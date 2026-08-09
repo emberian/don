@@ -1141,9 +1141,20 @@ impl Sim {
                 if let Some(build) = self.builds.get(row as usize) {
                     view.active = build.is_valid();
                     view.wall_active = build.is_active();
+                    view.wall_started = build.flags & production::flag::STARTED != 0;
+                    view.wall_city_flag = build.flags & production::flag::CAPTURED != 0;
                     view.owner_in_game =
                         self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
                     view.myhits = build.myhits;
+                    view.mylos = build.other[0x3c] as i8;
+                    view.job_counter = build.job_counter;
+                    view.constr_time = build.constr_time;
+                    view.construct_hits = build.construct_hits;
+                    view.damage = build.damage;
+                    view.inside_down = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
+                    view.wall_hits_written = false;
+                    view.wall_los_written = false;
+                    view.eject_contents_requested = false;
                 } else {
                     view.active = false;
                 }
@@ -1168,9 +1179,8 @@ impl Sim {
         }
     }
 
-    /// Commit the two resolved base-Object virtual bodies back into walked object state.
-    /// Building-band entries are deliberately absent: their vtable overrides this pair
-    /// with `Wall::update_hits/update_los`, which remains red.
+    /// Commit the resolved Object and Wall stat virtuals back into walked object state.
+    /// Building-band writes are marker-gated so missing query packages leave live state intact.
     fn sync_step8_stat_outputs(&mut self, trace: &leaders::Step8Trace) {
         for who in 0..NUM_LEADERS {
             let slot = self.world.objects.slot(who);
@@ -1194,6 +1204,17 @@ impl Sim {
                 }
             }
             if trace.wall_stats_ran[who] {
+                for (view, &row) in objects.band_2000.iter().zip(slot.band(Band::Build)) {
+                    if let Some(build) = self.builds.get_mut(row as usize) {
+                        if view.wall_hits_written {
+                            build.myhits = view.myhits;
+                            build.construct_hits = view.construct_hits;
+                        }
+                        if view.wall_los_written {
+                            build.other[0x3c] = view.mylos as u8;
+                        }
+                    }
+                }
                 for (view, &row) in objects.band_3000.iter().zip(slot.band(Band::Wall)) {
                     if let Some(wall) = self.walls.get_mut(row as usize) {
                         if view.active && view.hit_inputs.is_some() {
