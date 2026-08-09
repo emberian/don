@@ -210,6 +210,18 @@ try {
         'session-ai-slots', 'session-ai-difficulty', 'session-victory',
       ].every(id => document.getElementById(id)?.disabled),
       sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
+      objectiveTime: document.getElementById('objective-time')?.textContent ?? '',
+      objectiveState: document.getElementById('objective-state')?.textContent ?? '',
+      objectiveScore: document.getElementById('objective-score')?.textContent ?? '',
+      objectiveCountdown: document.getElementById('objective-countdown')?.textContent ?? '',
+      objectiveFactsDisabled: ['objective-state', 'objective-score', 'objective-countdown']
+        .every(id => document.getElementById(id)?.getAttribute('aria-disabled') === 'true'),
+      visibilityHonesty: document.getElementById('visibility-honesty')?.textContent ?? '',
+      ownerLegend: document.querySelectorAll('#owner-legend .owner-key').length,
+      ownerRows: document.querySelectorAll('#world-players .world-player').length,
+      ownerStates: [...document.querySelectorAll('#world-players .owner-state')]
+        .map(node => node.textContent),
+      minimapLabel: document.getElementById('mini')?.getAttribute('aria-label') ?? '',
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -252,6 +264,17 @@ try {
     ['the pregame summary exposes world, slots, rules, and unavailable systems',
       out.ui.sessionSummary.includes('128 × 128') && out.ui.sessionSummary.includes('manual') &&
       out.ui.sessionSummary.includes('population 150') && out.ui.sessionSummary.includes('victory unavailable')],
+    ['the objective panel reports real elapsed time but disables absent endgame facts',
+      out.ui.objectiveTime.includes('frame') && out.ui.objectiveFactsDisabled &&
+      out.ui.objectiveState.includes('unavailable') && out.ui.objectiveScore.includes('not a victory score') &&
+      out.ui.objectiveCountdown.includes('elapsed time only')],
+    ['the objective panel labels omniscient visibility and unknown relations honestly',
+      out.ui.visibilityHonesty.includes('Omniscient integration view') &&
+      out.ui.visibilityHonesty.includes('not exported') &&
+      out.ui.ownerStates.slice(1).every(text => text.includes('relation unavailable'))],
+    ['the real minimap exposes every owner without inventing teams',
+      out.ui.ownerLegend === 4 && out.ui.ownerRows === 4 &&
+      out.ui.minimapLabel.includes('All exported owners are visible')],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -272,12 +295,15 @@ try {
     const first = document.querySelector('#command-dock button').getBoundingClientRect();
     const tab = document.getElementById('tab-research').getBoundingClientRect();
     const palette = document.querySelector('#palette button').getBoundingClientRect();
+    const objectives = document.getElementById('objectives').getBoundingClientRect();
+    const focus = document.querySelector('#world-players button').getBoundingClientRect();
     return {
       viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
       sideBelowStage: side.top >= stage.bottom - 1,
       dockInsideViewport: dock.left >= 0 && dock.right <= innerWidth,
       dockScrollable: document.getElementById('command-dock').scrollWidth >= dock.width,
-      touchTarget: [first.width, first.height], paletteTouchTargets: [tab.height, palette.height], coverageVisible:
+      touchTarget: [first.width, first.height], paletteTouchTargets: [tab.height, palette.height],
+      objectivePanel: [objectives.left, objectives.right], focusTouchHeight: focus.height, coverageVisible:
         getComputedStyle(document.getElementById('coverage')).display !== 'none',
     };
   })()`);
@@ -288,6 +314,9 @@ try {
     ['narrow command dock owns its overflow', out.narrow.dockScrollable],
     ['narrow command targets are at least 40 px', out.narrow.touchTarget[0] >= 40 && out.narrow.touchTarget[1] >= 40],
     ['narrow palette tabs and actions are touch-sized', out.narrow.paletteTouchTargets.every(x => x >= 40)],
+    ['narrow objectives stay in the page and camera buttons are touch-sized',
+      out.narrow.objectivePanel[0] >= 0 && out.narrow.objectivePanel[1] <= out.narrow.viewport[0] &&
+      out.narrow.focusTouchHeight >= 40],
     ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
@@ -367,6 +396,56 @@ try {
     ['a malformed seed preserves the live session', out.session.invalidPreserved],
     ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
     ['session status returns to player zero', out.session.status.includes('player 0')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // The minimap is an exported-world navigator, not fog or diplomacy evidence. Exercise
+  // panel, pointer, and keyboard navigation while checking the snapshot totals and explicit
+  // unavailable victory surface.
+  out.objectives = await c.eval(`(() => {
+    const d = window.don, m = d.state.mod;
+    const snapshot = d.objectives.snapshot();
+    const initial = d.objectives.camera();
+    const focused = d.objectives.focusPlayer(2);
+    const mini = document.getElementById('mini');
+    const rect = mini.getBoundingClientRect();
+    mini.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, buttons: 1,
+      clientX: rect.left + rect.width * .78,
+      clientY: rect.top + rect.height * .22,
+    }));
+    const pointer = d.objectives.camera();
+    document.querySelector('.world-player[data-player="1"] button').click();
+    const panel = d.objectives.camera();
+    mini.focus();
+    mini.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, code: 'Digit4', key: '4' }));
+    const keyboard = d.objectives.camera();
+    const returned = d.objectives.focusPlayer(0);
+    return JSON.stringify({
+      snapshot, initial, focused, pointer, panel, keyboard, returned,
+      live: m.live,
+      cameraStatus: document.getElementById('camera-status').textContent,
+      cameraLive: document.getElementById('camera-status').getAttribute('aria-live'),
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the world snapshot accounts for every live exported object',
+      out.objectives.snapshot.owners.reduce((n, owner) => n + owner.objects, 0) === out.objectives.live],
+    ['the world snapshot refuses victory, score, countdown, diplomacy, and fog claims',
+      out.objectives.snapshot.visibility === 'omniscient-export' &&
+      out.objectives.snapshot.victory === 'unavailable' && out.objectives.snapshot.score === 'unavailable' &&
+      out.objectives.snapshot.countdown === 'unavailable' && out.objectives.snapshot.diplomacy === 'unavailable'],
+    ['player focus buttons navigate to exported starts',
+      out.objectives.focused.source.includes('P2') && out.objectives.panel.source.includes('P1')],
+    ['minimap pointer navigation moves the camera',
+      out.objectives.pointer.source === 'minimap' &&
+      (out.objectives.pointer.tileX !== out.objectives.focused.tileX ||
+       out.objectives.pointer.tileY !== out.objectives.focused.tileY)],
+    ['minimap keyboard navigation reaches owner starts and can return home',
+      out.objectives.keyboard.source.includes('P3') && out.objectives.returned.source.includes('P0')],
+    ['camera navigation feedback is announced',
+      out.objectives.cameraLive === 'polite' && out.objectives.cameraStatus.includes('camera tile')],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -554,6 +633,29 @@ try {
     ['every submitted packet drained at a tick',
       out.scriptTransport.drained === out.scriptTransport.submitted && out.scriptTransport.pending === 0],
     ['packet handlers applied object orders', out.scriptTransport.ordersApplied > 0],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+  await sleep(150);
+  out.objectivesAfterPlay = await c.eval(`(() => {
+    const snapshot = window.don.objectives.snapshot();
+    return JSON.stringify({
+      snapshot,
+      live: window.don.state.mod.live,
+      playerZeroText: document.getElementById('owner-state-0').textContent,
+      scoreText: document.getElementById('objective-score').textContent,
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the owner snapshot updates after real building and training',
+      out.objectivesAfterPlay.snapshot.owners[0].objects >= out.objectives.snapshot.owners[0].objects + 3 &&
+      out.objectivesAfterPlay.playerZeroText.includes(
+        `${out.objectivesAfterPlay.snapshot.owners[0].objects} objects`)],
+    ['post-play owner totals still equal the live world',
+      out.objectivesAfterPlay.snapshot.owners.reduce((n, owner) => n + owner.objects, 0) ===
+        out.objectivesAfterPlay.live],
+    ['object growth is never relabelled as victory score',
+      out.objectivesAfterPlay.scoreText.includes('not a victory score')],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

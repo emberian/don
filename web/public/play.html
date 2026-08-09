@@ -69,6 +69,7 @@
   #minibox { position:absolute; left:10px; bottom:10px; border:1px solid var(--line);
     border-radius:6px; overflow:hidden; background:#0b0e14; box-shadow:0 6px 24px rgba(0,0,0,.5); }
   canvas#mini { display:block; width:210px; height:210px; cursor:pointer; }
+  canvas#mini:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
 
   /* ---- side panel ---- */
   #side { background:var(--panel); border-left:1px solid var(--line); overflow-y:auto;
@@ -161,6 +162,26 @@
     font:9.5px/1.35 var(--mono); }
   .summary-row span { color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
   .summary-row b { color:var(--ink); font-weight:500; overflow-wrap:anywhere; }
+  .endgame-grid { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .endgame-fact { min-width:0; padding:6px; border:1px solid var(--line); border-radius:5px;
+    background:#0d1016; }
+  .endgame-fact .rh { color:var(--dim); font:8.5px var(--mono); text-transform:uppercase;
+    letter-spacing:.07em; }
+  .endgame-fact .rv { margin-top:2px; color:var(--ink); font:9.5px/1.35 var(--mono);
+    overflow-wrap:anywhere; }
+  .endgame-fact [aria-disabled="true"] { color:var(--warn); }
+  #visibility-honesty { margin:6px 0; }
+  #owner-legend { display:flex; flex-wrap:wrap; gap:5px; margin:6px 0; }
+  .owner-key { display:flex; align-items:center; gap:4px; color:var(--dim); font:9px var(--mono); }
+  .owner-swatch { width:9px; height:9px; border-radius:2px; border:1px solid #ffffff44; }
+  #world-players { display:grid; gap:4px; }
+  .world-player { display:grid; grid-template-columns:26px minmax(0,1fr) auto; align-items:center;
+    gap:6px; padding:5px 6px; border:1px solid var(--line); border-radius:5px; background:#11151d; }
+  .world-player.you { border-color:#2b6d99; background:#111b25; }
+  .world-player .owner-id { font:600 10px var(--mono); }
+  .world-player .owner-state { color:var(--dim); font:9px/1.35 var(--mono); overflow-wrap:anywhere; }
+  .world-player button { min-height:32px; }
+  #camera-status { margin-top:6px; color:var(--dim); font:9.5px/1.35 var(--mono); }
 
   @media (max-width:900px) {
     #app { grid-template-columns:minmax(400px,1fr) 290px; }
@@ -187,6 +208,7 @@
     #command-dock::-webkit-scrollbar { display:none; }
     .cmd { min-width:48px; min-height:42px; }
     .tab,.pal { min-height:42px; }
+    .world-player button { min-height:42px; }
     #dock-state { display:none; }
     #coverage { top:54px; right:6px; bottom:auto; max-width:190px; padding:4px 6px;
       overflow:hidden; border-radius:5px; background:rgba(8,10,14,.68); font-size:9px; }
@@ -206,7 +228,8 @@
     <div id="inspect"></div>
     <div id="coverage"></div>
     <div id="toast" role="status" aria-live="polite"></div>
-    <div id="minibox"><canvas id="mini" width="210" height="210"></canvas></div>
+    <div id="minibox"><canvas id="mini" width="210" height="210" tabindex="0" role="img"
+      aria-label="Omniscient integration minimap. Click or drag to move the camera."></canvas></div>
     <nav id="command-dock" aria-label="Game commands">
       <button id="cmd-move" class="cmd" aria-pressed="false" title="Choose a move destination"><span>move</span><span class="ck">target</span></button>
       <button id="cmd-attack" class="cmd" aria-pressed="false" title="Choose an enemy target"><span>attack</span><span class="ck">target</span></button>
@@ -321,6 +344,34 @@
         generation. Disabled choices are encoded as unavailable in the session URL; they are not
         frontend-only rules pretending to affect play.
       </div>
+    </fieldset>
+
+    <fieldset id="objectives">
+      <legend>objectives &amp; endgame</legend>
+      <div class="endgame-grid">
+        <div class="endgame-fact">
+          <div class="rh">match time</div><div id="objective-time" class="rv">frame 0</div>
+        </div>
+        <div class="endgame-fact">
+          <div class="rh">objective</div>
+          <div id="objective-state" class="rv" aria-disabled="true">unavailable — no victory host</div>
+        </div>
+        <div class="endgame-fact">
+          <div class="rh">victory score</div>
+          <div id="objective-score" class="rv" aria-disabled="true">unavailable — no score ABI</div>
+        </div>
+        <div class="endgame-fact">
+          <div class="rh">countdown</div>
+          <div id="objective-countdown" class="rv" aria-disabled="true">unavailable — no endgame clock</div>
+        </div>
+      </div>
+      <div id="visibility-honesty" class="status-note">
+        Omniscient integration view: every exported object is drawn. Fog, seen-state, teams,
+        allies, and enemy relations are not exported, so other owners are not labelled enemies.
+      </div>
+      <div id="owner-legend" aria-label="Minimap owner colours"></div>
+      <div id="world-players" aria-label="Exported per-player world snapshot"></div>
+      <div id="camera-status" role="status" aria-live="polite">camera loading…</div>
     </fieldset>
 
     <fieldset id="readiness">

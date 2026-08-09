@@ -9,7 +9,7 @@
 // something, the wasm side counts it in `game_gaps_ptr` and the coverage panel shows it
 // live, with the reason.
 
-import { GameModule, RES_NAMES, GAP_NAMES, OP } from './wasmgame.js';
+import { GameModule, RES_NAMES, GAP_NAMES, OP, TAG } from './wasmgame.js';
 import { makeRenderer } from './gfx.js';
 import { REPLAY_EVIDENCE } from './readiness.gen.js';
 import { decode } from '../wire.gen.js';
@@ -27,6 +27,7 @@ const INCOME_MODES = Object.freeze([
   Object.freeze({ value: 1, slug: 'uncapped-experiment', label: 'DoN uncapped experiment' }),
 ]);
 const QUEUE_CAPACITY = 8; // game_object_info exposes queue_n plus q0..q7.
+const OWNER_COLOURS = Object.freeze(['#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47']);
 
 const state = {
   mod: null, gfx: null, data: null, play: null,
@@ -52,6 +53,7 @@ const state = {
   toastTimer: 0,
   rendererErrorCount: 0,
   paletteNotice: '',
+  cameraSource: 'home',
 };
 
 // ---------------------------------------------------------------------------------------
@@ -107,6 +109,7 @@ async function boot() {
   wireInput($('gl'));
   wirePanels();
   initializeSessionPanel();
+  initializeObjectivesPanel();
   buildPalette();
   renderMenus();
   requestAnimationFrame(frame);
@@ -219,6 +222,7 @@ function zoomAt(cx, cy, factor) {
   const after = screenToWorld(cx, cy);
   state.cam.x += before[0] - after[0];
   state.cam.y += before[1] - after[1];
+  state.cameraSource = 'map zoom';
   clampCam();
 }
 
@@ -271,6 +275,7 @@ function wireInput(canvas) {
       }
       state.cam.x = state.panning.cx - (e.clientX - state.panning.x) * dpr / p;
       state.cam.y = state.panning.cy - (e.clientY - state.panning.y) * dpr / p;
+      state.cameraSource = 'map drag';
       clampCam();
       return;
     }
@@ -329,11 +334,26 @@ function wireInput(canvas) {
     const wx = (e.clientX - r.left) / r.width * state.mod.span;
     const wy = (e.clientY - r.top) / r.height * state.mod.span;
     if (e.buttons === 2 || e.button === 2) issueMove([wx | 0, wy | 0]);
-    else centreOn(wx, wy);
+    else {
+      centreOn(wx, wy);
+      state.cameraSource = 'minimap';
+      renderObjectivesPanel();
+    }
   };
   mini.addEventListener('contextmenu', (e) => e.preventDefault());
   mini.addEventListener('pointerdown', miniJump);
   mini.addEventListener('pointermove', (e) => { if (e.buttons & 1) miniJump(e); });
+  mini.addEventListener('keydown', (e) => {
+    if (/^Digit[1-4]$/.test(e.code)) {
+      focusPlayerStart(Number(e.code.slice(5)) - 1, 'minimap keyboard');
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.code === 'Home' || e.code === 'Enter') {
+      focusPlayerStart(state.who, 'minimap keyboard');
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
 }
 
 function onKeyDown(e) {
@@ -383,7 +403,7 @@ function onKeyDown(e) {
     case 'Escape': cancelTargeting(); break;
     case 'KeyH': logPacket('HALT', m.halt(state.who)); break;
     case 'KeyF': jumpToSelection(); break;
-    case 'Home': { const [sx, sy] = m.startOf(state.who); centreOn(sx, sy); break; }
+    case 'Home': focusPlayerStart(state.who, 'Home key'); break;
     case 'KeyP': case 'Pause': setPaused(!state.paused); break;
     case 'Period': cycleIdleWorker(); break;
     case 'KeyA': if (e.ctrlKey || e.metaKey) { selectAllUnits(); e.preventDefault(); } break;
@@ -467,7 +487,10 @@ function jumpToSelection() {
     const i = m.info(id);
     if (i) { sx += i.x; sy += i.y; n++; }
   }
-  if (n) centreOn(sx / n, sy / n);
+  if (n) {
+    centreOn(sx / n, sy / n);
+    state.cameraSource = 'selection';
+  }
 }
 
 function cycleIdleWorker() {
@@ -693,6 +716,7 @@ function restartSessionFromPanel() {
   state.gfx.provision(state.mod.tiles, state.mod.x.game_capacity(state.mod.g));
   const [sx, sy] = state.mod.startOf(state.who);
   centreOn(sx, sy);
+  state.cameraSource = `new session: P${state.who}`;
   setPaused(false, false);
   input.value = formatSeed(seed);
   syncSessionUrl();
@@ -718,6 +742,7 @@ function switchPlayer(player) {
   state.commandMode = null;
   const [sx, sy] = state.mod.startOf(state.who);
   centreOn(sx, sy);
+  state.cameraSource = `perspective: P${state.who}`;
   syncSessionUrl();
   renderMenus();
   renderSelection();
@@ -812,6 +837,140 @@ function renderSessionSummary() {
     `${setup.slots} manual command perspectives · AI unavailable`;
   $('summary-rules').textContent =
     `population ${setup.population} · ${INCOME_MODES[state.sessionIncomeMode].label} · victory unavailable`;
+}
+
+function initializeObjectivesPanel() {
+  const legend = $('owner-legend');
+  const players = $('world-players');
+  legend.replaceChildren();
+  players.replaceChildren();
+  for (let p = 0; p < state.mod.playerCount; p++) {
+    const key = document.createElement('div');
+    key.className = 'owner-key';
+    const swatch = document.createElement('span');
+    swatch.className = 'owner-swatch';
+    swatch.style.background = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    const label = document.createElement('span');
+    label.id = `owner-key-${p}`;
+    key.append(swatch, label);
+    legend.appendChild(key);
+
+    const row = document.createElement('div');
+    row.className = 'world-player';
+    row.dataset.player = String(p);
+    const owner = document.createElement('div');
+    owner.className = 'owner-id';
+    owner.style.color = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    owner.textContent = `P${p}`;
+    const exported = document.createElement('div');
+    exported.className = 'owner-state';
+    exported.id = `owner-state-${p}`;
+    const focus = document.createElement('button');
+    focus.type = 'button';
+    focus.dataset.focusPlayer = String(p);
+    focus.textContent = 'focus';
+    focus.setAttribute('aria-label', `Focus camera on player ${p} start`);
+    focus.addEventListener('click', () => focusPlayerStart(p, 'player panel'));
+    row.append(owner, exported, focus);
+    players.appendChild(row);
+  }
+  renderObjectivesPanel();
+}
+
+function exportedWorldSnapshot() {
+  const m = state.mod;
+  const owners = Array.from({ length: m.playerCount }, (_, player) => ({
+    player,
+    objects: 0,
+    units: 0,
+    buildings: 0,
+    foundations: 0,
+    ledger: m.player(player),
+    relation: player === state.who ? 'local perspective' : 'unavailable',
+  }));
+  const views = m.views();
+  for (let row = 0; row < m.live; row++) {
+    const tag = views.tag[row];
+    if ((tag & TAG.occupied) === 0) continue;
+    const owner = tag & 0xf;
+    if (!owners[owner]) continue;
+    owners[owner].objects++;
+    if (tag & TAG.building) {
+      owners[owner].buildings++;
+      if (tag & TAG.underConstruction) owners[owner].foundations++;
+    } else {
+      owners[owner].units++;
+    }
+  }
+  return Object.freeze({
+    frame: m.frame,
+    elapsedSeconds: m.frame * TICK_MS / 1000,
+    visibility: 'omniscient-export',
+    diplomacy: 'unavailable',
+    victory: 'unavailable',
+    score: 'unavailable',
+    countdown: 'unavailable',
+    owners: Object.freeze(owners.map(Object.freeze)),
+  });
+}
+
+function cameraSnapshot() {
+  const [width, height] = vp();
+  const scale = pxPerSub();
+  const worldX = state.cam.x + width / scale / 2;
+  const worldY = state.cam.y + height / scale / 2;
+  return Object.freeze({
+    worldX: Math.round(worldX),
+    worldY: Math.round(worldY),
+    tileX: clamp(Math.floor(worldX / state.mod.subtile), 0, state.mod.tiles - 1),
+    tileY: clamp(Math.floor(worldY / state.mod.subtile), 0, state.mod.tiles - 1),
+    source: state.cameraSource,
+  });
+}
+
+function focusPlayerStart(player, source = 'player panel') {
+  const p = parseSessionPlayer(player, state.mod.playerCount);
+  const [x, y] = state.mod.startOf(p);
+  centreOn(x, y);
+  state.cameraSource = `${source}: P${p}`;
+  renderObjectivesPanel();
+  say(`camera focused on P${p} exported start; relation and visibility remain unavailable`, 'hi');
+  return cameraSnapshot();
+}
+
+function renderObjectivesPanel() {
+  if (!$('objectives') || !state.mod) return;
+  const snapshot = exportedWorldSnapshot();
+  const camera = cameraSnapshot();
+  $('objective-time').textContent =
+    `frame ${snapshot.frame.toLocaleString()} · elapsed ${snapshot.elapsedSeconds.toFixed(1)} s`;
+  $('objective-state').textContent = 'unavailable — no victory/endgame host';
+  $('objective-score').textContent = 'unavailable — object counts are not a victory score';
+  $('objective-countdown').textContent = 'unavailable — elapsed time only';
+  for (const owner of snapshot.owners) {
+    const relation = owner.player === state.who ? 'you' : 'relation unavailable';
+    const key = $(`owner-key-${owner.player}`);
+    if (key) key.textContent = `P${owner.player} ${relation}`;
+    const row = document.querySelector(`.world-player[data-player="${owner.player}"]`);
+    if (row) row.classList.toggle('you', owner.player === state.who);
+    const stateEl = $(`owner-state-${owner.player}`);
+    if (stateEl) {
+      const objectWord = owner.objects === 1 ? 'object' : 'objects';
+      const unitWord = owner.units === 1 ? 'unit' : 'units';
+      const buildingWord = owner.buildings === 1 ? 'building' : 'buildings';
+      stateEl.textContent =
+        `${owner.objects} ${objectWord} · ${owner.units} ${unitWord} · ` +
+        `${owner.buildings} ${buildingWord}` +
+        (owner.foundations ? ` (${owner.foundations} foundations)` : '') +
+        ` · pop ${owner.ledger.pop}/${owner.ledger.popCap} · age ${owner.ledger.age} · ${relation}`;
+    }
+  }
+  $('camera-status').textContent =
+    `camera tile ${camera.tileX},${camera.tileY} · ${camera.source} · ` +
+    'minimap click/drag navigates; right-click issues a move for the current selection';
+  $('mini').setAttribute('aria-label',
+    `Omniscient integration minimap, camera at tile ${camera.tileX}, ${camera.tileY}. ` +
+    'All exported owners are visible; diplomacy and fog are unavailable.');
 }
 
 function wirePanels() {
@@ -1259,6 +1418,7 @@ function renderHud() {
   refreshPaletteAvailability();
   renderPaletteFeedback();
   renderSessionStatus();
+  renderObjectivesPanel();
   renderCoverage();
   renderTransport();
 }
@@ -1489,14 +1649,27 @@ function drawMinimap() {
   const v = m.views();
   const live = m.live;
   const s = c.width / m.span;
-  const OWNER = ['#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47'];
   for (let i = 0; i < live; i++) {
     const tag = v.tag[i];
     if ((tag & 0x80000000) === 0) continue;
-    g.fillStyle = OWNER[(tag & 0xf) % OWNER.length];
+    g.fillStyle = OWNER_COLOURS[(tag & 0xf) % OWNER_COLOURS.length];
     const b = (tag >>> 29) & 1;
     g.fillRect(v.x[i] * s - (b ? 1.5 : 0.5), v.y[i] * s - (b ? 1.5 : 0.5), b ? 3 : 1.5, b ? 3 : 1.5);
   }
+  // Start positions are real exported coordinates. The labels carry only owner identity;
+  // they deliberately do not imply ally/enemy relations the ABI cannot provide.
+  g.font = '10px ui-monospace, monospace';
+  g.textAlign = 'center';
+  for (let p = 0; p < m.playerCount; p++) {
+    const [x, y] = m.startOf(p);
+    const sx = x * s, sy = y * s;
+    g.strokeStyle = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    g.lineWidth = p === state.who ? 2 : 1;
+    g.strokeRect(sx - 4, sy - 4, 8, 8);
+    g.fillStyle = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    g.fillText(`P${p}`, sx, sy - 7);
+  }
+  g.textAlign = 'start';
   // viewport rectangle
   const [w, h] = vp();
   const p = pxPerSub();
@@ -1549,7 +1722,12 @@ function frame(now) {
   if (keys.has('ArrowUp')) dy -= 1;
   if (keys.has('ArrowDown')) dy += 1;
   if (state.edge && !state.drag) { dx += state.edge.x; dy += state.edge.y; }
-  if (dx || dy) { state.cam.x += dx * panSpeed; state.cam.y += dy * panSpeed; clampCam(); }
+  if (dx || dy) {
+    state.cam.x += dx * panSpeed;
+    state.cam.y += dy * panSpeed;
+    state.cameraSource = 'keyboard/edge pan';
+    clampCam();
+  }
 
   // simulation at the engine's own 67 ms tick, scaled by the speed control
   if (!state.paused) {
@@ -1626,6 +1804,11 @@ window.don = {
     url: () => sessionUrl().href,
     setup: () => sessionDescriptor(),
   },
+  objectives: {
+    snapshot: () => exportedWorldSnapshot(),
+    camera: () => cameraSnapshot(),
+    focusPlayer: (player) => focusPlayerStart(player, 'automation/player panel'),
+  },
   activate,
   info: (id) => state.mod.info(id),
   player: (p = 0) => state.mod.player(p),
@@ -1650,6 +1833,7 @@ window.don = {
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
     sessionSetup: sessionDescriptor(),
+    objectives: exportedWorldSnapshot(), camera: cameraSnapshot(),
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),
