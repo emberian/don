@@ -42,10 +42,10 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "siege_attack", va: 0x00706FF0, size: 549, call_sites: 1, installs: &[], delegates: &["attack", "guard"], port: Port::Todo },
     ActionDef { name: "form", va: 0x00707220, size: 746, call_sites: 6, installs: &[], delegates: &["halt", "move_to"], port: Port::Orders },
     ActionDef { name: "build", va: 0x00707510, size: 1256, call_sites: 1, installs: &[], delegates: &["swarm_around"], port: Port::Todo },
-    ActionDef { name: "halt", va: 0x0070D0C0, size: 685, call_sites: 14, installs: &[], delegates: &[], port: Port::State },
+    ActionDef { name: "halt", va: 0x0070D0C0, size: 685, call_sites: 14, installs: &[], delegates: &[], port: Port::Complete },
     ActionDef { name: "stance", va: 0x0070D440, size: 928, call_sites: 8, installs: &[], delegates: &[], port: Port::State },
     ActionDef { name: "siege_attack_to", va: 0x0070D830, size: 2037, call_sites: 2, installs: &[], delegates: &["guard", "move_to"], port: Port::NotOnTheWire },
-    ActionDef { name: "disband", va: 0x0070E260, size: 693, call_sites: 3, installs: &[], delegates: &[], port: Port::State },
+    ActionDef { name: "disband", va: 0x0070E260, size: 693, call_sites: 3, installs: &[], delegates: &[], port: Port::Complete },
     ActionDef { name: "alarm", va: 0x0070EC30, size: 3169, call_sites: 4, installs: &[], delegates: &["alarm_peasant", "garrison"], port: Port::Todo },
     ActionDef { name: "move_to", va: 0x0070FBA0, size: 49, call_sites: 34, installs: &[], delegates: &["move_near"], port: Port::Orders },
     ActionDef { name: "swarm_around", va: 0x0070FBE0, size: 3044, call_sites: 13, installs: &[OrderIndex::MoveTo, OrderIndex::AttackTo, OrderIndex::ExploreTo, OrderIndex::FleeTo, OrderIndex::BuildAt, OrderIndex::Repair, OrderIndex::CastSpell], delegates: &["halt", "move_to"], port: Port::Todo },
@@ -55,7 +55,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "begin", va: 0x00714100, size: 8, call_sites: 0, installs: &[], delegates: &[], port: Port::Complete },
 ];
 
-pub const NUM_INLINE_COMMANDS: usize = 22;
+pub const NUM_INLINE_COMMANDS: usize = 23;
 
 /// Inline state-writing handlers recovered beyond the `action_*` receiver table.
 #[rustfmt::skip]
@@ -76,6 +76,7 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 64, name: "cheat_ai_toggle", port: InlinePort::Complete },
     InlineDef { op: 65, name: "cheat_increase_buckets", port: InlinePort::Complete },
     InlineDef { op: 66, name: "cheat_zero_buckets", port: InlinePort::Complete },
+    InlineDef { op: 67, name: "cheat_init_unit", port: InlinePort::Complete },
     InlineDef { op: 69, name: "chat_set", port: InlinePort::Complete },
     InlineDef { op: 72, name: "camera", port: InlinePort::Complete },
     InlineDef { op: 74, name: "turn_data", port: InlinePort::Complete },

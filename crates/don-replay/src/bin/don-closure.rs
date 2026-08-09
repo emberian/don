@@ -180,7 +180,7 @@ mod tests {
     fn canonical_inventory_cardinalities() {
         assert_eq!((DO_FRAME.len(), EXECUTORS.len()), (29, 28));
         assert_eq!((GROUP_ACTIONS.len(), OPCODES.len()), (42, 82));
-        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 22);
+        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 23);
         assert_eq!(NUM_WALKED, 15);
     }
 
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn inline_command_statuses_preserve_complete_vs_state_wired() {
         for op in [
-            34, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 69, 72, 74, 79, 81,
+            34, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 69, 72, 74, 79, 81,
         ] {
             assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
         }

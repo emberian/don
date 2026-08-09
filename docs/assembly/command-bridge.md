@@ -29,8 +29,9 @@ Concretely, what executes now:
   `ObjectData::group`. Without this every other command is a no-op, which is exactly why
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
-  complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Twenty-one inline state handlers** — control-group save/camera, MP-log toggle, speed
+  complete transactional actions (`begin`, `halt`, and `disband`), one reproduced state
+  action, and three capability-gated state paths.
+* **Twenty-three inline state handlers** — control-group save/camera, MP-log toggle, speed
   set/up/down, all eight player-speed accumulators, two lockstep report stores, chat-route
   status, reveal-map/turn telemetry, three bounded cheat-state handlers, three AI controls,
   and three measured simulation no-ops are complete; pause's common state path is wired
@@ -51,10 +52,12 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,693 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 22 `InlineDef` + 82 `OpDef` | 172 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 4,201 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 23 `InlineDef` + 82 `OpDef` | 173 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–66/69/72/74/76/79/81, 8 tests | 509 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–66/69/72/74/76/79/81, 8 tests | 520 |
+| `crates/don-sim/tests/command_cheat_init_unit.rs` | transactional world-receipt pins for opcode 67, 2 tests | 270 |
+| `crates/don-sim/tests/command_group_lifecycle.rs` | atomic HALT/DISBAND receipt, mask, ordering, and rollback pins, 2 tests | 184 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -62,9 +65,11 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-53 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+57 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
 `cargo test -p don-sim --test command_speed_state` 8/8,
+`cargo test -p don-sim --test command_cheat_init_unit` 2/2,
+`cargo test -p don-sim --test command_group_lifecycle` 2/2,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -79,17 +84,17 @@ They carry **209 direct `call`/`jmp` sites** across all named procedures in `.te
 
 | status | count | meaning |
 |---|---:|---|
-| `Port::Complete` | 1 | complete simulation-side mutation (`begin`) |
+| `Port::Complete` | 3 | complete transactional mutation (`begin`, `halt`, `disband`) |
 | `Port::Orders` | 15 | installs orders per member, with `QueuePos`, from a command |
-| `Port::State` | 3 | reproduced, and retail installs no order either (`halt`, `stance`, `disband`) |
+| `Port::State` | 1 | reproduced, and retail installs no order either (`stance`) |
 | `Port::StateWired` | 3 | exact wire/state path; host capability/state columns remain explicit |
 | `Port::Todo` | 13 | dispatched and counted, body not ported |
 | `Port::NotOnTheWire` | 7 | no `CommandPackage` handler reaches them |
 
 So **22 of the 35 wire-reachable actions execute a recovered mutation** and 13 remain
-bodyless. Only `Complete`, `Orders`, and `State` are closure-green: `StateWired` is an
-honest intermediate tier because product hosts must still populate exact capability/state
-columns. `BridgeStats` counts the split at runtime (`acted` vs `unported`).
+bodyless. Only `Complete` is whole-simulation closure-green; `Orders`, `State`, and
+`StateWired` remain honest intermediate tiers until every retail tail and required product
+host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
 
 ### The full table, in descending call-site order
 
@@ -102,7 +107,7 @@ columns. `BridgeStats` counts the split at runtime (`acted` vs `unported`).
 | `move_to` | `0x0070FBA0` | 49 | 34 | forwards to `move_near` with `tolerance = 0` — that is its entire body | Orders |
 | `move_near` | `0x00704990` | 9205 | 23 | each member gets `MOVE_TO`/`ATTACK_TO`/`EXPLORE_TO`/`FLEE_TO` per the `orders` byte, at the commanded coords + tolerance; `GROUP_MOVE`/`GROUP_ATTACK_TO` when marching, `GARRISON` on the transport branch → `halt` | Orders (spine) |
 | `attack` | `0x00712490` | 3833 | 16 | `ATTACK` on each member; retail also splits out `CAST_SPELL` casters and sends out-of-reach members via `move_to` → `halt`, `move_to` | Orders (no split) |
-| `halt` | `0x0070D0C0` | 685 | 14 | empties every member's order list; whole loop gated on `group.buildings == 0`; resets `GroupData::form` to −1 | State |
+| `halt` | `0x0070D0C0` | 685 | 14 | atomically retires orders, applies the exact masks and aircraft skip, and resets `GroupData::form` to −1 | Complete |
 | `swarm_around` | `0x0070FBE0` | 3044 | 13 | `BUILD_AT`/`REPAIR`/`CAST_SPELL` + move, spread around a target → `halt`, `move_to` | Todo |
 | `guard` | `0x006FCD30` | 2012 | 8 | `GUARD` on each member, plus pulls nearby idle units into the group → `halt` | Orders |
 | `stance` | `0x0070D440` | 928 | 8 | writes `UnitData::stance` `+0xB1` / `Build::stance` `+0x7E`, sets flag bit `0x10`; installs nothing | State |
@@ -119,7 +124,7 @@ columns. `BridgeStats` counts the split at runtime (`acted` vs `unported`).
 | `trade` | `0x00701CC0` | 1022 | 3 | `TRADE_ROUTE` → `halt` | Orders |
 | `repair` | `0x007020C0` | 999 | 3 | `REPAIR`, `CAST_SPELL` → `halt` | Orders |
 | `attack_ground` | `0x00704520` | 1133 | 3 | `ATTACK_GROUND` → `air_attack_ground` for aircraft | Orders |
-| `disband` | `0x0070E260` | 693 | 3 | `Object::disband` `0x006455C0` backwards through the list; `all == 0` stops after one | State |
+| `disband` | `0x0070E260` | 693 | 3 | atomically executes the reverse direct/build-queue plan; `all == 0` stops after one and dead identities remain in the group | Complete |
 | `eject_all` | `0x00710B40` | 766 | 3 | unloads garrisons; installs nothing | Todo |
 | `hotkey` | `0x006FA7A0` | 64 | 2 | binds a control group; **only caller is `Console::on_key_down`** | NotOnTheWire |
 | `recall` | `0x006FA7E0` | 1373 | 2 | `STRAFE` → `return` | Todo |
@@ -277,6 +282,7 @@ remain honestly `orders_partial`.
 | 61 | `process_cheat_zero_techs` `0x00944FA0` | clear technology bits 0..805, status 0→2, accumulated-cheat byte | `complete` |
 | 65 | `process_cheat_increase_buckets` `0x00944C50` | add 1000 to six XOR-encoded resource buckets, accumulated-cheat byte | `complete` |
 | 66 | `process_cheat_zero_buckets` `0x00944B80` | zero six encoded buckets, consume sound RNG, typed external sound receipt | `complete` |
+| 67 | `process_cheat_init_unit` `0x00944A80` | direct/all-player unit initialization, nearby search, warning tail | `complete` |
 
 The tech actions reproduce the exact 806-bit loops from `Game::action_cheat_give_techs`
 `0x00593180` and `Game::action_cheat_zero_techs` `0x00593120`; the two padding bits in
@@ -295,6 +301,42 @@ longer list is unreachable; the bridge intentionally preserves both quirks. A va
 selected ID becomes a typed `CheatResponseReceipt` for the product layer's external
 `SoundRef::play` call; invalid IDs still consume the sound draw but produce no receipt.
 Solo and empty-list paths consume no draw.
+
+INIT_UNIT crosses the much larger `Objects::init_unit` world boundary without replacing
+it with a toy spawn. Non-negative `who` issues exactly one allocation at the two raw wire
+coordinates with trailing arguments `[-1; 3]`. Any negative `who` scans player slots
+0..7 in order, gates on `PlayerData::valid & 1`, and calls the addressed `UnitType`'s
+`find_nearby_spot` with the exact trailing tuple
+`[0, 0xC00, 0, 0x55555555, 3, -1, -1, 0, 0, -1, 0, -1]`; only a zero return proceeds to
+allocation at the returned coordinates.
+
+`Fleet::apply_cheat_init_unit_transaction` is an atomic typed host boundary: unavailable
+hosts promise zero world mutation, while applied hosts return the entire ordered nearby /
+allocation trace. The bridge validates the echoed command, every player identity, the
+constant call tuple, branch order, coordinates, and `[-1; 3]` allocation tail, retaining
+mismatches as auditable receipt records. It then reproduces `action_cheat_warning`: direct
+mode warns `who`, while the all-player loop warns its completed counter value 8. The
+wrapped accumulated-cheat byte now covers all ten owner slots, and network warnings emit
+a typed external `SoundGlobal::play` category-99 receipt rather than pretending the audio
+selection belongs to the simulation.
+
+### HALT and DISBAND transactional lifecycle tranche (2026-08-09)
+
+HALT and DISBAND now cross an atomic typed `Fleet` boundary instead of mutating the
+bridge's lightweight object table piecemeal. For HALT, the host snapshots the scenario
+`ignore_orders` prelude and every selected member, then returns the exact ordered
+`plan_action_halt` result. Receipt validation recomputes that plan, including the
+`0x04000000` and `0x100` unit-mask clears, form reset, airborne-plane skip, flags vetoes,
+and order/path/action retirement. The queue-first and queued-FORM branches abort before
+inserting or reissuing anything when the transaction is unavailable or malformed.
+
+DISBAND follows the same fail-closed contract with the scenario validation gate, owner
+locality, reverse member scan, active-building queue path, direct retirement path, and
+local feedback steps all carried in one receipt. The receiver assigns the validated
+post-action `GroupData` verbatim: retail retains dead member identities and does not
+compact the selection. Product hosts promise that an unavailable or malformed receipt
+means zero world mutation, which is pinned both in the command-only fixture and through
+the real `EnvWorld` callbacks.
 
 ## Five things worth keeping
 

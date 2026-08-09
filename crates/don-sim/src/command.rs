@@ -110,8 +110,9 @@
 
 use crate::order::{Order, OrderIndex};
 use crate::systems::groups_guys::{
-    formation_order_coord, resolve_form, vector_dist, Formation, FormationMember, GroupData,
-    MemberState, GROUP_MAX_MEMBERS,
+    formation_order_coord, plan_action_disband, plan_action_halt, resolve_form, vector_dist,
+    DisbandMemberFacts, DisbandPlan, DisbandStep, Formation, FormationMember, GroupData,
+    HaltMemberFacts, HaltPlan, HaltStep, MemberState, GROUP_MAX_MEMBERS,
 };
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
@@ -461,6 +462,290 @@ fn i16_at(b: &[u8], off: usize) -> Option<i16> {
 // The world this bridge writes into
 // ---------------------------------------------------------------------------
 
+/// Player slots scanned by the negative-owner arm of `Game::action_cheat_init_unit`.
+pub const CHEAT_INIT_PLAYER_SLOTS: usize = 8;
+
+/// Exact trailing arguments passed to `UnitType::find_nearby_spot` by opcode 67 after
+/// `(origin_x, origin_y, &out_x, &out_y)`.
+pub const CHEAT_INIT_NEARBY_TAIL: [i32; 12] =
+    [0, 0xC00, 0, 0x5555_5555, 3, -1, -1, 0, 0, -1, 0, -1];
+
+/// Whole command request crossing the world-owned `Objects::init_unit` boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatInitUnitRequest {
+    /// Non-negative selects one owner directly; every negative value selects all valid
+    /// player slots 0..7.
+    pub who: i32,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+    /// Snapshot of `PlayerData::valid & 1`, used only by the negative-owner arm.
+    pub valid_players: [bool; CHEAT_INIT_PLAYER_SLOTS],
+}
+
+/// Exact `UnitType::find_nearby_spot` call for one valid player in the all-player arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatInitUnitNearbyRequest {
+    pub owner: u8,
+    pub type_index: i32,
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub tail: [i32; 12],
+}
+
+/// Exact `Objects::init_unit` call made by either arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatInitUnitAllocationRequest {
+    pub owner: i32,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+    pub tail: [i32; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheatInitUnitNearbyOutcome {
+    /// Retail's zero return, carrying the two output coordinates.
+    Found { x: i32, y: i32 },
+    /// Any non-zero return; no allocation follows for this owner.
+    NotFound,
+}
+
+/// Ordered world calls made by one applied opcode-67 transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheatInitUnitStepReceipt {
+    Nearby {
+        request: CheatInitUnitNearbyRequest,
+        outcome: CheatInitUnitNearbyOutcome,
+    },
+    Allocation {
+        request: CheatInitUnitAllocationRequest,
+        /// Raw `Objects::init_unit` return. The retail action ignores allocation failure.
+        object_id: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheatInitUnitTransactionStatus {
+    /// The host preflighted and atomically applied the complete ordered call sequence.
+    Applied,
+    /// No world mutation occurred because this host does not expose the transaction.
+    Unavailable,
+}
+
+/// Host receipt for the world-owned portion of `Game::action_cheat_init_unit`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheatInitUnitTransactionReceipt {
+    pub request: CheatInitUnitRequest,
+    pub status: CheatInitUnitTransactionStatus,
+    pub steps: Vec<CheatInitUnitStepReceipt>,
+}
+
+impl CheatInitUnitTransactionReceipt {
+    pub fn unavailable(request: CheatInitUnitRequest) -> Self {
+        Self {
+            request,
+            status: CheatInitUnitTransactionStatus::Unavailable,
+            steps: Vec::new(),
+        }
+    }
+
+    /// Validate the complete ordered call trace against the recovered retail branches.
+    pub fn validates(&self, expected: CheatInitUnitRequest) -> bool {
+        if self.request != expected {
+            return false;
+        }
+        if self.status == CheatInitUnitTransactionStatus::Unavailable {
+            return self.steps.is_empty();
+        }
+
+        if expected.who >= 0 {
+            let [CheatInitUnitStepReceipt::Allocation { request, .. }] = self.steps.as_slice()
+            else {
+                return false;
+            };
+            return *request
+                == (CheatInitUnitAllocationRequest {
+                    owner: expected.who,
+                    type_index: expected.type_index,
+                    x: expected.x,
+                    y: expected.y,
+                    tail: [-1; 3],
+                });
+        }
+
+        let mut cursor = 0usize;
+        for owner in 0..CHEAT_INIT_PLAYER_SLOTS {
+            if !expected.valid_players[owner] {
+                continue;
+            }
+            let expected_nearby = CheatInitUnitNearbyRequest {
+                owner: owner as u8,
+                type_index: expected.type_index,
+                origin_x: expected.x,
+                origin_y: expected.y,
+                tail: CHEAT_INIT_NEARBY_TAIL,
+            };
+            let Some(CheatInitUnitStepReceipt::Nearby { request, outcome }) =
+                self.steps.get(cursor)
+            else {
+                return false;
+            };
+            if *request != expected_nearby {
+                return false;
+            }
+            cursor += 1;
+            if let CheatInitUnitNearbyOutcome::Found { x, y } = *outcome {
+                let Some(CheatInitUnitStepReceipt::Allocation { request, .. }) =
+                    self.steps.get(cursor)
+                else {
+                    return false;
+                };
+                if *request
+                    != (CheatInitUnitAllocationRequest {
+                        owner: owner as i32,
+                        type_index: expected.type_index,
+                        x,
+                        y,
+                        tail: [-1; 3],
+                    })
+                {
+                    return false;
+                }
+                cursor += 1;
+            }
+        }
+        cursor == self.steps.len()
+    }
+}
+
+/// Bridge-owned validation record retaining both expected and host-observed identities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheatInitUnitReceiptRecord {
+    pub expected: CheatInitUnitRequest,
+    pub observed: CheatInitUnitTransactionReceipt,
+    pub valid: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupHaltTransactionRequest {
+    pub group: GroupData,
+    pub flags: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupHaltTransactionStatus {
+    Applied,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupHaltTransactionReceipt {
+    pub request: GroupHaltTransactionRequest,
+    pub status: GroupHaltTransactionStatus,
+    pub group_after_ignore_orders: Option<GroupData>,
+    pub members: Vec<HaltMemberFacts>,
+    pub plan: Option<HaltPlan>,
+}
+
+impl GroupHaltTransactionReceipt {
+    pub fn unavailable(request: GroupHaltTransactionRequest) -> Self {
+        Self {
+            request,
+            status: GroupHaltTransactionStatus::Unavailable,
+            group_after_ignore_orders: None,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupHaltTransactionRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupHaltTransactionStatus::Unavailable => {
+                self.group_after_ignore_orders.is_none()
+                    && self.members.is_empty()
+                    && self.plan.is_none()
+            }
+            GroupHaltTransactionStatus::Applied => {
+                let (Some(group), Some(observed)) =
+                    (self.group_after_ignore_orders.as_ref(), self.plan.as_ref())
+                else {
+                    return false;
+                };
+                plan_action_halt(group, expected.flags, &self.members)
+                    .is_ok_and(|recomputed| recomputed == *observed)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupDisbandTransactionRequest {
+    pub group: GroupData,
+    pub all: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupDisbandTransactionStatus {
+    Applied,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupDisbandTransactionReceipt {
+    pub request: GroupDisbandTransactionRequest,
+    pub status: GroupDisbandTransactionStatus,
+    pub group_after_ignore_orders: Option<GroupData>,
+    pub validate_disband: Option<bool>,
+    pub owner_is_local: Option<bool>,
+    pub members: Vec<DisbandMemberFacts>,
+    pub plan: Option<DisbandPlan>,
+}
+
+impl GroupDisbandTransactionReceipt {
+    pub fn unavailable(request: GroupDisbandTransactionRequest) -> Self {
+        Self {
+            request,
+            status: GroupDisbandTransactionStatus::Unavailable,
+            group_after_ignore_orders: None,
+            validate_disband: None,
+            owner_is_local: None,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupDisbandTransactionRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupDisbandTransactionStatus::Unavailable => {
+                self.group_after_ignore_orders.is_none()
+                    && self.validate_disband.is_none()
+                    && self.owner_is_local.is_none()
+                    && self.members.is_empty()
+                    && self.plan.is_none()
+            }
+            GroupDisbandTransactionStatus::Applied => {
+                let (Some(group), Some(validate), Some(local), Some(observed)) = (
+                    self.group_after_ignore_orders.as_ref(),
+                    self.validate_disband,
+                    self.owner_is_local,
+                    self.plan.as_ref(),
+                ) else {
+                    return false;
+                };
+                plan_action_disband(group, expected.all, validate, local, &self.members)
+                    .is_ok_and(|recomputed| recomputed == *observed)
+            }
+        }
+    }
+}
+
 /// The object-side interface `Group::action_*` needs.
 ///
 /// The retail actions reach the world through `objects.lists[who][o]` and a pile of
@@ -639,6 +924,30 @@ pub trait Fleet {
     fn set_stance(&mut self, who: u8, o: i16, stance: i8);
     /// `Object::disband` `0x006455C0`.
     fn disband(&mut self, who: u8, o: i16);
+
+    /// Atomic world boundary for opcode 67. `Applied` hosts must preflight and commit the
+    /// complete retail sequence described by the returned ordered steps; `Unavailable`
+    /// must perform no mutation. The bridge validates every echoed identity and branch.
+    fn apply_cheat_init_unit_transaction(
+        &mut self,
+        request: CheatInitUnitRequest,
+    ) -> CheatInitUnitTransactionReceipt {
+        CheatInitUnitTransactionReceipt::unavailable(request)
+    }
+
+    fn apply_group_halt_transaction(
+        &mut self,
+        request: GroupHaltTransactionRequest,
+    ) -> GroupHaltTransactionReceipt {
+        GroupHaltTransactionReceipt::unavailable(request)
+    }
+
+    fn apply_group_disband_transaction(
+        &mut self,
+        request: GroupDisbandTransactionRequest,
+    ) -> GroupDisbandTransactionReceipt {
+        GroupDisbandTransactionReceipt::unavailable(request)
+    }
 }
 
 /// One object, holding only what [`Fleet`] exposes.
@@ -658,10 +967,18 @@ pub struct Slot {
     pub angle: i32,
     pub role: i32,
     pub domain: i32,
+    pub unit_flags: u32,
+    pub entering_or_exiting: bool,
+    pub halt_flag_4_veto: bool,
+    pub special: bool,
+    pub spy: bool,
     pub unit_masks: u32,
     pub can_ever_transport: bool,
     pub build_masks: u16,
     pub build_mask_capabilities: u16,
+    pub build_active: bool,
+    pub can_make_disband: bool,
+    pub can_make_depopulate: bool,
     pub group: i16,
     pub uid: u16,
     pub x: i32,
@@ -862,6 +1179,105 @@ impl Fleet for ObjectTable {
             s.alive = false;
             s.group = -1;
             s.orders.clear();
+        }
+    }
+
+    fn apply_group_halt_transaction(
+        &mut self,
+        request: GroupHaltTransactionRequest,
+    ) -> GroupHaltTransactionReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                HaltMemberFacts {
+                    o,
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    on_map: slot.is_some_and(|slot| slot.is_on_map),
+                    is_plane: slot.is_some_and(|slot| slot.is_plane),
+                    domain: slot.map_or(0, |slot| slot.domain),
+                    unit_flags: slot.map_or(0, |slot| slot.unit_flags),
+                    entering_or_exiting: slot.is_some_and(|slot| slot.entering_or_exiting),
+                    flag_4_veto: slot.is_some_and(|slot| slot.halt_flag_4_veto),
+                    special: slot.is_some_and(|slot| slot.special),
+                    spy: slot.is_some_and(|slot| slot.spy),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_action_halt(&request.group, request.flags, &members) else {
+            return GroupHaltTransactionReceipt::unavailable(request);
+        };
+
+        for step in &plan.steps {
+            match *step {
+                HaltStep::ClearUnitMask { who, o, mask } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.unit_masks &= !mask;
+                    }
+                }
+                HaltStep::CloseOrders { who, o, .. } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.orders.clear();
+                    }
+                }
+                HaltStep::ClearPathAnchor { .. }
+                | HaltStep::ClearPartialPath { .. }
+                | HaltStep::UpdateAction { .. } => {}
+            }
+        }
+        GroupHaltTransactionReceipt {
+            request: request.clone(),
+            status: GroupHaltTransactionStatus::Applied,
+            group_after_ignore_orders: Some(request.group.clone()),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_disband_transaction(
+        &mut self,
+        request: GroupDisbandTransactionRequest,
+    ) -> GroupDisbandTransactionReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                DisbandMemberFacts {
+                    o,
+                    active: slot.is_some_and(|slot| slot.alive),
+                    is_build: slot.is_some_and(|slot| slot.is_building),
+                    build_active: slot.is_some_and(|slot| slot.build_active),
+                    can_make_disband: slot.is_some_and(|slot| slot.can_make_disband),
+                    can_make_depopulate: slot.is_some_and(|slot| slot.can_make_depopulate),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_action_disband(&request.group, request.all, false, false, &members)
+        else {
+            return GroupDisbandTransactionReceipt::unavailable(request);
+        };
+        if plan
+            .steps
+            .iter()
+            .any(|step| matches!(step, DisbandStep::QueueDisband { .. }))
+        {
+            return GroupDisbandTransactionReceipt::unavailable(request);
+        }
+        for step in &plan.steps {
+            if let DisbandStep::DisbandObject { who, o, .. } = *step {
+                self.disband(who, o);
+            }
+        }
+        GroupDisbandTransactionReceipt {
+            request: request.clone(),
+            status: GroupDisbandTransactionStatus::Applied,
+            group_after_ignore_orders: Some(request.group.clone()),
+            validate_disband: Some(false),
+            owner_is_local: Some(false),
+            members,
+            plan: Some(plan),
         }
     }
 }
@@ -1152,6 +1568,14 @@ pub struct CheatResponseReceipt {
     pub sound_ref: i32,
 }
 
+/// External `SoundGlobal::play` request emitted by `Game::action_cheat_warning`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatWarningReceipt {
+    pub who: i32,
+    /// `SoundGlobalCat` 99. `SoundGlobal::play` owns its subsequent sound-RNG selection.
+    pub sound_category: i32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HotKeyCamera {
     /// Raw IEEE-754 bits from `HotKeyCommand::x/y`; retaining bits preserves NaN payloads.
@@ -1207,7 +1631,9 @@ pub struct InlineCommandState {
     pub chat_status: [[u32; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
     pub local_play: i32,
     pub reveal_map: bool,
-    pub accum_cheated: [u8; NUM_NETWORK_PLAYERS],
+    pub accum_cheated: [u8; NUM_OWNER_SLOTS],
+    /// `PlayerData::valid & 1` for the eight player slots scanned by opcode 67.
+    pub player_valid: [bool; CHEAT_INIT_PLAYER_SLOTS],
     pub tech_bits: [[u8; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
     pub tech_status: [i32; NUM_NETWORK_PLAYERS],
     pub resource_buckets_encoded: [[u32; RESOURCE_BUCKETS]; NUM_NETWORK_PLAYERS],
@@ -1218,6 +1644,10 @@ pub struct InlineCommandState {
     pub sound_ref_count: i32,
     /// Product-facing requests for the external `SoundRef::play` tail.
     pub cheat_response_receipts: Vec<CheatResponseReceipt>,
+    /// Product-facing fixed sound requests from `action_cheat_warning`.
+    pub cheat_warning_receipts: Vec<CheatWarningReceipt>,
+    /// Validated world transaction evidence for opcode 67.
+    pub cheat_init_unit_receipts: Vec<CheatInitUnitReceiptRecord>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
@@ -1244,7 +1674,8 @@ impl Default for InlineCommandState {
             chat_status: [[0; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
             local_play: 0,
             reveal_map: false,
-            accum_cheated: [0; NUM_NETWORK_PLAYERS],
+            accum_cheated: [0; NUM_OWNER_SLOTS],
+            player_valid: [false; CHEAT_INIT_PLAYER_SLOTS],
             tech_bits: [[0; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
             tech_status: [0; NUM_NETWORK_PLAYERS],
             resource_buckets_encoded: [[RESOURCE_BUCKET_XOR; RESOURCE_BUCKETS];
@@ -1253,6 +1684,8 @@ impl Default for InlineCommandState {
             cheat_response_sound_refs: Vec::new(),
             sound_ref_count: 0,
             cheat_response_receipts: Vec::new(),
+            cheat_warning_receipts: Vec::new(),
+            cheat_init_unit_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
@@ -1337,6 +1770,14 @@ impl Bridge {
         std::mem::take(&mut self.inline.cheat_response_receipts)
     }
 
+    pub fn take_cheat_warning_receipts(&mut self) -> Vec<CheatWarningReceipt> {
+        std::mem::take(&mut self.inline.cheat_warning_receipts)
+    }
+
+    pub fn take_cheat_init_unit_receipts(&mut self) -> Vec<CheatInitUnitReceiptRecord> {
+        std::mem::take(&mut self.inline.cheat_init_unit_receipts)
+    }
+
     /// `CommandPackage::process_all` `0x0094C500`: walk a payload, dispatching each
     /// command and advancing by exactly what its handler returns.
     ///
@@ -1378,7 +1819,7 @@ impl Bridge {
             return;
         }
         if InlineDef::find(op).is_some() {
-            self.process_inline(pkg, cmd);
+            self.process_inline(pkg, cmd, f);
             self.stats.inline_state += 1;
             return;
         }
@@ -1410,7 +1851,7 @@ impl Bridge {
 
     /// Inline `CommandPackage::process_*` handlers which mutate state without an
     /// `action_*` receiver.
-    fn process_inline(&mut self, pkg: &Package, cmd: &[u8]) {
+    fn process_inline(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
         match cmd[0] {
             34 => self.process_hotkey(pkg, cmd),
             // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
@@ -1512,6 +1953,7 @@ impl Bridge {
                     self.process_cheat_zero_buckets(who);
                 }
             }
+            67 => self.process_cheat_init_unit(cmd, f),
             // ChatSetCommand replaces all eight recipient status words for the sender's
             // Player::who row. These values later gate chat and ping delivery.
             69 => {
@@ -1580,8 +2022,17 @@ impl Bridge {
         let Ok(who) = usize::try_from(who) else {
             return;
         };
-        if let Some(accum) = self.inline.accum_cheated.get_mut(who) {
-            *accum = accum.wrapping_add(1);
+        let Some(accum) = self.inline.accum_cheated.get_mut(who) else {
+            return;
+        };
+        *accum = accum.wrapping_add(1);
+        if self.inline.network {
+            self.inline
+                .cheat_warning_receipts
+                .push(CheatWarningReceipt {
+                    who: who as i32,
+                    sound_category: 99,
+                });
         }
     }
 
@@ -1667,6 +2118,42 @@ impl Bridge {
                 response_slot: response_slot as u32,
                 sound_ref,
             });
+    }
+
+    /// `Game::action_cheat_init_unit` `0x00592D90` through a typed atomic world receipt.
+    fn process_cheat_init_unit(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+        let (Some(who), Some(type_index), Some(x), Some(y)) = (
+            i32_at(cmd, 1),
+            i32_at(cmd, 5),
+            i32_at(cmd, 9),
+            i32_at(cmd, 13),
+        ) else {
+            return;
+        };
+        let expected = CheatInitUnitRequest {
+            who,
+            type_index,
+            x,
+            y,
+            valid_players: self.inline.player_valid,
+        };
+        let observed = f.apply_cheat_init_unit_transaction(expected);
+        let valid = observed.validates(expected);
+        self.inline
+            .cheat_init_unit_receipts
+            .push(CheatInitUnitReceiptRecord {
+                expected,
+                observed,
+                valid,
+            });
+
+        // The negative-owner loop leaves its counter at eight and passes that exact value
+        // to action_cheat_warning, irrespective of how many players were valid/spawned.
+        self.process_cheat_warning(if who < 0 {
+            CHEAT_INIT_PLAYER_SLOTS as i32
+        } else {
+            who
+        });
     }
 
     /// `CommandPackage::process_turn_data` `0x00943D20`.
@@ -1915,7 +2402,9 @@ impl Action<'_> {
             .iter()
             .filter_map(|&o| f.orders(who, o).map(|l| (o, l.iter().cloned().collect())))
             .collect();
-        self.action_halt(0, f);
+        if !self.action_halt(0, f) {
+            return true;
+        }
         {
             let mut inner = Action {
                 groups: self.groups,
@@ -1997,7 +2486,9 @@ impl Action<'_> {
                 let q = QueuePos::from_i64(i8_at(cmd, 9).unwrap_or(0) as i64);
                 self.action_ground(OrderIndex::AttackGround, x, y, q, f);
             }
-            "halt" => self.action_halt(0, f),
+            "halt" => {
+                let _ = self.action_halt(0, f);
+            }
             "set_transport" => {
                 if let Some(flag) = i32_at(cmd, 1) {
                     self.action_set_transport(flag, f);
@@ -2092,7 +2583,7 @@ impl Action<'_> {
             }
             "disband" => {
                 let all = i32_at(cmd, 1).unwrap_or(0);
-                self.action_disband(all != 0, f);
+                let _ = self.action_disband(all != 0, f);
             }
             "unitmask" => {
                 if let (Some(mask), Some(set)) = (i32_at(cmd, 1), i32_at(cmd, 5)) {
@@ -2414,9 +2905,6 @@ impl Action<'_> {
         // form write. We retain each member's corresponding group nodes so the flattened
         // queues preserve their already-materialized per-member destinations.
         if queued == QueuePos::First as i32 || queued == QueuePos::New as i32 {
-            if let Some(g) = self.groups.get_mut(self.slot) {
-                g.form = -1;
-            }
             let (who, members) = self.members();
             let leader_has_group_order = f
                 .orders(who, leader)
@@ -2438,7 +2926,9 @@ impl Action<'_> {
                     (o, orders)
                 })
                 .collect();
-            self.action_halt(0, f);
+            if !self.action_halt(0, f) {
+                return;
+            }
             self.write_member_forms(resolved, f);
             if leader_has_group_order {
                 for (o, orders) in saved {
@@ -2943,31 +3433,44 @@ impl Action<'_> {
 
     /// `Group::action_halt(int flags)` `0x0070D0C0` (685 B, 14 call sites).
     ///
-    /// Installs nothing. Per member it runs `Unit::close_orders(0)` +
-    /// `Unit::clear_partial_path` + `Unit::update_action`, which empties the order list,
-    /// after three guards [structure]: `group.buildings == 0` gates the whole loop, a
-    /// plane that is airborne is skipped, and `flags & 1` / `flags & 2` skip units that
-    /// answer two virtual predicates. Only the first guard and the emptying are here.
-    fn action_halt(&mut self, _flags: i32, f: &mut dyn Fleet) {
-        let buildings = self.groups.get(self.slot).map(|g| g.buildings).unwrap_or(0);
-        if buildings != 0 {
-            return;
+    /// The exact fact snapshot and ordered lifecycle effects are applied atomically by
+    /// the world host. The bridge accepts only a recomputable planner receipt.
+    fn action_halt(&mut self, flags: i32, f: &mut dyn Fleet) -> bool {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return false;
+        };
+        let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let nonempty_before: Vec<i16> = group.list[..n]
+            .iter()
+            .copied()
+            .filter(|&o| {
+                f.orders(group.who, o)
+                    .is_some_and(|orders| !orders.is_empty())
+            })
+            .collect();
+        let request = GroupHaltTransactionRequest { group, flags };
+        let receipt = f.apply_group_halt_transaction(request.clone());
+        if receipt.status != GroupHaltTransactionStatus::Applied || !receipt.validates(&request) {
+            return false;
         }
-        let (who, list) = self.members();
-        for o in list {
-            if !f.alive(who, o) {
-                continue;
-            }
-            if let Some(l) = f.orders_mut(who, o) {
-                if !l.is_empty() {
-                    self.stats.orders_cleared += 1;
-                }
-                l.clear();
-            }
-        }
-        // `in_ECX[4] = -1` — GroupData::form is reset [structure, 0x0070D14C].
-        if let Some(g) = self.groups.get_mut(self.slot) {
-            g.form = -1;
+        let Some(plan) = receipt.plan else {
+            return false;
+        };
+        self.stats.orders_cleared += plan
+            .steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step,
+                    HaltStep::CloseOrders { o, .. } if nonempty_before.contains(o)
+                )
+            })
+            .count() as u64;
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
+            true
+        } else {
+            false
         }
     }
 
@@ -3015,27 +3518,28 @@ impl Action<'_> {
 
     /// `Group::action_disband(int all)` `0x0070E260` (693 B, 3 call sites).
     ///
-    /// Walks the member list **backwards** and calls `Object::disband` `0x006455C0`;
-    /// with `all == 0` it stops after the first success [structure]. Members that are
-    /// producing buildings go to `Build::queue_up` instead, which is the production
-    /// lane's, not this one's.
-    fn action_disband(&mut self, all: bool, f: &mut dyn Fleet) {
-        let (who, list) = self.members();
-        let mut killed = 0;
-        for &o in list.iter().rev() {
-            if !f.alive(who, o) {
-                continue;
-            }
-            f.disband(who, o);
-            if let Some(g) = self.groups.get_mut(self.slot) {
-                g.remove_member(o);
-            }
-            killed += 1;
-            if !all {
-                break;
-            }
+    /// The host preflights scenario-ignore-orders, validation, active-building queueing,
+    /// direct disband, and feedback before committing. Retail leaves dead identities in
+    /// the group until a later normalize pass; the accepted plan therefore never compacts.
+    fn action_disband(&mut self, all: bool, f: &mut dyn Fleet) -> bool {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return false;
+        };
+        let request = GroupDisbandTransactionRequest { group, all };
+        let receipt = f.apply_group_disband_transaction(request.clone());
+        if receipt.status != GroupDisbandTransactionStatus::Applied || !receipt.validates(&request)
+        {
+            return false;
         }
-        let _ = killed;
+        let Some(plan) = receipt.plan else {
+            return false;
+        };
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -3619,7 +4123,11 @@ mod tests {
         b.process_all(&mut p, &build::disband(0), &mut f).unwrap();
         assert!(!f.alive(1, 2));
         assert!(f.alive(1, 1) && f.alive(1, 0));
-        assert_eq!(b.groups.get(p.group).unwrap().num, 2);
+        assert_eq!(
+            b.groups.get(p.group).unwrap().num,
+            3,
+            "retail leaves the dead identity until Group::normalize"
+        );
         b.process_all(&mut p, &build::disband(1), &mut f).unwrap();
         assert!(!f.alive(1, 0) && !f.alive(1, 1));
     }

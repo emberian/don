@@ -4,8 +4,8 @@
 //! are never called directly.
 
 use don_sim::command::{
-    Bridge, CheatResponseReceipt, InlineDef, InlinePort, ObjectTable, Package, Slot,
-    CHEAT_TECH_BYTES, PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
+    Bridge, CheatResponseReceipt, CheatWarningReceipt, InlineDef, InlinePort, ObjectTable, Package,
+    Slot, CHEAT_TECH_BYTES, PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
 };
 use don_sim::rng::Random;
 
@@ -504,6 +504,17 @@ fn zero_buckets_preserves_sound_rng_quirk_and_surfaces_external_sound_receipts()
         "a SoundRef ID equal to the array count is out of range"
     );
     assert_eq!(bridge.inline.accum_cheated[6], 5);
+    assert_eq!(
+        bridge.take_cheat_warning_receipts(),
+        vec![
+            CheatWarningReceipt {
+                who: 6,
+                sound_category: 99,
+            };
+            5
+        ],
+        "every network cheat warning crosses the exact SoundGlobal category boundary"
+    );
     assert_eq!(bridge.stats.inline_state, 6);
     assert_eq!(bridge.stats.inert, 0);
 }
