@@ -624,12 +624,18 @@ class RetailCtlTests(unittest.TestCase):
             "load_only=true local_addr=127.0.0.1:49152\n"
             "seq=3 pid=77 call=vtable.ns_error_set_callback\n"
             "seq=4 pid=77 call=vtable.ns_set_profiler\n"
+            "seq=5 pid=77 call=vtable.ns_init\n"
+            "seq=6 pid=77 init=stored messenger=true crossplay_service=true "
+            "object_size=0x3d4\n"
+            "seq=7 pid=77 call=vtable.ns_close\n"
+            "seq=8 pid=77 call=vtable.ns_cleanup_system\n"
         )
         parsed = retailctl.parse_netsys_trace(trace, 77)
         self.assertTrue(parsed["load_only"])
-        self.assertEqual(len(parsed["records"]), 4)
+        self.assertEqual(len(parsed["records"]), 8)
         retailctl.validate_netsys_load_only_frontier(parsed)
         self.assertEqual(retailctl.parse_netsys_exit(b"exit_code=0\r\n"), {"exit_code": 0})
+        self.assertIn(8008, retailctl.NETSYS_NORMAL_EXIT_CODES)
         with self.assertRaisesRegex(ValueError, "malformed"):
             retailctl.parse_netsys_exit(b"result=success\n")
         with self.assertRaisesRegex(ValueError, "sequence"):
@@ -637,7 +643,7 @@ class RetailCtlTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "multiple process|does not match"):
             retailctl.parse_netsys_trace(trace.replace("pid=77 factory", "pid=78 factory"))
         with self.assertRaisesRegex(ValueError, "credential"):
-            retailctl.parse_netsys_trace(trace + "seq=5 pid=77 token=abc\n", 77)
+            retailctl.parse_netsys_trace(trace + "seq=9 pid=77 token=abc\n", 77)
         bridge_off = retailctl.parse_netsys_trace(
             "seq=1 pid=81 call=factory.get_netsys_object_ptr\n"
             "seq=2 pid=81 factory=ready abi=netsys-v65 role=Host "

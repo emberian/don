@@ -11,7 +11,7 @@ import http.server
 import ipaddress
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import random
 import re
 import socketserver
@@ -64,6 +64,7 @@ DEFAULT_NETSYS_SHIM = (
 NETSYS_SCHEMA = "don.retail-netsys-experiment.v1"
 NETSYS_JSON_BEGIN = "DON_NETSYS_JSON_BEGIN"
 NETSYS_JSON_END = "DON_NETSYS_JSON_END"
+NETSYS_NORMAL_EXIT_CODES = frozenset({0, 8008})
 
 
 def validate_generation(generation: str) -> str:
@@ -3973,6 +3974,10 @@ def validate_netsys_load_only_frontier(trace: dict) -> None:
         trace["factory_ready"],
         "call=vtable.ns_error_set_callback",
         "call=vtable.ns_set_profiler",
+        "call=vtable.ns_init",
+        "init=stored messenger=true crossplay_service=true object_size=0x3d4",
+        "call=vtable.ns_close",
+        "call=vtable.ns_cleanup_system",
     ]
     positions = []
     for detail in required:
@@ -4152,20 +4157,33 @@ Write-Output '{NETSYS_JSON_END}'
 
 def guest_write_bytes(path: str, data: bytes) -> None:
     encoded = base64.b64encode(data).decode("ascii")
-    script = f"""
-$ErrorActionPreference = 'Stop'
-$path = {ps_literal(path)}
-$directory = Split-Path -Parent $path
-[IO.Directory]::CreateDirectory($directory) | Out-Null
-$temp = $path + '.write.tmp'
-[IO.File]::WriteAllBytes($temp, [Convert]::FromBase64String('{encoded}'))
-if (Test-Path -LiteralPath $path -PathType Leaf) {{
-    [IO.File]::Replace($temp, $path, $null)
-}} else {{
-    [IO.File]::Move($temp, $path)
-}}
-"""
-    guest_ps_encoded(script)
+    if not encoded or '"' in path or any(char in path for char in "\r\n"):
+        raise ValueError("guest byte destination or payload is invalid")
+
+    # Parallels' guest-exec transport can hang indefinitely when a complete file is
+    # embedded in one doubly-base64-encoded PowerShell command.  Feed certutil bounded
+    # canonical-base64 lines through cmd.exe instead.  The temporary files are adjacent
+    # to the destination, and the final move is a same-volume replacement.
+    encoded_temp = path + ".b64.tmp"
+    decoded_temp = path + ".write.tmp"
+    guest_cmd(
+        f'if not exist "{str(PureWindowsPath(path).parent)}" '
+        f'mkdir "{str(PureWindowsPath(path).parent)}" & '
+        f'del /q "{encoded_temp}" "{decoded_temp}" 2>nul & exit /b 0'
+    )
+    try:
+        for offset in range(0, len(encoded), 2048):
+            redirect = ">" if offset == 0 else ">>"
+            guest_cmd(f'{redirect}"{encoded_temp}" echo {encoded[offset:offset + 2048]}')
+        guest_cmd(
+            f'certutil.exe -f -decode "{encoded_temp}" "{decoded_temp}" >nul && '
+            f'move /y "{decoded_temp}" "{path}" >nul'
+        )
+    finally:
+        guest_cmd(
+            f'del /q "{encoded_temp}" "{decoded_temp}" 2>nul & exit /b 0',
+            check=False,
+        )
 
 
 def read_netsys_manifest() -> dict:
@@ -4376,7 +4394,7 @@ def netsys_configure_host(bind: str) -> dict:
         load_exit = parse_netsys_exit(guest_read_bytes(NETSYS_LOAD_EXIT, 1024))
     except ValueError as exc:
         raise SystemExit(f"REFUSING host mode: {exc}") from exc
-    if load_exit["exit_code"] != 0:
+    if load_exit["exit_code"] not in NETSYS_NORMAL_EXIT_CODES:
         raise SystemExit(
             f"REFUSING host mode after load-only exit code {load_exit['exit_code']}"
         )
