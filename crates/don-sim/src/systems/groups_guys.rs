@@ -42,6 +42,7 @@
 //! | `GuyData::turn_speed` | `0x005DE340` | 202 | per-frame angular step |
 //! | `GuyData::get_speed` | `0x005DE410` | 220 | per-frame linear step source |
 //! | `Unit::set_type` | `0x00612FA0` | 2157 | **guy allocation** |
+//! | `Unit::set_new_location` | `0x005F8D20` | 1757 | initial squad lattice + Guy teleport |
 //! | `Objects::kill_guy` | `0x00659410` | 978 | guy teardown |
 //! | `Groups::process` | `0x006FA210` | 582 | one group per player per frame |
 //! | `Group::normalize` | `0x00711540` | 473 | prune dead members + compact |
@@ -56,11 +57,13 @@
 //!
 //! # Fidelity
 //!
-//! **Tier C throughout.** Every function here is an instruction-level transcription with
-//! its own unit test, but *nothing here has been executed against retail* — there is no
-//! oracle case for any `Guy` or `Group` entry point yet. Treat the tests as evidence that
-//! the Rust matches my reading of the x86, not that the reading is right. The honest gap
-//! list is in `docs/mechanics/groups-guys.md` §"What is not derived".
+//! **Tier C except for a Tier-B initial-materialization state check.** Every function here
+//! is an instruction-level transcription with its own unit test, but there is no injected
+//! oracle call for a `Guy` or `Group` entry point yet. Coherent main-thread retail samples
+//! do independently confirm raw Guy coordinates, zero initial `off_x/off_y`, and Guy 0 at
+//! the unit anchor when `guy_mark == 1`; see the mechanics report. Treat the remaining tests
+//! as evidence that the Rust matches the x86 reading, not that the reading is right. The
+//! honest gap list is in `docs/mechanics/groups-guys.md` §"What is not derived".
 
 use crate::trig::{find_angle, sin_table};
 
@@ -960,9 +963,11 @@ impl UnitGuys {
         (ut.squad_size + ut.crew_size).max(0) as usize
     }
 
-    /// Populate a fresh unit's guys the way `Unit::set_type` does on a full re-type.
+    /// Rebuild a unit's guy pointer array the way the full (`param_2 == 0`)
+    /// `Unit::set_type` path does.
     ///
     /// - `guys.length = squad_size + crew_size`
+    /// - every old crew pointer is killed; the new crew range is freshly allocated
     /// - `guy_mark = min(previous guy_mark, squad_size)`; squad guys `[0, guy_mark)` are
     ///   re-typed and given `guy_num = i`
     /// - crew guys `[squad_size, length)` are given `guy_num = i`, `who`, `o` and re-typed
@@ -971,21 +976,52 @@ impl UnitGuys {
     /// The last point is the one that matters: **a squad's live soldier count is
     /// `guy_mark`, and the slots past it are genuinely null pointers**, which the
     /// checksum's presence-bit pass observes.
-    pub fn set_type(&mut self, ty: i32, who: i8, o: i16, ut: &UnitTypeStats) {
+    pub fn set_type(
+        &mut self,
+        ty: i32,
+        who: i8,
+        o: i16,
+        old_ut: &UnitTypeStats,
+        ut: &UnitTypeStats,
+    ) {
         let total = Self::count_for(ut);
-        self.guys.resize(total, None);
-        self.size = self.size.max(total as i32);
+        let old_squad = old_ut.squad_size.max(0) as usize;
+        let mut old = std::mem::take(&mut self.guys);
         let mark = (self.guy_mark as i32).min(ut.squad_size).max(0);
+        self.guys.resize(total, None);
+        let needed = total as i32 - self.size;
+        if needed > 0 {
+            // Unit::set_type's call to ArrayBaseSimpleCopy<Guy*>::increase_size: a
+            // non-negative increment is the minimum growth quantum; a negative increment
+            // does not take increase_size's doubling sentinel here because the caller
+            // supplies the exact deficit instead.
+            let growth = if self.increment >= 0 {
+                needed.max(self.increment as i32)
+            } else {
+                needed
+            };
+            self.size = self.size.wrapping_add(growth);
+        }
         self.guy_mark = mark as i8;
+
+        // Retail retains only the still-live squad prefix.  Old crew starts at the old
+        // type's squad boundary and is killed before any new crew is allocated; growing a
+        // squad leaves the new squad slots null rather than recycling those old crew Guys.
         for i in 0..mark as usize {
-            let g = self.guys[i].get_or_insert_with(GuyData::default);
+            let g = self.guys[i].insert(old.get_mut(i).and_then(Option::take).unwrap_or_default());
             g.ty = ty;
             g.guy_num = i as i8;
             g.who = who;
             g.o = o;
         }
+        for slot in old.iter_mut().skip(old_squad) {
+            // Make the old-crew destruction explicit.  Dropping the old vector would have
+            // the same Rust result, but this mirrors the pointer-array transition being
+            // documented and prevents a future optimization from reusing a crew slot.
+            *slot = None;
+        }
         for i in ut.squad_size.max(0) as usize..total {
-            let g = self.guys[i].get_or_insert_with(GuyData::default);
+            let g = self.guys[i].insert(GuyData::default());
             g.ty = ty;
             g.guy_num = i as i8;
             g.who = who;
@@ -1012,25 +1048,142 @@ impl UnitGuys {
         u
     }
 
-    /// The default squad formation offsets, in `guy_spacing` units.
+    /// Compute the live squad destinations from `Unit::set_new_location` `0x005F8D20`.
     ///
-    /// **Not derived.** `Guy::off_x`/`off_y` are written by `Unit::set_guy_offsets`-class
-    /// code that has not been read; this is a placeholder grid using the type's
-    /// `x_spacing`/`y_spacing`, provided so callers have *something* deterministic. It is
-    /// marked here and in the report rather than presented as retail behaviour.
-    pub fn placeholder_offsets(ut: &UnitTypeStats) -> Vec<(i16, i16)> {
-        let n = Self::count_for(ut);
-        if n == 0 {
+    /// This is the initial materialization path called by `Unit::init` after all Guys have
+    /// been allocated and initialized.  It is a rotated, centered lattice whose width is
+    /// normally three and is two for formation byte 8 (`Column`).  Formation byte 5
+    /// (`Sparse`) doubles `ObjectTypeData::guy_spacing`; `unit_masks & 2` reverses both
+    /// basis vectors.  Every multiply and add is wrapping x86 arithmetic, and `/ 2` is
+    /// signed truncation toward zero.
+    ///
+    /// `world_max_x/y` are the exclusive retail coordinate bounds (`WorldData::tile_xs/ys
+    /// * 192`).  `Unit::set_new_location` clamps each destination before teleporting the
+    /// Guy, so the edge behavior belongs here rather than in a host.
+    pub fn initial_squad_locations(
+        live_count: usize,
+        anchor_x: i32,
+        anchor_y: i32,
+        angle: i32,
+        formation: i8,
+        unit_masks: u32,
+        world_max_x: i32,
+        world_max_y: i32,
+        ut: &UnitTypeStats,
+    ) -> Vec<(i32, i32)> {
+        if live_count == 0 {
             return Vec::new();
         }
-        let cols = (n as f64).sqrt().ceil() as usize;
-        let mut out = Vec::with_capacity(n);
+        let n = live_count.min(i32::MAX as usize) as i32;
+        let mut spacing = ut.guy_spacing;
+        if formation == Formation::Sparse as i8 {
+            spacing = spacing.wrapping_mul(2);
+        }
+        let mut a = sinx(angle.wrapping_sub(0x4000_0000), spacing);
+        let mut b = sinx(angle, spacing);
+        if unit_masks & 2 != 0 {
+            a = a.wrapping_neg();
+            b = b.wrapping_neg();
+        }
+
+        let columns = if formation == Formation::Column as i8 {
+            if n == 1 {
+                1
+            } else {
+                2
+            }
+        } else {
+            n.min(3)
+        };
+        let last_row = (n - 1) / columns;
+        let last_column = columns - 1;
+        let center_x = last_row
+            .wrapping_mul(b)
+            .wrapping_div(2)
+            .wrapping_sub(last_column.wrapping_mul(a).wrapping_div(2));
+        let center_y = last_row
+            .wrapping_mul(a)
+            .wrapping_div(2)
+            .wrapping_add(last_column.wrapping_mul(b).wrapping_div(2));
+
+        let clamp_coord = |v: i32, max: i32| {
+            if v < 0 {
+                0
+            } else if v >= max {
+                max.wrapping_sub(1)
+            } else {
+                v
+            }
+        };
+        let mut out = Vec::with_capacity(live_count);
         for i in 0..n {
-            let cx = (i % cols) as i32 - (cols as i32 - 1) / 2;
-            let cy = (i / cols) as i32;
-            out.push(((cx * ut.x_spacing) as i16, (cy * ut.y_spacing) as i16));
+            let row = i / columns;
+            let column = i % columns;
+            let x = column
+                .wrapping_mul(a)
+                .wrapping_sub(row.wrapping_mul(b))
+                .wrapping_add(anchor_x)
+                .wrapping_add(center_x);
+            let y = anchor_y
+                .wrapping_sub(column.wrapping_mul(b))
+                .wrapping_sub(row.wrapping_mul(a))
+                .wrapping_add(center_y);
+            out.push((clamp_coord(x, world_max_x), clamp_coord(y, world_max_y)));
         }
         out
+    }
+
+    /// Materialize every live, non-null squad Guy at retail's initial lattice position.
+    ///
+    /// `Guy::clear` `0x005DB590` initializes the packed `off_x/off_y` dword to zero, and
+    /// neither `Unit::init` nor `Unit::set_new_location` writes it.  Main-thread retail
+    /// samples confirm `(0,0)` for all observed squad and crew Guys: the formation is carried
+    /// in `x/y` and `des_x/des_y`, **not** in those shorts.  This method therefore clears the
+    /// offsets and reproduces the `set_angle(..., 1)` + `set_new_location(..., 1)` state for
+    /// the live squad prefix.
+    ///
+    /// Crew are deliberately not synthesized here.  Retail propagates them recursively from
+    /// Guy 0 using each crew Guy's graphics-derived `track_dx/track_dy` (`Guy +0x54/+0x58`),
+    /// data which is not part of [`UnitTypeStats`].  Crew do not own collision footprints;
+    /// callers with graphics state may materialize that separate recursive tail exactly.
+    pub fn set_initial_locations(
+        &mut self,
+        anchor_x: i32,
+        anchor_y: i32,
+        angle: i32,
+        formation: i8,
+        unit_masks: u32,
+        world_max_x: i32,
+        world_max_y: i32,
+        ut: &UnitTypeStats,
+    ) {
+        let live = (self.guy_mark as i32).clamp(0, ut.squad_size.max(0)) as usize;
+        let locations = Self::initial_squad_locations(
+            live,
+            anchor_x,
+            anchor_y,
+            angle,
+            formation,
+            unit_masks,
+            world_max_x,
+            world_max_y,
+            ut,
+        );
+        for (slot, (x, y)) in self.guys.iter_mut().take(live).zip(locations) {
+            let Some(g) = slot else { continue };
+            g.off_x = 0;
+            g.off_y = 0;
+            g.des_angle = angle;
+            g.angle = angle;
+            g.last_angle = angle;
+            g.des_x = x;
+            g.des_y = y;
+            g.x = x;
+            g.y = y;
+            g.last_x = x;
+            g.last_y = y;
+            g.last_z = g.z;
+        }
     }
 
     /// `PtrArray<Guy>::walk_data` `0x0046DF30`, checksum (non-loading) side.
@@ -1889,9 +2042,49 @@ mod tests {
         let mut small = ut();
         small.squad_size = 3;
         small.crew_size = 1;
-        u.set_type(51, 0, 0, &small);
+        u.set_type(51, 0, 0, &big, &small);
         assert_eq!(u.guy_mark, 3, "guy_mark is min(old, new squad_size)");
         assert_eq!(u.len(), 4);
+    }
+
+    #[test]
+    fn set_type_destroys_old_crew_and_leaves_grown_squad_slots_null() {
+        let mut old = ut();
+        old.squad_size = 2;
+        old.crew_size = 1;
+        let mut u = UnitGuys::spawn_full(50, 0, 7, &old);
+        u.guys[2].as_mut().unwrap().x = 12_345;
+
+        let mut new = ut();
+        new.squad_size = 3;
+        new.crew_size = 1;
+        u.set_type(51, 1, 8, &old, &new);
+
+        assert_eq!(u.guy_mark, 2);
+        assert!(u.guys[0].is_some() && u.guys[1].is_some());
+        assert!(u.guys[2].is_none(), "new squad capacity is a null pointer");
+        let crew = u.guys[3].as_ref().unwrap();
+        assert_eq!(
+            crew.x, 0,
+            "old crew object was destroyed, not shifted/reused"
+        );
+        assert_eq!((crew.ty, crew.who, crew.o, crew.guy_num), (51, 1, 8, 3));
+    }
+
+    #[test]
+    fn set_type_capacity_growth_honours_ptrarray_increment() {
+        let mut old = ut();
+        old.squad_size = 2;
+        old.crew_size = 1;
+        let mut u = UnitGuys::spawn_full(50, 0, 0, &old);
+        u.increment = 4;
+
+        let mut new = ut();
+        new.squad_size = 4;
+        new.crew_size = 1;
+        u.set_type(51, 0, 0, &old, &new);
+        assert_eq!(u.len(), 5);
+        assert_eq!(u.size, 7, "capacity 3 grows by max(deficit 2, increment 4)");
     }
 
     #[test]
@@ -1904,6 +2097,101 @@ mod tests {
         assert!(u.guys[1].as_ref().unwrap().is_squad(&t));
         assert!(!u.guys[2].as_ref().unwrap().is_squad(&t));
         assert!(!u.guys[3].as_ref().unwrap().is_squad(&t));
+    }
+
+    #[test]
+    fn initial_locations_are_retails_centered_three_wide_lattice() {
+        let mut t = ut();
+        t.squad_size = 4;
+        t.crew_size = 0;
+        t.guy_spacing = 48;
+        let mut u = UnitGuys::spawn_full(50, 0, 0, &t);
+        u.set_initial_locations(1_000, 1_000, 0, 0, 0, 10_000, 10_000, &t);
+
+        let got: Vec<_> = u.guys.iter().flatten().map(|g| (g.x, g.y)).collect();
+        assert_eq!(
+            got,
+            [(1_048, 976), (1_000, 976), (952, 976), (1_048, 1_024)]
+        );
+        for g in u.guys.iter().flatten() {
+            assert_eq!((g.x, g.y), (g.des_x, g.des_y));
+            assert_eq!((g.x, g.y), (g.last_x, g.last_y));
+            assert_eq!((g.angle, g.des_angle, g.last_angle), (0, 0, 0));
+            assert_eq!((g.off_x, g.off_y), (0, 0));
+        }
+    }
+
+    #[test]
+    fn sparse_column_reverse_and_world_edge_gates_are_exact() {
+        let mut t = ut();
+        t.guy_spacing = 48;
+        let sparse = UnitGuys::initial_squad_locations(
+            2,
+            1_000,
+            1_000,
+            0x4000_0000,
+            Formation::Sparse as i8,
+            0,
+            10_000,
+            10_000,
+            &t,
+        );
+        assert_eq!(sparse, [(1_000, 1_048), (1_000, 952)]);
+
+        let column = UnitGuys::initial_squad_locations(
+            4,
+            1_000,
+            1_000,
+            0,
+            Formation::Column as i8,
+            0,
+            10_000,
+            10_000,
+            &t,
+        );
+        assert_eq!(
+            column,
+            [(1_024, 976), (976, 976), (1_024, 1_024), (976, 1_024)]
+        );
+
+        let reversed = UnitGuys::initial_squad_locations(2, 0, 0, 0, 0, 2, 10_000, 10_000, &t);
+        assert_eq!(
+            reversed,
+            [(0, 0), (24, 0)],
+            "negative first point is clamped at the edge"
+        );
+    }
+
+    #[test]
+    fn measured_retail_single_squad_plus_crew_materializes_only_squad_at_anchor() {
+        // Live v5 samples: type 62 had guy_mark=1, PtrArray length=3 and both crew Guys
+        // at graphics-derived offsets; type 69 had guy_mark=1, length=2.  The collision
+        // body is therefore exactly Guy 0 at the anchor in both cases.
+        let mut t = ut();
+        t.squad_size = 1;
+        t.crew_size = 2;
+        t.guy_spacing = 144;
+        let mut u = UnitGuys::spawn_full(62, 0, 1, &t);
+        u.guys[1].as_mut().unwrap().x = -192;
+        u.guys[1].as_mut().unwrap().y = -56;
+        u.set_initial_locations(
+            3_480,
+            29_592,
+            0x5555_5555,
+            0,
+            0x0008_0000,
+            50_000,
+            50_000,
+            &t,
+        );
+        let squad = u.guys[0].as_ref().unwrap();
+        assert_eq!((squad.x, squad.y), (3_480, 29_592));
+        assert_eq!((squad.off_x, squad.off_y), (0, 0));
+        assert_eq!(
+            (u.guys[1].as_ref().unwrap().x, u.guys[1].as_ref().unwrap().y),
+            (-192, -56),
+            "crew placement remains owned by graphics track offsets"
+        );
     }
 
     // --- guy motion ---------------------------------------------------------

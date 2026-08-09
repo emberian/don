@@ -2,7 +2,7 @@
 
 **Lane:** `mech:groups-guys`. **Channels served:** `CheckSums::check_groups` (channel 6) and
 `CheckSums::check_guys` (channel 7) of the fifteen in `CheckSums::check_all` `0x00936560`.
-**Code:** `crates/don-sim/src/systems/groups_guys.rs`. **Tests:** 48, all passing.
+**Code:** `crates/don-sim/src/systems/groups_guys.rs`. **Tests:** 54, all passing.
 
 ---
 
@@ -22,6 +22,7 @@ the guy turret settle, group membership pruning and compaction, and the formatio
 | `GuyData::walk_data` `0x005E0210` — the flat 155-byte window | ported | `GuyData::walk_bytes` |
 | `Group::walk_data` `0x00708400` — length-prefixed, six arrays | ported | `GroupData::walk` |
 | Guy population = `squad_size + crew_size`; `guy_mark` semantics | ported | `UnitGuys::set_type` / `spawn_full` |
+| `Unit::set_new_location` `0x005F8D20` initial squad lattice | ported + live state checked | `initial_squad_locations` / `set_initial_locations` |
 | `Guy::move` `0x005D9240` integrator | ported | `GuyData::move` |
 | `Guy::process` `0x005E0230` turret settle + block-registration gate | ported (registration hook stubbed) | `GuyData::process` |
 | `GuyData::turn_speed` `0x005DE340` | ported | `GuyData::turn_speed` |
@@ -37,7 +38,7 @@ the guy turret settle, group membership pruning and compaction, and the formatio
 | `Group::action_form` `0x00707220` form selection | ported (selection half) | `resolve_form` |
 | `Form::categorize` / `Form::compute` layout | **not ported** | §6 |
 | collision-block bit writes | **not ported** (hook) | §6 |
-| guy formation offsets inside a squad | **not derived** (placeholder, marked) | §6 |
+| graphics-derived crew attachment positions | **not ported** | §6 |
 
 ### How it was measured
 
@@ -60,9 +61,11 @@ the state (a soldier dying, a guy moving one world unit, a member joining the la
 the last player, `last_group[7]` changing) **moves** the channel, and that a change the
 engine does not hash (`proc_group`, array entries past `num`) **does not**.
 
-**Fidelity is Tier C throughout.** There is no oracle case for any `Guy` or `Group` entry
-point. The tests are evidence that the Rust matches my reading of the x86; they are not
-evidence that the reading is right.
+**Fidelity is Tier C except for the Tier-B initial-materialization state check in §2.4.**
+There is still no injected retail call oracle for a `Guy` or `Group` entry point. Most tests
+are therefore evidence that the Rust matches the x86 reading; the coherent live samples add
+independent state evidence only for raw Guy coordinates, `guy_mark`, zero `off_x/off_y`, and
+the single-live-squad-at-anchor cases described below.
 
 ---
 
@@ -168,7 +171,49 @@ test that fails if you collapse it.
 Step 5 is the reason a dead soldier is visible to the checksum: killed squad slots become
 genuine null pointers, and the presence byte flips.
 
-### 2.4 `Guy::move` — the integrator
+### 2.4 Initial squad materialization is a rotated lattice
+
+`Unit::init` allocates and initializes the complete Guy pointer array, then calls
+`Unit::set_new_location` `0x005F8D20` with both the set-angle and teleport flags. The latter
+routine lays out the `guy_mark` live squad prefix. It does not use `x_spacing` or
+`y_spacing`, and it does not store the lattice in `GuyData::off_x/off_y`:
+
+```text
+spacing = type.guy_spacing * (unit.form == Sparse ? 2 : 1)
+a = sinx(unit.angle - 90deg, spacing)
+b = sinx(unit.angle,         spacing)
+if (unit.unit_masks & 2) { a = -a; b = -b; }
+
+columns = unit.form == Column ? (guy_mark == 1 ? 1 : 2) : min(guy_mark, 3)
+last_row = (guy_mark - 1) / columns
+center_x = (last_row*b)/2 - ((columns-1)*a)/2
+center_y = (last_row*a)/2 + ((columns-1)*b)/2
+
+for i in 0..guy_mark {
+    row = i / columns; col = i % columns
+    x = anchor_x + col*a - row*b + center_x
+    y = anchor_y - col*b - row*a + center_y
+    clamp x/y to the world; set angle; set destination; teleport
+}
+```
+
+The divisions are signed x86 truncation toward zero and the intermediate arithmetic wraps.
+`UnitGuys::initial_squad_locations` reproduces that arithmetic; `set_initial_locations`
+also materializes `x/y`, destination, last position, angle and last angle.
+
+`Guy::clear` `0x005DB590` zeroes `off_x` and `off_y` together at `Guy+0x92`. Neither
+`Unit::init` nor this lattice path assigns them afterward. A coherent paused retail sample
+at frame 163 checked three live units: every Guy had `off=(0,0)`; both independently sampled
+type-62 units had the same crew-relative positions. In those units `guy_mark=1` while the
+pointer-array lengths were 2 or 3, proving that only Guy 0 was squad and the remaining
+bodies were crew. Guy 0 was exactly at the unit anchor in every sample.
+
+Crew are a separate recursive tail: Guy 0's `set_angle` / `set_new_location` propagates to
+indices `[squad_size, length)` using each crew Guy's graphics-derived `track_dx/track_dy` at
+`+0x54/+0x58`. Those graph-packet values are not present in `UnitTypeStats`. The port leaves
+crew untouched rather than inventing attachments; crew do not stamp collision footprints.
+
+### 2.5 `Guy::move` — the integrator
 
 `Guy::move` `0x005D9240` is 1,233 bytes and is **pure integer**. Structure from
 `re/decomp-all/005d9240.c`, values from the instruction stream:
@@ -219,7 +264,7 @@ Five details that are load-bearing and are reproduced:
   position carries it, and the step is taken from the unit anchor. A blocked step leaves the
   guy at `(x - off_x, y - off_y)`. That is retail.
 
-### 2.5 `Guy::process` — turrets and blocks
+### 2.6 `Guy::process` — turrets and blocks
 
 ```
 Guy::move();
@@ -243,7 +288,7 @@ The `(frame + o) % 64` phase means a guy refreshes its collision block once ever
 — about 4.3 game seconds — on a per-unit phase spread across the object array. That is one
 more ordering fact a deterministic scheduler has to reproduce.
 
-### 2.6 `GuyData::turn_speed` — the angular budget
+### 2.7 `GuyData::turn_speed` — the angular budget
 
 ```
 step = 0x40000000;                                    // crew default: a quarter turn
@@ -528,12 +573,12 @@ My module adds `sinx`, `cosx` and `angle_diff` and leaves `trig.rs` untouched.
 
 Listed so nobody mistakes silence for coverage.
 
-1. **Guy formation offsets inside a squad.** `GuyData::off_x`/`off_y` are written by code I
-   did not find. `UnitGuys::placeholder_offsets` is a deterministic grid from the type's
-   `x_spacing`/`y_spacing` and is **explicitly marked a placeholder** in the source. Do not
-   promote it. `<GUY_SPACING>` (12 for Citizen), `<X_SPACING>`, `<Y_SPACING>` are in
-   `unitrules.xml` and are exposed in `UnitTypeStats`, but the layout function that consumes
-   them is unread.
+1. **Graphics-derived crew attachment positions.** Initial squad placement is exact, and
+   the old heuristic `placeholder_offsets` has been deleted. Crew are recursively attached
+   to Guy 0 using `track_dx/track_dy` written from the selected graphics piece. The rotation
+   is statically decoded, and live relative positions are recorded in §2.4, but the graph
+   packet lookup that supplies those two per-Guy magnitudes is not represented by the sim's
+   `UnitTypeStats`; no attachment vector is synthesized.
 2. **`squad_size`'s data source.** Bound at `0x0061CEEE` to `UnitTypeData +0x304`, absent
    from `unitrules.xml`. Needs a read of `UnitType::init` `0x0061AB50`.
 3. **Guy count vs hit points, and the "3-sub-unit damage division".** See §2.2. No evidence
@@ -565,8 +610,8 @@ Listed so nobody mistakes silence for coverage.
    flags that only the `move_to` leg has been traced end to end; that is still true.
 9. **`Group::find_role` `0x007081F0`** is called by `Groups::process` and not ported — it
    recomputes `role` from the members. `compute_speed` is ported.
-10. **No oracle coverage.** Nothing in this lane has been executed against retail. Every
-    claim is a reading of static machine code.
+10. **No call oracle coverage.** The main-thread live samples in §2.4 validate settled state,
+    not an injected invocation of `Unit::set_new_location`, `Guy::move`, or a Group method.
 
 ---
 
