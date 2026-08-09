@@ -727,16 +727,22 @@ pub const fn air_patrol_building_scan_due(object_index: i32, frame: i32) -> bool
 /// [`AIR_PATROL_WAYPOINT_ARRIVE`], and wraps to 0 when the cursor has run past the list
 /// (`0x005EA64B`).
 ///
-/// Returns the new cursor and whether the patrol has completed a full circuit while
-/// `UnitData +0xD8 > 1` — the condition under which `0x005EA6FA` issues the
-/// return-to-base order instead of looping.
+/// Returns the new cursor and whether the patrol order is retired at its last waypoint.
+/// `UnitData +0xD8` is `OrderList::length`, not a loop counter: retail retires the patrol
+/// only when another order is queued behind it. With a one-order list the cursor remains
+/// on the final waypoint; it does not wrap to zero.
 #[inline]
-pub fn air_patrol_advance(cursor: i32, count: i32, dist: i32, loops_remaining: i32) -> (i32, bool) {
+pub fn air_patrol_advance(
+    cursor: i32,
+    count: i32,
+    dist: i32,
+    queued_order_count: i32,
+) -> (i32, bool) {
     let mut cur = if cursor >= count { 0 } else { cursor };
     if dist < AIR_PATROL_WAYPOINT_ARRIVE {
         if cur < count - 1 {
             cur += 1;
-        } else if loops_remaining > 1 {
+        } else if queued_order_count > 1 {
             return (cur, true);
         }
     }
@@ -1961,14 +1967,14 @@ mod tests {
     }
 
     #[test]
-    fn patrol_waypoint_advance_and_return() {
+    fn patrol_waypoint_advance_and_queue_retirement() {
         // Not yet arrived.
         assert_eq!(air_patrol_advance(0, 4, 0x241, 3), (0, false));
         // Arrived, advance.
         assert_eq!(air_patrol_advance(0, 4, 0x23F, 3), (1, false));
-        // Arrived at the last waypoint with laps left -> return to base.
+        // Arrived at the last waypoint with queued follow-on work -> retire patrol.
         assert_eq!(air_patrol_advance(3, 4, 0, 3), (3, true));
-        // Arrived at the last waypoint with no laps left -> hold.
+        // Arrived at the last waypoint with no follow-on order -> hold.
         assert_eq!(air_patrol_advance(3, 4, 0, 1), (3, false));
         // Cursor past the end wraps first (0x005EA64B).
         assert_eq!(air_patrol_advance(9, 4, 0x300, 3), (0, false));

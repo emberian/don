@@ -27,7 +27,13 @@ pub const LIVE_PLANES: [&str; 7] = [
 
 /// Pick the entity rows an agent observes, nearest-first around its own centroid so the
 /// truncation to `max_entities` is a locality choice rather than an arbitrary one.
-pub fn select_entities(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usize>) {
+pub fn select_entities(
+    w: &EnvWorld,
+    cfg: &EnvConfig,
+    who: u8,
+    out: &mut Vec<usize>,
+    others: &mut Vec<(i64, usize)>,
+) {
     out.clear();
     let n = w.sim.live_count() as usize;
     // Own entities first, in row order.
@@ -56,16 +62,14 @@ pub fn select_entities(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usi
     }
     cx /= out.len() as i64;
     cy /= out.len() as i64;
-    let mut others: Vec<(i64, usize)> = (0..n)
-        .filter(|&r| w.sim.owner()[r] != who as i8)
-        .map(|r| {
-            let dx = w.sim.pos_x()[r] as i64 - cx;
-            let dy = w.sim.pos_y()[r] as i64 - cy;
-            (dx * dx + dy * dy, r)
-        })
-        .collect();
+    others.clear();
+    others.extend((0..n).filter(|&r| w.sim.owner()[r] != who as i8).map(|r| {
+        let dx = w.sim.pos_x()[r] as i64 - cx;
+        let dy = w.sim.pos_y()[r] as i64 - cy;
+        (dx * dx + dy * dy, r)
+    }));
     others.sort_unstable();
-    for (_, r) in others {
+    for &(_, r) in others.iter() {
         if out.len() == cfg.max_entities {
             break;
         }
@@ -74,12 +78,22 @@ pub fn select_entities(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usi
 }
 
 /// `(N_PLANES, grid_h, grid_w)` f32, agent-relative.
-pub fn write_spatial(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut [f32]) {
-    out.fill(0.0);
+pub fn write_spatial(
+    w: &EnvWorld,
+    cfg: &EnvConfig,
+    who: u8,
+    out: &mut [f32],
+    occupancy: &mut [f32],
+) {
     let (gw, gh) = (cfg.grid_w, cfg.grid_h);
     let plane = gw * gh;
+    // Views over this Rust-owned buffer are zero-copy and may have been written by a host
+    // since the preceding call. Reconstruct every plane, including source-less structural
+    // planes, rather than relying on allocation-time zeroes as hidden persistent state.
+    out.fill(0.0);
+    let occupancy = &mut occupancy[..plane];
+    occupancy.fill(0.0);
     let n = w.sim.live_count() as usize;
-    let mut occupancy = vec![0f32; plane];
     for row in 0..n {
         let (tx, ty) = w.tile_of(row);
         let (tx, ty) = (

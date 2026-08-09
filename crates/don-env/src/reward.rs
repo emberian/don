@@ -86,10 +86,15 @@ pub fn write_terms(w: &EnvWorld, who: u8, before: &RewardSnapshot, terms: &mut [
     terms[15] = (p.buildings_lost - before.buildings_lost) as f32;
     terms[16] = (p.econ.iter().sum::<i32>() - before.econ_total) as f32;
 
-    let alive: Vec<usize> = (0..g::NUM_PLAYERS)
-        .filter(|&i| w.players[i].alive)
-        .collect();
-    let last_standing = alive.len() == 1 && alive[0] == who as usize;
+    let mut alive_count = 0usize;
+    let mut last_alive = usize::MAX;
+    for i in 0..g::NUM_PLAYERS {
+        if w.players[i].alive {
+            alive_count += 1;
+            last_alive = i;
+        }
+    }
+    let last_standing = alive_count == 1 && last_alive == who as usize;
     let just_died = before.alive && !p.alive;
     terms[IDX_WIN] = if last_standing { 1.0 } else { 0.0 };
     terms[IDX_LOSS] = if just_died || (!p.alive && before.alive) {

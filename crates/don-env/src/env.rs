@@ -55,10 +55,34 @@ pub struct VecEnv {
     sample_rng: u64,
 
     threads: usize,
+    workers: Vec<WorkerScratch>,
     caps_real: bool,
     balance_real: bool,
     pub steps_taken: u64,
     pub apply_stats: ApplyStats,
+}
+
+/// Persistent heap payload owned by a vector environment. These are allocator-requested
+/// capacities, not RSS: allocator metadata, code pages, thread stacks, and shared-library
+/// mappings are deliberately outside the number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReservedBytes {
+    /// Mutable simulation and per-player state across every world.
+    pub worlds: usize,
+    /// Spatial/entity/global observations, masks, rewards, terms, flags and row handles.
+    pub outputs: usize,
+    /// Reference masked-sampler action buffers.
+    pub sampler: usize,
+    /// Reusable per-worker entity-selection and mask-writing scratch.
+    pub workspace: usize,
+    /// Immutable type-capability, production-bitset and balance tables shared by the batch.
+    pub shared_rules: usize,
+}
+
+impl ReservedBytes {
+    pub fn total(self) -> usize {
+        self.worlds + self.outputs + self.sampler + self.workspace + self.shared_rules
+    }
 }
 
 impl VecEnv {
@@ -86,6 +110,10 @@ impl VecEnv {
         let a = cfg.num_agents;
         let uml = MaskLayout::new(&unit_head_sizes(&cfg));
         let pml = MaskLayout::new(&player_head_sizes(&cfg));
+        let worker_count = threads.max(1).min(n.max(1));
+        let workers = (0..worker_count)
+            .map(|_| WorkerScratch::new(&cfg))
+            .collect();
         let mut e = VecEnv {
             spatial: vec![0.0; n * a * obs::N_PLANES * cfg.grid_h * cfg.grid_w],
             entities: vec![0.0; n * a * cfg.max_entities * obs::N_ENTITY_FEATURES],
@@ -106,7 +134,8 @@ impl VecEnv {
             worlds,
             rules,
             cfg,
-            threads: threads.max(1),
+            threads: worker_count,
+            workers,
             caps_real,
             balance_real,
             steps_taken: 0,
@@ -121,6 +150,36 @@ impl VecEnv {
     }
     pub fn is_empty(&self) -> bool {
         self.worlds.is_empty()
+    }
+
+    /// Persistent heap payload by purpose, using `Vec::capacity` rather than logical
+    /// length. This makes the memory line stable even if a future writer temporarily
+    /// shortens a buffer without returning its allocation.
+    pub fn bytes_reserved(&self) -> ReservedBytes {
+        fn vec_bytes<T>(v: &Vec<T>) -> usize {
+            v.capacity() * std::mem::size_of::<T>()
+        }
+
+        let outputs = vec_bytes(&self.spatial)
+            + vec_bytes(&self.entities)
+            + vec_bytes(&self.globals)
+            + vec_bytes(&self.unit_masks)
+            + vec_bytes(&self.player_masks)
+            + vec_bytes(&self.rewards)
+            + vec_bytes(&self.terms)
+            + vec_bytes(&self.dones)
+            + vec_bytes(&self.truncs)
+            + vec_bytes(&self.entity_rows);
+        let shared_rules = self.rules.caps.bytes_reserved()
+            + self.rules.balance.as_ref().map_or(0, |v| vec_bytes(v))
+            + vec_bytes(&self.rules.building_types);
+        ReservedBytes {
+            worlds: self.worlds.iter().map(EnvWorld::bytes_reserved).sum(),
+            outputs,
+            sampler: vec_bytes(&self.sample_unit) + vec_bytes(&self.sample_player),
+            workspace: self.workers.iter().map(WorkerScratch::bytes_reserved).sum(),
+            shared_rules,
+        }
     }
 
     /// Honest description of what is derived and what is scaffolding, so a training run
@@ -175,7 +234,7 @@ impl VecEnv {
         ];
         let scaffold = [
             "movement: straight-line integer approach, NOT Unit::move_step / PathFinder::astar_path",
-            "patrol: QUEUE_NEW routes AIR_PATROL/GROUP_PATROL exactly; executors and queued order-list insertion are absent",
+            "patrol: exact AIR_PATROL/GROUP_PATROL dynamic queue ownership and executor transitions are wired; Unit::do_air_physics and patrol target-search remain explicit host gaps",
             "pathfinding: absent",
             "gathering / economy rates: absent, base_rate is always 0",
             "build queue timing: absent, QueueUp and Build complete instantly",
@@ -214,12 +273,27 @@ impl VecEnv {
 
     pub fn reset_all(&mut self) {
         let (agents, start, seed) = (self.cfg.num_agents, self.cfg.start_units, self.cfg.seed);
-        for (i, w) in self.worlds.iter_mut().enumerate() {
-            w.reset(
-                agents,
-                start,
-                seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            );
+        let threads = self.threads.min(self.worlds.len().max(1));
+        // Below four worlds per worker, spawning a second scope costs more than the reset
+        // work. The benchmark covers both sides of this crossover (16 and 64 worlds).
+        if threads == 1 || self.worlds.len() < threads * 4 {
+            for (i, w) in self.worlds.iter_mut().enumerate() {
+                reset_world(w, agents, start, seed, i);
+            }
+        } else {
+            let chunk = self.worlds.len().div_ceil(threads);
+            // Worlds are independent; each worker reconstructs a stable contiguous range
+            // with seeds derived from global world indices, never scheduling order.
+            std::thread::scope(|scope| {
+                for (group_index, group) in self.worlds.chunks_mut(chunk).enumerate() {
+                    scope.spawn(move || {
+                        let first = group_index * chunk;
+                        for (offset, w) in group.iter_mut().enumerate() {
+                            reset_world(w, agents, start, seed, first + offset);
+                        }
+                    });
+                }
+            });
         }
         self.dones.fill(0);
         self.truncs.fill(0);
@@ -306,41 +380,44 @@ impl VecEnv {
             });
         }
 
-        let stats = std::sync::Mutex::new(ApplyStats::default());
         let chunk = parts.len().div_ceil(threads.max(1)).max(1);
-        std::thread::scope(|scope| {
-            for group in parts.chunks_mut(chunk) {
-                let (cfg, spec, uml, pml, stats) = (&cfg, &spec, &uml, &pml, &stats);
-                scope.spawn(move || {
-                    let mut mw = MaskWriter::new(cfg);
-                    let mut local = ApplyStats::default();
-                    let mut sel: Vec<usize> = Vec::with_capacity(cfg.max_entities);
-                    let mut own: Vec<usize> = Vec::with_capacity(cfg.max_controlled);
-                    for p in group.iter_mut() {
-                        step_one(
-                            p, cfg, spec, uml, pml, &mut mw, &mut sel, &mut own, &mut local,
-                        );
-                    }
-                    stats.lock().expect("worker panicked").add(&local);
-                });
+        if threads == 1 {
+            let stats = step_group(&mut parts, &cfg, &spec, &uml, &pml, &mut self.workers[0]);
+            self.apply_stats.add(&stats);
+        } else {
+            let groups = parts.len().div_ceil(chunk);
+            std::thread::scope(|scope| {
+                for (group, worker) in parts
+                    .chunks_mut(chunk)
+                    .zip(self.workers[..groups].iter_mut())
+                {
+                    let (cfg, spec, uml, pml) = (&cfg, &spec, &uml, &pml);
+                    scope.spawn(move || {
+                        step_group(group, cfg, spec, uml, pml, worker);
+                    });
+                }
+            });
+            for worker in &self.workers[..groups] {
+                self.apply_stats.add(&worker.stats);
             }
-        });
-        self.apply_stats
-            .add(&stats.into_inner().expect("worker panicked"));
+        }
         self.steps_taken += 1;
     }
 
     fn refresh_observations(&mut self) {
-        let zero_u =
-            vec![
-                0i32;
-                self.worlds.len() * self.cfg.num_agents * self.cfg.max_controlled * g::N_UNIT_HEADS
-            ];
-        let zero_p = vec![0i32; self.worlds.len() * self.cfg.num_agents * g::N_PLAYER_HEADS];
+        // The sampler buffers have exactly the action input shapes. A reset invalidates
+        // every returned view anyway, so reuse them as zero-action scratch instead of
+        // allocating two potentially multi-megabyte vectors on every reset.
+        let mut zero_u = std::mem::take(&mut self.sample_unit);
+        let mut zero_p = std::mem::take(&mut self.sample_player);
+        zero_u.fill(0);
+        zero_p.fill(0);
         let before = self.steps_taken;
         let saved = std::mem::take(&mut self.apply_stats);
         // A NOOP step: applies nothing, and writes every observation and mask.
         self.step(&zero_u, &zero_p);
+        self.sample_unit = zero_u;
+        self.sample_player = zero_p;
         self.steps_taken = before;
         self.apply_stats = saved;
         // The NOOP step still advanced the sim by one frame; undo the episode counter so
@@ -401,10 +478,9 @@ impl VecEnv {
 
     /// Draw a uniform action from under the current masks, into the sampler buffers.
     ///
-    /// Reservoir sampling straight over the packed bitsets: whole zero bytes are skipped,
-    /// so the 806-wide `Type` head costs 101 byte loads rather than 806 elements. This is
-    /// the reference behaviour a masked policy must reproduce, and the opponent a scripted
-    /// league slot can use without leaving Rust.
+    /// Uniform packed-bit sampling uses one popcount pass and one selection pass. The
+    /// 806-wide `Type` head costs bytes rather than unpacked elements, and a scripted
+    /// league slot can use the same reference behavior without leaving Rust.
     pub fn sample_masked(&mut self) {
         let a = self.cfg.num_agents;
         let urec = self.unit_mask_layout.record_bytes;
@@ -421,47 +497,110 @@ impl VecEnv {
         let chunk = n.div_ceil(threads.max(1)).max(1);
         let umasks = &self.unit_masks;
         let pmasks = &self.player_masks;
-        let mut u_out = self
-            .sample_unit
-            .chunks_mut(chunk * per_world_recs * g::N_UNIT_HEADS);
-        let mut p_out = self.sample_player.chunks_mut(chunk * a * g::N_PLAYER_HEADS);
-        std::thread::scope(|scope| {
-            let mut w0 = 0usize;
-            while w0 < n {
-                let w1 = (w0 + chunk).min(n);
-                let uo = u_out.next().expect("chunk");
-                let po = p_out.next().expect("chunk");
-                let um = &umasks[w0 * per_world_recs * urec..w1 * per_world_recs * urec];
-                let pm = &pmasks[w0 * a * prec..w1 * a * prec];
-                let s = seed ^ ((w0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-                scope.spawn(move || {
-                    let mut rng = s | 1;
-                    let mut next = move || {
-                        rng ^= rng << 13;
-                        rng ^= rng >> 7;
-                        rng ^= rng << 17;
-                        rng
-                    };
-                    for (i, rec) in um.chunks_exact(urec).enumerate() {
-                        let o = i * g::N_UNIT_HEADS;
-                        for h in 0..g::N_UNIT_HEADS {
-                            uo[o + h] = pick(&rec[uml.offsets[h]..], uml.sizes[h], &mut next);
-                        }
-                    }
-                    for (i, rec) in pm.chunks_exact(prec).enumerate() {
-                        let o = i * g::N_PLAYER_HEADS;
-                        for h in 0..g::N_PLAYER_HEADS {
-                            po[o + h] = pick(&rec[pml.offsets[h]..], pml.sizes[h], &mut next);
-                        }
-                    }
-                });
-                w0 = w1;
-            }
-        });
+        if threads == 1 {
+            sample_worlds(
+                0,
+                n,
+                a,
+                per_world_recs,
+                urec,
+                prec,
+                uml,
+                pml,
+                seed,
+                umasks,
+                pmasks,
+                &mut self.sample_unit,
+                &mut self.sample_player,
+            );
+        } else {
+            let mut u_out = self
+                .sample_unit
+                .chunks_mut(chunk * per_world_recs * g::N_UNIT_HEADS);
+            let mut p_out = self.sample_player.chunks_mut(chunk * a * g::N_PLAYER_HEADS);
+            std::thread::scope(|scope| {
+                let mut w0 = 0usize;
+                while w0 < n {
+                    let w1 = (w0 + chunk).min(n);
+                    let uo = u_out.next().expect("chunk");
+                    let po = p_out.next().expect("chunk");
+                    let um = &umasks[w0 * per_world_recs * urec..w1 * per_world_recs * urec];
+                    let pm = &pmasks[w0 * a * prec..w1 * a * prec];
+                    scope.spawn(move || {
+                        sample_worlds(
+                            w0,
+                            w1,
+                            a,
+                            per_world_recs,
+                            urec,
+                            prec,
+                            uml,
+                            pml,
+                            seed,
+                            um,
+                            pm,
+                            uo,
+                            po,
+                        );
+                    });
+                    w0 = w1;
+                }
+            });
+        }
         self.sample_rng = self
             .sample_rng
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_worlds(
+    w0: usize,
+    w1: usize,
+    agents: usize,
+    per_world_recs: usize,
+    urec: usize,
+    prec: usize,
+    uml: &MaskLayout,
+    pml: &MaskLayout,
+    seed: u64,
+    unit_masks: &[u8],
+    player_masks: &[u8],
+    unit_out: &mut [i32],
+    player_out: &mut [i32],
+) {
+    for local_world in 0..(w1 - w0) {
+        // A world's stream is a function of (sampler epoch, world index), never its
+        // worker chunk. This makes the reference sampler thread-count independent.
+        let world = w0 + local_world;
+        let mut rng = seed ^ ((world as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let ur0 = local_world * per_world_recs;
+        for (i, rec) in unit_masks[ur0 * urec..(ur0 + per_world_recs) * urec]
+            .chunks_exact(urec)
+            .enumerate()
+        {
+            let o = (ur0 + i) * g::N_UNIT_HEADS;
+            for h in 0..g::N_UNIT_HEADS {
+                unit_out[o + h] = pick(&rec[uml.offsets[h]..], uml.sizes[h], &mut next);
+            }
+        }
+        let pr0 = local_world * agents;
+        for (i, rec) in player_masks[pr0 * prec..(pr0 + agents) * prec]
+            .chunks_exact(prec)
+            .enumerate()
+        {
+            let o = (pr0 + i) * g::N_PLAYER_HEADS;
+            for h in 0..g::N_PLAYER_HEADS {
+                player_out[o + h] = pick(&rec[pml.offsets[h]..], pml.sizes[h], &mut next);
+            }
+        }
     }
 }
 
@@ -521,6 +660,71 @@ struct WorldPart<'a> {
     er: &'a mut [i32],
 }
 
+fn reset_world(w: &mut EnvWorld, agents: usize, start: usize, seed: u64, index: usize) {
+    w.reset(
+        agents,
+        start,
+        seed ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    );
+}
+
+struct WorkerScratch {
+    masks: MaskWriter,
+    selected: Vec<usize>,
+    controlled: Vec<usize>,
+    others: Vec<(i64, usize)>,
+    occupancy: Vec<f32>,
+    stats: ApplyStats,
+}
+
+impl WorkerScratch {
+    fn new(cfg: &EnvConfig) -> WorkerScratch {
+        WorkerScratch {
+            masks: MaskWriter::new(cfg),
+            selected: Vec::with_capacity(cfg.max_entities),
+            controlled: Vec::with_capacity(cfg.max_controlled),
+            others: Vec::with_capacity(cfg.max_entities),
+            occupancy: vec![0.0; cfg.grid_w * cfg.grid_h],
+            stats: ApplyStats::default(),
+        }
+    }
+
+    fn bytes_reserved(&self) -> usize {
+        self.masks.bytes_reserved()
+            + self.selected.capacity() * std::mem::size_of::<usize>()
+            + self.controlled.capacity() * std::mem::size_of::<usize>()
+            + self.others.capacity() * std::mem::size_of::<(i64, usize)>()
+            + self.occupancy.capacity() * std::mem::size_of::<f32>()
+    }
+}
+
+fn step_group(
+    group: &mut [WorldPart<'_>],
+    cfg: &EnvConfig,
+    spec: &RewardSpec,
+    uml: &MaskLayout,
+    pml: &MaskLayout,
+    scratch: &mut WorkerScratch,
+) -> ApplyStats {
+    scratch.stats = ApplyStats::default();
+    for p in group {
+        step_one(
+            p,
+            cfg,
+            spec,
+            uml,
+            pml,
+            &mut scratch.masks,
+            &mut scratch.selected,
+            &mut scratch.controlled,
+            &mut scratch.others,
+            &mut scratch.occupancy,
+            &mut scratch.stats,
+        );
+    }
+    scratch.stats
+}
+
 #[allow(clippy::too_many_arguments)]
 fn step_one(
     p: &mut WorldPart<'_>,
@@ -531,10 +735,15 @@ fn step_one(
     mw: &mut MaskWriter,
     sel: &mut Vec<usize>,
     own: &mut Vec<usize>,
+    others: &mut Vec<(i64, usize)>,
+    occupancy: &mut [f32],
     stats: &mut ApplyStats,
 ) {
     let a = cfg.num_agents;
-    let snaps: Vec<_> = (0..a).map(|k| reward::snapshot(p.w, k as u8)).collect();
+    let mut snaps = [reward::RewardSnapshot::default(); g::NUM_PLAYERS];
+    for (k, snap) in snaps.iter_mut().enumerate().take(a) {
+        *snap = reward::snapshot(p.w, k as u8);
+    }
 
     // Apply actions. Agents are visited in the engine's rotated owner order so the
     // scheduler bias matches `Objects::process_all` rather than a fixed 0..n sweep.
@@ -584,9 +793,15 @@ fn step_one(
     let plane = obs::N_PLANES * cfg.grid_h * cfg.grid_w;
     for k in 0..a {
         let who = k as u8;
-        obs::select_entities(p.w, cfg, who, sel);
+        obs::select_entities(p.w, cfg, who, sel, others);
         controlled_rows(p.w, cfg, who, own);
-        obs::write_spatial(p.w, cfg, who, &mut p.sp[k * plane..(k + 1) * plane]);
+        obs::write_spatial(
+            p.w,
+            cfg,
+            who,
+            &mut p.sp[k * plane..(k + 1) * plane],
+            occupancy,
+        );
         obs::write_entities(
             p.w,
             cfg,
@@ -607,10 +822,16 @@ fn step_one(
         for (i, &r) in sel.iter().enumerate() {
             er[i] = r as i32;
         }
-        let ctrl_h: Vec<_> = own.iter().map(|&r| p.w.handle_at(r)).collect();
-        let obs_h: Vec<_> = sel.iter().map(|&r| p.w.handle_at(r)).collect();
-        p.w.ctrl[k] = ctrl_h;
-        p.w.obs_ents[k] = obs_h;
+        p.w.ctrl[k].clear();
+        for &r in own.iter() {
+            let h = p.w.handle_at(r);
+            p.w.ctrl[k].push(h);
+        }
+        p.w.obs_ents[k].clear();
+        for &r in sel.iter() {
+            let h = p.w.handle_at(r);
+            p.w.obs_ents[k].push(h);
+        }
         let um = &mut p.um[k * cfg.max_controlled * uml.record_bytes
             ..(k + 1) * cfg.max_controlled * uml.record_bytes];
         mw.write_unit_masks(p.w, cfg, who, own, sel, um);

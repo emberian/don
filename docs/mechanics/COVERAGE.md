@@ -199,31 +199,31 @@ Jump table at `0x00617B94`, indexed directly by `OrderIndex`, reached from `Unit
 | 0 `NONE` | virtual `do_idle` | implemented | 14 `CAST_SPELL` | `do_cast` | absent |
 | 1 `MOVE_TO` | **`do_move` `0x005F7B30`** | implemented | 15 `TRADE_ROUTE` | `do_trade` | absent |
 | 2 `ATTACK_TO` | `do_attack_to` | absent | 16 `STRAFE` | `do_strafe` | absent |
-| 3 `EXPLORE_TO` | `do_explore_to` | absent | 17 `AIR_PATROL` | `do_air_patrol` | absent |
+| 3 `EXPLORE_TO` | `do_explore_to` | absent | 17 `AIR_PATROL` | `do_air_patrol` | implemented (host boundaries) |
 | 4 `FLEE_TO` | **`do_move` — same arm** | implemented | 18 `CHANGE_FORM` | `do_form_change` | absent |
 | 5 `PATROL` | *(default arm)* | **faithfully empty** | 19 `GROUP_MOVE` | `do_group_move` | absent |
 | 6 `BUILD_AT` | `do_build` | absent | 20 `GROUP_ATTACK` | `do_group_attack` | absent |
-| 7 `GATHER` | `do_gather` | absent | 21 `GROUP_ATTACK_TO` | `do_group_attack_to` | absent |
-| 8 `BOARD_SHIP` | `do_board` | absent | 22 `GROUP_PATROL` | `do_patrol` | absent |
+| 7 `GATHER` | `do_gather` | implemented (host boundary) | 21 `GROUP_ATTACK_TO` | `do_group_attack_to` | absent |
+| 8 `BOARD_SHIP` | `do_board` | absent | 22 `GROUP_PATROL` | `do_patrol` | implemented |
 | 9 `AWAIT_BOARD` | `do_await_board` | absent | 23 `ATTACK_GROUND` | `do_attack_ground` | absent |
-| 10 `ATTACK` | `do_attack` `0x005F1B80` | **partial** | 24 `AIR_ATTACK_GROUND` | `do_air_attack_ground` | absent |
+| 10 `ATTACK` | `do_attack` `0x005F1B80` | implemented (host boundary) | 24 `AIR_ATTACK_GROUND` | `do_air_attack_ground` | absent |
 | 11 `FOLLOW` | `do_follow` | absent | 25 `SPECIAL_ANIM` | `do_spec_anim` | absent |
 | 12 `GUARD` | `do_guard` | absent | 26 `GARRISON` | `do_garrison` | absent |
 | 13 `REPAIR` | `do_repair` | absent | 27 `THINK` | `do_think_order` | absent |
 
-**3 implemented, 1 partial, 1 faithfully empty, 23 absent.**
+**7 implemented, 1 faithfully empty, 20 absent.**
 
-`ATTACK` is *partial* rather than implemented: the damage arithmetic is the derived
-`ObjectData::get_damage` pipeline, but `DamagePredicates` sit at their defaults so only the
-spine runs (balance term, ×10 attack, mid-chain armor subtraction, conditional floor of 1);
-overkill, flank, entrenchment, height, river and recapture are guarded and unreached. And
-the target-selection half of attacking is missing outright: **`Unit::fight` `0x005FD4D0`
-(8,157 B) and `Unit::find_attack_pos` `0x00601280` (7,124 B) are uncited by any Rust file.**
+`ATTACK` is implemented at the order layer, but its host is still partial: the damage
+arithmetic is the derived `ObjectData::get_damage` pipeline while `DamagePredicates` sit at
+their defaults. `Unit::fight` `0x005FD4D0` (8,157 B) and `Unit::find_attack_pos`
+`0x00601280` (7,124 B), the target-selection half, also remain outside this dispatcher.
 
-`Unit::work` `0x0060D180` (2,885 B) — the order-list driver that sits between
-`Unit::process` and `do_job`, and that owns `update_order` / `repath` / `check_target_path`
-/ `kill_current_order` — is **also uncited**. So even the three implemented arms have no
-retail-derived thing to dispatch them.
+`Unit::work` `0x0060D180` (2,885 B) and its queue driver are now transcribed in
+`systems::order_dispatch`, including `update_action`, `repath`, `kill_current_order`, the
+per-owner phase gates, and explicit callbacks for adjacent world systems. `AIR_PATROL` and
+`GROUP_PATROL` are dynamic concrete payloads rather than flat order tags. No oracle run has
+raised their fidelity tier; “implemented” here means the recovered arm is executable and
+its unowned systems are explicit host boundaries.
 
 ### 3.1 Reconciling the rl-env lane's 34 %
 
@@ -236,38 +236,36 @@ The env's action space is the **command** layer, not the order layer:
 the 82 `CommandTypes` opcodes. Auditing `apply_unit` / `apply_player` in
 `crates/don-env/src/action.rs`, the arms with real dynamics are:
 
-* unit (11 of 33 with downstream dynamics): `MOVE_TO`, `MOVE_NEAR`, `ATTACK`,
+* unit (13 of 33 with downstream dynamics): `MOVE_TO`, `MOVE_NEAR`, `ATTACK`,
   `SIEGE_ATTACK`, `SWARM_AROUND` (the three attacks collapse to one attack), `HALT`,
-  `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`. `PATROL` and `LAUNCH_PATROL` now
-  install the exact retail order kinds for `QUEUE_NEW`, but their frame executors are
-  absent. `QUEUE_FIRST`/`QUEUE_LAST` visibly report no effect because there is no env order
-  list.
+  `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`, `PATROL`, `LAUNCH_PATROL`. The two
+  patrol verbs use a dynamic queue and execute recovered waypoint/front-insertion state;
+  the AIR_PATROL airframe and target-search callbacks remain incomplete host systems.
 * player (4 of 16): `TREATY`, `DECLARE`, `TRIBUTE`, `RESIGN`.
 
-**15 of 49 verbs = 30.6 % of the verb space currently carries downstream dynamics.** Of
-the other 34, 32 fall to the `_ =>` arm that increments `accepted_no_effect`; the two
-patrol verbs install exact orders whose executors are absent. The *observed* rate of
+**17 of 49 verbs = 34.7 % of the verb space currently carries downstream dynamics.** The
+other 32 fall to the `_ =>` arm that increments `accepted_no_effect`. The *observed* rate of
 `accepted_no_effect` is instead the share of applied actions under a masked sampler, and
 masking suppresses many unimplemented verbs before they are ever emitted (you cannot
 `GATHER` with no gatherable in range). The two percentages are not expected to agree.
 
-Consistency with §3: every one of the 20 unhandled *unit* verbs maps to an order whose
-`do_job` arm is also absent — `GATHER`→`do_gather`, `REPAIR`→`do_repair`,
+Consistency with §3: 19 of the 20 unhandled *unit* verbs map to an order whose `do_job`
+arm is also absent — `REPAIR`→`do_repair`,
 `GARRISON`→`do_garrison`, `FOLLOW`→`do_follow`, `GUARD`→`do_guard`,
 `BOARD_SHIP`→`do_board`, `TRADE`→`do_trade`, `SPELL`→`do_cast`,
-`ATTACK_GROUND`→`do_attack_ground`. `PATROL` and `LAUNCH_PATROL` are the additional honest
-case: their orders are retained rather than dropped, but `AIR_PATROL` and `GROUP_PATROL`
-also lack executors.
+`ATTACK_GROUND`→`do_attack_ground`. `GATHER` is the exception: its order arm now exists
+behind a world callback, while the RL command surface still has no gather target/rate host.
 
-The former routing divergence is closed. `PATROL` now installs `GROUP_PATROL` (22) for
-ground units and helicopters and delegates true planes to `AIR_PATROL` (17);
-`LAUNCH_PATROL` installs `AIR_PATROL` only for true planes. `OrderIndex::PATROL` (5) stays
-the dead arm. These actions are still counted as `applied` because the exact order is
-installed, but they remain stationary until the two executors are derived. That execution
-gap, together with queued order-list insertion, is now the registered RL readiness blocker.
+The former routing, queue, and stationary-order divergences are closed. `PATROL` installs
+`GROUP_PATROL` (22) for ground units and helicopters and delegates true planes to
+`AIR_PATROL` (17); `LAUNCH_PATROL` installs `AIR_PATROL` only for true planes.
+`OrderIndex::PATROL` (5) stays the dead arm. The registered RL readiness blocker now names
+the remaining adjacent air host: retail `Unit::do_air_physics` and opportunistic target
+search are not yet EnvWorld systems.
 
 **Better metric for the RL lane:** `accepted_no_effect` measures the *command* surface.
-The order-layer figure is 4 of 28 `do_job` arms. The hand-classified `do_frame` table marks
+The dispatcher figure is 7 implemented plus 1 faithfully empty of 28 `do_job` arms. The
+hand-classified `do_frame` table marks
 3 of 14 in-scope entries implemented, but that label does not prove the runnable Rust tick
 executes retail-equivalent work. Reporting the distinction stops one number carrying more
 weight than it can.

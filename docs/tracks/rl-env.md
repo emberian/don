@@ -15,7 +15,7 @@ is which at runtime.
 
 ```sh
 python3 crates/don-env/gen/gen_spec.py     # regenerate spec + capability table
-cargo test -p don-env                      # 18 tests, all green
+cargo test -p don-env                      # 22 tests, all green
 bash python/build.sh                       # -> python/don_env/_don_env.so
 PYTHONPATH=python python3 python/smoke_test.py --envs 256
 ```
@@ -26,6 +26,7 @@ PYTHONPATH=python python3 python/smoke_test.py --envs 256
 | 33 unit verbs + 16 player verbs, an exact partition of the engine's 82 opcodes | `tests::every_opcode_is_classified_exactly_once` |
 | Per-parameter masks, bit-packed, derived from shipped rules data | `tests::no_mask_head_is_ever_all_zero` |
 | Retail patrol command routing, including plane vs helicopter | `command_bridge_agreement::env_patrol_routing_uses_retail_is_plane` |
+| Dynamic patrol queue positions and reachable ground/air executor transitions | `command_bridge_agreement::env_patrol_queue_and_executor_preserve_retail_transitions` |
 | Masked sampling never produces an illegal action | `tests::masked_sampling_produces_no_illegal_actions` — 0 illegal in ~486 k applied actions over the smoke test |
 | Zero-copy observations (numpy views over Rust memory) | smoke test: `entities.flags.owndata == False`, pointer stable across `step`, contents change in place |
 | Batch parallelism is bit-deterministic in thread count | `tests::stepping_is_deterministic_across_thread_counts` |
@@ -224,10 +225,13 @@ The env prints this itself (`env.provenance()`); repeated here so it is not only
 * **movement** — straight-line integer approach with an octagonal distance approximation.
   Not `Unit::move_step` (which uses `sin_table`/`cosx`/`find_angle`) and not
   `PathFinder::astar_path` `0x00683770`, which is unread.
-* **patrol execution** — `QUEUE_NEW` commands install the exact `AIR_PATROL` (17) or
-  `GROUP_PATROL` (22) order, but neither order has an env frame executor yet. They remain
-  stationary; patrol is never substituted with the straight-line `MoveTo` scaffold.
-  `QUEUE_FIRST`/`QUEUE_LAST` report no effect because the env has no linked order list.
+* **patrol airframe host** — commands install the exact `AIR_PATROL` (17) or
+  `GROUP_PATROL` (22) order into a dynamic queue with the recovered patrol-specific
+  `QUEUE_FIRST`/`QUEUE_LAST` rules. Both frame transitions execute; ground patrol inserts
+  its exact `ATTACK_TO` node ahead of itself. The remaining gap is adjacent to the air
+  executor: `Unit::do_air_physics` and the mod-16/mod-32 target searches are not ported,
+  so the air transition currently crosses the environment's labelled movement scaffold
+  and receives no opportunistic target.
 * **pathfinding, gathering, economy rates, build-queue timing, tech tree, terrain, map
   generation, real fog** — absent. `QueueUp` and `Build` complete instantly with cost and
   pop enforced from the shipped tables; the timing would otherwise be invented.

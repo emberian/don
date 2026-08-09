@@ -20,6 +20,8 @@ use crate::generated as g;
 use crate::spec::{EnvConfig, AMOUNT_BUCKETS, COUNT_BUCKETS};
 use crate::state::EnvWorld;
 use crate::typecaps::{F_BUILDING, F_CIVILIAN, F_PRODUCER};
+use don_sim::command::QueuePos;
+use don_sim::systems::order_dispatch::OrderRec;
 use don_sim::world::SUBTILE;
 
 /// One entity's action, as the ten head values.
@@ -160,6 +162,7 @@ pub fn apply_unit(
             .get((a.target_entity - 1) as usize)
             .and_then(|h| w.sim.row_of(*h))
     };
+    let queue = QueuePos::from_i64(a.queue_pos as i64);
 
     match vi {
         g::uv::MOVE_TO | g::uv::MOVE_NEAR => {
@@ -169,20 +172,12 @@ pub fn apply_unit(
             }
             w.dest_x[row] = tx;
             w.dest_y[row] = ty;
-            w.order[row] = g::OrderIndex::MoveTo as u8;
+            w.install_order(row, OrderRec::move_to(tx, ty, 0), queue);
             st.applied += 1;
         }
         g::uv::PATROL | g::uv::LAUNCH_PATROL => {
             if w.speed[row] <= 0 {
                 st.illegal += 1;
-                return;
-            }
-            // EnvWorld does not yet carry UnitOrder's linked list. QUEUE_FIRST and
-            // QUEUE_LAST cannot be represented by overwriting its single order byte;
-            // report those honestly instead of silently treating them as QUEUE_NEW.
-            if a.queue_pos != g::QueuePos::QueueNew as u16 {
-                w.unimplemented.unit[vi] += 1;
-                st.accepted_no_effect += 1;
                 return;
             }
             // The permissive fallback has no UnitData::is_plane evidence. Guessing here
@@ -202,9 +197,15 @@ pub fn apply_unit(
                 st.illegal += 1;
                 return;
             };
-            w.dest_x[row] = tx;
-            w.dest_y[row] = ty;
-            w.order[row] = order as u8;
+            match order {
+                g::OrderIndex::GroupPatrol => {
+                    w.install_group_patrol_order(row, tx, ty, queue);
+                }
+                g::OrderIndex::AirPatrol => {
+                    w.install_air_patrol_order(row, tx, ty, queue);
+                }
+                _ => unreachable!("patrol router only returns executable patrol classes"),
+            }
             st.applied += 1;
         }
         g::uv::ATTACK | g::uv::SIEGE_ATTACK | g::uv::SWARM_AROUND => {
@@ -223,11 +224,18 @@ pub fn apply_unit(
                 return;
             }
             w.target[row] = w.handle_at(tr);
-            w.order[row] = g::OrderIndex::Attack as u8;
+            let target_who = w.sim.owner()[tr] as i32;
+            let target_o = w.sim.units.o()[tr] as i32;
+            let target_uid = w.sim.units.uid()[tr] as u16;
+            w.install_order(
+                row,
+                OrderRec::attack(target_who, target_o, target_uid),
+                queue,
+            );
             st.applied += 1;
         }
         g::uv::HALT => {
-            w.order[row] = g::OrderIndex::None as u8;
+            w.clear_orders(row);
             let (px, py) = (w.sim.pos_x()[row], w.sim.pos_y()[row]);
             w.dest_x[row] = px;
             w.dest_y[row] = py;

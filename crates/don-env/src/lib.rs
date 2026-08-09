@@ -219,6 +219,131 @@ mod tests {
         }
     }
 
+    fn assert_float_bits(label: &str, a: &[f32], b: &[f32]) {
+        assert_eq!(a.len(), b.len(), "{label} length");
+        for (i, (x, y)) in a.iter().zip(b).enumerate() {
+            assert_eq!(x.to_bits(), y.to_bits(), "{label}[{i}]");
+        }
+    }
+
+    fn assert_env_image(a: &VecEnv, b: &VecEnv) {
+        assert_eq!(a.worlds.len(), b.worlds.len());
+        for (i, (x, y)) in a.worlds.iter().zip(&b.worlds).enumerate() {
+            assert_eq!(x.sim.digest(), y.sim.digest(), "world {i} sim");
+            assert_eq!(x.type_index, y.type_index, "world {i} types");
+            assert_eq!(x.order, y.order, "world {i} orders");
+            assert_eq!(x.target, y.target, "world {i} targets");
+            assert_eq!(x.dest_x, y.dest_x, "world {i} dest x");
+            assert_eq!(x.dest_y, y.dest_y, "world {i} dest y");
+            assert_eq!(x.stance, y.stance, "world {i} stance");
+            assert_eq!(x.form, y.form, "world {i} form");
+            assert_eq!(x.ctrl, y.ctrl, "world {i} control handles");
+            assert_eq!(x.obs_ents, y.obs_ents, "world {i} observed handles");
+            assert_eq!(x.step_index, y.step_index, "world {i} step");
+        }
+        assert_float_bits("spatial", a.spatial(), b.spatial());
+        assert_float_bits("entities", a.entities(), b.entities());
+        assert_float_bits("globals", a.globals(), b.globals());
+        assert_float_bits("rewards", a.rewards(), b.rewards());
+        assert_float_bits("terms", a.reward_terms(), b.reward_terms());
+        assert_eq!(a.unit_masks(), b.unit_masks(), "unit masks");
+        assert_eq!(a.player_masks(), b.player_masks(), "player masks");
+        assert_eq!(a.entity_rows(), b.entity_rows(), "entity rows");
+        assert_eq!(a.dones(), b.dones(), "done flags");
+        assert_eq!(a.truncateds(), b.truncateds(), "truncated flags");
+        assert_eq!(a.apply_stats, b.apply_stats, "action results");
+    }
+
+    /// Worker scheduling is not allowed to enter either the simulator or the reference
+    /// masked sampler's random stream. This compares all returned arrays and the mutable
+    /// entity columns, not merely a high-level score.
+    #[test]
+    fn full_step_and_sampler_are_thread_count_independent() {
+        let run = |threads| {
+            let cfg = EnvConfig {
+                grid_w: 24,
+                grid_h: 20,
+                max_entities: 40,
+                max_controlled: 20,
+                num_agents: 3,
+                start_units: 10,
+                max_steps: 0,
+                ..Default::default()
+            };
+            let mut e = VecEnv::new(11, cfg, None, None, threads).unwrap();
+            for _ in 0..12 {
+                e.sample_masked();
+                let ua = e.sampled_unit_actions().to_vec();
+                let pa = e.sampled_player_actions().to_vec();
+                e.step(&ua, &pa);
+            }
+            e
+        };
+
+        let serial = run(1);
+        for threads in [2usize, 4, 8] {
+            let parallel = run(threads);
+            assert_eq!(
+                serial.sampled_unit_actions(),
+                parallel.sampled_unit_actions(),
+                "unit sampler changed at {threads} threads"
+            );
+            assert_eq!(
+                serial.sampled_player_actions(),
+                parallel.sampled_player_actions(),
+                "player sampler changed at {threads} threads"
+            );
+            assert_env_image(&serial, &parallel);
+        }
+    }
+
+    #[test]
+    fn parallel_reset_reconstructs_the_same_complete_observation() {
+        let mut serial = env(13);
+        let mut parallel = {
+            let cfg = serial.cfg.clone();
+            VecEnv::new(13, cfg, None, None, 8).unwrap()
+        };
+        let ua = vec![0; 13 * 2 * serial.cfg.max_controlled * g::N_UNIT_HEADS];
+        let pa = vec![0; 13 * 2 * g::N_PLAYER_HEADS];
+        for _ in 0..7 {
+            serial.step(&ua, &pa);
+            parallel.step(&ua, &pa);
+        }
+        serial.reset_all();
+        parallel.reset_all();
+        assert_env_image(&serial, &parallel);
+    }
+
+    /// Captured with the pre-optimization implementation at `fc7e2b0`. These are the two
+    /// large outputs whose writers changed in this lane, so an accidental change to plane
+    /// clearing, entity occupancy, or packed-mask emission fails independently of the
+    /// cross-thread comparison above.
+    #[test]
+    fn hot_output_fingerprint_matches_the_pre_optimization_capture() {
+        let cfg = EnvConfig {
+            grid_w: 64,
+            grid_h: 64,
+            max_entities: 64,
+            max_controlled: 32,
+            num_agents: 2,
+            frames_per_step: 1,
+            max_steps: 0,
+            start_units: 16,
+            fog: false,
+            seed: 0x5EED,
+        };
+        let e = VecEnv::new(1, cfg, None, None, 1).unwrap();
+        let spatial = e.spatial().iter().fold(0x811C_9DC5u32, |h, v| {
+            (h ^ v.to_bits()).wrapping_mul(0x0100_0193)
+        });
+        let masks = e.unit_masks().iter().fold(0x811C_9DC5u32, |h, v| {
+            (h ^ u32::from(*v)).wrapping_mul(0x0100_0193)
+        });
+        assert_eq!(spatial, 0xD9EA_9DC5);
+        assert_eq!(masks, 0x5DC2_9C21);
+    }
+
     #[test]
     fn reward_defaults_to_sparse_outcome_and_shaping_is_settable() {
         let mut s = reward::RewardSpec::default();

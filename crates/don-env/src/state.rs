@@ -16,6 +16,13 @@
 
 use crate::generated as g;
 use crate::typecaps::{TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE};
+use don_sim::command::QueuePos;
+use don_sim::order::OrderIndex;
+use don_sim::systems::order_dispatch::{
+    install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, PatrolPayload,
+    UnitWork,
+};
+use don_sim::systems::patrol::{self, AirPatrolAction, AirPatrolAfterPhysics, GroundPatrolAction};
 use don_sim::world::SUBTILE;
 use don_sim::{Handle, World};
 use std::sync::Arc;
@@ -239,6 +246,10 @@ pub struct EnvWorld {
     pub players: Vec<PlayerState>,
     // ---- entity columns, parallel to `sim` rows -------------------------------------
     pub type_index: Vec<u16>,
+    /// Executable `UnitData::orderlist` state for the environment lane. Unlike the
+    /// historical `order` byte mirror below, this retains every queued node and the
+    /// dynamic waypoint arrays owned by patrol orders.
+    pub orders: Vec<OrderQueue>,
     pub order: Vec<u8>,
     pub target: Vec<Handle>,
     pub dest_x: Vec<i32>,
@@ -250,6 +261,8 @@ pub struct EnvWorld {
     pub max_hits: Vec<i32>,
     pub speed: Vec<i16>,
     pub range_max: Vec<i32>,
+    /// `UnitData::spell_time`; AIR_PATROL's animal override primes this from 0 to 1.
+    pub spell_time: Vec<i16>,
     /// Generation of the handle owning each row. `don-sim` exposes ids but not
     /// generations, and reconstructing one by probing would be O(generation); mirroring
     /// it through the same swap-remove keeps `handle_at` O(1).
@@ -294,6 +307,7 @@ impl EnvWorld {
                 .map(|i| PlayerState::new(i as u8))
                 .collect(),
             type_index: vec![0; cap],
+            orders: vec![OrderQueue::new(); cap],
             order: vec![0; cap],
             target: vec![NO_HANDLE; cap],
             dest_x: vec![0; cap],
@@ -305,6 +319,7 @@ impl EnvWorld {
             max_hits: vec![1; cap],
             speed: vec![0; cap],
             range_max: vec![0; cap],
+            spell_time: vec![0; cap],
             handle_gen: vec![0; cap],
             ctrl: vec![Vec::new(); g::NUM_PLAYERS],
             obs_ents: vec![Vec::new(); g::NUM_PLAYERS],
@@ -319,6 +334,49 @@ impl EnvWorld {
             subtile_w: grid_w as i32 * SUBTILE,
             subtile_h: grid_h as i32 * SUBTILE,
         }
+    }
+
+    /// Heap payload reserved by this mutable world, excluding the shared [`Rules`] tables
+    /// and allocator metadata. The benchmark reports this separately from output buffers
+    /// so changing observation shape cannot be mistaken for changing simulation state.
+    pub fn bytes_reserved(&self) -> usize {
+        fn vec_bytes<T>(v: &Vec<T>) -> usize {
+            v.capacity() * std::mem::size_of::<T>()
+        }
+
+        let mut bytes = self.sim.bytes_reserved()
+            + vec_bytes(&self.players)
+            + vec_bytes(&self.type_index)
+            + vec_bytes(&self.orders)
+            + vec_bytes(&self.order)
+            + vec_bytes(&self.target)
+            + vec_bytes(&self.dest_x)
+            + vec_bytes(&self.dest_y)
+            + vec_bytes(&self.stance)
+            + vec_bytes(&self.form)
+            + vec_bytes(&self.attack)
+            + vec_bytes(&self.armor)
+            + vec_bytes(&self.max_hits)
+            + vec_bytes(&self.speed)
+            + vec_bytes(&self.range_max)
+            + vec_bytes(&self.spell_time)
+            + vec_bytes(&self.handle_gen)
+            + vec_bytes(&self.ctrl)
+            + vec_bytes(&self.obs_ents)
+            + vec_bytes(&self.unimplemented.unit)
+            + vec_bytes(&self.unimplemented.player);
+        for p in &self.players {
+            bytes += vec_bytes(&p.num_buildings) + vec_bytes(&p.num_units);
+        }
+        for v in self.ctrl.iter().chain(self.obs_ents.iter()) {
+            bytes += vec_bytes(v);
+        }
+        bytes += self
+            .orders
+            .iter()
+            .map(OrderQueue::bytes_reserved)
+            .sum::<usize>();
+        bytes
     }
 
     #[inline]
@@ -341,6 +399,7 @@ impl EnvWorld {
         let row = self.sim.row_of(h).expect("just spawned");
         let c = *self.rules.caps.get(t);
         self.type_index[row] = t;
+        self.orders[row].clear();
         self.order[row] = g::OrderIndex::None as u8;
         self.target[row] = NO_HANDLE;
         self.dest_x[row] = x;
@@ -352,6 +411,7 @@ impl EnvWorld {
         self.max_hits[row] = c.hits.max(1);
         self.speed[row] = c.move_rate;
         self.range_max[row] = c.range_max;
+        self.spell_time[row] = 0;
         self.handle_gen[row] = h.generation;
         self.sim.set_pos(
             row,
@@ -388,6 +448,7 @@ impl EnvWorld {
         let owner = self.sim.owner()[row] as usize;
         if row != last {
             self.type_index[row] = self.type_index[last];
+            self.orders.swap(row, last);
             self.order[row] = self.order[last];
             self.target[row] = self.target[last];
             self.dest_x[row] = self.dest_x[last];
@@ -399,8 +460,10 @@ impl EnvWorld {
             self.max_hits[row] = self.max_hits[last];
             self.speed[row] = self.speed[last];
             self.range_max[row] = self.range_max[last];
+            self.spell_time[row] = self.spell_time[last];
             self.handle_gen[row] = self.handle_gen[last];
         }
+        self.orders[last].clear();
         let ok = self.sim.despawn(h);
         if ok && owner < g::NUM_PLAYERS {
             let c = *self.rules.caps.get(t);
@@ -481,6 +544,141 @@ impl EnvWorld {
         }
     }
 
+    /// Make the executable queue authoritative for a row which predates queue-aware
+    /// command installation. This compatibility import is intentionally one-way: after
+    /// the first queued command, [`Self::sync_order_from_queue`] owns the byte mirror.
+    fn import_legacy_order(&mut self, row: usize) {
+        if !self.orders[row].is_empty() || self.order[row] == OrderIndex::None as u8 {
+            return;
+        }
+        let Some(kind) = OrderIndex::from_index(self.order[row] as usize) else {
+            return;
+        };
+        let mut rec = match kind {
+            OrderIndex::MoveTo | OrderIndex::AttackTo => {
+                OrderRec::move_to(self.dest_x[row], self.dest_y[row], 0)
+            }
+            _ => OrderRec::of_kind(kind),
+        };
+        rec.kind = kind;
+        self.orders[row].push_back(rec);
+    }
+
+    /// Install an ordinary order with the three queue positions carried on the wire.
+    /// Patrol uses its two exceptional installers below instead.
+    pub fn install_order(&mut self, row: usize, rec: OrderRec, queue: QueuePos) {
+        self.import_legacy_order(row);
+        match queue {
+            QueuePos::New => self.orders[row].replace(rec),
+            QueuePos::Last => self.orders[row].push_back(rec),
+            QueuePos::First => self.orders[row].push_front(rec),
+        }
+        self.sync_order_from_queue(row);
+    }
+
+    /// Clear `UnitData::orderlist`, the exact queue-side effect of HALT / QUEUE_NEW.
+    pub fn clear_orders(&mut self, row: usize) {
+        self.orders[row].clear();
+        self.sync_order_from_queue(row);
+    }
+
+    /// `Group::action_patrol` + `Unit::add_patrol_order` for one environment actor.
+    ///
+    /// Env actions are per actor rather than persistent `Group` objects, so the unit is
+    /// deliberately executed ungrouped. The recovered ground executor does not read
+    /// `id`/`form_id` in that arm; `(whose, oxx)` still carries the real object address.
+    pub fn install_group_patrol_order(
+        &mut self,
+        row: usize,
+        target_x: i32,
+        target_y: i32,
+        queue: QueuePos,
+    ) -> PatrolInstall {
+        self.import_legacy_order(row);
+        let who = self.sim.owner()[row] as u8;
+        let o = self.sim.units.o()[row];
+        let (x, y) = (self.sim.pos_x()[row], self.sim.pos_y()[row]);
+        let mut unit = UnitWork::at(who, o, x, y);
+        unit.orders = std::mem::take(&mut self.orders[row]);
+        let result = install_group_patrol(
+            &mut unit,
+            x,
+            y,
+            target_x,
+            target_y,
+            0,
+            self.form[row] as i32,
+            o as i32,
+            who as i32,
+            queue,
+        );
+        self.orders[row] = unit.orders;
+        self.dest_x[row] = target_x;
+        self.dest_y[row] = target_y;
+        self.sync_order_from_queue(row);
+        result
+    }
+
+    /// `Group::action_air_patrol` + the true-plane replacement/extension installer.
+    pub fn install_air_patrol_order(
+        &mut self,
+        row: usize,
+        target_x: i32,
+        target_y: i32,
+        queue: QueuePos,
+    ) -> PatrolInstall {
+        self.import_legacy_order(row);
+        let who = self.sim.owner()[row] as u8;
+        let o = self.sim.units.o()[row];
+        let (x, y) = (self.sim.pos_x()[row], self.sim.pos_y()[row]);
+        let mut unit = UnitWork::at(who, o, x, y);
+        unit.orders = std::mem::take(&mut self.orders[row]);
+        // EnvWorld currently has no launch-home/garrison column. This is the exact
+        // no-live-home branch of add_air_patrol_order, not an invented origin.
+        let result = install_air_patrol(&mut unit, target_x, target_y, -1, -1, None, true, queue);
+        self.orders[row] = unit.orders;
+        self.dest_x[row] = target_x;
+        self.dest_y[row] = target_y;
+        self.sync_order_from_queue(row);
+        result
+    }
+
+    /// Refresh the compact observation/action mirror from the executable list head.
+    fn sync_order_from_queue(&mut self, row: usize) {
+        self.orders[row].reset();
+        let Some(front) = self.orders[row].front() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        let (kind, x, y, target_who, target_o, target_uid) = (
+            front.kind,
+            front.x,
+            front.y,
+            front.target_who,
+            front.target_o,
+            front.target_uid,
+        );
+        self.order[row] = kind as u8;
+        if matches!(kind, OrderIndex::MoveTo | OrderIndex::AttackTo) {
+            self.dest_x[row] = x;
+            self.dest_y[row] = y;
+        } else if kind == OrderIndex::Attack {
+            let target_row = (0..self.sim.live_count() as usize).find(|&candidate| {
+                self.sim.owner()[candidate] as i32 == target_who
+                    && self.sim.units.o()[candidate] as i32 == target_o
+                    && self.sim.units.uid()[candidate] as u16 == target_uid
+            });
+            self.target[row] = target_row.map_or(NO_HANDLE, |target| self.handle_at(target));
+        }
+    }
+
+    fn retire_front_order(&mut self, row: usize) {
+        self.orders[row].reset();
+        self.orders[row].remove_current();
+        self.orders[row].reset();
+        self.sync_order_from_queue(row);
+    }
+
     // ---- per-frame systems -----------------------------------------------------------
 
     /// Advance one simulation frame.
@@ -509,11 +707,118 @@ impl EnvWorld {
             }
             match self.order[row] {
                 x if x == g::OrderIndex::MoveTo as u8 || x == g::OrderIndex::AttackTo as u8 => {
-                    self.advance_move(row);
+                    self.advance_move(row, true);
                 }
                 x if x == g::OrderIndex::Attack as u8 => self.advance_attack(row),
+                x if x == g::OrderIndex::GroupPatrol as u8 => self.advance_group_patrol(row),
+                x if x == g::OrderIndex::AirPatrol as u8 => self.advance_air_patrol(row),
                 _ => {}
             }
+        }
+    }
+
+    /// `Unit::do_patrol` for the ungrouped environment actor. The executor advances the
+    /// route cursor before reading it and inserts an exact ATTACK_TO node at the head;
+    /// the patrol node remains behind it and resumes when that movement leg retires.
+    fn advance_group_patrol(&mut self, row: usize) {
+        let who = self.sim.owner()[row] as u8;
+        let o = self.sim.units.o()[row];
+        let (x, y) = (self.sim.pos_x()[row], self.sim.pos_y()[row]);
+        let step = {
+            self.orders[row].reset();
+            let Some(front) = self.orders[row].front_mut() else {
+                self.order[row] = OrderIndex::None as u8;
+                return;
+            };
+            let PatrolPayload::Group(order) = &mut front.patrol_payload else {
+                // A kind without its concrete class body cannot be executed faithfully.
+                self.unimplemented.unit[g::uv::PATROL] += 1;
+                return;
+            };
+            patrol::step_group_patrol(order, x, y, o, who, -1, -1, false)
+        };
+
+        if let GroundPatrolAction::InsertAttackTo(m) = step.action {
+            self.orders[row].push_front(OrderRec {
+                kind: OrderIndex::AttackTo,
+                flags: 0,
+                x: m.x,
+                y: m.y,
+                angle: m.angle,
+                dest: m.dest,
+                tolerance: m.tolerance,
+                pause: m.pause,
+                retry: m.retry,
+                attempts: m.attempts,
+                timer: m.timer,
+                facing: m.facing,
+                dest_x: m.dest_x,
+                dest_y: m.dest_y,
+                last_x: m.last_x,
+                last_y: m.last_y,
+                off_x: m.off_x,
+                off_y: m.off_y,
+                ..OrderRec::default()
+            });
+        }
+        self.sync_order_from_queue(row);
+    }
+
+    /// Execute the derived AIR_PATROL state machine around EnvWorld's explicit airframe
+    /// boundary. Waypoint ownership, cursor advancement, final-waypoint retirement, and
+    /// inserted STRAFE queue position are the retail transitions. The adjacent airframe
+    /// and target-search systems remain separately reported scaffolding.
+    fn advance_air_patrol(&mut self, row: usize) {
+        self.orders[row].reset();
+        let Some(front) = self.orders[row].front() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        let PatrolPayload::Air(mut air) = front.patrol_payload.clone() else {
+            self.unimplemented.unit[g::uv::PATROL] += 1;
+            return;
+        };
+        let list_len = self.orders[row].len();
+        let is_animal = (don_sim::balance_path::ANIMAL_FIRST..=don_sim::balance_path::ANIMAL_LAST)
+            .contains(&(self.type_index[row] as i32));
+        let target =
+            patrol::air_patrol_target(&mut air, is_animal, None, self.subtile_w, self.subtile_h);
+
+        // Explicit host boundary: this is the environment's existing movement subsystem,
+        // not a replacement patrol rule. The patrol transition is evaluated only after
+        // that subsystem has integrated the aircraft for the frame.
+        if target.0 >= 0 && target.1 >= 0 {
+            self.advance_towards(row, target.0, target.1);
+        }
+
+        let input = AirPatrolAfterPhysics {
+            actor_x: self.sim.pos_x()[row],
+            actor_y: self.sim.pos_y()[row],
+            actor_o: self.sim.units.o()[row],
+            frame: self.sim.frame,
+            is_animal,
+            spell_time: self.spell_time[row],
+            order_list_len: list_len,
+            unit_target: None,
+            building_target: None,
+        };
+        let action = patrol::step_air_patrol_after_physics(&mut air, target, &input);
+        if let Some(front) = self.orders[row].front_mut() {
+            front.patrol_payload = PatrolPayload::Air(air.clone());
+        }
+        match action {
+            AirPatrolAction::KillCurrent => self.retire_front_order(row),
+            AirPatrolAction::InsertStrafe { target, mandatory } => {
+                let order =
+                    patrol::patrol_strafe_order(target, air.air.oxx, air.air.whose, mandatory);
+                self.orders[row].push_front(OrderRec::strafe(order));
+                self.sync_order_from_queue(row);
+            }
+            AirPatrolAction::PrimeAnimalSpellTime => {
+                self.spell_time[row] = 1;
+                self.sync_order_from_queue(row)
+            }
+            AirPatrolAction::Continue => self.sync_order_from_queue(row),
         }
     }
 
@@ -522,15 +827,27 @@ impl EnvWorld {
     /// **Not** the engine's mover: `Unit::move_step` uses `sin_table`/`cosx`/`find_angle`
     /// and the real path comes from `PathFinder::astar_path` `0x00683770`, which is
     /// unread. This exists so a MOVE action changes state.
-    fn advance_move(&mut self, row: usize) {
+    fn advance_move(&mut self, row: usize, retire_on_arrival: bool) {
+        let (x, y) = (self.dest_x[row], self.dest_y[row]);
+        if self.advance_towards(row, x, y) && retire_on_arrival {
+            if !self.orders[row].is_empty() {
+                self.retire_front_order(row);
+            } else {
+                self.order[row] = g::OrderIndex::None as u8;
+            }
+        }
+    }
+
+    /// Integrate one frame toward an explicit target using the environment's existing
+    /// movement host. Returns true when the target was reached this frame.
+    fn advance_towards(&mut self, row: usize, target_x: i32, target_y: i32) -> bool {
         let (px, py) = (self.sim.pos_x()[row], self.sim.pos_y()[row]);
-        let (dx, dy) = (self.dest_x[row] - px, self.dest_y[row] - py);
+        let (dx, dy) = (target_x - px, target_y - py);
         let step = self.speed[row].max(1) as i32;
         let dist2 = (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64);
         if dist2 <= (step as i64) * (step as i64) {
-            self.sim.set_pos(row, self.dest_x[row], self.dest_y[row]);
-            self.order[row] = g::OrderIndex::None as u8;
-            return;
+            self.sim.set_pos(row, target_x, target_y);
+            return true;
         }
         // Integer normalisation via the Chebyshev/octagonal approximation; no float, no
         // trig table. Deliberately a different approximation from the engine's, and
@@ -545,12 +862,17 @@ impl EnvWorld {
             nx.rem_euclid(self.subtile_w),
             ny.rem_euclid(self.subtile_h),
         );
+        false
     }
 
     fn advance_attack(&mut self, row: usize) {
         let Some(trow) = self.sim.row_of(self.target[row]) else {
-            self.order[row] = g::OrderIndex::None as u8;
             self.target[row] = NO_HANDLE;
+            if self.orders[row].is_empty() {
+                self.order[row] = g::OrderIndex::None as u8;
+            } else {
+                self.retire_front_order(row);
+            }
             return;
         };
         let (px, py) = (self.sim.pos_x()[row], self.sim.pos_y()[row]);
@@ -562,7 +884,7 @@ impl EnvWorld {
         if d2 > reach * reach {
             self.dest_x[row] = tx;
             self.dest_y[row] = ty;
-            self.advance_move(row);
+            self.advance_move(row, false);
             return;
         }
         if self.sim.cooldown()[row] > 0 {

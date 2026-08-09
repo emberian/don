@@ -234,19 +234,24 @@ fidelity claim.
 
 ### `env-patrol-execution`
 
-The `QUEUE_NEW` command-to-order path is now exact. Opcode 10 installs `GROUP_PATROL` (22)
-for ground units and helicopters, but follows retail's `Group::action_patrol` branch to
-`AIR_PATROL` (17) for true planes. Opcode 11 installs `AIR_PATROL` only for true planes.
-The mask uses retail's `UnitData::is_plane` predicate (`AIR` domain and no `FLAGS f`), not
-the broader air-domain capability, and `OrderIndex::PATROL` (5) remains the dead arm.
-`QUEUE_FIRST` and `QUEUE_LAST` report `accepted_no_effect` rather than being silently
-treated as `QUEUE_NEW`, because the env does not yet model `UnitOrder`'s linked list.
+The command-to-order path and queue ownership are now exact. Opcode 10 installs
+`GROUP_PATROL` (22) for ground units and helicopters, but follows retail's
+`Group::action_patrol` branch to `AIR_PATROL` (17) for true planes. Opcode 11 installs
+`AIR_PATROL` only for true planes. The mask uses retail's `UnitData::is_plane` predicate
+(`AIR` domain and no `FLAGS f`), not the broader air-domain capability, and
+`OrderIndex::PATROL` (5) remains the dead arm. The environment now retains dynamic
+waypoint arrays and the real front/current queue shape: ground `QUEUE_FIRST` replaces,
+compatible `QUEUE_LAST` extends with the raw command coordinate, air `QUEUE_LAST` extends
+only a compatible active patrol, and the true-plane installer replaces otherwise.
 
-The remaining drift is execution: `EnvWorld::process_slot` has no executor for order 17 or
-22, so the exact order remains installed and stationary. Routing it through the env's
-straight-line `MoveTo` scaffold would recreate the former silent substitution. RL
-readiness therefore stays blocked until both patrol executors and order-list semantics are
-derived and wired.
+Both recovered executor transitions are reachable. `GROUP_PATROL` advances before reading
+its waypoint and inserts the exact `ATTACK_TO` body ahead of itself, then resumes when that
+leg retires. `AIR_PATROL` retains its cursor and post-physics retirement rules. The
+remaining drift is narrower but still product-blocking: EnvWorld has not ported
+`Unit::do_air_physics`, and its mod-16/mod-32 air/building target-search callbacks currently
+produce no target. Its existing explicitly scaffolded mover serves that host boundary; it
+is not a retail airframe implementation. RL readiness stays blocked until those adjacent
+air systems are derived and wired.
 *`docs/mechanics/COVERAGE.md` §3.1; `docs/assembly/command-bridge.md`.*
 
 ### `ai-model-simplifications`

@@ -154,6 +154,7 @@ fn patrol_and_launch_patrol_are_not_move_to() {
 
     let mut f = ObjectTable::new(2);
     f.put(1, 0, Slot::unit(1, 0, 0));
+    f.put(1, 1, Slot::plane(2, 0, 0));
     let mut b = Bridge::new();
     let mut p = Package::new(1, 0);
     b.process_all(&mut p, &build::group(1, &[0]), &mut f)
@@ -170,6 +171,15 @@ fn patrol_and_launch_patrol_are_not_move_to() {
         OrderIndex::GroupPatrol
     );
 
+    // The same opcode delegates a true plane to AIR_PATROL.
+    b.process_all(&mut p, &build::group(1, &[1]), &mut f)
+        .unwrap();
+    b.process_all(&mut p, &patrol, &mut f).unwrap();
+    assert_eq!(
+        f.orders(1, 1).unwrap().current().unwrap().kind,
+        OrderIndex::AirPatrol
+    );
+
     // LaunchPatrolCommand (11): op | i32 to_x | i32 to_y | i32 queued | shift | ctrl | alt.
     let mut launch = vec![11u8];
     launch.extend_from_slice(&64i32.to_le_bytes());
@@ -178,7 +188,7 @@ fn patrol_and_launch_patrol_are_not_move_to() {
     launch.extend_from_slice(&[0u8; 12]);
     b.process_all(&mut p, &launch, &mut f).unwrap();
     assert_eq!(
-        f.orders(1, 0).unwrap().current().unwrap().kind,
+        f.orders(1, 1).unwrap().current().unwrap().kind,
         OrderIndex::AirPatrol
     );
 
@@ -242,11 +252,11 @@ fn env_patrol_routing_uses_retail_is_plane() {
         },
         &mut queued,
     );
-    assert_eq!(queued.accepted_no_effect, 1);
+    assert_eq!(queued.applied, 1);
     assert_eq!(
         w.order[w.sim.row_of(citizen).unwrap()],
-        g::OrderIndex::None as u8,
-        "QUEUE_FIRST must not be silently collapsed to QUEUE_NEW"
+        g::OrderIndex::GroupPatrol as u8,
+        "retail normalizes GROUP_PATROL QUEUE_FIRST to its replacement path"
     );
 
     assert_eq!(apply(&mut w, citizen, g::uv::PATROL).applied, 1);
@@ -296,6 +306,76 @@ fn env_patrol_routing_uses_retail_is_plane() {
     assert!(allows(1, g::uv::LAUNCH_PATROL));
     assert!(allows(2, g::uv::PATROL));
     assert!(!allows(2, g::uv::LAUNCH_PATROL));
+}
+
+#[test]
+fn env_patrol_queue_and_executor_preserve_retail_transitions() {
+    use don_env::spec::EnvConfig;
+    use don_env::state::{EnvWorld, Rules};
+    use don_sim::command::QueuePos;
+    use don_sim::order::OrderIndex;
+    use don_sim::systems::order_dispatch::PatrolPayload;
+
+    let (rules, caps_real, _) = Rules::load(None, None);
+    if !caps_real {
+        eprintln!("SKIP: schema/live/env-typecaps.bin absent (run gen/gen_spec.py)");
+        return;
+    }
+    let cfg = EnvConfig::default();
+    let mut w = EnvWorld::new(rules, 8, 1, cfg.grid_w, cfg.grid_h);
+
+    let ground = w.spawn(0, 50, 0, 0).unwrap();
+    let grow = w.sim.row_of(ground).unwrap();
+    w.install_group_patrol_order(grow, 48, 48, QueuePos::New);
+    w.install_group_patrol_order(grow, 111, 222, QueuePos::Last);
+    let group = match &w.orders[grow].front().unwrap().patrol_payload {
+        PatrolPayload::Group(group) => group,
+        other => panic!("expected concrete group-patrol body, got {other:?}"),
+    };
+    assert_eq!(group.points.len(), 3);
+    assert_eq!(
+        (group.points.x[2], group.points.y[2]),
+        (111, 222),
+        "QUEUE_LAST extension writes the raw command Coord"
+    );
+    w.install_group_patrol_order(grow, 48, 48, QueuePos::First);
+    assert_eq!(w.orders[grow].len(), 1);
+    let group = match &w.orders[grow].front().unwrap().patrol_payload {
+        PatrolPayload::Group(group) => group,
+        _ => unreachable!(),
+    };
+    assert_eq!(group.points.len(), 2, "QUEUE_FIRST follows replacement");
+
+    w.frame();
+    assert_eq!(w.orders[grow].len(), 2);
+    let leg = w.orders[grow].front().unwrap();
+    assert_eq!(leg.kind, OrderIndex::AttackTo);
+    assert_eq!((leg.x, leg.y), (72, 72));
+    assert_eq!(w.order[grow], OrderIndex::AttackTo as u8);
+    let patrol = w.orders[grow].iter().nth(1).unwrap();
+    let PatrolPayload::Group(group) = &patrol.patrol_payload else {
+        unreachable!()
+    };
+    assert_eq!(group.points.waypoint, 1);
+
+    let air = w.spawn(0, 289, 0, 0).unwrap();
+    let arow = w.sim.row_of(air).unwrap();
+    w.install_air_patrol_order(arow, 24, 24, QueuePos::New);
+    w.install_air_patrol_order(arow, 900, 900, QueuePos::Last);
+    assert_eq!(w.orders[arow].len(), 1);
+    let PatrolPayload::Air(route) = &w.orders[arow].front().unwrap().patrol_payload else {
+        unreachable!()
+    };
+    assert_eq!(route.points.len(), 2);
+
+    w.frame();
+    let PatrolPayload::Air(route) = &w.orders[arow].front().unwrap().patrol_payload else {
+        unreachable!()
+    };
+    assert_eq!(
+        route.points.waypoint, 1,
+        "post-physics AIR_PATROL advances to its queued waypoint"
+    );
 }
 
 /// The env's `OrderIndex` and `QueuePos` enums must be numerically identical to

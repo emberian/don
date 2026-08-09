@@ -143,6 +143,14 @@ impl TypeCaps {
         self.permissive
     }
 
+    /// Heap payload reserved by the immutable capability tables, excluding allocator
+    /// metadata. `Rules` is shared by every world in a [`crate::env::VecEnv`], so this
+    /// amount belongs once in a batch memory report rather than once per world.
+    pub fn bytes_reserved(&self) -> usize {
+        self.caps.capacity() * std::mem::size_of::<TypeCap>()
+            + self.produces.capacity() * std::mem::size_of::<u8>()
+    }
+
     pub fn load(path: &Path) -> std::io::Result<TypeCaps> {
         Self::from_bytes(&std::fs::read(path)?)
     }

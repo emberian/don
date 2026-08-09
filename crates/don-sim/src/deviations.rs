@@ -595,25 +595,29 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     Entry {
         id: Deviation::EnvPatrolExecution,
         slug: "env-patrol-execution",
-        title: "don-env installs retail patrol orders but does not execute them",
+        title: "don-env executes patrol queues around an incomplete airframe host",
         kind: Kind::Drift,
         retail: "Opcode 10 installs `GROUP_PATROL` (22), except that true planes delegate \
                  to `AIR_PATROL` (17); opcode 11 installs `AIR_PATROL` only for true planes. \
                  `Unit::do_job` then dispatches those live orders to their executors.",
-        ours: "For `QUEUE_NEW`, `don-env` now preserves that exact command-to-order split, \
-               including the helicopter/plane distinction, but `EnvWorld::process_slot` \
-               has no executor for either order 17 or 22. They remain installed and \
-               stationary. `QUEUE_FIRST`/`QUEUE_LAST` visibly report no effect because the \
-               env does not yet model `UnitOrder`'s linked list.",
-        why: "Routing a patrol through the env's straight-line MoveTo scaffold would erase \
-              the order's identity and repeat the old drift. Exact routing is landed; this \
-              blocker stays until the patrol executors and order-list semantics are \
-              derived and wired.",
+        ours: "`don-env` carries a dynamic `OrderQueue`, preserves the two patrol classes, \
+               implements their exceptional `QUEUE_FIRST`/`QUEUE_LAST` installation, and \
+               runs the recovered waypoint/retirement/front-insertion transitions. Ground \
+               patrol therefore schedules the exact `ATTACK_TO` leg and resumes behind it. \
+               AIR_PATROL still crosses EnvWorld's scaffold movement host instead of \
+               `Unit::do_air_physics`, and its target-search callbacks return no target.",
+        why: "The former command routing, queue, and executor-identity drift is closed. The \
+              readiness blocker remains because an AIR_PATROL run can still diverge at the \
+              adjacent physics and target-acquisition calls. Keeping that boundary named \
+              prevents exact queue semantics from being promoted into a whole-executor \
+              fidelity claim.",
         derived_from: &[
             "Group::action_patrol 0x007030C0",
             "Group::action_launch_patrol 0x00703580",
             "Unit::add_air_patrol_order 0x005E4350",
             "Unit::add_patrol_order 0x005E4560",
+            "Unit::do_air_patrol 0x005EA620",
+            "Unit::do_patrol 0x005F1910",
             "Unit::do_job jump table 0x00617B94 (28 arms)",
             "crates/don-env/src/state.rs::process_slot",
         ],

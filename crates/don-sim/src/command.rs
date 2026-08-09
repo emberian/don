@@ -104,13 +104,15 @@
 //!
 //! # What is not here
 //!
-//! The order *executors*. This module installs orders; [`crate::order`] describes the
-//! 28-arm `Unit::do_job` table that runs them, and `Unit::work` `0x0060D180` — the driver
-//! between them — is still uncited by any Rust file. An order installed here will sit in
-//! its list until that lands.
+//! The order *executors* live in [`crate::systems::order_dispatch`]. This module owns the
+//! wire/group installation side and writes the same executable queue shape, including the
+//! dynamic patrol payloads that cannot be represented by a flat order tag.
 
-use crate::order::{Order, OrderIndex, OrderList};
+use crate::order::{Order, OrderIndex};
 use crate::systems::groups_guys::{GroupData, GROUP_MAX_MEMBERS};
+use crate::systems::order_dispatch::{
+    install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
+};
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
@@ -442,6 +444,15 @@ pub trait Fleet {
     fn can_move(&self, who: u8, o: i16) -> bool {
         self.is_unit(who, o)
     }
+    /// `UnitData::is_plane` `0x0046CE40`, not merely air domain. Helicopters return false.
+    fn is_plane(&self, _who: u8, _o: i16) -> bool {
+        false
+    }
+    /// Live home object carried by the aircraft's `AirOrder` base, when one exists.
+    /// `(home_o, home_who, x, y)` uses engine object addressing and world Coord units.
+    fn air_patrol_home(&self, _who: u8, _o: i16) -> Option<(i32, i32, i32, i32)> {
+        None
+    }
     /// `ObjectData::group`, the `short` at `+0x80`: the slot this object currently
     /// belongs to, or `-1`.
     fn group_of(&self, who: u8, o: i16) -> i16;
@@ -451,8 +462,8 @@ pub trait Fleet {
     fn uid(&self, who: u8, o: i16) -> u16;
     /// World coordinates, already un-XORed (`ObjectData` stores them `^ 0x00063637`).
     fn pos(&self, who: u8, o: i16) -> (i32, i32);
-    fn orders(&self, who: u8, o: i16) -> Option<&OrderList>;
-    fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderList>;
+    fn orders(&self, who: u8, o: i16) -> Option<&OrderQueue>;
+    fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderQueue>;
     /// `Unit::set_stance` — `action_stance` writes it and installs no order.
     fn set_stance(&mut self, who: u8, o: i16, stance: i8);
     /// `Object::disband` `0x006455C0`.
@@ -466,13 +477,14 @@ pub struct Slot {
     pub is_unit: bool,
     pub is_building: bool,
     pub can_move: bool,
+    pub is_plane: bool,
     pub role: i32,
     pub group: i16,
     pub uid: u16,
     pub x: i32,
     pub y: i32,
     pub stance: i8,
-    pub orders: OrderList,
+    pub orders: OrderQueue,
 }
 
 impl Slot {
@@ -502,6 +514,14 @@ impl Slot {
             x,
             y,
             ..Slot::default()
+        }
+    }
+
+    /// A true plane. Air-domain helicopters intentionally continue to use [`Slot::unit`].
+    pub fn plane(uid: u16, x: i32, y: i32) -> Slot {
+        Slot {
+            is_plane: true,
+            ..Slot::unit(uid, x, y)
         }
     }
 }
@@ -557,6 +577,9 @@ impl Fleet for ObjectTable {
     fn can_move(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.can_move)
     }
+    fn is_plane(&self, who: u8, o: i16) -> bool {
+        self.get(who, o).is_some_and(|s| s.is_plane)
+    }
     fn group_of(&self, who: u8, o: i16) -> i16 {
         self.get(who, o).map_or(-1, |s| s.group)
     }
@@ -571,10 +594,10 @@ impl Fleet for ObjectTable {
     fn pos(&self, who: u8, o: i16) -> (i32, i32) {
         self.get(who, o).map_or((0, 0), |s| (s.x, s.y))
     }
-    fn orders(&self, who: u8, o: i16) -> Option<&OrderList> {
+    fn orders(&self, who: u8, o: i16) -> Option<&OrderQueue> {
         self.get(who, o).map(|s| &s.orders)
     }
-    fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderList> {
+    fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderQueue> {
         self.get_mut(who, o).map(|s| &mut s.orders)
     }
     fn set_stance(&mut self, who: u8, o: i16, stance: i8) {
@@ -1037,7 +1060,7 @@ impl Action<'_> {
             }
             list.clear();
         }
-        list.push(order);
+        list.push_back(OrderRec::from(order));
         self.stats.orders_installed += 1;
         self.stats.by_order[order.kind.index()] += 1;
     }
@@ -1057,9 +1080,9 @@ impl Action<'_> {
         }
         let (who, list) = self.members();
         // set_up_insert: stash every member's current order list.
-        let saved: Vec<(i16, Vec<Order>)> = list
+        let saved: Vec<(i16, Vec<OrderRec>)> = list
             .iter()
-            .filter_map(|&o| f.orders(who, o).map(|l| (o, l.iter().copied().collect())))
+            .filter_map(|&o| f.orders(who, o).map(|l| (o, l.iter().cloned().collect())))
             .collect();
         self.action_halt(0, f);
         {
@@ -1075,9 +1098,10 @@ impl Action<'_> {
         for (o, orders) in saved {
             if let Some(l) = f.orders_mut(who, o) {
                 for ord in orders {
-                    l.push(ord);
+                    let kind = ord.kind;
+                    l.push_back(ord);
                     self.stats.orders_installed += 1;
-                    self.stats.by_order[ord.kind.index()] += 1;
+                    self.stats.by_order[kind.index()] += 1;
                 }
             }
         }
@@ -1185,27 +1209,21 @@ impl Action<'_> {
                     return;
                 };
                 let q = QueuePos::from_i64(i8_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_ground(OrderIndex::GroupPatrol, x, y, q, f);
+                self.action_patrol(x, y, q, false, f);
             }
             "launch_patrol" => {
                 let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i32_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_ground(OrderIndex::AirPatrol, x, y, q, f);
+                self.action_patrol(x, y, q, true, f);
             }
             "scramble" => {
                 let (who, list) = self.members();
                 for o in list {
-                    if f.alive(who, o) && f.can_move(who, o) {
+                    if f.alive(who, o) && f.can_move(who, o) && f.is_plane(who, o) {
                         let (x, y) = f.pos(who, o);
-                        let ord = Order {
-                            kind: OrderIndex::AirPatrol,
-                            x,
-                            y,
-                            ..Order::default()
-                        };
-                        self.install(who, o, ord, QueuePos::New, f);
+                        self.install_air_patrol_member(who, o, x, y, QueuePos::New, f);
                     }
                 }
             }
@@ -1360,6 +1378,83 @@ impl Action<'_> {
             return;
         }
         body(self, q, f);
+    }
+
+    /// The patrol-specific group actions. These deliberately do not use
+    /// [`Self::with_queue_first`]: both recovered patrol paths are exceptions to that
+    /// generic stash/replay dance.
+    fn action_patrol(&mut self, x: i32, y: i32, q: QueuePos, launch_only: bool, f: &mut dyn Fleet) {
+        let (who, list) = self.members();
+        let (group_id, form_id) = self
+            .groups
+            .get(self.slot)
+            .map_or((-1, -1), |g| (g.id, g.form));
+        for o in list {
+            if !f.alive(who, o) || !f.can_move(who, o) {
+                continue;
+            }
+            let is_plane = f.is_plane(who, o);
+            if launch_only && !is_plane {
+                continue;
+            }
+            if is_plane {
+                self.install_air_patrol_member(who, o, x, y, q, f);
+                continue;
+            }
+            let (ux, uy) = f.pos(who, o);
+            let Some(queue) = f.orders_mut(who, o) else {
+                continue;
+            };
+            let before = queue.len();
+            let mut unit = UnitWork::at(who, o, ux, uy);
+            unit.orders = std::mem::take(queue);
+            let result = install_group_patrol(
+                &mut unit, ux, uy, x, y, group_id, form_id, o as i32, who as i32, q,
+            );
+            *queue = unit.orders;
+            self.record_patrol_install(result, before, OrderIndex::GroupPatrol);
+        }
+    }
+
+    fn install_air_patrol_member(
+        &mut self,
+        who: u8,
+        o: i16,
+        x: i32,
+        y: i32,
+        q: QueuePos,
+        f: &mut dyn Fleet,
+    ) {
+        let (ux, uy) = f.pos(who, o);
+        let home = f.air_patrol_home(who, o);
+        let (home_o, home_who, home_pos) =
+            home.map_or((-1, -1, None), |h| (h.0, h.1, Some((h.2, h.3))));
+        let Some(queue) = f.orders_mut(who, o) else {
+            return;
+        };
+        let before = queue.len();
+        let mut unit = UnitWork::at(who, o, ux, uy);
+        unit.orders = std::mem::take(queue);
+        let result = install_air_patrol(&mut unit, x, y, home_o, home_who, home_pos, true, q);
+        *queue = unit.orders;
+        self.record_patrol_install(result, before, OrderIndex::AirPatrol);
+    }
+
+    fn record_patrol_install(&mut self, result: PatrolInstall, before: usize, kind: OrderIndex) {
+        match result {
+            PatrolInstall::ExtendedWaypoints => {}
+            PatrolInstall::Replaced => {
+                if before != 0 {
+                    self.stats.orders_cleared += 1;
+                }
+                self.stats.orders_installed += 1;
+                self.stats.by_order[kind.index()] += 1;
+            }
+            PatrolInstall::AppendedOrder => {
+                self.stats.orders_installed += 1;
+                self.stats.by_order[kind.index()] += 1;
+            }
+        }
     }
 
     /// `Group::action_halt(int flags)` `0x0070D0C0` (685 B, 14 call sites).
@@ -1534,6 +1629,25 @@ pub mod build {
         v
     }
 
+    /// `PatrolCommand` (10), 10 bytes.
+    pub fn patrol(x: i32, y: i32, q: QueuePos) -> Vec<u8> {
+        let mut v = vec![10u8];
+        v.extend_from_slice(&x.to_le_bytes());
+        v.extend_from_slice(&y.to_le_bytes());
+        v.push(q as u8);
+        v
+    }
+
+    /// `LaunchPatrolCommand` (11), 25 bytes.
+    pub fn launch_patrol(x: i32, y: i32, q: QueuePos) -> Vec<u8> {
+        let mut v = vec![11u8];
+        v.extend_from_slice(&x.to_le_bytes());
+        v.extend_from_slice(&y.to_le_bytes());
+        v.extend_from_slice(&(q as i32).to_le_bytes());
+        v.extend_from_slice(&[0u8; 12]); // shift, ctrl, alt
+        v
+    }
+
     /// `HaltCommand` (12), 1 byte.
     pub fn halt() -> Vec<u8> {
         vec![12u8]
@@ -1567,6 +1681,7 @@ pub mod build {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::systems::order_dispatch::PatrolPayload;
 
     fn fleet(n: usize) -> ObjectTable {
         let mut t = ObjectTable::new(n);
@@ -1817,12 +1932,12 @@ mod tests {
             &mut f,
         )
         .unwrap();
-        let ord = *f.orders(1, 0).unwrap().current().unwrap();
+        let ord = f.orders(1, 0).unwrap().current().unwrap().clone();
         assert_eq!(ord.kind, OrderIndex::FleeTo);
         assert_eq!(ord.tolerance, 48);
         b.process_all(&mut p, &build::move_to(10, 20, QueuePos::New, 2), &mut f)
             .unwrap();
-        let ord = *f.orders(1, 0).unwrap().current().unwrap();
+        let ord = f.orders(1, 0).unwrap().current().unwrap().clone();
         assert_eq!(ord.kind, OrderIndex::AttackTo);
         assert_eq!(ord.tolerance, 0);
     }
@@ -1866,6 +1981,61 @@ mod tests {
     }
 
     #[test]
+    fn patrol_bridge_uses_plane_routing_and_the_two_queue_exceptions() {
+        let mut b = Bridge::new();
+        let mut f = fleet(3);
+        f.put(1, 1, Slot::plane(101, 16, 0));
+        let mut p = Package::new(1, 0);
+
+        select(&mut b, &mut p, &mut f, &[0]);
+        b.process_all(&mut p, &build::patrol(48, 96, QueuePos::New), &mut f)
+            .unwrap();
+        b.process_all(&mut p, &build::patrol(111, 222, QueuePos::Last), &mut f)
+            .unwrap();
+        assert_eq!(f.orders(1, 0).unwrap().len(), 1);
+        let PatrolPayload::Group(group) = &f.orders(1, 0).unwrap().front().unwrap().patrol_payload
+        else {
+            panic!("ground member did not receive GroupPatrolOrder")
+        };
+        assert_eq!(group.points.len(), 3);
+        assert_eq!((group.points.x[2], group.points.y[2]), (111, 222));
+        b.process_all(&mut p, &build::patrol(333, 444, QueuePos::First), &mut f)
+            .unwrap();
+        assert_eq!(f.orders(1, 0).unwrap().len(), 1);
+        let PatrolPayload::Group(group) = &f.orders(1, 0).unwrap().front().unwrap().patrol_payload
+        else {
+            unreachable!()
+        };
+        assert_eq!(group.points.len(), 2, "ground QUEUE_FIRST replaces");
+
+        select(&mut b, &mut p, &mut f, &[1]);
+        b.process_all(&mut p, &build::patrol(10, 20, QueuePos::New), &mut f)
+            .unwrap();
+        b.process_all(&mut p, &build::patrol(30, 40, QueuePos::Last), &mut f)
+            .unwrap();
+        let PatrolPayload::Air(air) = &f.orders(1, 1).unwrap().front().unwrap().patrol_payload
+        else {
+            panic!("true plane did not receive AirPatrolOrder")
+        };
+        assert_eq!(air.points.len(), 2);
+        b.process_all(&mut p, &build::patrol(50, 60, QueuePos::First), &mut f)
+            .unwrap();
+        let PatrolPayload::Air(air) = &f.orders(1, 1).unwrap().front().unwrap().patrol_payload
+        else {
+            unreachable!()
+        };
+        assert_eq!(air.points.len(), 1, "air QUEUE_FIRST replaces");
+
+        select(&mut b, &mut p, &mut f, &[2]);
+        b.process_all(&mut p, &build::launch_patrol(70, 80, QueuePos::New), &mut f)
+            .unwrap();
+        assert!(
+            f.orders(1, 2).unwrap().is_empty(),
+            "launch-patrol filters a non-plane member"
+        );
+    }
+
+    #[test]
     fn halt_empties_every_members_order_list() {
         let mut b = Bridge::new();
         let mut f = fleet(4);
@@ -1889,7 +2059,9 @@ mod tests {
         f.put(1, 0, Slot::building(1, 0, 0));
         let mut p = Package::new(1, 0);
         select(&mut b, &mut p, &mut f, &[0]);
-        f.orders_mut(1, 0).unwrap().push(Order::move_to(1, 2, 0));
+        f.orders_mut(1, 0)
+            .unwrap()
+            .push_back(OrderRec::from(Order::move_to(1, 2, 0)));
         b.process_all(&mut p, &build::halt(), &mut f).unwrap();
         assert_eq!(f.orders(1, 0).unwrap().len(), 1);
     }
@@ -1902,7 +2074,7 @@ mod tests {
         select(&mut b, &mut p, &mut f, &[0, 1]);
         b.process_all(&mut p, &build::attack(7, 2, QueuePos::New), &mut f)
             .unwrap();
-        let ord = *f.orders(1, 0).unwrap().current().unwrap();
+        let ord = f.orders(1, 0).unwrap().current().unwrap().clone();
         assert_eq!(ord.kind, OrderIndex::Attack);
         assert_eq!((ord.target_who, ord.target_o), (2, 7));
         assert_eq!(b.stats.by_order[OrderIndex::Attack.index()], 2);

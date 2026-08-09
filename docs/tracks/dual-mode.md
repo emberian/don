@@ -115,7 +115,7 @@ form:
 | `refund-repeat-compounding` | `adj` written back over the record, so repeats compound | leave the record alone | **on** |
 | `caravan-heuristic-goal-y` | `pf_dist(dx, −goalY)` at `0x00685FD9`; mode A ≈ Dijkstra | pass `child.y − goalY` | off |
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
-| `env-patrol-execution` | orders 17/22 route, queue, and execute | *drift*: `QUEUE_NEW` routes exactly; no env executor or queued order list | — |
+| `env-patrol-execution` | orders 17/22 route, queue, execute, and cross retail airframe/search boundaries | *drift*: exact dynamic queue and patrol transitions; env air physics/target-search host remains incomplete | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
 | `arena-model-simplifications` | full retail game systems | *drift*: five simplified arena models on the playable path (retail A* movement is now wired) | — |
 | `attack-dir-semantics` | attacker→target bearing | *rejected*: retail is right | — |

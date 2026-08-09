@@ -41,6 +41,10 @@ pub struct MaskWriter {
     /// Scratch: the acting player's affordable-type bitset, recomputed once per player
     /// per step instead of once per entity.
     affordable: Vec<u8>,
+    /// Reused target bitsets; allocating these for every agent made mask generation
+    /// allocator-bound at large batch sizes.
+    hostile: Vec<u8>,
+    friendly: Vec<u8>,
     bitset_bytes: usize,
 }
 
@@ -51,8 +55,20 @@ impl MaskWriter {
             unit: MaskLayout::new(&crate::spec::unit_head_sizes(cfg)),
             player: MaskLayout::new(&crate::spec::player_head_sizes(cfg)),
             affordable: vec![0; bb],
+            hostile: vec![0; (cfg.max_entities + 1).div_ceil(8)],
+            friendly: vec![0; (cfg.max_entities + 1).div_ceil(8)],
             bitset_bytes: bb,
         }
+    }
+
+    pub(crate) fn bytes_reserved(&self) -> usize {
+        self.unit.offsets.capacity() * std::mem::size_of::<usize>()
+            + self.unit.sizes.capacity() * std::mem::size_of::<usize>()
+            + self.player.offsets.capacity() * std::mem::size_of::<usize>()
+            + self.player.sizes.capacity() * std::mem::size_of::<usize>()
+            + self.affordable.capacity()
+            + self.hostile.capacity()
+            + self.friendly.capacity()
     }
 
     /// Write masks for one agent. `rows` is the agent's controllable entity rows, in the
@@ -90,19 +106,19 @@ impl MaskWriter {
             }
         }
         // Which observed entity slots are plausible targets at all.
-        let mut hostile = vec![0u8; (cfg.max_entities + 1).div_ceil(8)];
-        let mut friendly = vec![0u8; (cfg.max_entities + 1).div_ceil(8)];
+        self.hostile.fill(0);
+        self.friendly.fill(0);
         let mut any_hostile = false;
         let mut any_friendly = false;
         for (slot, &r) in entity_rows.iter().enumerate().take(cfg.max_entities) {
             let o = w.sim.owner()[r];
             match w.relation(who, o) {
                 0 | 1 => {
-                    set_bit(&mut friendly, slot + 1);
+                    set_bit(&mut self.friendly, slot + 1);
                     any_friendly = true;
                 }
                 _ => {
-                    set_bit(&mut hostile, slot + 1);
+                    set_bit(&mut self.hostile, slot + 1);
                     any_hostile = true;
                 }
             }
@@ -211,12 +227,16 @@ impl MaskWriter {
             {
                 let self_slot = entity_rows.iter().position(|&r2| r2 == row);
                 let th = self.unit.head(r, g::UnitHead::TargetEntity as usize);
-                let src = if c.has(F_ATTACK) { &hostile } else { &friendly };
+                let src = if c.has(F_ATTACK) {
+                    &self.hostile
+                } else {
+                    &self.friendly
+                };
                 for (b, s) in th.iter_mut().zip(src.iter()) {
                     *b |= *s;
                 }
                 if c.has(F_CIVILIAN) {
-                    for (b, s) in th.iter_mut().zip(friendly.iter()) {
+                    for (b, s) in th.iter_mut().zip(self.friendly.iter()) {
                         *b |= *s;
                     }
                 }

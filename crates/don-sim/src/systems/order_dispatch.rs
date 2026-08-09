@@ -436,6 +436,23 @@ pub enum PatrolPayload {
     Strafe(StrafeOrder),
 }
 
+impl PatrolPayload {
+    /// Heap storage owned by the dynamically-sized patrol waypoint arrays.
+    ///
+    /// The order record itself is accounted for by [`OrderQueue::bytes_reserved`]; only
+    /// the two `SimpleArray<Coord>`-shaped vector allocations live out of line.
+    pub fn bytes_reserved(&self) -> usize {
+        let points = match self {
+            PatrolPayload::Group(order) => Some(&order.points),
+            PatrolPayload::Air(order) => Some(&order.points),
+            PatrolPayload::None | PatrolPayload::Strafe(_) => None,
+        };
+        points.map_or(0, |p| {
+            (p.x.capacity() + p.y.capacity()) * std::mem::size_of::<i32>()
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PatrolInstall {
     Replaced,
@@ -794,6 +811,16 @@ impl OrderQueue {
 
     pub fn iter(&self) -> impl Iterator<Item = &OrderRec> {
         self.orders.iter()
+    }
+
+    /// Heap storage retained by the queue and every dynamic patrol payload it owns.
+    pub fn bytes_reserved(&self) -> usize {
+        self.orders.capacity() * std::mem::size_of::<OrderRec>()
+            + self
+                .orders
+                .iter()
+                .map(|order| order.patrol_payload.bytes_reserved())
+                .sum::<usize>()
     }
 
     /// `Unit::add_*_order` with `QueuePos::BACK` — append behind whatever is queued.
