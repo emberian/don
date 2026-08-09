@@ -12,7 +12,7 @@ use don_sim::order::{Order, OrderIndex, ORDER_FLEEING};
 use don_sim::systems::map_terrain::{Coord, FCoord};
 use don_sim::systems::movement_live::{LiveCollisionFault, LiveCollisionSource};
 use don_sim::systems::victory_score::{leader_flag, Diplo};
-use don_sim::world::OBJ_FLAG_ACTIVE;
+use don_sim::world::{OBJ_FLAG_ACTIVE, SUBTILE};
 use don_sim::Handle;
 
 pub const UNIT_VERB_COUNT: usize = 33;
@@ -142,6 +142,103 @@ pub struct UnitActionRequest {
     pub target_y: i32,
     pub queue: QueuePosition,
     pub order_flags: u8,
+}
+
+/// Shape needed to decode the generated ten-head policy action without borrowing the
+/// compact backend. Coordinates retain `VecEnv`'s public contract: one head cell is one
+/// quarter-tile [`SUBTILE`], addressed at its centre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FactoredUnitActionSpace {
+    pub grid_w: usize,
+    pub grid_h: usize,
+    pub max_entities: usize,
+}
+
+/// Refusal produced before the authoritative core is borrowed or mutated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadDecodeRefusal {
+    WrongHeadCount {
+        actual: usize,
+        expected: usize,
+    },
+    ValueOutOfRange {
+        head: usize,
+        value: i32,
+        exclusive_max: usize,
+    },
+    CoordinateOverflow {
+        head: usize,
+        value: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FactoredApplyRefusal {
+    Decode(HeadDecodeRefusal),
+    Apply(ApplyRefusal),
+}
+
+/// Decode exactly the generated `UnitHead` layout into the narrower authoritative request.
+///
+/// Every head is range-checked even when the selected verb does not consume it. This keeps
+/// an unmasked/broken policy distinguishable from a hosted verb refusal and avoids compact
+/// `UnitAction::from_slice`'s intentionally permissive missing/negative-to-zero conversion.
+pub fn decode_unit_heads(
+    actor: Handle,
+    heads: &[i32],
+    space: FactoredUnitActionSpace,
+) -> Result<UnitActionRequest, HeadDecodeRefusal> {
+    if heads.len() != crate::generated::N_UNIT_HEADS {
+        return Err(HeadDecodeRefusal::WrongHeadCount {
+            actual: heads.len(),
+            expected: crate::generated::N_UNIT_HEADS,
+        });
+    }
+    let sizes = [
+        crate::generated::N_UNIT_VERBS + 1,
+        space.grid_w,
+        space.grid_h,
+        space.max_entities.saturating_add(1),
+        crate::generated::NUM_TYPES,
+        3,
+        4,
+        crate::generated::FORMS.len(),
+        8,
+        5,
+    ];
+    for (head, (&value, &exclusive_max)) in heads.iter().zip(&sizes).enumerate() {
+        if value < 0 || usize::try_from(value).map_or(true, |value| value >= exclusive_max) {
+            return Err(HeadDecodeRefusal::ValueOutOfRange {
+                head,
+                value,
+                exclusive_max,
+            });
+        }
+    }
+
+    let coord = |head: usize| {
+        heads[head]
+            .checked_mul(SUBTILE)
+            .and_then(|value| value.checked_add(SUBTILE / 2))
+            .ok_or(HeadDecodeRefusal::CoordinateOverflow {
+                head,
+                value: heads[head],
+            })
+    };
+    let queue = match heads[crate::generated::UnitHead::QueuePos as usize] {
+        0 => QueuePosition::First,
+        1 => QueuePosition::Last,
+        2 => QueuePosition::Replace,
+        _ => unreachable!("queue head was range-checked"),
+    };
+    Ok(UnitActionRequest {
+        verb_head: heads[crate::generated::UnitHead::Verb as usize] as u16,
+        actor,
+        target_x: coord(crate::generated::UnitHead::TargetX as usize)?,
+        target_y: coord(crate::generated::UnitHead::TargetY as usize)?,
+        queue,
+        order_flags: heads[crate::generated::UnitHead::OrderMods as usize] as u8,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -396,6 +493,20 @@ impl AuthoritativeBackend {
             kind,
             queue_len: sim.world.orders(row).len(),
         })
+    }
+
+    /// Decode and apply one generated ten-head action without entering compact `EnvWorld`.
+    pub fn apply_unit_heads(
+        &mut self,
+        who: u8,
+        actor: Handle,
+        heads: &[i32],
+        space: FactoredUnitActionSpace,
+    ) -> Result<ApplyReceipt, FactoredApplyRefusal> {
+        let request =
+            decode_unit_heads(actor, heads, space).map_err(FactoredApplyRefusal::Decode)?;
+        self.apply_unit(who, request)
+            .map_err(FactoredApplyRefusal::Apply)
     }
 
     /// Player-verb counterpart to [`Self::apply_unit`]. The map is executable even while
