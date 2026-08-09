@@ -2415,7 +2415,9 @@ pub fn work<W: WorkWorld>(
 
     // --- I ---
     if u.safe != 0 {
-        u.safe -= 1;
+        // Retail executes a byte-sized `dec`; the checksum-visible field wraps through
+        // `0x80 -> 0x7f` instead of trapping in a checked Rust build.
+        u.safe = u.safe.wrapping_sub(1);
     }
 
     // --- J ---
@@ -3173,6 +3175,19 @@ mod tests {
         let r = work(&mut u, &mut w, &mut pf, &mut cov);
         assert_eq!(r.dispatched, OrderIndex::Gather);
         assert_eq!(r.result, ArmResult::Gathered(3));
+    }
+
+    #[test]
+    fn safe_countdown_has_retails_byte_wrap_semantics() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 24, 24);
+        u.safe = i8::MIN;
+
+        let _ = work(&mut u, &mut w, &mut pf, &mut cov);
+
+        assert_eq!(u.safe, i8::MAX);
     }
 
     #[test]
