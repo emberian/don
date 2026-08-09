@@ -144,6 +144,7 @@ pub mod terrain_drop_tile;
 pub mod terrain_groups;
 pub mod terrain_player_group;
 pub mod terrain_player_growth;
+pub mod terrain_player_mountain_retry;
 pub mod terrain_region_continuation;
 pub mod terrain_region_patterns;
 pub mod terrain_region_placement;

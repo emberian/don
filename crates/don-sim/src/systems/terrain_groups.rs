@@ -27,6 +27,9 @@ use super::terrain_player_group::{
     PlacePlayerGroupCall, PlacePlayerGroupError, PlacePlayerGroupOutcome, PlacePlayerGroupReceipt,
     PlayerGroupExternalRequest, PlayerGroupExternalResolution,
 };
+use super::terrain_player_mountain_retry::{
+    PlayerMountainTemplateRetryError, PlayerMountainTemplateRetryReceipt,
+};
 use super::terrain_region_continuation::{
     PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupReceipt,
 };
@@ -168,9 +171,12 @@ pub struct PlaceAllPreviewReceipt {
     pub region_group_continuation: Option<PlaceRegionGroupReceipt>,
     /// Exact pattern-1/2/3 eligible-region and clump loop.
     pub region_pattern: Option<RegionPatternReceipt>,
-    /// Exact pattern-0 player/start-ring entry calls executed before the next
-    /// mountain, cliff, or orthogonal-growth dependency.
+    /// Exact pattern-0 player/start-ring calls, including locally closed growth
+    /// and mountain-template retry continuations.
     pub player_group_prefix: Option<Vec<PlacePlayerGroupReceipt>>,
+    /// Complete type-5 mountain-template cursor cycles reached after an initial
+    /// player placement returned zero.
+    pub player_group_mountain_retries: Vec<PlayerMountainTemplateRetryReceipt>,
     pub player_group_host_events: Vec<PlaceAllHostEvent>,
     pub player_group_placed_after: Vec<i32>,
     pub player_group_formation_x: Vec<i32>,
@@ -339,11 +345,6 @@ pub enum TerrainPlacementBoundary {
         player_index: usize,
         return_value: i32,
     },
-    PlayerGroupMountainTemplateRetry {
-        group_index: usize,
-        clump_index: usize,
-        player_index: usize,
-    },
     PlayerGroupPatternComplete {
         group_index: usize,
     },
@@ -391,6 +392,7 @@ pub enum PlaceAllError {
     InvalidRegionGroupContinuation(PlaceRegionGroupError),
     InvalidRegionPattern(RegionPatternError),
     InvalidPlayerGroupPrefix(PlacePlayerGroupError),
+    InvalidPlayerMountainTemplateRetry(PlayerMountainTemplateRetryError),
     InvalidPlayerGroupInputs {
         group_index: usize,
     },
@@ -636,8 +638,10 @@ impl TerrainGroups {
         )
     }
 
-    /// Executes the exact pattern-0 start-ring/player entry transaction through
-    /// its first typed object effect or the post-drop growth kernel.
+    /// Executes the exact selected pattern-0 clump/player loop, including
+    /// type-4 strict retry, type-4/type-6 growth, and type-5 template fallback.
+    /// Object-system effects remain ordered typed inputs; an absent input stops
+    /// at the exact request without mutating caller-owned preview state.
     #[allow(clippy::too_many_arguments)]
     pub fn place_all_with_player_group_inputs(
         &mut self,
@@ -841,6 +845,7 @@ impl TerrainGroups {
         let mut region_group_continuation = None;
         let mut region_pattern = None;
         let mut player_group_prefix = None;
+        let mut player_group_mountain_retries = Vec::new();
         let mut player_group_host_events = Vec::new();
         let mut player_group_placed_after = Vec::new();
         let mut player_group_formation_x = Vec::new();
@@ -961,22 +966,80 @@ impl TerrainGroups {
                             }
                             PlacePlayerGroupOutcome::Returned(return_value) => {
                                 if preview_group.group_type == 5 && return_value == 0 {
-                                    next =
-                                        TerrainPlacementBoundary::PlayerGroupMountainTemplateRetry {
+                                    let retry = preview_group
+                                        .apply_player_mountain_template_retry(
+                                            &mut preview_world,
+                                            &mut preview_random,
+                                            &mut preview_mountains,
+                                            PlacePlayerGroupCall {
+                                                target_tiles,
+                                                player_index,
+                                                land_subtype,
+                                                oil_deposits,
+                                                group_index,
+                                                strict_type_four: false,
+                                            },
+                                            land_subtype,
+                                            &mut player_group_formation_x,
+                                            &mut player_group_formation_y,
+                                            &externals[consumed..],
+                                            || {
+                                                let event =
+                                                    PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                                                        group_index,
+                                                        clump_index,
+                                                        player_index,
+                                                    };
+                                                host(event);
+                                                player_group_host_events.push(event);
+                                            },
+                                        )
+                                        .map_err(
+                                            PlaceAllError::InvalidPlayerMountainTemplateRetry,
+                                        )?;
+                                    consumed += retry.external_resolutions_consumed;
+                                    calls.extend(
+                                        retry
+                                            .attempts
+                                            .iter()
+                                            .map(|attempt| attempt.placement.clone()),
+                                    );
+                                    outcome = retry.outcome.clone();
+                                    player_group_mountain_retries.push(retry);
+                                }
+                                match outcome {
+                                    PlacePlayerGroupOutcome::Returned(return_value) => {
+                                        preview_group.placed.push(return_value);
+                                        next = TerrainPlacementBoundary::PlayerGroupReturnControl {
+                                            group_index,
+                                            clump_index,
+                                            player_index,
+                                            return_value,
+                                        };
+                                    }
+                                    PlacePlayerGroupOutcome::ExternalResolutionRequired {
+                                        request,
+                                    } => {
+                                        next = TerrainPlacementBoundary::
+                                            PlayerGroupExternalSubsystem {
+                                                group_index,
+                                                clump_index,
+                                                player_index,
+                                                request,
+                                            };
+                                        complete = false;
+                                        break 'clumps;
+                                    }
+                                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                                        next = TerrainPlacementBoundary::PlayerGroupGrowthKernel {
                                             group_index,
                                             clump_index,
                                             player_index,
                                         };
-                                    complete = false;
-                                    break 'clumps;
+                                        complete = false;
+                                        break 'clumps;
+                                    }
                                 }
-                                preview_group.placed.push(return_value);
-                                next = TerrainPlacementBoundary::PlayerGroupReturnControl {
-                                    group_index,
-                                    clump_index,
-                                    player_index,
-                                    return_value,
-                                };
                             }
                         }
                     }
@@ -1159,6 +1222,7 @@ impl TerrainGroups {
                 region_group_continuation,
                 region_pattern,
                 player_group_prefix,
+                player_group_mountain_retries,
                 player_group_host_events,
                 player_group_placed_after,
                 player_group_formation_x,
