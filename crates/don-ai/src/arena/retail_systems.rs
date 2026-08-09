@@ -13,6 +13,7 @@ use don_sim::systems::air::{self, AntiAirGate, AntiAirShot, FuelVerdict};
 use don_sim::systems::borders_fog::{
     self, AttritionDamage, AttritionInput, AttritionRules, SupplyInput,
 };
+use don_sim::systems::combat::DamageOutcome;
 use don_sim::systems::construction::{self, ConstructionEffects};
 use don_sim::systems::economy::NUM_RESOURCES;
 use don_sim::systems::gathering::{self, GatherCount, GatherSite, GatherTile, GatherWorker};
@@ -332,11 +333,12 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
         recovered: &[
             "calc_anti_attrition and get_attrition arithmetic",
             "period phase and suffer-attrition damage shape",
+            "object-backed due-tick supply/attrition mutation transaction",
         ],
         missing: &[
             "arena per-unit attrition-period state and retail recomputation sites",
             "runtime type virtuals get_bonus(0x42), +0x10c and +0x308",
-            "Object::take_damage fractional-damage denominator",
+            "arena Object::take_damage implementation and death cascade",
             "removal of arena combat's unconditional in_supply=true input",
         ],
     },
@@ -345,12 +347,12 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
         status: IntegrationStatus::AdapterOnly,
         recovered: &[
             "ordered Unit::process_supply host-query adapter",
+            "walked SupplyData and HeroData registry traversal with exact range metric",
+            "due-tick UnitData unit_masks2 resupplied write",
             "out-of-supply reload arithmetic and constants",
         ],
         missing: &[
-            "Supplies::find_supply and source lifetime/index",
-            "three building proximity queries in retail traversal order",
-            "per-tick resupplied flag transaction in UnitData walked state",
+            "arena SupplyAttritionHost implementation over its live object tables",
             "located reload call site and supply healing",
         ],
     },
@@ -715,13 +717,14 @@ pub fn attrition_period(source: AttritionPeriodSource, rules: &AttritionRules) -
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SupplyGuards {
     pub already_flagged: bool,
-    pub always_supplied: bool,
+    pub supply_type: bool,
     pub militia: bool,
 }
 
 /// Stable identity and de-obfuscated position of the unit whose owner-local supply queries
-/// are being performed. `Supplies::find_supply` consumes `(x, y, who)`; the nearby-building
-/// calls are instance methods, so `(who, o)` must stay attached to the same query receipt.
+/// are being performed. `Supplies::find_supply` consumes `(x, y, who)`; the subsequent
+/// `ObjectData::has_general` calls are instance methods, so `(who, o)` must stay attached
+/// to the same query receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SupplyUnitKey {
     pub who: i32,
@@ -734,7 +737,7 @@ pub struct SupplyUnitKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupplyGuard {
     AlreadyFlagged,
-    AlwaysSupplied,
+    SupplyType,
     Militia,
 }
 
@@ -744,7 +747,7 @@ pub enum SupplyGuard {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupplySource {
     SuppliesIndex(i32),
-    OwnedBuilding { type_id: i32, object_index: i32 },
+    HeroObject { type_id: i32, object_index: i32 },
 }
 
 /// Completed `Unit::process_supply` outcome, including why no later query ran.
@@ -777,22 +780,22 @@ impl SupplyResolution {
                 SupplyOutcome::Supplied(SupplySource::SuppliesIndex(_)) => {
                     (true, false, false, false)
                 }
-                SupplyOutcome::Supplied(SupplySource::OwnedBuilding { type_id: 0x16B, .. }) => {
+                SupplyOutcome::Supplied(SupplySource::HeroObject { type_id: 0x16B, .. }) => {
                     (false, true, false, false)
                 }
-                SupplyOutcome::Supplied(SupplySource::OwnedBuilding { type_id: 0x176, .. }) => {
+                SupplyOutcome::Supplied(SupplySource::HeroObject { type_id: 0x176, .. }) => {
                     (false, false, true, false)
                 }
-                SupplyOutcome::Supplied(SupplySource::OwnedBuilding { type_id: 0x16E, .. }) => {
+                SupplyOutcome::Supplied(SupplySource::HeroObject { type_id: 0x16E, .. }) => {
                     (false, false, false, true)
                 }
-                SupplyOutcome::Supplied(SupplySource::OwnedBuilding { .. })
+                SupplyOutcome::Supplied(SupplySource::HeroObject { .. })
                 | SupplyOutcome::Guarded(_)
                 | SupplyOutcome::Exhausted => (false, false, false, false),
             };
         SupplyInput {
             already_flagged: guards.already_flagged,
-            always_supplied: guards.always_supplied,
+            always_supplied: guards.supply_type,
             militia: guards.militia,
             near_supply_source,
             near_building_16b,
@@ -809,7 +812,7 @@ pub trait ArenaSupplyQueries {
     type Error;
 
     fn find_supply(&mut self, unit: SupplyUnitKey) -> Result<Option<i32>, Self::Error>;
-    fn find_owned_building_in_range(
+    fn find_owned_hero_in_range(
         &mut self,
         unit: SupplyUnitKey,
         type_id: i32,
@@ -832,7 +835,7 @@ pub enum SupplyAdapterError<E> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupplyQuery {
     Supplies,
-    OwnedBuilding(i32),
+    HeroType(i32),
 }
 
 /// Resolve `Unit::process_supply` without flattening ordered, fallible world queries into
@@ -851,8 +854,8 @@ pub fn resolve_supply<Q: ArenaSupplyQueries>(
     }
     let guarded = if guards.already_flagged {
         Some(SupplyGuard::AlreadyFlagged)
-    } else if guards.always_supplied {
-        Some(SupplyGuard::AlwaysSupplied)
+    } else if guards.supply_type {
+        Some(SupplyGuard::SupplyType)
     } else if guards.militia {
         Some(SupplyGuard::Militia)
     } else {
@@ -883,17 +886,17 @@ pub fn resolve_supply<Q: ArenaSupplyQueries>(
 
     for type_id in [0x16B, 0x176, 0x16E] {
         if let Some(object_index) = queries
-            .find_owned_building_in_range(unit, type_id)
+            .find_owned_hero_in_range(unit, type_id)
             .map_err(SupplyAdapterError::Host)?
         {
             if object_index < 0 {
                 return Err(SupplyAdapterError::InvalidObjectIndex {
-                    query: SupplyQuery::OwnedBuilding(type_id),
+                    query: SupplyQuery::HeroType(type_id),
                     object_index,
                 });
             }
             let result = SupplyResolution {
-                outcome: SupplyOutcome::Supplied(SupplySource::OwnedBuilding {
+                outcome: SupplyOutcome::Supplied(SupplySource::HeroObject {
                     type_id,
                     object_index,
                 }),
@@ -938,6 +941,445 @@ pub fn attrition_tick(input: &AttritionTickInput) -> AttritionTick {
         input.type_308,
         input.curr_uber_size,
     ))
+}
+
+/// `SupplyData::supply_flags` / `HeroData::hero_flags` bit checked by the two retail
+/// registry traversals.
+pub const SUPPORT_REGISTRY_ACTIVE: u8 = 1;
+/// `UnitData::unit_masks2` bit written by `Unit::process` after a due supply hit.
+pub const RESUPPLIED_THIS_TICK: u32 = 0x4_0000;
+/// Both `SupplyData::get_radius` and `HeroData::get_radius` return tiles; their callers
+/// multiply by this many fine world units before comparing `vector_dist`.
+pub const SUPPORT_RANGE_UNITS_PER_TILE: i32 = 0xC0;
+
+/// The six bytes walked by `Supply::walk_data` (`0x0073B540`) and consumed in owner-local
+/// list order by `Supplies::find_supply` (`0x0073ABA0`). The list slot, not `supply`, is
+/// the identity returned by the latter function, so both remain visible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplyRegistryRecord {
+    pub supply: i16,
+    pub o: i16,
+    pub supply_flags: u8,
+    pub who: i8,
+}
+
+/// The identity fields at `HeroData +0x24..+0x29` consumed by
+/// `HeroesData::find_hero` (`0x0073A1B0`). The rest of the 48-byte walked record owns the
+/// aura-radius calculation and is deliberately accessed through the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeroRegistryRecord {
+    pub o: i16,
+    pub hero_flags: u8,
+    pub who: i8,
+}
+
+/// Object fields and virtual results read by both registry traversals. This is an object
+/// snapshot, not a pre-combined "in supply" answer: the adapter still resolves every
+/// record, checks liveness and `is_supply`, computes distance, and preserves the first
+/// source identity itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplySearchObject {
+    pub active: bool,
+    pub is_supply: bool,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// Exact inputs to `SupplyData::get_radius` (`0x0073B560`). The Terra Cotta Army is
+/// TypeIndex `0x211`; `terra_cotta_range` is `Constants +0x45C`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplyRadiusFacts {
+    pub supply_radius: i32,
+    pub supply_radius_upgrade: i32,
+    pub supply_upgrade: i32,
+    pub has_terra_cotta: bool,
+    pub terra_cotta_range: i32,
+}
+
+impl SupplyRadiusFacts {
+    pub fn radius_tiles(self) -> i32 {
+        let radius = self
+            .supply_radius
+            .wrapping_add(self.supply_radius_upgrade.wrapping_mul(self.supply_upgrade));
+        if self.has_terra_cotta {
+            radius.wrapping_add(self.terra_cotta_range)
+        } else {
+            radius
+        }
+    }
+}
+
+/// Scalar leader/rules inputs to `HeroData::get_radius` (`0x00739E50`). Object type
+/// predicates are deliberately not flattened into this value; the adapter asks the host's
+/// `ObjectTypeData::is` implementation in the retail order and with the retail relation
+/// selector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeroRadiusFacts {
+    pub general_upgrade: i32,
+    pub general_radius: i32,
+    pub parmenio_radius_adjust_256: i32,
+    pub wellington_radius_percent: i32,
+    pub kutosov_radius_percent: i32,
+    pub has_terra_cotta: bool,
+    pub terra_cotta_range: i32,
+    pub military_patriot_radius_bonus: i32,
+    pub economic_patriot_radius_bonus: i32,
+}
+
+/// UnitData fields and virtual results needed for one `Unit::process` supply/attrition
+/// branch. A host loads this from one live object immediately before the transaction, so
+/// the position, phase, walked mask and damage shape cannot be assembled from unrelated
+/// objects by the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplyAttritionUnitState {
+    pub unit: SupplyUnitKey,
+    pub unit_id: i16,
+    pub attrition_period: i16,
+    pub unit_masks: u32,
+    pub unit_masks2: u32,
+    pub is_supply: bool,
+    pub militia: bool,
+    pub type_308: i32,
+    pub curr_uber_size: i32,
+}
+
+/// Real host boundary for the complete sim-state portion of the due attrition branch.
+///
+/// The two returned slices are walked registry state, not arbitrary candidates. Object
+/// lookup is owner-local exactly as in retail: even though each registry record also
+/// stores `who`, its `o` is resolved through the unit being processed's owner table.
+/// `object_is` must implement `ObjectTypeData::is(type_id, relation_set)`, including its
+/// equivalence lists, rather than compare display names. `hero_radius_facts` exposes the
+/// leader/rules scalars used by `HeroData::get_radius`; the adapter owns the ordered type
+/// predicates and arithmetic.
+///
+/// The two mutation methods are intentionally scalar/full-transaction writes. In
+/// particular, `take_attrition_damage` must execute the ordinary `Object::take_damage`
+/// path (including death/captain cascades) with the recovered flat/fractional shape; it
+/// may not update a detached hit-point copy.
+pub trait ArenaSupplyAttritionHost {
+    type Error;
+
+    fn unit_state(&self, who: i32, o: i32)
+        -> Result<Option<SupplyAttritionUnitState>, Self::Error>;
+    fn supply_records(&self, who: i32) -> Result<&[SupplyRegistryRecord], Self::Error>;
+    fn hero_records(&self, who: i32) -> Result<&[HeroRegistryRecord], Self::Error>;
+    fn support_object(&self, who: i32, o: i32) -> Result<Option<SupplySearchObject>, Self::Error>;
+    fn supply_radius_facts(&self, who: i32) -> Result<SupplyRadiusFacts, Self::Error>;
+    fn owned_type_count(&self, who: i32, type_id: i32) -> Result<i32, Self::Error>;
+    fn object_is(
+        &self,
+        who: i32,
+        o: i32,
+        type_id: i32,
+        relation_set: i32,
+    ) -> Result<bool, Self::Error>;
+    fn hero_radius_facts(&self, who: i32) -> Result<HeroRadiusFacts, Self::Error>;
+
+    fn write_unit_masks2(
+        &mut self,
+        who: i32,
+        o: i32,
+        before: u32,
+        after: u32,
+    ) -> Result<(), Self::Error>;
+    fn take_attrition_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage: AttritionDamage,
+    ) -> Result<DamageOutcome, Self::Error>;
+    fn suffer_graphic_attrition(&mut self, who: i32, o: i32) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportRegistry {
+    Supplies,
+    Heroes,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SupplyAttritionTransactionError<E> {
+    Host(E),
+    InvalidUnit {
+        who: i32,
+        o: i32,
+    },
+    MissingUnit {
+        who: i32,
+        o: i32,
+    },
+    UnitIdentityChanged {
+        requested_who: i32,
+        requested_o: i32,
+        found_who: i32,
+        found_o: i32,
+    },
+    MissingRegistryObject {
+        registry: SupportRegistry,
+        slot: usize,
+        who: i32,
+        o: i16,
+    },
+}
+
+/// Mutation receipt for one `Unit::process` due-check. `Resupplied` proves the walked
+/// `unit_masks2` write happened; `Damaged` proves the full host damage call happened and
+/// records whether retail's surviving-unit graphic callback ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupplyAttritionTransaction {
+    NotDue,
+    Resupplied {
+        source: SupplySource,
+        unit_masks2_before: u32,
+        unit_masks2_after: u32,
+    },
+    Damaged {
+        supply: SupplyOutcome,
+        damage: AttritionDamage,
+        outcome: DamageOutcome,
+        graphic_attrition: bool,
+    },
+}
+
+fn support_distance(unit: SupplyUnitKey, object: SupplySearchObject) -> i32 {
+    don_sim::systems::movement::vector_dist(
+        unit.x.wrapping_sub(object.x),
+        unit.y.wrapping_sub(object.y),
+    )
+}
+
+fn signed_div_256(value: i32) -> i32 {
+    value.wrapping_add((value >> 31) & 0xFF) >> 8
+}
+
+fn hero_radius_tiles<H: ArenaSupplyAttritionHost>(
+    host: &H,
+    object_who: i32,
+    object_o: i32,
+    radius_who: i32,
+) -> Result<i32, SupplyAttritionTransactionError<H::Error>> {
+    let facts = host
+        .hero_radius_facts(radius_who)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    let mut radius = facts
+        .general_radius
+        .wrapping_mul(facts.general_upgrade.wrapping_add(3))
+        / 2;
+    if host
+        .object_is(object_who, object_o, 0x168, 0)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        radius = signed_div_256(facts.parmenio_radius_adjust_256.wrapping_mul(radius));
+    }
+    if host
+        .object_is(object_who, object_o, 0x170, 0)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        radius = facts.wellington_radius_percent.wrapping_mul(radius) / 100;
+    }
+    if host
+        .object_is(object_who, object_o, 0x176, 0)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        radius = facts.kutosov_radius_percent.wrapping_mul(radius) / 100;
+    }
+    if facts.has_terra_cotta {
+        radius = radius.wrapping_add(facts.terra_cotta_range);
+    }
+    if host
+        .object_is(object_who, object_o, 0x160, 1)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        || host
+            .object_is(object_who, object_o, 0x162, 1)
+            .map_err(SupplyAttritionTransactionError::Host)?
+        || host
+            .object_is(object_who, object_o, 0x164, 1)
+            .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        radius = radius.wrapping_add(facts.military_patriot_radius_bonus);
+    }
+    if host
+        .object_is(object_who, object_o, 0x161, 1)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        || host
+            .object_is(object_who, object_o, 0x163, 1)
+            .map_err(SupplyAttritionTransactionError::Host)?
+        || host
+            .object_is(object_who, object_o, 0x165, 1)
+            .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        radius = radius.wrapping_add(facts.economic_patriot_radius_bonus);
+    }
+    Ok(radius)
+}
+
+fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
+    state: SupplyAttritionUnitState,
+    host: &H,
+) -> Result<SupplyResolution, SupplyAttritionTransactionError<H::Error>> {
+    let guards = SupplyGuards {
+        already_flagged: state.unit_masks & 0x40_0000 != 0,
+        supply_type: state.is_supply,
+        militia: state.militia,
+    };
+    let guarded = if guards.already_flagged {
+        Some(SupplyGuard::AlreadyFlagged)
+    } else if guards.supply_type {
+        Some(SupplyGuard::SupplyType)
+    } else if guards.militia {
+        Some(SupplyGuard::Militia)
+    } else {
+        None
+    };
+    if let Some(guard) = guarded {
+        return Ok(SupplyResolution {
+            outcome: SupplyOutcome::Guarded(guard),
+        });
+    }
+
+    let supplies = host
+        .supply_records(state.unit.who)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    for (slot, record) in supplies.iter().copied().enumerate() {
+        if record.supply_flags & SUPPORT_REGISTRY_ACTIVE == 0 {
+            continue;
+        }
+        let object = host
+            .support_object(state.unit.who, record.o as i32)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            .ok_or(SupplyAttritionTransactionError::MissingRegistryObject {
+                registry: SupportRegistry::Supplies,
+                slot,
+                who: state.unit.who,
+                o: record.o,
+            })?;
+        if !object.active || !object.is_supply {
+            continue;
+        }
+        let radius = host
+            .supply_radius_facts(record.who as i32)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            .radius_tiles()
+            .wrapping_mul(SUPPORT_RANGE_UNITS_PER_TILE);
+        if support_distance(state.unit, object) <= radius {
+            return Ok(SupplyResolution {
+                outcome: SupplyOutcome::Supplied(SupplySource::SuppliesIndex(slot as i32)),
+            });
+        }
+    }
+
+    for type_id in [0x16B, 0x176, 0x16E] {
+        if host
+            .owned_type_count(state.unit.who, type_id)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            == 0
+        {
+            continue;
+        }
+        let heroes = host
+            .hero_records(state.unit.who)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        for (slot, record) in heroes.iter().copied().enumerate() {
+            if record.hero_flags & SUPPORT_REGISTRY_ACTIVE == 0 {
+                continue;
+            }
+            let object = host
+                .support_object(state.unit.who, record.o as i32)
+                .map_err(SupplyAttritionTransactionError::Host)?
+                .ok_or(SupplyAttritionTransactionError::MissingRegistryObject {
+                    registry: SupportRegistry::Heroes,
+                    slot,
+                    who: state.unit.who,
+                    o: record.o,
+                })?;
+            if !object.active
+                || !object.is_supply
+                || !host
+                    .object_is(state.unit.who, record.o as i32, type_id, 0)
+                    .map_err(SupplyAttritionTransactionError::Host)?
+            {
+                continue;
+            }
+            let radius =
+                hero_radius_tiles(host, state.unit.who, record.o as i32, record.who as i32)?
+                    .wrapping_mul(SUPPORT_RANGE_UNITS_PER_TILE);
+            if support_distance(state.unit, object) <= radius {
+                return Ok(SupplyResolution {
+                    outcome: SupplyOutcome::Supplied(SupplySource::HeroObject {
+                        type_id,
+                        object_index: record.o as i32,
+                    }),
+                });
+            }
+        }
+    }
+
+    Ok(SupplyResolution {
+        outcome: SupplyOutcome::Exhausted,
+    })
+}
+
+/// Execute the sim-state part of retail's supply/attrition branch for one live unit.
+///
+/// The transaction performs no registry read before the exact `(frame + id) % period`
+/// due check. When due, it traverses the walked `Supplies` list, then the three
+/// count-gated `Heroes` searches in retail order. A hit ORs `0x40000` into the live walked
+/// `unit_masks2`; otherwise it executes the recovered attrition damage shape and, when
+/// the object survives, the same graphic callback selected by `suffer_attrition(1)`.
+pub fn execute_supply_attrition<H: ArenaSupplyAttritionHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<SupplyAttritionTransaction, SupplyAttritionTransactionError<H::Error>> {
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if !borders_fog::attrition_due(frame, state.unit_id, state.attrition_period) {
+        return Ok(SupplyAttritionTransaction::NotDue);
+    }
+
+    let supply = resolve_registered_supply(state, host)?;
+    if let SupplyOutcome::Supplied(source) = supply.outcome() {
+        let before = state.unit_masks2;
+        let after = before | RESUPPLIED_THIS_TICK;
+        host.write_unit_masks2(who, o, before, after)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        return Ok(SupplyAttritionTransaction::Resupplied {
+            source,
+            unit_masks2_before: before,
+            unit_masks2_after: after,
+        });
+    }
+
+    let damage = borders_fog::attrition_damage(state.type_308, state.curr_uber_size);
+    let outcome = host
+        .take_attrition_damage(who, o, damage)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    let graphic_attrition = outcome == DamageOutcome::Survived;
+    if graphic_attrition {
+        host.suffer_graphic_attrition(who, o)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+    }
+    Ok(SupplyAttritionTransaction::Damaged {
+        supply: supply.outcome(),
+        damage,
+        outcome,
+        graphic_attrition,
+    })
 }
 
 #[cfg(test)]
@@ -1395,9 +1837,9 @@ mod tests {
         calls: Vec<i32>,
         units: Vec<SupplyUnitKey>,
         supply: Option<i32>,
-        building_16b: Option<i32>,
-        building_176: Option<i32>,
-        building_16e: Option<i32>,
+        hero_16b: Option<i32>,
+        hero_176: Option<i32>,
+        hero_16e: Option<i32>,
         fail_on: Option<i32>,
     }
 
@@ -1414,7 +1856,7 @@ mod tests {
             }
         }
 
-        fn find_owned_building_in_range(
+        fn find_owned_hero_in_range(
             &mut self,
             unit: SupplyUnitKey,
             type_id: i32,
@@ -1422,13 +1864,13 @@ mod tests {
             self.calls.push(type_id);
             self.units.push(unit);
             if self.fail_on == Some(type_id) {
-                return Err("building traversal unavailable");
+                return Err("hero traversal unavailable");
             }
             Ok(match type_id {
-                0x16B => self.building_16b,
-                0x176 => self.building_176,
-                0x16E => self.building_16e,
-                _ => unreachable!("adapter requested an underived supply building"),
+                0x16B => self.hero_16b,
+                0x176 => self.hero_176,
+                0x16E => self.hero_16e,
+                _ => unreachable!("adapter requested an underived supply hero"),
             })
         }
     }
@@ -1443,16 +1885,16 @@ mod tests {
         };
         let open = SupplyGuards {
             already_flagged: false,
-            always_supplied: false,
+            supply_type: false,
             militia: false,
         };
         let mut queries = ScriptedSupplyQueries {
-            building_176: Some(73),
+            hero_176: Some(73),
             ..ScriptedSupplyQueries::default()
         };
         assert_eq!(
             resolve_supply(unit, open, &mut queries).unwrap().outcome(),
-            SupplyOutcome::Supplied(SupplySource::OwnedBuilding {
+            SupplyOutcome::Supplied(SupplySource::HeroObject {
                 type_id: 0x176,
                 object_index: 73,
             })
@@ -1472,7 +1914,7 @@ mod tests {
         queries.calls.clear();
         queries.units.clear();
         queries.supply = None;
-        queries.building_176 = None;
+        queries.hero_176 = None;
         assert_eq!(
             resolve_supply(unit, open, &mut queries).unwrap().outcome(),
             SupplyOutcome::Exhausted
@@ -1504,7 +1946,7 @@ mod tests {
         };
         let open = SupplyGuards {
             already_flagged: false,
-            always_supplied: false,
+            supply_type: false,
             militia: false,
         };
         let mut missing = ScriptedSupplyQueries {
@@ -1513,7 +1955,7 @@ mod tests {
         };
         assert_eq!(
             resolve_supply(unit, open, &mut missing),
-            Err(SupplyAdapterError::Host("building traversal unavailable"))
+            Err(SupplyAdapterError::Host("hero traversal unavailable"))
         );
         assert_eq!(missing.calls, [-1, 0x16B]);
 
@@ -1606,5 +2048,275 @@ mod tests {
                 fractional: 4,
             })
         );
+    }
+
+    #[test]
+    fn supply_attrition_transaction_traverses_walked_sources_and_commits_one_branch() {
+        use std::cell::RefCell;
+
+        struct Host {
+            unit: SupplyAttritionUnitState,
+            supplies: Vec<SupplyRegistryRecord>,
+            heroes: Vec<HeroRegistryRecord>,
+            objects: Vec<Option<SupplySearchObject>>,
+            object_types: Vec<i32>,
+            counts: [i32; 3],
+            reads: RefCell<Vec<String>>,
+            writes: Vec<(u32, u32)>,
+            damages: Vec<AttritionDamage>,
+            graphics: usize,
+        }
+
+        impl ArenaSupplyAttritionHost for Host {
+            type Error = &'static str;
+
+            fn unit_state(
+                &self,
+                who: i32,
+                o: i32,
+            ) -> Result<Option<SupplyAttritionUnitState>, Self::Error> {
+                self.reads.borrow_mut().push(format!("unit:{who}:{o}"));
+                Ok(Some(self.unit))
+            }
+
+            fn supply_records(&self, who: i32) -> Result<&[SupplyRegistryRecord], Self::Error> {
+                self.reads.borrow_mut().push(format!("supplies:{who}"));
+                Ok(&self.supplies)
+            }
+
+            fn hero_records(&self, who: i32) -> Result<&[HeroRegistryRecord], Self::Error> {
+                self.reads.borrow_mut().push(format!("heroes:{who}"));
+                Ok(&self.heroes)
+            }
+
+            fn support_object(
+                &self,
+                who: i32,
+                o: i32,
+            ) -> Result<Option<SupplySearchObject>, Self::Error> {
+                self.reads.borrow_mut().push(format!("object:{who}:{o}"));
+                Ok(self.objects.get(o as usize).copied().flatten())
+            }
+
+            fn supply_radius_facts(&self, who: i32) -> Result<SupplyRadiusFacts, Self::Error> {
+                self.reads.borrow_mut().push(format!("supply-radius:{who}"));
+                Ok(SupplyRadiusFacts {
+                    supply_radius: 14,
+                    supply_radius_upgrade: 2,
+                    supply_upgrade: 0,
+                    has_terra_cotta: false,
+                    terra_cotta_range: 3,
+                })
+            }
+
+            fn owned_type_count(&self, _who: i32, type_id: i32) -> Result<i32, Self::Error> {
+                self.reads.borrow_mut().push(format!("count:{type_id}"));
+                Ok(self.counts[match type_id {
+                    0x16B => 0,
+                    0x176 => 1,
+                    0x16E => 2,
+                    _ => return Err("unexpected type count"),
+                }])
+            }
+
+            fn object_is(
+                &self,
+                _who: i32,
+                o: i32,
+                type_id: i32,
+                relation_set: i32,
+            ) -> Result<bool, Self::Error> {
+                self.reads
+                    .borrow_mut()
+                    .push(format!("object-is:{o}:{type_id}:{relation_set}"));
+                Ok(self.object_types[o as usize] == type_id)
+            }
+
+            fn hero_radius_facts(&self, who: i32) -> Result<HeroRadiusFacts, Self::Error> {
+                self.reads.borrow_mut().push(format!("hero-radius:{who}"));
+                Ok(HeroRadiusFacts {
+                    general_upgrade: 1,
+                    general_radius: 4,
+                    parmenio_radius_adjust_256: 256,
+                    wellington_radius_percent: 100,
+                    kutosov_radius_percent: 100,
+                    has_terra_cotta: false,
+                    terra_cotta_range: 3,
+                    military_patriot_radius_bonus: 0,
+                    economic_patriot_radius_bonus: 0,
+                })
+            }
+
+            fn write_unit_masks2(
+                &mut self,
+                who: i32,
+                o: i32,
+                before: u32,
+                after: u32,
+            ) -> Result<(), Self::Error> {
+                if (who, o, before) != (self.unit.unit.who, self.unit.unit.o, self.unit.unit_masks2)
+                {
+                    return Err("stale unit_masks2 write");
+                }
+                self.unit.unit_masks2 = after;
+                self.writes.push((before, after));
+                Ok(())
+            }
+
+            fn take_attrition_damage(
+                &mut self,
+                who: i32,
+                o: i32,
+                damage: AttritionDamage,
+            ) -> Result<DamageOutcome, Self::Error> {
+                if (who, o) != (self.unit.unit.who, self.unit.unit.o) {
+                    return Err("damage identity changed");
+                }
+                self.damages.push(damage);
+                Ok(DamageOutcome::Survived)
+            }
+
+            fn suffer_graphic_attrition(&mut self, who: i32, o: i32) -> Result<(), Self::Error> {
+                if (who, o) != (self.unit.unit.who, self.unit.unit.o) {
+                    return Err("graphic identity changed");
+                }
+                self.graphics += 1;
+                Ok(())
+            }
+        }
+
+        let unit = SupplyUnitKey {
+            who: 2,
+            o: 18,
+            x: 10_000,
+            y: 5_000,
+        };
+        let mut objects = vec![None; 19];
+        // Exact axis boundary: vector_dist is 14 * 0xC0, so this source is included.
+        objects[10] = Some(SupplySearchObject {
+            active: true,
+            is_supply: true,
+            x: unit.x + 14 * SUPPORT_RANGE_UNITS_PER_TILE,
+            y: unit.y,
+        });
+        objects[11] = Some(SupplySearchObject {
+            active: true,
+            is_supply: true,
+            x: unit.x + 8 * SUPPORT_RANGE_UNITS_PER_TILE,
+            y: unit.y,
+        });
+        let mut object_types = vec![-1; 19];
+        object_types[11] = 0x176;
+        let mut host = Host {
+            unit: SupplyAttritionUnitState {
+                unit,
+                unit_id: 0,
+                attrition_period: 48,
+                unit_masks: 0,
+                unit_masks2: 0x20,
+                is_supply: false,
+                militia: false,
+                type_308: 0,
+                curr_uber_size: 4,
+            },
+            supplies: vec![
+                SupplyRegistryRecord {
+                    supply: 0,
+                    o: 9,
+                    supply_flags: 0,
+                    who: 2,
+                },
+                SupplyRegistryRecord {
+                    supply: 41,
+                    o: 10,
+                    supply_flags: SUPPORT_REGISTRY_ACTIVE,
+                    who: 2,
+                },
+            ],
+            heroes: vec![HeroRegistryRecord {
+                o: 11,
+                hero_flags: SUPPORT_REGISTRY_ACTIVE,
+                who: 2,
+            }],
+            objects,
+            object_types,
+            counts: [0, 1, 0],
+            reads: RefCell::default(),
+            writes: Vec::new(),
+            damages: Vec::new(),
+            graphics: 0,
+        };
+
+        assert_eq!(
+            execute_supply_attrition(47, 2, 18, &mut host).unwrap(),
+            SupplyAttritionTransaction::NotDue
+        );
+        assert_eq!(&*host.reads.borrow(), &["unit:2:18"]);
+
+        host.reads.borrow_mut().clear();
+        assert_eq!(
+            execute_supply_attrition(48, 2, 18, &mut host).unwrap(),
+            SupplyAttritionTransaction::Resupplied {
+                source: SupplySource::SuppliesIndex(1),
+                unit_masks2_before: 0x20,
+                unit_masks2_after: 0x20 | RESUPPLIED_THIS_TICK,
+            }
+        );
+        assert_eq!(host.writes, [(0x20, 0x20 | RESUPPLIED_THIS_TICK)]);
+        assert!(host
+            .reads
+            .borrow()
+            .iter()
+            .all(|read| !read.starts_with("count:") && !read.starts_with("heroes:")));
+
+        // One fine unit outside the supply radius forces the ordered 16B -> 176 fallback;
+        // the walked HeroData source lies exactly on its own inclusive boundary.
+        host.unit.unit_masks2 = 0x40;
+        host.objects[10].as_mut().unwrap().x += 1;
+        host.reads.borrow_mut().clear();
+        assert_eq!(
+            execute_supply_attrition(48, 2, 18, &mut host).unwrap(),
+            SupplyAttritionTransaction::Resupplied {
+                source: SupplySource::HeroObject {
+                    type_id: 0x176,
+                    object_index: 11,
+                },
+                unit_masks2_before: 0x40,
+                unit_masks2_after: 0x40 | RESUPPLIED_THIS_TICK,
+            }
+        );
+        let reads = host.reads.borrow();
+        let count_16b = reads.iter().position(|v| v == "count:363").unwrap();
+        let count_176 = reads.iter().position(|v| v == "count:374").unwrap();
+        let heroes = reads.iter().position(|v| v == "heroes:2").unwrap();
+        assert!(count_16b < count_176 && count_176 < heroes);
+        drop(reads);
+
+        // The same one-unit radius mutation now exhausts every source and commits damage,
+        // never a mask write. A surviving take_damage result triggers the graphic hook.
+        host.unit.unit_masks2 = 0x80;
+        host.objects[11].as_mut().unwrap().x += 1;
+        let writes_before = host.writes.len();
+        assert_eq!(
+            execute_supply_attrition(48, 2, 18, &mut host).unwrap(),
+            SupplyAttritionTransaction::Damaged {
+                supply: SupplyOutcome::Exhausted,
+                damage: AttritionDamage {
+                    flat: 0,
+                    fractional: 4,
+                },
+                outcome: DamageOutcome::Survived,
+                graphic_attrition: true,
+            }
+        );
+        assert_eq!(host.writes.len(), writes_before);
+        assert_eq!(
+            host.damages,
+            [AttritionDamage {
+                flat: 0,
+                fractional: 4,
+            }]
+        );
+        assert_eq!(host.graphics, 1);
     }
 }
