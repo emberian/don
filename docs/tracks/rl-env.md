@@ -1,13 +1,44 @@
 # Track: `rl-env` — the reinforcement-learning environment surface
 
-**Status: working.** `crates/don-env` + `python/don_env` build, import, step, and mask.
+**Status: working, with two explicit fidelity tiers.** `crates/don-env` + `python/don_env`
+build, import, step, and mask through the compact `VecEnv` backend.
 A 256-env batch runs **77,166 env-steps/s** in `step()` alone and **53,216 env-steps/s**
 end to end including masked action sampling, on this M2 Max, measured by
 `python/smoke_test.py`. Full numbers and the honest caveats are below.
 
-Nothing in this track raises a fidelity tier. It is an *interface* derived from the
-binary, wrapped around a simulation that is still mostly scaffolding, and it reports which
-is which at runtime.
+The additive `AuthoritativeBackend` instead owns `don_sim::tick::Sim` directly. It is a
+bounded migration surface, not yet a full-game vector environment: currently only NOOP and
+fully hosted MOVE_TO are admitted, and the other policy verbs fail with typed boundaries.
+
+### Side-by-side authoritative migration contract
+
+`EnvironmentBackend::compact(...)` constructs the unchanged batched `VecEnv`.
+`EnvironmentBackend::authoritative(scenario)` constructs one deterministic `Sim` episode.
+The enum deliberately has no common `step` method: selecting a backend does not imply that
+their action, observation, reward, or fidelity contracts are interchangeable.
+
+The authoritative contract is frozen at this boundary:
+
+* `ScenarioSpec` completely determines seed, player activation, allocation identity, and
+  initial unit state. `reset()` reconstructs that image; `step_frames(n)` executes exactly
+  `n` retail-ordered `Sim::do_frame` calls and returns per-stage reachability counts.
+* Unit/player NOOP is observational. MOVE_TO is the only non-NOOP route and reaches
+  `Sim::issue` only after ownership, queue/flag, map, and live movement-host preflight.
+  Every other generated unit/player verb returns `ApplyRefusal::Unhosted` with the missing
+  authoritative owner and cannot mutate `Sim`.
+* `observe()` and `reward_snapshot()` project directly from `Sim`. Observation currently
+  contains own units and leader state only; `external_entities_complete` remains false until
+  cloak/detection-aware visibility has an authoritative host. Reward deltas use Sim-owned
+  score, economy, alive, and won state.
+* `install_movement_source()` is scenario/content setup authority. Because that source is
+  not yet part of `ScenarioSpec`, `reset()` discards it and callers must reinstall it before
+  issuing MOVE_TO. No hidden sidecar survives reset.
+
+Migration proceeds by moving one complete transaction at a time behind the authoritative
+variant: first content-owned movement sources, then group/command decoding, then visibility
+and opponent observations, then vectorisation. Compact `EnvWorld` remains available for
+throughput comparison; it is not incrementally copied into `Sim` and does not become a
+second source of truth for the authoritative variant.
 
 ---
 
@@ -15,7 +46,7 @@ is which at runtime.
 
 ```sh
 python3 crates/don-env/gen/gen_spec.py     # regenerate spec + capability table
-cargo test -p don-env                      # 22 tests, all green
+cargo test -p don-env                      # compact + authoritative contracts
 bash python/build.sh                       # -> python/don_env/_don_env.so
 PYTHONPATH=python python3 python/smoke_test.py --envs 256
 ```
@@ -299,6 +330,9 @@ crates/don-env/
   src/obs.rs          spatial / entity / global encoders
   src/reward.rs       20 named terms + linear shaping
   src/env.rs          VecEnv: owned buffers, parallel step, native masked sampler
+  src/authoritative_episode.rs  deterministic scenario -> sole Sim owner -> frame receipts
+  src/authoritative_backend.rs  fail-closed action + direct observation/reward adapter
+  src/backend.rs      explicit compact/authoritative ownership selector
   src/py.rs           PyO3 bindings (feature `python` / `extension-module`)
   build.rs            macOS extension-module link args
 
@@ -318,15 +352,20 @@ modified.
 
 ## 9. Next, in order of leverage
 
-1. **Wire `don-sim`'s new `generated/state.rs`** (landed by a parallel lane while this was
-   being built) as the entity backing store, replacing this crate's ad-hoc columns. That is
-   the seam that turns scaffolding into simulation without touching the RL surface.
-2. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
+1. **Put movement collision sources into authoritative scenario/content setup.** This makes
+   MOVE_TO usable immediately after both construction and reset without an out-of-band
+   installer while preserving `Sim` as the only mutable game-state owner.
+2. **Host group/command decoding over the authoritative backend.** Decode the existing
+   generated factored heads into fail-closed typed transactions; do not route unsupported
+   verbs through compact `action.rs` behavior.
+3. **Cloak/detection-aware external observations.** Only then may
+   `external_entities_complete` become true or the authoritative backend expose opponents.
+4. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).
-3. **Terrain + `PathFinder::astar_path`** — unlocks 5 of 12 spatial planes and the
+5. **Terrain + `PathFinder::astar_path`** — unlocks 5 of 12 spatial planes and the
    reachability mask.
-4. **`Leader::compute_score` `0x006EC560`** — one function; removes the last "ours, not the
+6. **`Leader::compute_score` `0x006EC560`** — one function; removes the last "ours, not the
    engine's" caveat from the reward.
-5. **Prerequisites** (`PREQ0/1/2` columns) — turns the `Type` head mask from
+7. **Prerequisites** (`PREQ0/1/2` columns) — turns the `Type` head mask from
    affordability-only into the real tech-gated set.

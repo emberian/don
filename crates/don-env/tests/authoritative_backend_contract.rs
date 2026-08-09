@@ -1,19 +1,11 @@
-//! Side-by-side fidelity backend contract. No compact `EnvWorld` participates.
+//! Public side-by-side fidelity backend contract. No compact `EnvWorld` participates.
 
-mod generated {
-    pub use don_env::generated::*;
-}
-
-#[path = "../src/authoritative_backend.rs"]
-mod authoritative_backend;
-#[path = "../src/authoritative_episode.rs"]
-mod authoritative_episode;
-
-use authoritative_backend::{
-    ApplyReceipt, ApplyRefusal, AuthoritativeBackend, QueuePosition, UnitActionRequest,
-    PLAYER_INTEGRATION, UNIT_INTEGRATION,
+use don_env::authoritative_backend::{
+    ApplyReceipt, ApplyRefusal, QueuePosition, UnitActionRequest, PLAYER_INTEGRATION,
+    UNIT_INTEGRATION,
 };
-use authoritative_episode::{ScenarioSpec, ScenarioUnit};
+use don_env::generated;
+use don_env::{AuthoritativeBackend, ScenarioSpec, ScenarioUnit};
 use don_sim::order::{OrderIndex, ORDER_FLEEING};
 use don_sim::systems::collision::DOMAIN_LAND;
 use don_sim::systems::map_terrain::COORD_PER_WCELL;

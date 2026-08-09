@@ -1,12 +1,6 @@
-//! Reachability contract for migrating ordinary RL episodes onto `don_sim::tick::Sim`.
-//!
-//! The source module is path-included until the VecEnv integration owner replaces its
-//! compact `World` owner.  This keeps the proof pack isolated from currently-owned env files.
+//! Public reachability contract for ordinary RL episodes over `don_sim::tick::Sim`.
 
-#[path = "../src/authoritative_episode.rs"]
-mod authoritative_episode;
-
-use authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit};
+use don_env::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit};
 use don_sim::systems::map_terrain::COORD_PER_WCELL;
 
 fn duel() -> ScenarioSpec {

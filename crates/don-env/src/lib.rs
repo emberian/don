@@ -2,8 +2,17 @@
 //!
 //! # What this crate is
 //!
-//! A **factored, masked, vectorised** environment whose action and observation spaces are
+//! Two deliberately different environment surfaces whose action and observation spaces are
 //! read out of the engine rather than invented:
+//!
+//! * [`VecEnv`] is the existing factored, masked, vectorised compact backend. It remains the
+//!   throughput-oriented default and keeps its existing API;
+//! * [`AuthoritativeBackend`] is an opt-in, single-episode fidelity backend whose sole mutable
+//!   game-state owner is `don_sim::tick::Sim`. Its admitted action surface is intentionally
+//!   narrow and fail-closed.
+//!
+//! [`EnvironmentBackend`] makes that ownership choice explicit without inventing a lowest-
+//! common-denominator `step` method between incompatible fidelity tiers.
 //!
 //! * the action space is the 82 `CommandTypes` opcodes and the 28 `OrderIndex` order kinds
 //!   (`schema/command-wire.json`, the PDB type stream) refactored into ten independently
@@ -19,13 +28,16 @@
 //!
 //! # What this crate is not
 //!
-//! It is **not** a faithful simulation. `don-sim` supplies storage, identity, the vector
-//! tick kernels and the derived damage chain; the rest of the dynamics — pathing,
-//! gathering, construction time, tech, fog — do not exist yet. Every verb with no dynamics
-//! behind it is counted, and [`env::VecEnv::provenance`] prints the complete list. Nothing
-//! here raises a fidelity tier for anything.
+//! Neither backend is a complete retail simulation. The compact backend contains explicitly
+//! reported scaffolding; [`env::VecEnv::provenance`] prints its complete list. The
+//! authoritative backend executes the retail-ordered `Sim` core, but currently admits only
+//! NOOP and the completely hosted subset of MOVE_TO. Every other policy verb is a typed
+//! refusal rather than accepted no-effect behavior.
 
 pub mod action;
+pub mod authoritative_backend;
+pub mod authoritative_episode;
+pub mod backend;
 pub mod env;
 pub mod eval;
 pub mod generated;
@@ -39,6 +51,11 @@ pub mod typecaps;
 #[cfg(feature = "python")]
 mod py;
 
+pub use authoritative_backend::AuthoritativeBackend;
+pub use authoritative_episode::{
+    AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit, StepReceipt,
+};
+pub use backend::{BackendCreateError, BackendKind, EnvironmentBackend};
 pub use env::VecEnv;
 pub use spec::EnvConfig;
 
