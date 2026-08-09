@@ -112,6 +112,9 @@ pub mod patrol;
 /// present on disk with no `pub mod` line, which is exactly the silent stranding this
 /// file's header warns about.
 pub mod production;
+/// Exact post-coastline `Regions::clear_all` / `find_all` worldgen stage, including
+/// component floods, overflow aggregation, coasts, ranks and coordinate rebuilds.
+pub mod regions;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
