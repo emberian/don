@@ -161,7 +161,7 @@ def validate_words(words: list[str]) -> None:
     allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
                "move", "halt", "attack", "trace-move", "observe-guys",
                "observe-player", "validate-queue", "validate-build", "gather",
-               "queue", "build", "run-frames"}
+               "queue", "build", "run-frames", "find-build"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
     for word in words:
@@ -564,6 +564,106 @@ def build_validation(root: str, owner: int, worker_id: int, x: int, y: int,
                                    str(worker_id)])
 
 
+def find_build_site(root: str, observation: dict, worker_id: int,
+                    type_index: int, radius: int = 8) -> dict:
+    """Ask retail's main-thread GroupData::validate_build for a bounded legal site."""
+    owned = {obj["object_id"]: obj for obj in observation["objects"]}
+    worker = owned.get(worker_id)
+    if (not worker or worker["category"] != "unit" or
+            worker.get("type_index") not in {50, 51}):
+        raise RuntimeError("placement query requires one observed own citizen")
+    if not 0 <= radius <= 8:
+        raise RuntimeError("placement query radius exceeds the bounded retail callback limit")
+    origin_x = ((worker["position"]["x"] + 24) // 48) * 48
+    origin_y = ((worker["position"]["y"] + 24) // 48) * 48
+    event = exact_validation(root, ["find-build", str(observation["player"]["owner"]),
+                                    str(origin_x), str(origin_y), str(radius),
+                                    str(type_index), str(worker_id)])
+    accepted = bool(event["validation_result"])
+    result = {
+        "schema": "don.retail-build-placement-query.v1",
+        "protocol": observation["protocol"],
+        "frame": observation["frame"],
+        "worker_id": worker_id,
+        "type_index": type_index,
+        "origin": {"x": origin_x, "y": origin_y},
+        "radius_ucoord": radius,
+        "lattice_coord_units": 48,
+        "tested": event["placement_tested"],
+        "retail_result": event["validation_result"],
+        "accepted": accepted,
+        "site": ({"x": event["placement_x"], "y": event["placement_y"],
+                  "x2": -1, "y2": -1} if accepted else None),
+        "gesture": "retail simple pick: (x, y, -1, -1)",
+    }
+    if accepted:
+        max_x = observation["world"]["tile_xs"] * 192
+        max_y = observation["world"]["tile_ys"] * 192
+        if not (0 <= result["site"]["x"] < max_x and
+                0 <= result["site"]["y"] < max_y):
+            raise RuntimeError("retail placement query returned a site outside public world bounds")
+        if result["site"]["x"] % 48 or result["site"]["y"] % 48:
+            raise RuntimeError("retail placement query escaped the exact UCoord lattice")
+    return result
+
+
+def building_row(type_index: int) -> dict[str, int | str]:
+    path = HERE.parents[1] / "schema/live/live-tables-building.tsv"
+    lines = path.read_text().splitlines()
+    header = lines[0].split("\t")
+    for line in lines[1:]:
+        fields = line.split("\t")
+        if int(fields[header.index("type_id")]) == type_index:
+            numeric = {name for name in ["type_id", "age", "preq0", "preq1", "preq2",
+                                         "cost0", "cost1", "cost2", "cost3", "cost4",
+                                         "cost5"]}
+            return {name: (int(value) if name in numeric else value)
+                    for name, value in zip(header, fields)}
+    raise RuntimeError(f"live building table has no TypeIndex {type_index}")
+
+
+def build_cost_factor() -> int:
+    constants = ET.parse(HERE.parents[1] / "ron-data/rules.xml").getroot().find("CONSTANTS")
+    node = constants.find("BUILD_COST_FACTOR") if constants is not None else None
+    if node is None:
+        raise RuntimeError("rules.xml lacks BUILD_COST_FACTOR")
+    match = re.search(r"-?\d+", node.attrib["value"])
+    if not match:
+        raise RuntimeError("BUILD_COST_FACTOR has no integer value")
+    return int(match.group())
+
+
+def static_build_legality(type_index: int, observation: dict) -> dict:
+    """Necessary public prerequisite/base-cost gate preceding retail's exact gates."""
+    row = building_row(type_index)
+    held = set(observation["technology"]["owned_type_indices"])
+    prerequisites = [int(row[f"preq{i}"]) for i in range(3) if int(row[f"preq{i}"]) >= 0]
+    raw_cost = [int(row[f"cost{i}"]) for i in range(6)]
+    cost = [value * build_cost_factor() for value in raw_cost]
+    stock = observation["economy"]["stockpile_i32"]
+    reasons = []
+    if type_index not in held:
+        reasons.append("building TypeIndex is not enabled in the local public tech bitset")
+    missing = [value for value in prerequisites if value not in held]
+    if missing:
+        reasons.append(f"missing prerequisite TypeIndex values {missing}")
+    if int(row["age"]) > observation["technology"]["age"]:
+        reasons.append("building age exceeds the observed local age")
+    short = [i for i, needed in enumerate(cost) if stock[i] < needed]
+    if short:
+        reasons.append(f"insufficient public stockpile channels {short}")
+    return {
+        "accepted": not reasons,
+        "reasons": reasons,
+        "type_name": row["name_display"],
+        "prerequisites": prerequisites,
+        "base_cost_i32": cost,
+        "cost_scope": ("live table base cost times BUILD_COST_FACTOR; retail issue remains the "
+                       "authority for count ramping and civilization modifiers"),
+        "resource_order": observation["economy"]["resource_order"],
+    }
+
+
 def conservative_opening_policy(observation: dict, root: str) -> dict:
     owner = observation["player"]["owner"]
     by_type: dict[int, list[dict]] = {}
@@ -728,8 +828,9 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
         "stage": "economy.placement",
         "source": "Marshal::economy/place_except",
         "result": "unsupported",
-        "reason": ("retail v2 has no fog-safe terrain/exploration plane and no positive "
-                   "four-Coord placement-gesture oracle; no Build command is synthesized"),
+        "reason": ("BUILD_AT ingress and the retail simple-pick oracle are proven, but v2 lacks "
+                   "the terrain/gather-capacity inputs that make Marshal request Camp first; "
+                   "no Farm or other Build command is substituted"),
     })
 
     # CapFirst::target_citizens = useful food seats + useful timber seats + 3 builders.
@@ -825,8 +926,24 @@ def validate_economy_action(action: dict, observation: dict, root: str) -> dict:
         workers = action.get("worker_ids", [])
         if len(workers) != 1 or workers[0] not in owned or owned[workers[0]]["type_index"] not in {50, 51}:
             raise RuntimeError("build action requires exactly one observed own citizen")
-        return build_validation(root, owner, workers[0], action["x1"], action["y1"],
-                                action["x2"], action["y2"], action["type_index"])
+        if action.get("x2") != -1 or action.get("y2") != -1:
+            raise RuntimeError("build action requires retail's canonical simple-pick -1 endpoints")
+        if action["x1"] % 48 or action["y1"] % 48:
+            raise RuntimeError("build action must use the exact 48-Coord UCoord lattice")
+        max_x = observation["world"]["tile_xs"] * 192
+        max_y = observation["world"]["tile_ys"] * 192
+        if not (0 <= action["x1"] < max_x and 0 <= action["y1"] < max_y):
+            raise RuntimeError("build action lies outside observed public world bounds")
+        public_gate = static_build_legality(action["type_index"], observation)
+        if not public_gate["accepted"]:
+            return {"validation_result": 0, "public_gate": public_gate,
+                    "validation": "necessary public tech/prerequisite/age/base-cost gate"}
+        result = build_validation(root, owner, workers[0], action["x1"], action["y1"],
+                                  action["x2"], action["y2"], action["type_index"])
+        result["public_gate"] = public_gate
+        result["validation"] = ("retail GroupData::validate_build plus necessary public "
+                                "tech/prerequisite/age/base-cost gate")
+        return result
     raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
 
 
@@ -1071,6 +1188,38 @@ def economy_action_command(root: str, generation: str, action: dict, output: Pat
     try:
         prove_economy_action(root, generation, action, output)
         print(f"wrote bounded economy proof to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+def placement_query_command(root: str, generation: str, worker_id: int,
+                            type_index: int, radius: int, output: Path) -> None:
+    failure: BaseException | None = None
+    try:
+        observation = player_observation(root, generation)
+        public_gate = static_build_legality(type_index, observation)
+        query = find_build_site(root, observation, worker_id, type_index, radius)
+        artifact = {
+            "schema": "don.retail-build-placement-proof.v1",
+            "controller_generation": generation,
+            "retail_executable_sha256": EXPECTED_SHA256,
+            "mode": "validation-only",
+            "public_gate": public_gate,
+            "query": query,
+            "observation": observation,
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(artifact, indent=2) + "\n")
+        print(json.dumps(query, indent=2))
+        print(f"wrote bounded placement query to {output}")
     except BaseException as exc:
         failure = exc
     finally:
@@ -1359,6 +1508,13 @@ def main() -> None:
     ea.add_argument("--output", type=Path,
                     default=HERE.parents[1] / "schema/live/retail-economy-action-proof-v1.json")
     add_generation(ea)
+    pq = sub.add_parser("placement-query")
+    pq.add_argument("--worker-id", type=int, required=True)
+    pq.add_argument("--type-index", type=int, required=True)
+    pq.add_argument("--radius", type=int, default=8)
+    pq.add_argument("--output", type=Path,
+                    default=HERE.parents[1] / "schema/live/retail-build-placement-proof-v1.json")
+    add_generation(pq)
     stop_parser = sub.add_parser("stop")
     add_generation(stop_parser)
     rearm_parser = sub.add_parser("rearm")
@@ -1405,6 +1561,9 @@ def main() -> None:
                       "x1": a.x1, "y1": a.y1, "x2": a.x2, "y2": a.y2, "queue": 2}
         economy_action_command(generation_root(a.generation), a.generation, action,
                                a.output.resolve())
+    elif a.action == "placement-query":
+        placement_query_command(generation_root(a.generation), a.generation,
+                                a.worker_id, a.type_index, a.radius, a.output.resolve())
     elif a.action == "marshal-policy":
         arena_marshal_policy_run(generation_root(a.generation), a.generation,
                                  a.output.resolve(), a.apply)

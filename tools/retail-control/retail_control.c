@@ -103,7 +103,8 @@ enum Verb {
     V_BUILD,
     V_VALIDATE_QUEUE,
     V_VALIDATE_BUILD,
-    V_RUN_FRAMES
+    V_RUN_FRAMES,
+    V_FIND_BUILD
 };
 
 typedef struct {
@@ -257,6 +258,9 @@ typedef struct {
     int player_object_truncated;
     public_object_t player_objects[MAX_PUBLIC_OBJECTS];
     int validation_result;
+    int placement_x;
+    int placement_y;
+    int placement_tested;
     unsigned note;
 } event_t;
 
@@ -853,6 +857,41 @@ static int dispatch(const request_t *r, event_t *e) {
                 group, r->arg[1], r->arg[2], r->arg[3], r->arg[4],
                 r->arg[5], r->arg[6]);
             return 1;
+        case V_FIND_BUILD: {
+            fn_validate_build validate =
+                (fn_validate_build)(g_base + RVA_GROUP_VALIDATE_BUILD);
+            int radius = r->arg[3], ring, dx, dy;
+            make_group(group, r);
+            e->placement_x = -1;
+            e->placement_y = -1;
+            /* Enumerate the exact 48-Coord UCoord lattice, nearest ring first.
+               Every returned site has been accepted by retail's own validator
+               with the canonical simple-pick gesture (x,y,-1,-1). */
+            for (ring = 0; ring <= radius && !e->validation_result; ring++) {
+                for (dy = -ring; dy <= ring && !e->validation_result; dy++) {
+                    for (dx = -ring; dx <= ring; dx++) {
+                        long long x, y;
+                        int result;
+                        if (ring && dx != -ring && dx != ring &&
+                            dy != -ring && dy != ring) continue;
+                        x = (long long)r->arg[1] + (long long)dx * 48ll;
+                        y = (long long)r->arg[2] + (long long)dy * 48ll;
+                        if (x < 0 || y < 0 || x > 0x3fffffffll || y > 0x3fffffffll)
+                            continue;
+                        e->placement_tested++;
+                        result = validate(group, (int)x, (int)y, -1, -1,
+                                          r->arg[4], 2);
+                        if (result) {
+                            e->validation_result = result;
+                            e->placement_x = (int)x;
+                            e->placement_y = (int)y;
+                            break;
+                        }
+                    }
+                }
+            }
+            return 1;
+        }
         case V_PAUSE:
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, r->arg[0]);
             break;
@@ -1023,7 +1062,7 @@ static void __cdecl on_turn_frame(void) {
     } else if (dispatch(&r, &e)) {
         e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
                    r.verb == V_OBSERVE_PLAYER || r.verb == V_VALIDATE_QUEUE ||
-                   r.verb == V_VALIDATE_BUILD) ? 0 : 1;
+                   r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK) {
@@ -1219,6 +1258,7 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq observe-player
  * seq validate-queue WHO PRODUCER_ID TYPE
  * seq validate-build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
+ * seq find-build WHO ORIGIN_X ORIGIN_Y RADIUS TYPE WORKER_ID
  * seq gather WHO TARGET_ID QUEUED ID...
  * seq queue WHO TYPE COUNT PRODUCER_ID...
  * seq build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
@@ -1296,6 +1336,20 @@ static int parse_request(char *line, request_t *r) {
         if (r->arg[5] < 414 || r->arg[5] > 542 ||
             r->arg[6] < 0 || r->arg[6] > 2) ok = 0;
         first = 9;
+    } else if (!strcmp(t[1], "find-build") && n == 8) {
+        int id;
+        r->verb = V_FIND_BUILD;
+        r->arg[0] = parse_int(t[2], &ok);
+        r->arg[1] = parse_int(t[3], &ok);
+        r->arg[2] = parse_int(t[4], &ok);
+        r->arg[3] = parse_int(t[5], &ok);
+        r->arg[4] = parse_int(t[6], &ok);
+        id = parse_int(t[7], &ok);
+        if (r->arg[3] < 0 || r->arg[3] > 8 ||
+            r->arg[4] < 414 || r->arg[4] > 542 ||
+            id < 0 || id > 32767) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
     } else if (!strcmp(t[1], "trace-move") && n == 7) {
         int id;
         r->verb = V_TRACE_MOVE;
@@ -1316,6 +1370,7 @@ static int parse_request(char *line, request_t *r) {
     if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
          r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS ||
          r->verb == V_VALIDATE_QUEUE || r->verb == V_VALIDATE_BUILD ||
+         r->verb == V_FIND_BUILD ||
          r->verb == V_GATHER || r->verb == V_QUEUE_UP || r->verb == V_BUILD) &&
         (r->arg[0] < 0 || r->arg[0] >= 10)) return 0;
     if (first) {
@@ -1356,6 +1411,7 @@ static const char *verb_name(unsigned verb) {
         case V_VALIDATE_QUEUE: return "validate-queue";
         case V_VALIDATE_BUILD: return "validate-build";
         case V_RUN_FRAMES: return "run-frames";
+        case V_FIND_BUILD: return "find-build";
         default: return "unknown";
     }
 }
@@ -1452,7 +1508,9 @@ static void write_event(const event_t *e) {
             "\"player_slots\":%d,\"player_unit_mark\":%d,"
             "\"player_build_mark\":%d,\"player_wall_mark\":%d,"
             "\"player_object_count\":%d,\"player_object_truncated\":%d,"
-            "\"validation_result\":%d,\"player_queued_types\":[",
+            "\"validation_result\":%d,\"placement_x\":%d,"
+            "\"placement_y\":%d,\"placement_tested\":%d,"
+            "\"player_queued_types\":[",
             e->local_player, e->world_tile_xs, e->world_tile_ys,
             e->player_pop, e->player_pop_cap, e->player_leader_flags,
             e->player_identity_flags, e->player_tribe, e->player_team,
@@ -1468,7 +1526,8 @@ static void write_event(const event_t *e) {
             e->player_queued_type_count, e->player_queued_type_truncated,
             e->player_slots, e->player_unit_mark,
             e->player_build_mark, e->player_wall_mark, e->player_object_count,
-            e->player_object_truncated, e->validation_result);
+            e->player_object_truncated, e->validation_result,
+            e->placement_x, e->placement_y, e->placement_tested);
         if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
     }
     for (i = 0; i < (unsigned)e->player_queued_type_count && i < MAX_QUEUED_TYPES; i++) {

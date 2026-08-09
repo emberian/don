@@ -1,0 +1,1621 @@
+{
+  "schema": "don.retail-economy-action-proof.v1",
+  "protocol": "don.retail-player.v2",
+  "controller_generation": "economy-v11",
+  "mode": "apply",
+  "action": {
+    "verb": "build",
+    "owner": 0,
+    "worker_ids": [
+      8
+    ],
+    "type_index": 417,
+    "type_name": "Farm",
+    "x1": 2832,
+    "y1": 32448,
+    "x2": -1,
+    "y2": -1,
+    "queue": 2
+  },
+  "retail_validation": {
+    "seq": 1689141586,
+    "verb": "validate-build",
+    "phase": "observed",
+    "tick": 46027640,
+    "game": "0x01797ec0",
+    "frame": 357,
+    "seconds": 23,
+    "paused": 1,
+    "speed": 1,
+    "network": 0,
+    "package_before": 0,
+    "package_after": 0,
+    "command_hex": "",
+    "first_object": "0x249a5524",
+    "order_length": 2,
+    "current_order": "0x1a841874",
+    "order_vtable": "0x014aa12c",
+    "order_flags": 1,
+    "order_metric": 0,
+    "unit_x": 2809,
+    "unit_y": 32450,
+    "unit_x_stored": "0x00063cce",
+    "unit_y_stored": "0x000648f5",
+    "unit_type_pointer": "0x23eaf3b4",
+    "unit_type": 50,
+    "unit_masks": 8,
+    "unit_form": 9,
+    "unit_guy_mark": 1,
+    "unit_type_guy_spacing": 144,
+    "unit_angle": 2656567296,
+    "unit_dest_angle": 2689138688,
+    "unit_orders_x": 1320,
+    "unit_orders_y": 32472,
+    "move_valid": 1,
+    "move_x": 1320,
+    "move_y": 32472,
+    "move_angle": -1605828608,
+    "move_dest": 1,
+    "move_tolerance": 0,
+    "move_pause": 0,
+    "move_retry": 0,
+    "move_attempts": 0,
+    "move_timer": 0,
+    "move_facing": -1,
+    "move_dest_x": 2088,
+    "move_dest_y": 33240,
+    "move_last_x": -1,
+    "move_last_y": -1,
+    "move_coll_x": 0,
+    "move_coll_y": 0,
+    "move_orig_x": -1,
+    "move_orig_y": -1,
+    "move_off_x": 552,
+    "move_off_y": 216,
+    "note": 0,
+    "guy_length": -1,
+    "guy_capacity": -1,
+    "guy_count": 0,
+    "guy_truncated": 0,
+    "guys": [],
+    "local_player": 0,
+    "world_tile_xs": 0,
+    "world_tile_ys": 0,
+    "player_pop": 0,
+    "player_pop_cap": 0,
+    "player_leader_flags": 0,
+    "player_identity_flags": 0,
+    "player_tribe": 0,
+    "player_team": 0,
+    "player_resources": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "player_resource_caps": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "player_over_cap": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "player_age": 0,
+    "player_epochs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "player_tech_bits_hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "player_queued_type_count": 0,
+    "player_queued_type_truncated": 0,
+    "player_slots": 0,
+    "player_unit_mark": 0,
+    "player_build_mark": 0,
+    "player_wall_mark": 0,
+    "player_object_count": 0,
+    "player_object_truncated": 0,
+    "validation_result": 1,
+    "placement_x": 0,
+    "placement_y": 0,
+    "placement_tested": 0,
+    "player_queued_types": [],
+    "player_objects": [],
+    "public_gate": {
+      "accepted": true,
+      "reasons": [],
+      "type_name": "Farm",
+      "prerequisites": [],
+      "base_cost_i32": [
+        0,
+        40,
+        0,
+        0,
+        0,
+        0
+      ],
+      "cost_scope": "live table base cost times BUILD_COST_FACTOR; retail issue remains the authority for count ramping and civilization modifiers",
+      "resource_order": [
+        "food",
+        "timber",
+        "wealth",
+        "knowledge",
+        "metal",
+        "oil"
+      ]
+    },
+    "validation": "retail GroupData::validate_build plus public static gate"
+  },
+  "retail_command_hex": "000100080019100b0000c07e0000ffffffffffffffffa101000002000000",
+  "frame_boundary": {
+    "before": 357,
+    "after": 387
+  },
+  "pause_before_after": [
+    1,
+    1
+  ],
+  "bounded_settlement": [
+    {
+      "verb": "run-frames",
+      "requested": 30,
+      "frame_before": 357,
+      "frame_after": 387,
+      "pause_after": 1,
+      "unpause_command_hex": "4c00"
+    }
+  ],
+  "before": {
+    "schema": "don.retail-player-observation.v2",
+    "protocol": "don.retail-player.v2",
+    "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+    "controller_generation": "economy-v11",
+    "public_scope": {
+      "owner": 0,
+      "includes": [
+        "own active object bands",
+        "own stockpile",
+        "own commerce cap",
+        "own population",
+        "public game clock"
+      ],
+      "excludes": [
+        "enemy and neutral object tables",
+        "enemy resources",
+        "fog-hidden map state",
+        "target-object dereferences",
+        "visibility flags not proven local-slot-specific"
+      ]
+    },
+    "frame": 357,
+    "seconds": 23,
+    "paused": 1,
+    "speed": 1,
+    "world": {
+      "tile_xs": 280,
+      "tile_ys": 280,
+      "coordinate_units_per_tile": 192
+    },
+    "player": {
+      "owner": 0,
+      "slot": 0,
+      "who": 0,
+      "tribe": 22,
+      "team": 8,
+      "leader_flags": 7,
+      "game_info_flags": 7
+    },
+    "economy": {
+      "resource_order": [
+        "food",
+        "timber",
+        "wealth",
+        "knowledge",
+        "metal",
+        "oil"
+      ],
+      "stockpile_i32": [
+        33,
+        223,
+        107,
+        0,
+        0,
+        0
+      ],
+      "commerce_cap_x16_i32": [
+        1600,
+        1600,
+        1600,
+        15984,
+        1600,
+        1600
+      ],
+      "capped_state_i32": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "population": {
+      "current": 9,
+      "cap": 25
+    },
+    "technology": {
+      "age": 0,
+      "epochs": {
+        "military": 0,
+        "civic": 0,
+        "commerce": 1,
+        "science": 0
+      },
+      "owned_type_indices": [
+        50,
+        52,
+        60,
+        62,
+        69,
+        82,
+        132,
+        170,
+        317,
+        414,
+        417,
+        418,
+        435,
+        521,
+        558,
+        629,
+        631,
+        634,
+        635,
+        636,
+        637,
+        639,
+        640,
+        641,
+        643,
+        646,
+        648,
+        649,
+        650,
+        651,
+        652,
+        653,
+        654,
+        655,
+        656,
+        657,
+        658,
+        659,
+        660,
+        661,
+        662,
+        663,
+        664,
+        666,
+        667,
+        668,
+        669,
+        670,
+        671,
+        672,
+        673,
+        674,
+        675,
+        676,
+        677,
+        678,
+        679,
+        680,
+        681,
+        682,
+        683
+      ]
+    },
+    "queued_types": [
+      {
+        "type_index": 50,
+        "type_name": "Citizen",
+        "count": 2
+      },
+      {
+        "type_index": 565,
+        "type_name": "City State",
+        "count": 1
+      }
+    ],
+    "object_slots": 3000,
+    "object_marks": {
+      "unit": 9,
+      "building": 2007,
+      "wall": 3000
+    },
+    "objects": [
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 0,
+          "uid": 7
+        },
+        "object_id": 0,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 69,
+        "type_valid": true,
+        "type_name": "Scout",
+        "position": {
+          "x": 3480,
+          "y": 31896,
+          "z": 616
+        },
+        "hits": 50,
+        "flags": 73,
+        "heading_u32": 1073741824,
+        "physical_body_count": 2,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 1,
+          "uid": 8
+        },
+        "object_id": 1,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 62,
+        "type_valid": true,
+        "type_name": "Armed Merchant",
+        "position": {
+          "x": 3480,
+          "y": 29592,
+          "z": 519
+        },
+        "hits": 125,
+        "flags": 9,
+        "heading_u32": 1431655765,
+        "physical_body_count": 3,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 2,
+          "uid": 9
+        },
+        "object_id": 2,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 62,
+        "type_valid": true,
+        "type_name": "Armed Merchant",
+        "position": {
+          "x": 4248,
+          "y": 31128,
+          "z": 575
+        },
+        "hits": 125,
+        "flags": 9,
+        "heading_u32": 1431655765,
+        "physical_body_count": 3,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 3,
+          "uid": 10
+        },
+        "object_id": 3,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1464,
+          "y": 32520,
+          "z": 499
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 1165426688,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 4,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2001,
+            "uid": 1
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 4,
+          "uid": 11
+        },
+        "object_id": 4,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1464,
+          "y": 32712,
+          "z": 495
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 1165426688,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 0,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2001,
+            "uid": 1
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 5,
+          "uid": 12
+        },
+        "object_id": 5,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1245,
+          "y": 30291,
+          "z": 537
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 541917184,
+        "physical_body_count": 1,
+        "order": {
+          "length": 2,
+          "kind": "MoveOrder",
+          "index": 1,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4a12c",
+          "flags": 1,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 6,
+          "uid": 13
+        },
+        "object_id": 6,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1296,
+          "y": 29744,
+          "z": 561
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 2999582720,
+        "physical_body_count": 1,
+        "order": {
+          "length": 2,
+          "kind": "MoveOrder",
+          "index": 1,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4a12c",
+          "flags": 1,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 7,
+          "uid": 14
+        },
+        "object_id": 7,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1112,
+          "y": 29016,
+          "z": 618
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 2369126400,
+        "physical_body_count": 1,
+        "order": {
+          "length": 2,
+          "kind": "MoveOrder",
+          "index": 1,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4a12c",
+          "flags": 1,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 8,
+          "uid": 15
+        },
+        "object_id": 8,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 2809,
+          "y": 32450,
+          "z": 594
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 2656567296,
+        "physical_body_count": 1,
+        "order": {
+          "length": 2,
+          "kind": "MoveOrder",
+          "index": 1,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4a12c",
+          "flags": 1,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2000,
+          "uid": 0
+        },
+        "object_id": 2000,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 414,
+        "type_valid": true,
+        "type_name": "Small City",
+        "position": {
+          "x": 2400,
+          "y": 30048,
+          "z": 522
+        },
+        "hits": 1200,
+        "flags": 39,
+        "production_queue": {
+          "logical_length": 2,
+          "storage_length": 20,
+          "truncated": false,
+          "items": [
+            {
+              "type_index": 50,
+              "type_name": "Citizen",
+              "elapsed": 8300
+            },
+            {
+              "type_index": 50,
+              "type_name": "Citizen",
+              "elapsed": 0
+            }
+          ]
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2001,
+          "uid": 1
+        },
+        "object_id": 2001,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 418,
+        "type_valid": true,
+        "type_name": "Woodcutter's Camp",
+        "position": {
+          "x": 1152,
+          "y": 32640,
+          "z": 489
+        },
+        "hits": 800,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2002,
+          "uid": 2
+        },
+        "object_id": 2002,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1152,
+          "y": 30336,
+          "z": 535
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2003,
+          "uid": 3
+        },
+        "object_id": 2003,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1152,
+          "y": 29568,
+          "z": 561
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2004,
+          "uid": 4
+        },
+        "object_id": 2004,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1344,
+          "y": 28800,
+          "z": 627
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2005,
+          "uid": 5
+        },
+        "object_id": 2005,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 435,
+        "type_valid": true,
+        "type_name": "Library",
+        "position": {
+          "x": 2784,
+          "y": 31392,
+          "z": 556
+        },
+        "hits": 1200,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 1,
+          "storage_length": 10,
+          "truncated": false,
+          "items": [
+            {
+              "type_index": 565,
+              "type_name": "City State",
+              "elapsed": 18200
+            }
+          ]
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2006,
+          "uid": 6
+        },
+        "object_id": 2006,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 436,
+        "type_valid": true,
+        "type_name": "Market",
+        "position": {
+          "x": 1920,
+          "y": 31104,
+          "z": 538
+        },
+        "hits": 1200,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 20,
+          "truncated": false,
+          "items": []
+        }
+      }
+    ]
+  },
+  "after": {
+    "schema": "don.retail-player-observation.v2",
+    "protocol": "don.retail-player.v2",
+    "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+    "controller_generation": "economy-v11",
+    "public_scope": {
+      "owner": 0,
+      "includes": [
+        "own active object bands",
+        "own stockpile",
+        "own commerce cap",
+        "own population",
+        "public game clock"
+      ],
+      "excludes": [
+        "enemy and neutral object tables",
+        "enemy resources",
+        "fog-hidden map state",
+        "target-object dereferences",
+        "visibility flags not proven local-slot-specific"
+      ]
+    },
+    "frame": 387,
+    "seconds": 25,
+    "paused": 1,
+    "speed": 1,
+    "world": {
+      "tile_xs": 280,
+      "tile_ys": 280,
+      "coordinate_units_per_tile": 192
+    },
+    "player": {
+      "owner": 0,
+      "slot": 0,
+      "who": 0,
+      "tribe": 22,
+      "team": 8,
+      "leader_flags": 7,
+      "game_info_flags": 7
+    },
+    "economy": {
+      "resource_order": [
+        "food",
+        "timber",
+        "wealth",
+        "knowledge",
+        "metal",
+        "oil"
+      ],
+      "stockpile_i32": [
+        35,
+        173,
+        108,
+        0,
+        0,
+        0
+      ],
+      "commerce_cap_x16_i32": [
+        1600,
+        1600,
+        1600,
+        15984,
+        1600,
+        1600
+      ],
+      "capped_state_i32": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "population": {
+      "current": 10,
+      "cap": 25
+    },
+    "technology": {
+      "age": 0,
+      "epochs": {
+        "military": 0,
+        "civic": 1,
+        "commerce": 1,
+        "science": 0
+      },
+      "owned_type_indices": [
+        50,
+        52,
+        60,
+        62,
+        69,
+        82,
+        132,
+        170,
+        317,
+        414,
+        417,
+        418,
+        435,
+        521,
+        558,
+        565,
+        629,
+        631,
+        634,
+        635,
+        636,
+        637,
+        639,
+        640,
+        641,
+        643,
+        646,
+        648,
+        649,
+        650,
+        651,
+        652,
+        653,
+        654,
+        655,
+        656,
+        657,
+        658,
+        659,
+        660,
+        661,
+        662,
+        663,
+        664,
+        666,
+        667,
+        668,
+        669,
+        670,
+        671,
+        672,
+        673,
+        674,
+        675,
+        676,
+        677,
+        678,
+        679,
+        680,
+        681,
+        682,
+        683
+      ]
+    },
+    "queued_types": [
+      {
+        "type_index": 50,
+        "type_name": "Citizen",
+        "count": 1
+      },
+      {
+        "type_index": 417,
+        "type_name": "Farm",
+        "count": 1
+      }
+    ],
+    "object_slots": 3000,
+    "object_marks": {
+      "unit": 10,
+      "building": 2008,
+      "wall": 3000
+    },
+    "objects": [
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 0,
+          "uid": 7
+        },
+        "object_id": 0,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 69,
+        "type_valid": true,
+        "type_name": "Scout",
+        "position": {
+          "x": 3480,
+          "y": 31896,
+          "z": 616
+        },
+        "hits": 50,
+        "flags": 73,
+        "heading_u32": 1073741824,
+        "physical_body_count": 2,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 1,
+          "uid": 8
+        },
+        "object_id": 1,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 62,
+        "type_valid": true,
+        "type_name": "Armed Merchant",
+        "position": {
+          "x": 3480,
+          "y": 29592,
+          "z": 519
+        },
+        "hits": 125,
+        "flags": 9,
+        "heading_u32": 1431655765,
+        "physical_body_count": 3,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 2,
+          "uid": 9
+        },
+        "object_id": 2,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 62,
+        "type_valid": true,
+        "type_name": "Armed Merchant",
+        "position": {
+          "x": 4248,
+          "y": 31128,
+          "z": 575
+        },
+        "hits": 125,
+        "flags": 9,
+        "heading_u32": 1431655765,
+        "physical_body_count": 3,
+        "order": {
+          "length": 0,
+          "kind": "none",
+          "index": 0,
+          "index_valid": true,
+          "preferred_vtable": "0x00000000",
+          "flags": 0,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 3,
+          "uid": 10
+        },
+        "object_id": 3,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1464,
+          "y": 32520,
+          "z": 499
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 1165426688,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 4,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2001,
+            "uid": 1
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 4,
+          "uid": 11
+        },
+        "object_id": 4,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1464,
+          "y": 32712,
+          "z": 495
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 1165426688,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 0,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2001,
+            "uid": 1
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 5,
+          "uid": 12
+        },
+        "object_id": 5,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1272,
+          "y": 30264,
+          "z": 537
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 497287168,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 0,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2002,
+            "uid": 2
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 6,
+          "uid": 13
+        },
+        "object_id": 6,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 888,
+          "y": 29880,
+          "z": 543
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 2999582720,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 0,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2003,
+            "uid": 3
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 7,
+          "uid": 14
+        },
+        "object_id": 7,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 1080,
+          "y": 29112,
+          "z": 618
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 2369126400,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "GatherOrder",
+          "index": 7,
+          "index_valid": true,
+          "preferred_vtable": "0x00b49c1c",
+          "flags": 0,
+          "metric": 0,
+          "own_target": {
+            "object_id": 2004,
+            "uid": 4
+          }
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 8,
+          "uid": 15
+        },
+        "object_id": 8,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 2952,
+          "y": 32520,
+          "z": 616
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 3402825728,
+        "physical_body_count": 1,
+        "order": {
+          "length": 1,
+          "kind": "BuildOrder",
+          "index": 6,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4834c",
+          "flags": 4,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "unit",
+          "o": 9,
+          "uid": 17
+        },
+        "object_id": 9,
+        "category": "unit",
+        "runtime_class": "unit",
+        "preferred_class_vtable": "0x00b417d0",
+        "type_index": 50,
+        "type_valid": true,
+        "type_name": "Citizen",
+        "position": {
+          "x": 3180,
+          "y": 30828,
+          "z": 548
+        },
+        "hits": 40,
+        "flags": 1,
+        "heading_u32": 1564737536,
+        "physical_body_count": 1,
+        "order": {
+          "length": 2,
+          "kind": "MoveOrder",
+          "index": 1,
+          "index_valid": true,
+          "preferred_vtable": "0x00b4a12c",
+          "flags": 1,
+          "metric": 0
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2000,
+          "uid": 0
+        },
+        "object_id": 2000,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 414,
+        "type_valid": true,
+        "type_name": "Small City",
+        "position": {
+          "x": 2400,
+          "y": 30048,
+          "z": 522
+        },
+        "hits": 1200,
+        "flags": 39,
+        "production_queue": {
+          "logical_length": 1,
+          "storage_length": 20,
+          "truncated": false,
+          "items": [
+            {
+              "type_index": 50,
+              "type_name": "Citizen",
+              "elapsed": 700
+            }
+          ]
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2001,
+          "uid": 1
+        },
+        "object_id": 2001,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 418,
+        "type_valid": true,
+        "type_name": "Woodcutter's Camp",
+        "position": {
+          "x": 1152,
+          "y": 32640,
+          "z": 489
+        },
+        "hits": 800,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2002,
+          "uid": 2
+        },
+        "object_id": 2002,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1152,
+          "y": 30336,
+          "z": 535
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2003,
+          "uid": 3
+        },
+        "object_id": 2003,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1152,
+          "y": 29568,
+          "z": 561
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2004,
+          "uid": 4
+        },
+        "object_id": 2004,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 1344,
+          "y": 28800,
+          "z": 627
+        },
+        "hits": 400,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2005,
+          "uid": 5
+        },
+        "object_id": 2005,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 435,
+        "type_valid": true,
+        "type_name": "Library",
+        "position": {
+          "x": 2784,
+          "y": 31392,
+          "z": 556
+        },
+        "hits": 1200,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 10,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2006,
+          "uid": 6
+        },
+        "object_id": 2006,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 436,
+        "type_valid": true,
+        "type_name": "Market",
+        "position": {
+          "x": 1920,
+          "y": 31104,
+          "z": 538
+        },
+        "hits": 1200,
+        "flags": 7,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 20,
+          "truncated": false,
+          "items": []
+        }
+      },
+      {
+        "id": {
+          "slot": 0,
+          "band": "build",
+          "o": 2007,
+          "uid": 16
+        },
+        "object_id": 2007,
+        "category": "build",
+        "runtime_class": "build",
+        "preferred_class_vtable": "0x00b42174",
+        "type_index": 417,
+        "type_valid": true,
+        "type_name": "Farm",
+        "position": {
+          "x": 2688,
+          "y": 32448,
+          "z": 594
+        },
+        "hits": 400,
+        "flags": 3,
+        "production_queue": {
+          "logical_length": 0,
+          "storage_length": 2,
+          "truncated": false,
+          "items": []
+        }
+      }
+    ]
+  }
+}

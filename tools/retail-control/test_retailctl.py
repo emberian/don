@@ -3,6 +3,7 @@ import json
 import copy
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 SPEC = importlib.util.spec_from_file_location("retailctl", Path(__file__).with_name("retailctl.py"))
@@ -43,6 +44,7 @@ class RetailCtlTests(unittest.TestCase):
             ["gather", "0", "2001", "2", "3"],
             ["queue", "0", "50", "1", "2000"],
             ["build", "0", "1", "2", "3", "4", "427", "2", "3"],
+            ["find-build", "0", "1488", "32544", "8", "417", "3"],
             ["run-frames", "30"],
         ]:
             retailctl.validate_words(words)
@@ -205,7 +207,35 @@ class RetailCtlTests(unittest.TestCase):
             (Path(__file__).parents[2] / "schema/live/retail-player-protocol-v2.json")
             .read_text()
         )
-        self.assertIn("must not synthesize", protocol["actions"]["build"]["coordinates"])
+        self.assertIn("simple retail UI pick", protocol["actions"]["build"]["coordinates"])
+
+    def test_build_public_gate_accepts_farm_and_rejects_locked_barracks(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v2.json")
+            .read_text()
+        )
+        farm = retailctl.static_build_legality(417, observation)
+        self.assertTrue(farm["accepted"])
+        self.assertEqual(farm["base_cost_i32"], [0, 40, 0, 0, 0, 0])
+        barracks = retailctl.static_build_legality(427, observation)
+        self.assertFalse(barracks["accepted"])
+        self.assertIn(572, barracks["prerequisites"])
+
+    def test_build_site_query_uses_observed_worker_and_retail_simple_pick(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v2.json")
+            .read_text()
+        )
+        event = {"phase": "observed", "paused": 1, "validation_result": 1,
+                 "placement_x": 1536, "placement_y": 32544, "placement_tested": 7}
+        with mock.patch.object(retailctl, "exact_validation", return_value=event) as query:
+            result = retailctl.find_build_site("unused", observation, 3, 417, 8)
+        query.assert_called_once_with(
+            "unused", ["find-build", "0", "1488", "32544", "8", "417", "3"]
+        )
+        self.assertEqual(result["site"], {"x": 1536, "y": 32544,
+                                          "x2": -1, "y2": -1})
+        self.assertEqual(result["tested"], 7)
 
     def test_arena_marshal_adapter_preserves_source_order_and_rl_heads(self):
         observation = json.loads(
@@ -227,7 +257,7 @@ class RetailCtlTests(unittest.TestCase):
         self.assertEqual(calls, [(0, 2000, 50)])
         placement = next(t for t in plan["trace"] if t["stage"] == "economy.placement")
         self.assertEqual(placement["result"], "unsupported")
-        self.assertIn("no Build command", placement["reason"])
+        self.assertIn("no Farm or other Build command", placement["reason"])
 
     def test_arena_marshal_adapter_does_not_skip_a_rejected_first_tech(self):
         observation = json.loads(
@@ -276,8 +306,27 @@ class RetailCtlTests(unittest.TestCase):
             .read_text()
         )
         self.assertEqual(protocol["adapter"], "faithful supported subsequence")
-        self.assertIn("unsupported", protocol["mappings"]["Build"])
+        self.assertEqual(protocol["mappings"]["Build"]["packed_opcode"], "0x19")
+        self.assertIn("must not substitute", protocol["mappings"]["Build"]["adapter_limit"])
         self.assertIn("at most one", protocol["selection"])
+
+    def test_live_build_at_proof_uses_retail_oracle_and_materializes_own_farm(self):
+        live = Path(__file__).parents[2] / "schema/live"
+        placement = json.loads((live / "retail-build-placement-proof-v1.json").read_text())
+        self.assertEqual(placement["mode"], "validation-only")
+        self.assertTrue(placement["query"]["accepted"])
+        self.assertEqual(placement["query"]["site"],
+                         {"x": 2832, "y": 32448, "x2": -1, "y2": -1})
+        proof = json.loads((live / "retail-economy-build-proof-v1.json").read_text())
+        self.assertEqual(proof["pause_before_after"], [1, 1])
+        self.assertEqual(proof["frame_boundary"], {"before": 357, "after": 387})
+        self.assertEqual(bytes.fromhex(proof["retail_command_hex"])[5], 0x19)
+        before_ids = {(obj["object_id"], obj["id"]["uid"]) for obj in proof["before"]["objects"]}
+        new_farms = [obj for obj in proof["after"]["objects"]
+                     if obj["category"] == "build" and obj["type_index"] == 417 and
+                     (obj["object_id"], obj["id"]["uid"]) not in before_ids]
+        self.assertEqual([(obj["object_id"], obj["id"]["uid"]) for obj in new_farms],
+                         [(2007, 16)])
 
 
 if __name__ == "__main__":

@@ -10,7 +10,14 @@
       "retail": "BuildData::can_queue then GroupOut::issue_queue_up",
       "don_env_heads": ["QUEUE_UP+1", 0, 0, 0, "TypeIndex", 0, 0, 0, 0, 1]
     },
-    "Build": "unsupported until a positive retail four-Coord placement-gesture oracle exists",
+    "Build": {
+      "retail": "bounded find-build query through GroupData::validate_build, then GroupOut::issue_build",
+      "gesture": ["x", "y", -1, -1],
+      "lattice_coord_units": 48,
+      "packed_opcode": "0x19",
+      "positive_proof": "Farm TypeIndex 417 materialized as own Build 2007/uid16 after one 30-frame boundary",
+      "adapter_limit": "Marshal must not substitute a Farm for its current terrain/gather-capacity-derived Camp branch; no Build is emitted until that branch's public inputs are exposed"
+    },
     "Move": "unsupported for Marshal scouting until v2 has a fog-safe explored-map plane",
     "Attack": "unsupported until fog-approved visible/remembered enemy sightings exist",
     "Gather": "unsupported until v2 exposes exact own gather_max and occupancy",

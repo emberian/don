@@ -31,7 +31,9 @@
       "query": "GroupData::validate_build(x1,y1,x2,y2,type,queue)",
       "issue": "GroupOut::issue_build",
       "packed_opcode": "0x19",
-      "coordinates": "four raw Coord arguments preserved exactly; the host must not synthesize a degenerate rectangle",
+      "coordinates": "simple retail UI pick is exactly (x,y,-1,-1); find-build enumerates at most radius 8 on the 48-Coord UCoord lattice and returns only a nonzero shipped-validator result; the click is not assumed to equal the eventual Build object anchor",
+      "host_gate": "one observed own Citizen; enabled local TypeIndex; public prerequisite/age/base-cost minimum; observed world bounds",
+      "exact_cost_authority": "retail issue/processing owns count ramping and civilization modifiers; base table cost is not represented as the final price",
       "proof": "a new own building with the requested TypeIndex must materialize inside a supervised 180-frame cap"
     },
     "run_frames": {

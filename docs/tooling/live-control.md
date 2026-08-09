@@ -258,6 +258,26 @@ recorded as a negative attempt, not a positive proof; guessed degenerate placeme
 the opening policy. See `schema/live/retail-player-protocol-v2.json` and the
 `schema/live/retail-economy-*-v1.json` fixtures.
 
+Generation `economy-v11` resolves the four-coordinate ambiguity from retail itself. PDB-backed
+`Options::picked_spot` is called by the UI as `(x,y,-1,-1)` for an ordinary click; its drag path
+alone supplies the second coordinate pair. `find-build` runs on the retail main thread and examines
+at most 289 candidates (radius eight) on the exact 48-Coord `UCoord` lattice, nearest ring first.
+It returns a site only when shipped `GroupData::validate_build(x,y,-1,-1,type,QUEUE_NEW)` returns
+nonzero. The host additionally requires an observed own Citizen, an enabled local TypeIndex,
+public prerequisites/age/base-cost minimum, and observed world bounds. Base cost is intentionally
+not presented as the final price: retail still owns count ramping and civilization modifiers.
+
+The live validation-only query at paused frame 357 found Farm 417 at
+`(2832,32448,-1,-1)` for Citizen 8 on its first candidate. The apply proof re-ran the shipped
+validator, serialized opcode `0x19` as
+`000100080019100b0000c07e0000ffffffffffffffffa101000002000000`, and crossed one supervised
+30-frame boundary. At frame 387, own building mark advanced 2007→2008 and new own Farm
+`{o:2007,uid:16}` existed at its retail-snapped object anchor `(2688,32448)`; the click coordinate is
+therefore not relabelled as the final object anchor. Pause was `[1,1]`. The generation was then STOP-parked with the original
+call bytes restored. The validation and materialization records are
+`schema/live/retail-build-placement-proof-v1.json` and
+`schema/live/retail-economy-build-proof-v1.json`.
+
 ### Arena Marshal retail adapter
 
 `marshal-policy` follows `Marshal::act` in source order—sense, economy, scout, military,
@@ -271,8 +291,9 @@ still comes from retail `BuildData::can_queue`.
 This is explicitly a supported subsequence, not a synthetic Arena world. Enemy sensing/attacks are
 omitted because v2 exposes no fog-approved sightings; scout waypoints are omitted because it has no
 explored-map plane; employment is omitted because exact gather capacity/occupancy is not yet in the
-snapshot; builds are omitted because the retail four-Coord placement gesture has no positive oracle.
-The adapter never substitutes a different action for those branches. Its trace records each omission.
+snapshot. Generic BUILD_AT ingress now has a positive retail oracle, but Marshal's current branch
+requests a terrain/gather-capacity-derived Camp before a Farm. The adapter therefore does not
+substitute the newly proven Farm action. Its trace records each omission.
 
 The live dry run at frame 357 observed City State already queued, so Arena's `next_tech` selected it
 and `queue_at` suppressed the duplicate without falling through—matching the Rust source. Marshal's
