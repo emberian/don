@@ -151,7 +151,8 @@ pub mod tail_command_transactions;
 pub mod unimplemented_group_command_plans;
 
 use self::diplomacy_command_plans::{
-    DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
+    plan_diplomacy_command, DiplomacyCommandReceipt, DiplomacyCommandRequest,
+    DiplomacyCommandState, DiplomacyPlanDecision, DiplomacyTransactionStatus,
 };
 use self::direct_entity_command_integration::{DirectEntityFleetReceipt, DirectEntityFleetRequest};
 use self::follow_action::{
@@ -1441,6 +1442,8 @@ pub struct ObjectTable {
     lists: Vec<Vec<Slot>>,
     leader_flags: [u32; NUM_OWNER_SLOTS],
     local_who: Option<u8>,
+    diplomacy: Option<DiplomacyCommandState>,
+    diplomacy_receipts: Vec<DiplomacyCommandReceipt>,
     pause_steps: Vec<PauseStep>,
     stop_spell_gpiece_update: bool,
 }
@@ -1453,6 +1456,8 @@ impl ObjectTable {
                 .collect(),
             leader_flags: [0; NUM_OWNER_SLOTS],
             local_who: None,
+            diplomacy: None,
+            diplomacy_receipts: Vec::new(),
             pause_steps: Vec::new(),
             stop_spell_gpiece_update: false,
         }
@@ -1466,6 +1471,22 @@ impl ObjectTable {
 
     pub fn set_local_who(&mut self, who: Option<u8>) {
         self.local_who = who;
+    }
+
+    /// Install the complete command-owned diplomacy image used by opcodes 37 through 45.
+    /// Boundary branches still fail closed; exact [`DiplomacyPlanDecision::Apply`] branches
+    /// replace this image only after the request snapshot has been revalidated.
+    pub fn set_diplomacy_command_state(&mut self, state: DiplomacyCommandState) {
+        self.diplomacy = Some(state);
+    }
+
+    pub fn diplomacy_command_state_ref(&self) -> Option<&DiplomacyCommandState> {
+        self.diplomacy.as_ref()
+    }
+
+    /// Drain exact applied-host receipts, including ordered presentation evidence.
+    pub fn take_diplomacy_command_receipts(&mut self) -> Vec<DiplomacyCommandReceipt> {
+        std::mem::take(&mut self.diplomacy_receipts)
     }
 
     pub fn take_pause_steps(&mut self) -> Vec<PauseStep> {
@@ -2263,6 +2284,35 @@ impl Fleet for ObjectTable {
             members,
             plan: Some(plan),
         }
+    }
+
+    fn diplomacy_command_state(&self) -> Option<DiplomacyCommandState> {
+        self.diplomacy.clone()
+    }
+
+    fn apply_diplomacy_command_transaction(
+        &mut self,
+        request: DiplomacyCommandRequest,
+    ) -> DiplomacyCommandReceipt {
+        // The planner snapshot and the host image are one CAS boundary: a stale command
+        // cannot overwrite an intervening diplomacy transaction.
+        if self.diplomacy.as_ref() != Some(&request.before) {
+            return DiplomacyCommandReceipt::unavailable(request);
+        }
+        let Ok(DiplomacyPlanDecision::Apply(plan)) =
+            plan_diplomacy_command(&request.before, &request.wire)
+        else {
+            return DiplomacyCommandReceipt::unavailable(request);
+        };
+
+        self.diplomacy = Some(plan.state.clone());
+        let receipt = DiplomacyCommandReceipt {
+            request,
+            status: DiplomacyTransactionStatus::Applied,
+            plan: Some(plan),
+        };
+        self.diplomacy_receipts.push(receipt.clone());
+        receipt
     }
 
     fn apply_pause_transaction(

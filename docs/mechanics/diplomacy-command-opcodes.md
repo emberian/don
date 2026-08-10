@@ -95,6 +95,20 @@ Six opcodes and the common Reject arm have a bounded state transaction.
 Click stamps, local text, and sounds are retained as ordered presentation receipts.  They
 do not mutate walked simulation state and do not authorize skipping a state boundary.
 
+### Shipped command-host transaction
+
+`command::ObjectTable` now owns an optional complete `DiplomacyCommandState` image and
+executes every planner `Apply` decision as one compare-and-swap transaction.  It first
+revalidates the exact state snapshot supplied to the bridge, replaces the image with the
+planned after-state, and retains the complete receipt (including ordered presentation
+evidence).  A stale snapshot or any `Boundary` decision returns unavailable before mutation.
+
+This makes the pending-agreement arm of opcode 42 executable in the shipped command host:
+the two response counters, escrow refund, declaration-cost clear, agreement/open flags and
+local-notice receipt commit together.  It does **not** make opcode 42 closure-green.  The
+non-pending arm still reaches `RejectCounterproposal`, whose possible recursive declaration
+must include DOW payment, `set_diplo`, team fan-out and callbacks in the same receipt.
+
 ## Exact diplomacy and team gates
 
 The planner reproduces `LeaderData::get_diplo` `0x006EBA50`:
