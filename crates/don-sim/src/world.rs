@@ -246,9 +246,23 @@ pub(crate) enum WorldSaveError {
     Capacity,
     Length(&'static str),
     HandlePermutation,
-    Owner { row: usize, owner: u8 },
-    ObjectIndex { row: usize, index: i16 },
-    DuplicateObjectIndex { owner: usize, index: usize },
+    OrderTargetIdentity {
+        row: usize,
+        order: usize,
+        handle: Handle,
+    },
+    Owner {
+        row: usize,
+        owner: u8,
+    },
+    ObjectIndex {
+        row: usize,
+        index: i16,
+    },
+    DuplicateObjectIndex {
+        owner: usize,
+        index: usize,
+    },
     RegistryMismatch,
     UnsupportedObjectBand,
 }
@@ -259,6 +273,10 @@ impl std::fmt::Display for WorldSaveError {
             Self::Capacity => f.write_str("world capacity/live count is invalid"),
             Self::Length(name) => write!(f, "world save length mismatch: {name}"),
             Self::HandlePermutation => f.write_str("world handle ids are not a permutation"),
+            Self::OrderTargetIdentity { row, order, handle } => write!(
+                f,
+                "unit row {row} order {order} has invalid exact target identity {handle:?}"
+            ),
             Self::Owner { row, owner } => write!(f, "unit row {row} has invalid owner {owner}"),
             Self::ObjectIndex { row, index } => {
                 write!(f, "unit row {row} has invalid object index {index}")
@@ -302,6 +320,17 @@ impl WorldSaveState {
             let id = id as usize;
             if id >= cap || std::mem::replace(&mut seen_handles[id], true) {
                 return Err(WorldSaveError::HandlePermutation);
+            }
+        }
+
+        for (row, orders) in self.unit_orders.iter().enumerate() {
+            for (order, value) in orders.iter().enumerate() {
+                let Some(handle) = value.target_handle else {
+                    continue;
+                };
+                if handle.id as usize >= cap || value.target_who < 0 || value.target_o < 0 {
+                    return Err(WorldSaveError::OrderTargetIdentity { row, order, handle });
+                }
             }
         }
 

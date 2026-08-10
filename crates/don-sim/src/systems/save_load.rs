@@ -30,7 +30,7 @@ use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
@@ -317,6 +317,12 @@ fn write_order(w: &mut Writer, o: &Order) {
     w.i32(o.y);
     w.i8(o.target_who);
     w.i16(o.target_o);
+    w.u16(o.target_uid);
+    w.bool(o.target_handle.is_some());
+    if let Some(handle) = o.target_handle {
+        w.u32(handle.id);
+        w.u32(handle.generation);
+    }
     w.i32(o.tolerance);
     w.bool(o.special_anim.is_some());
     if let Some(special) = o.special_anim {
@@ -357,6 +363,15 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
         y: r.i32()?,
         target_who: r.i8()?,
         target_o: r.i16()?,
+        target_uid: r.u16()?,
+        target_handle: if r.bool()? {
+            Some(crate::Handle {
+                id: r.u32()?,
+                generation: r.u32()?,
+            })
+        } else {
+            None
+        },
         tolerance: r.i32()?,
         special_anim: None,
         follow: None,
@@ -2351,6 +2366,20 @@ mod tests {
     }
 
     #[test]
+    fn pre_target_identity_v5_and_v6_streams_are_rejected() {
+        let bytes = save_sim(&supported_sim()).unwrap();
+        let core = section_offset(&bytes, CORE);
+        for version in [5u32, 6] {
+            let mut legacy = bytes.clone();
+            legacy[core + 8..core + 12].copy_from_slice(&version.to_le_bytes());
+            assert_eq!(
+                load_error(&legacy),
+                SaveError::Invalid("unsupported save format version")
+            );
+        }
+    }
+
+    #[test]
     fn save_load_resave_and_resume_are_deterministic() {
         let mut original = supported_sim();
         let before_digest = original.channel_digest();
@@ -2772,10 +2801,15 @@ mod tests {
 
     #[test]
     fn unknown_special_animation_discriminators_are_rejected() {
-        let mut bytes = vec![OrderIndex::SpecialAnim as u8, 0];
-        bytes.extend_from_slice(&[0; 4 + 4 + 1 + 2 + 4]);
-        bytes.push(1);
-        bytes.extend_from_slice(&3i32.to_le_bytes());
+        let mut writer = Writer::default();
+        write_order(
+            &mut writer,
+            &Order::special_anim(SpecialAnimType::Unit, 0, 0),
+        );
+        let mut bytes = writer.0;
+        // Fixed v7 prefix: kind/flags, x/y, who/o/uid, absent Handle, tolerance, then the
+        // present SPECIAL_ANIM byte. Its discriminator immediately follows at byte 21.
+        bytes[21..25].copy_from_slice(&3i32.to_le_bytes());
         let mut reader = Reader::new(&bytes);
         assert_eq!(
             read_order(&mut reader),

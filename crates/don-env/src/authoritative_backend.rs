@@ -6,17 +6,18 @@
 //! has a frozen route below. Only `MOVE_TO` is admitted today, and only when the live
 //! collision host proves every active object needed by the transaction. `ATTACK` has a
 //! production Sim issue/execution route. A complete current-frame capture now binds its policy
-//! ordinal through retail's cloak/detection/fog predicate and revalidates `(Handle,who,o,uid)`;
-//! ATTACK remains masked at the next boundary because the current walked order cannot retain
-//! that UID/Handle or host the whole target-eligibility transaction. Unsupported verbs fail
-//! before mutation; there is no accepted-no-effect result.
+//! ordinal through retail's cloak/detection/fog predicate and revalidates `(Handle,who,o,uid)`.
+//! The prepared transaction and walked order now retain that identity, visibility revision,
+//! and hostile eligibility. ATTACK remains masked at the next boundary because the production
+//! tick does not consume the retained identity and still has accepted-no-effect dependency
+//! exits. Unsupported verbs fail before mutation; there is no accepted-no-effect result.
 
 use crate::authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, StepReceipt};
-use don_sim::order::{Order, OrderIndex, ORDER_FLEEING};
+use don_sim::order::{Order, OrderIndex, OrderTargetIdentity, ORDER_FLEEING};
 use don_sim::systems::external_entity_visibility_frontier::{
     ExternalEntityIdentity, ExternalEntityPublicState, ExternalEntityVisibilityOwner,
     ExternalUnitFrameRow, ExternalVisibilityFrame, RetailUnitVisibilityFacts, RetailViewerFacts,
-    VisibilityInstallFault, VisibilityProjectionFault, VisibleExternalEntity,
+    VisibilityInstallFault, VisibilityProjectionFault, VisibleExternalEntity, VisibleTargetBinding,
     UNIT_MASK_DETECTION_BYPASS,
 };
 use don_sim::systems::map_terrain::{Coord, FCoord, WCoord};
@@ -453,6 +454,13 @@ pub enum ApplyRefusal {
         target: ExternalEntityIdentity,
         boundary: IntegrationBoundary,
     },
+    /// Identity and visibility were current, but the target fails a retail-known eligibility
+    /// predicate before the still-unhosted production combat transaction.
+    AttackTargetIneligible {
+        verb_index: usize,
+        target: ExternalEntityIdentity,
+        reason: AttackTargetEligibilityRefusal,
+    },
     InvalidDestination {
         x: i32,
         y: i32,
@@ -466,6 +474,13 @@ pub enum ApplyRefusal {
     },
     MovementSourceState(LiveCollisionFault),
     CoreRejectedAfterPreflight,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackTargetEligibilityRefusal {
+    ActorIsTarget,
+    RelationUnavailable { owner: u8 },
+    NotEnemy { relation: Diplo },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -601,6 +616,65 @@ pub struct PreparedUnitAction {
     row: usize,
     kind: OrderIndex,
     source: MovementSourceState,
+}
+
+/// Maximal fail-closed ATTACK transaction before the production executor boundary.
+///
+/// This token retains the policy request, Sim episode revision, opaque visibility binding,
+/// exact stable/retail target identity, and the retail-known hostile eligibility result.  It
+/// can produce the non-lossy queue node, but it is not an admission token: the normal mask and
+/// apply routes remain red until the production tick consumes the identity and preflights every
+/// dependency which can currently yield an accepted-no-effect ATTACK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedAttackTargetTransaction {
+    who: u8,
+    request: UnitActionRequest,
+    episode_revision: u64,
+    actor_row: usize,
+    target_row: usize,
+    binding: VisibleTargetBinding,
+    target: ExternalEntityIdentity,
+    relation: Diplo,
+}
+
+impl PreparedAttackTargetTransaction {
+    pub const fn actor(&self) -> Handle {
+        self.request.actor
+    }
+
+    pub const fn target(&self) -> ExternalEntityIdentity {
+        self.target
+    }
+
+    pub const fn episode_revision(&self) -> u64 {
+        self.episode_revision
+    }
+
+    pub const fn visibility_revision(&self) -> u64 {
+        self.binding.owner_revision()
+    }
+
+    pub const fn visibility_frame(&self) -> i32 {
+        self.binding.frame()
+    }
+
+    pub const fn target_ordinal(&self) -> u16 {
+        self.binding.ordinal()
+    }
+
+    pub const fn relation(&self) -> Diplo {
+        self.relation
+    }
+
+    /// Build the exact queue payload without claiming that the production consumer is ready.
+    pub fn retained_order(&self) -> Order {
+        Order::attack_exact(OrderTargetIdentity {
+            handle: self.target.handle,
+            who: self.target.who as i8,
+            o: self.target.object_o,
+            uid: self.target.uid,
+        })
+    }
 }
 
 impl PreparedUnitAction {
@@ -840,6 +914,47 @@ impl AuthoritativeBackend {
             who,
             request,
         )
+    }
+
+    /// Prepare ATTACK through exact actor, identity, visibility, and hostile-eligibility
+    /// ownership without admitting it to the policy mask.
+    ///
+    /// Callers may retain this token across scheduler phases. A tick, visibility refresh, or
+    /// reset makes its revisions stale; [`Self::apply_prepared_attack_target`] then refuses
+    /// before mutation. Even a current token stops at `CombatTargetHost` until the production
+    /// executor consumes the retained Handle/UID and owns every no-effect dependency.
+    pub fn prepare_attack_target(
+        &self,
+        who: u8,
+        request: UnitActionRequest,
+    ) -> Result<PreparedAttackTargetTransaction, ApplyRefusal> {
+        prepare_attack_target_transaction(
+            self.episode.sim(),
+            &self.external_visibility,
+            self.episode_revision,
+            who,
+            request,
+        )
+    }
+
+    /// Revalidate a prepared ATTACK transaction, preserving typed staleness and the final
+    /// production-consumer refusal. This method never installs an order in the current tranche.
+    pub fn apply_prepared_attack_target(
+        &mut self,
+        prepared: PreparedAttackTargetTransaction,
+    ) -> Result<ApplyReceipt, ApplyRefusal> {
+        if prepared.episode_revision != self.episode_revision {
+            return Err(ApplyRefusal::StaleEpisodeRevision {
+                expected: prepared.episode_revision,
+                observed: self.episode_revision,
+            });
+        }
+        validate_prepared_attack_target(self.episode.sim(), &self.external_visibility, prepared)?;
+        Err(ApplyRefusal::AttackTargetCommitUnavailable {
+            verb_index: crate::generated::uv::ATTACK,
+            target: prepared.target,
+            boundary: IntegrationBoundary::CombatTargetHost,
+        })
     }
 
     /// Commit a previously prepared action or refuse it before any mutation.
@@ -1240,6 +1355,178 @@ fn capture_external_visibility_frame(
     })
 }
 
+fn prepare_attack_target_transaction(
+    sim: &don_sim::tick::Sim,
+    external_visibility: &ExternalEntityVisibilityOwner,
+    episode_revision: u64,
+    who: u8,
+    request: UnitActionRequest,
+) -> Result<PreparedAttackTargetTransaction, ApplyRefusal> {
+    if request.verb_head == 0 {
+        return Err(ApplyRefusal::UnknownVerb(0));
+    }
+    let verb_index = usize::from(request.verb_head - 1);
+    let integration = UNIT_INTEGRATION
+        .get(verb_index)
+        .ok_or(ApplyRefusal::UnknownVerb(request.verb_head))?;
+    if integration.route != VerbRoute::SimAttackIssue {
+        return Err(match integration.route {
+            VerbRoute::Refused(boundary) => ApplyRefusal::Unhosted {
+                verb_index,
+                boundary,
+            },
+            VerbRoute::SimIssue => ApplyRefusal::Unhosted {
+                verb_index,
+                boundary: IntegrationBoundary::CombatTargetHost,
+            },
+            VerbRoute::SimAttackIssue => unreachable!(),
+        });
+    }
+    let player = sim
+        .vic_leaders
+        .slots
+        .get(usize::from(who))
+        .ok_or(ApplyRefusal::InvalidPlayer(who))?;
+    if !player.is_alive() {
+        return Err(ApplyRefusal::PlayerNotAlive(who));
+    }
+    let actor_row = sim
+        .world
+        .row_of(request.actor)
+        .ok_or(ApplyRefusal::StaleActor(request.actor))?;
+    let actual = sim.world.units.get_who(actor_row);
+    if actual != who {
+        return Err(ApplyRefusal::ActorNotOwned {
+            actor: request.actor,
+            expected: who,
+            actual,
+        });
+    }
+    if sim.world.units.get_flags(actor_row) & OBJ_FLAG_ACTIVE == 0 {
+        return Err(ApplyRefusal::InactiveActor(request.actor));
+    }
+    if request.target_entity == 0 {
+        return Err(ApplyRefusal::MissingTargetEntity { verb_index });
+    }
+    let binding = match external_visibility.bind_target(who, request.target_entity) {
+        Ok(binding) => binding,
+        Err(VisibilityProjectionFault::Uninstalled) => {
+            return Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+                verb_index,
+                target_entity: request.target_entity,
+            });
+        }
+        Err(fault) => {
+            return Err(ApplyRefusal::TargetVisibility {
+                verb_index,
+                target_entity: request.target_entity,
+                fault,
+            });
+        }
+    };
+    let target = external_visibility
+        .revalidate_target(binding)
+        .map_err(|fault| ApplyRefusal::TargetVisibility {
+            verb_index,
+            target_entity: request.target_entity,
+            fault,
+        })?;
+    let target_row =
+        sim.world
+            .row_of(target.identity.handle)
+            .ok_or(ApplyRefusal::TargetVisibility {
+                verb_index,
+                target_entity: request.target_entity,
+                fault: VisibilityProjectionFault::BindingIdentityChanged,
+            })?;
+    if sim.world.units.get_flags(target_row) & OBJ_FLAG_ACTIVE == 0
+        || sim.world.units.get_who(target_row) != target.identity.who
+        || sim.world.units.o()[target_row] != target.identity.object_o
+        || sim.world.units.get_uid(target_row) != target.identity.uid
+    {
+        return Err(ApplyRefusal::TargetVisibility {
+            verb_index,
+            target_entity: request.target_entity,
+            fault: VisibilityProjectionFault::BindingIdentityChanged,
+        });
+    }
+    if actor_row == target_row || request.actor == target.identity.handle {
+        return Err(ApplyRefusal::AttackTargetIneligible {
+            verb_index,
+            target: target.identity,
+            reason: AttackTargetEligibilityRefusal::ActorIsTarget,
+        });
+    }
+    if usize::from(target.identity.who) >= sim.vic_leaders.slots.len() {
+        return Err(ApplyRefusal::AttackTargetIneligible {
+            verb_index,
+            target: target.identity,
+            reason: AttackTargetEligibilityRefusal::RelationUnavailable {
+                owner: target.identity.who,
+            },
+        });
+    }
+    let relation = sim
+        .vic_leaders
+        .get_diplo(usize::from(who), usize::from(target.identity.who));
+    if relation != Diplo::War {
+        return Err(ApplyRefusal::AttackTargetIneligible {
+            verb_index,
+            target: target.identity,
+            reason: AttackTargetEligibilityRefusal::NotEnemy { relation },
+        });
+    }
+    if request.queue != QueuePosition::Replace {
+        return Err(ApplyRefusal::UnsupportedQueue(request.queue));
+    }
+    if request.order_flags != 0 {
+        return Err(ApplyRefusal::UnsupportedOrderFlags(request.order_flags));
+    }
+
+    Ok(PreparedAttackTargetTransaction {
+        who,
+        request,
+        episode_revision,
+        actor_row,
+        target_row,
+        binding,
+        target: target.identity,
+        relation,
+    })
+}
+
+fn validate_prepared_attack_target(
+    sim: &don_sim::tick::Sim,
+    external_visibility: &ExternalEntityVisibilityOwner,
+    prepared: PreparedAttackTargetTransaction,
+) -> Result<(), ApplyRefusal> {
+    let verb_index = crate::generated::uv::ATTACK;
+    external_visibility
+        .revalidate_target(prepared.binding)
+        .map_err(|fault| ApplyRefusal::TargetVisibility {
+            verb_index,
+            target_entity: prepared.request.target_entity,
+            fault,
+        })?;
+    let current = prepare_attack_target_transaction(
+        sim,
+        external_visibility,
+        prepared.episode_revision,
+        prepared.who,
+        prepared.request,
+    )?;
+    if current != prepared {
+        return Err(ApplyRefusal::TargetVisibility {
+            verb_index,
+            target_entity: prepared.request.target_entity,
+            fault: VisibilityProjectionFault::BindingIdentityChanged,
+        });
+    }
+    debug_assert_eq!(current.actor_row, prepared.actor_row);
+    debug_assert_eq!(current.target_row, prepared.target_row);
+    Ok(())
+}
+
 /// Read-only half of the action transaction, shared byte-for-byte by masking and apply.
 fn preflight_unit(
     sim: &don_sim::tick::Sim,
@@ -1286,54 +1573,16 @@ fn preflight_unit(
         return Err(ApplyRefusal::InactiveActor(request.actor));
     }
     if integration.route == VerbRoute::SimAttackIssue {
-        if request.target_entity == 0 {
-            return Err(ApplyRefusal::MissingTargetEntity { verb_index });
-        }
-        let binding = match external_visibility.bind_target(who, request.target_entity) {
-            Ok(binding) => binding,
-            Err(VisibilityProjectionFault::Uninstalled) => {
-                return Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
-                    verb_index,
-                    target_entity: request.target_entity,
-                });
-            }
-            Err(fault) => {
-                return Err(ApplyRefusal::TargetVisibility {
-                    verb_index,
-                    target_entity: request.target_entity,
-                    fault,
-                });
-            }
-        };
-        let target = external_visibility
-            .revalidate_target(binding)
-            .map_err(|fault| ApplyRefusal::TargetVisibility {
-                verb_index,
-                target_entity: request.target_entity,
-                fault,
-            })?;
-        let target_row =
-            sim.world
-                .row_of(target.identity.handle)
-                .ok_or(ApplyRefusal::TargetVisibility {
-                    verb_index,
-                    target_entity: request.target_entity,
-                    fault: VisibilityProjectionFault::BindingIdentityChanged,
-                })?;
-        if sim.world.units.get_flags(target_row) & OBJ_FLAG_ACTIVE == 0
-            || sim.world.units.get_who(target_row) != target.identity.who
-            || sim.world.units.o()[target_row] != target.identity.object_o
-            || sim.world.units.get_uid(target_row) != target.identity.uid
-        {
-            return Err(ApplyRefusal::TargetVisibility {
-                verb_index,
-                target_entity: request.target_entity,
-                fault: VisibilityProjectionFault::BindingIdentityChanged,
-            });
-        }
+        let prepared = prepare_attack_target_transaction(
+            sim,
+            external_visibility,
+            episode_revision,
+            who,
+            request,
+        )?;
         return Err(ApplyRefusal::AttackTargetCommitUnavailable {
             verb_index,
-            target: target.identity,
+            target: prepared.target,
             boundary: IntegrationBoundary::CombatTargetHost,
         });
     }

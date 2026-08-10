@@ -24,6 +24,7 @@
 //!   the game is a `GROUP_PATROL` (22), which `Unit::do_patrol` `0x005F1910` serves.
 //!   A port that "helpfully" implemented `PATROL` would diverge from retail.
 
+use crate::Handle;
 use std::fmt;
 
 /// `NUM_UNIT_ORDERS` from the PDB.
@@ -351,6 +352,19 @@ pub const EXECUTORS: [Executor; NUM_UNIT_ORDERS] = [
         note: "exact atomic retirement and four-type think_peasant tail" },
 ];
 
+/// Complete identity retained by a target-taking authoritative order.
+///
+/// `(who,o,uid)` is retail's `TargetOrder` staleness contract.  `handle` is additive port
+/// identity: it survives dense-row compaction and rejects a recycled object id before a
+/// production executor can act on a reused owner-array slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OrderTargetIdentity {
+    pub handle: Handle,
+    pub who: i8,
+    pub o: i16,
+    pub uid: u16,
+}
+
 /// One `UnitOrder`, flattened.
 ///
 /// The retail hierarchy is 31 classes with a virtual `get_type()`, a virtually-inherited
@@ -368,6 +382,12 @@ pub struct Order {
     /// owner's list. `who < 0` means "no target".
     pub target_who: i8,
     pub target_o: i16,
+    /// Retail `TargetOrder::uid`, the incarnation token paired with `(target_who,target_o)`.
+    pub target_uid: u16,
+    /// Additive compaction-stable port identity for the target. `None` denotes an older or
+    /// descriptive order whose caller did not prove the authoritative Handle; ATTACK
+    /// admission must not manufacture one from the retail scalar fields.
+    pub target_handle: Option<Handle>,
     /// Arrival tolerance in Coord units; `UnitData::tolerance` is the per-unit default.
     pub tolerance: i32,
     /// Concrete payload for order 11. `None` on FOLLOW is malformed legacy state: the
@@ -390,6 +410,8 @@ impl Default for Order {
             y: 0,
             target_who: -1,
             target_o: -1,
+            target_uid: 0,
+            target_handle: None,
             tolerance: 0,
             follow: None,
             special_anim: None,
@@ -416,6 +438,32 @@ impl Order {
             target_o,
             ..Order::default()
         }
+    }
+
+    /// Construct an ATTACK whose queue node retains both authoritative and retail identity.
+    ///
+    /// The duplicated `(target_who,target_o)` fields are the flattened `TargetOrder` view
+    /// used by the current production executor.  [`OrderTargetIdentity`] is the non-lossy
+    /// transaction payload; consumers must require the two views to agree.
+    pub fn attack_exact(target: OrderTargetIdentity) -> Order {
+        Order {
+            kind: OrderIndex::Attack,
+            target_who: target.who,
+            target_o: target.o,
+            target_uid: target.uid,
+            target_handle: Some(target.handle),
+            ..Order::default()
+        }
+    }
+
+    /// Return the complete target identity only when the stable Handle was retained.
+    pub fn exact_target_identity(&self) -> Option<OrderTargetIdentity> {
+        Some(OrderTargetIdentity {
+            handle: self.target_handle?,
+            who: self.target_who,
+            o: self.target_o,
+            uid: self.target_uid,
+        })
     }
 
     /// One exact `FollowOrder`, retaining both identities and UID snapshots.

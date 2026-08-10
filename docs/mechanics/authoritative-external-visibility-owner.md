@@ -5,8 +5,10 @@
 `don-env::authoritative_backend` has a real `SimAttackIssue` route, but both its mask and apply
 path remain red. Without a fresh frame they stop at `TargetIdentityVisibilityUnavailable`; with
 one, they bind and revalidate the exact external identity before stopping at
-`AttackTargetCommitUnavailable`. The current walked `Order` cannot retain target UID/Handle, and
-the complete combat-target eligibility transaction is not hosted.
+`AttackTargetCommitUnavailable`. The walked `Order`, executable queue, and DoNSave v7 now retain
+target UID/Handle, but the production tick does not consume them and the complete combat-target
+eligibility transaction is not hosted. See
+[`authoritative-attack-target-transaction.md`](authoritative-attack-target-transaction.md).
 
 `external_entity_visibility_frontier.rs` freezes the owner used at that boundary. The
 `don-env` adapter now captures it from `Sim`, exposes its rows to observation, and consumes the
@@ -77,9 +79,11 @@ publish a plausible-but-incomplete cloak image. Detection-bypass cloaks remain a
 retail skips the detector query for that exact instance bit.
 
 ATTACK now binds the policy ordinal, immediately revalidates the opaque binding, resolves its
-Handle generation in Sim, and compares live `(who,o,uid)` before returning the typed target-commit
-refusal. Its conditional verb mask remains false and apply mutates no order, path, or world byte.
-The admitted authoritative verb delta is **0**.
+Handle generation in Sim, compares live `(who,o,uid)`, and freezes episode/visibility revisions
+plus hostile eligibility in `PreparedAttackTargetTransaction`. Its retained order survives queue
+conversion and save/load. The conditional verb mask nevertheless remains false because the
+production executor still ignores that payload and retains silent dependency exits. Apply mutates
+no order, path, or world byte. The admitted authoritative verb delta is **0**.
 
 ## Compaction, reset, save, and digest semantics
 

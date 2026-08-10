@@ -478,6 +478,9 @@ pub struct OrderRec {
     /// `TargetOrder::uid` at `+16` — `ObjectData::uid`, the staleness token. A mismatch is
     /// what `Unit::work`'s tail treats as "the target you named is not there any more".
     pub target_uid: u16,
+    /// Additive stable port identity retained with the retail `(who,o,uid)` triple.
+    /// Production consumers must require every duplicated field to agree before acting.
+    pub target_handle: Option<crate::Handle>,
 
     /// Complete concrete payload for `FollowOrder` (order 11). The duplicated primary
     /// identity must agree with `target_o/target_who/target_uid`; a mismatch is malformed.
@@ -591,6 +594,7 @@ impl Default for OrderRec {
             target_o: -1,
             target_who: -1,
             target_uid: 0,
+            target_handle: None,
             follow: None,
             special_anim: None,
             form_order: None,
@@ -889,7 +893,8 @@ impl From<Order> for OrderRec {
             tolerance: o.tolerance,
             target_o: follow.map_or(i32::from(o.target_o), |payload| payload.ox),
             target_who: follow.map_or(i32::from(o.target_who), |payload| payload.whom),
-            target_uid: follow.map_or(0, |payload| payload.uid),
+            target_uid: follow.map_or(o.target_uid, |payload| payload.uid),
+            target_handle: o.target_handle,
             follow,
             special_anim: o.special_anim,
             angle: o.form_order.map_or(0, |form| form.angle),
@@ -911,6 +916,8 @@ impl From<OrderRec> for Order {
             y: r.y,
             target_who: r.target_who.clamp(i8::MIN as i32, i8::MAX as i32) as i8,
             target_o: r.target_o.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            target_uid: r.target_uid,
+            target_handle: r.target_handle,
             tolerance: r.tolerance,
             follow: r.follow,
             special_anim: r.special_anim,
@@ -5148,9 +5155,12 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 /// today — those belong to the terrain and collision lanes. That gap, not this bridge, is
 /// what stands between this module and `World::step`.
 ///
-/// **Lossy in one direction, stated plainly:** [`crate::order::Order`] has no `target_uid`,
-/// no `timer`, no `retry`, and no post-construction coordinate-target scratch state, so a
-/// round trip through it drops those fields. Widening a newly issued ATTACK_GROUND or
+/// **Lossy in one direction, stated plainly:** [`crate::order::Order`] has no `timer`, no
+/// `retry`, and no post-construction coordinate-target scratch state, so a round trip through
+/// it drops those fields. Exact target identity is retained by `target_uid` plus
+/// `target_handle`; a legacy target order which lacks a Handle still cannot grow one during
+/// widening. Widening a
+/// newly issued ATTACK_GROUND or
 /// AIR_ATTACK_GROUND order does create the correct zero-initialized concrete payload. Keep
 /// [`OrderQueue`] as the owning representation and use this only at the boundary.
 pub fn adopt(list: &crate::order::OrderList) -> OrderQueue {
@@ -7793,8 +7803,10 @@ mod tests {
         assert_eq!(back.kind, r.kind);
         assert_eq!(back.target_who, r.target_who);
         assert_eq!(back.target_o, r.target_o);
-        // uid does not survive the narrow form; that is why OrderRec exists.
-        assert_eq!(back.target_uid, 0);
+        assert_eq!(back.target_uid, r.target_uid);
+        // A legacy OrderRec did not prove a stable port Handle; conversion preserves that
+        // absence rather than manufacturing one from the retail triple.
+        assert_eq!(back.target_handle, None);
     }
 
     /// Retail's close-waypoint arm turns in place until aligned. Omitting it produces the

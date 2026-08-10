@@ -52,11 +52,12 @@ pub mod typecaps;
 mod py;
 
 pub use authoritative_backend::{
-    decode_unit_heads, ApplyReceipt, ApplyRefusal, AuthoritativeBackend, CoreObservation,
-    CoreReward, CoreRewardSnapshot, FactoredApplyRefusal, FactoredUnitActionSpace,
-    HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation, PreparedUnitAction,
-    ProjectionRefusal, QueuePosition, Relation, UnitActionRequest, VerbIntegration, VerbRoute,
-    VisibilityCaptureRefusal, VisibilityStaticSourceRefusal, PLAYER_INTEGRATION, UNIT_INTEGRATION,
+    decode_unit_heads, ApplyReceipt, ApplyRefusal, AttackTargetEligibilityRefusal,
+    AuthoritativeBackend, CoreObservation, CoreReward, CoreRewardSnapshot, FactoredApplyRefusal,
+    FactoredUnitActionSpace, HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation,
+    PreparedAttackTargetTransaction, PreparedUnitAction, ProjectionRefusal, QueuePosition,
+    Relation, UnitActionRequest, VerbIntegration, VerbRoute, VisibilityCaptureRefusal,
+    VisibilityStaticSourceRefusal, PLAYER_INTEGRATION, UNIT_INTEGRATION,
 };
 pub use authoritative_episode::{
     AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit, StepReceipt,

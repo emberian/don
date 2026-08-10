@@ -134,6 +134,75 @@ fn attack_reaches_identity_visibility_preflight_but_stays_masked_at_commit_host(
 }
 
 #[test]
+fn prepared_attack_retains_revisions_visibility_hostility_and_exact_queue_identity() {
+    let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
+    install_non_cloaked_type_sources(&mut backend);
+    backend.step_frames(34);
+    backend.capture_external_visibility().unwrap();
+
+    let actor = backend.sim().world.handle_at_row(0).unwrap();
+    let target = backend.observe(0).unwrap().external_entities[0];
+    let request = attack(actor, target.ordinal);
+    let prepared = backend.prepare_attack_target(0, request).unwrap();
+
+    assert_eq!(prepared.actor(), actor);
+    assert_eq!(prepared.target(), target.identity);
+    assert_eq!(prepared.target_ordinal(), target.ordinal);
+    assert_eq!(prepared.visibility_frame(), backend.sim().world.frame);
+    assert_eq!(
+        prepared.visibility_revision(),
+        backend.external_visibility_revision()
+    );
+    assert_eq!(
+        prepared.relation(),
+        don_sim::systems::victory_score::Diplo::War
+    );
+    let retained = prepared.retained_order();
+    assert_eq!(retained.kind, don_sim::order::OrderIndex::Attack);
+    assert_eq!(
+        retained.exact_target_identity(),
+        Some(don_sim::order::OrderTargetIdentity {
+            handle: target.identity.handle,
+            who: target.identity.who as i8,
+            o: target.identity.object_o,
+            uid: target.identity.uid,
+        })
+    );
+
+    let before_digest = backend.sim().world.digest();
+    let before_orders = backend.sim().world.orders(0).clone();
+    assert_eq!(
+        backend.apply_prepared_attack_target(prepared),
+        Err(ApplyRefusal::AttackTargetCommitUnavailable {
+            verb_index: don_env::generated::uv::ATTACK,
+            target: target.identity,
+            boundary: IntegrationBoundary::CombatTargetHost,
+        })
+    );
+    assert_eq!(backend.sim().world.digest(), before_digest);
+    assert_eq!(backend.sim().world.orders(0), &before_orders);
+
+    // Publishing a new image invalidates the opaque visibility revision even when the
+    // source frame and canonical rows are byte-identical.
+    backend.capture_external_visibility().unwrap();
+    assert!(matches!(
+        backend.apply_prepared_attack_target(prepared),
+        Err(ApplyRefusal::TargetVisibility {
+            fault: don_sim::systems::external_entity_visibility_frontier::VisibilityProjectionFault::StaleBinding { .. },
+            ..
+        })
+    ));
+
+    let current = backend.prepare_attack_target(0, request).unwrap();
+    let expected_episode = current.episode_revision();
+    backend.reset().unwrap();
+    assert!(matches!(
+        backend.apply_prepared_attack_target(current),
+        Err(ApplyRefusal::StaleEpisodeRevision { expected, .. }) if expected == expected_episode
+    ));
+}
+
+#[test]
 fn tick_and_reset_invalidate_ordinals_while_type_sources_survive_reset() {
     let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
     install_non_cloaked_type_sources(&mut backend);

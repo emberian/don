@@ -76,9 +76,11 @@ object-graph coverage.
 ## Container and validation
 
 The root chunk (`0x444e`) has seven required leaf children in deterministic order. The
-current DoN format version is 3. Version 1 predates authoritative item state; version 2
-predates the complete `SpecialAnimOrder` payload. Both are rejected rather than silently
-inventing missing checksum-visible order state.
+current DoN format version is 7. Versions 1 through 6 are rejected rather than silently
+inventing missing checksum-visible state. Version 7 adds the retail target UID and optional
+stable Handle to every flattened order before the existing SPECIAL_ANIM, FORM, and FOLLOW
+payloads; this closes authoritative ATTACK identity persistence without admitting ATTACK's
+still-incomplete production consumer.
 
 | id | section |
 |---:|---|
