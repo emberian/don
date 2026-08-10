@@ -66,9 +66,20 @@ new-WoW64 runtime. The original disposable-prefix attempt timed out while
 `syswow64`. `run-gen7-wine-smoke.sh` avoids that bootstrap failure by seeding
 both architecture trees from the installed Wine bundle before `wineboot`.
 The independent clean-prefix rerun exited 0 and emitted the complete
-`don.netsys-load-smoke.v4` pass with 73 stack-pointer checks. Its fresh 69-line
-shim trace has SHA-256
-`3bbc732d7f803860d5f99b1757022728ef7e9102f0d7a6af32f719a02b1ff04d`.
+`don.netsys-load-smoke.v4` pass with 73 stack-pointer checks and a 69-line shim trace.
+
+A fourth independent run on 2026-08-10 reproduced the pass against the frozen
+artifacts, whose hashes still match this file exactly, and confirms `seq=11
+call=vtable.ns_get_ip_addresses` — the call that faulted generation 5 — now crosses the
+PE32 boundary and returns.
+
+**The trace SHA-256 is a per-run value, not a reproducibility invariant.** It was
+previously recorded here as if it were one. The trace embeds the Wine `pid` and the
+ephemeral `local_addr` port, so it necessarily differs every run; what is stable is the
+69-line length and the fixed call sequence. Comparing raw trace digests across runs will
+always disagree. Emitting a normalized digest (pid and port elided) alongside the raw one
+would make this checkable and is not yet done.
+
 This is disposable PE32 evidence only; it did not read or modify a retail
 process and does not authorize a retail retry.
 
@@ -136,7 +147,7 @@ make the DLL self-describing under `dumpbin /exports`.
 | shipped names occupy the exact ordinals 1..11; the callback export emits `ret 0x78` | `check-exports.py`, PASS |
 | vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | fresh shipped-PDB extraction plus compile-time assertions in `abi.rs` |
 | generation-7 DLL and v4 smoke compile warning-free for PE32/i386; all test executables link | hbox `cargo xwin build --release` and `cargo xwin test --release --no-run`, PASS; exact hashes above |
-| generation-7 PE32 runtime boundary | Wine Devel 11.10 v4 smoke, PASS three times including two clean pre-seeded prefixes; runner's fresh 69-line shim trace SHA-256 `3bbc732d...b1ff04d` |
+| generation-7 PE32 runtime boundary | Wine Devel 11.10 v4 smoke, PASS four times including three clean pre-seeded prefixes; 69-line shim trace with a fixed call sequence (its raw SHA-256 varies per run — see above) |
 | callable-inert bind failure, close→init reuse reset, concrete flag/scalar getters, null-unicast refusal, callback clone/replace/destruction, heap-backed wstrings, Setup bridge order, and all non-destructor `NetPlayer` slots preserve ESP | `don.netsys-load-smoke.v4`, runtime PASS with 73 stack-pointer checks |
 | Friend Game host materialization exposes coherent local/host pointers while pending, retains NetMessenger session data at `+0xB0`, defers `on_player_added` until the retail DTO ID is installed, then clears pending; repeat `OnPlayerJoined` is idempotent | shared production/smoke host lifecycle plus generation-7 v4 PE32 runtime PASS |
 | SetupWin bridge passes the remote ID as two exact by-value MSVC wstrings, resolves slot 1, writes `PlayerConnectionData[1].ready` at `59+58`, then calls `send_player(1,true)`; a pre-SetupWin remote remains pending and is retried | production bridge ABI plus heap-backed generation-7 v4 PE32 runtime PASS |

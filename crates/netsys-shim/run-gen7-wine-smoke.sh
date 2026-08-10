@@ -73,6 +73,17 @@ else
 fi
 readonly timeout_bin
 
+# `wineboot --init` returns before the registry is on disk: wineserver owns system.reg and
+# flushes it asynchronously. Grepping it straight after wineboot is a race that a quiet host
+# usually wins and a loaded one loses, which reads as a bootstrap failure that never happened.
+# Wait for the prefix to go idle, then poll for the file. Only these budgets are configurable;
+# every PASS condition further down is unchanged.
+readonly boot_timeout="${DON_WINE_BOOT_TIMEOUT:-300}"
+readonly settle_timeout="${DON_WINE_SETTLE_TIMEOUT:-120}"
+for budget in "$boot_timeout" "$settle_timeout"; do
+    [[ "$budget" =~ ^[0-9]+$ ]] || fail "wine timeout budgets must be seconds: $budget"
+done
+
 dll_sha256="$(sha256_file "$dll")"
 smoke_sha256="$(sha256_file "$smoke")"
 readonly dll_sha256 smoke_sha256
@@ -122,7 +133,14 @@ readonly -a wine_env=(
     "MVK_CONFIG_LOG_LEVEL=0"
 )
 
-"${wine_env[@]}" "$timeout_bin" --preserve-status 120 "$wineboot" --init
+"${wine_env[@]}" "$timeout_bin" --preserve-status "$boot_timeout" "$wineboot" --init
+"${wine_env[@]}" "$timeout_bin" --preserve-status "$settle_timeout" "$wineserver" -w || true
+for _ in $(seq "$settle_timeout"); do
+    [[ -f "$prefix/system.reg" ]] && break
+    sleep 1
+done
+[[ -f "$prefix/system.reg" ]] || \
+    fail "wineserver never flushed system.reg (raise DON_WINE_BOOT_TIMEOUT/DON_WINE_SETTLE_TIMEOUT)"
 grep -Fq '#arch=win64' "$prefix/system.reg" || fail "Wine did not create a win64/WoW64 prefix"
 file "$prefix/drive_c/windows/system32/kernel32.dll" | grep -Fq 'PE32+' || \
     fail "system32 kernel32.dll is not x86_64"
