@@ -1,5 +1,5 @@
-use don_sim::systems::bhs_type_factory::{RulesCompositionId, Sha256Digest, TypeBuiltinProvenance};
 use don_sim::systems::bhs_type_channel13_frontier as frontier;
+use don_sim::systems::bhs_type_factory::{RulesCompositionId, Sha256Digest, TypeBuiltinProvenance};
 use don_sim::systems::bhs_type_table::{
     BuildRestoreFields, CommonRestoreFields, LeaderTypeMasks, ObjectRestoreFields, TribeRoster,
     TypeBackup, TypeBody, TypeBuiltinState, TypeRow, TypeTable, UnitRestoreFields, BUILD_BEGIN,

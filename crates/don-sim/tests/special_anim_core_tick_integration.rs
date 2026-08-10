@@ -18,10 +18,7 @@ fn actor_with_order(sim: &mut Sim, order: Order) -> (don_sim::world::Handle, usi
 fn real_frame_commits_object_free_exit_as_one_queue_path_transaction() {
     let mut sim = Sim::new(0x25_5880, 16);
     sim.activate(0);
-    let (_, row) = actor_with_order(
-        &mut sim,
-        Order::special_anim(SpecialAnimType::Exit, 9, 10),
-    );
+    let (_, row) = actor_with_order(&mut sim, Order::special_anim(SpecialAnimType::Exit, 9, 10));
     sim.world.orders_mut(row).push(Order {
         kind: OrderIndex::Guard,
         x: 384,
@@ -49,10 +46,7 @@ fn real_frame_commits_object_free_exit_as_one_queue_path_transaction() {
 fn real_frame_reaches_the_host_free_special_unit_no_op() {
     let mut sim = Sim::new(0x25_5880, 16);
     sim.activate(0);
-    let (_, row) = actor_with_order(
-        &mut sim,
-        Order::special_anim(SpecialAnimType::Unit, 9, 10),
-    );
+    let (_, row) = actor_with_order(&mut sim, Order::special_anim(SpecialAnimType::Unit, 9, 10));
     let before = *sim.world.orders(row).current().unwrap();
 
     sim.do_frame();
@@ -110,11 +104,24 @@ fn saved_walked_payload_is_the_one_the_real_frame_executes() {
         &mut original,
         Order::special_anim(SpecialAnimType::Exit, 41, 43),
     );
-    let walked = original.world.orders(original_row).current().unwrap().special_anim;
+    let walked = original
+        .world
+        .orders(original_row)
+        .current()
+        .unwrap()
+        .special_anim;
     let bytes = save_sim(&original).unwrap();
     let mut loaded = load_sim(&bytes).unwrap();
     let loaded_row = 0;
-    assert_eq!(loaded.world.orders(loaded_row).current().unwrap().special_anim, walked);
+    assert_eq!(
+        loaded
+            .world
+            .orders(loaded_row)
+            .current()
+            .unwrap()
+            .special_anim,
+        walked
+    );
 
     loaded.activate(0);
     loaded.do_frame();

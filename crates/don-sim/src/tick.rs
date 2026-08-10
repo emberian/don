@@ -857,13 +857,14 @@ fn special_anim_snapshot(
     host: &SimSpecialAnimHost,
     actor: &order_dispatch::UnitWork,
     order: &order_dispatch::OrderRec,
-) -> Result<special_anim_executor::SpecialAnimHostSnapshot, order_dispatch::SpecialAnimHostError>
-{
-    let current = actor.orders.front().ok_or(
-        order_dispatch::SpecialAnimHostError::InvalidState(
-            "SPECIAL_ANIM queue became empty before snapshot",
-        ),
-    )?;
+) -> Result<special_anim_executor::SpecialAnimHostSnapshot, order_dispatch::SpecialAnimHostError> {
+    let current =
+        actor
+            .orders
+            .front()
+            .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+                "SPECIAL_ANIM queue became empty before snapshot",
+            ))?;
     if current != order {
         return Err(order_dispatch::SpecialAnimHostError::InvalidState(
             "SPECIAL_ANIM head changed before snapshot",
@@ -905,8 +906,10 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
         &mut self,
         actor: &order_dispatch::UnitWork,
         order: &order_dispatch::OrderRec,
-    ) -> Result<special_anim_executor::SpecialAnimExecutorReceipt, order_dispatch::SpecialAnimHostError>
-    {
+    ) -> Result<
+        special_anim_executor::SpecialAnimExecutorReceipt,
+        order_dispatch::SpecialAnimHostError,
+    > {
         let state = order
             .special_anim
             .map(order_dispatch::special_anim_state)
@@ -2548,11 +2551,8 @@ impl Sim {
             before: None,
         };
         let mut dispatch = order_dispatch::DispatchCoverage::default();
-        let result = order_dispatch::do_special_anim_with_host(
-            &mut actor,
-            &mut host,
-            &mut dispatch,
-        );
+        let result =
+            order_dispatch::do_special_anim_with_host(&mut actor, &mut host, &mut dispatch);
         match result {
             order_dispatch::ArmResult::Retired(order_dispatch::KillReason::Completed) => {
                 self.publish_special_anim_actor(row, &actor);
