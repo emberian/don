@@ -143,10 +143,12 @@ The isolated executor supplies receipts for every reached external boundary:
 - invalid `who`, absent scores, and absent encrypted age words as fail-closed residuals.
 
 The shared systems/tick owner now adopts this executor through the canonical `Leaders` event
-block. Its deterministic integration delta is live, while the two product tails remain
-explicitly StateWired/red: `JukeBox::set_next_mood` and `Achieve::add_event` have receipts and
-coverage charges but no installed host. Root convergence formatted the isolated files and
-validated all 12 focused tests in both modes:
+block. `Leaders::event.product_outbox` is the installed typed owner for both product calls:
+it retains their exact shared sequence, Leader identity, call VA, and arguments, while
+leaving wall-clock/audio playback outside the deterministic core. The schedule row is green
+because no reached boundary is dropped or charged; decoded mood and achievement vectors are
+convenience projections of the ordered outbox. Root convergence formatted the isolated files
+and validated all 12 focused tests in both modes:
 
 - hbox debug: `tick-step19-20260809T225229Z-90306-2033-cb8b2b915d8e`;
 - persvati release: `tick-step19-release-20260809T225229Z-90315-27682-cb8b2b915d8e`.
@@ -159,5 +161,5 @@ cargo test -p don-sim --test leaders_process_event_frame_step19
 
 The later live scheduler convergence was validated together with the shared Leader/PlayerSetup
 owners: persvati job `gen7-integration-batch-v3-20260809T234324Z-74734-7021-05c01f206acb`
-passed all five real-step-19 tests. The schedule remains red only for the explicit JukeBox and
-achievement product tails.
+passed all five original real-step-19 tests. The later outbox integration also pins combined
+JukeBox/achievement delivery, exact order, schedule promotion, and no stale replay.

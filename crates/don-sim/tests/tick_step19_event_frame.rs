@@ -1,5 +1,6 @@
+use don_sim::schedule::{StepStatus, DO_FRAME};
 use don_sim::systems::{leaders, leaders_process_event_frame_step19 as step19};
-use don_sim::tick::{Gap, Sim, StepRun};
+use don_sim::tick::{Sim, StepRun};
 
 #[test]
 fn real_tick_executes_event_frame_fold_at_step_nineteen() {
@@ -16,8 +17,8 @@ fn real_tick_executes_event_frame_fold_at_step_nineteen() {
     assert_eq!(event.deaths_fifteen_seconds, 1);
     assert_eq!(event.average_death_rate, 50);
     assert_eq!(event.deaths_current_frame, 0);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventJukeBoxTail.index()], 0);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventAchievementTail.index()], 0);
+    assert_eq!(DO_FRAME[19].status, StepStatus::Implemented);
+    assert!(sim.step8.event.product_outbox.last_calls.is_empty());
 }
 
 #[test]
@@ -45,8 +46,7 @@ fn real_tick_event_dispatcher_uses_in_game_not_process() {
 
     assert_eq!(tick.steps[19], StepRun::Vacuous);
     assert_eq!(tick.work[19], 0);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventJukeBoxTail.index()], 0);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventAchievementTail.index()], 0);
+    assert!(sim.step8.event.product_outbox.last_calls.is_empty());
 }
 
 #[test]
@@ -96,29 +96,43 @@ fn real_tick_indexes_reciprocal_diplomacy_by_who_array_slot() {
         })
         .collect();
     assert_eq!(team_reads, vec![(3, 3)]);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventJukeBoxTail.index()], 1);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventAchievementTail.index()], 0);
+    assert_eq!(
+        sim.step8.event.product_outbox.last_calls,
+        sim.last_event_frame_trace.exact.host_tails
+    );
+    assert_eq!(sim.step8.event.product_outbox.last_calls.len(), 1);
 }
 
 #[test]
-fn real_tick_keeps_achievement_as_an_unresolved_typed_tail() {
+fn real_tick_delivers_music_and_achievement_tails_to_one_ordered_product_outbox() {
     let mut sim = Sim::new(0x19e4, 16);
     sim.activate(0);
     sim.step8.leaders[0].flags &= !leaders::flag::PROCESS;
+    sim.step8.end.local_who = 0;
     sim.step8.leaders[0].event_frame.deaths_current_frame = 4;
     sim.step8.leaders[0].event_frame.kills_current_frame = 2;
 
     sim.do_frame();
 
+    assert_eq!(sim.step8.event.last_mood_requests.len(), 1);
     assert_eq!(sim.step8.event.last_achievement_events.len(), 1);
-    assert_eq!(sim.cover.gaps[Gap::LeaderEventAchievementTail.index()], 1);
+    assert_eq!(
+        sim.step8.event.product_outbox.last_calls,
+        sim.last_event_frame_trace.exact.host_tails
+    );
+    let mood = sim.step8.event.product_outbox.last_calls[0];
+    assert!(matches!(
+        mood.host_tail,
+        step19::HostTail::JukeBoxSetNextMood { .. }
+    ));
     let tail = sim
-        .last_event_frame_trace
-        .exact
-        .host_tails
+        .step8
+        .event
+        .product_outbox
+        .last_calls
         .iter()
         .find(|tail| matches!(tail.host_tail, step19::HostTail::AchieveAddEvent { .. }))
-        .expect("typed achievement tail");
+        .expect("delivered achievement call");
     let sentinel = sim
         .last_event_frame_trace
         .exact
@@ -139,5 +153,12 @@ fn real_tick_keeps_achievement_as_an_unresolved_typed_tail() {
     assert_eq!(
         sim.step8.leaders[0].event_frame.average_kill_rate,
         step19::BATTLE_RATE_SENTINEL
+    );
+
+    sim.world.frame = 1;
+    sim.do_frame();
+    assert!(
+        sim.step8.event.product_outbox.last_calls.is_empty(),
+        "a non-due dispatcher must clear the prior product calls"
     );
 }

@@ -59,9 +59,8 @@ use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
-    game_daemon_step12, groups_guys, leaders, leaders_process_event_frame_step19, movement,
-    movement_driver, movement_live, order_dispatch, production, special_anim_executor,
-    victory_score, walls, wonders,
+    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
+    order_dispatch, production, special_anim_executor, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -105,8 +104,6 @@ pub enum Gap {
     UnitNeedsTransport,
     ObjectsWildlifeSpawn,
     UnitIncTime,
-    LeaderEventJukeBoxTail,
-    LeaderEventAchievementTail,
     RoadsScanStray,
     WonderValueWorld,
 }
@@ -142,8 +139,6 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 14 UnitData::needs_transport 0x00609920 - unported; the UnitWorld view answers 0",
     "step 14 Objects::process_all wildlife spawn (frame%32) - draws game_random an unknown number of times; drawing wrongly is worse than not drawing",
     "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - uncited; only the Ammo half of Objects::inc_time runs",
-    "step 19 JukeBox::set_next_mood 0x0097D5D0 - typed presentation tail emitted; no headless product host installed",
-    "step 19 Achieve::add_event 0x007AF660 - typed product tail emitted; no achievement host installed",
     "step 22 Roads::scan_and_kill_stray_roads - exact scanner executes; live road tiles without their renderer-owned RoadElementCandidate fail closed",
     "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
 ];
@@ -2272,17 +2267,6 @@ impl Sim {
                 team_scores,
             },
         );
-        for tail in &trace.exact.host_tails {
-            let gap = match tail.host_tail {
-                leaders_process_event_frame_step19::HostTail::JukeBoxSetNextMood { .. } => {
-                    Gap::LeaderEventJukeBoxTail
-                }
-                leaders_process_event_frame_step19::HostTail::AchieveAddEvent { .. } => {
-                    Gap::LeaderEventAchievementTail
-                }
-            };
-            self.cover.gaps[gap.index()] += 1;
-        }
         let work = trace.leaders_dispatched() as u32;
         self.last_event_frame_trace = trace;
         if work == 0 {

@@ -135,8 +135,8 @@ pub mod items;
 /// re-port `Leader::process_elimination`, which `victory_score` already owns.
 pub mod leaders;
 /// Exact eight-record `Game::do_frame` step-19 reconstruction. The canonical Leader owner
-/// adapts through this receipt-bearing executor so product reads and presentation tails stay
-/// explicit instead of being collapsed into successful headless calls.
+/// adapts through this receipt-bearing executor; its exact ordered outbox owns every reached
+/// presentation/achievement call without fabricating wall-clock audio behavior.
 pub mod leaders_process_event_frame_step19;
 pub mod map_terrain;
 /// Exact `Mountains::randomize_mountains` three-list RNG/cursor transaction and

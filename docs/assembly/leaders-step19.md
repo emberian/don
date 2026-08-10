@@ -64,18 +64,21 @@ Deaths-over-kills emits kind 1; kills-over-deaths emits kind 0. Retail then stor
 and emits a typed `BattleAchievementEvent` for the external
 `Achieve::add_event(kind, who, EMPTY_STRING)` call at `0x007AF660`.
 
-## Live integration and open product tails
+## Live integration and product-tail ownership
 
 The real `Sim::do_frame` step 19 now publishes the exact executor's event-queue and requested-
 mood writes back into the canonical Leader owner. `Sim::last_event_frame_trace` retains the
 single ordered receipt domain for team-score reads, encoded-age reads, local mutations,
 residuals, and host tails.
 
-This is **state-wired, not product-complete**. Reaching `JukeBox::set_next_mood` or
-`Achieve::add_event` records a typed tail and charges the corresponding coverage gap. No
-headless call is reported as successful, and no audio or achievement product state is
-fabricated. Missing score/age facts suppress only their dependent state transitions and
-remain typed residuals.
+`Leaders::event.product_outbox` is the installed headless owner for both reached product
+calls. It retains the exact shared sequence number, Leader identity, call VA, and arguments;
+the existing mood and achievement vectors are decoded convenience views of that outbox. The
+outbox is cleared and repopulated on every dispatcher call, so stale requests cannot replay.
+Wall-clock/audio playback remains deliberately outside the deterministic core, just as the
+localized message/audio calls do for completed step 17; the call boundary itself is no
+longer dropped or charged as a gap. Missing score/age facts suppress only their dependent
+state transitions and remain typed residuals.
 
 ## Verification
 
@@ -84,12 +87,14 @@ Focused tests pin the independent IN_GAME/PROCESS gates, non-due no-write return
 hostile score bias and sequential observation, both presentation boundaries, the 1800-frame
 cooldown, `0xFC18` sentinels, and fail-closed age lookup with no stale event replay. The
 production-tick tests additionally pin direct eight-slot reciprocal ownership and prove that
-typed host tails remain red while their preceding deterministic writes execute.
+both product calls are delivered into one ordered outbox, after which a non-due pass clears
+the prior calls.
 
 Evidence tier remains C: shipped PDB/type layout, disassembly/decompiler, and existing exact
 team-score port, without a retail oracle comparison.
 
 Root convergence validated the production reachability in persvati job
 `gen7-integration-batch-v3-20260809T234324Z-74734-7021-05c01f206acb`: all five real-step tests
-passed alongside the final PlayerSetup owner. Retail oracle comparison and the two product tails
-remain open.
+passed alongside the final PlayerSetup owner. The later ordered-outbox integration closes the
+two typed product boundaries and promotes compiled schedule row 19; retail oracle comparison
+remains open.

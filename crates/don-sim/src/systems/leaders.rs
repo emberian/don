@@ -836,6 +836,18 @@ pub struct BattleAchievementEvent {
     pub kind: BattleAchievementKind,
 }
 
+/// Exact ordered product boundary for the most recent step-19 dispatcher call.
+///
+/// The headless core cannot reproduce JukeBox wall-clock/audio playback, and achievement
+/// presentation is not simulation state. It does own delivery of every reached retail call:
+/// this outbox retains the original shared sequence number, leader identity, call VA, and
+/// arguments. Product adapters consume these receipts; an empty later dispatcher replaces the
+/// prior frame so a stale call cannot replay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EventProductOutbox {
+    pub last_calls: Vec<step19::HostTailReceipt>,
+}
+
 /// Presentation-owned globals touched by step 19.
 ///
 /// Both moods are zero in the executable image; a product host may refresh
@@ -848,7 +860,11 @@ pub struct EventProcessState {
     pub current_music_mood: i32,
     /// Requested mood at `0x00ECBA2C`.
     pub next_music_mood: i32,
+    /// Installed headless owner for both reached product calls, in exact retail order.
+    pub product_outbox: EventProductOutbox,
+    /// Convenience projection of JukeBox calls in [`Self::product_outbox`].
     pub last_mood_requests: Vec<CombatMoodRequest>,
+    /// Convenience projection of achievement calls in [`Self::product_outbox`].
     pub last_achievement_events: Vec<BattleAchievementEvent>,
 }
 
@@ -2829,6 +2845,7 @@ impl EventFrameTrace {
 /// scan observes freshly folded hit/damage rates only for earlier Leader slots, exactly as
 /// the original loop does.
 pub fn process_event_frames(ls: &mut Leaders, input: EventFrameInputs) -> EventFrameTrace {
+    ls.event.product_outbox.last_calls.clear();
     ls.event.last_mood_requests.clear();
     ls.event.last_achievement_events.clear();
     let mut exact_state = step19::Step19State {
@@ -2908,6 +2925,9 @@ pub fn process_event_frames(ls: &mut Leaders, input: EventFrameInputs) -> EventF
         }
     }
     for tail in &exact.host_tails {
+        // Delivery into the installed headless product owner happens in the exact executor's
+        // one sequence domain. The decoded vectors below are convenience projections only.
+        ls.event.product_outbox.last_calls.push(*tail);
         match tail.host_tail {
             step19::HostTail::JukeBoxSetNextMood {
                 requested_mood,
