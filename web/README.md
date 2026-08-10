@@ -123,7 +123,7 @@ native/Wasm digests agreed at 600 frames for both inactive setup
 
 The subsequent deterministic PlayerSetup tranche expanded the contract to 76 required exports
 while keeping both raw setup setters forbidden. The active-team diplomacy tranche then rebuilt the
-artifact at 733,880 bytes. Nine native ABI tests, five Sim owner tests, five bounded Leader-init
+artifact at 733,392 bytes. Nine native ABI tests, five Sim owner tests, five bounded Leader-init
 tests, and the complete Chrome/WebGPU smoke passed. FFA and 2v2 setup reconstruct through
 URL/journal state owned by Sim; the smoke reads P0/P2 as allies and proves a teammate ATTACK packet
 increments the non-hostile gap without installing an order. The inactive 600-frame digest remains
@@ -135,6 +135,11 @@ source/artefact preflights run before `play-smoke.mjs` opens Chrome. The export 
 the Sim-owned activation and active-roster query while forbidding `game_set_team` and
 `game_set_victory_mode`; a source advance paired with an old checked-in Wasm therefore fails with a
 specific stale-ABI error rather than a late panel exception.
+
+The script performs the Cargo build from a fresh, locked `/tmp/don-web-canonical-source-v1`
+source root. This stabilizes path-dependency package identities as well as embedded source paths,
+so the same source archive produces byte-identical Wasm regardless of its extraction directory.
+An existing lock or source root is treated as a concurrent/stale build and refused, never reused.
 
 Cross-target digest checks take an explicit roster, so they never inherit browser session state.
 From the repository root, compare both supported baselines with:

@@ -6,8 +6,8 @@ standalone Descent of Nations distribution.
 
 The capture currently proves these narrow mechanical facts:
 
-- the component is exactly 733,880 bytes at SHA-256
-  `9cdeeaa70cffb02b906fa7a564e523fdf957091d4472c4dec3722cb3e0de15be`;
+- the component is exactly 733,392 bytes at SHA-256
+  `b908d6b86af7c3734477fe8af00899f9983da1db37cf420b099876f373570d5f`;
 - its selected dependency candidate set is the five-package graph reachable from `don-web` in the
   exact `web/wasm/Cargo.lock` at SHA-256
   `7f311db3db512ef3d3b1b74c3455ec5513a3a1d6f2f8e12c3291f750bffe35d0`;

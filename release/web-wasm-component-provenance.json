@@ -6,8 +6,8 @@
   },
   "payload": {
     "path": "web/public/wasm/don_web.wasm",
-    "size": 733880,
-    "sha256": "9cdeeaa70cffb02b906fa7a564e523fdf957091d4472c4dec3722cb3e0de15be"
+    "size": 733392,
+    "sha256": "b908d6b86af7c3734477fe8af00899f9983da1db37cf420b099876f373570d5f"
   },
   "lock": {
     "path": "web/wasm/Cargo.lock",
