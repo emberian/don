@@ -227,6 +227,29 @@ impl GatherTerrainMaterialization {
                 actual: rules_xml.len(),
             });
         }
+        Self::from_admitted_sources(rules_xml, stamp, world, mountains, cliffs)
+    }
+
+    /// Exercise the XML/materialization contract without presenting synthetic bytes as an
+    /// installed retail source. Product callers must use [`Self::from_supported_sources`].
+    #[cfg(test)]
+    fn from_fixture(
+        rules_xml: &[u8],
+        stamp: GatherTerrainSourceStamp,
+        world: GatherTerrainWorldIdentity,
+        mountains: Vec<Option<MaterializedMountainObject>>,
+        cliffs: Vec<Option<MaterializedCliffObject>>,
+    ) -> Result<Self, GatherTerrainMaterializationError> {
+        Self::from_admitted_sources(rules_xml, stamp, world, mountains, cliffs)
+    }
+
+    fn from_admitted_sources(
+        rules_xml: &[u8],
+        stamp: GatherTerrainSourceStamp,
+        world: GatherTerrainWorldIdentity,
+        mountains: Vec<Option<MaterializedMountainObject>>,
+        cliffs: Vec<Option<MaterializedCliffObject>>,
+    ) -> Result<Self, GatherTerrainMaterializationError> {
         if !stamp.coherent_generation {
             return Err(GatherTerrainMaterializationError::IncoherentGeneration);
         }
@@ -775,7 +798,20 @@ mod tests {
     };
     use crate::systems::map_terrain::{tflag, wflag};
 
-    const RULES_XML: &[u8] = include_bytes!("../../../../ron-data/rules.xml");
+    /// Sim-owned parser fixture. The deliberately non-retail amounts prove that this is not a
+    /// copy of the installed rules asset. The private fixture constructor bypasses only the
+    /// supported file identity/length gates; structural, world and object validation remain on.
+    const RULES_XML_FIXTURE: &[u8] = br#"<DON_SIM_TEST_FIXTURE><LANDS>
+<LAND><NAME>Land</NAME><MAKE num="11" type="Knowledge"/><MAKE num="12" type="Food"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Sandy</NAME><MAKE num="21" type="Food"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Ocean</NAME><MAKE num="22" type="Food"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Coast</NAME><MAKE num="23" type="Food"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Forest</NAME><MAKE num="7" type="Timber"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Mountains</NAME><MAKE num="31" type="Metal"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Rocks</NAME><MAKE num="41" type="Knowledge"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Oil</NAME><MAKE num="51" type="Oil"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+<LAND><NAME>Cliffs</NAME><MAKE num="61" type="Metal"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/><MAKE num="0" type="none"/></LAND>
+</LANDS></DON_SIM_TEST_FIXTURE>"#;
 
     fn test_world() -> World {
         let mut world = World::init_default_rules(8, 8);
@@ -788,7 +824,15 @@ mod tests {
         world
     }
 
-    fn stamp(world: &World) -> GatherTerrainSourceStamp {
+    fn fixture_stamp(world: &World) -> GatherTerrainSourceStamp {
+        GatherTerrainSourceStamp {
+            installed_rules_sha256: [0; 32],
+            world_seed: world.seed,
+            coherent_generation: true,
+        }
+    }
+
+    fn supported_stamp(world: &World) -> GatherTerrainSourceStamp {
         GatherTerrainSourceStamp {
             installed_rules_sha256: SUPPORTED_RULES_XML_SHA256,
             world_seed: world.seed,
@@ -823,9 +867,9 @@ mod tests {
         mountains: Vec<Option<MaterializedMountainObject>>,
         cliffs: Vec<Option<MaterializedCliffObject>>,
     ) -> GatherTerrainMaterialization {
-        GatherTerrainMaterialization::from_supported_sources(
-            RULES_XML,
-            stamp(world),
+        GatherTerrainMaterialization::from_fixture(
+            RULES_XML_FIXTURE,
+            fixture_stamp(world),
             GatherTerrainWorldIdentity::from_world(world),
             mountains,
             cliffs,
@@ -834,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn supported_rules_xml_materializes_all_nine_exact_four_slot_lands() {
+    fn sim_owned_fixture_materializes_all_nine_exact_four_slot_lands() {
         let world = test_world();
         let materialization = materialization(&world, Vec::new(), Vec::new());
         assert_eq!(materialization.lands().len(), 9);
@@ -851,11 +895,11 @@ mod tests {
             [
                 LandGatherSlot {
                     make: economy::RES_KNOWLEDGE as i32,
-                    num_make: 1,
+                    num_make: 11,
                 },
                 LandGatherSlot {
                     make: economy::RES_FOOD as i32,
-                    num_make: 1,
+                    num_make: 12,
                 },
                 LandGatherSlot {
                     make: -1,
@@ -871,7 +915,7 @@ mod tests {
             materialization.lands()[4].gather.slots[0],
             LandGatherSlot {
                 make: economy::RES_TIMBER as i32,
-                num_make: 1,
+                num_make: 7,
             }
         );
         assert_eq!(
@@ -885,13 +929,39 @@ mod tests {
     }
 
     #[test]
+    fn local_supported_rules_xml_is_consumed_only_at_runtime() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ron-data/rules.xml");
+        let Ok(rules_xml) = std::fs::read(&path) else {
+            eprintln!("skipping local retail input: {}", path.display());
+            return;
+        };
+        let world = test_world();
+        let materialization = GatherTerrainMaterialization::from_supported_sources(
+            &rules_xml,
+            supported_stamp(&world),
+            GatherTerrainWorldIdentity::from_world(&world),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("supported local rules.xml");
+        assert_eq!(
+            materialization.lands()[4].gather.slots[0],
+            LandGatherSlot {
+                make: economy::RES_TIMBER as i32,
+                num_make: 1,
+            }
+        );
+    }
+
+    #[test]
     fn installed_identity_and_coherent_generation_are_mandatory() {
         let world = test_world();
-        let mut wrong = stamp(&world);
+        let mut wrong = supported_stamp(&world);
         wrong.installed_rules_sha256 = [0; 32];
         assert_eq!(
             GatherTerrainMaterialization::from_supported_sources(
-                RULES_XML,
+                RULES_XML_FIXTURE,
                 wrong,
                 GatherTerrainWorldIdentity::from_world(&world),
                 Vec::new(),
@@ -900,11 +970,25 @@ mod tests {
             Err(GatherTerrainMaterializationError::UnsupportedRulesXml)
         );
 
-        let mut incoherent = stamp(&world);
-        incoherent.coherent_generation = false;
         assert_eq!(
             GatherTerrainMaterialization::from_supported_sources(
-                RULES_XML,
+                RULES_XML_FIXTURE,
+                supported_stamp(&world),
+                GatherTerrainWorldIdentity::from_world(&world),
+                Vec::new(),
+                Vec::new()
+            ),
+            Err(GatherTerrainMaterializationError::WrongRulesXmlLength {
+                expected: SUPPORTED_RULES_XML_LEN,
+                actual: RULES_XML_FIXTURE.len(),
+            })
+        );
+
+        let mut incoherent = fixture_stamp(&world);
+        incoherent.coherent_generation = false;
+        assert_eq!(
+            GatherTerrainMaterialization::from_fixture(
+                RULES_XML_FIXTURE,
                 incoherent,
                 GatherTerrainWorldIdentity::from_world(&world),
                 Vec::new(),
@@ -985,7 +1069,7 @@ mod tests {
         let host = MaterializedGatherHost::new(&world, &materialization, &diplomacy).unwrap();
         let land = host.land_gather_data(2, 2).unwrap();
         assert_eq!(land.slots[0].make, economy::RES_TIMBER as i32);
-        assert_eq!(land.slots[0].num_make, 1);
+        assert_eq!(land.slots[0].num_make, 7);
     }
 
     #[test]
@@ -1018,7 +1102,7 @@ mod tests {
                 },
                 GatherCapacityRules::shipped(),
             ),
-            Ok(1)
+            Ok(4)
         );
     }
 
@@ -1036,9 +1120,9 @@ mod tests {
         let world = test_world();
         let bad = mountain(world.xs, 0);
         assert!(matches!(
-            GatherTerrainMaterialization::from_supported_sources(
-                RULES_XML,
-                stamp(&world),
+            GatherTerrainMaterialization::from_fixture(
+                RULES_XML_FIXTURE,
+                fixture_stamp(&world),
                 GatherTerrainWorldIdentity::from_world(&world),
                 vec![Some(bad)],
                 Vec::new(),

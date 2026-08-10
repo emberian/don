@@ -44,6 +44,6 @@ cargo test -p don-sim --manifest-path <archive>/Cargo.toml --test bhs_type_stat_
 Those archive commands compile and run with no `schema/live/live-tables-unit.tsv`. The one
 local-capture agreement unit test reports a skip in that environment; structural admission,
 provenance refusal, positive installed-source execution, and absent-source behavior remain covered
-by source-only fixtures. The broader archive `--lib` test build has a separate pre-existing
-test-only `gather_terrain.rs` include of export-ignored `ron-data/rules.xml`; it is not a runtime
-library-build dependency and is outside this boundary.
+by source-only fixtures. The former `gather_terrain.rs` test-only include of export-ignored
+`ron-data/rules.xml` is closed the same way: an archive-safe synthetic parser fixture plus an
+optional runtime local-file agreement test.

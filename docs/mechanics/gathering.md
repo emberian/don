@@ -108,6 +108,13 @@ stale world identity return errors. Arena's anonymous forest/mountain circles do
 these records and therefore remain intentionally unwired: stamp traversal or connected
 components cannot be relabeled as retail object order.
 
+The installed `rules.xml` remains a local runtime input and is excluded from source archives.
+`don-sim` neither embeds nor redistributes it. Unit tests exercise the same XML, land-shape,
+world, and object validators through a private Sim-owned fixture whose deliberately non-retail
+amounts cannot be admitted by the public file-identity/length boundary. A separate agreement
+test reads the supported local file at runtime when present and otherwise reports a source-archive
+skip; compiling or running the library tests never requires that export-ignored file.
+
 Capacity refresh and attachment are separate. The caller stores the evaluator result with
 `GatherSite::set_authoritative_capacity`; `attach_worker` reads that persistent value, as
 retail does. The building-center terrain update byte drives two independent operations:
