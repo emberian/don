@@ -1,0 +1,70 @@
+{
+  "schema": "don.release-source-archive-reproducibility.v1",
+  "scope": {
+    "candidate": {
+      "path": "web/public/wasm/don_web.wasm",
+      "size": 768503,
+      "sha256": "289b472d749ce3e60fdb3f6502f49209391441b63e272b44a755d7b8cfcf22cc"
+    },
+    "component_provenance": {
+      "path": "release/web-wasm-component-provenance.json",
+      "size": 7165,
+      "sha256": "3be88848d05005e2fa8050af8265b690a1fd168636d3e9e041d5de7643deefd6"
+    },
+    "manifest": {
+      "path": "web/wasm/Cargo.toml",
+      "size": 940,
+      "sha256": "89b4c512524be8641c707f7feab5baee18369ed51b7dedd68ed3e67780601ce9"
+    },
+    "lock": {
+      "path": "web/wasm/Cargo.lock",
+      "size": 737,
+      "sha256": "7f311db3db512ef3d3b1b74c3455ec5513a3a1d6f2f8e12c3291f750bffe35d0"
+    },
+    "build_command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--manifest-path",
+      "web/wasm/Cargo.toml"
+    ]
+  },
+  "toolchain": {
+    "cargo": "cargo 1.98.0-nightly (a595d0da2 2026-06-20)",
+    "rustc": "rustc 1.98.0-nightly (91fe22da8 2026-06-21)",
+    "target": "wasm32-unknown-unknown"
+  },
+  "archive_projection": {
+    "consumer": {
+      "path": "crates/don-sim/src/systems/leaders.rs",
+      "size": 196150,
+      "sha256": "cee0e384af115344847dd9b34ce0be98fdb63a61e7b5dda9964493d462376f9a",
+      "line": 1297,
+      "macro": "include_str",
+      "literal": "../../../../schema/live/live-tables-unit.tsv"
+    },
+    "required_input": {
+      "path": "schema/live/live-tables-unit.tsv",
+      "size": 102288,
+      "sha256": "59f5287f4c3387617bfe76ab2610c24223b2220ee0bdf0e084aae028c57a90d5",
+      "classification": "tracked-retail-live-derived-export-ignored",
+      "export_ignore": true
+    },
+    "consumer_present": true,
+    "required_input_present": false
+  },
+  "probe": {
+    "outcome": "blocked-missing-exported-build-input",
+    "exit_code": 101,
+    "diagnostic": "rustc could not read schema/live/live-tables-unit.tsv, required by crates/don-sim/src/systems/leaders.rs:1297"
+  },
+  "claims": {
+    "source_archive_buildable": false,
+    "candidate_reproduced_from_archive": false,
+    "product_binary_source_linkage": false,
+    "proprietary_input_redistributed": false
+  }
+}

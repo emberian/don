@@ -281,6 +281,13 @@ class ReleaseProofTests(unittest.TestCase):
         self.assertEqual(report["lock_package_records"], 179)
         self.assertFalse(report["readiness"]["source"])
         self.assertFalse(report["readiness"]["distribution"])
+        self.assertEqual(
+            report["source_archive_reproducibility"]["outcome"],
+            "blocked-missing-exported-build-input",
+        )
+        self.assertFalse(
+            report["source_archive_reproducibility"]["candidate_reproduced"]
+        )
         self.assertIn("source-license-coverage", report["blockers"]["source"])
         self.assertIn(
             "independent-presentation-content", report["blockers"]["distribution"]
@@ -288,6 +295,7 @@ class ReleaseProofTests(unittest.TestCase):
         self.assertIn(
             "remote-workspace-license-consistency", report["blockers"]["source"]
         )
+        self.assertIn("source-archive-reproducibility", report["blockers"]["source"])
 
     def test_hash_drift_is_refused(self) -> None:
         value = payload()

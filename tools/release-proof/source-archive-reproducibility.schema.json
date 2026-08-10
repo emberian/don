@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://descentofnations.invalid/schema/release-source-archive-reproducibility-v1.json",
+  "title": "DoN source archive reproducibility blocker",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scope",
+    "toolchain",
+    "archive_projection",
+    "probe",
+    "claims"
+  ],
+  "properties": {
+    "schema": {"const": "don.release-source-archive-reproducibility.v1"},
+    "scope": {"type": "object"},
+    "toolchain": {"type": "object"},
+    "archive_projection": {"type": "object"},
+    "probe": {"type": "object"},
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_archive_buildable",
+        "candidate_reproduced_from_archive",
+        "product_binary_source_linkage",
+        "proprietary_input_redistributed"
+      ],
+      "properties": {
+        "source_archive_buildable": {"const": false},
+        "candidate_reproduced_from_archive": {"const": false},
+        "product_binary_source_linkage": {"const": false},
+        "proprietary_input_redistributed": {"const": false}
+      }
+    }
+  }
+}

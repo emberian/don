@@ -18,7 +18,10 @@ whole-game/product readiness; gameplay completion remains governed by `GOAL.md` 
   snapshots contain 179 package records without an audited product dependency notice inventory.
   One component-only precursor now binds the checked-in browser Wasm to its five-package lock graph
   and mechanically captures both registry packages' archive-carried declarations/texts, but every
-  record remains pending review and the graph is not a linked-code SBOM. There is no standalone
+  record remains pending review and the graph is not a linked-code SBOM. An isolated public-source
+  archive build now records the exact blocking boundary: `don-sim` compile-time-includes an
+  export-ignored retail/live-derived unit table, so the checked-in Wasm cannot yet be reproduced
+  from distributable source. There is no standalone
   product payload/installer and no human-cleared manifest for independently licensed art, audio,
   fonts, and presentation data; the recorded retail-controller incident retained no dump; and the
   five-cycle STOP/rearm result lacks a compact per-cycle machine record.
@@ -47,6 +50,9 @@ The pack also preserves narrow positive conclusions already supported elsewhere:
 - the checked-in browser Wasm component and exact five-package lock graph are hash-bound, while
   checksum-matching registry archives supply retained declaration and license-text evidence for
   `memchr 2.8.3` and `quick-xml 0.38.4`; all package obligation decisions remain explicitly pending.
+- the source-archive build failure is hash-bound to the exact `include_str!` consumer, omitted
+  live input, Wasm candidate, lock graph, and toolchain, with all positive reproducibility and
+  product-linkage claims forced false.
 
 None of those claims a finished installer, independent content, a retained live minidump, or an
 assembled release. Those remain separate red gates in `evidence-manifest.json`.
@@ -73,10 +79,14 @@ python3 -m unittest tools/release-proof/test_check.py
 python3 -m unittest tools/release-proof/test_component_provenance.py
 python3 tools/release-proof/component_provenance.py verify \
   --artifact release/web-wasm-component-provenance.json
+python3 tools/release-proof/archive_reproducibility.py verify \
+  --artifact release/source-archive-reproducibility.json
 ```
 
-The checker does not compile, download, access a retail installation, copy content, or modify the
-tree. A changed hash, newly added Cargo manifest/workspace template/lockfile, changed license
+The normal checker does not compile, download, access a retail installation, copy content, or
+modify the tree. Its archive-reproducibility verifier projects only the two named paths through
+`git archive`; the separate `probe` command performs the isolated build. A changed hash, newly
+added Cargo manifest/workspace template/lockfile, changed license
 declaration, missing evidence path, inconsistent gate, or false readiness bit fails closed. Merely
 adding a file with an expected top-level schema is also refused: each completion artifact needs a
 schema-specific semantic validator in the checker before its gate can be promoted.
@@ -103,19 +113,22 @@ Do not fill a field from memory or by copying a convenient license from elsewher
    with explicit authority; do not choose an expression merely to make the gate green.
 2. For `whole-source-license-provenance` and `derived-research-release-review`, inventory non-Cargo
    scopes and classify every tracked derived research artifact before publishing a source archive.
-3. For `binary-third-party-notices`, start from the exact assembled product/SBOM, select the
+3. Remove the compile-time dependency on the export-ignored live unit table through an explicit
+   runtime/content authority boundary, then replace the negative archive-build record with a
+   successful byte-linked rebuild. Never solve this by redistributing the live TSV.
+4. For `binary-third-party-notices`, start from the exact assembled product/SBOM, select the
    actually conveyed subset from the repository lock snapshots, retain authoritative license
    evidence and required text, and bind source treatment. Merely listing SPDX guesses is
    insufficient.
-4. For `independent-presentation-content`, record every shipped item, origin, stated
+5. For `independent-presentation-content`, record every shipped item, origin, stated
    author/rightsholder, exact license or owned-extraction rule, source URL or local source identity,
    content SHA-256, required attribution, destination, and human clearance. The auditor must not
    certify legal title, and retail content is never assigned a DoN license.
-5. For `standalone-product-installer` and `assembled-product-packaging`, bind an exact payload and
+6. For `standalone-product-installer` and `assembled-product-packaging`, bind an exact payload and
    prove install/configure/repair/remove behavior before marking either gate proved.
-6. For `retail-controller-byte-restoration`, add the redacted compact per-cycle record named by the
+7. For `retail-controller-byte-restoration`, add the redacted compact per-cycle record named by the
    manifest; prose describing the measurement is not a substitute for that artifact.
-7. For `controller-stop-incident-closure`, add candidate-bound active soak/reversibility evidence.
+8. For `controller-stop-incident-closure`, add candidate-bound active soak/reversibility evidence.
    Do not intentionally induce another crash; if one occurs naturally, retain the stable MDMP in
    its protected local location and publish only a redacted identity/result and stack-supported
    conclusion.

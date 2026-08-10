@@ -26,6 +26,7 @@ REQUIRED_GATE_SCOPES = {
     "remote-workspace-license-consistency": {"source", "distribution"},
     "whole-source-license-provenance": {"source", "distribution"},
     "source-proprietary-payload-exclusion": {"source"},
+    "source-archive-reproducibility": {"source", "distribution"},
     "derived-research-release-review": {"source", "distribution"},
     "binary-third-party-notices": {"distribution"},
     "owned-data-bootstrap-boundary": {"distribution"},
@@ -590,6 +591,20 @@ def _load_content_license_auditor() -> Any:
     return module
 
 
+def _validate_archive_reproducibility(root: Path) -> dict[str, Any]:
+    tool = HERE / "archive_reproducibility.py"
+    spec = importlib.util.spec_from_file_location("don_archive_reproducibility", tool)
+    if spec is None or spec.loader is None:
+        raise ProofError("archive reproducibility verifier cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    artifact = root / "release/source-archive-reproducibility.json"
+    try:
+        return module.verify(root, artifact)
+    except module.ReproducibilityError as exc:
+        raise ProofError(f"archive reproducibility evidence failed: {exc}") from exc
+
+
 def _validate_content_clearance(
     root: Path,
     artifact_path: str,
@@ -1136,6 +1151,7 @@ def _validate_gates(
     missing_license_texts: list[str],
     template_license_mismatches: list[str],
     documentation_conflicts: list[str],
+    archive_reproducibility: dict[str, Any],
     hash_records: dict[str, dict[str, Any]],
 ) -> tuple[
     dict[str, list[str]],
@@ -1200,6 +1216,9 @@ def _validate_gates(
             "blocked" if template_license_mismatches else "proved"
         ),
         "release-documentation-consistency": "blocked" if documentation_conflicts else "proved",
+        "source-archive-reproducibility": (
+            "proved" if archive_reproducibility["candidate_reproduced"] else "blocked"
+        ),
     }
     for gate_id, expected_status in derived.items():
         if gate_id not in by_id:
@@ -1307,6 +1326,7 @@ def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
     )
     missing_notice_inventories = _validate_locks(root, payload, hash_records)
     _validate_owned_inputs(root)
+    archive_reproducibility = _validate_archive_reproducibility(root)
     incident_dump_retained = _incident_dump_retained(root)
     documentation_conflicts = _known_documentation_conflicts(root)
     blockers, readiness, blocker_details = _validate_gates(
@@ -1315,6 +1335,7 @@ def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
         missing_license_texts,
         template_license_mismatches,
         documentation_conflicts,
+        archive_reproducibility,
         hash_records,
     )
     return {
@@ -1329,6 +1350,7 @@ def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
         ),
         "gates": len(payload["gates"]),
         "repository_locks_without_notice_inventory": missing_notice_inventories,
+        "source_archive_reproducibility": archive_reproducibility,
         "recorded_incident_dump_retained": incident_dump_retained,
         "documentation_conflicts": documentation_conflicts,
         "readiness": readiness,
