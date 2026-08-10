@@ -165,7 +165,7 @@ code actually does.
 | 14 | **`Objects::process_all`** | `0x0065DCE0` | **implemented** | rotation `(frame+i)%10`, `crate::objects` |
 | 15 | `Objects::inc_time` | `0x0065DB70` | module exists, runtime call unverified | `ammo.rs` lives here |
 | 16 | `GraphicEvents::process` | `0x008E50A0` | out of scope | |
-| 17 | **`Leaders::end_process_all`** | `0x006ED070` | **dispatcher and deterministic body executed** | full Player-warning cleanup and population-cap rate limiter; UI/audio emitted as an inspectable presentation event |
+| 17 | **`Leaders::end_process_all`** | `0x006ED070` | **implemented** | full Player-warning cleanup and population-cap rate limiter execute in the real tick; UI/audio emitted as inspectable presentation requests |
 | 18 | `Achieve::capture_data` | `0x007AF980` | out of scope | |
 | 19 | **`Leader::process_event_frame`** | `0x006EC180` | **canonical dispatcher and deterministic body executed** | exact receipt-ordered rate/mood/battle mutations; JukeBox/Achieve remain typed, charged StateWired tails without product hosts |
 | 20 | **`Game::frame++`** | `0x005924BF` | **implemented** | after step 14 — rotation uses pre-increment frame |
@@ -178,7 +178,7 @@ code actually does.
 | 27 | `Game::process_end_game` | `0x00591CE0` | implemented: exact bit-22 call gate and one-shot latch consumption; product/UI tail excluded | `victory_score.rs`, `tick.rs` |
 | 28 | `Scene::process_capture_sequence` | `0x008C13C0` | out of scope | |
 
-**Schedule tally: 5 implemented, 9 stub, 15 out of scope.** `tick::Sim::do_frame` is the
+**Schedule tally: 6 implemented, 8 stub, 15 out of scope.** `tick::Sim::do_frame` is the
 executable path and reports executed, vacuous, skipped, and out-of-scope work separately;
 the remaining in-scope denominator is kept by the generated simulation-closure gate.
 

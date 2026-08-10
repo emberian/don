@@ -1,5 +1,6 @@
+use don_sim::schedule::{StepStatus, DO_FRAME};
 use don_sim::systems::leaders;
-use don_sim::tick::{Gap, Sim, StepRun};
+use don_sim::tick::{Sim, StepRun};
 
 #[test]
 fn real_tick_executes_end_process_and_clears_population_warning() {
@@ -21,7 +22,7 @@ fn real_tick_executes_end_process_and_clears_population_warning() {
         0,
         "the tick adapter refreshes the separate GameInfo::Player valid bit"
     );
-    assert_eq!(sim.cover.gaps[Gap::LeadersEndProcessAll.index()], 0);
+    assert_eq!(DO_FRAME[17].status, StepStatus::Implemented);
 }
 
 #[test]
@@ -32,5 +33,5 @@ fn real_tick_reports_end_process_vacuous_without_processed_leaders() {
 
     assert_eq!(tick.steps[17], StepRun::Vacuous);
     assert_eq!(tick.work[17], 0);
-    assert_eq!(sim.cover.gaps[Gap::LeadersEndProcessAll.index()], 0);
+    assert_eq!(DO_FRAME[17].status, StepStatus::Implemented);
 }

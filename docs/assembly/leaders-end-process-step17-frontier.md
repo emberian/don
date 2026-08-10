@@ -4,7 +4,9 @@ The isolated reconstruction in
 `crates/don-sim/src/systems/leaders_end_process_step17.rs` models the complete deterministic
 portion of retail `Leaders::end_process_all` at `0x006ED070`. Mutation-sensitive,
 path-import tests live in `crates/don-sim/tests/leaders_end_process_step17.rs`; the module
-does not depend on the broad `systems` module and is not yet wired into `tick.rs`.
+does not depend on the broad `systems` module. Its behavior is integrated through the
+canonical `leaders::end_process_all` owner and `Sim::leaders_end_process_all`; row 17 is
+therefore executable from the real 29-step driver rather than remaining an isolated proof.
 
 ## Authority and identity
 
@@ -97,7 +99,7 @@ state, or audio. The two open product invariants are also explicit: `Console::pl
 select one of the eight Players, and `GameInfo::pop_limit` must select a supplied Category
 row. No fallback Player, population cap, message, or sound result is invented.
 
-## Verification and honest closure
+## Verification and closure
 
 The path-import suite mutation-pins the PE/PDB sizes and offsets, eight-address visit order,
 outer gate, valid/identity Player selection, unconditional masked store, nonlocal branch,
@@ -105,13 +107,16 @@ outer gate, valid/identity Player selection, unconditional masked store, nonloca
 the exact three-call host tail, continuation into later leaders after that tail, and typed
 failure for both missing product invariants.
 
-No compiler, formatter, or test runner was invoked in this reversal lane. Static
-`git diff --check` is the lane-local validation; build and runtime validation belong to the
-convergence lane. Runtime closure delta is therefore **zero** until this isolated module is
-reviewed and integrated. Even after integration, the three presentation calls remain
-intentional product-host receipts rather than headless implementations.
+The original reversal lane invoked no compiler, formatter, or test runner. Its static
+`git diff --check` was followed by convergence builds and focused tests. The integrated
+owner executes every checksum-relevant mutation in the scheduled path; the three
+presentation calls remain intentional typed product-host requests rather than headless UI
+or audio implementations.
 
 Root convergence passed both independent profiles on 2026-08-09: hbox
 `tick-step17-frontier-20260809T223814Z-77934-6942-fede3d11b0b3` and persvati release
 `tick-step17-frontier-release-20260809T223814Z-77937-9563-fede3d11b0b3`, each with 10/10
-focused tests and exit 0. The module remains unwired, so the tick row remains red.
+focused tests and exit 0. `crates/don-sim/tests/tick_step17_end_process.rs` additionally
+pins execution through `Sim::do_frame`, including the populated and vacuous cases. The
+authoritative schedule now classifies row 17 as implemented; the old uncharged
+`LeadersEndProcessAll` gap entry was removed instead of preserving a contradictory red.
