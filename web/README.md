@@ -123,11 +123,13 @@ native/Wasm digests agreed at 600 frames for both inactive setup
 
 The subsequent deterministic PlayerSetup tranche expanded the contract to 76 required exports
 while keeping both raw setup setters forbidden. The active-team diplomacy tranche then rebuilt the
-artifact at 733,392 bytes. Nine native ABI tests, five Sim owner tests, five bounded Leader-init
+artifact at 771,141 bytes. Nine native ABI tests, five Sim owner tests, five bounded Leader-init
 tests, and the complete Chrome/WebGPU smoke passed. FFA and 2v2 setup reconstruct through
 URL/journal state owned by Sim; the smoke reads P0/P2 as allies and proves a teammate ATTACK packet
-increments the non-hostile gap without installing an order. The inactive 600-frame digest remains
-`e526f20feb32cb49`; the now diplomacy-visible active-roster digest is `7ff94bba708bfc86`.
+increments the non-hostile gap without installing an order. The inactive 600-frame digest is now
+`c315fabe7d19cb90`; the now diplomacy- and sparse-identity-visible active-roster digest is
+`61e14d1ab48d964f`. These replace the prior pair because sparse Object-band owner activity and
+marks are now deliberately inside the canonical World digest.
 
 `web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
 checks the fresh Wasm export table both before and after optional optimization. The same three

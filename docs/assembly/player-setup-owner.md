@@ -72,7 +72,7 @@ node web/tools/play-smoke.mjs --json web/play-results.json
 ```
 
 The checked-in `don_web.wasm` was rebuilt from the current owner/diplomacy-aware source at
-733,392 bytes. Nine focused native ABI tests, both five-test Sim suites, the 76-export contract,
+771,141 bytes. Nine focused native ABI tests, both five-test Sim suites, the 76-export contract,
 and the complete Chrome/WebGPU smoke passed; the smoke observes P0/P2 as allies and proves that an
 ATTACK packet targeting P2 increments the non-hostile gap without installing an order. Raw
 team/victory setters remain forbidden.
