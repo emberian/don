@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Capture and verify a fail-closed source-archive build blocker.
+"""Capture and verify source-archive-to-product-Wasm reproducibility.
 
-This proof is intentionally negative.  It records that the checked-in browser Wasm cannot
-currently be reproduced from the public ``git archive`` projection because a Rust
-``include_str!`` compile-time input is marked ``export-ignore``.  It never copies that input
-into the archive or treats a hash of the input as redistribution authority.
+The capture builds the exact committed ``git archive`` in a temporary directory, obtains
+rustc's build-produced depfile, and requires the resulting Wasm bytes to equal the checked-in
+candidate.  Retail/live inputs remain excluded.  A separate negative record keeps the known
+test-only owned-input dependency visible without weakening the positive release-binary claim.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -24,35 +25,43 @@ import tempfile
 from typing import Any
 
 
-SCHEMA = "don.release-source-archive-reproducibility.v1"
+SCHEMA = "don.release-source-archive-reproducibility.v2"
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
-CONSUMER = "crates/don-sim/src/systems/leaders.rs"
-REQUIRED_INPUT = "schema/live/live-tables-unit.tsv"
+REQUIRED_LIVE_INPUT = "schema/live/live-tables-unit.tsv"
+FORMER_CONSUMER = "crates/don-sim/src/systems/leaders.rs"
+FORMER_LITERAL = "../../../../schema/live/live-tables-unit.tsv"
 CANDIDATE = "web/public/wasm/don_web.wasm"
 COMPONENT_PROVENANCE = "release/web-wasm-component-provenance.json"
 MANIFEST = "web/wasm/Cargo.toml"
 LOCK = "web/wasm/Cargo.lock"
-INCLUDE_LITERAL = "../../../../schema/live/live-tables-unit.tsv"
-BUILD_COMMAND = [
-    "cargo",
-    "build",
-    "--locked",
-    "--release",
-    "--target",
-    "wasm32-unknown-unknown",
-    "--manifest-path",
-    MANIFEST,
+BUILD_COMMAND = ["web/build.sh"]
+TEST_COMMAND = ["cargo", "test", "--locked", "-p", "don-sim", "--lib"]
+PIPELINE_INPUTS = [
+    "schema/command-wire.json",
+    "schema/replay-validation.json",
+    "web/build.sh",
+    "web/public/js/play/client.js",
+    "web/public/js/play/readiness.gen.js",
+    "web/public/js/play/wasm-contract.mjs",
+    "web/public/js/play/wasmgame.js",
+    "web/public/js/wire.gen.js",
+    "web/tools/check-play-wasm.mjs",
+    "web/tools/gen-readiness.mjs",
+    "web/tools/gen-wire.mjs",
 ]
 EXPECTED_CLAIMS = {
-    "source_archive_buildable": False,
-    "candidate_reproduced_from_archive": False,
-    "product_binary_source_linkage": False,
+    "source_archive_product_wasm_buildable": True,
+    "candidate_reproduced_from_archive": True,
+    "product_binary_source_linkage": True,
+    "live_table_compile_time_dependency_absent": True,
+    "don_sim_lib_archive_tests_buildable": True,
+    "whole_archive_workspace_tests_proven": False,
     "proprietary_input_redistributed": False,
 }
 
 
 class ReproducibilityError(RuntimeError):
-    """The recorded archive blocker no longer matches repository truth."""
+    """The recorded archive/build relationship no longer matches repository truth."""
 
 
 def _sha256(data: bytes) -> str:
@@ -87,9 +96,20 @@ def _git_bytes(root: Path, path: str) -> bytes:
         raise ReproducibilityError(f"tracked source is unavailable at HEAD: {path}") from exc
 
 
-def _record(root: Path, path: str) -> dict[str, object]:
-    data = _git_bytes(root, path)
+def _record_bytes(path: str, data: bytes) -> dict[str, object]:
     return {"path": path, "size": len(data), "sha256": _sha256(data)}
+
+
+def _record(root: Path, path: str) -> dict[str, object]:
+    return _record_bytes(path, _git_bytes(root, path))
+
+
+def _working_record(root: Path, path: str) -> dict[str, object]:
+    try:
+        data = (root / path).read_bytes()
+    except OSError as exc:
+        raise ReproducibilityError(f"working candidate evidence is unavailable: {path}") from exc
+    return _record_bytes(path, data)
 
 
 def _canonical(path: object, context: str) -> str:
@@ -127,29 +147,9 @@ def _export_ignore(root: Path, path: str) -> bool:
     return result.endswith(": export-ignore: set")
 
 
-def _include_site(root: Path) -> dict[str, object]:
-    data = _git_bytes(root, CONSUMER)
-    try:
-        source = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ReproducibilityError(f"consumer is not UTF-8: {CONSUMER}") from exc
-    pattern = re.compile(r'include_str!\(\s*"' + re.escape(INCLUDE_LITERAL) + r'"\s*\)')
-    match = pattern.search(source)
-    if match is None:
-        raise ReproducibilityError("the recorded include_str blocker is absent")
-    line = source.count("\n", 0, match.start()) + 1
-    resolved = (PurePosixPath(CONSUMER).parent / INCLUDE_LITERAL)
-    collapsed: list[str] = []
-    for part in resolved.parts:
-        if part == "..":
-            if not collapsed:
-                raise ReproducibilityError("include_str path escapes the repository")
-            collapsed.pop()
-        elif part != ".":
-            collapsed.append(part)
-    if "/".join(collapsed) != REQUIRED_INPUT:
-        raise ReproducibilityError("include_str literal resolves to an unexpected input")
-    return {"line": line, "macro": "include_str", "literal": INCLUDE_LITERAL}
+def _former_live_include_absent(root: Path) -> bool:
+    source = _git_bytes(root, FORMER_CONSUMER).decode("utf-8")
+    return FORMER_LITERAL not in source
 
 
 def _version(command: str) -> str:
@@ -168,85 +168,214 @@ def _version(command: str) -> str:
     return output
 
 
-def _probe_archive_build(root: Path) -> tuple[int, str]:
+def _source_inputs_digest(records: list[dict[str, object]]) -> str:
+    encoded = json.dumps(records, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _sha256(encoded)
+
+
+def _depfile_inputs(tree: Path, depfile: Path) -> list[dict[str, object]]:
+    tree = tree.resolve(strict=True)
+    try:
+        text = depfile.read_text(encoding="utf-8").replace("\\\n", " ")
+    except (OSError, UnicodeError) as exc:
+        raise ReproducibilityError("build-produced Wasm depfile is unreadable") from exc
+    if ": " not in text:
+        raise ReproducibilityError("build-produced Wasm depfile has no dependency list")
+    dependencies = text.split(": ", 1)[1].split()
+    by_path: dict[str, dict[str, object]] = {}
+    for raw in dependencies:
+        path = Path(raw)
+        try:
+            relative = path.resolve(strict=True).relative_to(tree).as_posix()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ReproducibilityError(f"Wasm depfile names an input outside the archive: {raw}") from exc
+        relative = _canonical(relative, "Wasm build input")
+        data = path.read_bytes()
+        by_path[relative] = _record_bytes(relative, data)
+    if not by_path:
+        raise ReproducibilityError("Wasm depfile resolved to an empty source set")
+    for required in (FORMER_CONSUMER, "web/wasm/src/lib.rs"):
+        if required not in by_path:
+            raise ReproducibilityError(f"Wasm depfile omits required source input: {required}")
+    if REQUIRED_LIVE_INPUT in by_path:
+        raise ReproducibilityError("Wasm depfile still includes the retail/live unit table")
+    return [by_path[path] for path in sorted(by_path)]
+
+
+def _probe_archive_build(
+    root: Path,
+    expected_candidate: bytes,
+) -> tuple[dict[str, object], list[dict[str, object]], dict[str, object]]:
     with tempfile.TemporaryDirectory(prefix="don-source-archive-probe-") as directory:
         scratch = Path(directory)
-        archive_path = scratch / "source.tar"
         tree = scratch / "tree"
-        target = scratch / "target"
         tree.mkdir()
-        target.mkdir()
         try:
-            archive_path.write_bytes(
-                _run(["git", "archive", "--format=tar", "HEAD"], root).stdout
-            )
-            with tarfile.open(archive_path, "r:") as archive:
+            raw_archive = _run(["git", "archive", "--format=tar", "HEAD"], root).stdout
+            with tarfile.open(fileobj=io.BytesIO(raw_archive), mode="r:") as archive:
                 archive.extractall(tree, filter="data")
         except (OSError, tarfile.TarError, subprocess.CalledProcessError) as exc:
             raise ReproducibilityError("could not materialize the source archive") from exc
-        command = BUILD_COMMAND.copy()
-        command[-1] = str(tree / MANIFEST)
-        env = _git_env()
-        env["CARGO_TARGET_DIR"] = str(target)
-        result = subprocess.run(
-            command,
-            cwd=tree,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    diagnostic = result.stderr
-    if result.returncode != 101 or REQUIRED_INPUT not in diagnostic:
-        raise ReproducibilityError(
-            "archive build did not fail at the expected exported include_str input"
-        )
-    return result.returncode, (
-        f"rustc could not read {REQUIRED_INPUT}, required by "
-        f"{CONSUMER}:{_include_site(root)['line']}"
-    )
+        if (tree / REQUIRED_LIVE_INPUT).exists():
+            raise ReproducibilityError("retail/live unit table leaked into the source archive")
+        canonical_root = Path("/tmp/don-web-canonical-source-v1")
+        canonical_lock = Path("/tmp/don-web-canonical-source-v1.lock")
+        try:
+            canonical_lock.mkdir(mode=0o700)
+        except FileExistsError as exc:
+            raise ReproducibilityError(
+                f"canonical Web build lock is active or stale: {canonical_lock}"
+            ) from exc
+        try:
+            if canonical_root.exists():
+                raise ReproducibilityError(
+                    f"canonical Web source root is unexpectedly present: {canonical_root}"
+                )
+            canonical_root.mkdir(mode=0o700)
+            copy = subprocess.run(
+                [
+                    "rsync",
+                    "-a",
+                    "--exclude=.git/",
+                    "--exclude=target/",
+                    "--exclude=web/public/wasm/don_web.wasm",
+                    f"{tree}/",
+                    f"{canonical_root}/",
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if copy.returncode != 0:
+                raise ReproducibilityError(f"could not populate canonical source root: {copy.stderr}")
+            command = [str(canonical_root / BUILD_COMMAND[0])]
+            env = _git_env()
+            env["DON_WEB_CANONICAL_INNER"] = "1"
+            result = subprocess.run(
+                command,
+                cwd=canonical_root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if result.returncode != 0:
+                tail = "\n".join(result.stderr.splitlines()[-8:])
+                raise ReproducibilityError(f"source-archive Wasm build failed:\n{tail}")
+            built = canonical_root / CANDIDATE
+            raw = canonical_root / "web/wasm/target/wasm32-unknown-unknown/release/don_web.wasm"
+            depfile = canonical_root / "web/wasm/target/wasm32-unknown-unknown/release/don_web.d"
+            try:
+                built_bytes = built.read_bytes()
+                raw_bytes = raw.read_bytes()
+            except OSError as exc:
+                raise ReproducibilityError("archive build or candidate Wasm is absent") from exc
+            if built_bytes != expected_candidate:
+                raise ReproducibilityError(
+                    "archive-built Wasm does not byte-match the checked-in candidate: "
+                    f"built={len(built_bytes)}:{_sha256(built_bytes)}, "
+                    f"candidate={len(expected_candidate)}:{_sha256(expected_candidate)}"
+                )
+            inputs = _depfile_inputs(canonical_root, depfile)
+            output = _record_bytes(CANDIDATE, built_bytes)
+            raw_output = _record_bytes(
+                "web/wasm/target/wasm32-unknown-unknown/release/don_web.wasm", raw_bytes
+            )
+            test_env = _git_env()
+            test_env.pop("CARGO_ENCODED_RUSTFLAGS", None)
+            test_env.pop("RUSTFLAGS", None)
+            test_env["CARGO_TARGET_DIR"] = str(canonical_root / "target-archive-test")
+            test_result = subprocess.run(
+                TEST_COMMAND,
+                cwd=canonical_root,
+                env=test_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            combined = test_result.stdout + "\n" + test_result.stderr
+            matches = re.findall(
+                r"test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;",
+                combined,
+            )
+            if test_result.returncode != 0 or len(matches) != 1:
+                tail = "\n".join(combined.splitlines()[-12:])
+                raise ReproducibilityError(f"source-archive don-sim lib tests failed:\n{tail}")
+            passed, failed, ignored = (int(value) for value in matches[0])
+            if failed != 0 or passed == 0:
+                raise ReproducibilityError(
+                    "source-archive don-sim lib tests have no positive result"
+                )
+            test_probe = {
+                "command": TEST_COMMAND,
+                "outcome": "passed",
+                "exit_code": test_result.returncode,
+                "passed": passed,
+                "failed": failed,
+                "ignored": ignored,
+            }
+        finally:
+            if canonical_root.exists():
+                shutil.rmtree(canonical_root)
+            canonical_lock.rmdir()
+    return {"output": output, "raw_output": raw_output}, inputs, test_probe
 
 
 def capture(root: Path, output: Path) -> dict[str, object]:
     root = root.resolve(strict=True)
-    site = _include_site(root)
-    projection = _archive_files(root, [CONSUMER, REQUIRED_INPUT])
-    if CONSUMER not in projection:
-        raise ReproducibilityError("consumer is unexpectedly absent from the source archive")
-    if REQUIRED_INPUT in projection:
-        raise ReproducibilityError("required live input is unexpectedly present in the archive")
-    if not _export_ignore(root, REQUIRED_INPUT):
-        raise ReproducibilityError("required live input is not protected by export-ignore")
-    exit_code, diagnostic = _probe_archive_build(root)
+    selected = _archive_files(root, [FORMER_CONSUMER, REQUIRED_LIVE_INPUT])
+    if FORMER_CONSUMER not in selected:
+        raise ReproducibilityError("required Rust consumer is absent from the archive")
+    if REQUIRED_LIVE_INPUT in selected:
+        raise ReproducibilityError("owned/live input leaked into the source archive")
+    if not _export_ignore(root, REQUIRED_LIVE_INPUT):
+        raise ReproducibilityError("owned/live input lost export-ignore protection")
+    if not _former_live_include_absent(root):
+        raise ReproducibilityError("leaders still compile-time-includes the live unit table")
+    try:
+        candidate_bytes = (root / CANDIDATE).read_bytes()
+    except OSError as exc:
+        raise ReproducibilityError("working candidate Wasm is unavailable") from exc
+    built, source_inputs, test_probe = _probe_archive_build(root, candidate_bytes)
     artifact: dict[str, object] = {
         "schema": SCHEMA,
         "scope": {
-            "candidate": _record(root, CANDIDATE),
-            "component_provenance": _record(root, COMPONENT_PROVENANCE),
+            "candidate": _working_record(root, CANDIDATE),
+            "component_provenance": _working_record(root, COMPONENT_PROVENANCE),
             "manifest": _record(root, MANIFEST),
             "lock": _record(root, LOCK),
             "build_command": BUILD_COMMAND,
+            "pipeline_inputs": [_record(root, path) for path in PIPELINE_INPUTS],
         },
         "toolchain": {
             "cargo": _version("cargo"),
             "rustc": _version("rustc"),
+            "node": _version("node"),
+            "wasm_opt": _version("wasm-opt"),
             "target": "wasm32-unknown-unknown",
         },
         "archive_projection": {
-            "consumer": {**_record(root, CONSUMER), **site},
-            "required_input": {
-                **_record(root, REQUIRED_INPUT),
+            "live_input": {
+                **_record(root, REQUIRED_LIVE_INPUT),
                 "classification": "tracked-retail-live-derived-export-ignored",
                 "export_ignore": True,
+                "present": False,
             },
-            "consumer_present": True,
-            "required_input_present": False,
+            "former_consumer": {
+                **_record(root, FORMER_CONSUMER),
+                "compile_time_literal_absent": True,
+            },
         },
-        "probe": {
-            "outcome": "blocked-missing-exported-build-input",
-            "exit_code": exit_code,
-            "diagnostic": diagnostic,
+        "build": {
+            "outcome": "reproduced-byte-identical-candidate",
+            "exit_code": 0,
+            "raw_output": built["raw_output"],
+            "output": built["output"],
+            "source_inputs": source_inputs,
+            "source_inputs_sha256": _source_inputs_digest(source_inputs),
         },
+        "test_projection": test_probe,
         "claims": EXPECTED_CLAIMS,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -276,14 +405,14 @@ def verify(root: Path, artifact_path: Path) -> dict[str, object]:
         raise ReproducibilityError("archive reproducibility artifact is unreadable") from exc
     artifact = _exact(
         artifact,
-        {"schema", "scope", "toolchain", "archive_projection", "probe", "claims"},
+        {"schema", "scope", "toolchain", "archive_projection", "build", "test_projection", "claims"},
         "artifact",
     )
     if artifact["schema"] != SCHEMA:
         raise ReproducibilityError("archive reproducibility schema drift")
     scope = _exact(
         artifact["scope"],
-        {"candidate", "component_provenance", "manifest", "lock", "build_command"},
+        {"candidate", "component_provenance", "manifest", "lock", "build_command", "pipeline_inputs"},
         "scope",
     )
     for field, path in (
@@ -295,68 +424,110 @@ def verify(root: Path, artifact_path: Path) -> dict[str, object]:
         _verify_record(root, scope[field], path, f"scope.{field}")
     if scope["build_command"] != BUILD_COMMAND:
         raise ReproducibilityError("archive build command drift")
-
-    toolchain = _exact(artifact["toolchain"], {"cargo", "rustc", "target"}, "toolchain")
+    pipeline_inputs = scope["pipeline_inputs"]
+    if not isinstance(pipeline_inputs, list) or len(pipeline_inputs) != len(PIPELINE_INPUTS):
+        raise ReproducibilityError("archive build pipeline input coverage drift")
+    for index, path in enumerate(PIPELINE_INPUTS):
+        _verify_record(root, pipeline_inputs[index], path, f"scope.pipeline_inputs[{index}]")
+    toolchain = _exact(
+        artifact["toolchain"], {"cargo", "rustc", "node", "wasm_opt", "target"}, "toolchain"
+    )
     if not all(isinstance(toolchain[field], str) and toolchain[field] for field in toolchain):
         raise ReproducibilityError("toolchain values are invalid")
     if toolchain["target"] != "wasm32-unknown-unknown":
         raise ReproducibilityError("archive build target drift")
 
     projection = _exact(
-        artifact["archive_projection"],
-        {"consumer", "required_input", "consumer_present", "required_input_present"},
-        "archive_projection",
+        artifact["archive_projection"], {"live_input", "former_consumer"}, "archive_projection"
     )
-    consumer = _exact(
-        projection["consumer"],
-        {"path", "size", "sha256", "line", "macro", "literal"},
-        "archive_projection.consumer",
+    live = _exact(
+        projection["live_input"],
+        {"path", "size", "sha256", "classification", "export_ignore", "present"},
+        "archive_projection.live_input",
     )
-    expected_consumer = {**_record(root, CONSUMER), **_include_site(root)}
-    if consumer != expected_consumer:
-        raise ReproducibilityError("archive consumer identity or include site drift")
-    required = _exact(
-        projection["required_input"],
-        {"path", "size", "sha256", "classification", "export_ignore"},
-        "archive_projection.required_input",
-    )
-    expected_required = {
-        **_record(root, REQUIRED_INPUT),
+    expected_live = {
+        **_record(root, REQUIRED_LIVE_INPUT),
         "classification": "tracked-retail-live-derived-export-ignored",
         "export_ignore": True,
+        "present": False,
     }
-    if required != expected_required:
-        raise ReproducibilityError("required live-input identity or classification drift")
-    selected = _archive_files(root, [CONSUMER, REQUIRED_INPUT])
-    actual_consumer = CONSUMER in selected
-    actual_input = REQUIRED_INPUT in selected
-    if projection["consumer_present"] is not True or actual_consumer is not True:
-        raise ReproducibilityError("consumer is not present in the archive projection")
-    if projection["required_input_present"] is not False or actual_input is not False:
-        raise ReproducibilityError("required live input is no longer absent from the archive")
-    if not _export_ignore(root, REQUIRED_INPUT):
-        raise ReproducibilityError("required live input lost export-ignore protection")
+    if live != expected_live:
+        raise ReproducibilityError("live-input identity or archive classification drift")
+    former = _exact(
+        projection["former_consumer"],
+        {"path", "size", "sha256", "compile_time_literal_absent"},
+        "archive_projection.former_consumer",
+    )
+    expected_former = {**_record(root, FORMER_CONSUMER), "compile_time_literal_absent": True}
+    if former != expected_former or not _former_live_include_absent(root):
+        raise ReproducibilityError("former live-table consumer boundary drift")
+    selected = _archive_files(root, [FORMER_CONSUMER, REQUIRED_LIVE_INPUT])
+    if REQUIRED_LIVE_INPUT in selected:
+        raise ReproducibilityError("owned/live input leaked into the source archive")
+    if not _export_ignore(root, REQUIRED_LIVE_INPUT):
+        raise ReproducibilityError("live unit table lost export-ignore protection")
 
-    probe = _exact(artifact["probe"], {"outcome", "exit_code", "diagnostic"}, "probe")
-    expected_probe = {
-        "outcome": "blocked-missing-exported-build-input",
-        "exit_code": 101,
-        "diagnostic": (
-            f"rustc could not read {REQUIRED_INPUT}, required by "
-            f"{CONSUMER}:{consumer['line']}"
-        ),
-    }
-    if probe != expected_probe:
-        raise ReproducibilityError("archive build probe record drift")
+    build = _exact(
+        artifact["build"],
+        {"outcome", "exit_code", "raw_output", "output", "source_inputs", "source_inputs_sha256"},
+        "build",
+    )
+    if build["outcome"] != "reproduced-byte-identical-candidate" or build["exit_code"] != 0:
+        raise ReproducibilityError("archive build result does not prove reproduction")
+    if build["output"] != scope["candidate"]:
+        raise ReproducibilityError("archive build output does not match the checked-in candidate")
+    raw_output = _exact(build["raw_output"], {"path", "size", "sha256"}, "build.raw_output")
+    if raw_output["path"] != "web/wasm/target/wasm32-unknown-unknown/release/don_web.wasm":
+        raise ReproducibilityError("raw rustc output path drift")
+    if raw_output["sha256"] == build["output"]["sha256"]:
+        raise ReproducibilityError("canonical optimizer stage is not distinguished from raw rustc output")
+    inputs = build["source_inputs"]
+    if not isinstance(inputs, list) or not inputs:
+        raise ReproducibilityError("archive build source closure is empty")
+    paths: set[str] = set()
+    for index, record in enumerate(inputs):
+        record = _exact(record, {"path", "size", "sha256"}, f"build.source_inputs[{index}]")
+        path = _canonical(record["path"], f"build.source_inputs[{index}].path")
+        if path in paths:
+            raise ReproducibilityError(f"duplicate archive build input: {path}")
+        paths.add(path)
+        if record != _record(root, path):
+            raise ReproducibilityError(f"archive build source-input drift: {path}")
+    if REQUIRED_LIVE_INPUT in paths or FORMER_CONSUMER not in paths or "web/wasm/src/lib.rs" not in paths:
+        raise ReproducibilityError("archive build source closure violates required boundaries")
+    if build["source_inputs_sha256"] != _source_inputs_digest(inputs):
+        raise ReproducibilityError("archive build source-closure digest drift")
+
+    test = _exact(
+        artifact["test_projection"],
+        {"command", "outcome", "exit_code", "passed", "failed", "ignored"},
+        "test_projection",
+    )
+    if (
+        test["command"] != TEST_COMMAND
+        or test["outcome"] != "passed"
+        or test["exit_code"] != 0
+        or not isinstance(test["passed"], int)
+        or test["passed"] <= 0
+        or test["failed"] != 0
+        or not isinstance(test["ignored"], int)
+        or test["ignored"] < 0
+    ):
+        raise ReproducibilityError("archive don-sim lib test result overstates evidence")
     if artifact["claims"] != EXPECTED_CLAIMS:
-        raise ReproducibilityError("archive reproducibility claims overstate current evidence")
+        raise ReproducibilityError("archive reproducibility claims contradict current evidence")
     return {
-        "schema": "don.release-source-archive-reproducibility-check.v1",
+        "schema": "don.release-source-archive-reproducibility-check.v2",
         "ok": True,
-        "outcome": probe["outcome"],
-        "consumer": CONSUMER,
-        "missing_input": REQUIRED_INPUT,
-        "candidate_reproduced": False,
+        "outcome": build["outcome"],
+        "candidate_reproduced": True,
+        "source_inputs": len(inputs),
+        "live_input_present": False,
+        "don_sim_lib_tests": {
+            "passed": test["passed"],
+            "ignored": test["ignored"],
+        },
+        "whole_archive_workspace_tests_proven": False,
     }
 
 
@@ -366,17 +537,18 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     probe_parser = subparsers.add_parser("probe", help="run the isolated archive build probe")
     probe_parser.add_argument("--output", type=Path, required=True)
-    verify_parser = subparsers.add_parser("verify", help="verify the recorded blocker offline")
+    verify_parser = subparsers.add_parser("verify", help="verify the recorded build linkage offline")
     verify_parser.add_argument("--artifact", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == "probe":
             result = capture(args.root, args.output)
             report = {
-                "schema": "don.release-source-archive-reproducibility-probe.v1",
+                "schema": "don.release-source-archive-reproducibility-probe.v2",
                 "ok": True,
-                "outcome": result["probe"]["outcome"],
+                "outcome": result["build"]["outcome"],
                 "artifact": str(args.output),
+                "source_inputs": len(result["build"]["source_inputs"]),
             }
         else:
             report = verify(args.root, args.artifact)

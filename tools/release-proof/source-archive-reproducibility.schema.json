@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://descentofnations.invalid/schema/release-source-archive-reproducibility-v1.json",
-  "title": "DoN source archive reproducibility blocker",
+  "$id": "https://descentofnations.invalid/schema/release-source-archive-reproducibility-v2.json",
+  "title": "DoN source archive product-Wasm reproducibility",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,28 +9,36 @@
     "scope",
     "toolchain",
     "archive_projection",
-    "probe",
+    "build",
+    "test_projection",
     "claims"
   ],
   "properties": {
-    "schema": {"const": "don.release-source-archive-reproducibility.v1"},
+    "schema": {"const": "don.release-source-archive-reproducibility.v2"},
     "scope": {"type": "object"},
     "toolchain": {"type": "object"},
     "archive_projection": {"type": "object"},
-    "probe": {"type": "object"},
+    "build": {"type": "object"},
+    "test_projection": {"type": "object"},
     "claims": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "source_archive_buildable",
+        "source_archive_product_wasm_buildable",
         "candidate_reproduced_from_archive",
         "product_binary_source_linkage",
+        "live_table_compile_time_dependency_absent",
+        "don_sim_lib_archive_tests_buildable",
+        "whole_archive_workspace_tests_proven",
         "proprietary_input_redistributed"
       ],
       "properties": {
-        "source_archive_buildable": {"const": false},
-        "candidate_reproduced_from_archive": {"const": false},
-        "product_binary_source_linkage": {"const": false},
+        "source_archive_product_wasm_buildable": {"const": true},
+        "candidate_reproduced_from_archive": {"const": true},
+        "product_binary_source_linkage": {"const": true},
+        "live_table_compile_time_dependency_absent": {"const": true},
+        "don_sim_lib_archive_tests_buildable": {"const": true},
+        "whole_archive_workspace_tests_proven": {"const": false},
         "proprietary_input_redistributed": {"const": false}
       }
     }

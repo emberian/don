@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regressions for the exact source-archive build blocker artifact."""
+"""Regressions for exact source-archive-to-product-Wasm linkage."""
 
 from __future__ import annotations
 
@@ -32,33 +32,46 @@ class ArchiveReproducibilityTest(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         return directory, path
 
-    def test_current_negative_artifact_verifies(self) -> None:
+    def test_current_product_wasm_linkage_verifies(self) -> None:
         report = archive_reproducibility.verify(ROOT, ARTIFACT)
         self.assertTrue(report["ok"])
-        self.assertFalse(report["candidate_reproduced"])
-        self.assertEqual(report["outcome"], "blocked-missing-exported-build-input")
+        self.assertTrue(report["candidate_reproduced"])
+        self.assertFalse(report["live_input_present"])
+        self.assertGreater(report["don_sim_lib_tests"]["passed"], 1000)
+        self.assertFalse(report["whole_archive_workspace_tests_proven"])
+        self.assertGreater(report["source_inputs"], 100)
 
-    def test_positive_reproducibility_claim_is_refused(self) -> None:
+    def test_whole_workspace_overclaim_is_refused(self) -> None:
         directory, path = self.mutated_artifact(
-            lambda value: value["claims"].update(source_archive_buildable=True)
+            lambda value: value["claims"].update(whole_archive_workspace_tests_proven=True)
         )
         try:
             with self.assertRaisesRegex(
-                archive_reproducibility.ReproducibilityError, "overstate"
+                archive_reproducibility.ReproducibilityError, "claims contradict"
             ):
                 archive_reproducibility.verify(ROOT, path)
         finally:
             directory.cleanup()
 
-    def test_required_input_hash_drift_is_refused(self) -> None:
+    def test_build_source_hash_drift_is_refused(self) -> None:
         directory, path = self.mutated_artifact(
-            lambda value: value["archive_projection"]["required_input"].update(
-                sha256="0" * 64
-            )
+            lambda value: value["build"]["source_inputs"][0].update(sha256="0" * 64)
         )
         try:
             with self.assertRaisesRegex(
-                archive_reproducibility.ReproducibilityError, "identity"
+                archive_reproducibility.ReproducibilityError, "source-input drift"
+            ):
+                archive_reproducibility.verify(ROOT, path)
+        finally:
+            directory.cleanup()
+
+    def test_candidate_linkage_drift_is_refused(self) -> None:
+        directory, path = self.mutated_artifact(
+            lambda value: value["build"]["output"].update(sha256="0" * 64)
+        )
+        try:
+            with self.assertRaisesRegex(
+                archive_reproducibility.ReproducibilityError, "does not match"
             ):
                 archive_reproducibility.verify(ROOT, path)
         finally:

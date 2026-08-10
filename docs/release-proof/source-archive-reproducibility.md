@@ -1,44 +1,41 @@
-# Source-archive reproducibility blocker
+# Source-archive product-Wasm reproducibility
 
-`release/source-archive-reproducibility.json` records an isolated build of the exact public
-`git archive` projection. It is a negative, fail-closed artifact: it proves why the checked-in
-browser Wasm cannot currently be linked back to distributable source. It does not put the
-missing input into the archive and does not promote any release gate.
+`release/source-archive-reproducibility.json` is the build-produced link between the public
+source projection and the checked-in browser Wasm candidate. Capture extracts a clean
+`git archive HEAD`, runs the repository's canonical `web/build.sh`, and refuses unless the final
+post-optimization bytes exactly equal `web/public/wasm/don_web.wasm` from that archive.
 
-The 2026-08-09 probe used the recorded Rust/Cargo toolchain and this canonical command inside a
-fresh temporary extraction:
+The current exact result is a 975,828-byte raw rustc module at SHA-256
+`0ddd4285f313911962199dc671f2677b8952ae9aa328fe93771f2961c99b6327`, transformed by
+Binaryen 130 into the 771,141-byte checked-in candidate at SHA-256
+`b7c71e5db4b6ceaa94c3f32bcc91a1004cea667e6367c0326f8ba6e5e8b679c5`.
 
-```sh
-cargo build --locked --release --target wasm32-unknown-unknown \
-  --manifest-path web/wasm/Cargo.toml
-```
+The artifact binds:
 
-Compilation stopped with exit code 101. `crates/don-sim/src/systems/leaders.rs` contains a
-compile-time `include_str!` for `schema/live/live-tables-unit.tsv`, while `.gitattributes`
-correctly marks live TSV captures `export-ignore`. The archive contains the Rust consumer and
-omits the retail/live-derived table. The artifact binds the consumer, required input, candidate
-Wasm, component provenance, manifest, lockfile, include site, export state, toolchain, and
-normalized failure classification by size and SHA-256 where applicable.
+- the candidate, component-provenance record, Wasm manifest, lockfile, build script, generator
+  inputs, generated contracts, ABI checker inputs, Rust/Cargo/Node/Binaryen toolchain, and both the
+  raw rustc and final optimized Wasm identities;
+- every repository source file named by rustc's build-produced `don_web.d`, with an aggregate
+  source-closure digest (141 files in the current build);
+- the absence of `schema/live/live-tables-unit.tsv` from both `git archive` and the depfile, plus
+  the removal of its former compile-time `include_str!` consumer;
+- an isolated `cargo test --locked -p don-sim --lib` result from that same clean source archive.
 
-This is a real distribution blocker, not an invitation to ship the TSV. The table contains
-post-load retail type facts and remains outside a public archive. The minimal source-side repair
-is to remove the compile-time include from the normal `don-sim` build and inject the derived
-type-stat rows through an explicit runtime/content authority boundary. A clean archive must
-compile with that provider absent, and the affected mechanic must remain unresolved/fail-closed
-instead of substituting plausible rows. Local fidelity runs may load an exact owned-input
-provider separately. That source repair belongs to the simulation lane; this release artifact
-only records and guards the boundary.
+The exact product Wasm and 1,579 passing `don-sim` library tests (2 ignored) therefore build without live or owned
+retail inputs. This is not a whole-workspace/all-targets archive test, and the artifact forces
+that broader claim false. It supplies no legal review, third-party obligation decision, independent
+presentation-content clearance, installer proof, or whole-product payload claim.
 
-Capture reruns the isolated build and writes the negative artifact only if it fails at the exact
-known input:
+Capture performs the isolated build and writes the artifact only on a byte-identical result:
 
 ```sh
 python3 tools/release-proof/archive_reproducibility.py probe \
   --output release/source-archive-reproducibility.json
 ```
 
-Normal verification is offline and re-derives hashes, the `include_str!` site, `export-ignore`,
-and a selective `git archive` projection without compiling or accessing retail:
+Normal verification is offline. It re-hashes the current committed candidate, all recorded
+pipeline and depfile inputs, the live-input exclusion, and the test-only blocker without compiling
+or reading excluded inputs:
 
 ```sh
 python3 tools/release-proof/archive_reproducibility.py verify \
@@ -46,7 +43,7 @@ python3 tools/release-proof/archive_reproducibility.py verify \
 python3 -m unittest tools/release-proof/test_archive_reproducibility.py
 ```
 
-When the simulation boundary is repaired, verification will deliberately fail because the
-recorded blocker is no longer true. The next release wave must then replace this negative record
-with a successful archive rebuild whose output is byte-linked to the assembled candidate; it
-must not merely refresh hashes or weaken `export-ignore`.
+Any compiled Rust source or pipeline input change invalidates the record and requires a clean
+archive rebuild. Refreshing hashes without reproducing the candidate is not an admissible update.
+The next archive-hardening tranche should extend the same clean projection to the complete
+workspace/all-targets test matrix.

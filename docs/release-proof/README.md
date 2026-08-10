@@ -18,10 +18,10 @@ whole-game/product readiness; gameplay completion remains governed by `GOAL.md` 
   snapshots contain 179 package records without an audited product dependency notice inventory.
   One component-only precursor now binds the checked-in browser Wasm to its five-package lock graph
   and mechanically captures both registry packages' archive-carried declarations/texts, but every
-  record remains pending review and the graph is not a linked-code SBOM. An isolated public-source
-  archive build now records the exact blocking boundary: `don-sim` compile-time-includes an
-  export-ignored retail/live-derived unit table, so the checked-in Wasm cannot yet be reproduced
-  from distributable source. There is no standalone
+  record remains pending review and the graph is not a linked-code SBOM. The exact checked-in Wasm
+  is now reproduced byte-for-byte by the canonical build from a clean public source archive; its
+  141 build-produced source inputs are hash-bound, the retail/live unit table is absent, and 1,579
+  archive `don-sim` library tests pass. There is no standalone
   product payload/installer and no human-cleared manifest for independently licensed art, audio,
   fonts, and presentation data; the recorded retail-controller incident retained no dump; and the
   five-cycle STOP/rearm result lacks a compact per-cycle machine record.
@@ -50,9 +50,9 @@ The pack also preserves narrow positive conclusions already supported elsewhere:
 - the checked-in browser Wasm component and exact five-package lock graph are hash-bound, while
   checksum-matching registry archives supply retained declaration and license-text evidence for
   `memchr 2.8.3` and `quick-xml 0.38.4`; all package obligation decisions remain explicitly pending.
-- the source-archive build failure is hash-bound to the exact `include_str!` consumer, omitted
-  live input, Wasm candidate, lock graph, and toolchain, with all positive reproducibility and
-  product-linkage claims forced false.
+- the public source archive reproduces the exact 771,141-byte browser Wasm at SHA-256
+  `b7c71e5d…79c5`; the rustc depfile, generator/ABI pipeline, raw and optimized outputs, toolchain,
+  live-input exclusion, and clean-archive `don-sim --lib` result are hash-bound.
 
 None of those claims a finished installer, independent content, a retained live minidump, or an
 assembled release. Those remain separate red gates in `evidence-manifest.json`.
@@ -84,8 +84,9 @@ python3 tools/release-proof/archive_reproducibility.py verify \
 ```
 
 The normal checker does not compile, download, access a retail installation, copy content, or
-modify the tree. Its archive-reproducibility verifier projects only the two named paths through
-`git archive`; the separate `probe` command performs the isolated build. A changed hash, newly
+modify the tree. Its archive-reproducibility verifier re-hashes the recorded 141-file depfile
+closure and pipeline inputs; the separate `probe` command performs the isolated build and tests.
+A changed hash, newly
 added Cargo manifest/workspace template/lockfile, changed license
 declaration, missing evidence path, inconsistent gate, or false readiness bit fails closed. Merely
 adding a file with an expected top-level schema is also refused: each completion artifact needs a
@@ -113,9 +114,8 @@ Do not fill a field from memory or by copying a convenient license from elsewher
    with explicit authority; do not choose an expression merely to make the gate green.
 2. For `whole-source-license-provenance` and `derived-research-release-review`, inventory non-Cargo
    scopes and classify every tracked derived research artifact before publishing a source archive.
-3. Remove the compile-time dependency on the export-ignored live unit table through an explicit
-   runtime/content authority boundary, then replace the negative archive-build record with a
-   successful byte-linked rebuild. Never solve this by redistributing the live TSV.
+3. Extend clean-archive verification from the now-green product Wasm and `don-sim --lib` scopes to
+   the whole workspace/all-targets matrix without adding retail/live inputs.
 4. For `binary-third-party-notices`, start from the exact assembled product/SBOM, select the
    actually conveyed subset from the repository lock snapshots, retain authoritative license
    evidence and required text, and bind source treatment. Merely listing SPDX guesses is

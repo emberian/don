@@ -135,28 +135,28 @@
     },
     {
       "path": "tools/release-proof/archive_reproducibility.py",
-      "sha256": "5a88075b9a3d9e9503b4c5c241d9bbfcb85b046af9d46d0a6dc9fd571a1a2b98",
-      "role": "isolated source-archive build probe and offline negative-evidence verifier"
+      "sha256": "f7b4dacc975265e09d727549eab0e3e54414f5ba7a01037a48060c40726be1a7",
+      "role": "isolated source-archive build/test probe and offline byte-linkage verifier"
     },
     {
       "path": "tools/release-proof/test_archive_reproducibility.py",
-      "sha256": "f267ab515f3c62e9440ee6c1d53ba1ed3a54efe4a7529cadab54b5e294542413",
-      "role": "archive reproducibility identity and false-claim refusal regressions"
+      "sha256": "10f6dae5fbc8263c945d8504366939661d51269cc6ef0098651755cb4621b044",
+      "role": "archive build closure, candidate linkage, and overclaim refusal regressions"
     },
     {
       "path": "tools/release-proof/source-archive-reproducibility.schema.json",
-      "sha256": "21aad63ceb1d8998652d179deaf8b04a54107c4482d13f1e69cf3ab548db63bd",
-      "role": "structural contract forcing archive and product linkage claims false"
+      "sha256": "0a73d131a86a8c6c331938162cd7512e4f80ddaa9dcc62aa04227cdd245186ed",
+      "role": "structural contract for positive product-Wasm linkage and bounded non-claims"
     },
     {
       "path": "docs/release-proof/source-archive-reproducibility.md",
-      "sha256": "ad3d9fab5cb1931beef7efba733ee15753750aceaf1598e9dfb3bdaa0a168849",
-      "role": "source-archive build blocker, non-claims, and source-boundary repair contract"
+      "sha256": "530a684116ac720b0b650d157a525f47333e4696ef01d9e27a4c27e7105ebd80",
+      "role": "source-archive product-Wasm linkage, depfile closure, and scope contract"
     },
     {
       "path": "release/source-archive-reproducibility.json",
-      "sha256": "af5c089d86645fdc058f5638b60866189e46f5fe134815112b2b60ceefb5981c",
-      "role": "exact negative build record for the export-ignored compile-time live-table dependency"
+      "sha256": "c244603190ea7b0fb0851a09090ab83e5d94834c7c311e00c0b7724ca2d2c9ec",
+      "role": "exact clean-archive Wasm build closure, byte identity, exclusion, and test result"
     },
     {
       "path": "release/notices/web-wasm/memchr-2.8.3/Cargo.toml.orig",
@@ -490,7 +490,7 @@
         "source",
         "distribution"
       ],
-      "status": "blocked",
+      "status": "proved",
       "claim": "The public source archive builds the exact checked-in binary candidate without retail/live-derived inputs, and the candidate is byte-linked to that build.",
       "evidence": [
         ".gitattributes",
@@ -501,7 +501,7 @@
         "release/source-archive-reproducibility.json",
         "release/web-wasm-component-provenance.json"
       ],
-      "blocker": "An isolated git-archive build fails at crates/don-sim/src/systems/leaders.rs because its include_str! compile-time dependency on schema/live/live-tables-unit.tsv is correctly export-ignored. The checked-in browser Wasm therefore is not reproducible from the public source projection. Replace the compile-time dependency with an explicit fail-closed runtime/content authority boundary; do not redistribute the live TSV."
+      "blocker": null
     },
     {
       "id": "derived-research-release-review",
@@ -548,7 +548,7 @@
         "release/notices/web-wasm/quick-xml-0.38.4/Cargo.toml.orig",
         "release/notices/web-wasm/quick-xml-0.38.4/LICENSE-MIT.md"
       ],
-      "blocker": "A component-only precursor binds the checked-in browser Wasm to its five-package lock graph and captures the two registry packages' declarations/texts, while the source-archive probe proves that candidate is not yet reproducible from distributable source. All five records remain pending human obligation/source-treatment review; the graph is not a linked-code SBOM, and no exact assembled-product payload identifies the conveyed subset. Expected completion artifact: release/product-dependency-notices.json."
+      "blocker": "The exact checked-in browser Wasm is now reproduced from its clean public source archive and bound to its five-package lock graph, but all five records remain pending human obligation/source-treatment review. The lock reachability graph is not a linked-code SBOM, and no exact assembled-product payload identifies the conveyed subset. Expected completion artifact: release/product-dependency-notices.json."
     },
     {
       "id": "owned-data-bootstrap-boundary",
@@ -666,7 +666,7 @@
         "release/source-archive-reproducibility.json",
         "GOAL.md"
       ],
-      "blocker": "There is no assembled product payload manifest or product-specific allowlisted provenance audit. The checked-in Wasm also cannot yet be reproduced from the public source archive because an export-ignored live table is a compile-time input. The existing release-audit.sh is intentionally source-only and rejects executable payloads, so it cannot admit a binary product tree."
+      "blocker": "There is no assembled product payload manifest or product-specific allowlisted provenance audit. The browser Wasm source/build linkage is now green, but the existing release-audit.sh is intentionally source-only and rejects executable payloads, so it cannot admit a binary product tree."
     }
   ],
   "declared_readiness": {
