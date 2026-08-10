@@ -17,6 +17,7 @@ export const GAP_NAMES = [
   'unknown opcode', 'nothing selected', 'cannot afford', 'population capped',
   'placement blocked', 'not a producer', 'queue full', 'no worker',
   'tile not gatherable', 'wrong age', 'object capacity full', 'movement route failed',
+  'target is not hostile',
 ];
 export const DIPLOMACY = Object.freeze(['war', 'peace', 'ally']);
 export const VICTORY_MODES = Object.freeze([

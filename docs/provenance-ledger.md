@@ -81,6 +81,7 @@ column are the shipped PDB's own names where one exists.
 | Economy: tick, caps, ramp, attrition timing | `Leader::do_gather` `0x006CE450`, `Leader::calc_resource_caps` `0x006CE900`, `ObjectData::train_time` `0x006508C0`, `UnitData::get_attrition` `0x00608FD0`, `Unit::process_attrition` `0x005E11A0`, `Unit::process` `0x006117C8`/`0x006115EA`, `TypeData::get_cost` `0x00664090` | `don-sim/src/mechanics.rs` | **C at best** — transcribed, never executed against retail |
 | Field-offset table, 1,223 constants | `log_data` walkers across 112 functions | `don-rules/src/offsets.rs` (generated) | **structural** (downgraded from B — §4.10) |
 | `RuleValue::parse` | the *prose* of `ron-data/rules.xml`; no engine counterpart | `don-rules/src/value.rs` | **engineering** — documentation/linting layer, never a value source |
+| Active-team diplomacy initialization prefix | `Leader::init` `0x006E3C52..0x006E3CB7`; exact `is_team(target,0)` call and true-arm value-2 declaration write | `don-sim/src/systems/leader_init_diplomacy.rs`; integrated by `player_setup.rs` | **C, instruction-derived; no retail execution** — only active team-true cells; option-dependent non-team arm and remainder of `Leader::init` excluded |
 
 ### 1.1 `hash_into_range(a, b, lo, hi)` — `Doober::get_num`
 

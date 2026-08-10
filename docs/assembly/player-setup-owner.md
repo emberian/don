@@ -15,8 +15,11 @@ the fully applied `TeamSetupState`, and the ordered `InitTeamsReceipt` script-ca
    inactive slots;
 3. materialize exact `PlayerSetup` and `LeaderTeamState` records and apply the recovered
    deterministic `Game::init_teams` body on a detached state image;
-4. synchronize `MatchOptions::team_style`, `Match::on_team`, `num_sides`, and the team-scoring
-   semaphore, install the owner, and only then call `Sim::activate` for the complete roster.
+4. apply the option-independent active-team alliance branch from `Leader::init`
+   `0x006E3C52..0x006E3CB7`, retaining its directional write receipt;
+5. synchronize `MatchOptions::team_style`, `Match::on_team`, `num_sides`, the team-scoring
+   semaphore, and the admitted diplomacy cells, install the owner, and only then call
+   `Sim::activate` for the complete roster.
 
 No fallible work follows the owner swap. A refusal therefore leaves the checksum digest, RNG,
 victory state, leader flags, and setup owner unchanged. The transaction consumes no RNG.
@@ -38,9 +41,9 @@ v1/v2 journals map to the older inactive/own-slot-team baseline.
 
 - The retained `InitTeamsReceipt` contains the exact ordered BHS callback facts; no browser BHS
   host is installed, so the callbacks are not claimed executed.
-- `Game::init_teams` does not call `Leader::set_diplo`. Configured teammates therefore remain at
-  the separately owned diplomacy declarations (war by default) until diplomacy initialization is
-  integrated.
+- The bounded `Leader::init` prefix installs active teammate alliances. Its option-dependent
+  non-team peace/war arm, inactive cells, shared vision, and remaining Leader initialization
+  state are still red. Later diplomacy mutation still requires complete `Leader::set_diplo`.
 - The setup owner is not in DoNSave v6. `save_sim` rejects `player setup owner` before emitting
   bytes, and the browser keeps live-match save disabled.
 - Random-team RNG, ranked ELO balancing, AI slots, and victory-mode mutation remain red.
@@ -65,5 +68,8 @@ node web/tools/check-play-wasm.mjs
 node web/tools/play-smoke.mjs --json web/play-results.json
 ```
 
-The checked-in `don_web.wasm` is the rebuilt owner-aware artifact; raw team/victory setters remain
-forbidden.
+The checked-in `don_web.wasm` was rebuilt from the current owner/diplomacy-aware source at
+733,880 bytes. Nine focused native ABI tests, both five-test Sim suites, the 76-export contract,
+and the complete Chrome/WebGPU smoke passed; the smoke observes P0/P2 as allies and proves that an
+ATTACK packet targeting P2 increments the non-hostile gap without installing an order. Raw
+team/victory setters remain forbidden.

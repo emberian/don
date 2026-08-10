@@ -127,6 +127,8 @@ pub mod held_target;
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
 /// remain explicit boundaries; see `docs/mechanics/items.md`.
 pub mod items;
+/// Option-independent `Leader::init` diplomacy prefix for active frame-zero teammates.
+pub mod leader_init_diplomacy;
 /// Added by `economy-step8`. `Leaders::process_all` `0x006ED2A0` — step 8 of `do_frame`,
 /// the caller `economy.rs` never had, plus the second level `Leader::gather` reaches:
 /// the `BitMask<44>` union that arms the two stat-dirty bits, `calc_wall_stats`,

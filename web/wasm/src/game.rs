@@ -115,7 +115,9 @@ pub mod gap {
     /// A unit gave up on an order because straight-line movement could not make progress.
     /// This is the placeholder pathfinder failing, and it is counted rather than hidden.
     pub const PATH_STUCK: usize = 11;
-    pub const COUNT: usize = 12;
+    /// Attack packet named self, a teammate, or a non-hostile diplomacy target.
+    pub const NOT_HOSTILE: usize = 12;
+    pub const COUNT: usize = 13;
 }
 
 // ---------------------------------------------------------------------------------------

@@ -862,9 +862,28 @@ try {
     d.replay.step();
     const imported = await d.replay.import(JSON.stringify(journal));
     const importedMatch = m.match();
+    const relations = Array.from({ length: m.playerCount }, (_, other) =>
+      m.relation(0, other));
+    let own = -1, teammate = -1;
+    for (let row = 0; row < m.live; row++) {
+      const id = m.idAtRow(row), info = id >= 0 ? m.info(id) : null;
+      if (info?.owner === 0 && own < 0) own = id;
+      if (info?.owner === 2 && teammate < 0) teammate = id;
+    }
+    m.group(0, [own]);
+    m.step(1);
+    const beforeFriendlyAttack = {
+      gaps: m.gaps(), order: m.info(own)?.order, transport: m.transport(),
+    };
+    m.attack(0, teammate);
+    m.step(1);
+    const afterFriendlyAttack = {
+      gaps: m.gaps(), order: m.info(own)?.order, transport: m.transport(),
+    };
     const activeUrl = d.session.url();
     return JSON.stringify({ activated, leaders, activePlayers, activeMask, match, startedFrame,
-      journal, saveDisabled, status, imported, importedMatch, activeUrl });
+      journal, saveDisabled, status, imported, importedMatch, relations, own, teammate,
+      beforeFriendlyAttack, afterFriendlyAttack, activeUrl });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['frame-zero match start reaches every Sim leader and is queried without a JS roster copy',
@@ -886,6 +905,16 @@ try {
       out.activation.importedMatch.teamStyle === 1 &&
       JSON.stringify(out.activation.importedMatch.activePlayers) ===
         JSON.stringify(out.activation.activePlayers)],
+    ['the rebuilt browser module observes active allies and refuses friendly ATTACK ingress',
+      out.activation.own >= 0 && out.activation.teammate >= 0 &&
+      out.activation.relations[0].id === 2 && out.activation.relations[0].name === 'ally' &&
+      out.activation.relations[1].id === 0 && out.activation.relations[1].name === 'war' &&
+      out.activation.relations[2].id === 2 && out.activation.relations[2].name === 'ally' &&
+      out.activation.afterFriendlyAttack.gaps[12] ===
+        out.activation.beforeFriendlyAttack.gaps[12] + 1 &&
+      out.activation.afterFriendlyAttack.order === out.activation.beforeFriendlyAttack.order &&
+      out.activation.afterFriendlyAttack.transport.ordersApplied ===
+        out.activation.beforeFriendlyAttack.transport.ordersApplied],
     ['active roster makes unsupported live save status explicit',
       out.activation.saveDisabled && out.activation.status.includes('not serialized')],
   ]) {

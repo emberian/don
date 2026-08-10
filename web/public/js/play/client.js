@@ -1125,6 +1125,11 @@ function rightClick(w, e) {
   const id = m.pickAt(w[0], w[1]);
   const info = id >= 0 ? m.info(id) : null;
   if (info && info.owner !== state.who) {
+    const relation = m.relation(state.who, info.owner);
+    if (relation.id !== 0) {
+      say(`P${info.owner} is ${relation.name}; no ATTACK packet was submitted`, 'warn');
+      return;
+    }
     logPacket('ATTACK', m.attack(state.who, id));
     ping(w, '#ff6b5b');
     return;
@@ -1163,6 +1168,11 @@ function targetCommand(w, e = {}) {
     const info = id >= 0 ? m.info(id) : null;
     if (!info || info.owner === state.who) {
       say('attack needs an enemy object target', 'warn');
+      return;
+    }
+    const relation = m.relation(state.who, info.owner);
+    if (relation.id !== 0) {
+      say(`P${info.owner} is ${relation.name}; no ATTACK packet was submitted`, 'warn');
       return;
     }
     logPacket('ATTACK', m.attack(state.who, id));

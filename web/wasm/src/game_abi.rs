@@ -1131,6 +1131,14 @@ impl Game {
                         self.gaps[gap::NO_SELECTION] += 1;
                     }
                     if let Some((owner, object)) = target_fact {
+                        let owner_index = usize::from(owner as u8);
+                        if who >= PLAYERS
+                            || owner_index >= PLAYERS
+                            || !self.core.vic_leaders.is_enemy(who, owner_index)
+                        {
+                            self.gaps[gap::NOT_HOSTILE] += 1;
+                            continue;
+                        }
                         for handle in handles {
                             if self.core.issue(handle, Order::attack(owner, object)) {
                                 self.orders_applied += 1;
@@ -2036,6 +2044,14 @@ mod tests {
         packet
     }
 
+    fn attack_packet(target: i32) -> [u8; 17] {
+        let mut packet = [0u8; 17];
+        packet[0] = wire_gen::op::ATTACK;
+        packet[1..5].copy_from_slice(&(-1i32).to_le_bytes());
+        packet[5..9].copy_from_slice(&target.to_le_bytes());
+        packet
+    }
+
     #[test]
     fn setup_diplomacy_and_victory_queries_are_read_only_core_projections() {
         let _stage = STAGE_LOCK
@@ -2101,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_team_setup_is_atomic_sim_owned_and_save_refused() {
+    fn manual_team_setup_is_atomic_sim_owned_initializes_allies_and_save_refuses() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -2126,7 +2142,8 @@ mod tests {
         );
         assert_eq!(game.core.world.frame, 0);
         assert_eq!(game.core.world.random.state(), rng);
-        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 0);
+        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 2);
+        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 1) }, 0);
 
         assert_eq!(unsafe { game_save(&mut game) }, 0);
         assert!(String::from_utf8_lossy(&game.error).contains("player setup owner"));
@@ -2135,6 +2152,47 @@ mod tests {
             0
         );
         assert!(String::from_utf8_lossy(&game.error).contains("MatchAlreadyStarted"));
+    }
+
+    #[test]
+    fn browser_attack_ingress_refuses_teammates_before_installing_a_core_order() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0xa11e_2026);
+        let packed = u32::from_le_bytes([0, 1, 0, 1]);
+        assert_eq!(
+            unsafe { game_start_manual_teams(&mut game, 0x0f, packed, 1, 0, 0) },
+            1
+        );
+
+        let handle_for = |owner: u8| {
+            (0..game.core.world.live_count() as usize)
+                .find(|&row| game.core.world.units.get_who(row) == owner)
+                .and_then(|row| game.core.world.handle_at_row(row))
+                .unwrap()
+        };
+        let actor = handle_for(0);
+        let enemy = handle_for(1);
+        let ally = handle_for(2);
+
+        submit_packet(&mut game, 0, &select_packet(0, actor.id as i16));
+        submit_packet(&mut game, 0, &attack_packet(ally.id as i32));
+        game.apply_commands();
+        let actor_row = game.core.world.row_of(actor).unwrap();
+        assert_eq!(
+            game.core.world.orders(actor_row).order_type(),
+            OrderIndex::None
+        );
+        assert_eq!(game.gaps[gap::NOT_HOSTILE], 1);
+
+        submit_packet(&mut game, 0, &attack_packet(enemy.id as i32));
+        game.apply_commands();
+        let order = game.core.world.orders(actor_row).current().unwrap();
+        assert_eq!(order.kind, OrderIndex::Attack);
+        assert_eq!(order.target_who, 1);
     }
 
     #[test]

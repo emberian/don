@@ -7,6 +7,9 @@
 //! [`Sim`], and only then activates the requested leader cohort.  No adapter-side roster or
 //! team table survives the call.
 
+use super::leader_init_diplomacy::{
+    init_active_team_alliances, LeaderInitTeamAllianceError, LeaderInitTeamAllianceReceipt,
+};
 use super::setup_diplomacy::{
     LeaderTeamState, PlayerSetup, PLAYER_PRESENT, SETUP_SLOTS, TEAM_AUTO,
 };
@@ -50,6 +53,9 @@ pub struct AppliedPlayerSetup {
     pub active_mask: u8,
     pub state: TeamSetupState,
     pub receipt: InitTeamsReceipt,
+    /// Option-independent active-team declarations from the recovered `Leader::init`
+    /// prefix. Non-team declarations remain owned by the caller's existing leader image.
+    pub diplomacy: LeaderInitTeamAllianceReceipt,
 }
 
 /// Persistent setup owner embedded in the authoritative victory leader table.
@@ -95,11 +101,18 @@ pub enum ManualPlayerSetupError {
     InactiveSlotHasTeam { slot: usize, team: i8 },
     UnsupportedManualTeam { slot: usize, team: i8 },
     InitTeams(InitTeamsError),
+    LeaderInitDiplomacy(LeaderInitTeamAllianceError),
 }
 
 impl From<InitTeamsError> for ManualPlayerSetupError {
     fn from(value: InitTeamsError) -> Self {
         Self::InitTeams(value)
+    }
+}
+
+impl From<LeaderInitTeamAllianceError> for ManualPlayerSetupError {
+    fn from(value: LeaderInitTeamAllianceError) -> Self {
+        Self::LeaderInitDiplomacy(value)
     }
 }
 
@@ -183,10 +196,12 @@ fn plan_manual_setup(
             ranked: request.ranked,
         },
     )?;
+    let diplomacy = init_active_team_alliances(&mut state.setup, request.active_mask)?;
     Ok(AppliedPlayerSetup {
         active_mask: request.active_mask,
         state,
         receipt,
+        diplomacy,
     })
 }
 
@@ -207,6 +222,15 @@ impl Sim {
             self.vic_match.set_sem(game_sem::TEAM_SCORING);
         } else {
             self.vic_match.clear_sem(game_sem::TEAM_SCORING);
+        }
+        for actor in 0..SETUP_SLOTS {
+            let mask = applied.diplomacy.ally_masks[actor];
+            for target in 0..SETUP_SLOTS {
+                if mask & (1u8 << target) != 0 {
+                    self.vic_leaders.slots[actor].diplos[target] =
+                        applied.state.setup.leaders[actor].diplos[target];
+                }
+            }
         }
         self.vic_leaders.setup_owner.applied = Some(applied);
 

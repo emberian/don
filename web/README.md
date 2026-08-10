@@ -93,19 +93,22 @@ effective diplomacy, victory mode/status, and personal/team score are read-only 
 the authoritative Sim. The team-layout control is the bounded exception: manual start recreates
 the requested seed and sends the complete roster, explicit team bytes, team style, and local slot
 through one frame-zero `Sim::start_manual_player_setup` transaction. That owner applies the
-recovered deterministic/non-ranked `Game::init_teams` body before activating any leader and retains
-its exact `PlayerSetup` image and ordered script-call receipt in the Sim. Random-team byte 5,
+recovered deterministic/non-ranked `Game::init_teams` body, then the option-independent active-team
+alliance branch of `Leader::init`, before activating any leader. It retains the exact `PlayerSetup`
+image, ordered script-call plan, and directional alliance receipt in the Sim. Random-team byte 5,
 ranked setup, malformed/inactive team bytes, repeated start, and nonzero frames all refuse without
 mutation. JavaScript queries the resulting roster and teams back; it retains no parallel copy.
 Shared-session URLs and command-journal v3 baselines carry the bounded team preset and reconstruct
 it through the same transaction. V1 and v2 journals remain importable as inactive/own-slot-team
 baselines. `setup`, `active`, and `ended` remain live core projections.
 
-This does not make diplomacy or victory setup complete. Retail `Game::init_teams` does not execute
-`Leader::set_diplo`, so configured teammates retain the separately-owned diplomacy declarations;
-the browser does not invent alliances. Raw `game_set_team` and `game_set_victory_mode` exports stay
-forbidden. The active setup owner is not yet serialized by DoNSave, so core save fails closed after
-match start instead of silently dropping roster/team state.
+This does not make diplomacy or victory setup complete. The recovered `Leader::init` prefix installs
+value 2 only for active pairs where the exact frame-zero team query succeeds. The option-dependent
+non-team peace/war arm, inactive cells, shared vision, and later `Leader::set_diplo` transaction stay
+red. ATTACK ingress refuses self, allied, and other non-hostile targets before installing an order.
+Raw `game_set_team` and `game_set_victory_mode` exports stay forbidden. The active setup owner is not
+yet serialized by DoNSave, so core save fails closed after match start instead of silently dropping
+roster/team state.
 
 The authoritative-roster ABI tranche passed six focused native tests in both independent remote
 profiles on 2026-08-09: hbox
@@ -118,11 +121,13 @@ mouse input installed `MOVE_TO`, URL reload reconstructed the exact authoritativ
 native/Wasm digests agreed at 600 frames for both inactive setup
 (`e526f20feb32cb49`) and roster `0,1,2,3` (`b68aa66f8a4703d0`).
 
-The subsequent deterministic PlayerSetup tranche rebuilt the artifact at 768,503 bytes and
-expanded the contract to 76 required exports while keeping both raw setup setters forbidden.
-Eight native ABI tests, five Sim owner tests, and the complete Chrome/WebGPU smoke passed. FFA and
-2v2 setup reconstruct through URL/journal state owned by Sim; both 600-frame digests remain
-unchanged from the values above.
+The subsequent deterministic PlayerSetup tranche expanded the contract to 76 required exports
+while keeping both raw setup setters forbidden. The active-team diplomacy tranche then rebuilt the
+artifact at 733,880 bytes. Nine native ABI tests, five Sim owner tests, five bounded Leader-init
+tests, and the complete Chrome/WebGPU smoke passed. FFA and 2v2 setup reconstruct through
+URL/journal state owned by Sim; the smoke reads P0/P2 as allies and proves a teammate ATTACK packet
+increments the non-hostile gap without installing an order. The inactive 600-frame digest remains
+`e526f20feb32cb49`; the now diplomacy-visible active-roster digest is `7ff94bba708bfc86`.
 
 `web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
 checks the fresh Wasm export table both before and after optional optimization. The same three

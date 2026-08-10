@@ -60,7 +60,7 @@
     },
     {
       "path": "tools/retail-control/README.md",
-      "sha256": "9b46d5e9c6e0b7cfb11088d706574802d17ceae508415b31e9152fdcf59974c0",
+      "sha256": "e8572d26d341ef374edc2bf715e832d690cc15aba136242e0ccab7bd16a03b5d",
       "role": "retail-control operational and safety boundary documentation"
     },
     {
@@ -70,7 +70,7 @@
     },
     {
       "path": "docs/tooling/live-control.md",
-      "sha256": "a7f3fff85b5d0cd03f8ca33148061ad19772814f61ae6407407b24a021f1d6cf",
+      "sha256": "dd2ee380f4bdd91f2b85e240f9855b00ace92f2d76bbd145e4b75019afc79120",
       "role": "active-main-thread STOP/rearm and external byte-restoration evidence"
     },
     {
@@ -125,12 +125,12 @@
     },
     {
       "path": "docs/release-proof/web-wasm-component-provenance.md",
-      "sha256": "3517ba3871fd5be8f8aae45838efd1119d6b5c199933a3d27a1dbd2dad1549d9",
+      "sha256": "6cd8044c734f4bdb14058be5835626a9a69d80c7ec069cfe6e087e607ba47b62",
       "role": "scope and explicit non-claims for the browser Wasm dependency precursor"
     },
     {
       "path": "release/web-wasm-component-provenance.json",
-      "sha256": "3be88848d05005e2fa8050af8265b690a1fd168636d3e9e041d5de7643deefd6",
+      "sha256": "53a42ca0c947b96ae1f56e3b1bf461558253899bfb0f50171ab6d69c47746bad",
       "role": "exact browser Wasm component, lock graph, and pending-review package provenance"
     },
     {

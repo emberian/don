@@ -30,6 +30,8 @@ fn alternating_teams_apply_once_to_the_authoritative_sim() {
     assert_eq!(applied.state.on_team, [2, 2, 0, 0, 0, 0, 0, 0]);
     assert_eq!((applied.state.num_teams, applied.state.num_sides), (2, 2));
     assert!(applied.receipt.team_mode_enabled);
+    assert_eq!(applied.diplomacy.ally_masks[..4], [0x05, 0x0a, 0x05, 0x0a]);
+    assert_eq!(applied.diplomacy.writes, 8);
     assert_eq!(sim.vic_match.options.team_style, 1);
     assert_eq!(sim.vic_match.on_team, [2, 2, 0, 0, 0, 0, 0, 0]);
     assert_eq!(sim.vic_match.num_sides, 2);
@@ -45,8 +47,8 @@ fn alternating_teams_apply_once_to_the_authoritative_sim() {
     assert_eq!(sim.world.frame, 0);
     assert_eq!(sim.world.random.state(), rng);
 
-    // `Game::init_teams` does not initialize diplomacy and this owner does not invent it.
-    assert_eq!(sim.vic_leaders.get_diplo(0, 2), Diplo::War);
+    assert_eq!(sim.vic_leaders.get_diplo(0, 2), Diplo::Ally);
+    assert_eq!(sim.vic_leaders.get_diplo(0, 1), Diplo::War);
     assert_eq!(
         save_sim(&sim),
         Err(SaveError::Unsupported("player setup owner"))
@@ -64,6 +66,8 @@ fn style_three_forces_local_and_remote_teams_without_rng() {
     assert_eq!(sim.vic_leaders.team_of(2), 0);
     assert_eq!(sim.vic_leaders.team_of(6), 1);
     assert_eq!(sim.vic_match.on_team[..4], [1, 2, 0, 0]);
+    assert_eq!(sim.vic_leaders.get_diplo(0, 6), Diplo::Ally);
+    assert_eq!(sim.vic_leaders.get_diplo(2, 0), Diplo::War);
     assert_eq!(sim.world.random.state(), rng);
 }
 
