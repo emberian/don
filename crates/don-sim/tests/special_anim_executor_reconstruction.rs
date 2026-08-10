@@ -613,11 +613,11 @@ fn receipt_rejects_stale_host_state_and_plan_splicing() {
 
 #[test]
 fn closure_inventory_keeps_every_unadapted_host_tail_explicit() {
-    assert_eq!(SPECIAL_ANIM_OPEN_TAILS.len(), 8);
+    assert_eq!(SPECIAL_ANIM_OPEN_TAILS.len(), 7);
     assert!(SPECIAL_ANIM_OPEN_TAILS.contains(&SpecialAnimOpenTail::InternalLandPlaneInstaller));
     assert!(
         SPECIAL_ANIM_OPEN_TAILS.contains(&SpecialAnimOpenTail::ObjectLookupAndVirtualPredicates)
     );
     assert!(SPECIAL_ANIM_OPEN_TAILS.contains(&SpecialAnimOpenTail::CanonicalGameRandom));
-    assert!(SPECIAL_ANIM_OPEN_TAILS.contains(&SpecialAnimOpenTail::DispatcherAndLiveTickAdapter));
+    assert!(!SPECIAL_ANIM_OPEN_TAILS.contains(&SpecialAnimOpenTail::DispatcherAndLiveTickAdapter));
 }

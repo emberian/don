@@ -60,7 +60,8 @@ use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
     game_daemon_step12, groups_guys, leaders, leaders_process_event_frame_step19, movement,
-    movement_driver, movement_live, production, victory_score, walls, wonders,
+    movement_driver, movement_live, order_dispatch, production, special_anim_executor,
+    victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -283,6 +284,16 @@ pub struct Coverage {
     pub unit_process: u64,
     pub unit_move_step: u64,
     pub unit_attack: u64,
+    /// SPECIAL_ANIM frames which reached a complete local transaction (currently the
+    /// object-free EXIT branch).
+    pub special_anim_completed: u64,
+    /// Host-free SPECIAL_UNIT no-op frames reached through the real object pass.
+    pub special_anim_working: u64,
+    /// ENTER/Airbase-EXIT frames refused before mutation because a required world surface
+    /// is not installed.
+    pub special_anim_host_refused: u64,
+    /// Malformed payload or broken host attestations rejected without publication.
+    pub special_anim_malformed: u64,
     pub damage_applied: u64,
     pub damage_total: i64,
     pub deaths: u64,
@@ -327,6 +338,10 @@ impl Default for Coverage {
             unit_process: 0,
             unit_move_step: 0,
             unit_attack: 0,
+            special_anim_completed: 0,
+            special_anim_working: 0,
+            special_anim_host_refused: 0,
+            special_anim_malformed: 0,
             damage_applied: 0,
             damage_total: 0,
             deaths: 0,
@@ -785,6 +800,218 @@ pub struct Sim {
     /// in the object pass.
     traversal_buf: Vec<(usize, Band, u32, u32)>,
     seen_buf: Vec<(i32, i32)>,
+}
+
+/// Production step-14 host for the portion of `Unit::do_spec_anim` whose complete mutation
+/// surface is already owned by [`Sim`].
+///
+/// The object-free EXIT arm touches only the canonical walked order, queue, Unit columns, and
+/// path stack. ENTER and Airbase EXIT reach object virtuals, containment/death, terrain, a
+/// primary Guy, and (conditionally) the game RNG; those arms return a typed unavailable result
+/// before any byte changes until all of those owners can participate in one transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SimSpecialAnimBefore {
+    who: u8,
+    o: i16,
+    uid: u16,
+    x: i32,
+    y: i32,
+    angle: i32,
+    unit_masks: u32,
+    dest_angle: i32,
+    orders_x: i32,
+    orders_y: i32,
+    orders: order_dispatch::OrderQueue,
+    path: movement::PathStack,
+}
+
+impl SimSpecialAnimBefore {
+    fn capture(actor: &order_dispatch::UnitWork) -> Self {
+        Self {
+            who: actor.who,
+            o: actor.o,
+            uid: actor.uid,
+            x: actor.body.x,
+            y: actor.body.y,
+            angle: actor.body.angle,
+            unit_masks: actor.unit_masks,
+            dest_angle: actor.dest_angle,
+            orders_x: actor.orders_x,
+            orders_y: actor.orders_y,
+            orders: actor.orders.clone(),
+            path: actor.path.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SimSpecialAnimHost {
+    frame: i32,
+    rng_state: i32,
+    before: Option<SimSpecialAnimBefore>,
+}
+
+fn special_anim_debug_digest(value: &impl std::fmt::Debug) -> u64 {
+    u64::from(adler32(1, format!("{value:?}").as_bytes()))
+}
+
+fn special_anim_snapshot(
+    host: &SimSpecialAnimHost,
+    actor: &order_dispatch::UnitWork,
+    order: &order_dispatch::OrderRec,
+) -> Result<special_anim_executor::SpecialAnimHostSnapshot, order_dispatch::SpecialAnimHostError>
+{
+    let current = actor.orders.front().ok_or(
+        order_dispatch::SpecialAnimHostError::InvalidState(
+            "SPECIAL_ANIM queue became empty before snapshot",
+        ),
+    )?;
+    if current != order {
+        return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+            "SPECIAL_ANIM head changed before snapshot",
+        ));
+    }
+    let state = current
+        .special_anim
+        .map(order_dispatch::special_anim_state)
+        .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+            "missing walked SPECIAL_ANIM payload",
+        ))?;
+    let identity = special_anim_executor::ObjectIdentity {
+        o: i32::from(actor.o),
+        who: i32::from(actor.who),
+        uid: actor.uid,
+    };
+    Ok(special_anim_executor::SpecialAnimHostSnapshot {
+        actor: special_anim_executor::ObjectSnapshot {
+            identity,
+            version: special_anim_debug_digest(actor),
+        },
+        target: None,
+        current_order: state,
+        current_order_digest: special_anim_debug_digest(&state),
+        queue_digest: special_anim_debug_digest(&actor.orders),
+        path_digest: u64::from(adler32(1, &actor.path.walk_bytes())),
+        primary_guy_digest: special_anim_debug_digest(&actor.lead_guy),
+        object_epoch: host.frame as u32 as u64,
+        // No terrain/external byte is observed by the only accepted branch. Zero is a
+        // deliberate not-observed token, not a guessed epoch.
+        terrain_epoch: 0,
+        external_epoch: 0,
+        rng_epoch: host.rng_state as u32 as u64,
+    })
+}
+
+impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
+    fn special_anim_preflight(
+        &mut self,
+        actor: &order_dispatch::UnitWork,
+        order: &order_dispatch::OrderRec,
+    ) -> Result<special_anim_executor::SpecialAnimExecutorReceipt, order_dispatch::SpecialAnimHostError>
+    {
+        let state = order
+            .special_anim
+            .map(order_dispatch::special_anim_state)
+            .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+                "missing walked SPECIAL_ANIM payload",
+            ))?;
+        if state.special_type != special_anim_executor::SpecialAnimKind::Exit || state.ox >= 0 {
+            return Err(order_dispatch::SpecialAnimHostError::Unavailable);
+        }
+        let snapshot = special_anim_snapshot(self, actor, order)?;
+        let request = special_anim_executor::SpecialAnimExecutorRequest {
+            order: state,
+            actor: special_anim_executor::ActorFacts {
+                identity: snapshot.actor.identity,
+            },
+            enter_target: None,
+            exit_target: None,
+            random_draws: None,
+            helicopter_samples: None,
+            terrain_z: None,
+        };
+        let receipt = special_anim_executor::preflight_special_anim_executor(snapshot, request)
+            .map_err(|_| {
+                order_dispatch::SpecialAnimHostError::InvalidState(
+                    "object-free EXIT preflight rejected",
+                )
+            })?;
+        if receipt.plan.branch != special_anim_executor::SpecialAnimBranch::ExitWithoutAirbase
+            || receipt.plan.steps.iter().any(|step| {
+                !matches!(
+                    step,
+                    special_anim_executor::SpecialAnimHostStep::StoreFrames(_)
+                        | special_anim_executor::SpecialAnimHostStep::StoreStarted(_)
+                        | special_anim_executor::SpecialAnimHostStep::KillCurrentOrder(0)
+                )
+            })
+        {
+            return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                "object-free EXIT escaped its local effect set",
+            ));
+        }
+        self.before = Some(SimSpecialAnimBefore::capture(actor));
+        Ok(receipt)
+    }
+
+    fn special_anim_commit(
+        &mut self,
+        actor: &mut order_dispatch::UnitWork,
+        order: &order_dispatch::OrderRec,
+        preflight: &special_anim_executor::SpecialAnimExecutorReceipt,
+    ) -> Result<order_dispatch::SpecialAnimCommitReceipt, order_dispatch::SpecialAnimHostError>
+    {
+        if self.before.as_ref() != Some(&SimSpecialAnimBefore::capture(actor)) {
+            return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                "SPECIAL_ANIM local owner changed before commit",
+            ));
+        }
+        let current = special_anim_snapshot(self, actor, order)?;
+        let plan = special_anim_executor::validate_special_anim_receipt(preflight, current)
+            .map_err(|_| {
+                order_dispatch::SpecialAnimHostError::InvalidState(
+                    "SPECIAL_ANIM snapshot changed before commit",
+                )
+            })?;
+        let mut after = actor.clone();
+        for step in &plan.steps {
+            match *step {
+                special_anim_executor::SpecialAnimHostStep::StoreFrames(frames) => {
+                    let payload = after
+                        .orders
+                        .front_mut()
+                        .and_then(|current| current.special_anim.as_mut())
+                        .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+                            "SPECIAL_ANIM payload disappeared before frames store",
+                        ))?;
+                    payload.frames = frames;
+                }
+                special_anim_executor::SpecialAnimHostStep::StoreStarted(started) => {
+                    let payload = after
+                        .orders
+                        .front_mut()
+                        .and_then(|current| current.special_anim.as_mut())
+                        .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+                            "SPECIAL_ANIM payload disappeared before started store",
+                        ))?;
+                    payload.started = started;
+                }
+                special_anim_executor::SpecialAnimHostStep::KillCurrentOrder(0) => {
+                    order_dispatch::kill_current_order(
+                        &mut after,
+                        order_dispatch::KillReason::Completed,
+                    );
+                }
+                _ => {
+                    return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                        "external SPECIAL_ANIM effect reached local commit",
+                    ));
+                }
+            }
+        }
+        *actor = after;
+        Ok(order_dispatch::SpecialAnimCommitReceipt::applied(preflight))
+    }
 }
 
 /// Borrow-split bridge from the exact step-12 scheduler into `Sim`'s authoritative stores.
@@ -2236,19 +2463,9 @@ impl Sim {
     /// `Unit::work` `0x0060D180` -> `Unit::do_job` `0x00617A10`, the 28-entry jump table
     /// at `0x00617B94` indexed directly by `OrderIndex`.
     ///
-    /// # This is the seam to replace next
-    ///
-    /// A sibling lane landed [`crate::systems::order_dispatch`] during this wave: a real
-    /// `Unit::work` port with the `(frame + o) % 32 / % 16 / % 64` phasing, `update_order`,
-    /// `repath`, `check_target_path`, `kill_current_order`, and a `WorkWorld` host trait.
-    /// It is strictly better than the five arms below and it is what step 14 should
-    /// dispatch into. Wiring it needs three things this driver does not yet have: a
-    /// `UnitWork` record per unit row kept in sync with the columns, a `WorkWorld` impl
-    /// (`frame`, `target`, `attack`, `gather`, `draw_path_retry_delay`) over `Sim`, and a
-    /// decision about `draw_path_retry_delay`, which **must** consume
-    /// `Random::get(0, 0xFFFF) % 3 + 6` from the sim stream or every later draw in the tick
-    /// desyncs. It was not wired here because that module's own suite was still red while
-    /// this file was being written; the note is the handoff, not an excuse.
+    /// SPECIAL_ANIM now crosses the canonical order/path/Unit-column boundary into the
+    /// recovered dispatcher. The other compact arms remain here until their complete
+    /// `WorkWorld` surfaces can be installed without guessing terrain, collision, or RNG.
     fn unit_work(&mut self, row: usize) {
         let kind = self.world.orders(row).order_type();
         match kind {
@@ -2260,9 +2477,101 @@ impl Sim {
             OrderIndex::Attack => self.do_attack(row),
             // Arm 6, `Unit::do_build` 0x005EEBF0 -> Wall::do_construct.
             OrderIndex::BuildAt => self.do_build(row),
+            // Arm 25, `Unit::do_spec_anim` `0x005E5880`, through its narrow atomic host.
+            OrderIndex::SpecialAnim => self.do_special_anim(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
+        }
+    }
+
+    /// Build the SPECIAL_ANIM dispatch view from canonical row-owned state.
+    fn special_anim_actor(
+        &self,
+        row: usize,
+    ) -> Result<order_dispatch::UnitWork, order_dispatch::SpecialAnimHostError> {
+        let units = &self.world.units;
+        let mut actor = order_dispatch::UnitWork::at(
+            units.get_who(row),
+            units.o()[row],
+            units.x_internal()[row],
+            units.y_internal()[row],
+        );
+        actor.flags = units.get_flags(row);
+        actor.visible = units.visible()[row] as u8;
+        actor.uid = units.get_uid(row);
+        actor.inside_down = units.inside_down()[row];
+        actor.ptype = self.unit_type.get(row).copied().unwrap_or_default();
+        actor.body.angle = units.angle()[row];
+        actor.dest_angle = units.dest_angle()[row];
+        actor.tolerance = units.tolerance()[row];
+        actor.orders_x = units.orders_x()[row];
+        actor.orders_y = units.orders_y()[row];
+        actor.unit_masks = units.get_unit_masks(row);
+        actor.unit_masks2 = units.get_unit_masks2(row);
+        actor.form = units.form()[row];
+        actor.group = units.group()[row];
+        actor.inside_up = units.inside_up()[row];
+        actor.collide_frame = units.collide_frame()[row];
+        actor.spell_time = units.spell_time()[row];
+        actor.myspeed = units.myspeed()[row];
+        actor.recharging = units.get_recharging(row);
+        actor.idle = units.get_idle(row);
+        actor.safe = units.safe()[row];
+        actor.path = self.paths.get(row).cloned().ok_or(
+            order_dispatch::SpecialAnimHostError::InvalidState(
+                "live SPECIAL_ANIM row has no canonical path owner",
+            ),
+        )?;
+        actor.orders = order_dispatch::adopt(self.world.orders(row));
+        Ok(actor)
+    }
+
+    /// Publish the checksum-owned part of a successful local SPECIAL_ANIM transaction.
+    fn publish_special_anim_actor(&mut self, row: usize, actor: &order_dispatch::UnitWork) {
+        order_dispatch::publish(&actor.orders, self.world.orders_mut(row));
+        if let Some(path) = self.paths.get_mut(row) {
+            *path = actor.path.clone();
+        }
+        self.world.units.set_unit_masks(row, actor.unit_masks);
+        self.world.units.dest_angle_mut()[row] = actor.dest_angle;
+        self.world.units.orders_x_mut()[row] = actor.orders_x;
+        self.world.units.orders_y_mut()[row] = actor.orders_y;
+    }
+
+    fn do_special_anim(&mut self, row: usize) {
+        let Ok(mut actor) = self.special_anim_actor(row) else {
+            self.cover.special_anim_malformed += 1;
+            return;
+        };
+        let mut host = SimSpecialAnimHost {
+            frame: self.world.frame,
+            rng_state: self.world.random.state(),
+            before: None,
+        };
+        let mut dispatch = order_dispatch::DispatchCoverage::default();
+        let result = order_dispatch::do_special_anim_with_host(
+            &mut actor,
+            &mut host,
+            &mut dispatch,
+        );
+        match result {
+            order_dispatch::ArmResult::Retired(order_dispatch::KillReason::Completed) => {
+                self.publish_special_anim_actor(row, &actor);
+                self.cover.special_anim_completed += 1;
+            }
+            order_dispatch::ArmResult::Working => {
+                self.cover.special_anim_working += 1;
+            }
+            order_dispatch::ArmResult::HostUnavailable => {
+                self.cover.special_anim_host_refused += 1;
+            }
+            order_dispatch::ArmResult::MalformedOrder => {
+                self.cover.special_anim_malformed += 1;
+            }
+            _ => {
+                self.cover.special_anim_malformed += 1;
+            }
         }
     }
 

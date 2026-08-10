@@ -3,8 +3,8 @@
 //! StateWired integration pins for SPECIAL_ANIM.
 //!
 //! The typed dispatcher adapter is executable behind one atomic host transaction. The real
-//! `Sim::do_frame` pin is intentionally negative: step 14 visits the actor, but its legacy
-//! compact switch still bypasses `systems::order_dispatch`, so the strict order row stays red.
+//! `Sim::do_frame` path reaches it for the host-free UNIT arm and the object-free EXIT arm;
+//! external ENTER/Airbase-EXIT tails remain typed-unavailable, so the strict row stays red.
 
 use don_sim::order::{
     ArmStatus, Order, OrderIndex, SpecialAnimOrderState, SpecialAnimType, EXECUTORS,
@@ -334,7 +334,7 @@ fn unavailable_or_malformed_publication_restores_the_local_before_image() {
 }
 
 #[test]
-fn real_sim_frame_visits_special_anim_but_does_not_promote_the_bypassed_adapter() {
+fn real_sim_frame_reaches_the_host_free_special_unit_adapter() {
     let mut sim = Sim::new(0x25_5880, 16);
     sim.activate(0);
     let actor = sim.spawn_unit(0, 1, 192, 192, 1).unwrap();
@@ -349,6 +349,7 @@ fn real_sim_frame_visits_special_anim_but_does_not_promote_the_bypassed_adapter(
         sim.cover.unit_process, 1,
         "the real object pass visited the actor"
     );
+    assert_eq!(sim.cover.special_anim_working, 1);
     assert_eq!(sim.world.orders(row).current(), Some(&before));
     assert_eq!(
         ARMS[OrderIndex::SpecialAnim.index()],

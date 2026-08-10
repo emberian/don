@@ -2338,8 +2338,8 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
     ArmStatus::Implemented,     // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
     ArmStatus::Implemented,     // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
-    // StateWired behind an atomic WorkWorld transaction; closure stays red until Sim::do_frame
-    // reaches this dispatcher with a production host.
+    // Production Sim reaches UNIT and object-free EXIT through the atomic host. Closure stays
+    // red until ENTER/Airbase-EXIT object, Guy, terrain, containment/death, and RNG tails land.
     ArmStatus::Unimplemented, // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
     ArmStatus::Unimplemented, // 26 GARRISON        Unit::do_garrison 0x005E6B80
     ArmStatus::Implemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0
@@ -4540,7 +4540,7 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
     }
 }
 
-fn special_anim_state(state: SpecialAnimOrderState) -> SpecialAnimState {
+pub(crate) fn special_anim_state(state: SpecialAnimOrderState) -> SpecialAnimState {
     SpecialAnimState {
         special_type: match state.special_type {
             crate::order::SpecialAnimType::Enter => SpecialAnimKind::Enter,
@@ -4558,14 +4558,67 @@ fn special_anim_state(state: SpecialAnimOrderState) -> SpecialAnimState {
     }
 }
 
-/// State-wired SPECIAL_ANIM adapter.
+/// Narrow host surface used by the SPECIAL_ANIM dispatcher and the production tick bridge.
+///
+/// Keeping this separate from [`WorkWorld`] lets `Sim::do_frame` execute arm 25 without
+/// pretending that its terrain/collision host can service every other order arm.  A production
+/// host may return [`SpecialAnimHostError::Unavailable`] for a reached external tail; that is a
+/// typed refusal and authorizes no local publication.
+pub(crate) trait SpecialAnimWorld {
+    fn special_anim_preflight(
+        &mut self,
+        actor: &UnitWork,
+        order: &OrderRec,
+    ) -> Result<SpecialAnimExecutorReceipt, SpecialAnimHostError>;
+
+    fn special_anim_commit(
+        &mut self,
+        actor: &mut UnitWork,
+        order: &OrderRec,
+        preflight: &SpecialAnimExecutorReceipt,
+    ) -> Result<SpecialAnimCommitReceipt, SpecialAnimHostError>;
+}
+
+struct WorkWorldSpecialAnim<'a, W>(&'a mut W);
+
+impl<W: WorkWorld> SpecialAnimWorld for WorkWorldSpecialAnim<'_, W> {
+    fn special_anim_preflight(
+        &mut self,
+        actor: &UnitWork,
+        order: &OrderRec,
+    ) -> Result<SpecialAnimExecutorReceipt, SpecialAnimHostError> {
+        self.0.special_anim_preflight(actor, order)
+    }
+
+    fn special_anim_commit(
+        &mut self,
+        actor: &mut UnitWork,
+        order: &OrderRec,
+        preflight: &SpecialAnimExecutorReceipt,
+    ) -> Result<SpecialAnimCommitReceipt, SpecialAnimHostError> {
+        self.0.special_anim_commit(actor, order, preflight)
+    }
+}
+
+/// State-wired SPECIAL_ANIM adapter for the complete [`WorkWorld`] dispatcher.
 ///
 /// The pure module fixes the exact branch/effect sequence. This boundary accepts it only through
-/// a snapshot-bound preflight followed by one atomic host commit. It deliberately does not make
-/// order 25 closure-complete: the production `Sim::do_frame` path still bypasses this dispatcher.
+/// a snapshot-bound preflight followed by one atomic host commit.
 pub fn do_special_anim<W: WorkWorld>(
     actor: &mut UnitWork,
     world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    do_special_anim_with_host(actor, &mut WorkWorldSpecialAnim(world), cov)
+}
+
+/// Execute SPECIAL_ANIM through its narrow atomic host transaction.
+///
+/// This is crate-visible so the canonical `Sim::do_frame` owner can reach the same adapter
+/// without implementing unrelated movement, patrol, combat, and group callbacks.
+pub(crate) fn do_special_anim_with_host<H: SpecialAnimWorld>(
+    actor: &mut UnitWork,
+    world: &mut H,
     cov: &mut DispatchCoverage,
 ) -> ArmResult {
     let Some(order_before) = actor.orders.front().cloned() else {

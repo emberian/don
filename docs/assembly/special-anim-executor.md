@@ -1,13 +1,14 @@
 # SPECIAL_ANIM order executor reconstruction
 
-Status: **StateWired behind an atomic dispatcher receipt; production Sim frame bridge red**.
+Status: **production frame reaches the atomic adapter; external world tails remain red**.
 
 This note bounds `SpecialAnimOrder` installation and every reachable branch of
 `Unit::do_spec_anim` in the shipped Rise of Nations binary. The source planner is now registered
 and consumed by `systems::order_dispatch`: ENTER/EXIT require one snapshot-bound preflight and
 one whole-plan commit receipt, while SPECIAL_UNIT is the shipped host-free no-op. This is
-StateWired, not closure-complete. The strict row remains red until that adapter is connected to
-the production frame path and the real host publishes every reached effect atomically.
+StateWired, not closure-complete. The real step-14 path now executes SPECIAL_UNIT and the
+object-free `EXIT(ox < 0)` transaction. The strict row remains red because ENTER and Airbase EXIT
+still require world surfaces which the production host deliberately refuses before mutation.
 
 ## Ground truth
 
@@ -126,8 +127,7 @@ The explicit unresolved host adapters are:
 - angle and location mutation;
 - terrain and primary-Guy mutation;
 - `go_inside` and `die`;
-- queue retirement plus same-tick `Unit::work`;
-- production Sim host and live-tick publication.
+- the Airbase-EXIT queue retirement plus same-tick recursive `Unit::work` tail.
 
 ## StateWired dispatcher boundary
 
@@ -144,9 +144,14 @@ compact actor before-image; the host contract permits no external partial public
 
 `tests/special_anim_dispatch_statewired.rs` pins successful whole-plan publication, unavailable
 preflight, malformed commit attestation, and the host-free SPECIAL_UNIT behavior. Its real
-`Sim::do_frame` test also pins the remaining blocker: step 14 visits the actor, but `tick.rs` still
-uses its compact five-arm switch rather than `systems::order_dispatch::work`, so the order stays
-unchanged and both authoritative status tables remain red.
+`Sim::do_frame` test now proves the UNIT arm reaches the same adapter through step 14.
+
+`tests/special_anim_core_tick_integration.rs` adds the mutating positive case: an object-free EXIT
+stores `frames = 10`, stores `started = 1`, retires the current order, clears its canonical path,
+and exposes the queued successor in one host commit. A save/load case proves the walked
+`SpecialAnimOrderState` remains the sole payload owner before that frame. Reached ENTER and
+Airbase-EXIT fixtures prove order, path, and RNG remain unchanged when the missing external host
+surfaces return `SpecialAnimHostError::Unavailable`.
 
 ## Remaining shared integration map
 
@@ -154,11 +159,10 @@ The remaining convergence work must:
 
 1. supply the production object/type/Guy/terrain/RNG/containment/death host behind the typed
    preflight and commit boundary;
-2. bridge that arm into the actual `Sim::do_frame` / `World::unit_work` path; the core Sim/World
-   production frame path does not currently reach `order_dispatch::work`, so a dispatcher-only
-   flip is a silent no-op there (the separate `don-ai` arena runtime already calls it);
-3. only after a positive live frame test passes, flip `order_dispatch::ARMS[25]` and
-   `order.rs::EXECUTORS[25]`, then regenerate
+2. publish Airbase EXIT's angle/location/Guy changes, queue retirement, and recursive same-tick
+   `Unit::work` as one receipt-validated transaction;
+3. only after positive production-frame tests cover every reached branch, flip
+   `order_dispatch::ARMS[25]` and `order.rs::EXECUTORS[25]`, then regenerate
    `schema/simulation-closure.json` with the normal closure generator.
 
 No payload, save/load, or player-command format change belongs to this lane. The full nine-word
@@ -184,8 +188,8 @@ tools/swarm-cargo-remote submit persvati special-anim-tests \
   --jobs 12 -- test -p don-sim --tests
 ```
 
-The source proof and StateWired adapter earn **zero** strict closure rows. Full production host
-adapters, atomic live-tick wiring, and evidence can earn exactly **orders +1** (`21/28` to
+The source proof and partial production host earn **zero** strict closure rows. Full production
+host adapters and evidence can earn exactly **orders +1** (`21/28` to
 `22/28`, assuming no concurrent ledger movement). They earn no command/group-action or opcode
 row.
 
@@ -194,8 +198,8 @@ The frozen proof passed both independent convergence profiles on 2026-08-09: hbo
 `special-anim-executor-release-20260809T215933Z-42546-23998-9f11e3ea7d82`, each with 16/16
 focused tests and exit 0. Evidence-only VA constants produced warnings; no strict row was promoted.
 
-The subsequent StateWired dispatcher boundary passed 4/4 tests in the same two independent
+The initial StateWired dispatcher boundary passed 4/4 tests in the same two independent
 profiles as the BHS factory: hbox
 `bhs-factory-special-state-20260809T222235Z-65491-19369-3437590ed646` and persvati release
-`bhs-factory-special-state-release-20260809T222236Z-65494-7499-3437590ed646`. The live-frame
-negative pin confirms why both strict order inventories remain red.
+`bhs-factory-special-state-release-20260809T222236Z-65494-7499-3437590ed646`. Those jobs predate
+the production-frame bridge described above; its source is frozen for parent-owned validation.

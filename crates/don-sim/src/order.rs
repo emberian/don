@@ -343,7 +343,7 @@ pub const EXECUTORS: [Executor; NUM_UNIT_ORDERS] = [
         note: "exact post-air-physics angle/fire/recharge/mana transaction; mandatory typed host receipt" },
     Executor { order: OrderIndex::SpecialAnim, va: Some("0x005E5880"), symbol: "Unit::do_spec_anim",
         status: ArmStatus::Unimplemented,
-        note: "StateWired atomic dispatcher adapter; production Sim::do_frame still bypasses it" },
+        note: "production frame reaches UNIT and object-free EXIT; external world tails remain typed-unavailable" },
     Executor { order: OrderIndex::Garrison, va: Some("0x005E6B80"), symbol: "Unit::do_garrison",
         status: ArmStatus::Unimplemented, note: "" },
     Executor { order: OrderIndex::Think, va: Some("0x005E5BF0"), symbol: "Unit::do_think_order",

@@ -2,9 +2,9 @@
 //! Source-only reconstruction of `SpecialAnimOrder` installation and execution.
 //!
 //! The module is registered and its fail-closed, mutation-ordered transaction is consumed by
-//! the typed `systems::order_dispatch` host seam. The production `Sim::do_frame` bridge and
-//! concrete world effects remain listed in `SPECIAL_ANIM_OPEN_TAILS`; see the integration map
-//! in `docs/assembly/special-anim-executor.md`.
+//! the typed `systems::order_dispatch` host seam. The production `Sim::do_frame` bridge reaches
+//! the host-free UNIT and object-free EXIT arms; remaining concrete world effects stay listed in
+//! `SPECIAL_ANIM_OPEN_TAILS`. See `docs/assembly/special-anim-executor.md`.
 
 pub const SPECIAL_ANIM_ORDER_INDEX: i32 = 25;
 pub const SPECIAL_ANIM_ORDER_SIZE: usize = 44;
@@ -785,5 +785,4 @@ pub const SPECIAL_ANIM_OPEN_TAILS: &[SpecialAnimOpenTail] = &[
     SpecialAnimOpenTail::TerrainAndPrimaryGuyMutation,
     SpecialAnimOpenTail::ContainmentAndDeath,
     SpecialAnimOpenTail::QueueRetirementAndSameTickWork,
-    SpecialAnimOpenTail::DispatcherAndLiveTickAdapter,
 ];
