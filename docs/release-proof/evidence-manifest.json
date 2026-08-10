@@ -70,7 +70,7 @@
     },
     {
       "path": "docs/tooling/live-control.md",
-      "sha256": "dd2ee380f4bdd91f2b85e240f9855b00ace92f2d76bbd145e4b75019afc79120",
+      "sha256": "5487b2f72c9c50175c3cae6ecbe3d5ec7c77dd7906aaf1e0621c1127e2df488f",
       "role": "active-main-thread STOP/rearm and external byte-restoration evidence"
     },
     {
@@ -643,14 +643,14 @@
         "source",
         "distribution"
       ],
-      "status": "blocked",
+      "status": "proved",
       "claim": "Public release status documents agree on active STOP/rearm and real-host lobby-peering status.",
       "evidence": [
         "README.md",
         "GOAL.md",
         "docs/tooling/live-control.md"
       ],
-      "blocker": "README.md still says the active STOP/rearm exercise is missing, and docs/tooling/live-control.md says real-host peering remains open, while GOAL.md records both as green at their bounded scopes."
+      "blocker": null
     },
     {
       "id": "assembled-product-packaging",

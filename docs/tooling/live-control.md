@@ -1,8 +1,9 @@
 # Bidirectional live retail control
 
 Status: **live-validated for pause, unit movement, exact own-state observation, a bounded
-supervised scout policy, and repeated active-main-thread STOP/rearm against retail solo
-skirmishes. Multiplayer turn agreement and real-host peering remain separate open gates.**
+supervised scout policy, repeated active-main-thread STOP/rearm against retail solo skirmishes,
+and bounded join/leave peering with a real retail host. Match launch and multiplayer
+turn/checksum/replay agreement remain open gates.**
 Target: the one supported `riseofnations.exe`, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
 
@@ -522,7 +523,16 @@ Tribe image SHA-256 was
 `4a271dcca8a7c1223e61b9f58b4e5809f45f0fcfd43ce1b5f79a8c55dfde14bb`; the independent walk
 reproduced Types `0x72e0c3b6`, Constants `0x50625668`, Balance `0x56daabc1`, final Rules
 `0x12ba3104`, and exactly 997,846 walked bytes. This closes the active solo lifecycle and local
-Rules-capture gates, not the multiplayer turn/replay or real-host client gates.
+Rules-capture gates, not match launch or multiplayer turn/checksum/replay agreement.
+
+A separate bounded read-only experiment then joined one public retail-hosted room. The redacted
+snapshot records exactly two NetSys players with both local- and host-player pointers present,
+followed by a normal leave that cleared the player band and both pointers. That proves the narrow
+real-host lobby-peering and join/leave lifecycle only; it does not establish replacement-DLL
+interoperability or any launched-match traffic. The evidence is
+[`schema/live/retail-netstate-menu-v1.json`](../../schema/live/retail-netstate-menu-v1.json), with
+the full scope and redaction contract in
+[`docs/tracks/headless-net.md`](../tracks/headless-net.md#52-the-blocking-list--exactly-what-a-live-join-needs).
 
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
