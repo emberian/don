@@ -82,6 +82,7 @@ column are the shipped PDB's own names where one exists.
 | Field-offset table, 1,223 constants | `log_data` walkers across 112 functions | `don-rules/src/offsets.rs` (generated) | **structural** (downgraded from B — §4.10) |
 | `RuleValue::parse` | the *prose* of `ron-data/rules.xml`; no engine counterpart | `don-rules/src/value.rs` | **engineering** — documentation/linting layer, never a value source |
 | Active-team diplomacy initialization prefix | `Leader::init` `0x006E3C52..0x006E3CB7`; exact `is_team(target,0)` call and true-arm value-2 declaration write | `don-sim/src/systems/leader_init_diplomacy.rs`; integrated by `player_setup.rs` | **C, instruction-derived; no retail execution** — only active team-true cells; option-dependent non-team arm and remainder of `Leader::init` excluded |
+| Full diplomacy/shared-vision initialization loop | `Leader::init` `0x006E3BF9..0x006E3D93`, `LeaderData::starting_age` `0x006D7320`, `Game::teams_locked` `0x00594880` | `don-sim/src/systems/leader_init_diplomacy_loop.rs` | **C, instruction-derived; no retail execution; source-only** — full instruction-ordered loop and fail-closed plan, not published to Sim/browser until options, prerequisite, sequential table and destination fields have one owner |
 
 ### 1.1 `hash_into_range(a, b, lo, hi)` — `Doober::get_num`
 

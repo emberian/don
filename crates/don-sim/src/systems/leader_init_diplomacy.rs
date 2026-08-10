@@ -7,11 +7,12 @@
 //! diplomacy value 2 at `0x006E3C76..0x006E3C79` and stores it in
 //! `LeaderData::diplos[target]` at `0x006E3CB4`.
 //!
-//! The false arm depends on `GameInfo+0x32`, `Leader::get_age`, and
-//! `Game::teams_locked`, while the remainder of `Leader::init` owns substantially more
-//! state. This module therefore admits only active player pairs for which the recovered
-//! frame-zero team query is true. It never changes a non-team declaration and does not
-//! claim the rest of `Leader::init`.
+//! The false arm depends on `Game+0x32` (`GameInfo+0x26`, `rush_rules`),
+//! `LeaderData::starting_age`, and `Game::teams_locked`, while the remainder of
+//! `Leader::init` owns substantially more state. This module therefore admits only active
+//! player pairs for which the recovered frame-zero team query is true. The complete
+//! detached loop is reconstructed in `leader_init_diplomacy_loop`; product integration
+//! here never changes a non-team declaration or claims the rest of `Leader::init`.
 
 use super::setup_diplomacy::{IsTeamArg, SetupDiplomacy, TeamQueryError, DIPLO_ALLY, SETUP_SLOTS};
 

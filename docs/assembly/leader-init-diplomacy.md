@@ -28,14 +28,18 @@ ingress refuses ATTACK packets whose target is not hostile before installing a c
 
 ## Honest red boundary
 
-This is not complete `Leader::init`, `Leader::set_diplo`, or diplomacy setup:
+This is not complete product integration of `Leader::init`, `Leader::set_diplo`, or diplomacy
+setup:
 
-- the false `is_team` arm at `0x006E3C7B..0x006E3CA8` depends on `GameInfo+0x32`,
-  `Leader::get_age`, and `Game::teams_locked`; non-team declarations are preserved rather
-  than guessed;
+- the wider source-only owner in `leader_init_diplomacy_loop.rs` now recovers the false
+  `is_team` arm and the complete loop. Its byte at `Game+0x32` is
+  `GameInfo+0x26` (`rush_rules`), and the exact callee is `LeaderData::starting_age`, not
+  `GameInfo+0x32`/`Leader::get_age` as an earlier note stated. PlayerSetup still preserves
+  non-team declarations because it does not own the required option/semaphore image or
+  sequential Leader initialization order;
 - inactive target cells are outside the admitted product prefix;
-- shared-vision, prerequisite, tribe, economy, type, scoring, and remaining Leader
-  initialization state in the 6,102-byte body remain red;
+- shared-vision publication, prerequisite ownership, tribe, economy, type, scoring, and
+  remaining Leader initialization state in the 6,102-byte body remain red;
 - later diplomacy commands still require the atomic `Leader::set_diplo` ejection, vision,
   victory, army, and event tail;
 - PlayerSetup and active leader owners remain unencoded in DoNSave, so live-match save

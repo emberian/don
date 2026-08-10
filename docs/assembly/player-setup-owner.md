@@ -41,9 +41,12 @@ v1/v2 journals map to the older inactive/own-slot-team baseline.
 
 - The retained `InitTeamsReceipt` contains the exact ordered BHS callback facts; no browser BHS
   host is installed, so the callbacks are not claimed executed.
-- The bounded `Leader::init` prefix installs active teammate alliances. Its option-dependent
-  non-team peace/war arm, inactive cells, shared vision, and remaining Leader initialization
-  state are still red. Later diplomacy mutation still requires complete `Leader::set_diplo`.
+- The bounded `Leader::init` prefix installs active teammate alliances. A detached source owner
+  now recovers the full raw relation/treaty/shared-vision loop, but PlayerSetup cannot publish it
+  until it owns the exact options, semaphore bits, prerequisite result, sequential Leader order,
+  and the currently absent treaty/interaction/ally-mask fields. Inactive cells and remaining
+  Leader initialization state stay red. Later diplomacy mutation still requires complete
+  `Leader::set_diplo`.
 - The setup owner is not in DoNSave v6. `save_sim` rejects `player setup owner` before emitting
   bytes, and the browser keeps live-match save disabled.
 - Random-team RNG, ranked ELO balancing, AI slots, and victory-mode mutation remain red.
