@@ -49,6 +49,12 @@ pub const WEIGHTED_WATER_GOOD_ID: i32 = 6;
 pub const WEIGHTED_WATER_GOOD_COPIES: usize = 10;
 pub const EARLY_AGE_END_EXCLUSIVE: i32 = 3;
 
+/// Domain separator for the stable logical digest handed from the pool owner to the XML owner.
+///
+/// This is deliberately a digest of the typed six-field projection below, not a hash of native
+/// object bytes or allocator-dependent vector storage.
+pub const RESOURCE_DIVVY_POOL_DIGEST_DOMAIN: &[u8] = b"don-replay/resource-divvy-pool-state/v1";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResourcePoolBitMask {
     /// Logical bit count passed to `DynamicBitMask::init`.
@@ -74,6 +80,48 @@ pub struct ResourceDivvyPoolState {
     pub late_goods: Vec<i32>,
     pub water_bits: ResourcePoolBitMask,
     pub water_goods: Vec<i32>,
+}
+
+/// Return a stable FNV-1a digest of the complete logical `ResourceDivvyPoolState` projection.
+///
+/// Every field is tagged and length-delimited; signed values are encoded little-endian. This
+/// makes the pool-to-XML handoff reproducible across hosts without claiming equivalence to a
+/// retail in-memory object hash.
+pub fn resource_divvy_pool_digest(pool: &ResourceDivvyPoolState) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn update(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    fn bit_mask(hash: &mut u64, tag: u8, mask: &ResourcePoolBitMask) {
+        update(hash, &[tag]);
+        update(hash, &mask.bits.to_le_bytes());
+        update(hash, &(mask.bytes.len() as u64).to_le_bytes());
+        update(hash, &mask.bytes);
+    }
+
+    fn goods(hash: &mut u64, tag: u8, values: &[i32]) {
+        update(hash, &[tag]);
+        update(hash, &(values.len() as u64).to_le_bytes());
+        for value in values {
+            update(hash, &value.to_le_bytes());
+        }
+    }
+
+    let mut hash = FNV_OFFSET_BASIS;
+    update(&mut hash, RESOURCE_DIVVY_POOL_DIGEST_DOMAIN);
+    bit_mask(&mut hash, 1, &pool.early_bits);
+    goods(&mut hash, 2, &pool.early_goods);
+    bit_mask(&mut hash, 3, &pool.late_bits);
+    goods(&mut hash, 4, &pool.late_goods);
+    bit_mask(&mut hash, 5, &pool.water_bits);
+    goods(&mut hash, 6, &pool.water_goods);
+    hash
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

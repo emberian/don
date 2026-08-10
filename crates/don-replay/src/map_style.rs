@@ -328,7 +328,7 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 15] = [
     MapGenerationStage {
         name: "place_resources",
         evidence_va: Some(MAP_PLACE_RESOURCES_VA),
-        rng: "pool prefix none; body open at 0x0068f597 before known direct/callee draws",
+        rng: "pool and XML bootstrap none; row body open at 0x0068fb9d before known direct/callee draws",
         checkpoint: None,
     },
     MapGenerationStage {

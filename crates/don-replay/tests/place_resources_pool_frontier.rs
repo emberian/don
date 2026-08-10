@@ -6,16 +6,16 @@ mod place_resources_pool_frontier;
 
 use don_sim::systems::map_terrain::World;
 use place_resources_pool_frontier::{
-    execute_place_resources_pool_prefix, PlaceResourcesEntryHandoff, PlaceResourcesFactEvidence,
-    PlaceResourcesLiveFacts, PlaceResourcesPoolError, RareGoodLiveFact, ResourceDivvyPoolState,
-    ResourceGoodDisposition, ResourcePoolBitMask, DYNAMIC_BIT_MASK_INIT_VA, FIRST_SCANNED_GOOD_ID,
-    GAME_CONST_REFERENCE_VA, GOOD_TYPES_REFERENCE_VA, LANDS_OCEAN_RARE_LIST_POINTER_SLOT_VA,
-    MAP_PLACE_RESOURCES_ADD_GOOD_CALL_VA, MAP_PLACE_RESOURCES_CALL_VA,
-    MAP_PLACE_RESOURCES_DONE_ADDING_CALL_VA, MAP_PLACE_RESOURCES_ENTRY_VA,
-    MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA, MAP_POST_TRANSITIONS_CHECKPOINT_CALL_VA,
-    MAP_POST_TRANSITIONS_SOURCE_TOKEN, RESOURCE_DIVVY_ADD_GOOD_VA,
-    RESOURCE_DIVVY_DONE_ADDING_GOODS_VA, SCANNED_GOOD_COUNT, SHIPPED_EXE_SHA256,
-    SHIPPED_PDB_SHA256, WEIGHTED_WATER_GOOD_COPIES,
+    execute_place_resources_pool_prefix, resource_divvy_pool_digest, PlaceResourcesEntryHandoff,
+    PlaceResourcesFactEvidence, PlaceResourcesLiveFacts, PlaceResourcesPoolError, RareGoodLiveFact,
+    ResourceDivvyPoolState, ResourceGoodDisposition, ResourcePoolBitMask, DYNAMIC_BIT_MASK_INIT_VA,
+    FIRST_SCANNED_GOOD_ID, GAME_CONST_REFERENCE_VA, GOOD_TYPES_REFERENCE_VA,
+    LANDS_OCEAN_RARE_LIST_POINTER_SLOT_VA, MAP_PLACE_RESOURCES_ADD_GOOD_CALL_VA,
+    MAP_PLACE_RESOURCES_CALL_VA, MAP_PLACE_RESOURCES_DONE_ADDING_CALL_VA,
+    MAP_PLACE_RESOURCES_ENTRY_VA, MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA,
+    MAP_POST_TRANSITIONS_CHECKPOINT_CALL_VA, MAP_POST_TRANSITIONS_SOURCE_TOKEN,
+    RESOURCE_DIVVY_ADD_GOOD_VA, RESOURCE_DIVVY_DONE_ADDING_GOODS_VA, SCANNED_GOOD_COUNT,
+    SHIPPED_EXE_SHA256, SHIPPED_PDB_SHA256, WEIGHTED_WATER_GOOD_COPIES,
 };
 
 fn entry() -> PlaceResourcesEntryHandoff {
@@ -406,4 +406,52 @@ fn every_live_fact_axis_is_mutation_sensitive() {
         .unwrap()
         .pool_after;
     assert_ne!(baseline, conquest_mutant);
+}
+
+#[test]
+fn logical_pool_digest_covers_all_six_fields_and_is_stable() {
+    let baseline = ResourceDivvyPoolState {
+        early_bits: ResourcePoolBitMask {
+            bits: 2,
+            bytes: vec![0],
+        },
+        early_goods: vec![6, 9],
+        late_bits: ResourcePoolBitMask {
+            bits: 1,
+            bytes: vec![0],
+        },
+        late_goods: vec![17],
+        water_bits: ResourcePoolBitMask {
+            bits: 3,
+            bytes: vec![0],
+        },
+        water_goods: vec![6, 6, 28],
+    };
+    let digest = resource_divvy_pool_digest(&baseline);
+    assert_eq!(digest, 0x08da_b4e3_598b_effd);
+    assert_eq!(digest, resource_divvy_pool_digest(&baseline.clone()));
+
+    let mut mutations = Vec::new();
+    let mut state = baseline.clone();
+    state.early_bits.bits += 1;
+    mutations.push(state);
+    let mut state = baseline.clone();
+    state.early_goods.push(49);
+    mutations.push(state);
+    let mut state = baseline.clone();
+    state.late_bits.bytes[0] = 1;
+    mutations.push(state);
+    let mut state = baseline.clone();
+    state.late_goods[0] += 1;
+    mutations.push(state);
+    let mut state = baseline.clone();
+    state.water_bits.bits += 1;
+    mutations.push(state);
+    let mut state = baseline;
+    state.water_goods.swap(0, 2);
+    mutations.push(state);
+
+    assert!(mutations
+        .iter()
+        .all(|state| resource_divvy_pool_digest(state) != digest));
 }

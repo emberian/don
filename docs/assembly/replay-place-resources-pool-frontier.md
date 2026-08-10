@@ -78,6 +78,10 @@ allocated sizes.
 The prefix commits the complete six-field `ResourceDivvyPool` projection atomically.
 Malformed catalog IDs, an Ocean list longer than the native 44 entries, a stale handoff,
 or mismatched capture evidence leaves the previous pool byte projection untouched.
+Shared integration binds the following XML owner to this exact result with
+`resource_divvy_pool_digest`: a domain-separated, field-tagged, length-delimited FNV-1a
+encoding of all three bitmask projections and all three ordered goods arrays. It is a
+stable logical receipt digest, not an allocator-dependent retail memory hash.
 
 ## Ownership and residual
 
@@ -87,11 +91,10 @@ goods, so a repeated invocation duplicates qualifying entries; the source preser
 behavior. It performs no World write, does not advance the World checksum or
 sourced-byte count, and has zero calls to `Random::get` (`0x00a39d70`).
 
-The real residual is `0x0068f597`, immediately after pool finalization. Retail next
-constructs XML path/string state and reads selected map/default resource configuration.
-That XML-dependent body, its later direct and callee RNG draws, the post-resource caller
-checkpoint at `0x0068c72d` (token `0x1ef7`), and the caller gap from `0x0068c12f` remain
-red until separately reconstructed and receipted.
+The pool owner's real residual is `0x0068f597`, immediately after pool finalization.
+Shared integration now continues through the selected/default XML bootstrap to
+`0x0068fb9d`. BONUS row parsing, later direct and callee RNG draws, and the post-resource
+caller checkpoint at `0x0068c72d` (token `0x1ef7`) remain red.
 
 ## Source-only proof
 
@@ -106,11 +109,12 @@ red until separately reconstructed and receipted.
 - zero RNG draws and unchanged World checksum/sourced bytes;
 - exact entry, call, residual, EXE/PDB, and global-reference evidence;
 - rollback for malformed catalogs, oversized Ocean lists, and stale evidence;
-- mutation sensitivity for age, Ocean membership, CTW state, and exclusion.
+- mutation sensitivity for age, Ocean membership, CTW state, and exclusion; and
+- stable digest coverage of all six logical pool fields.
 
 Root convergence formatted the isolated files. The first compile found only focused-test
 shadowing/binding defects; after those were corrected, persvati job
 `replay-place-resources-v2-20260809T233428Z-47419-30980-20e8106b2577` passed all nine tests.
 Retail was not run. The exact caller-gap RNG/World/checkpoint handoff is now integrated by
-`map_make_resource_schedule_integration`; the XML-dependent body after `0x0068f597` remains the
-typed open boundary.
+`map_make_resource_schedule_integration`; the typed open boundary is now the BONUS row body at
+`0x0068fb9d` when XML facts are available.

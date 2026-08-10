@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Typed receipt integration from the post-nubify checksum through the deterministic
-//! `Map::place_resources` pool prefix.
+//! `Map::place_resources` pool and XML bootstrap.
 //!
 //! This adapter does not authenticate an in-memory `Map` projection. The caller supplies its
 //! immutable object identities and capture digest, and the caller-gap evidence binds them to the
-//! exact post-nubify World/RNG receipt. The pool mutation is then represented as the entry digest
-//! plus the complete pool-prefix receipt; no stale whole-Map digest is claimed after mutation.
+//! exact post-nubify World/RNG receipt. Pool and XML host mutations are represented by their
+//! complete receipts; no stale whole-Map digest is claimed after mutation.
 
 use crate::map_make_resource_caller_gap_frontier::{
     execute_map_make_resource_caller_gap, MapMakeResourceCallerFacts,
@@ -19,9 +19,14 @@ use crate::map_make_resource_caller_gap_frontier::{
 };
 use crate::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
 use crate::place_resources_pool_frontier::{
-    execute_place_resources_pool_prefix, PlaceResourcesEntryHandoff, PlaceResourcesLiveFacts,
-    PlaceResourcesPoolError, PlaceResourcesPoolReceipt, ResourceDivvyPoolState,
-    MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA,
+    execute_place_resources_pool_prefix, resource_divvy_pool_digest, PlaceResourcesEntryHandoff,
+    PlaceResourcesLiveFacts, PlaceResourcesPoolError, PlaceResourcesPoolReceipt,
+    ResourceDivvyPoolState, MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA,
+};
+use crate::place_resources_xml_frontier::{
+    execute_place_resources_xml_frontier, PlaceResourcesXmlEntryHandoff, PlaceResourcesXmlError,
+    PlaceResourcesXmlFacts, PlaceResourcesXmlOutcome, XmlHostHandles,
+    PLACE_RESOURCES_XML_RESIDUAL_VA,
 };
 use crate::post_nubify_transition_frontier::{
     PostNubifyTransitionReceipt, MAP_POST_NUBIFY_CHECKPOINT_CALL_VA,
@@ -82,10 +87,29 @@ pub struct PlaceResourcesBodyBoundary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceResourcesXmlBoundary {
+    /// Exact first unowned instruction after the typed XML/bootstrap owner.
+    pub residual_va: u32,
+    pub caller_continuation_va: u32,
+    /// The caller checkpoint is chronological evidence only; the open body has not reached it.
+    pub pending_checkpoint_call_va: u32,
+    pub pending_source_token: u32,
+    pub map_object_identity: u64,
+    pub world_object_identity: u64,
+    /// Immutable digest at `Map::place_resources` entry. Pool mutation is owned separately by
+    /// `pool_prefix` and its canonical logical digest in `xml_entry`.
+    pub map_state_sha256_at_entry: [u8; 32],
+    pub pool_prefix: PlaceResourcesPoolReceipt,
+    pub xml_entry: PlaceResourcesXmlEntryHandoff,
+    pub xml_frontier: PlaceResourcesXmlOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MapMakeResourcePlacementReceipt {
     Skipped(PlaceResourcesSkippedBoundary),
     EntryOpen(PlaceResourcesEntryBoundary),
     BodyOpen(PlaceResourcesBodyBoundary),
+    XmlRowsOpen(PlaceResourcesXmlBoundary),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +126,9 @@ pub enum MapMakeResourceScheduleError {
     CallerGap(MapMakeResourceCallerGapError),
     CallerEntryContinuityMismatch,
     PoolPrefix(PlaceResourcesPoolError),
+    XmlFactsWithoutPoolPrefix,
+    XmlFrontier(PlaceResourcesXmlError),
+    XmlContinuityMismatch,
 }
 
 fn post_nubify_receipt_matches(receipt: &PostNubifyTransitionReceipt) -> bool {
@@ -164,6 +191,34 @@ fn caller_entry_matches(
         && entry.random_state_at_entry == prior.random_state
 }
 
+fn xml_outcome_matches(
+    entry: &PlaceResourcesXmlEntryHandoff,
+    outcome: &PlaceResourcesXmlOutcome,
+    final_host: XmlHostHandles,
+) -> bool {
+    let receipt = &outcome.receipt;
+    let handoff = &outcome.handoff;
+    receipt.entry_va == entry.entry_va
+        && receipt.residual_va == PLACE_RESOURCES_XML_RESIDUAL_VA
+        && receipt.random_state_before == entry.random_state
+        && receipt.random_state_after == entry.random_state
+        && receipt.random_draws == 0
+        && receipt.world_checksum_before == entry.world_checksum
+        && receipt.world_checksum_after == entry.world_checksum
+        && receipt.sourced_walked_bytes_before == entry.sourced_walked_bytes
+        && receipt.sourced_walked_bytes_after == entry.sourced_walked_bytes
+        && receipt.resource_pool_digest_before == entry.resource_pool_digest
+        && receipt.resource_pool_digest_after == entry.resource_pool_digest
+        && receipt.world_mutations == 0
+        && handoff.resume_va == PLACE_RESOURCES_XML_RESIDUAL_VA
+        && handoff.player_count_argument == entry.player_count_argument
+        && handoff.current_category_handles == final_host
+        && handoff.random_state == entry.random_state
+        && handoff.world_checksum == entry.world_checksum
+        && handoff.sourced_walked_bytes == entry.sourced_walked_bytes
+        && handoff.resource_pool_digest == entry.resource_pool_digest
+}
+
 /// Advance the exact `Map::make` receipt chain through the no-RNG caller gap and, when live
 /// resource facts are available, the deterministic resource-pool prefix.
 ///
@@ -176,6 +231,33 @@ pub fn execute_map_make_resource_schedule(
     caller_facts: &MapMakeResourceCallerFacts,
     pool_facts: Option<&PlaceResourcesLiveFacts>,
 ) -> Result<MapMakeResourceScheduleReceipt, MapMakeResourceScheduleError> {
+    let mut detached_xml_host = XmlHostHandles::default();
+    execute_map_make_resource_schedule_with_xml(
+        pool,
+        &mut detached_xml_host,
+        post_nubify,
+        owner,
+        caller_facts,
+        pool_facts,
+        None,
+    )
+}
+
+/// Advance the same receipt chain through the typed XML bootstrap at `0x0068fb9d`.
+///
+/// The pool projection and XML host references are staged together. A stale XML capture or any
+/// seam-continuity failure commits neither mutation. `xml_facts` may only be supplied with live
+/// pool facts because its evidence is bound to the canonical digest of the resulting six-field
+/// pool projection.
+pub fn execute_map_make_resource_schedule_with_xml(
+    pool: &mut ResourceDivvyPoolState,
+    xml_host: &mut XmlHostHandles,
+    post_nubify: &PostNubifyTransitionReceipt,
+    owner: &MapMakeResourceOwnerProvenance,
+    caller_facts: &MapMakeResourceCallerFacts,
+    pool_facts: Option<&PlaceResourcesLiveFacts>,
+    xml_facts: Option<&PlaceResourcesXmlFacts>,
+) -> Result<MapMakeResourceScheduleReceipt, MapMakeResourceScheduleError> {
     if !post_nubify_receipt_matches(post_nubify) {
         return Err(MapMakeResourceScheduleError::PostNubifyReceiptMismatch);
     }
@@ -185,6 +267,9 @@ pub fn execute_map_make_resource_schedule(
         .all(|byte| *byte == 0)
     {
         return Err(MapMakeResourceScheduleError::EmptyMapStateDigest);
+    }
+    if xml_facts.is_some() && pool_facts.is_none() {
+        return Err(MapMakeResourceScheduleError::XmlFactsWithoutPoolPrefix);
     }
 
     let prior = MapMakeResourceCallerPriorReceipt {
@@ -231,26 +316,74 @@ pub fn execute_map_make_resource_schedule(
                     {
                         return Err(MapMakeResourceScheduleError::CallerEntryContinuityMismatch);
                     }
-                    *pool = staged_pool;
-                    MapMakeResourcePlacementReceipt::BodyOpen(PlaceResourcesBodyBoundary {
-                        residual_va: MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA,
-                        caller_continuation_va: MAP_RESOURCE_CALLER_CONTINUATION_VA,
-                        pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
-                        pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
-                        map_object_identity: prior.map_object_identity,
-                        world_object_identity: prior.world_object_identity,
-                        map_state_sha256_at_entry: prior.map_state_sha256,
-                        world_checksum: prior.world_checksum.clone(),
-                        sourced_walked_bytes: prior.sourced_walked_bytes,
-                        random_state: prior.random_state,
-                        pool_prefix,
-                    })
+                    match xml_facts {
+                        None => {
+                            *pool = staged_pool;
+                            MapMakeResourcePlacementReceipt::BodyOpen(PlaceResourcesBodyBoundary {
+                                residual_va: MAP_PLACE_RESOURCES_PREFIX_RESIDUAL_VA,
+                                caller_continuation_va: MAP_RESOURCE_CALLER_CONTINUATION_VA,
+                                pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
+                                pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
+                                map_object_identity: prior.map_object_identity,
+                                world_object_identity: prior.world_object_identity,
+                                map_state_sha256_at_entry: prior.map_state_sha256,
+                                world_checksum: prior.world_checksum.clone(),
+                                sourced_walked_bytes: prior.sourced_walked_bytes,
+                                random_state: prior.random_state,
+                                pool_prefix,
+                            })
+                        }
+                        Some(xml_facts) => {
+                            let xml_entry = PlaceResourcesXmlEntryHandoff {
+                                entry_va: pool_prefix.prefix_residual_va,
+                                player_count_argument: pool_prefix.player_count_argument,
+                                random_state: pool_prefix.random_state_after,
+                                world_checksum: pool_prefix.world_checksum_after.clone(),
+                                sourced_walked_bytes: pool_prefix.sourced_walked_bytes_after,
+                                resource_pool_digest: resource_divvy_pool_digest(
+                                    &pool_prefix.pool_after,
+                                ),
+                            };
+                            let mut staged_xml_host = *xml_host;
+                            let xml_frontier = execute_place_resources_xml_frontier(
+                                &mut staged_xml_host,
+                                &xml_entry,
+                                xml_facts,
+                            )
+                            .map_err(MapMakeResourceScheduleError::XmlFrontier)?;
+                            if staged_pool != pool_prefix.pool_after
+                                || !xml_outcome_matches(&xml_entry, &xml_frontier, staged_xml_host)
+                            {
+                                return Err(MapMakeResourceScheduleError::XmlContinuityMismatch);
+                            }
+                            *pool = staged_pool;
+                            *xml_host = staged_xml_host;
+                            MapMakeResourcePlacementReceipt::XmlRowsOpen(
+                                PlaceResourcesXmlBoundary {
+                                    residual_va: PLACE_RESOURCES_XML_RESIDUAL_VA,
+                                    caller_continuation_va: MAP_RESOURCE_CALLER_CONTINUATION_VA,
+                                    pending_checkpoint_call_va:
+                                        MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
+                                    pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
+                                    map_object_identity: prior.map_object_identity,
+                                    world_object_identity: prior.world_object_identity,
+                                    map_state_sha256_at_entry: prior.map_state_sha256,
+                                    pool_prefix,
+                                    xml_entry,
+                                    xml_frontier,
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
         disposition => {
             if caller_gap.place_resources_entry.is_some() {
                 return Err(MapMakeResourceScheduleError::CallerEntryContinuityMismatch);
+            }
+            if xml_facts.is_some() {
+                return Err(MapMakeResourceScheduleError::XmlFactsWithoutPoolPrefix);
             }
             MapMakeResourcePlacementReceipt::Skipped(PlaceResourcesSkippedBoundary {
                 disposition,

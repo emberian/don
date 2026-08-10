@@ -79,6 +79,11 @@ nonempty-row body `0x0068fbb3`, player-count argument, selected/default source i
 live category/document host state, ordered rows, RNG state, World checksum/sourced bytes,
 and resource-pool digest.
 
+Shared integration derives that pool digest from the actual staged six-field
+`ResourceDivvyPoolState`; XML facts cannot bypass the pool owner. The validated retail or
+fixture evidence is retained in `PlaceResourcesXmlReceipt`, so the residual does not lose
+the selected XML capture's EXE/PDB, string-table, RNG, World, sourced-byte, or pool binding.
+
 The next red tranche begins at `0x0068fb9d`: it iterates each `BONUS`, parses its
 attributes, performs the first direct chance draw at `0x0068fd64` when the native chance
 key changes, and eventually dispatches `Map::place_resource` (`0x00691f70`) or
@@ -89,5 +94,7 @@ post-resource checkpoint at `0x0068c72d` remain red.
 `crates/don-replay/tests/place_resources_xml_frontier.rs` freezes selected/default
 fallback, present-empty semantics, UTF-16 suffix behavior, row order, host ref-operation
 order, pending cleanup addresses, atomic rejection, and unchanged RNG/World/pool state.
-The files are intentionally source-only and are not wired into `lib.rs`; root integration
-must connect the prior pool receipt and validate them in the shared build lane.
+`crates/don-replay/tests/map_make_resource_schedule_integration.rs` additionally proves the
+typed pool-to-XML seam, exact `0x0068fb9d` schedule boundary, source evidence retention, and
+joint rollback of pool and host state. The frontier is wired through `don_replay::lib` and
+`execute_map_make_resource_schedule_with_xml`.

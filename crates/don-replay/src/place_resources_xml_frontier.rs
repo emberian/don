@@ -218,6 +218,8 @@ pub struct XmlHostRefOperation {
 pub struct PlaceResourcesXmlReceipt {
     pub entry_va: u32,
     pub residual_va: u32,
+    /// Evidence that bound the typed XML sources to the pool/RNG/World entry projection.
+    pub evidence: PlaceResourcesXmlEvidence,
     pub selected_style_name: String,
     pub selected_style_path: String,
     pub default_style_path: String,
@@ -462,6 +464,7 @@ pub fn execute_place_resources_xml_frontier(
     let receipt = PlaceResourcesXmlReceipt {
         entry_va: entry.entry_va,
         residual_va: PLACE_RESOURCES_XML_RESIDUAL_VA,
+        evidence: facts.evidence.clone(),
         selected_style_name: facts.selected_style_name.clone(),
         selected_style_path,
         default_style_path: DEFAULT_STYLE_PATH.to_owned(),

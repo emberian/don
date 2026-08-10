@@ -60,6 +60,7 @@ pub mod nubify_forest_frontier;
 pub mod place_all_boundary;
 pub mod place_all_facts;
 pub mod place_resources_pool_frontier;
+pub mod place_resources_xml_frontier;
 pub mod player_land;
 pub mod pools;
 pub mod post_continent;
@@ -105,9 +106,10 @@ pub use initial::{
     WorldgenSourceSpans,
 };
 pub use map_make_resource_schedule_integration::{
-    execute_map_make_resource_schedule, MapMakeResourceOwnerProvenance,
-    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
-    PlaceResourcesBodyBoundary, PlaceResourcesEntryBoundary, PlaceResourcesSkippedBoundary,
+    execute_map_make_resource_schedule, execute_map_make_resource_schedule_with_xml,
+    MapMakeResourceOwnerProvenance, MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError,
+    MapMakeResourceScheduleReceipt, PlaceResourcesBodyBoundary, PlaceResourcesEntryBoundary,
+    PlaceResourcesSkippedBoundary, PlaceResourcesXmlBoundary,
 };
 pub use map_style::{
     MapGenerationCheckpoint, MapGenerationStage, MapStyleIdentity, MapStyleLoadError,
