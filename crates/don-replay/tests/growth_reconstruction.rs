@@ -2,8 +2,8 @@
 //! Mutation pins for the complete `Map::grow_region` helper graph.
 
 use don_replay::growth::{
-    execute_grow_region, GrowRegionCall, GrowRegionError, MapGrowthConfig, MAP_GROW_VALID_VA,
-    MAP_LARGE_STAMP_VA, MAP_POINT_VA, MAP_STAMP_VA,
+    execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowValidCall,
+    MapGrowthConfig, MAP_GROW_VALID_VA, MAP_LARGE_STAMP_VA, MAP_POINT_VA, MAP_STAMP_VA,
 };
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, World};
@@ -166,6 +166,122 @@ fn edge_jitter_is_rng_ordered_and_parameter_mutation_changes_the_projection() {
         baseline_regions.list[1].coords.items
     );
     assert!((0..=4).contains(&edged.edge_jitter_final));
+}
+
+/// `Map::grow_valid` `0x0069d000` is reachable two ways: through
+/// `Map::grow_region`'s `point`, and directly from a style virtual
+/// (`MapGreatLakes::make_continents` `0x0069a32d`). The standalone entry must
+/// consume the same `Map+0x64` jitter draws in the same order and must
+/// reproduce retail's `cmp ecx, 0x40; jle` early return instead of erroring.
+#[test]
+fn standalone_grow_valid_draws_per_margin_and_honours_the_avoid_continent_gate() {
+    let seed = 5_150;
+    let (world, regions) = seeded_region(40, seed);
+
+    // Every margin nonzero: retail walks all four and draws once each before
+    // accepting a point far from every edge.
+    let mut config = config();
+    config.edge_avoid = [3, 3, 3, 3];
+    let mut rng = Random::new(seed);
+    let accepted = execute_grow_valid(
+        &world,
+        &regions,
+        &mut rng,
+        &mut config,
+        &GrowValidCall {
+            region: 1,
+            x: 20,
+            y: 20,
+        },
+    )
+    .unwrap();
+    assert_eq!(accepted.retail_return, 1);
+    assert_eq!(accepted.rng_sites.len(), 4);
+    assert_eq!(accepted.rng_final, rng.state());
+    assert_eq!(accepted.edge_jitter_initial, 0);
+    assert_eq!(config.edge_jitter, accepted.edge_jitter_final);
+    assert!((0..=4).contains(&accepted.edge_jitter_final));
+
+    // A point inside the first margin is rejected on that margin, so the
+    // remaining three never draw.
+    let mut rejecting = config.clone();
+    rejecting.edge_jitter = 0;
+    let mut rng = Random::new(seed);
+    let rejected = execute_grow_valid(
+        &world,
+        &regions,
+        &mut rng,
+        &mut rejecting,
+        &GrowValidCall {
+            region: 1,
+            x: 0,
+            y: 20,
+        },
+    )
+    .unwrap();
+    assert_eq!(rejected.retail_return, 0);
+    assert_eq!(rejected.rng_sites.len(), 1);
+
+    // `avoid_continent > 64` returns zero without touching the world, the RNG
+    // or the jitter. That is retail behaviour, not a harness refusal.
+    let mut gated = config.clone();
+    gated.avoid_continent = 65;
+    let before_jitter = gated.edge_jitter;
+    let mut rng = Random::new(seed);
+    let before_rng = rng;
+    let short = execute_grow_valid(
+        &world,
+        &regions,
+        &mut rng,
+        &mut gated,
+        &GrowValidCall {
+            region: 1,
+            x: 20,
+            y: 20,
+        },
+    )
+    .unwrap();
+    assert_eq!(short.retail_return, 0);
+    assert!(short.rng_sites.is_empty());
+    assert_eq!(rng, before_rng);
+    assert_eq!(gated.edge_jitter, before_jitter);
+
+    // A negative radius has no retail meaning; it must fail closed rather than
+    // index the ring table below zero.
+    let mut negative = config.clone();
+    negative.avoid_continent = -1;
+    let mut rng = Random::new(seed);
+    assert!(matches!(
+        execute_grow_valid(
+            &world,
+            &regions,
+            &mut rng,
+            &mut negative,
+            &GrowValidCall {
+                region: 1,
+                x: 20,
+                y: 20,
+            },
+        ),
+        Err(GrowRegionError::InvalidMapField {
+            field: "avoid_continent",
+            value: -1
+        })
+    ));
+    assert!(matches!(
+        execute_grow_valid(
+            &world,
+            &regions,
+            &mut rng,
+            &mut config.clone(),
+            &GrowValidCall {
+                region: 64,
+                x: 20,
+                y: 20,
+            },
+        ),
+        Err(GrowRegionError::InvalidRegion { region: 64 })
+    ));
 }
 
 #[test]

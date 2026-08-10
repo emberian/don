@@ -91,8 +91,8 @@ pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES
 pub use continent::{
     execute_continent_prefix, execute_continent_prefix_from_rng,
     execute_continent_prefix_with_regions, execute_continent_prefix_with_regions_from_rng,
-    ContinentError, ContinentReceipt, ContinentStop, LandDistanceCall, RegionSeedCall,
-    RegionSeedReceipt,
+    ContinentError, ContinentReceipt, ContinentStop, LakeCandidateReceipt, RegionSeedCall,
+    RegionSeedReceipt, MAP_PLAYER_LAND_RADIUS,
 };
 pub use fractal_boundary::{
     resolve_fertility_boundary, resolve_tile_selection, FertilityBoundary, FractalBoundaryError,
@@ -100,7 +100,8 @@ pub use fractal_boundary::{
     TileSelectionPass, TileSelectionSource, TERRAIN_GROUPS_PLACE_ALL_VA,
 };
 pub use growth::{
-    execute_grow_region, GrowRegionCall, GrowRegionError, GrowRegionReceipt, MapGrowthConfig,
+    execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowRegionReceipt,
+    GrowValidCall, GrowValidReceipt, MapGrowthConfig,
 };
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use initial::{

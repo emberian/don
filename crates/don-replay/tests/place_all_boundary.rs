@@ -86,6 +86,8 @@ fn continent(random_state: i32) -> ContinentReceipt {
         regions_cleared: 2,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        grow_valid_calls: Vec::new(),
+        lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
         starts_added: 0,

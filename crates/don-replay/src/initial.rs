@@ -860,14 +860,6 @@ impl InitialItemReconstruction {
                     primitive_va: crate::continent::MAP_GROW_REGION_VA,
                 }
             }
-            crate::continent::ContinentStop::LandDistance { primitive_va, .. } => {
-                InitialItemBoundary::MapContinentPrimitiveUnavailable {
-                    boundary: "map_land_distance",
-                    map_style: receipt.map_style,
-                    make_continents_va: receipt.make_continents_va,
-                    primitive_va: *primitive_va,
-                }
-            }
             crate::continent::ContinentStop::FillCont { primitive_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
                     boundary: "map_team_continent_partition",

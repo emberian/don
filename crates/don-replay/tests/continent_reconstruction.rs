@@ -3,7 +3,7 @@
 
 use don_replay::continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError, ContinentStop,
-    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA, REGIONS_CLEAR_ALL_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, REGIONS_CLEAR_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
 use don_replay::map_style::{
@@ -67,7 +67,9 @@ fn style(ordinal: u8) -> MapStyleStaticData {
             if ordinal == 14 { "8" } else { "4" },
         ));
     }
-    if ordinal == 18 {
+    if ordinal == 14 || ordinal == 18 {
+        // Both shipped files override AVOID_CENTER with a plain 3 and all four
+        // edge margins; `greatlakes.xml` scales its margins by the world axis.
         selected_map_entries.push(entry("AVOID_CENTER", "scalevalue", "3"));
         for tag in [
             "AVOID_EDGE_0",
@@ -75,7 +77,11 @@ fn style(ordinal: u8) -> MapStyleStaticData {
             "AVOID_EDGE_2",
             "AVOID_EDGE_3",
         ] {
-            selected_map_entries.push(entry(tag, "scalevalue", "2"));
+            selected_map_entries.push(entry(
+                tag,
+                "scalevalue",
+                if ordinal == 14 { "8 SCALE" } else { "2" },
+            ));
         }
     }
     let evidence = || StaticFileEvidence {
@@ -242,20 +248,87 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         .all(|cell| (0..128).contains(&i32::from(cell.region))));
 
     let mut lakes_world = seeded_world(100, seed);
-    let lakes =
-        execute_continent_prefix(&inputs(14, 4, seed, 100, 5), &style(14), &mut lakes_world)
-            .unwrap();
-    assert_eq!(lakes.direct_rng_sites.len(), 6); // orientation + five hook draws
-    assert_eq!(lakes.rng_final, lcg_after(seed as i32, 6));
-    match lakes.stop {
-        ContinentStop::LandDistance { primitive_va, call } => {
-            assert_eq!(primitive_va, MAP_LAND_DIST_VA);
-            assert_eq!(call.region, 1);
-            assert!(call.x >= 0 && call.x < 100 && call.y >= 0 && call.y < 100);
-            assert_eq!(call.required_distance, 16);
+    let mut lakes_regions = Regions::default();
+    let lakes = execute_continent_prefix_with_regions(
+        &inputs(14, 4, seed, 100, 5),
+        &style(14),
+        &mut lakes_world,
+        &mut lakes_regions,
+    )
+    .unwrap();
+    assert!(matches!(
+        lakes.stop,
+        ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA
         }
-        other => panic!("Great Lakes stopped at {other:?}"),
+    ));
+    // xs/12 == 8 lakes, plus zero or one from the parity draw.
+    assert!(
+        (8..=9).contains(&lakes.region_seeds.len()),
+        "lakes seeded: {}",
+        lakes.region_seeds.len()
+    );
+    assert_eq!(lakes.region_seeds.len(), lakes.region_growths.len());
+    assert_eq!(lakes.lake_candidates.len(), lakes.grow_valid_calls.len());
+    // Every accepted candidate cleared its own spacing threshold, which is what
+    // `Map::land_dist` exists to decide.
+    for candidate in &lakes.lake_candidates {
+        assert!(
+            candidate.land_distance >= candidate.required_distance,
+            "{candidate:?}"
+        );
+        assert!(candidate.required_distance >= 3);
+        assert!((0..100).contains(&candidate.x) && (0..100).contains(&candidate.y));
     }
+    // The first pass uses the unshrunk area, so its threshold is fixed by
+    // `max((8 + 1) / 2 + isqrt(500 * 7 / 22), 3)`.
+    assert_eq!(lakes.lake_candidates[0].required_distance, 16);
+    assert_eq!(lakes.lake_candidates[0].area, 500);
+    // Regions become lakes: `Map::invert_land` runs after the growth loop, so
+    // the seeded cells read as ocean in the returned world.
+    for candidate in &lakes.lake_candidates {
+        if candidate.grow_valid_return != 0 {
+            assert!(
+                lakes_world.is_ocean(candidate.x, candidate.y),
+                "{candidate:?}"
+            );
+        }
+    }
+    assert_eq!(lakes.starts_added, 4);
+    assert_eq!(lakes_world.start_x.items.len(), 4);
+    for (&sx, &sy) in lakes_world
+        .start_x
+        .items
+        .iter()
+        .zip(&lakes_world.start_y.items)
+    {
+        assert!(!lakes_world.is_ocean(sx, sy));
+        assert!(sx > 0 && sy > 0 && sx < 99 && sy < 99);
+    }
+    assert!(lakes.player_land.is_some());
+    assert!(lakes.world_inverted);
+    // Every direct hook draw is recorded, and the growth helpers appended
+    // theirs, so the final RNG word cannot be reached by five draws any more.
+    assert!(lakes.direct_rng_sites.len() > 6);
+    assert_eq!(
+        lakes.direct_rng_sites[0],
+        don_replay::map_style::MAP_MAKE_ORIENTATION_RNG_VA
+    );
+    // `greatlakes.xml` sets all four AVOID_EDGE margins, so an accepted direct
+    // `grow_valid` call draws exactly once per margin at `0x0069d2ab`, while a
+    // rejection stops the margin walk early and draws fewer.
+    for call in &lakes.grow_valid_calls {
+        assert_eq!(call.primitive_va, don_replay::growth::MAP_GROW_VALID_VA);
+        assert!(call.rng_sites.len() <= 4, "{call:?}");
+        if call.retail_return != 0 {
+            assert_eq!(call.rng_sites.len(), 4, "{call:?}");
+        }
+        assert!((0..=4).contains(&call.edge_jitter_final), "{call:?}");
+    }
+    assert!(lakes
+        .grow_valid_calls
+        .iter()
+        .any(|call| call.retail_return != 0));
 
     let mut indies_world = seeded_world(90, seed);
     let mut indies_regions = Regions::default();

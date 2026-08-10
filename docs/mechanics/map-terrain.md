@@ -27,7 +27,7 @@ sim's terrain is **two integer arrays and four byte planes**.
 | **There is no sim-side heightmap.** | `Terrain::master_land_heights : SimpleArray<float>` lives in the render class and never enters the checksum. The sim's only vertical structure is the discrete cliff/mountain bits. |
 | **But four `Terrain` fields *are* lockstep-critical.** | `World::walk_data` sections 10–13 checksum `Terrain::{halfland_locs, halfland_types, halfland_subtypes, nuke_hits}`. New finding; see §6. |
 
-33 focused unit tests, all passing (§8).
+35 focused unit tests, all passing (§8).
 
 ---
 
@@ -604,11 +604,11 @@ inputs and side effects can be executed and compared.
 
 ## 8. What the Rust module does, and how it was measured
 
-`crates/don-sim/src/systems/map_terrain.rs`, **33 focused tests, all passing**:
+`crates/don-sim/src/systems/map_terrain.rs`, **35 focused tests, all passing**:
 
 ```
-rustc --edition 2021 --test crates/don-sim/src/systems/map_terrain.rs -o /tmp/mt && /tmp/mt
-test result: ok. 23 passed; 0 failed
+tools/swarm-cargo <lane> test -p don-sim --lib systems::map_terrain
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1558 filtered out
 ```
 
 Implemented:
@@ -629,6 +629,12 @@ Implemented:
   `set_river_at`, `set_coastal`, `set_resource_at`, `set_city_at`, `set_started_at`,
   `set_started2_at`, `set_gathered_at`, `set_gather_edge`, `set_behind`, `set_land`,
   `set_oil_at`, `set_down`, `new_coll_block`.
+- **`Map::land_dist` `0x0069d970`** — the complete call-free spacing leaf. A non-ocean
+  origin returns `0`; otherwise it returns the first canonical circle ring `1 ..= 0x40`
+  containing a non-ocean cell, saturating at `0x41`. Its third argument decides whether
+  an off-map offset counts as land. `WATERHALF` is tested before the `land` byte at both
+  the origin and every offset, so a half-land cell terminates the scan. See
+  [`docs/assembly/map-great-lakes-continents.md`](../assembly/map-great-lakes-continents.md).
 - The fog planes and their accessors, plus `clear_seen` / `clear_danger`.
 - **The `world` checksum channel**: a `DataWalk` trait, adler-32 (NMAX 5552 as measured at
   `0x00a46854`), and `World::walk` reproducing all 13 sections in order.
@@ -649,6 +655,8 @@ Tests that carry real evidence rather than restating the code:
 | `blocked_propagates_bad_path_to_the_eight_ring` | the 8-ring `BAD_PATH` invariant and both counters, set and clear |
 | `river_cell_flag_tracks_its_sixteen_tiles` | the rollup rescan |
 | `tregion_splits_waterhalf_cells` | `region`/`region2` selection |
+| `land_dist_measures_rings_to_the_first_non_ocean_cell` | the octagon ring order, `WATERHALF` before `land`, ring 0 excluded, the `0x41` saturation |
+| `land_dist_edge_flag_selects_whether_off_map_counts_as_land` | the third argument — mutation-checked in both directions |
 | `adler32_known_vector` | the hash primitive |
 | `world_channel_byte_count` | the exact byte total of the traversal — catches a section-order regression by size as well as by hash |
 | `world_checksum_is_deterministic_and_sensitive` | stability, and that padding is excluded while block *presence* is included |
@@ -728,7 +736,12 @@ not promote adjacent uncased behavior. Specifically:
 8. **The generator itself is not ported.** `Map::make`'s subsystem order and the 21
    per-style `make_continents` overrides are mapped but not implemented. The common
    post-continent `fix_diag_land` stage is now exact and oracle-backed; its input land
-   plane is still supplied rather than generated.
+   plane is still supplied rather than generated. Four style virtuals do run end to end
+   inside `crates/don-replay` — Old World (6), Himalayas (9), Mediterranean (12) and,
+   as of this lane, **Great Lakes (14)** — while East Indies (18) and East Meets West
+   (19) still stop at a named primitive and the remaining seventeen styles are not
+   dispatched at all. None of the four has an executable retail differential: they are
+   structure read off the disassembly, tier **C**.
 9. **`land` values 0/1/2 are named from behaviour**, not from a definition. `is_ocean`
    accepts 1 and 2, `wipe` and `offmap_world` use 2. The PDB's `TileSetLandTypes`
    (`eTILE_FERTILE=0, eTILE_COASTAL=1, eTILE_OCEAN=2`) is a *tileset* enum and is only a
@@ -753,6 +766,7 @@ models; there is no parallel standalone terrain representation.
 | `Terrain::{halfland_locs,halfland_types,halfland_subtypes,nuke_hits}` are in the `world` channel | `0x006b5ff4`+, via `[0x00c06218]` = `MiscAccess::terrain` | structural [measured] | offsets `+0x4b80/4b9c/4bb8/4bd4` |
 | Map generation is seeded from one 32-bit value into `game_random` | `Map::make` `0x0068bc90` @ `0x0068bcbf` | structural [measured] | `mov [world+0x7c], ecx` ; `mov [game_random], ecx` |
 | Worldgen has no transcendental calls; sim terrain is integer-only | scan of all `map.cpp` functions vs IAT `0xac5518`–`0xac5534`; FP census of `World::set_*` | structural [measured] | 38 FP / 26,430 in generators, 0 FP / 1,929 in the write API, 0 transcendental calls |
+| `Map::land_dist` ring-distance-to-land leaf | `0x0069d970`–`0x0069dacc`; tables `0x00cb7e90` / `0x00cbb0e0` / `0x00cbe330` | structural [measured] | complete call-free disassembly; `is_ocean` at origin and offsets, rings `1..=0x40`, `0x41` saturation, off-map gated on arg 3 |
 | `space_at_corner` probe layout and approach groups | `0x006b27f0`; tables `0x00adeca0`, `0x00adecf0`, `0x00aded30` | structural [measured] | 4×4 tiling with indices 0–3 as the core; four 5-cell L groups |
 | `river_modifier` (×2, `Constants+0x68`) is read only by `get_damage` | `0x00644130` | structural [measured] | sole reader across `re/decomp-all/`; gated on `(obj[+0xc] ^ 0x63637) < 0` |
 

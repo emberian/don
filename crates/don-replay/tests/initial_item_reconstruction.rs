@@ -230,6 +230,85 @@ fn changing_the_source_style_byte_changes_the_plan_without_installing_items() {
     assert_eq!(sim.items_channel(), Err(ItemRuntimeError::Unavailable));
 }
 
+fn open_great_lakes() -> Option<Replay> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ron-data/replays/multi/Playback___2024.02.24_21_25_53__Sat_.rcx");
+    if !path.is_file() {
+        eprintln!("\n  SKIPPED — NOT A PASS. Great Lakes retail replay is absent.\n");
+        return None;
+    }
+    Some(Replay::open(&path).expect("Great Lakes retail replay must decode"))
+}
+
+/// The second most common corpus style now runs its whole virtual.
+///
+/// Before `Map::land_dist` `0x0069d970` existed as a port, this replay stopped
+/// inside `MapGreatLakes::make_continents` at the first spacing test, with no
+/// lake, no start and an unwiped candidate. It now leaves the hook at
+/// `0x0069a641` and joins Mediterranean at the common `TerrainGroups` boundary.
+#[test]
+fn checksum_bearing_great_lakes_replay_runs_its_whole_style_virtual() {
+    let Some(rep) = open_great_lakes() else {
+        return;
+    };
+    assert!(rep.checksum_packets > 0);
+    assert_eq!(rep.initial.info.settings.map_style, 14);
+    let root = ron_data_root_for_replay(&rep.path).unwrap();
+    let style = MapStyleStaticData::load_from_ron_data(&root, 14).unwrap();
+    assert_eq!(style.identity.key, "Great Lakes");
+    assert_eq!(style.identity.make_continents_va, Some(0x0069_9e40));
+
+    let plan = rep.initial.reconstruct_items_with_style(style).unwrap();
+    assert_eq!(
+        plan.boundary,
+        InitialItemBoundary::MapContinentGenerationUnavailable {
+            map_style: 14,
+            make_continents_va: 0x0069_9e40,
+        }
+    );
+
+    let sim = WorldSim::from_replay(&rep);
+    assert_eq!(sim.initial_item_style_error, None);
+    let executed = sim.initial_items.as_ref().unwrap();
+    assert_eq!(
+        executed.boundary.name(),
+        "terrain_groups_fill_fertile",
+        "continent execution error: {:?}",
+        sim.initial_item_error
+    );
+    let continent = sim.initial_continent.as_ref().unwrap();
+    assert_eq!(continent.map_style, 14);
+    assert!(matches!(
+        continent.stop,
+        don_replay::ContinentStop::HookComplete { .. }
+    ));
+    // xs/12 lakes plus the parity draw, each seeded and grown once.
+    let world = sim.initial_world.as_ref().expect("prefix world");
+    assert_eq!(world.world.xs, 100);
+    assert!((8..=9).contains(&continent.region_seeds.len()));
+    assert_eq!(continent.region_seeds.len(), continent.region_growths.len());
+    assert!(continent.lake_candidates.len() >= continent.region_seeds.len());
+    for candidate in &continent.lake_candidates {
+        assert!(candidate.land_distance >= candidate.required_distance);
+    }
+    assert_eq!(continent.starts_added, rep.initial.active_players().count());
+    assert!(continent.world_inverted);
+    assert_eq!(continent.pool_eliminations.len(), 1);
+    assert!(continent.player_land.is_some());
+    // `Map::grow_region`'s return is not tested by this style, so a stalled
+    // growth must not turn into a retry stop.
+    assert_eq!(continent.retry_attempt, 1);
+    let post = executed
+        .post_continent
+        .as_ref()
+        .expect("the common coastline chain runs once the hook returns");
+    assert_eq!(post.next_va, don_replay::TERRAIN_GROUPS_FILL_FERTILE_VA);
+}
+
 #[test]
 fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     let Some(rep) = open_east_indies() else {

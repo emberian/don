@@ -98,6 +98,29 @@ pub enum GrowRegionError {
     },
 }
 
+/// One direct `Map::grow_valid` call. `MapGreatLakes::make_continents` issues
+/// these at `0x0069a32d` before it has created the region, so `region` is the
+/// *next* land-region id rather than an existing one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrowValidCall {
+    pub region: i32,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrowValidReceipt {
+    pub primitive_va: u32,
+    pub call: GrowValidCall,
+    /// Retail's `int` return, exactly: `1` accepted, `0` rejected.
+    pub retail_return: i32,
+    pub rng_initial: i32,
+    pub rng_final: i32,
+    pub rng_sites: Vec<u32>,
+    pub edge_jitter_initial: i32,
+    pub edge_jitter_final: i32,
+}
+
 #[derive(Default)]
 struct Counters {
     sites: Vec<u32>,
@@ -139,12 +162,87 @@ pub fn execute_grow_region(
     Ok(receipt)
 }
 
-fn validate(
+/// Execute retail `Map::grow_valid` `0x0069d000` as a standalone call.
+///
+/// `Map::grow_region` reaches this helper through `point`; `MapGreatLakes` calls
+/// it directly to decide whether a candidate lake seed may become a region at
+/// all. Both paths mutate the same two pieces of caller state — the main
+/// `Random` stream and the persistent `Map+0x64` edge jitter — so the wrapper
+/// stages them and commits only on success.
+///
+/// `avoid_continent > 64` is retail behaviour (`0x0069d011`: `cmp ecx, 0x40;
+/// jle`), not a harness error: the shipped body returns `0` without reading the
+/// world or drawing. A negative value has no retail meaning (it would index
+/// `ring_end` below zero) and fails closed.
+pub fn execute_grow_valid(
     world: &World,
     regions: &Regions,
-    config: &MapGrowthConfig,
-    call: &GrowRegionCall,
-) -> Result<(), GrowRegionError> {
+    rng: &mut Random,
+    config: &mut MapGrowthConfig,
+    call: &GrowValidCall,
+) -> Result<GrowValidReceipt, GrowRegionError> {
+    validate_world_shape(world)?;
+    validate_world_regions(world, regions)?;
+    let Ok(region_index) = usize::try_from(call.region) else {
+        return Err(GrowRegionError::InvalidRegion {
+            region: call.region,
+        });
+    };
+    if region_index >= LAND_REGION_COUNT || region_index >= regions.list.len() {
+        return Err(GrowRegionError::InvalidRegion {
+            region: call.region,
+        });
+    }
+    if config.avoid_continent < 0 {
+        return Err(GrowRegionError::InvalidMapField {
+            field: "avoid_continent",
+            value: config.avoid_continent,
+        });
+    }
+    if !(0..=3).contains(&config.base_edge) {
+        return Err(GrowRegionError::InvalidMapField {
+            field: "base_edge",
+            value: config.base_edge,
+        });
+    }
+    if !(0..=4).contains(&config.edge_jitter) {
+        return Err(GrowRegionError::InvalidMapField {
+            field: "edge_jitter",
+            value: config.edge_jitter,
+        });
+    }
+
+    let mut next_rng = *rng;
+    let mut next_config = config.clone();
+    let mut counters = Counters::default();
+    let rng_initial = next_rng.state();
+    let edge_jitter_initial = next_config.edge_jitter;
+    let accepted = grow_valid(
+        world,
+        regions,
+        &mut next_rng,
+        &mut next_config,
+        call.region,
+        call.x,
+        call.y,
+        &mut counters,
+    );
+    let receipt = GrowValidReceipt {
+        primitive_va: MAP_GROW_VALID_VA,
+        call: *call,
+        retail_return: i32::from(accepted),
+        rng_initial,
+        rng_final: next_rng.state(),
+        rng_sites: counters.sites,
+        edge_jitter_initial,
+        edge_jitter_final: next_config.edge_jitter,
+    };
+    *rng = next_rng;
+    *config = next_config;
+    Ok(receipt)
+}
+
+fn validate_world_shape(world: &World) -> Result<(), GrowRegionError> {
     let expected = i64::from(world.xs).checked_mul(i64::from(world.ys));
     if world.xs <= 0
         || world.ys <= 0
@@ -158,6 +256,32 @@ fn validate(
             wdata_len: world.wdata.len(),
         });
     }
+    Ok(())
+}
+
+fn validate_world_regions(world: &World, regions: &Regions) -> Result<(), GrowRegionError> {
+    for y in 0..world.ys {
+        for x in 0..world.xs {
+            let cell_region = world.wdata(x, y).region;
+            if cell_region < 0 || cell_region as usize >= regions.list.len() {
+                return Err(GrowRegionError::InvalidWorldRegion {
+                    x,
+                    y,
+                    region: cell_region,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate(
+    world: &World,
+    regions: &Regions,
+    config: &MapGrowthConfig,
+    call: &GrowRegionCall,
+) -> Result<(), GrowRegionError> {
+    validate_world_shape(world)?;
     let Ok(region_index) = usize::try_from(call.region) else {
         return Err(GrowRegionError::InvalidRegion {
             region: call.region,
@@ -194,18 +318,7 @@ fn validate(
             value: config.avoid_continent,
         });
     }
-    for y in 0..world.ys {
-        for x in 0..world.xs {
-            let cell_region = world.wdata(x, y).region;
-            if cell_region < 0 || cell_region as usize >= regions.list.len() {
-                return Err(GrowRegionError::InvalidWorldRegion {
-                    x,
-                    y,
-                    region: cell_region,
-                });
-            }
-        }
-    }
+    validate_world_regions(world, regions)?;
     if !(0..=3).contains(&config.base_edge) {
         return Err(GrowRegionError::InvalidMapField {
             field: "base_edge",

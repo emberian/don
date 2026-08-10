@@ -9,7 +9,8 @@
 //! call as data; it never skips the primitive and consumes later RNG draws.
 
 use crate::growth::{
-    execute_grow_region, GrowRegionCall, GrowRegionError, GrowRegionReceipt, MapGrowthConfig,
+    execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowRegionReceipt,
+    GrowValidCall, GrowValidReceipt, MapGrowthConfig,
 };
 use crate::initial::InitialWorldgenInputs;
 use crate::map_style::{MapStyleStaticData, StaticXmlEntry, MAP_MAKE_ORIENTATION_RNG_VA};
@@ -33,6 +34,17 @@ pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
 pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
 
+/// `MapGreatLakes::make_continents` `0x00699e40` derives the
+/// `Map::check_player_land` radius from a shipped unit type rather than from map
+/// XML: `[[[0x00c061fc]+0x10]+0x574]+0x1fc`, rounded up by four
+/// (`0x00699e92`–`0x00699eb1`). `MapMediterranean::make_continents` reads the
+/// identical chain at `0x0069ae2a`; that lane recorded the type as
+/// `unittypes.items[349]` (Battleship) with PDB `ObjectTypeData::max_range`
+/// `+0x1fc` fixed at 24 TCoords by `NAVAL_ROSTER`/`unitrules.xml`, so
+/// `ceil(24 / 4) == 6`. Nothing in this crate loads unit types yet, so the
+/// derived value is carried as a named constant instead of a bare literal.
+pub const MAP_PLAYER_LAND_RADIUS: i32 = 6;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionSeedCall {
     pub region: i32,
@@ -41,12 +53,20 @@ pub struct RegionSeedCall {
     pub area: i32,
 }
 
+/// One accepted `MapGreatLakes` lake seed, with the exact rejection budget the
+/// candidate loop at `0x0069a150`–`0x0069a272` spent reaching it. Each rejected
+/// candidate consumed two `Random::get(0, 0xffff)` draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LandDistanceCall {
+pub struct LakeCandidateReceipt {
+    pub region: i32,
     pub x: i32,
     pub y: i32,
-    pub region: i32,
+    pub area: i32,
     pub required_distance: i32,
+    pub land_distance: i32,
+    pub rejected_candidates: i32,
+    /// `Map::grow_valid`'s `int` return for this candidate.
+    pub grow_valid_return: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,12 +102,6 @@ pub enum ContinentStop {
         failed_region: i32,
         retail_return: i32,
     },
-    /// Great Lakes needs the current generated-land distance before its retry
-    /// branch can be selected.
-    LandDistance {
-        primitive_va: u32,
-        call: LandDistanceCall,
-    },
     /// East Meets West first partitions players by team into continent shares.
     FillCont {
         primitive_va: u32,
@@ -113,6 +127,11 @@ pub struct ContinentReceipt {
     pub regions_cleared: u32,
     pub region_seeds: Vec<RegionSeedReceipt>,
     pub region_growths: Vec<GrowRegionReceipt>,
+    /// Direct `Map::grow_valid` calls issued by the style virtual itself. The
+    /// calls `Map::grow_region` makes internally stay inside its own receipt.
+    pub grow_valid_calls: Vec<GrowValidReceipt>,
+    /// Accepted `MapGreatLakes` lake seeds, in creation order.
+    pub lake_candidates: Vec<LakeCandidateReceipt>,
     pub pool_eliminations: Vec<EliminatePoolsReceipt>,
     pub player_land: Option<CheckPlayerLandReceipt>,
     pub starts_added: usize,
@@ -290,7 +309,7 @@ pub fn execute_continent_prefix_with_regions_from_rng(
 
     // `Map::make_region` reads these installed Map fields. Resolve them before
     // any wipe or RNG draw so missing static data remains transactional.
-    let region_defaults = if matches!(inputs.map_style, 12 | 18) {
+    let region_defaults = if matches!(inputs.map_style, 12 | 14 | 18) {
         RegionSeedDefaults {
             common_factor: map_int(style, "COMMON_RESOURCES", "value")?,
             goody_factor: map_int(style, "GOODY_BOXES", "value")?,
@@ -348,11 +367,13 @@ pub fn execute_continent_prefix_with_regions_from_rng(
         14 => great_lakes(
             players,
             inputs.map_size,
+            orientation,
             &mut next_world,
             &mut next_regions,
             &mut rng,
             &mut sites,
             style,
+            region_defaults,
         )?,
         18 => east_indies(
             players,
@@ -385,6 +406,8 @@ pub fn execute_continent_prefix_with_regions_from_rng(
         regions_cleared: partial.regions_cleared,
         region_seeds: partial.region_seeds,
         region_growths: partial.region_growths,
+        grow_valid_calls: partial.grow_valid_calls,
+        lake_candidates: partial.lake_candidates,
         pool_eliminations: partial.pool_eliminations,
         player_land: partial.player_land,
         starts_added: partial.starts_added,
@@ -398,6 +421,8 @@ struct PartialReceipt {
     regions_cleared: u32,
     region_seeds: Vec<RegionSeedReceipt>,
     region_growths: Vec<GrowRegionReceipt>,
+    grow_valid_calls: Vec<GrowValidReceipt>,
+    lake_candidates: Vec<LakeCandidateReceipt>,
     pool_eliminations: Vec<EliminatePoolsReceipt>,
     player_land: Option<CheckPlayerLandReceipt>,
     starts_added: usize,
@@ -451,6 +476,8 @@ fn old_world_or_himalayas(
         regions_cleared: 2,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        grow_valid_calls: Vec::new(),
+        lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
         starts_added: players as usize,
@@ -512,6 +539,8 @@ fn mediterranean(
             regions_cleared: 1,
             region_seeds: vec![seed_receipt],
             region_growths: vec![growth.clone()],
+            grow_valid_calls: Vec::new(),
+            lake_candidates: Vec::new(),
             pool_eliminations: Vec::new(),
             player_land: None,
             starts_added: 0,
@@ -655,6 +684,8 @@ fn mediterranean(
             regions_cleared: 7,
             region_seeds: vec![seed_receipt, second_seed_receipt],
             region_growths: vec![growth, second_growth],
+            grow_valid_calls: Vec::new(),
+            lake_candidates: Vec::new(),
             pool_eliminations: vec![first_pools, second_pools],
             player_land: Some(player_land),
             starts_added: players,
@@ -672,6 +703,8 @@ fn mediterranean(
         regions_cleared: 8,
         region_seeds: vec![seed_receipt, second_seed_receipt],
         region_growths: vec![growth, second_growth],
+        grow_valid_calls: Vec::new(),
+        lake_candidates: Vec::new(),
         pool_eliminations: vec![first_pools, second_pools, final_pools],
         player_land: Some(player_land),
         starts_added: players,
@@ -682,64 +715,276 @@ fn mediterranean(
     })
 }
 
+/// `MapGreatLakes::make_continents` `0x00699e40`–`0x0069a641`.
+///
+/// The style grows ordinary land regions on an all-ocean world and then calls
+/// `Map::invert_land`, so the regions it created *become* the lakes. Structure,
+/// read off the instruction stream:
+///
+/// ```text
+/// 0x00699e80  avoid_continent = max(scale_land_area(Map+0x30, players), 6)  -> Map+0x30
+/// 0x00699f63  World::wipe ; Regions::clear_all
+/// 0x00699f88  angle       = (draw << 16) + draw
+/// 0x00699fb5  area_max    = max(size / 20, 90) ; area_min = max(size / 40, 24)
+/// 0x0069a002  remaining   = xs / 12 + (draw & 1)
+/// 0x0069a043  loop:  attempts += 1 ; if attempts >= 100 -> done
+/// 0x0069a060         required = max((avoid_continent + 1) / 2 + isqrt(area * 7 / 22), 3)
+/// 0x0069a150         candidate: x = draw % xs ; y = draw % ys
+/// 0x0069a255                    if Map::land_dist(x, y, 1) < required and
+///                               fewer than 1000 rejections -> candidate
+/// 0x0069a272         1000 rejections -> shrink
+/// 0x0069a32d         if Map::grow_valid(last + 1, x, y):
+/// 0x0069a3fe             Map::make_region(region, x, y, area)
+/// 0x0069a415             Map::grow_region(region, area, xs, -1, -1, 0)   [return ignored]
+/// 0x0069a41a             remaining -= 1 ; attempts = 0
+/// 0x0069a424         area = area_min + (draw % (area_max - area_min)) when that span > 1
+/// 0x0069a45a  shrink: area > area_min ? area_max = area = area_min
+///                                     : area_min = area_min * 13 / 16, and stop below 20
+/// 0x0069a489         repeat while remaining != 0
+/// 0x0069a496  done:  Map::eliminate_pools(EntireWorld) ; Map::invert_land
+/// 0x0069a4c0         per player: spiral a start in from radius (xs * 3) / 2, step -3
+/// 0x0069a617         Map::check_player_land(1, avoid_continent, 6, _)
+/// ```
+///
+/// `Map::grow_region`'s return value is deliberately *not* tested at
+/// `0x0069a41a`, so unlike Mediterranean and East Indies this style has no
+/// whole-pass retry branch.
+#[allow(clippy::too_many_arguments)]
 fn great_lakes(
     players: u8,
     map_size: u8,
+    orientation: i32,
     world: &mut World,
     regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
     style: &MapStyleStaticData,
+    defaults: RegionSeedDefaults,
 ) -> Result<PartialReceipt, ContinentError> {
-    let land_area = scale_land_area(
-        map_int(style, "AVOID_CONTINENT", "scalevalue")?,
+    // `Map+0x30` already holds the resolved AVOID_CONTINENT expression when the
+    // virtual is entered; the style rescales it and writes it back, so every
+    // later `grow_valid`/`check_player_land` read sees the clamped value.
+    let mut growth_config = map_growth_config(style, world, players, map_size, orientation)?;
+    let avoid_continent = scale_land_area(
+        map_scaled_int(style, "AVOID_CONTINENT", "scalevalue", world)?,
         players,
         map_size,
     )
     .max(6);
+    growth_config.avoid_continent = avoid_continent;
+
     world.wipe();
     regions.clear_all(world);
     let style_sites = &crate::map_style::GREAT_LAKES_DIRECT_RNG_SITES;
     let a = draw(rng, sites, style_sites[0]);
     let b = draw(rng, sites, style_sites[1]);
-    let _angle = a.wrapping_shl(16).wrapping_add(b);
-    let mut region_area = world.size / 20;
-    if region_area < 90 {
-        region_area = 90;
+    // Retail takes `% 0xffff` of each draw. `Random::get(0, 0xffff)` is
+    // half-open, so the remainder is the identity on the whole output range.
+    let mut angle = a.wrapping_shl(16).wrapping_add(b);
+    let mut area_max = world.size / 20;
+    if area_max < 90 {
+        area_max = 90;
     }
-    let mut min_region_area = world.size / 40;
-    if min_region_area < 24 {
-        min_region_area = 24;
+    let mut area_min = world.size / 40;
+    if area_min < 24 {
+        area_min = 24;
     }
-    let remaining = world.xs / 12 + (draw(rng, sites, style_sites[2]) & 1);
-    debug_assert!(remaining > 0);
+    let mut area = area_max;
+    let mut remaining = world.xs / 12 + (draw(rng, sites, style_sites[2]) & 1);
 
-    // First pass through the retry loop, stopping immediately before land_dist.
-    let shrunk = region_area.wrapping_mul(7) / 22;
-    let required_distance = ((land_area + 1) / 2 + integer_sqrt_floor(shrunk)).max(3);
-    let x = draw(rng, sites, style_sites[3]) % world.xs;
-    let y = draw(rng, sites, style_sites[4]) % world.ys;
-    let _ = min_region_area; // feeds the later grow-size retry, after this boundary.
+    let circle = circle_table();
+    let mut attempts = 0;
+    let mut last_region = 0;
+    let mut region_seeds = Vec::new();
+    let mut region_growths = Vec::new();
+    let mut grow_valid_calls = Vec::new();
+    let mut lake_candidates = Vec::new();
+    while remaining != 0 {
+        attempts += 1;
+        if attempts >= 100 {
+            break;
+        }
+        let shrunk = area.wrapping_mul(7) / 22;
+        let required_distance = ((avoid_continent + 1) / 2 + integer_sqrt_floor(shrunk)).max(3);
+
+        let mut rejected = 0;
+        let accepted = loop {
+            // Retail skips the draw entirely on a degenerate axis; the entry
+            // guard already rejects maps below two cells, but the branch is
+            // reproduced because it changes the draw count, not just the value.
+            let x = if world.xs > 1 {
+                draw(rng, sites, style_sites[3]) % world.xs
+            } else {
+                0
+            };
+            let y = if world.ys > 1 {
+                draw(rng, sites, style_sites[4]) % world.ys
+            } else {
+                0
+            };
+            let distance = world.land_dist(&circle, WCoord(x), WCoord(y), true);
+            if distance >= required_distance {
+                break Some((x, y, distance));
+            }
+            rejected += 1;
+            if rejected >= 1000 {
+                break None;
+            }
+        };
+
+        let Some((x, y, land_distance)) = accepted else {
+            // 0x0069a45a. No draw is consumed on this arm.
+            if area > area_min {
+                area_max = area_min;
+                area = area_min;
+            } else {
+                area_min = area_min.wrapping_mul(13) / 16;
+                area_max = area_min;
+                area = area_min;
+                if area_min < 20 {
+                    break;
+                }
+            }
+            continue;
+        };
+
+        let region = last_region + 1;
+        let valid = execute_grow_valid(
+            world,
+            regions,
+            rng,
+            &mut growth_config,
+            &GrowValidCall { region, x, y },
+        )
+        .map_err(ContinentError::RegionGrowth)?;
+        sites.extend_from_slice(&valid.rng_sites);
+        let grow_valid_return = valid.retail_return;
+        grow_valid_calls.push(valid);
+        if grow_valid_return != 0 {
+            last_region = region;
+            let call = RegionSeedCall { region, x, y, area };
+            region_seeds.push(apply_make_region(world, regions, &call, defaults)?);
+            let growth = execute_grow_region(
+                world,
+                regions,
+                rng,
+                &mut growth_config,
+                &GrowRegionCall {
+                    region,
+                    target_area: area,
+                    max_distance: world.xs,
+                    anchor_x: -1,
+                    anchor_y: -1,
+                    return_partial_size: 0,
+                },
+            )
+            .map_err(ContinentError::RegionGrowth)?;
+            sites.extend_from_slice(&growth.rng_sites);
+            region_growths.push(growth);
+            remaining -= 1;
+            attempts = 0;
+        }
+        lake_candidates.push(LakeCandidateReceipt {
+            region,
+            x,
+            y,
+            area,
+            required_distance,
+            land_distance,
+            rejected_candidates: rejected,
+            grow_valid_return,
+        });
+
+        // 0x0069a424. The span is the *current* max minus min, and the draw is
+        // taken only when it exceeds one.
+        let span = area_max - area_min;
+        area = if span > 1 {
+            area_min + (draw(rng, sites, style_sites[5]) % span)
+        } else {
+            area_min
+        };
+    }
+
+    let pools = execute_eliminate_pools(world, regions, ElimPoolParam::EntireWorld)
+        .map_err(ContinentError::PoolElimination)?;
+    invert_land(world);
+    // `Map::invert_land` ends with its own `Regions::clear_all`; the Rust leaf
+    // owns only World, so the authoritative Regions mutation stays here.
+    regions.clear_all(world);
+
+    let players = usize::from(players);
+    let increment = (u32::MAX / players as u32) as i32;
+    let center = world.xs / 2;
+    let max_attempts = world.wdata.len().saturating_mul(32).max(1);
+    for player in 0..players {
+        angle = angle.wrapping_add(increment);
+        let mut radius = world.xs.wrapping_mul(3) / 2;
+        let mut accepted = None;
+        for _ in 0..max_attempts {
+            // Retail projects from (xs/2, xs/2): both centre arguments are the
+            // same `xs >> 1`, not the y axis (`0x0069a4ae`, `0x0069a4d9`).
+            let (x, y) = project(center, center, angle, radius);
+            radius = radius.wrapping_sub(3);
+            let touches_edge = GREAT_LAKES_START_CROSS.into_iter().any(|(dx, dy)| {
+                let nx = x.wrapping_add(dx);
+                let ny = y.wrapping_add(dy);
+                !world.valid_w(nx, ny)
+                    || nx == 0
+                    || ny == 0
+                    || nx == world.xs - 1
+                    || ny == world.ys - 1
+            });
+            if !world.valid_w(x, y) || world.is_ocean(x, y) || touches_edge {
+                continue;
+            }
+            accepted = Some((x, y));
+            break;
+        }
+        let Some((x, y)) = accepted else {
+            return Err(ContinentError::StartPlacementUnavailable {
+                player,
+                attempts: max_attempts,
+            });
+        };
+        world.add_starting_location(WCoord(x), WCoord(y));
+    }
+
+    let player_land = execute_check_player_land(
+        world,
+        regions,
+        CheckPlayerLandCall {
+            enabled: 1,
+            avoid_continent,
+            radius: MAP_PLAYER_LAND_RADIUS,
+            unused: 0,
+        },
+    )
+    .map_err(ContinentError::PlayerLand)?;
+
     Ok(PartialReceipt {
-        world_inverted: false,
-        regions_cleared: 1,
-        region_seeds: Vec::new(),
-        region_growths: Vec::new(),
-        pool_eliminations: Vec::new(),
-        player_land: None,
-        starts_added: 0,
+        world_inverted: true,
+        // clear_all, eliminate_pools' find_all rebuild, invert_land's clear_all.
+        regions_cleared: 3,
+        region_seeds,
+        region_growths,
+        grow_valid_calls,
+        lake_candidates,
+        pool_eliminations: vec![pools],
+        player_land: Some(player_land),
+        starts_added: players,
         start_min: None,
-        stop: ContinentStop::LandDistance {
-            primitive_va: MAP_LAND_DIST_VA,
-            call: LandDistanceCall {
-                x,
-                y,
-                region: 1,
-                required_distance,
-            },
+        stop: ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA,
         },
     })
 }
+
+/// The five-entry `int` cross retail tests around a Great Lakes start
+/// candidate: `x` offsets at `0x00add250` and `y` offsets at `0x00add210`, read
+/// from the image as `[(0,0), (0,-1), (1,0), (0,1), (-1,0)]`. These are the
+/// four-ring tables shifted back by one entry, so the candidate itself is
+/// included.
+const GREAT_LAKES_START_CROSS: [(i32, i32); 5] = [(0, 0), (0, -1), (1, 0), (0, 1), (-1, 0)];
 
 fn east_indies(
     players: u8,
@@ -858,6 +1103,8 @@ fn east_indies(
                     regions_cleared: 1,
                     region_seeds: seeds,
                     region_growths: growths,
+                    grow_valid_calls: Vec::new(),
+                    lake_candidates: Vec::new(),
                     pool_eliminations: Vec::new(),
                     player_land: None,
                     starts_added: players as usize,
@@ -875,6 +1122,8 @@ fn east_indies(
         regions_cleared: 1,
         region_seeds: seeds,
         region_growths: growths,
+        grow_valid_calls: Vec::new(),
+        lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
         starts_added: players as usize,
@@ -898,6 +1147,8 @@ fn east_meets_west(
         regions_cleared: 1,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        grow_valid_calls: Vec::new(),
+        lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
         starts_added: 0,

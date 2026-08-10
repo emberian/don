@@ -1149,6 +1149,60 @@ impl World {
         true
     }
 
+    /// `Map::land_dist` `0x0069d970`–`0x0069dacc`.
+    ///
+    /// The complete call-free leaf. It answers "how many canonical circle rings
+    /// out from this water cell does the nearest non-water cell sit?" and is the
+    /// spacing test `MapGreatLakes::make_continents` applies to every candidate
+    /// lake seed (`0x0069a255`, with `edge_is_land = 1`).
+    ///
+    /// The instruction stream, read at `0x0069d9a6`–`0x0069daa4`:
+    ///
+    /// * `test word [wdata], 0x100` then `movsx byte [wdata+2]` compared against
+    ///   `2` and `1` — that is exactly `WorldData::is_ocean`. A non-ocean origin
+    ///   returns `0` before any ring is scanned.
+    /// * rings `1 ..= 0x40` are walked in the canonical `circle_init` order, ring
+    ///   `d` occupying `[ring_end[d-1], ring_end[d])` (`0xcbe32c` is `ring_end`
+    ///   minus one entry, `0xcbe330` is `ring_end` itself).
+    /// * an in-bounds offset that is **not** ocean returns `d` — `WATERHALF` is
+    ///   tested first and also terminates, so a half-land cell counts as land.
+    /// * an out-of-bounds offset returns `d` when `edge_is_land` is non-zero,
+    ///   and is otherwise skipped.
+    /// * falling out of ring `0x40` returns `0x41`.
+    ///
+    /// Retail performs no bounds check on the origin: it indexes
+    /// `wdata[y * xs + x]` directly. Callers must pass an in-bounds world
+    /// coordinate, exactly as the engine's own call sites do.
+    pub fn land_dist(
+        &self,
+        circle: &crate::systems::combat::CircleTable,
+        x: WCoord,
+        y: WCoord,
+        edge_is_land: bool,
+    ) -> i32 {
+        if !self.is_ocean(x.0, y.0) {
+            return 0;
+        }
+        for ring in 1..=crate::systems::combat::CIRCLE_MAX_RING {
+            let begin = circle.ring_end[ring - 1] as usize;
+            let end = circle.ring_end[ring] as usize;
+            for index in begin..end {
+                let nx = x.0.wrapping_add(circle.x[index] as i32);
+                let ny = y.0.wrapping_add(circle.y[index] as i32);
+                if !self.valid_w(nx, ny) {
+                    if edge_is_land {
+                        return ring as i32;
+                    }
+                    continue;
+                }
+                if !self.is_ocean(nx, ny) {
+                    return ring as i32;
+                }
+            }
+        }
+        crate::systems::combat::CIRCLE_MAX_RING as i32 + 1
+    }
+
     /// `Map::fix_diag_land` `0x0069c250`–`0x0069c457`.
     ///
     /// This is the first common terrain mutation after the selected map-style
@@ -2656,6 +2710,75 @@ mod tests {
         let outer_index = w.w_index(ox, oy);
         w.wdata[outer_index].land = land::OCEAN;
         assert!(w.is_near_ocean(&circle, x, y, 3, 9));
+    }
+
+    /// `Map::land_dist` returns zero for any origin `WorldData::is_ocean`
+    /// rejects, and otherwise the exact ring index at which the first non-ocean
+    /// cell appears in `circle_init` order. Both facts are read at
+    /// `0x0069d9a6`–`0x0069da80`. A model that used a Euclidean ring, tested the
+    /// origin's own ring, or treated `WATERHALF` as water fails here.
+    #[test]
+    fn land_dist_measures_rings_to_the_first_non_ocean_cell() {
+        let circle = crate::systems::combat::circle_table();
+        let mut w = World::init_default_rules(48, 48);
+        for cell in &mut w.wdata {
+            cell.land = land::OCEAN;
+        }
+        let (x, y) = (WCoord(24), WCoord(24));
+
+        // A dry origin returns 0 before any ring is walked, as does a WATERHALF
+        // origin whose `land` byte still reads as deep water.
+        w.wdata_mut(x.0, y.0).land = land::FERTILE;
+        assert_eq!(w.land_dist(&circle, x, y, true), 0);
+        w.wdata_mut(x.0, y.0).land = land::OCEAN;
+        w.wdata_mut(x.0, y.0).flags |= wflag::WATERHALF;
+        assert_eq!(w.land_dist(&circle, x, y, true), 0);
+        w.wdata_mut(x.0, y.0).flags &= !wflag::WATERHALF;
+
+        // An all-ocean interior with edges that do not count as land walks every
+        // ring and saturates at CIRCLE_MAX_RING + 1.
+        assert_eq!(w.land_dist(&circle, x, y, false), 0x41);
+
+        // `vector_dist` is an octagon metric, so (1,1) sits in ring 1 while
+        // (3,0) sits in ring 3.
+        for (dx, dy, expected) in [(1, 1, 1), (2, 0, 2), (3, 0, 3), (0, -4, 4)] {
+            let index = w.w_index(x.0 + dx, y.0 + dy);
+            w.wdata[index].land = land::FERTILE;
+            assert_eq!(
+                w.land_dist(&circle, x, y, false),
+                expected,
+                "land at ({dx},{dy})"
+            );
+            w.wdata[index].land = land::OCEAN;
+        }
+
+        // WATERHALF terminates the scan even though the cell's `land` byte is
+        // still deep water: retail tests `flags & 0x100` before the land byte.
+        let half = w.w_index(x.0 + 2, y.0);
+        w.wdata[half].flags |= wflag::WATERHALF;
+        assert_eq!(w.land_dist(&circle, x, y, false), 2);
+        w.wdata[half].flags &= !wflag::WATERHALF;
+    }
+
+    /// The third argument is the only thing that makes an off-map offset count.
+    /// Retail's `cmp dword [ebp+0x10], 0` at `0x0069da8a` skips the offset when
+    /// it is zero, which is why an ocean cell one row from the map edge reports
+    /// `0x41` with the flag clear and `1` with it set.
+    #[test]
+    fn land_dist_edge_flag_selects_whether_off_map_counts_as_land() {
+        let circle = crate::systems::combat::circle_table();
+        let mut w = World::init_default_rules(24, 24);
+        for cell in &mut w.wdata {
+            cell.land = land::OCEAN;
+        }
+        let corner = (WCoord(0), WCoord(0));
+        assert_eq!(w.land_dist(&circle, corner.0, corner.1, true), 1);
+        assert_eq!(w.land_dist(&circle, corner.0, corner.1, false), 0x41);
+
+        // Two cells in from the edge the first off-map offset appears in ring 3.
+        let inner = (WCoord(2), WCoord(12));
+        assert_eq!(w.land_dist(&circle, inner.0, inner.1, true), 3);
+        assert_eq!(w.land_dist(&circle, inner.0, inner.1, false), 0x41);
     }
 
     #[test]
