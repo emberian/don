@@ -111,4 +111,6 @@ red until separately reconstructed and receipted.
 Root convergence formatted the isolated files. The first compile found only focused-test
 shadowing/binding defects; after those were corrected, persvati job
 `replay-place-resources-v2-20260809T233428Z-47419-30980-20e8106b2577` passed all nine tests.
-Retail was not run. Integration still waits for an exact caller-gap RNG handoff owner.
+Retail was not run. The exact caller-gap RNG/World/checkpoint handoff is now integrated by
+`map_make_resource_schedule_integration`; the XML-dependent body after `0x0068f597` remains the
+typed open boundary.

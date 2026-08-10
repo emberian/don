@@ -24,8 +24,8 @@ pub const SHIPPED_EXE_SHA256: &str =
     "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079";
 
 /// `Map::make` seeds the main RNG, loads map data, selects orientation, calls
-/// the style virtual, constructs/fixes regions, places terrain groups, then
-/// enters `Map::place_resources`.
+/// the style virtual, constructs/fixes regions, places terrain groups, crosses
+/// the no-RNG resource caller gap, then enters `Map::place_resources`.
 pub const MAP_MAKE_VA: u32 = 0x0068_bc90;
 pub const MAP_MAKE_ORIENTATION_RNG_VA: u32 = 0x0068_bd6a;
 pub const MAP_PLACE_RESOURCES_VA: u32 = 0x0068_f4f0;
@@ -234,12 +234,13 @@ pub const MAP_POST_NUBIFY_FOREST_CHECKPOINT_CALL_VA: u32 = 0x0068_c0b4;
 pub const MAP_POST_NUBIFY_FOREST_SOURCE_TOKEN: u32 = 0x1eb9;
 pub const MAP_POST_TERRAIN_TRANSITIONS_CHECKPOINT_CALL_VA: u32 = 0x0068_c12a;
 pub const MAP_POST_TERRAIN_TRANSITIONS_SOURCE_TOKEN: u32 = 0x1ebe;
+pub const MAP_RESOURCE_CALLER_GAP_RESUME_VA: u32 = 0x0068_c12f;
 
 /// Proven common ordering in `Map::make`. `rng` distinguishes a known direct
 /// call from stages whose callees consume a branch-dependent number of draws.
 /// The four post-placement checkpoints pin the exact receipt chain without
 /// pretending their source tokens are bytes serialized by a replay.
-pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 14] = [
+pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 15] = [
     MapGenerationStage {
         name: "load_map_data",
         evidence_va: None,
@@ -319,9 +320,15 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 14] = [
         }),
     },
     MapGenerationStage {
+        name: "resource_caller_gap",
+        evidence_va: Some(MAP_RESOURCE_CALLER_GAP_RESUME_VA),
+        rng: "none; exact internal checkpoints and lazy placement gate are receipted",
+        checkpoint: None,
+    },
+    MapGenerationStage {
         name: "place_resources",
         evidence_va: Some(MAP_PLACE_RESOURCES_VA),
-        rng: "one known direct site plus branch-dependent callees",
+        rng: "pool prefix none; body open at 0x0068f597 before known direct/callee draws",
         checkpoint: None,
     },
     MapGenerationStage {

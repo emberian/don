@@ -53,10 +53,13 @@ pub mod growth;
 pub mod harness;
 pub mod image;
 pub mod initial;
+pub mod map_make_resource_caller_gap_frontier;
+pub mod map_make_resource_schedule_integration;
 pub mod map_style;
 pub mod nubify_forest_frontier;
 pub mod place_all_boundary;
 pub mod place_all_facts;
+pub mod place_resources_pool_frontier;
 pub mod player_land;
 pub mod pools;
 pub mod post_continent;
@@ -100,6 +103,11 @@ pub use initial::{
     InitialItemReconstructionError, InitialPlayer, InitialState, InitialWorld,
     InitialWorldgenInputs, MapTerrainRepairError, MapTerrainRepairReceipt, ReplayByteSpan,
     WorldgenSourceSpans,
+};
+pub use map_make_resource_schedule_integration::{
+    execute_map_make_resource_schedule, MapMakeResourceOwnerProvenance,
+    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
+    PlaceResourcesBodyBoundary, PlaceResourcesEntryBoundary, PlaceResourcesSkippedBoundary,
 };
 pub use map_style::{
     MapGenerationCheckpoint, MapGenerationStage, MapStyleIdentity, MapStyleLoadError,
