@@ -43,9 +43,12 @@
 //!    retail all-war declaration matrix, and healing consumes its mutual ally relation.
 //!    Supply source traversal, siege reload selection, French/Versailles healing, live
 //!    Antipater/Wellington and Senator/President/CEO aura healing, same-owner
-//!    worker/Iroquois healing, the 32-frame attrition reset/friendly return and due-frame
-//!    attrition mutation are wired into the live unit band. Non-friendly period selection
-//!    and the remaining healing families stay explicit blockers.
+//!    worker/Iroquois healing, the 32-frame attrition recompute and due-frame attrition
+//!    mutation are wired into the live unit band. `Unit::process_attrition`'s complete
+//!    ordered selection now runs against live Arena state; it stops at typed blockers for
+//!    `Leader::calc_attrition`/`calc_anti_attrition` output, the peace and assassin
+//!    trespass transactions, and the live `GatherOrder::non_flat_gather` byte. The
+//!    remaining healing families stay explicit blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown. Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -128,12 +131,14 @@ use super::gather_runtime::{
 };
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
-    self, ArenaAttritionRecomputeHost, ArenaConstructionReceipt, ArenaHeroAuraHealingHost,
-    ArenaIroquoisHealingHost, ArenaPatriotHealingHost, ArenaPlacementReceipt,
-    ArenaPlacementTerritory, ArenaPlacementTileClaim, ArenaReloadSupplyHost,
-    ArenaSupplyAttritionHost, ArenaSupplyHealingHost, ArenaWorkerHealingHost,
-    AttritionRecomputeTransaction, DiplomacyState, HealingRepairMutation,
-    HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord, IroquoisHealingTransaction,
+    self, ArenaAttritionRecomputeHost, ArenaAttritionSelectionHost, ArenaConstructionReceipt,
+    ArenaHeroAuraHealingHost, ArenaIroquoisHealingHost, ArenaPatriotHealingHost,
+    ArenaPlacementReceipt, ArenaPlacementTerritory, ArenaPlacementTileClaim,
+    ArenaReloadSupplyHost, ArenaSupplyAttritionHost, ArenaSupplyHealingHost,
+    ArenaWorkerHealingHost, AttritionFreePoint, AttritionGameFacts, AttritionMeetReceipt,
+    AttritionRecomputeTransaction, AttritionUnitFacts, DiplomacyState, GatherOrderState,
+    HealingRepairMutation, HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord,
+    IroquoisHealingTransaction, LeaderAttritionFlags, LeaderAttritionRate,
     PatriotHealingTransaction, ReloadSupplyState, SupplyAttritionTransaction,
     SupplyAttritionUnitState, SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord,
     SupplySearchObject, WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
@@ -732,6 +737,10 @@ enum ArenaSupplyHostError {
     UnsupportedUberHealing { type_id: i32, uber_size: i32 },
     InvalidHealingRate(i32),
     PositionOutsideWorld { x: i32, y: i32 },
+    /// A retail fact the recovered transaction asked for that this arena does not
+    /// materialize. Reaching it is a programming error in the caller's branch order, not a
+    /// gameplay outcome: every branch Arena can actually reach answers without it.
+    UnsupportedAttritionFact(&'static str),
 }
 
 /// A direct view of the live Arena object tables for one retail supply/attrition
@@ -1273,6 +1282,191 @@ impl ArenaAttritionRecomputeHost for ArenaSupplyHost<'_> {
         }
         motion.unit_masks = unit_masks_after;
         motion.unit_masks2 = unit_masks2_after;
+        ent.attrition_period = period_after;
+        Ok(())
+    }
+}
+
+impl ArenaAttritionSelectionHost for ArenaSupplyHost<'_> {
+    /// The arena hosts no `ScenarioData`: it has no scenario loader, no trigger runtime and
+    /// no `ScenarioFuncSet`, so `ScenarioData::add_attrition_free_point` (`0x00996970`) and
+    /// `ScenarioFuncSet::set_attrition_free_point` (`0x00A02AA0`) have no caller and the
+    /// per-player list is empty. That is the same absence the Iroquois arm already reports
+    /// through `scenario_healing_type`.
+    fn attrition_free_points(&self, who: i32) -> Result<&[AttritionFreePoint], Self::Error> {
+        self.owner(who)?;
+        Ok(&[])
+    }
+
+    /// `leader_flags` bit 2 is the recovered `leader_ai` bit Arena already stores. Bits 0
+    /// and 1 gate "this index is a participating leader": in the arena the `WData` owner
+    /// byte is only ever written by a roster slot's own border claim, so every non-negative
+    /// territory owner reaching this call is one. The three `neutral`/`give`/`take`
+    /// scalars are zero because the arena has no scenario, Conquer-the-World or trigger
+    /// path that writes them; nothing else in retail does.
+    fn leader_attrition_flags(&self, who: i32) -> Result<LeaderAttritionFlags, Self::Error> {
+        let owner = self.owner(who)?;
+        Ok(LeaderAttritionFlags {
+            leader_flags: 3 | u32::from(self.players[owner].leader_ai) << 2,
+            neutral_attrition: 0,
+            give_att_disabled: 0,
+            take_att_disabled: 0,
+        })
+    }
+
+    /// An arena match is a skirmish: there is no Conquer-the-World metagame (retail's
+    /// `ConquestLeader` family is a separate AI this crate does not host), no team style
+    /// and therefore no assassination target, and no rush-rules option — with
+    /// `Game.info.rush_rules` at zero, `Game::war_allowed` (`0x00594670`) returns 1 on its
+    /// first branch.
+    fn attrition_game_facts(&self) -> Result<AttritionGameFacts, Self::Error> {
+        Ok(AttritionGameFacts {
+            conquest_world: false,
+            assassin_team_style: false,
+            war_allowed: true,
+        })
+    }
+
+    fn attrition_unit_facts(&self, who: i32, o: i32) -> Result<AttritionUnitFacts, Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let ent = &self.ents[index];
+        let ty = self
+            .types
+            .get(ent.type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(ent.type_id))?;
+        let motion = ent
+            .motion
+            .as_ref()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        Ok(AttritionUnitFacts {
+            is_worker: (0x32..=0x35).contains(&ent.type_id),
+            is_merchant: matches!(ent.type_id, 0x3D | 0x3E | 0x190),
+            unit_flags2: ty.unit_flags2,
+            attack: ty.attack,
+            is_tech_0x3a: type_is(self.types, ent.type_id, 0x3A),
+            domain: ty.domain,
+            is_siege: ty.unit_flags & 0x2_0000 != 0,
+            // `UnitData::is_idle` returns true immediately when the order list head is
+            // null; its second clause reads a `UnitOrder` field that is not recovered.
+            // The value is inert while `leader_attrition_rate` reports no rate, which is
+            // the only consumer.
+            is_idle: motion.orders.is_empty(),
+        })
+    }
+
+    /// Arena's gather seating is still the labelled MODEL path for every generated site, so
+    /// the live `GatherOrder::non_flat_gather` byte `Unit::process_attrition` reads does not
+    /// exist for a worker that is gathering. Reporting `Unavailable` keeps that visible
+    /// instead of substituting `OrdinaryGatherKind`'s initial value for the live byte.
+    fn gather_order_state(&self, who: i32, o: i32) -> Result<GatherOrderState, Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        Ok(match self.ents[index].job {
+            Job::Gather { .. } => GatherOrderState::Unavailable,
+            _ => GatherOrderState::NotGathering,
+        })
+    }
+
+    fn has_conquest_bonus_9(&self, _who: i32) -> Result<bool, Self::Error> {
+        Err(ArenaSupplyHostError::UnsupportedAttritionFact(
+            "LeaderData::has_conquest_bonus outside a Conquer-the-World game",
+        ))
+    }
+
+    fn declared_diplo(&self, who: i32, other: i32) -> Result<i32, Self::Error> {
+        let a = self.owner(who)?;
+        let b = self.owner(other)?;
+        Ok(self.diplomacy.declarations()[a][b])
+    }
+
+    /// `LeaderData::is_enemy` (`0x006EBAA0`) in its literal form: a different leader with
+    /// either directional `diplos` cell declaring war.
+    fn leader_is_enemy(&self, who: i32, other: i32) -> Result<bool, Self::Error> {
+        let a = self.owner(who)?;
+        let b = self.owner(other)?;
+        if a == b {
+            return Ok(false);
+        }
+        let declared = self.diplomacy.declarations();
+        let war = don_sim::systems::victory_score::Diplo::War as i32;
+        Ok(declared[a][b] == war || declared[b][a] == war)
+    }
+
+    fn leader_target(&self, _who: i32) -> Result<i32, Self::Error> {
+        Err(ArenaSupplyHostError::UnsupportedAttritionFact(
+            "LeaderData::get_target outside an assassin team style",
+        ))
+    }
+
+    /// Both scalars are produced by `Leader::calc_attrition` (`0x006CDEA0`) and
+    /// `Leader::calc_anti_attrition` (`0x006CDCC0`) from `LeaderData::has_preq` over the
+    /// `0x2DD..=0x2E0` and `0x2FE..=0x300` BonusType chains, `has_wonder(0x212/0x219/0x21A)`,
+    /// `has_tribe_bonus(0xD/0x11)` and the titanium rare-resource flag. Arena materializes
+    /// none of the BonusType prerequisite graph and no tribe-bonus table, and its
+    /// `PlayerState::techs` holds `TechType` indices only — a research command that would
+    /// grant an attrition bonus in retail grants nothing here. Reporting `None` keeps that
+    /// gap visible; answering zero would silently claim every arena nation has no attrition
+    /// research.
+    fn leader_attrition_rate(
+        &self,
+        victim: i32,
+        territory_owner: i32,
+    ) -> Result<Option<LeaderAttritionRate>, Self::Error> {
+        self.owner(victim)?;
+        self.owner(territory_owner)?;
+        Ok(None)
+    }
+
+    fn attrition_rules(
+        &self,
+    ) -> Result<don_sim::systems::borders_fog::AttritionRules, Self::Error> {
+        Ok(don_sim::systems::borders_fog::AttritionRules::default())
+    }
+
+    fn meet_territory_owner(
+        &mut self,
+        _who: i32,
+        _o: i32,
+        _territory_owner: i32,
+    ) -> Result<AttritionMeetReceipt, Self::Error> {
+        Err(ArenaSupplyHostError::UnsupportedAttritionFact(
+            "Leader::meet and the LeaderData::treaties met bit",
+        ))
+    }
+
+    fn write_attrition_selection(
+        &mut self,
+        who: i32,
+        o: i32,
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        period_before: i16,
+        period_after: i16,
+    ) -> Result<(), Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let ent = &mut self.ents[index];
+        if ent.attrition_period != period_before {
+            return Err(ArenaSupplyHostError::StaleAttritionPeriod {
+                expected: period_before,
+                found: ent.attrition_period,
+            });
+        }
+        let motion = ent
+            .motion
+            .as_mut()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        if motion.unit_masks != unit_masks_before {
+            return Err(ArenaSupplyHostError::StaleUnitMasks {
+                expected: unit_masks_before,
+                found: motion.unit_masks,
+            });
+        }
+        motion.unit_masks = unit_masks_after;
         ent.attrition_period = period_after;
         Ok(())
     }
@@ -4449,9 +4643,11 @@ impl World {
         }
     }
 
-    /// The exact 32-frame call site before the due attrition tail. Arena closes the
-    /// universal reset and friendly-territory return; the transaction receipt retains the
-    /// explicit non-friendly authority boundary instead of synthesising a period.
+    /// The exact 32-frame call site before the due attrition tail. The transaction walks
+    /// retail's own ordered returns against live Arena state; where a branch needs state
+    /// this arena does not materialize it produces a typed
+    /// [`retail_systems::AttritionSelectionBlocker`] rather than synthesising a period.
+    /// See `docs/mechanics/arena-attrition-selection.md`.
     fn tick_attrition_recompute(&mut self, i: usize) -> AttritionRecomputeTransaction {
         if (self.frame as i32).wrapping_add(i32::from(self.ents[i].object_o)) % 32 != 0 {
             return AttritionRecomputeTransaction::NotDue;
@@ -6568,8 +6764,9 @@ mod supply_attrition_integration {
         );
 
         // Unit::process calls process_attrition on its independent 32-frame stagger. The
-        // friendly return closes after the universal mask/period reset; neutral territory
-        // exposes the typed non-friendly authority boundary but retains that exact prefix.
+        // friendly return closes after the universal mask/period reset; unowned territory
+        // takes the exact `neutral_attrition == 0` return, which is retail's own answer
+        // rather than an authority boundary.
         world.collision_world.wdata_mut(siege_wx, siege_wy).who = 0;
         {
             let siege_ent = &mut world.ents[siege_index];
@@ -6597,10 +6794,11 @@ mod supply_attrition_integration {
         world.frame += 32;
         assert!(matches!(
             world.tick_attrition_recompute(siege_index),
-            AttritionRecomputeTransaction::BlockedNonFriendlyTerritory {
-                territory_owner: -1,
-                period_before: 29,
-                ..
+            AttritionRecomputeTransaction::NeutralTerritoryNoAttrition {
+                prefix: retail_systems::AttritionPrefix {
+                    period_before: 29,
+                    ..
+                }
             }
         ));
         assert_eq!(world.ents[siege_index].attrition_period, 0);

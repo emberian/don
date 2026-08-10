@@ -656,12 +656,20 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "calc_anti_attrition and get_attrition arithmetic",
             "period phase and suffer-attrition damage shape",
             "32-frame live recomputation call site and universal reset prefix",
-            "friendly-territory recomputation return",
+            "complete ordered process_attrition selection: scenario attrition-free points, \
+             neutral/friendly/inactive/allied territory, give and take disable, the worker \
+             merchant hero supply and ordinary object gauntlet, the sea-domain and \
+             neutral-override returns, the war/peace branch and the land rate tail",
             "object-backed due-tick supply/attrition mutation transaction",
             "live Arena unit-band host, singleton damage mutation and death close path",
         ],
         missing: &[
-            "non-friendly attrition-period selection requiring diplomacy, leader and object graphs",
+            "Leader::calc_attrition and Leader::calc_anti_attrition output: the \
+             has_preq(0x2DD..0x2E0) and has_preq(0x2FE..0x300) BonusType chains, the tribe \
+             bonus table and the wonder set Arena does not materialize",
+            "peace/trespass and assassin arms: LeaderData attrition_stamp, broke_alliance \
+             and made_peace timestamps plus Game::say_no_war, message and sound effects",
+            "live GatherOrder::non_flat_gather for MODEL-seated gather orders",
             "multi-slot captain damage cascade for ObjectType uber_size greater than one",
         ],
     },
@@ -1014,9 +1022,9 @@ pub fn air_fuel_transition(
     Ok((burn, returning, verdict))
 }
 
-/// Which already-derived `Unit::process_attrition` period source the host selected. The
-/// selection itself depends on object graph predicates not present in the arena, so it is
-/// an enum—not a guessed priority order.
+/// Which `Unit::process_attrition` period source the recovered selection reached.
+/// [`execute_attrition_recompute`] chooses between these arms; the enum stays public
+/// because the arithmetic behind each arm is separately testable.
 #[derive(Clone, Copy, Debug)]
 pub enum AttritionPeriodSource {
     Disabled,
@@ -1543,6 +1551,197 @@ pub trait ArenaAttritionRecomputeHost: ArenaReloadSupplyHost {
     ) -> Result<(), Self::Error>;
 }
 
+/// One `ScenarioData` attrition-free point.
+///
+/// Written by `ScenarioData::add_attrition_free_point` (`0x00996970`) and
+/// `ScenarioFuncSet::set_attrition_free_point` (`0x00A02AA0`) into a per-player 16-byte
+/// record whose `x`/`y`/`radius` live at `+4`/`+8`/`+0xC`; cleared by
+/// `ScenarioFuncSet::clear_attrition_free_points` (`0x00A02B60`). The setter validates the
+/// coordinate pair against `World +0x18`/`+0x1C`, so these are scenario `Coord` values and
+/// the loop compares them against the unit's own coordinates with `vector_dist`.
+///
+/// The list is walked at the very top of `Unit::process_attrition`, after the territory
+/// read and before every other predicate; a hit returns with the reset prefix only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttritionFreePoint {
+    pub x: i32,
+    pub y: i32,
+    pub radius: i32,
+}
+
+/// The `LeaderData` scalars `Unit::process_attrition` reads before selecting any period.
+///
+/// * `leader_flags` — `+0x000`; the territory owner must answer both `& 1` and `& 2`.
+/// * `neutral_attrition` — `+0x800`; the unowned-territory period, and (when non-zero) a
+///   return in owned territory as well.
+/// * `give_att_disabled` — `+0x7F8` of the territory owner.
+/// * `take_att_disabled` — `+0x7FC` of the unit's owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderAttritionFlags {
+    pub leader_flags: u32,
+    pub neutral_attrition: i32,
+    pub give_att_disabled: i32,
+    pub take_att_disabled: i32,
+}
+
+/// Game-option facts consumed by the branch selection.
+///
+/// * `conquest_world` — `Game +0x822 & 2`, the Conquer-the-World bit that both
+///   `LeaderData::has_conquest_bonus` (`0x006E1160`) and the peace arm test.
+/// * `assassin_team_style` — `Game.info.team_style` (`Game +0x24`) `== 2`, the option that
+///   routes an at-war trespass into `Constants::assassin_attrition`.
+/// * `war_allowed` — `Game::war_allowed` (`0x00594670`); only consulted when
+///   `conquest_world` is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttritionGameFacts {
+    pub conquest_world: bool,
+    pub assassin_team_style: bool,
+    pub war_allowed: bool,
+}
+
+/// Type-level facts for the ordered object gauntlet at `0x005E133B..0x005E1445`.
+///
+/// * `is_worker` — `ObjectData::is_worker` (`0x0046FA10`, called at `0x005E133B`):
+///   TypeIndex `0x32..=0x35`.
+/// * `is_merchant` — `ObjectData::is_merchant` (`0x0046D370`): TypeIndex `0x3D`, `0x3E`,
+///   `0x190`.
+/// * `unit_flags2` — `UnitTypeData +0x2B8`; `0x20` is `is_hero`, `0x40` is `is_supply`,
+///   `0x10` is `is_special` and `0x08` is `UnitTypeData::is_caravan` (`0x00470420`).
+/// * `attack` — `ObjectTypeData::attack` `+0x1E8`; an ordinary unit with zero attack never
+///   suffers attrition.
+/// * `is_tech_0x3a` — the devirtualized `ObjectData::is(0x3A, 0)`.
+/// * `domain` — `ObjectTypeData::domain` `+0x218`. `1` returns before any selection, `2`
+///   halves the two special periods and never reaches the rate tail, `0` is the land path.
+/// * `is_siege` — the `ObjectTypeData +0x10C` virtual `UnitData::get_attrition` consults,
+///   `UnitTypeData::is_siege` (`0x00470460`) = `unit_flags & 0x20000`.
+/// * `is_idle` — `UnitData::is_idle` (`0x0046FA40`), used only by `get_attrition`'s
+///   `has_preq(0x2FE)` arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttritionUnitFacts {
+    pub is_worker: bool,
+    pub is_merchant: bool,
+    pub unit_flags2: u32,
+    pub attack: i32,
+    pub is_tech_0x3a: bool,
+    pub domain: i32,
+    pub is_siege: bool,
+    pub is_idle: bool,
+}
+
+impl AttritionUnitFacts {
+    fn is_hero(self) -> bool {
+        self.unit_flags2 & 0x20 != 0
+    }
+
+    fn is_supply(self) -> bool {
+        self.unit_flags2 & 0x40 != 0
+    }
+
+    fn is_special(self) -> bool {
+        self.unit_flags2 & 0x10 != 0
+    }
+
+    fn is_caravan(self) -> bool {
+        self.unit_flags2 & 8 != 0
+    }
+}
+
+/// Whether the unit is executing a `GatherOrder`, and if so whether its
+/// `non_flat_gather` byte (`GatherOrder +0x25`) is set.
+///
+/// `UnitData::is_gathering` (`0x006089B0`) requires a worker TypeIndex, a current action of
+/// order kind 7, and that the order belongs to the unit's own owner. A gathering worker
+/// whose order has `non_flat_gather` set returns from `Unit::process_attrition`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatherOrderState {
+    /// `UnitData::is_gathering` is false.
+    NotGathering,
+    /// `UnitData::is_gathering` is true and the live byte is known.
+    Gathering { non_flat: bool },
+    /// The unit is on a gather order whose live `GatherOrder` record the host does not own.
+    Unavailable,
+}
+
+/// The two walked `LeaderData` attrition scalars `UnitData::get_attrition` (`0x00608FD0`)
+/// consumes, plus the age difference its caller clamps.
+///
+/// * `att` — `LeaderData::att` `+0x7F0` of the **territory owner**, produced by
+///   `Leader::calc_attrition` (`0x006CDEA0`) from `has_preq(0x2DD..=0x2E0)`,
+///   `has_wonder(0x212)`, `has_tribe_bonus(0xD)`, the Conquer-the-World bonus and
+///   `has_wonder(0x21A)`.
+/// * `anti_att` — `LeaderData::anti_att` `+0x7F4` of the **unit's owner**, produced by
+///   `Leader::calc_anti_attrition` (`0x006CDCC0`); `256.0` means no reduction.
+/// * `age_diff` — `attacker.age - victim.age`, clamped at the call site to `>= 0`.
+/// * `victim_upgrade_0x2fe` — `LeaderData::has_preq(0x2FE)` of the unit's owner. Together
+///   with `UnitData::is_idle` this is `get_attrition`'s own early return inside
+///   `0x00608FD0`,
+///   which `don_sim::systems::borders_fog::get_attrition` does not currently model; the
+///   transaction therefore applies it before calling that kernel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LeaderAttritionRate {
+    pub att: i32,
+    pub anti_att: f32,
+    pub age_diff: i32,
+    pub victim_upgrade_0x2fe: bool,
+}
+
+/// `Leader::meet` (`0x006E1250`) is executed whenever a period is written for a territory
+/// owner the unit's leader has not met (`LeaderData::treaties[terr] & 1 == 0`) — including
+/// on the unowned-territory arm, where the index is negative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttritionMeetReceipt {
+    AlreadyMet,
+    Met { territory_owner: i32 },
+}
+
+/// Everything `Unit::process_attrition` (`0x005E11A0`) needs after its universal prefix.
+///
+/// Each method is fallible and mandatory. There is no convenient default for a leader
+/// scalar, a game option, or a scenario registry: a host that cannot produce one makes the
+/// transaction stop at a typed receipt instead of selecting a fabricated period.
+pub trait ArenaAttritionSelectionHost: ArenaAttritionRecomputeHost {
+    fn attrition_free_points(&self, who: i32) -> Result<&[AttritionFreePoint], Self::Error>;
+    fn leader_attrition_flags(&self, who: i32) -> Result<LeaderAttritionFlags, Self::Error>;
+    fn attrition_game_facts(&self) -> Result<AttritionGameFacts, Self::Error>;
+    fn attrition_unit_facts(&self, who: i32, o: i32) -> Result<AttritionUnitFacts, Self::Error>;
+    fn gather_order_state(&self, who: i32, o: i32) -> Result<GatherOrderState, Self::Error>;
+    /// `LeaderData::conquest_bonus[9]`, read only when `conquest_world` is set.
+    fn has_conquest_bonus_9(&self, who: i32) -> Result<bool, Self::Error>;
+    /// The raw directional `LeaderData::diplos[other]` cell, not the mutual minimum.
+    fn declared_diplo(&self, who: i32, other: i32) -> Result<i32, Self::Error>;
+    /// `LeaderData::is_enemy` (`0x006EBAA0`): `other != who` and either direction declared
+    /// war.
+    fn leader_is_enemy(&self, who: i32, other: i32) -> Result<bool, Self::Error>;
+    /// `LeaderData::get_target` (`0x006DA000`), consulted only when the assassin team style
+    /// is active.
+    fn leader_target(&self, who: i32) -> Result<i32, Self::Error>;
+    /// `None` means the host does not materialize `Leader::calc_attrition` /
+    /// `Leader::calc_anti_attrition` output; it never means "no attrition".
+    fn leader_attrition_rate(
+        &self,
+        victim: i32,
+        territory_owner: i32,
+    ) -> Result<Option<LeaderAttritionRate>, Self::Error>;
+    fn attrition_rules(&self) -> Result<AttritionRules, Self::Error>;
+    fn meet_territory_owner(
+        &mut self,
+        who: i32,
+        o: i32,
+        territory_owner: i32,
+    ) -> Result<AttritionMeetReceipt, Self::Error>;
+    /// Compare-and-swap write of `UnitData::attrition` `+0x9E` and `unit_masks` `+0x68`
+    /// after the prefix already stored `period_before`.
+    fn write_attrition_selection(
+        &mut self,
+        who: i32,
+        o: i32,
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        period_before: i16,
+        period_after: i16,
+    ) -> Result<(), Self::Error>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupportRegistry {
     Supplies,
@@ -1766,12 +1965,77 @@ pub enum IroquoisHealingTransaction {
     },
 }
 
-/// Receipt for the 32-frame `Unit::process_attrition` call site in `Unit::process`.
-/// `BlockedNonFriendlyTerritory` still proves the universal retail prefix was applied;
-/// selecting a replacement period needs the unrecovered diplomacy/leader/object graph.
+/// The universal `Unit::process_attrition` prefix every receipt below carries: retail
+/// clears `unit_masks & 0x400080`, clears the caller's `RESUPPLIED_THIS_TICK` bit and
+/// resets `UnitData::attrition` `+0x9E` to zero before reading anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttritionPrefix {
+    pub unit_masks_before: u32,
+    pub unit_masks_after: u32,
+    pub unit_masks2_before: u32,
+    pub unit_masks2_after: u32,
+    pub period_before: i16,
+}
+
+/// Which ordered object-gauntlet arm returned before any period was selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttritionTypeExemption {
+    /// `UnitData::is_gathering` with `GatherOrder::non_flat_gather` set.
+    GatheringNonFlat,
+    /// An ordinary unit with `ObjectTypeData::attack == 0`.
+    ZeroAttack,
+    /// `UnitData::is_special`, `unit_flags2 & 0x10`.
+    Special,
+    /// The devirtualized `ObjectData::is(0x3A, 0)`.
+    Tech0x3a,
+    /// `UnitTypeData::is_caravan`, `unit_flags2 & 8`.
+    Caravan,
+    /// `ObjectTypeData::domain == 1`.
+    SeaDomain,
+}
+
+/// Which host fact stopped the transaction short of retail's own answer. These are
+/// authority boundaries, never "no attrition": each one names the retail state the Arena
+/// does not materialize.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttritionSelectionBlocker {
+    /// The host supplied `ScenarioData` attrition-free points. Their inclusion test at
+    /// `0x005E122C` compares `DAT_00CAE5FC[coord >> 6]` against the record, and that
+    /// scaling table's output space is not derived.
+    ScenarioAttritionFreePoints,
+    /// The unit is on a gather order whose live `GatherOrder` record is not owned, so the
+    /// `non_flat_gather` byte cannot be read.
+    GatherOrderState,
+    /// A Conquer-the-World game reaches `Leader::conquest_*` state and the CTW attrition
+    /// modifier; neither is recovered here.
+    ConquestWorldGame,
+    /// The peace/trespass arm needs `LeaderData::attrition_stamp{,2,3}`, the
+    /// `broke_alliance`/`made_peace` pair timestamps, `Game::say_no_war`, the message
+    /// window and the sound cue.
+    PeaceTrespassTransaction,
+    /// The assassin team style needs `LeaderData::get_target` plus the same message and
+    /// stamp transaction as the peace arm.
+    AssassinTrespassTransaction,
+    /// `Leader::calc_attrition` / `Leader::calc_anti_attrition` output is not materialized.
+    LeaderAttritionRate,
+    /// Unowned territory with a non-zero `LeaderData::neutral_attrition`. Retail writes the
+    /// period and then **falls through** at `0x005E12C5` with a negative territory index,
+    /// reaching `imul edx, edi, 0x6EEC` / `mov eax, [edx + Leaders]` at `0x005E12CD` — a
+    /// read before the `Leaders` array. That continuation is not recovered and is not
+    /// reproduced. The period write itself is exact and has already happened.
+    UnownedTerritoryFallthrough,
+}
+
+/// Receipt for the 32-frame `Unit::process_attrition` (`0x005E11A0`) call site in
+/// `Unit::process`. Every variant proves the universal prefix ran; the non-`Blocked`
+/// variants are retail's own returns, reached with real host state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttritionRecomputeTransaction {
     NotDue,
+    /// Unowned territory with `LeaderData::neutral_attrition == 0`.
+    NeutralTerritoryNoAttrition {
+        prefix: AttritionPrefix,
+    },
     FriendlyTerritoryReset {
         unit_masks_before: u32,
         unit_masks_after: u32,
@@ -1779,13 +2043,65 @@ pub enum AttritionRecomputeTransaction {
         unit_masks2_after: u32,
         period_before: i16,
     },
-    BlockedNonFriendlyTerritory {
+    /// `leader_flags & 1` or `& 2` clear on the territory owner.
+    InactiveTerritoryLeader {
         territory_owner: i32,
-        unit_masks_before: u32,
-        unit_masks_after: u32,
-        unit_masks2_before: u32,
-        unit_masks2_after: u32,
-        period_before: i16,
+        leader_flags: u32,
+        prefix: AttritionPrefix,
+    },
+    /// Both `diplos` cells declare `Diplo::Ally`.
+    AlliedTerritory {
+        territory_owner: i32,
+        prefix: AttritionPrefix,
+    },
+    /// `LeaderData::take_att_disabled` on the unit's owner.
+    TakeAttritionDisabled {
+        prefix: AttritionPrefix,
+    },
+    /// `LeaderData::give_att_disabled` on the territory owner.
+    GiveAttritionDisabled {
+        territory_owner: i32,
+        prefix: AttritionPrefix,
+    },
+    TypeExempt {
+        exemption: AttritionTypeExemption,
+        prefix: AttritionPrefix,
+    },
+    /// Owned territory reached with a non-zero `neutral_attrition`, which returns without
+    /// selecting a territory period.
+    NeutralAttritionOverride {
+        neutral_attrition: i32,
+        prefix: AttritionPrefix,
+    },
+    /// `unit_masks & 0x400000` clear and `UnitData::is_supply` set on the land tail.
+    SupplyTypeExempt {
+        territory_owner: i32,
+        prefix: AttritionPrefix,
+    },
+    /// A non-land domain reached the tail, which only runs for `domain == 0`.
+    NonLandTail {
+        territory_owner: i32,
+        domain: i32,
+        prefix: AttritionPrefix,
+    },
+    /// `UnitData::get_attrition` returned zero, so retail writes no period and no mask.
+    NoAttritionRate {
+        territory_owner: i32,
+        prefix: AttritionPrefix,
+    },
+    /// The complete land selection: the scalar, the resulting period and the `Leader::meet`
+    /// receipt retail performs alongside the `unit_masks |= 0x80` write.
+    Selected {
+        territory_owner: i32,
+        scalar: i32,
+        period_after: i16,
+        meet: AttritionMeetReceipt,
+        prefix: AttritionPrefix,
+    },
+    Blocked {
+        blocker: AttritionSelectionBlocker,
+        territory_owner: i32,
+        prefix: AttritionPrefix,
     },
 }
 
@@ -2721,15 +3037,34 @@ pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
     })
 }
 
-/// Execute the exact universal prefix and friendly-territory return of
-/// `Unit::process_attrition` (`0x005E11A0`) from its 32-frame `Unit::process` call site.
+/// Execute `Unit::process_attrition` (`0x005E11A0`) from its 32-frame `Unit::process` call
+/// site, in retail's own predicate order.
 ///
 /// Retail first clears `RESUPPLIED_THIS_TICK`, then `process_attrition` clears
-/// `unit_masks & 0x400080` and resets the signed attrition period to zero. Friendly land
-/// returns with that state. Non-friendly territory reaches predicates which require the
-/// diplomacy/leader/object graph, so the transaction reports that boundary without
-/// inventing a replacement period.
-pub fn execute_attrition_recompute<H: ArenaAttritionRecomputeHost>(
+/// `unit_masks & 0x400080` and resets the signed attrition period to zero. Everything after
+/// that prefix is a chain of returns; this function performs each of them against real host
+/// state and stops at a typed [`AttritionSelectionBlocker`] wherever the host cannot supply
+/// the retail state a branch consumes. No branch substitutes a default.
+///
+/// Order, with the decompiled boundaries in `re/decomp-all/005e11a0.c`:
+///
+/// 1. universal mask/period prefix;
+/// 2. the `WData` territory-owner byte under the unit;
+/// 3. the per-player `ScenarioData` attrition-free point list;
+/// 4. unowned territory -> `LeaderData::neutral_attrition`;
+/// 5. friendly territory;
+/// 6. the territory owner's `leader_flags & 1` and `& 2`;
+/// 7. the mutual `diplos == Ally` pair test;
+/// 8. `take_att_disabled` then `give_att_disabled`;
+/// 9. the worker / merchant / hero / supply / ordinary object gauntlet;
+/// 10. `domain == 1`, then `neutral_attrition` again;
+/// 11. the Conquer-the-World guard;
+/// 12. `LeaderData::is_enemy` selecting the peace/trespass arm or the war arm, and inside
+///     the war arm the assassin team style;
+/// 13. the land tail: `is_supply`, `UnitData::get_attrition`, the `Constants::attrition`
+///     period, the `min` against any special period already stored, `unit_masks |= 0x80`
+///     and `Leader::meet`.
+pub fn execute_attrition_recompute<H: ArenaAttritionSelectionHost>(
     frame: i32,
     who: i32,
     o: i32,
@@ -2767,28 +3102,305 @@ pub fn execute_attrition_recompute<H: ArenaAttritionRecomputeHost>(
         0,
     )
     .map_err(SupplyAttritionTransactionError::Host)?;
+    let prefix = AttritionPrefix {
+        unit_masks_before: state.unit_masks,
+        unit_masks_after,
+        unit_masks2_before: state.unit_masks2,
+        unit_masks2_after,
+        period_before: state.attrition_period,
+    };
+    let blocked = |blocker, territory_owner| {
+        Ok(AttritionRecomputeTransaction::Blocked {
+            blocker,
+            territory_owner,
+            prefix,
+        })
+    };
 
     let territory_owner = host
         .territory_owner_at(state.unit.x, state.unit.y)
         .map_err(SupplyAttritionTransactionError::Host)?;
-    if territory_owner == who {
-        Ok(AttritionRecomputeTransaction::FriendlyTerritoryReset {
-            unit_masks_before: state.unit_masks,
-            unit_masks_after,
-            unit_masks2_before: state.unit_masks2,
-            unit_masks2_after,
-            period_before: state.attrition_period,
-        })
-    } else {
-        Ok(AttritionRecomputeTransaction::BlockedNonFriendlyTerritory {
+
+    // `0x005E1213`: the scenario list is walked before every territory predicate. An empty
+    // list is the whole of the recovered behaviour here: the comparison at `0x005E122C`
+    // does not use the unit's coordinates directly but `DAT_00CAE5FC[coord >> 6]`, a
+    // scaling table whose output space is not derived, so a populated list stops the
+    // transaction instead of guessing the metric.
+    if !host
+        .attrition_free_points(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .is_empty()
+    {
+        return blocked(
+            AttritionSelectionBlocker::ScenarioAttritionFreePoints,
             territory_owner,
+        );
+    }
+
+    let victim = host
+        .leader_attrition_flags(who)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    let rules = host
+        .attrition_rules()
+        .map_err(SupplyAttritionTransactionError::Host)?;
+
+    // `0x005E1298`: unowned territory. A zero `neutral_attrition` returns exactly; a
+    // non-zero one writes the period and then falls through with a negative leader index,
+    // which is where recovery stops.
+    if territory_owner < 0 {
+        if victim.neutral_attrition == 0 {
+            return Ok(AttritionRecomputeTransaction::NeutralTerritoryNoAttrition { prefix });
+        }
+        if state.domain != 1 {
+            host.write_attrition_selection(
+                who,
+                o,
+                unit_masks_after,
+                unit_masks_after,
+                0,
+                victim.neutral_attrition as i16,
+            )
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        }
+        return blocked(
+            AttritionSelectionBlocker::UnownedTerritoryFallthrough,
+            territory_owner,
+        );
+    }
+
+    if territory_owner == who {
+        return Ok(AttritionRecomputeTransaction::FriendlyTerritoryReset {
             unit_masks_before: state.unit_masks,
             unit_masks_after,
             unit_masks2_before: state.unit_masks2,
             unit_masks2_after,
             period_before: state.attrition_period,
-        })
+        });
     }
+
+    let owner = host
+        .leader_attrition_flags(territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if owner.leader_flags & 1 == 0 || owner.leader_flags & 2 == 0 {
+        return Ok(AttritionRecomputeTransaction::InactiveTerritoryLeader {
+            territory_owner,
+            leader_flags: owner.leader_flags,
+            prefix,
+        });
+    }
+
+    // `0x005E12A0`: the mutual `diplos == 2` pair, read as two directional cells exactly as
+    // retail does rather than through the mutual-minimum `get_diplo`.
+    let ally_out = host
+        .declared_diplo(who, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if ally_out == Diplo::Ally as i32 {
+        let ally_in = host
+            .declared_diplo(territory_owner, who)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        if ally_in == Diplo::Ally as i32 {
+            return Ok(AttritionRecomputeTransaction::AlliedTerritory {
+                territory_owner,
+                prefix,
+            });
+        }
+    }
+
+    if victim.take_att_disabled != 0 {
+        return Ok(AttritionRecomputeTransaction::TakeAttritionDisabled { prefix });
+    }
+    if owner.give_att_disabled != 0 {
+        return Ok(AttritionRecomputeTransaction::GiveAttritionDisabled {
+            territory_owner,
+            prefix,
+        });
+    }
+
+    let facts = host
+        .attrition_unit_facts(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if facts.is_worker {
+        match host
+            .gather_order_state(who, o)
+            .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            GatherOrderState::Gathering { non_flat: true } => {
+                return Ok(AttritionRecomputeTransaction::TypeExempt {
+                    exemption: AttritionTypeExemption::GatheringNonFlat,
+                    prefix,
+                })
+            }
+            GatherOrderState::Gathering { non_flat: false } | GatherOrderState::NotGathering => {}
+            GatherOrderState::Unavailable => {
+                return blocked(
+                    AttritionSelectionBlocker::GatherOrderState,
+                    territory_owner,
+                )
+            }
+        }
+    } else if !facts.is_merchant && !facts.is_hero() && !facts.is_supply() {
+        if facts.attack == 0 {
+            return Ok(AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::ZeroAttack,
+                prefix,
+            });
+        }
+        if facts.is_special() {
+            return Ok(AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Special,
+                prefix,
+            });
+        }
+        if facts.is_tech_0x3a {
+            return Ok(AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Tech0x3a,
+                prefix,
+            });
+        }
+        if facts.is_caravan() {
+            return Ok(AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Caravan,
+                prefix,
+            });
+        }
+    }
+
+    if facts.domain == 1 {
+        return Ok(AttritionRecomputeTransaction::TypeExempt {
+            exemption: AttritionTypeExemption::SeaDomain,
+            prefix,
+        });
+    }
+    if victim.neutral_attrition != 0 {
+        return Ok(AttritionRecomputeTransaction::NeutralAttritionOverride {
+            neutral_attrition: victim.neutral_attrition,
+            prefix,
+        });
+    }
+
+    let game = host
+        .attrition_game_facts()
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if game.conquest_world {
+        // Both the guard at `0x005E15C3` and the peace arm below read Conquer-the-World
+        // leader state; the whole metagame stays outside this transaction.
+        if !game.assassin_team_style
+            && host
+                .has_conquest_bonus_9(who)
+                .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            return Ok(AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Special,
+                prefix,
+            });
+        }
+        return blocked(
+            AttritionSelectionBlocker::ConquestWorldGame,
+            territory_owner,
+        );
+    }
+
+    let at_war = host
+        .leader_is_enemy(who, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if !at_war || (game.conquest_world && !game.war_allowed) {
+        return blocked(
+            AttritionSelectionBlocker::PeaceTrespassTransaction,
+            territory_owner,
+        );
+    }
+    if game.assassin_team_style
+        && host
+            .leader_target(who)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            != territory_owner
+    {
+        return blocked(
+            AttritionSelectionBlocker::AssassinTrespassTransaction,
+            territory_owner,
+        );
+    }
+
+    // `0x005E18F1`: the land tail. Retail reaches it either with `special_period` already
+    // stored by one of the two trespass arms or, as here, with zero.
+    if facts.domain != 0 {
+        return Ok(AttritionRecomputeTransaction::NonLandTail {
+            territory_owner,
+            domain: facts.domain,
+            prefix,
+        });
+    }
+    if unit_masks_after & 0x40_0000 == 0 && facts.is_supply() {
+        return Ok(AttritionRecomputeTransaction::SupplyTypeExempt {
+            territory_owner,
+            prefix,
+        });
+    }
+
+    let Some(rate) = host
+        .leader_attrition_rate(who, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    else {
+        return blocked(
+            AttritionSelectionBlocker::LeaderAttritionRate,
+            territory_owner,
+        );
+    };
+    // `UnitData::get_attrition`: on the non-militia path an idle unit whose owner holds the first
+    // attrition-reduction upgrade returns zero before any of the type divisors.
+    if !state.militia && rate.victim_upgrade_0x2fe && facts.is_idle {
+        return Ok(AttritionRecomputeTransaction::NoAttritionRate {
+            territory_owner,
+            prefix,
+        });
+    }
+    let scalar = borders_fog::get_attrition(
+        &AttritionInput {
+            attacker_attrition: rate.att,
+            victim_anti_att: rate.anti_att,
+            siege_class: facts.is_siege,
+            militia: state.militia,
+            type_id: state.type_id,
+            type_class: facts.domain,
+            age_diff: rate.age_diff,
+        },
+        &rules,
+    );
+    if scalar == 0 {
+        return Ok(AttritionRecomputeTransaction::NoAttritionRate {
+            territory_owner,
+            prefix,
+        });
+    }
+    let Some(candidate) = borders_fog::attrition_period(scalar, &rules) else {
+        return Ok(AttritionRecomputeTransaction::NoAttritionRate {
+            territory_owner,
+            prefix,
+        });
+    };
+    // Retail's `if (period == 0 || new < period)` guard at `0x005E1962` compares against a
+    // period one of the two trespass arms may already have written. Both of those arms are
+    // blocked above, so the stored period here is always the prefix's zero.
+    let period_after = candidate;
+    host.write_attrition_selection(
+        who,
+        o,
+        unit_masks_after,
+        unit_masks_after | 0x80,
+        0,
+        period_after,
+    )
+    .map_err(SupplyAttritionTransactionError::Host)?;
+    let meet = host
+        .meet_territory_owner(who, o, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    Ok(AttritionRecomputeTransaction::Selected {
+        territory_owner,
+        scalar,
+        period_after,
+        meet,
+        prefix,
+    })
 }
 
 /// Execute the sim-state part of retail's supply/attrition branch for one live unit.
@@ -3796,5 +4408,598 @@ mod tests {
             }]
         );
         assert_eq!(host.graphics, 1);
+    }
+
+    /// A host that can answer every `Unit::process_attrition` predicate, so the recovered
+    /// selection can be driven through each of its returns. The Arena host deliberately
+    /// answers `leader_attrition_rate` with `None`; this one does not, which is the only
+    /// way the land tail is executable at all today.
+    struct SelectionHost {
+        unit: SupplyAttritionUnitState,
+        facts: AttritionUnitFacts,
+        gather: GatherOrderState,
+        game: AttritionGameFacts,
+        territory_owner: i32,
+        free_points: Vec<AttritionFreePoint>,
+        flags: Vec<LeaderAttritionFlags>,
+        diplos: [[i32; NUM_LEADERS]; NUM_LEADERS],
+        rate: Option<LeaderAttritionRate>,
+        target: i32,
+        prefix_writes: Vec<(u32, u32, i16, i16)>,
+        selection_writes: Vec<(u32, u32, i16, i16)>,
+        meets: Vec<i32>,
+    }
+
+    impl SelectionHost {
+        fn land_unit() -> Self {
+            let flags = LeaderAttritionFlags {
+                leader_flags: 3,
+                neutral_attrition: 0,
+                give_att_disabled: 0,
+                take_att_disabled: 0,
+            };
+            Self {
+                unit: SupplyAttritionUnitState {
+                    unit: SupplyUnitKey {
+                        who: 1,
+                        o: 7,
+                        x: 10_000,
+                        y: 5_000,
+                    },
+                    unit_id: 0,
+                    type_id: 0x40,
+                    type_category: 0,
+                    attrition_period: 23,
+                    damage: 0,
+                    healing: 0,
+                    unit_masks: 0x40_0080,
+                    unit_masks2: RESUPPLIED_THIS_TICK,
+                    is_supply: false,
+                    is_hero: false,
+                    militia: false,
+                    domain: 0,
+                    type_308: 0,
+                    curr_uber_size: 1,
+                },
+                facts: AttritionUnitFacts {
+                    is_worker: false,
+                    is_merchant: false,
+                    unit_flags2: 0,
+                    attack: 40,
+                    is_tech_0x3a: false,
+                    domain: 0,
+                    is_siege: false,
+                    is_idle: false,
+                },
+                gather: GatherOrderState::NotGathering,
+                game: AttritionGameFacts {
+                    conquest_world: false,
+                    assassin_team_style: false,
+                    war_allowed: true,
+                },
+                territory_owner: 0,
+                free_points: Vec::new(),
+                flags: vec![flags; NUM_LEADERS],
+                diplos: [[Diplo::War as i32; NUM_LEADERS]; NUM_LEADERS],
+                rate: Some(LeaderAttritionRate {
+                    att: 1,
+                    anti_att: borders_fog::ANTI_ATT_BASE,
+                    age_diff: 0,
+                    victim_upgrade_0x2fe: false,
+                }),
+                target: -1,
+                prefix_writes: Vec::new(),
+                selection_writes: Vec::new(),
+                meets: Vec::new(),
+            }
+        }
+
+        fn run(&mut self) -> AttritionRecomputeTransaction {
+            execute_attrition_recompute(0, 1, 7, self).unwrap()
+        }
+    }
+
+    impl ArenaSupplyAttritionHost for SelectionHost {
+        type Error = &'static str;
+
+        fn unit_state(
+            &self,
+            _who: i32,
+            _o: i32,
+        ) -> Result<Option<SupplyAttritionUnitState>, Self::Error> {
+            Ok(Some(self.unit))
+        }
+
+        fn supply_records(&self, _who: i32) -> Result<&[SupplyRegistryRecord], Self::Error> {
+            Ok(&[])
+        }
+
+        fn hero_records(&self, _who: i32) -> Result<&[HeroRegistryRecord], Self::Error> {
+            Ok(&[])
+        }
+
+        fn support_object(
+            &self,
+            _who: i32,
+            _o: i32,
+        ) -> Result<Option<SupplySearchObject>, Self::Error> {
+            Ok(None)
+        }
+
+        fn supply_radius_facts(&self, _who: i32) -> Result<SupplyRadiusFacts, Self::Error> {
+            Err("supply radius is not part of the attrition recompute")
+        }
+
+        fn owned_type_count(&self, _who: i32, _type_id: i32) -> Result<i32, Self::Error> {
+            Ok(0)
+        }
+
+        fn object_is(
+            &self,
+            _who: i32,
+            _o: i32,
+            _type_id: i32,
+            _relation_set: i32,
+        ) -> Result<bool, Self::Error> {
+            Ok(false)
+        }
+
+        fn hero_radius_facts(&self, _who: i32) -> Result<HeroRadiusFacts, Self::Error> {
+            Err("hero radius is not part of the attrition recompute")
+        }
+
+        fn write_unit_masks2(
+            &mut self,
+            _who: i32,
+            _o: i32,
+            _before: u32,
+            _after: u32,
+        ) -> Result<(), Self::Error> {
+            Err("the recompute never writes the resupply mask")
+        }
+
+        fn take_attrition_damage(
+            &mut self,
+            _who: i32,
+            _o: i32,
+            _damage: AttritionDamage,
+        ) -> Result<DamageOutcome, Self::Error> {
+            Err("the recompute never damages")
+        }
+
+        fn suffer_graphic_attrition(&mut self, _who: i32, _o: i32) -> Result<(), Self::Error> {
+            Err("the recompute never damages")
+        }
+    }
+
+    impl ArenaReloadSupplyHost for SelectionHost {
+        fn territory_owner_at(&self, _x: i32, _y: i32) -> Result<i32, Self::Error> {
+            Ok(self.territory_owner)
+        }
+    }
+
+    impl ArenaAttritionRecomputeHost for SelectionHost {
+        fn write_attrition_recompute_prefix(
+            &mut self,
+            _who: i32,
+            _o: i32,
+            unit_masks_before: u32,
+            unit_masks_after: u32,
+            unit_masks2_before: u32,
+            unit_masks2_after: u32,
+            period_before: i16,
+            period_after: i16,
+        ) -> Result<(), Self::Error> {
+            if self.unit.unit_masks != unit_masks_before
+                || self.unit.unit_masks2 != unit_masks2_before
+                || self.unit.attrition_period != period_before
+            {
+                return Err("stale prefix write");
+            }
+            self.unit.unit_masks = unit_masks_after;
+            self.unit.unit_masks2 = unit_masks2_after;
+            self.unit.attrition_period = period_after;
+            self.prefix_writes.push((
+                unit_masks_before,
+                unit_masks_after,
+                period_before,
+                period_after,
+            ));
+            Ok(())
+        }
+    }
+
+    impl ArenaAttritionSelectionHost for SelectionHost {
+        fn attrition_free_points(&self, _who: i32) -> Result<&[AttritionFreePoint], Self::Error> {
+            Ok(&self.free_points)
+        }
+
+        fn leader_attrition_flags(&self, who: i32) -> Result<LeaderAttritionFlags, Self::Error> {
+            self.flags
+                .get(who as usize)
+                .copied()
+                .ok_or("leader index out of range")
+        }
+
+        fn attrition_game_facts(&self) -> Result<AttritionGameFacts, Self::Error> {
+            Ok(self.game)
+        }
+
+        fn attrition_unit_facts(
+            &self,
+            _who: i32,
+            _o: i32,
+        ) -> Result<AttritionUnitFacts, Self::Error> {
+            Ok(self.facts)
+        }
+
+        fn gather_order_state(&self, _who: i32, _o: i32) -> Result<GatherOrderState, Self::Error> {
+            Ok(self.gather)
+        }
+
+        fn has_conquest_bonus_9(&self, _who: i32) -> Result<bool, Self::Error> {
+            Ok(false)
+        }
+
+        fn declared_diplo(&self, who: i32, other: i32) -> Result<i32, Self::Error> {
+            Ok(self.diplos[who as usize][other as usize])
+        }
+
+        fn leader_is_enemy(&self, who: i32, other: i32) -> Result<bool, Self::Error> {
+            if who == other {
+                return Ok(false);
+            }
+            Ok(self.diplos[who as usize][other as usize] == Diplo::War as i32
+                || self.diplos[other as usize][who as usize] == Diplo::War as i32)
+        }
+
+        fn leader_target(&self, _who: i32) -> Result<i32, Self::Error> {
+            Ok(self.target)
+        }
+
+        fn leader_attrition_rate(
+            &self,
+            _victim: i32,
+            _territory_owner: i32,
+        ) -> Result<Option<LeaderAttritionRate>, Self::Error> {
+            Ok(self.rate)
+        }
+
+        fn attrition_rules(&self) -> Result<AttritionRules, Self::Error> {
+            Ok(AttritionRules::default())
+        }
+
+        fn meet_territory_owner(
+            &mut self,
+            _who: i32,
+            _o: i32,
+            territory_owner: i32,
+        ) -> Result<AttritionMeetReceipt, Self::Error> {
+            self.meets.push(territory_owner);
+            Ok(AttritionMeetReceipt::Met { territory_owner })
+        }
+
+        fn write_attrition_selection(
+            &mut self,
+            _who: i32,
+            _o: i32,
+            unit_masks_before: u32,
+            unit_masks_after: u32,
+            period_before: i16,
+            period_after: i16,
+        ) -> Result<(), Self::Error> {
+            if self.unit.unit_masks != unit_masks_before
+                || self.unit.attrition_period != period_before
+            {
+                return Err("stale selection write");
+            }
+            self.unit.unit_masks = unit_masks_after;
+            self.unit.attrition_period = period_after;
+            self.selection_writes.push((
+                unit_masks_before,
+                unit_masks_after,
+                period_before,
+                period_after,
+            ));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn attrition_recompute_selects_the_land_period_and_meets_the_territory_owner() {
+        let mut host = SelectionHost::land_unit();
+        let transaction = host.run();
+        // Constants::attrition 48 with a rate of one and no anti-attrition: 48 frames.
+        assert_eq!(
+            transaction,
+            AttritionRecomputeTransaction::Selected {
+                territory_owner: 0,
+                scalar: 0x100,
+                period_after: 48,
+                meet: AttritionMeetReceipt::Met { territory_owner: 0 },
+                prefix: AttritionPrefix {
+                    unit_masks_before: 0x40_0080,
+                    unit_masks_after: 0,
+                    unit_masks2_before: RESUPPLIED_THIS_TICK,
+                    unit_masks2_after: 0,
+                    period_before: 23,
+                },
+            }
+        );
+        assert_eq!(host.prefix_writes, [(0x40_0080, 0, 23, 0)]);
+        assert_eq!(host.selection_writes, [(0, 0x80, 0, 48)]);
+        assert_eq!(host.unit.attrition_period, 48);
+        assert_eq!(host.meets, [0]);
+
+        // A doubled territory rate halves the period; the prefix is unchanged.
+        let mut host = SelectionHost::land_unit();
+        host.rate.as_mut().unwrap().att = 2;
+        assert!(matches!(
+            host.run(),
+            AttritionRecomputeTransaction::Selected {
+                period_after: 24,
+                ..
+            }
+        ));
+
+        // get_attrition's own has_preq(0x2FE) + is_idle arm returns before the divisors.
+        let mut host = SelectionHost::land_unit();
+        host.rate.as_mut().unwrap().victim_upgrade_0x2fe = true;
+        host.facts.is_idle = true;
+        assert!(matches!(
+            host.run(),
+            AttritionRecomputeTransaction::NoAttritionRate { .. }
+        ));
+        assert!(host.selection_writes.is_empty());
+
+        // A territory owner with no attrition research writes nothing at all.
+        let mut host = SelectionHost::land_unit();
+        host.rate.as_mut().unwrap().att = 0;
+        assert!(matches!(
+            host.run(),
+            AttritionRecomputeTransaction::NoAttritionRate { .. }
+        ));
+        assert!(host.selection_writes.is_empty());
+        assert_eq!(host.unit.attrition_period, 0);
+    }
+
+    #[test]
+    fn attrition_recompute_takes_every_recovered_return_in_retail_order() {
+        let exemption = |mutate: &mut dyn FnMut(&mut SelectionHost)| {
+            let mut host = SelectionHost::land_unit();
+            mutate(&mut host);
+            let transaction = host.run();
+            // Only the land tail may write a period; every other return leaves the
+            // universal reset in place.
+            if !matches!(transaction, AttritionRecomputeTransaction::Selected { .. }) {
+                assert!(
+                    host.selection_writes.is_empty(),
+                    "an early return may not write a period: {transaction:?}"
+                );
+                assert_eq!(host.unit.attrition_period, 0);
+            }
+            transaction
+        };
+
+        assert!(matches!(
+            exemption(&mut |host| host.free_points.push(AttritionFreePoint {
+                x: host.unit.unit.x,
+                y: host.unit.unit.y,
+                radius: 3,
+            })),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::ScenarioAttritionFreePoints,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.territory_owner = -1),
+            AttritionRecomputeTransaction::NeutralTerritoryNoAttrition { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.territory_owner = 1),
+            AttritionRecomputeTransaction::FriendlyTerritoryReset { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.flags[0].leader_flags = 1),
+            AttritionRecomputeTransaction::InactiveTerritoryLeader {
+                territory_owner: 0,
+                leader_flags: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.diplos[1][0] = Diplo::Ally as i32;
+                host.diplos[0][1] = Diplo::Ally as i32;
+            }),
+            AttritionRecomputeTransaction::AlliedTerritory { .. }
+        ));
+        // A one-sided alliance is neither the retail ally pair nor peace: `is_enemy` still
+        // sees the other leader's war declaration, so the land tail runs.
+        assert!(matches!(
+            exemption(&mut |host| host.diplos[1][0] = Diplo::Ally as i32),
+            AttritionRecomputeTransaction::Selected { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.flags[1].take_att_disabled = 1),
+            AttritionRecomputeTransaction::TakeAttritionDisabled { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.flags[0].give_att_disabled = 1),
+            AttritionRecomputeTransaction::GiveAttritionDisabled { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.facts.is_worker = true;
+                host.gather = GatherOrderState::Gathering { non_flat: true };
+            }),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::GatheringNonFlat,
+                ..
+            }
+        ));
+        // A flat-gathering worker keeps going, and skips the ordinary-unit gauntlet its
+        // zero attack would otherwise fail.
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.facts.is_worker = true;
+                host.facts.attack = 0;
+                host.gather = GatherOrderState::Gathering { non_flat: false };
+            }),
+            AttritionRecomputeTransaction::Selected { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.facts.is_worker = true;
+                host.gather = GatherOrderState::Unavailable;
+            }),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::GatherOrderState,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.attack = 0),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::ZeroAttack,
+                ..
+            }
+        ));
+        // Merchants and heroes bypass the ordinary-unit gauntlet entirely. Supply units
+        // bypass it too, but meet their own gate on the land tail, asserted below.
+        for flags in [0u32, 0x20] {
+            assert!(matches!(
+                exemption(&mut |host| {
+                    host.facts.attack = 0;
+                    host.facts.is_merchant = flags == 0;
+                    host.facts.unit_flags2 = flags;
+                }),
+                AttritionRecomputeTransaction::Selected { .. }
+            ));
+        }
+        assert!(matches!(
+            exemption(&mut |host| host.facts.unit_flags2 = 0x10),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Special,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.is_tech_0x3a = true),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Tech0x3a,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.unit_flags2 = 8),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::Caravan,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.domain = 1),
+            AttritionRecomputeTransaction::TypeExempt {
+                exemption: AttritionTypeExemption::SeaDomain,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.flags[1].neutral_attrition = 9),
+            AttritionRecomputeTransaction::NeutralAttritionOverride {
+                neutral_attrition: 9,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.game.conquest_world = true),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::ConquestWorldGame,
+                ..
+            }
+        ));
+        // `is_enemy` needs both directional cells off war before the trespass arm is taken.
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.diplos[1][0] = Diplo::Peace as i32;
+                host.diplos[0][1] = Diplo::Peace as i32;
+            }),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::PeaceTrespassTransaction,
+                ..
+            }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.game.assassin_team_style = true),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::AssassinTrespassTransaction,
+                ..
+            }
+        ));
+        // The assassin arm reaches the ordinary tail when the trespass is on the target.
+        assert!(matches!(
+            exemption(&mut |host| {
+                host.game.assassin_team_style = true;
+                host.target = 0;
+            }),
+            AttritionRecomputeTransaction::Selected { .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.domain = 2),
+            AttritionRecomputeTransaction::NonLandTail { domain: 2, .. }
+        ));
+        assert!(matches!(
+            exemption(&mut |host| host.facts.unit_flags2 = 0x40),
+            AttritionRecomputeTransaction::SupplyTypeExempt { .. }
+        ));
+        // The `0x400000` bit that would skip that exemption is cleared by the universal
+        // prefix and re-set only by the two trespass arms, both of which are blocked, so a
+        // supply unit on the direct war path is always exempt. There is deliberately no
+        // case here asserting otherwise.
+        assert!(matches!(
+            exemption(&mut |host| host.rate = None),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::LeaderAttritionRate,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unowned_territory_writes_the_leader_neutral_attrition_period_then_stops() {
+        let mut host = SelectionHost::land_unit();
+        host.territory_owner = -1;
+        host.flags[1].neutral_attrition = 12;
+        assert_eq!(
+            host.run(),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::UnownedTerritoryFallthrough,
+                territory_owner: -1,
+                prefix: AttritionPrefix {
+                    unit_masks_before: 0x40_0080,
+                    unit_masks_after: 0,
+                    unit_masks2_before: RESUPPLIED_THIS_TICK,
+                    unit_masks2_after: 0,
+                    period_before: 23,
+                },
+            }
+        );
+        assert_eq!(host.unit.attrition_period, 12);
+
+        // `ObjectTypeData::domain == 1` skips only the period write.
+        let mut host = SelectionHost::land_unit();
+        host.territory_owner = -1;
+        host.flags[1].neutral_attrition = 12;
+        host.unit.domain = 1;
+        assert!(matches!(
+            host.run(),
+            AttritionRecomputeTransaction::Blocked {
+                blocker: AttritionSelectionBlocker::UnownedTerritoryFallthrough,
+                ..
+            }
+        ));
+        assert_eq!(host.unit.attrition_period, 0);
     }
 }
