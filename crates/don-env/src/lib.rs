@@ -56,7 +56,7 @@ pub use authoritative_backend::{
     CoreReward, CoreRewardSnapshot, FactoredApplyRefusal, FactoredUnitActionSpace,
     HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation, PreparedUnitAction,
     ProjectionRefusal, QueuePosition, Relation, UnitActionRequest, VerbIntegration, VerbRoute,
-    PLAYER_INTEGRATION, UNIT_INTEGRATION,
+    VisibilityCaptureRefusal, VisibilityStaticSourceRefusal, PLAYER_INTEGRATION, UNIT_INTEGRATION,
 };
 pub use authoritative_episode::{
     AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit, StepReceipt,

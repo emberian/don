@@ -5,19 +5,28 @@
 //! replacing the compact high-throughput backend in the same change. Every generated verb
 //! has a frozen route below. Only `MOVE_TO` is admitted today, and only when the live
 //! collision host proves every active object needed by the transaction. `ATTACK` has a
-//! production Sim issue/execution route, but remains masked and refused until a policy target
-//! ordinal can be bound to a cloak/detection-aware external observation. Unsupported verbs
-//! fail before mutation; there is no accepted-no-effect result.
+//! production Sim issue/execution route. A complete current-frame capture now binds its policy
+//! ordinal through retail's cloak/detection/fog predicate and revalidates `(Handle,who,o,uid)`;
+//! ATTACK remains masked at the next boundary because the current walked order cannot retain
+//! that UID/Handle or host the whole target-eligibility transaction. Unsupported verbs fail
+//! before mutation; there is no accepted-no-effect result.
 
 use crate::authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, StepReceipt};
 use don_sim::order::{Order, OrderIndex, ORDER_FLEEING};
-use don_sim::systems::map_terrain::{Coord, FCoord};
+use don_sim::systems::external_entity_visibility_frontier::{
+    ExternalEntityIdentity, ExternalEntityPublicState, ExternalEntityVisibilityOwner,
+    ExternalUnitFrameRow, ExternalVisibilityFrame, RetailUnitVisibilityFacts, RetailViewerFacts,
+    VisibilityInstallFault, VisibilityProjectionFault, VisibleExternalEntity,
+    UNIT_MASK_DETECTION_BYPASS,
+};
+use don_sim::systems::map_terrain::{Coord, FCoord, WCoord};
 use don_sim::systems::movement_live::{
     LiveCollisionFault, LiveCollisionSource, MovementSourceState,
 };
 use don_sim::systems::victory_score::{leader_flag, Diplo};
 use don_sim::world::{OBJ_FLAG_ACTIVE, SUBTILE};
 use don_sim::Handle;
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub const UNIT_VERB_COUNT: usize = 33;
@@ -49,8 +58,8 @@ pub enum VerbRoute {
     /// Single selected unit -> Sim-owned action-state CAS -> `Sim::issue` -> retail-ordered
     /// `Sim::do_frame`.
     SimIssue,
-    /// The production Sim owns attack order installation and execution. Policy entry remains
-    /// fail-closed at the target identity/visibility projection boundary.
+    /// The production Sim owns attack order installation and execution. Policy entry can cross
+    /// exact target identity/visibility preflight, but remains fail-closed at target commit.
     SimAttackIssue,
     Refused(IntegrationBoundary),
 }
@@ -429,6 +438,21 @@ pub enum ApplyRefusal {
         verb_index: usize,
         target_entity: u16,
     },
+    /// A complete visibility image exists, but this ordinal is absent from the exact image
+    /// shown to the named viewer (or that image was invalidated before apply).
+    TargetVisibility {
+        verb_index: usize,
+        target_entity: u16,
+        fault: VisibilityProjectionFault,
+    },
+    /// Identity and current visibility were both revalidated against `Sim`; the remaining
+    /// production ATTACK transaction cannot yet retain the target UID/Handle through the
+    /// walked order and enforce the full combat-target eligibility predicate.
+    AttackTargetCommitUnavailable {
+        verb_index: usize,
+        target: ExternalEntityIdentity,
+        boundary: IntegrationBoundary,
+    },
     InvalidDestination {
         x: i32,
         y: i32,
@@ -482,7 +506,9 @@ pub struct CoreObservation {
     pub income: [i32; 6],
     pub diplomacy: [Relation; 8],
     pub own_entities: Vec<OwnEntityObservation>,
-    /// Explicitly false until external entities pass current visibility plus cloak detection.
+    /// Stable, one-based policy target rows from the exact captured frame image.
+    pub external_entities: Vec<VisibleExternalEntity>,
+    /// True only when `external_entities` is the complete current-frame projection.
     pub external_entities_complete: bool,
 }
 
@@ -492,6 +518,56 @@ pub enum ProjectionRefusal {
     PlayerNotInGame(u8),
     MissingHandle(usize),
     MissingType(usize),
+    ExternalVisibility(VisibilityProjectionFault),
+}
+
+/// Static UnitType cloak facts must enter through an explicit captured/shipped-data source.
+/// A zero-filled default `TypeTable` is not silently treated as authoritative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisibilityStaticSourceRefusal {
+    InvalidType(i32),
+    InvalidViewer(u8),
+    ViewerMaskExcludesSelf { viewer: u8, mask: u8 },
+}
+
+/// Failure to materialise one complete current-frame visibility image from `Sim`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisibilityCaptureRefusal {
+    MissingHandle(usize),
+    MissingType(usize),
+    TypeFlagsUnavailable {
+        row: usize,
+        type_id: i32,
+    },
+    TypeFlagsChanged {
+        type_id: i32,
+        captured: u32,
+        observed: u32,
+    },
+    ViewerMaskUnavailable {
+        viewer: u8,
+    },
+    ViewerMaskChanged {
+        viewer: u8,
+        captured: u8,
+        observed: u8,
+    },
+    /// The core currently owns `seen3`, but its step-12 producer still stamps every object
+    /// with `detector=false`. A cloaked row therefore cannot be called complete yet.
+    DetectionPlaneCompletenessUnavailable {
+        row: usize,
+    },
+    InvalidFogCell {
+        row: usize,
+        fx: i32,
+        fy: i32,
+    },
+    InvalidWorldCell {
+        row: usize,
+        wx: i32,
+        wy: i32,
+    },
+    Install(VisibilityInstallFault),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -549,6 +625,9 @@ pub struct AuthoritativeBackend {
     episode: AuthoritativeEpisode,
     episode_revision: u64,
     scenario_movement_sources: Vec<ScenarioMovementSource>,
+    external_visibility: ExternalEntityVisibilityOwner,
+    visibility_type_flags: BTreeMap<i32, u32>,
+    visibility_viewer_masks: BTreeMap<u8, u8>,
 }
 
 impl AuthoritativeBackend {
@@ -557,6 +636,9 @@ impl AuthoritativeBackend {
             episode: AuthoritativeEpisode::from_spec(spec)?,
             episode_revision: 0,
             scenario_movement_sources: Vec::new(),
+            external_visibility: ExternalEntityVisibilityOwner::default(),
+            visibility_type_flags: BTreeMap::new(),
+            visibility_viewer_masks: BTreeMap::new(),
         })
     }
 
@@ -579,6 +661,9 @@ impl AuthoritativeBackend {
             episode,
             episode_revision: 0,
             scenario_movement_sources: movement_sources,
+            external_visibility: ExternalEntityVisibilityOwner::default(),
+            visibility_type_flags: BTreeMap::new(),
+            visibility_viewer_masks: BTreeMap::new(),
         })
     }
 
@@ -589,13 +674,32 @@ impl AuthoritativeBackend {
             episode: self.episode.spec().clone(),
             movement_sources: self.scenario_movement_sources.clone(),
         })?;
+        replacement.visibility_type_flags = self.visibility_type_flags.clone();
+        replacement.visibility_viewer_masks = self.visibility_viewer_masks.clone();
+        apply_visibility_type_flags(
+            replacement.episode.sim_mut_for_backend(),
+            &replacement.visibility_type_flags,
+        );
+        apply_visibility_viewer_masks(
+            replacement.episode.sim_mut_for_backend(),
+            &replacement.visibility_viewer_masks,
+        );
+        let mut external_visibility = std::mem::take(&mut self.external_visibility);
+        external_visibility
+            .reset()
+            .expect("a visibility revision cannot exhaust in a process lifetime");
+        replacement.external_visibility = external_visibility;
         replacement.episode_revision = self.episode_revision.wrapping_add(1);
         *self = replacement;
         Ok(())
     }
 
     pub fn step_frames(&mut self, frames: u32) -> StepReceipt {
-        self.episode.step_frames(frames)
+        let receipt = self.episode.step_frames(frames);
+        if frames != 0 {
+            self.invalidate_external_visibility();
+        }
+        receipt
     }
 
     pub fn sim(&self) -> &don_sim::tick::Sim {
@@ -619,6 +723,69 @@ impl AuthoritativeBackend {
             .install_movement_collision_source(actor, source)
     }
 
+    /// Install one exact `UnitTypeData::unit_flags +0x2B4` capture into the Sim-owned type
+    /// table. The capture is retained across deterministic reset; changing it invalidates
+    /// every outstanding external ordinal.
+    pub fn install_visibility_type_flags(
+        &mut self,
+        type_id: i32,
+        unit_flags: u32,
+    ) -> Result<(), VisibilityStaticSourceRefusal> {
+        let type_index = usize::try_from(type_id)
+            .ok()
+            .filter(|&index| index < self.episode.sim().vic_leaders.types.rows.len())
+            .ok_or(VisibilityStaticSourceRefusal::InvalidType(type_id))?;
+        self.episode.sim_mut_for_backend().vic_leaders.types.rows[type_index].unit_flags =
+            unit_flags as i32;
+        self.visibility_type_flags.insert(type_id, unit_flags);
+        self.invalidate_external_visibility();
+        Ok(())
+    }
+
+    /// Install one exact `LeaderData::ally_mask +0x6929` capture. This byte is not inferred
+    /// from diplomacy: retail reads the stored mask directly in both fog and detection queries.
+    pub fn install_visibility_viewer_mask(
+        &mut self,
+        viewer: u8,
+        mask: u8,
+    ) -> Result<(), VisibilityStaticSourceRefusal> {
+        let index = usize::from(viewer);
+        if index >= self.episode.sim().map.fog.leaders.len() {
+            return Err(VisibilityStaticSourceRefusal::InvalidViewer(viewer));
+        }
+        if mask & (1u8 << viewer) == 0 {
+            return Err(VisibilityStaticSourceRefusal::ViewerMaskExcludesSelf { viewer, mask });
+        }
+        self.episode.sim_mut_for_backend().map.fog.leaders[index].player_mask = mask;
+        self.visibility_viewer_masks.insert(viewer, mask);
+        self.invalidate_external_visibility();
+        Ok(())
+    }
+
+    /// Capture every active Unit row and every valid viewer from the sole `Sim` owner, then
+    /// atomically install the cloak/detection/fog image which both observation and ATTACK
+    /// preflight consume. Every live type must have an explicit `unit_flags` source.
+    pub fn capture_external_visibility(&mut self) -> Result<u64, VisibilityCaptureRefusal> {
+        let frame = capture_external_visibility_frame(
+            self.episode.sim(),
+            &self.visibility_type_flags,
+            &self.visibility_viewer_masks,
+        )?;
+        self.external_visibility
+            .install_frame(frame)
+            .map_err(VisibilityCaptureRefusal::Install)
+    }
+
+    pub fn external_visibility_revision(&self) -> u64 {
+        self.external_visibility.revision()
+    }
+
+    fn invalidate_external_visibility(&mut self) {
+        self.external_visibility
+            .reset()
+            .expect("a visibility revision cannot exhaust in a process lifetime");
+    }
+
     /// Compute the verb mask without borrowing any mutable simulation store.
     pub fn unit_verb_mask(
         &self,
@@ -631,7 +798,14 @@ impl AuthoritativeBackend {
                 verb_head: verb_head as u16,
                 ..template
             };
-            *slot = preflight_unit(self.episode.sim(), self.episode_revision, who, request).is_ok();
+            *slot = preflight_unit(
+                self.episode.sim(),
+                &self.external_visibility,
+                self.episode_revision,
+                who,
+                request,
+            )
+            .is_ok();
         }
         AuthoritativeUnitVerbMask { allowed }
     }
@@ -659,7 +833,13 @@ impl AuthoritativeBackend {
         who: u8,
         request: UnitActionRequest,
     ) -> Result<Option<PreparedUnitAction>, ApplyRefusal> {
-        preflight_unit(self.episode.sim(), self.episode_revision, who, request)
+        preflight_unit(
+            self.episode.sim(),
+            &self.external_visibility,
+            self.episode_revision,
+            who,
+            request,
+        )
     }
 
     /// Commit a previously prepared action or refuse it before any mutation.
@@ -679,6 +859,7 @@ impl AuthoritativeBackend {
         }
         let Some(current) = preflight_unit(
             self.episode.sim(),
+            &self.external_visibility,
             self.episode_revision,
             prepared.who,
             prepared.request,
@@ -711,11 +892,14 @@ impl AuthoritativeBackend {
             sim.issue(prepared.request.actor, order),
             "movement-source CAS proved actor live immediately before Sim::issue"
         );
+        let frame = sim.world.frame;
+        let queue_len = sim.world.orders(prepared.row).len();
+        self.invalidate_external_visibility();
         Ok(ApplyReceipt::OrderInstalled {
-            frame: sim.world.frame,
+            frame,
             actor: prepared.request.actor,
             kind: prepared.kind,
-            queue_len: sim.world.orders(prepared.row).len(),
+            queue_len,
         })
     }
 
@@ -757,8 +941,8 @@ impl AuthoritativeBackend {
         }
     }
 
-    /// Own-state-only projection. The exact fog query is already available in Sim, but
-    /// external observation also needs cloaking/type facts not yet stored by this owner.
+    /// Sim-owned own-state plus the optional complete current-frame external projection.
+    /// Without an explicit type-flags source and a fresh capture, no external row leaks.
     pub fn observe(&self, who: u8) -> Result<CoreObservation, ProjectionRefusal> {
         let sim = self.episode.sim();
         let player = sim
@@ -808,6 +992,12 @@ impl AuthoritativeBackend {
                 }
             }
         });
+        let (external_entities, external_entities_complete) =
+            match self.external_visibility.project(who) {
+                Ok(projection) => (projection.rows, true),
+                Err(VisibilityProjectionFault::Uninstalled) => (Vec::new(), false),
+                Err(fault) => return Err(ProjectionRefusal::ExternalVisibility(fault)),
+            };
         Ok(CoreObservation {
             who,
             frame: sim.world.frame,
@@ -819,7 +1009,8 @@ impl AuthoritativeBackend {
             income: player.economy.income,
             diplomacy,
             own_entities,
-            external_entities_complete: false,
+            external_entities,
+            external_entities_complete,
         })
     }
 
@@ -909,9 +1100,150 @@ fn install_scenario_movement_sources(
     Ok(())
 }
 
+fn apply_visibility_type_flags(sim: &mut don_sim::tick::Sim, flags: &BTreeMap<i32, u32>) {
+    for (&type_id, &unit_flags) in flags {
+        let index = usize::try_from(type_id)
+            .expect("validated visibility type id became negative across reset");
+        sim.vic_leaders.types.rows[index].unit_flags = unit_flags as i32;
+    }
+}
+
+fn apply_visibility_viewer_masks(sim: &mut don_sim::tick::Sim, masks: &BTreeMap<u8, u8>) {
+    for (&viewer, &mask) in masks {
+        sim.map.fog.leaders[usize::from(viewer)].player_mask = mask;
+    }
+}
+
+fn capture_external_visibility_frame(
+    sim: &don_sim::tick::Sim,
+    type_sources: &BTreeMap<i32, u32>,
+    viewer_sources: &BTreeMap<u8, u8>,
+) -> Result<ExternalVisibilityFrame, VisibilityCaptureRefusal> {
+    let mut rows = Vec::new();
+    for row in 0..sim.world.live_count() as usize {
+        if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            continue;
+        }
+        let handle = sim
+            .world
+            .handle_at_row(row)
+            .ok_or(VisibilityCaptureRefusal::MissingHandle(row))?;
+        let type_id = *sim
+            .unit_type
+            .get(row)
+            .ok_or(VisibilityCaptureRefusal::MissingType(row))?;
+        let captured_type_flags = *type_sources
+            .get(&type_id)
+            .ok_or(VisibilityCaptureRefusal::TypeFlagsUnavailable { row, type_id })?;
+        let observed_type_flags = sim
+            .vic_leaders
+            .types
+            .rows
+            .get(usize::try_from(type_id).unwrap_or(usize::MAX))
+            .map(|type_row| type_row.unit_flags as u32)
+            .ok_or(VisibilityCaptureRefusal::TypeFlagsUnavailable { row, type_id })?;
+        if observed_type_flags != captured_type_flags {
+            return Err(VisibilityCaptureRefusal::TypeFlagsChanged {
+                type_id,
+                captured: captured_type_flags,
+                observed: observed_type_flags,
+            });
+        }
+
+        let x = sim.world.units.x_internal()[row];
+        let y = sim.world.units.y_internal()[row];
+        let fx = FCoord::from_coord(Coord(x)).0;
+        let fy = FCoord::from_coord(Coord(y)).0;
+        if !sim.map.world.valid_f(fx, fy) {
+            return Err(VisibilityCaptureRefusal::InvalidFogCell { row, fx, fy });
+        }
+        let wx = WCoord::from_coord(Coord(x)).0;
+        let wy = WCoord::from_coord(Coord(y)).0;
+        if !sim.map.world.valid_w(wx, wy) {
+            return Err(VisibilityCaptureRefusal::InvalidWorldCell { row, wx, wy });
+        }
+        let fog_index = sim.map.world.f_index(fx, fy);
+        let visibility = RetailUnitVisibilityFacts {
+            active: true,
+            unit_masks: sim.world.units.get_unit_masks(row),
+            type_unit_flags: captured_type_flags,
+            unit_masks2: sim.world.units.get_unit_masks2(row),
+            has_order: sim.world.orders(row).order_type() != OrderIndex::None,
+            object_visible_mask: sim.world.units.visible()[row] as u8,
+            cell_seen_mask: sim.map.world.seen[fog_index],
+            cell_detected_mask: sim.map.world.seen3[fog_index],
+            territory_owner: sim.map.world.wdata(wx, wy).who,
+        };
+        if visibility.is_cloaked() && visibility.unit_masks & UNIT_MASK_DETECTION_BYPASS == 0 {
+            return Err(VisibilityCaptureRefusal::DetectionPlaneCompletenessUnavailable { row });
+        }
+        rows.push(ExternalUnitFrameRow {
+            identity: ExternalEntityIdentity {
+                handle,
+                who: sim.world.units.get_who(row),
+                object_o: sim.world.units.o()[row],
+                uid: sim.world.units.get_uid(row),
+            },
+            public: ExternalEntityPublicState {
+                type_id,
+                x,
+                y,
+                hits: sim.world.units.myhits()[row],
+                angle: sim.world.units.angle()[row],
+                speed: sim.world.units.myspeed()[row],
+                recharge: sim.world.units.get_recharging(row),
+                order_index: sim.world.orders(row).order_type() as u16,
+            },
+            visibility,
+        });
+    }
+
+    let mut viewers = Vec::new();
+    for (who, player) in sim.vic_leaders.slots.iter().enumerate() {
+        if !player.flag(leader_flag::VALID) {
+            continue;
+        }
+        let viewer = who as u8;
+        let captured_viewer_mask = *viewer_sources
+            .get(&viewer)
+            .ok_or(VisibilityCaptureRefusal::ViewerMaskUnavailable { viewer })?;
+        let fog = sim.map.fog.leaders[who];
+        if fog.player_mask != captured_viewer_mask {
+            return Err(VisibilityCaptureRefusal::ViewerMaskChanged {
+                viewer,
+                captured: captured_viewer_mask,
+                observed: fog.player_mask,
+            });
+        }
+        let allied_territory_mask = (0..sim.vic_leaders.slots.len()).fold(0u8, |mask, other| {
+            if sim.vic_leaders.is_ally(who, other) {
+                mask | (1u8 << other)
+            } else {
+                mask
+            }
+        });
+        viewers.push(RetailViewerFacts {
+            who: viewer,
+            vision_mask: captured_viewer_mask,
+            see_all: fog.see_all,
+            reveal_counter: fog.reveal_counter,
+            see_own_territory: fog.see_own_territory,
+            allied_territory_mask,
+        });
+    }
+
+    Ok(ExternalVisibilityFrame {
+        frame: sim.world.frame,
+        fog_option: sim.map.fog.option.0,
+        rows,
+        viewers,
+    })
+}
+
 /// Read-only half of the action transaction, shared byte-for-byte by masking and apply.
 fn preflight_unit(
     sim: &don_sim::tick::Sim,
+    external_visibility: &ExternalEntityVisibilityOwner,
     episode_revision: u64,
     who: u8,
     request: UnitActionRequest,
@@ -957,14 +1289,52 @@ fn preflight_unit(
         if request.target_entity == 0 {
             return Err(ApplyRefusal::MissingTargetEntity { verb_index });
         }
-        // `observe()` currently exposes own rows only. An ATTACK target must be external, and
-        // fog alone cannot prove it policy-visible: retail additionally evaluates dynamic
-        // object cloak flags, type cloak flags and the dedicated detection plane. Preserve the
-        // ordinal for the future binding transaction, but never resolve it through scenario
-        // allocation order or an omniscient World walk.
-        return Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+        let binding = match external_visibility.bind_target(who, request.target_entity) {
+            Ok(binding) => binding,
+            Err(VisibilityProjectionFault::Uninstalled) => {
+                return Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+                    verb_index,
+                    target_entity: request.target_entity,
+                });
+            }
+            Err(fault) => {
+                return Err(ApplyRefusal::TargetVisibility {
+                    verb_index,
+                    target_entity: request.target_entity,
+                    fault,
+                });
+            }
+        };
+        let target = external_visibility
+            .revalidate_target(binding)
+            .map_err(|fault| ApplyRefusal::TargetVisibility {
+                verb_index,
+                target_entity: request.target_entity,
+                fault,
+            })?;
+        let target_row =
+            sim.world
+                .row_of(target.identity.handle)
+                .ok_or(ApplyRefusal::TargetVisibility {
+                    verb_index,
+                    target_entity: request.target_entity,
+                    fault: VisibilityProjectionFault::BindingIdentityChanged,
+                })?;
+        if sim.world.units.get_flags(target_row) & OBJ_FLAG_ACTIVE == 0
+            || sim.world.units.get_who(target_row) != target.identity.who
+            || sim.world.units.o()[target_row] != target.identity.object_o
+            || sim.world.units.get_uid(target_row) != target.identity.uid
+        {
+            return Err(ApplyRefusal::TargetVisibility {
+                verb_index,
+                target_entity: request.target_entity,
+                fault: VisibilityProjectionFault::BindingIdentityChanged,
+            });
+        }
+        return Err(ApplyRefusal::AttackTargetCommitUnavailable {
             verb_index,
-            target_entity: request.target_entity,
+            target: target.identity,
+            boundary: IntegrationBoundary::CombatTargetHost,
         });
     }
     debug_assert_eq!(integration.route, VerbRoute::SimIssue);

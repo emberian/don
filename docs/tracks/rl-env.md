@@ -8,9 +8,12 @@ end to end including masked action sampling, on this M2 Max, measured by
 
 The additive `AuthoritativeBackend` instead owns `don_sim::tick::Sim` directly. It is a
 bounded migration surface, not yet a full-game vector environment: currently only NOOP and
-fully hosted MOVE_TO are admitted. ATTACK's production Sim issue/execution route is now
-classified separately, but remains masked and returns a target identity/visibility refusal;
-the other policy verbs fail at their typed owner boundaries.
+fully hosted MOVE_TO are admitted. A fresh current-frame capture can now expose complete
+non-cloaked external rows and bind ATTACK's one-based target ordinal through stable
+`(Handle,who,o,uid)` identity plus the recovered fog predicate. ATTACK remains masked after
+that preflight: the current walked order cannot retain the target UID/Handle or host the full
+target-eligibility transaction. The admitted verb delta is therefore **0**; the other policy
+verbs still fail at their typed owner boundaries.
 
 Root convergence validated the target-identity tranche in persvati job
 `rl-target-entity-v2-20260809T232312Z-24206-11858-b8a284f806b0`: 22/22 focused backend, head,
@@ -39,17 +42,23 @@ The authoritative contract is frozen at this boundary:
   from reviving a plan whose handle and fresh source revision happen to repeat.
   Every other generated unit/player verb returns `ApplyRefusal::Unhosted` with the missing
   authoritative owner and cannot mutate `Sim`.
-* `observe()` and `reward_snapshot()` project directly from `Sim`. Observation currently
-  contains own units and leader state only; `external_entities_complete` remains false until
-  cloak/detection-aware visibility has an authoritative host. Reward deltas use Sim-owned
-  score, economy, alive, and won state.
-* Strict ten-head decoding preserves `TargetEntity` instead of dropping it. ATTACK can only
-  bind that ordinal against the exact external observation image shown to the policy. Because
-  that image is not yet cloak/detection complete, both its conditional verb mask and apply
-  path remain red: zero is `MissingTargetEntity`, a non-zero ordinal is
-  `TargetIdentityVisibilityUnavailable`, and neither route changes orders, paths, digest, or
-  reset determinism. Scenario allocation order and omniscient World traversal are forbidden
-  substitutes. This tranche adds **zero** authoritative action coverage by design.
+* `observe()` and `reward_snapshot()` project directly from `Sim`. Observation contains own
+  units and, after `capture_external_visibility()`, a stable one-based external row image.
+  Capture refuses zero-filled default type flags and any viewer without an explicit captured
+  `LeaderData::ally_mask`; it snapshots the Sim-owned object columns, fog/detection planes,
+  territory and viewer policy, and invalidates on tick, reset, or order mutation.
+  `external_entities_complete` stays false without that fresh image. The step-12
+  detector producer still hardcodes `detector=false`, so any cloak requiring detection refuses
+  capture instead of presenting an incomplete row image. Reward deltas use Sim-owned score,
+  economy, alive, and won state.
+* Strict ten-head decoding preserves `TargetEntity` instead of dropping it. ATTACK binds a
+  non-zero ordinal only against the exact captured image shown to the policy, then revalidates
+  the target's Handle generation and retail `(who,o,uid)` against the live Sim row. No image is
+  `TargetIdentityVisibilityUnavailable`; a missing/stale ordinal is `TargetVisibility`; a valid
+  visible identity reaches `AttackTargetCommitUnavailable`. All three remain masked and change
+  no order, path, digest, or reset state. Scenario allocation order and omniscient World
+  traversal are forbidden substitutes. This tranche adds **zero** authoritative action
+  coverage by design.
 * `AuthoritativeScenarioSpec` captures movement sources by deterministic scenario-unit
   ordinal and reinstalls them atomically on reset. `install_movement_source()` remains an
   explicitly out-of-band setup escape hatch and is not silently persisted. Masks read the
@@ -376,10 +385,10 @@ modified.
 1. **Host group/command decoding over the authoritative backend.** Decode the existing
    generated factored heads into fail-closed typed transactions; do not route unsupported
    verbs through compact `action.rs` behavior.
-2. **Cloak/detection-aware external observations.** Bind policy target ordinals to
-   identity-stable rows from that exact observation image. Only then may
-   `external_entities_complete` become true, the authoritative backend expose opponents, or
-   ATTACK leave its dedicated refusal boundary.
+2. **Finish cloak/detection and ATTACK target commit.** Replace step 12's hardcoded
+   `detector=false` with authoritative per-object detector facts; then retain target UID/Handle
+   in the walked ATTACK order and host its complete eligibility transaction. Only then may
+   cloaked rows pass capture or ATTACK become an admitted verb.
 3. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).

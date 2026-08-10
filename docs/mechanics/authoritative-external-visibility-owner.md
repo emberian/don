@@ -3,13 +3,14 @@
 ## Why ATTACK remains red
 
 `don-env::authoritative_backend` has a real `SimAttackIssue` route, but both its mask and apply
-path stop at `TargetIdentityVisibilityUnavailable`. Its current observation exposes own units
-only. Resolving a policy `target_entity` ordinal through scenario allocation order or an
-omniscient `World` scan would disclose hidden identities and would let mask/apply disagree after
-dense-row compaction.
+path remain red. Without a fresh frame they stop at `TargetIdentityVisibilityUnavailable`; with
+one, they bind and revalidate the exact external identity before stopping at
+`AttackTargetCommitUnavailable`. The current walked `Order` cannot retain target UID/Handle, and
+the complete combat-target eligibility transaction is not hosted.
 
-`external_entity_visibility_frontier.rs` freezes the smallest source-only owner needed at that
-boundary. It does not wire ATTACK, alter `don-env`, or claim a completion delta.
+`external_entity_visibility_frontier.rs` freezes the owner used at that boundary. The
+`don-env` adapter now captures it from `Sim`, exposes its rows to observation, and consumes the
+same ordinal in mask/apply preflight. It claims no admitted-verb completion delta.
 
 ## Retail ground truth
 
@@ -55,6 +56,31 @@ This owner establishes identity plus visibility only. Hostility, target validity
 and the existing attack order commit remain their own admission gates. The frontier is Unit-only;
 Build/Wall/Animal virtual visibility paths must not be guessed from the Unit layout.
 
+## `don-env` capture and consumer
+
+`AuthoritativeBackend::capture_external_visibility()` walks every active Unit in the sole Sim
+owner and captures its generated columns, current order presence, type, exact fog cell, detector
+cell, territory cell, and stable/retail identity. Static `UnitTypeData::unit_flags` and each
+viewer's stored `LeaderData::ally_mask` must first enter through explicit capture methods. The
+adapter does not infer the ally-mask byte from diplomacy and does not treat the zero-filled
+default type table as shipped data.
+
+The captured frame is invalidated by any non-zero tick, reset, visibility-type/viewer source
+change, or admitted order mutation. `observe()` exposes no external rows and reports
+`external_entities_complete=false` without a fresh frame. With a fresh frame it returns the
+owner's canonical one-based rows and reports the projection complete.
+
+One boundary remains earlier than the owner's full cloak predicate: step 12 currently calls
+`update_seen` with `detector=false` for every object. A row which actually needs the `seen3`
+plane therefore refuses capture at `DetectionPlaneCompletenessUnavailable`; the adapter does not
+publish a plausible-but-incomplete cloak image. Detection-bypass cloaks remain admissible because
+retail skips the detector query for that exact instance bit.
+
+ATTACK now binds the policy ordinal, immediately revalidates the opaque binding, resolves its
+Handle generation in Sim, and compares live `(who,o,uid)` before returning the typed target-commit
+refusal. Its conditional verb mask remains false and apply mutates no order, path, or world byte.
+The admitted authoritative verb delta is **0**.
+
 ## Compaction, reset, save, and digest semantics
 
 Dense World row indices are never retained. Reordering the same live rows produces identical
@@ -72,7 +98,7 @@ cloak/detection/fog input, and viewer policy in canonical order. It excludes the
 source dense order, so equal content has an equal digest. It is a local determinism/staleness
 diagnostic only—not a claim of byte-exact retail `DataWalk` or a new checksum channel.
 
-## Source-only validation command
+## Validation
 
 Root convergence formatted the two Rust files. Persvati job
 `rl-visibility-owner-20260810T000049Z-19232-9988-cf4a3c9ea7c5` passed all nine focused tests while
@@ -85,5 +111,9 @@ tools/swarm-cargo-remote submit persvati rl-visibility-owner \
   --jobs 12 -- test -p don-sim --test external_entity_visibility_frontier
 ```
 
-No Sim registration, retail launch, or live-process mutation was performed. ATTACK remains red
-until this owner is captured from a real Sim frame and consumed by `don-env`.
+The first source-only owner job used no Sim registration, retail launch, or live-process mutation.
+The local integration lane subsequently passed 18 focused `don-env` contracts: 5 visibility
+integration tests plus 13 existing backend/head/target tests. The full `don-env` invocation reached
+an unrelated stale command-bridge count gate (`35` observed versus the test's older `22`; its prose
+already records `28`) after every authoritative test passed. No remote build or retail process was
+used for the integration tranche.
