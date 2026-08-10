@@ -10,12 +10,16 @@
 use std::fmt;
 
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
-use crate::systems::bhs_type_factory::{
-    produce_type_builtin_state, TypeBuiltinFactoryError, TypeBuiltinFactoryInput,
-    TypeBuiltinProvenance,
+use crate::systems::bhs_create_unit_runtime::{
+    BhsCreateUnitRuntime, CreateUnitGroupMember, CreateUnitReceipt, CreateUnitRuntimeInput,
+    CreateUnitRuntimeSetupError,
 };
 use crate::systems::bhs_type_channel13_frontier::{
     ProjectedTypeRules, TypeChannel13Error, TypePersistenceOwner, TypeWalkSource,
+};
+use crate::systems::bhs_type_factory::{
+    produce_type_builtin_state, TypeBuiltinFactoryError, TypeBuiltinFactoryInput,
+    TypeBuiltinProvenance,
 };
 use crate::systems::bhs_type_runtime::{
     TypeBuiltinBoundaryError, TypeBuiltinReceipt, TypeBuiltinRuntime,
@@ -43,6 +47,12 @@ pub enum BhsSessionSetupError {
     },
     /// The immutable normalized Type walk does not admit the produced canonical owner.
     Channel13(TypeChannel13Error),
+    /// The create-unit projection was not produced by the same rules/mod composition or is
+    /// structurally incomplete.
+    CreateUnits(CreateUnitRuntimeSetupError),
+    /// A caller attempted to pair a newly witnessed session with an independently installed
+    /// ScenarioFuncSet creation owner.
+    PreinstalledCreateUnitOwner,
 }
 
 impl fmt::Display for BhsSessionSetupError {
@@ -67,6 +77,10 @@ impl fmt::Display for BhsSessionSetupError {
                 "BHS type owner Leader flags at slot {slot} are {type_owner:#x}, simulation has {sim:#x}"
             ),
             Self::Channel13(error) => write!(f, "BHS channel-13 setup failed: {error}"),
+            Self::CreateUnits(error) => write!(f, "BHS create-unit setup failed: {error}"),
+            Self::PreinstalledCreateUnitOwner => {
+                write!(f, "BHS runtime already contains an independent create-unit owner")
+            }
         }
     }
 }
@@ -89,6 +103,9 @@ pub struct BhsSessionStatus {
     pub type_mutation_revision: u64,
     pub type_state_dirty: bool,
     pub type_channel13_owned: bool,
+    pub create_unit_owned: bool,
+    pub create_unit_completed_calls: u64,
+    pub create_unit_faulted_calls: u64,
 }
 
 /// One non-cloneable production session.
@@ -114,7 +131,7 @@ impl BhsSession {
         scripts: ScriptRuntime,
         type_input: TypeBuiltinFactoryInput,
     ) -> Result<Self, BhsSessionSetupError> {
-        Self::build(sim, scripts, type_input, None)
+        Self::build(sim, scripts, type_input, None, None)
     }
 
     /// Build a session whose canonical owner also retains the exact normalized Type prefix of
@@ -126,7 +143,35 @@ impl BhsSession {
         type_input: TypeBuiltinFactoryInput,
         channel13_source: TypeWalkSource,
     ) -> Result<Self, BhsSessionSetupError> {
-        Self::build(sim, scripts, type_input, Some(channel13_source))
+        Self::build(sim, scripts, type_input, Some(channel13_source), None)
+    }
+
+    /// Build the joined owner for registrations 508--510 together with the canonical mutable
+    /// Type table. The projection witness must name the same composition and manifest.
+    pub fn new_with_create_units(
+        sim: Sim,
+        scripts: ScriptRuntime,
+        type_input: TypeBuiltinFactoryInput,
+        create_input: CreateUnitRuntimeInput,
+    ) -> Result<Self, BhsSessionSetupError> {
+        Self::build(sim, scripts, type_input, None, Some(create_input))
+    }
+
+    /// Compose checksum-channel-13 type ownership and the BHS creation prefix in one session.
+    pub fn new_with_channel13_and_create_units(
+        sim: Sim,
+        scripts: ScriptRuntime,
+        type_input: TypeBuiltinFactoryInput,
+        channel13_source: TypeWalkSource,
+        create_input: CreateUnitRuntimeInput,
+    ) -> Result<Self, BhsSessionSetupError> {
+        Self::build(
+            sim,
+            scripts,
+            type_input,
+            Some(channel13_source),
+            Some(create_input),
+        )
     }
 
     fn build(
@@ -134,12 +179,16 @@ impl BhsSession {
         mut scripts: ScriptRuntime,
         type_input: TypeBuiltinFactoryInput,
         channel13_source: Option<TypeWalkSource>,
+        create_input: Option<CreateUnitRuntimeInput>,
     ) -> Result<Self, BhsSessionSetupError> {
         if scripts.type_builtins().is_some() {
             return Err(BhsSessionSetupError::PreinstalledTypeOwner);
         }
         if scripts.has_started() {
             return Err(BhsSessionSetupError::ScriptRuntimeAlreadyStarted);
+        }
+        if scripts.create_unit_runtime().is_some() {
+            return Err(BhsSessionSetupError::PreinstalledCreateUnitOwner);
         }
 
         let produced = produce_type_builtin_state(type_input)?;
@@ -160,14 +209,15 @@ impl BhsSession {
                 });
             }
         }
+        let create_runtime = create_input
+            .map(|input| BhsCreateUnitRuntime::new(input, &state, type_provenance))
+            .transpose()
+            .map_err(BhsSessionSetupError::CreateUnits)?;
         match channel13_source {
             Some(source) => {
-                let runtime = TypeBuiltinRuntime::new_with_channel13(
-                    state,
-                    type_provenance,
-                    source,
-                )
-                .map_err(BhsSessionSetupError::Channel13)?;
+                let runtime =
+                    TypeBuiltinRuntime::new_with_channel13(state, type_provenance, source)
+                        .map_err(BhsSessionSetupError::Channel13)?;
                 scripts
                     .install_type_builtin_runtime(runtime)
                     .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?;
@@ -175,6 +225,11 @@ impl BhsSession {
             None => scripts
                 .install_type_builtins(state)
                 .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?,
+        }
+        if let Some(runtime) = create_runtime {
+            scripts
+                .install_create_unit_runtime(runtime)
+                .map_err(|_| BhsSessionSetupError::PreinstalledCreateUnitOwner)?;
         }
 
         Ok(Self {
@@ -198,8 +253,18 @@ impl BhsSession {
         self.scripts.last_type_builtin_receipt()
     }
 
+    pub fn last_create_unit_receipt(&self) -> Option<&CreateUnitReceipt> {
+        self.scripts.last_create_unit_receipt()
+    }
+
+    /// Read one persistent ScenarioData numeric group without exposing the enclosed Sim.
+    pub fn create_unit_numeric_group(&self, key: i32) -> Option<&[CreateUnitGroupMember]> {
+        self.scripts.create_unit_runtime()?.numeric_group(key)
+    }
+
     pub fn status(&self) -> BhsSessionStatus {
         let state = self.type_state();
+        let create_units = self.scripts.create_unit_runtime();
         BhsSessionStatus {
             frame: self.sim.world.frame,
             seconds: self.sim.world.seconds,
@@ -208,6 +273,10 @@ impl BhsSession {
             type_mutation_revision: state.mutation_revision(),
             type_state_dirty: state.is_dirty(),
             type_channel13_owned: self.type_runtime().has_channel13_source(),
+            create_unit_owned: create_units.is_some(),
+            create_unit_completed_calls: create_units
+                .map_or(0, BhsCreateUnitRuntime::completed_calls),
+            create_unit_faulted_calls: create_units.map_or(0, BhsCreateUnitRuntime::faulted_calls),
         }
     }
 
@@ -222,10 +291,9 @@ impl BhsSession {
     }
 
     /// Borrow the full canonical owner, exact provenance, live revision, and admitted checkpoint.
-    /// DoNSave v6 remains red because it has no encoding/restoration path for this contract.
-    pub fn type_persistence_owner(
-        &self,
-    ) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
+    /// The current DoNSave format remains red because it has no encoding/restoration path for
+    /// this contract.
+    pub fn type_persistence_owner(&self) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
         self.type_runtime().type_persistence_owner()
     }
 
@@ -234,11 +302,11 @@ impl BhsSession {
         self.sim.do_frame_with_scripts(&mut self.scripts)
     }
 
-    /// DoNSave v6 remains red for every installed owner, including a pristine one.
+    /// The current DoNSave format remains red for every installed owner, including a pristine one.
     ///
     /// This method cannot fall through to `save_sim(&Sim)`: admission runs first and currently
-    /// refuses because v6 has no provenance/type-state section or reconstruction path.
-    pub fn save_v6(&self) -> Result<Vec<u8>, SaveError> {
+    /// refuses because it has no provenance/type-state section or reconstruction path.
+    pub fn save(&self) -> Result<Vec<u8>, SaveError> {
         save_sim_with_scripts(&self.sim, &self.scripts)
     }
 

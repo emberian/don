@@ -6,7 +6,7 @@ use don_sim::systems::bhs_type_channel13_frontier::*;
 use don_sim::systems::bhs_type_factory::*;
 use don_sim::systems::bhs_type_runtime::TypeBuiltinBoundaryError;
 use don_sim::systems::bhs_type_table::*;
-use don_sim::systems::save_load::{SaveError};
+use don_sim::systems::save_load::SaveError;
 use don_sim::tick::Sim;
 
 fn digest(byte: u8) -> Sha256Digest {
@@ -141,7 +141,10 @@ fn source_for(state: &TypeBuiltinState, provenance: TypeBuiltinProvenance) -> Ty
             .then(|| vec![0; 152]);
             let mut tail = empty_tail(kind);
             match &owner.body {
-                TypeBody::Unit { object: fields, unit } => {
+                TypeBody::Unit {
+                    object: fields,
+                    unit,
+                } => {
                     let bytes = object.as_mut().unwrap();
                     for (offset, value) in [
                         (488, fields.attack),
@@ -281,33 +284,28 @@ fn script_runtime() -> ScriptRuntime {
 fn source_and_input() -> (TypeWalkSource, TypeBuiltinFactoryInput) {
     let input = factory_input();
     let produced = produce_type_builtin_state(input.clone()).unwrap();
-    (
-        source_for(produced.state(), produced.provenance()),
-        input,
-    )
+    (source_for(produced.state(), produced.provenance()), input)
 }
 
 #[test]
 fn session_projects_clean_and_mutated_owner_at_the_live_revision() {
     let (source, input) = source_and_input();
     let pristine_checkpoint = candidate_source_checkpoint(&source).unwrap().0;
-    let mut session = BhsSession::new_with_channel13(
-        Sim::new(0x13, 8),
-        script_runtime(),
-        input,
-        source,
-    )
-    .unwrap();
+    let mut session =
+        BhsSession::new_with_channel13(Sim::new(0x13, 8), script_runtime(), input, source).unwrap();
 
     assert!(session.status().type_channel13_owned);
-    assert_eq!(session.type_channel13_checkpoint().unwrap(), pristine_checkpoint);
+    assert_eq!(
+        session.type_channel13_checkpoint().unwrap(),
+        pristine_checkpoint
+    );
     let pristine_owner = session.type_persistence_owner().unwrap();
     assert!(!pristine_owner.dirty());
     assert_eq!(pristine_owner.mutation_revision(), 0);
     assert_eq!(pristine_owner.provenance(), session.type_provenance());
     assert_eq!(pristine_owner.state().types.row(50).common.job_time, 50);
     assert!(session.partial_channel_digest().is_ok());
-    assert!(matches!(session.save_v6(), Err(SaveError::BhsTypes(_))));
+    assert!(matches!(session.save(), Err(SaveError::BhsTypes(_))));
 
     session.do_frame().unwrap();
 
@@ -320,7 +318,7 @@ fn session_projects_clean_and_mutated_owner_at_the_live_revision() {
     assert_eq!(mutated_owner.state().types.row(50).common.job_time, 1);
     assert!(session.partial_channel_digest().is_ok());
     assert_eq!(
-        session.save_v6(),
+        session.save(),
         Err(SaveError::BhsTypes(
             TypeBuiltinBoundaryError::SaveOwnerUnowned {
                 mutation_revision: 1,
@@ -349,12 +347,7 @@ fn mismatched_source_is_rejected_before_session_publication() {
     let (mut source, input) = source_and_input();
     source.provenance.type_rows_sha256 = digest(9);
     assert!(matches!(
-        BhsSession::new_with_channel13(
-            Sim::new(0x15, 8),
-            script_runtime(),
-            input,
-            source,
-        ),
+        BhsSession::new_with_channel13(Sim::new(0x15, 8), script_runtime(), input, source,),
         Err(BhsSessionSetupError::Channel13(
             TypeChannel13Error::ProvenanceMismatch
         ))

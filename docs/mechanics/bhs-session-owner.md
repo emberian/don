@@ -33,7 +33,7 @@ Before this seam, three separately valid APIs could be composed incorrectly:
 
 1. `Sim::do_frame()` could execute a script-free frame while a neighboring `ScriptRuntime`
    carried the canonical type state;
-2. `save_sim(&Sim)` could serialize DoNSave v6 without seeing that external mutable owner; and
+2. `save_sim(&Sim)` could serialize DoNSave v7 without seeing that external mutable owner; and
 3. `Sim::channel_digest()` could emit the current partial digest without admitting missing retail
    checksum channel 13.
 
@@ -42,7 +42,7 @@ Before this seam, three separately valid APIs could be composed incorrectly:
 legacy APIs can be called after installation. The session exposes only:
 
 - `do_frame`, which always calls `Sim::do_frame_with_scripts`;
-- `save_v6`, which always calls the combined BHS admission before the v6 writer; and
+- `save`, which always calls the combined BHS admission before the current writer; and
 - `partial_channel_digest`, which always calls the BHS channel-13 admission before the existing
   partial digest.
 
@@ -61,7 +61,7 @@ or permit replacement of the source witness.
 
 The owner does not fabricate channel 13 and does not serialize unsupported state.
 
-- A pristine session refuses `save_v6` with
+- A pristine session refuses `save` with
   `SaveOwnerUnowned { mutation_revision: 0, dirty: false }`.
 - A mutated session refuses with the live revision and dirty bit.
 - State-only compatibility sessions refuse `partial_channel_digest` with
@@ -70,7 +70,7 @@ The owner does not fabricate channel 13 and does not serialize unsupported state
   Type-prefix projection passes. A missing or stale projection cannot be collapsed into success.
 
 The provenance and immutable Type walk are retained so a future complete loader can prove which synchronized rules/mod
-composition created the immutable restore backups. Retention alone does not make DoNSave v6 able
+composition created the immutable restore backups. Retention alone does not make DoNSave v7 able
 to reconstruct those backups. The Types checkpoint is not mislabeled as the final Rules checksum:
 Constants, Balance, and Tribes still have to continue the same Adler stream. The executed shipped
 call coverage of this source-only seam therefore remains zero until a real synchronized composer

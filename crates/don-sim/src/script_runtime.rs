@@ -20,6 +20,9 @@ use don_bhs::{
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use crate::systems::{
+    bhs_create_unit_runtime::{
+        BhsCreateUnitRuntime, CreateUnitLiveHost, CreateUnitReceipt, CreateUnitRuntimeError,
+    },
     bhs_type_runtime::{
         TypeBuiltinBoundaryError, TypeBuiltinOutcome, TypeBuiltinReceipt, TypeBuiltinRuntime,
         TypeBuiltinRuntimeError,
@@ -155,7 +158,7 @@ impl Default for ScenarioDataState {
 /// Retail routes utility RNG calls and every `ScenarioFuncSet` handler through the live
 /// `Game`/`World` singletons. Keeping those operations on one required host prevents a
 /// caller from executing bytecode against a detached clock or private random stream.
-pub trait ScenarioHost {
+pub trait ScenarioHost: CreateUnitLiveHost {
     fn script_frame(&self) -> i32;
     fn game_seconds(&self) -> i32;
     fn map_size(&self) -> i32;
@@ -262,6 +265,7 @@ pub struct ScriptRuntime {
     game: Option<ScriptBinding>,
     general_powers: Option<ScriptBinding>,
     type_builtins: Option<TypeBuiltinRuntime>,
+    create_units: Option<BhsCreateUnitRuntime>,
     started: bool,
     output: Vec<ScriptOutput>,
     timers: ScriptTimers,
@@ -286,6 +290,7 @@ impl ScriptRuntime {
             game,
             general_powers,
             type_builtins: None,
+            create_units: None,
             started: false,
             output: Vec::new(),
             timers: ScriptTimers::default(),
@@ -352,6 +357,30 @@ impl ScriptRuntime {
         self.type_builtins.as_ref()
     }
 
+    /// Install the composition-admitted ScenarioFuncSet unit-creation owner.
+    ///
+    /// This is crate-private so an independently built projection cannot be attached after the
+    /// canonical type owner. [`crate::bhs_session::BhsSession`] constructs and installs both
+    /// while it still owns the synchronized setup witnesses.
+    pub(crate) fn install_create_unit_runtime(
+        &mut self,
+        runtime: BhsCreateUnitRuntime,
+    ) -> Result<(), BhsCreateUnitRuntime> {
+        if self.create_units.is_some() {
+            return Err(runtime);
+        }
+        self.create_units = Some(runtime);
+        Ok(())
+    }
+
+    pub fn create_unit_runtime(&self) -> Option<&BhsCreateUnitRuntime> {
+        self.create_units.as_ref()
+    }
+
+    pub fn last_create_unit_receipt(&self) -> Option<&CreateUnitReceipt> {
+        self.create_units.as_ref()?.last_receipt()
+    }
+
     pub fn last_type_builtin_receipt(&self) -> Option<&TypeBuiltinReceipt> {
         self.type_builtins.as_ref()?.last_receipt()
     }
@@ -362,15 +391,27 @@ impl ScriptRuntime {
 
     /// Admission used by the opt-in combined Sim + script save entry point.
     /// Legacy `save_sim(&Sim)` cannot observe this external runtime and remains a red boundary.
-    pub fn admit_type_state_for_save_v6(&self) -> Result<(), TypeBuiltinBoundaryError> {
+    pub fn admit_type_state_for_save(&self) -> Result<(), TypeBuiltinBoundaryError> {
+        if let Some(create_units) = &self.create_units {
+            return Err(TypeBuiltinBoundaryError::CreateUnitOwnerUnowned {
+                completed_calls: create_units.completed_calls(),
+                faulted_calls: create_units.faulted_calls(),
+            });
+        }
         match &self.type_builtins {
-            Some(types) => types.admit_save_v6(),
+            Some(types) => types.admit_save(),
             None => Ok(()),
         }
     }
 
     /// An installed canonical type owner cannot be omitted from a checksum-shaped digest.
     pub fn admit_type_state_for_partial_digest(&self) -> Result<(), TypeBuiltinBoundaryError> {
+        if let Some(create_units) = &self.create_units {
+            return Err(TypeBuiltinBoundaryError::CreateUnitOwnerUnowned {
+                completed_calls: create_units.completed_calls(),
+                faulted_calls: create_units.faulted_calls(),
+            });
+        }
         match &self.type_builtins {
             Some(types) => types.admit_partial_channel_digest(),
             None => Ok(()),
@@ -423,6 +464,7 @@ impl ScriptRuntime {
             timers: &mut self.timers,
             output: &mut self.output,
             type_builtins: &mut self.type_builtins,
+            create_units: &mut self.create_units,
         };
         let mut vm = Vm::new(&mut self.program, &mut host);
         let result = vm.run_script(binding.file, &binding.name);
@@ -478,6 +520,7 @@ struct SimScriptHost<'a, H> {
     timers: &'a mut ScriptTimers,
     output: &'a mut Vec<ScriptOutput>,
     type_builtins: &'a mut Option<TypeBuiltinRuntime>,
+    create_units: &'a mut Option<BhsCreateUnitRuntime>,
 }
 
 fn string_arg(args: &[Value], index: usize) -> Result<&str, HostError> {
@@ -552,6 +595,22 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                                 ));
                             }
                             Err(_) => return Err(HostError::Unimplemented),
+                        }
+                    }
+                    if let (Some(create_units), Some(types)) =
+                        (self.create_units.as_mut(), self.type_builtins.as_ref())
+                    {
+                        match create_units.dispatch(self.scenario, types.state(), decl, args) {
+                            Ok(Some(value)) => return Ok(Value::Int(value)),
+                            Ok(None) => {}
+                            Err(CreateUnitRuntimeError::BadArguments) => {
+                                return Err(HostError::BadArgs(
+                                    "BHS create-unit arguments have wrong scalar shape",
+                                ));
+                            }
+                            Err(CreateUnitRuntimeError::OwnerFault(_)) => {
+                                return Err(HostError::Unimplemented);
+                            }
                         }
                     }
                     self.scenario.call_scenario(decl, args)

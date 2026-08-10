@@ -1,9 +1,12 @@
 # BHS unit-creation frontier
 
-Status: exact wrapper and shared-receiver prefix reversal; deliberately **not runtime-wired**.
-The isolated source is `crates/don-sim/src/systems/bhs_create_unit_frontier.rs`, with a
-path-import proof pack at `crates/don-sim/tests/bhs_create_unit_frontier.rs`.  These are new-only
-files and do not modify the type-stat, session, or channel-13 integration surfaces.
+Status: exact wrapper/shared-receiver reversal plus a deliberately partial, fail-closed runtime
+integration.  The pure proof is
+`crates/don-sim/src/systems/bhs_create_unit_frontier.rs`; the canonical owner is
+`crates/don-sim/src/systems/bhs_create_unit_runtime.rs`.  The proof pack remains
+`crates/don-sim/tests/bhs_create_unit_frontier.rs`, and
+`crates/don-sim/tests/bhs_create_unit_integration.rs` drives registrations 508--510 through a
+real `BhsSession` and compiled source fixture.
 
 ## Why this cohort
 
@@ -21,11 +24,13 @@ The count is the comment/string-stripped census over 363 shipped files, 93,649 l
 and 86 (509/510), with 32 files containing all three.  The union is therefore 232 files.
 All three wrappers call `ScenarioFuncSet::add_unit` `0x009E2220` (1,428 bytes).
 
-This is 13.194 percentage points of lexical reachability.  If a future integration closes every
-owner below, the last documented 9,444/39,957 strict static baseline would become
-14,716/39,957 = 36.83%.  This proof pack itself changes executed coverage by **zero** and does
-not register a builtin.  The newer type-stat work's 194 lexically reachable calls are a separate
-baseline question; they are not folded into either number here.
+This is 13.194184 percentage points of registration/prefix lexical reach.  It is not executed
+coverage.  A balanced-call census found 4,786 positive literal counts and 486 nonliteral counts;
+there are no zero, negative, or greater-than-2000 literal counts and no source name in the known
+Transport-Barge relation closure.  Consequently the currently owned subset proves zero shipped
+calls complete, and its honest fully handled shipped-call delta is **0/39,957 (0.000000 points)**.
+Registrations 508--510 therefore remain outside the implemented-index ledger until their
+positive allocation tail is owned.
 
 Ground truth is `ron-bin/riseofnations.exe`, 9,925,120 bytes, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`, plus its matching
@@ -106,6 +111,34 @@ The PDB procedure extents and direct calls pin the remaining mutation graph:
 
 ## Mutation path and ownership needs
 
+### Canonical runtime boundary
+
+`SimScriptHost` is the canonical join point: it already borrows the live `Sim` together with the
+session's canonical `TypeBuiltinRuntime`.  Dispatch for 508--510 runs there before the generic
+scenario fallback.  Type names, Unit membership, and relations come from that exact installed
+type state; composition-witnessed sparse projections provide per-Leader current upgrade/graft
+and per-type domain/Unit flags.  Live Leader flags, world validity/ocean, and the retail
+`can_transport` flag decode come from `Sim`.
+
+The executable order is deliberately:
+
+1. wrapper and shared prefix;
+2. persistent numeric-group clear at key `who - 1` for 508/509;
+3. relation/domain/ocean/transport route reads;
+4. native route rejection or zero-count return;
+5. a fail-closed positive-allocation boundary.
+
+An authority fault after step 2 retains the clear, matching the native mutation order.  The
+in-group form never clears.  Future successful allocations must append immediately to key `who`
+without deduplication, and the call must return the final allocation attempt even if earlier
+attempts succeeded.  Because numeric scenario groups are not yet serialized or checksummed, an
+installed create-unit owner makes save and partial-digest admission fail with
+`CreateUnitOwnerUnowned` rather than silently omitting live state.
+
+The remaining authority tail is exact nearby placement, full `Objects::init_unit` and all Sim
+sidecars, canonical game-group push/form/jump, Ground-on-ocean transport behavior, the Air
+suffix, and the Aircraft Carrier child-allocation suffix.
+
 The receiver is not a single object-table insert.  Closing it requires one transaction host that
 can preserve retail's partial effects and call order across:
 
@@ -136,12 +169,7 @@ groups; a failed allocation is skipped and the loop continues.  There is no roll
 return is the **last allocation attempt's object id or -1**, so `[success 41, failure -1]` returns
 `-1` while object 41 remains, and `[failure -1, success 42]` returns 42.
 
-This directly contradicts the older `docs/tooling/bhs-bridge.md` statement that `create_unit`
-returns only a status and that callers must recover the object with `find_unit`.  The native data
-flow (`Objects::init_unit` result -> Group::add object argument -> function return local) and
-shipped assignments such as `unit_id = create_unit(...)` establish object-id semantics.  The old
-note should be corrected only when a shared-doc owner is available.
-
-No build, formatter, retail process, VM, stage, commit, or push was used in this archaeology
-lane.  The new proof pack remains source-only until root convergence validates it on an
-independent host.
+This corrects the older `docs/tooling/bhs-bridge.md` claim that `create_unit` returns only a
+status and that callers must recover the object with `find_unit`.  The native data flow
+(`Objects::init_unit` result -> Group::add object argument -> function return local) and shipped
+assignments such as `unit_id = create_unit(...)` establish object-id semantics.

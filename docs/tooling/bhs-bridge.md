@@ -162,9 +162,9 @@ symbol, and present as a registered UTF-16 name literal in `.rdata`.
 `0x009f4c50`. Also `create_unit_upgrade`, `create_unit_in_group`, `create_building`,
 `create_building_near`.
 
-> Gotcha: `create_unit` returns a **status**, not an object id. Recover the id
-> afterwards with `find_unit(who, unit_type)` (`0x009ebe10`), which means the nation must
-> own exactly one unit of that type for the lookup to be unambiguous.
+> `create_unit*` returns the final `Objects::init_unit` attempt's object id, or `-1`.
+> Allocation is non-atomic: `[41, -1]` returns `-1` while object 41 remains live, and
+> `[-1, 42]` returns 42.  Every successful id is published before the next attempt.
 
 **SET positions** — there is **no teleport/set-position function**. Position is set at
 creation time by `create_unit`'s `x`/`y`, and changed thereafter only by ordering

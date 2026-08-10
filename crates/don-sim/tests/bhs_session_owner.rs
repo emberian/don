@@ -115,7 +115,7 @@ fn setup_installs_provenance_before_first_frame_and_all_session_boundaries_stay_
     assert_eq!(session.status().type_mutation_revision, 0);
     assert!(!session.status().type_state_dirty);
     assert_eq!(
-        session.save_v6(),
+        session.save(),
         Err(SaveError::BhsTypes(
             TypeBuiltinBoundaryError::SaveOwnerUnowned {
                 mutation_revision: 0,
@@ -137,7 +137,7 @@ fn setup_installs_provenance_before_first_frame_and_all_session_boundaries_stay_
     assert_eq!(session.type_state().types.row(50).common.job_time, 1);
     assert_eq!(session.last_type_builtin_receipt().unwrap().index, 290);
     assert_eq!(
-        session.save_v6(),
+        session.save(),
         Err(SaveError::BhsTypes(
             TypeBuiltinBoundaryError::SaveOwnerUnowned {
                 mutation_revision: 1,
@@ -196,7 +196,7 @@ fn consuming_sim_prevents_post_install_legacy_save_and_digest_handles() {
 
     // BhsSession deliberately provides no Sim accessor, Deref, Clone, or into_parts path.
     // After the unique Sim is consumed, save and digest both have only admitted red boundaries.
-    assert!(matches!(session.save_v6(), Err(SaveError::BhsTypes(_))));
+    assert!(matches!(session.save(), Err(SaveError::BhsTypes(_))));
     assert_eq!(
         session.partial_channel_digest(),
         Err(TypeBuiltinBoundaryError::Channel13ProjectionUnowned)

@@ -213,6 +213,26 @@ pub struct CreateUnitPrefixPlan {
     pub route: CreateUnitRoute,
 }
 
+/// The exact prefix state at the instruction immediately before the optional
+/// `ScenarioFuncSet::clear_group` call.
+///
+/// Keeping this boundary separate is load-bearing for an executable adapter: retail clears
+/// the numeric scenario group before it asks the effective type for the Transport Barge
+/// relation, domain, Air flags, or the Leader transport predicate.  Missing authority for any
+/// of those later reads therefore must not roll the clear back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateUnitPreGroupPlan {
+    pub builtin: CreateUnitBuiltin,
+    pub leader_slot: usize,
+    pub effective_type_name: String,
+    pub effective_type: i32,
+    pub graft_type: i32,
+    pub count: u32,
+    pub coords: CreateUnitCoords,
+    pub clear_group_key: Option<i32>,
+    pub group_append_key: i32,
+}
+
 fn leader_slot(who: i32) -> Result<usize, CreateUnitPrefixError> {
     let slot = who.wrapping_sub(1);
     if (slot as u32) > 7 {
@@ -229,11 +249,11 @@ fn leader_slot(who: i32) -> Result<usize, CreateUnitPrefixError> {
 /// `add_unit` then repeats player validation, requires both low Leader bits, checks the unsigned
 /// count bound, resolves the (possibly substituted) name, checks `is_unit_type`, validates the
 /// world coordinate, and only then resolves the Leader graft.
-pub fn plan_create_unit_prefix(
+pub fn plan_create_unit_pre_group(
     facts: &impl CreateUnitFacts,
     builtin: CreateUnitBuiltin,
     request: &CreateUnitRequest<'_>,
-) -> Result<CreateUnitPrefixPlan, CreateUnitPrefixError> {
+) -> Result<CreateUnitPreGroupPlan, CreateUnitPrefixError> {
     let effective_name = if builtin.resolves_current_upgrade() {
         let requested = facts
             .resolve_type(request.requested_type_name)
@@ -287,24 +307,46 @@ pub fn plan_create_unit_prefix(
         .ok_or(CreateUnitPrefixError::GraftFactsMissing)?;
 
     let clear_group_key = (!builtin.skips_group_clear()).then_some(slot as i32);
+    Ok(CreateUnitPreGroupPlan {
+        builtin,
+        leader_slot: slot,
+        effective_type_name: effective_name,
+        effective_type,
+        graft_type,
+        count: request.count as u32,
+        coords,
+        clear_group_key,
+        group_append_key: request.who,
+    })
+}
+
+/// Resolve the first reads after the optional numeric-group clear.
+///
+/// This function is pure, but callers must remember that retail has already applied
+/// `pre.clear_group_key` when it runs.  An authority error here is therefore compatible with a
+/// persistent clear side effect and must not be treated as an atomic prefix failure.
+pub fn plan_create_unit_route(
+    facts: &impl CreateUnitFacts,
+    pre: &CreateUnitPreGroupPlan,
+) -> Result<CreateUnitRoute, CreateUnitPrefixError> {
     let route = if facts
-        .is_transport_barge_relation(effective_type)
+        .is_transport_barge_relation(pre.effective_type)
         .ok_or(CreateUnitPrefixError::RelationFactsMissing)?
     {
         CreateUnitRoute::RejectAfterGroupPolicy
     } else {
         let domain = facts
-            .domain(effective_type)
+            .domain(pre.effective_type)
             .ok_or(CreateUnitPrefixError::DomainFactsMissing)?;
         let ocean = facts
-            .world_is_ocean(coords.world_x, coords.world_y)
+            .world_is_ocean(pre.coords.world_x, pre.coords.world_y)
             .ok_or(CreateUnitPrefixError::WorldFactsMissing)?;
         match (domain, ocean) {
             (DOMAIN_GROUND, false) => CreateUnitRoute::DirectGround,
             (DOMAIN_SEA, true) => CreateUnitRoute::DirectSea,
             (DOMAIN_AIR, _) => {
                 let unit_flags = facts
-                    .unit_flags(effective_type)
+                    .unit_flags(pre.effective_type)
                     .ok_or(CreateUnitPrefixError::UnitFlagsMissing)?;
                 CreateUnitRoute::DirectAir {
                     install_strafe_order: unit_flags & AIR_NO_STRAFE_FLAG == 0,
@@ -312,7 +354,7 @@ pub fn plan_create_unit_prefix(
             }
             (DOMAIN_GROUND, true) => {
                 if facts
-                    .can_transport(slot)
+                    .can_transport(pre.leader_slot)
                     .ok_or(CreateUnitPrefixError::TransportFactsMissing)?
                 {
                     CreateUnitRoute::GroundViaTransport
@@ -324,16 +366,33 @@ pub fn plan_create_unit_prefix(
         }
     };
 
+    Ok(route)
+}
+
+/// Recover the full pure prefix common to registrations 508--510.
+///
+/// Executable integrations should normally call [`plan_create_unit_pre_group`], apply the
+/// selected clear, then call [`plan_create_unit_route`] so a missing post-clear owner cannot
+/// accidentally make the native side effect atomic.  This combined helper remains the compact
+/// proof/test interface.
+pub fn plan_create_unit_prefix(
+    facts: &impl CreateUnitFacts,
+    builtin: CreateUnitBuiltin,
+    request: &CreateUnitRequest<'_>,
+) -> Result<CreateUnitPrefixPlan, CreateUnitPrefixError> {
+    let pre = plan_create_unit_pre_group(facts, builtin, request)?;
+    let route = plan_create_unit_route(facts, &pre)?;
+
     Ok(CreateUnitPrefixPlan {
-        builtin,
-        leader_slot: slot,
-        effective_type_name: effective_name,
-        effective_type,
-        graft_type,
-        count: request.count as u32,
-        coords,
-        clear_group_key,
-        group_append_key: request.who,
+        builtin: pre.builtin,
+        leader_slot: pre.leader_slot,
+        effective_type_name: pre.effective_type_name,
+        effective_type: pre.effective_type,
+        graft_type: pre.graft_type,
+        count: pre.count,
+        coords: pre.coords,
+        clear_group_key: pre.clear_group_key,
+        group_append_key: pre.group_append_key,
         route,
     })
 }

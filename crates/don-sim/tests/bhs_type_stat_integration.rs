@@ -176,7 +176,7 @@ fn all_eight_generated_declarations_execute_through_the_opaque_session() {
             }
         );
         assert_eq!(session.type_provenance().manifest_sha256, digest(2));
-        assert!(session.save_v6().is_err());
+        assert!(session.save().is_err());
         assert!(session.partial_channel_digest().is_err());
     }
 }

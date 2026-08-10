@@ -1,0 +1,7 @@
+int scenario bhs_create_unit_zero_tick()
+{
+    create_unit(1, 4, 4, "Infantry", 0);
+    create_unit_upgrade(1, 4, 4, "Infantry", 0);
+    create_unit_in_group(1, 4, 4, "Infantry", 0);
+    return 1;
+}

@@ -1987,9 +1987,9 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
 /// The ordinary `save_sim` entry point predates script ownership and cannot inspect a runtime
 /// supplied separately to `Sim::do_frame_with_scripts`.  Script-bearing callers must use this
 /// combined boundary: it rejects every installed type owner until DoNSave can restore that owner
-/// and its synchronized rules/mod provenance, then delegates to the same deterministic v6 writer.
+/// and its synchronized rules/mod provenance, then delegates to the current deterministic writer.
 pub fn save_sim_with_scripts(sim: &Sim, scripts: &ScriptRuntime) -> Result<Vec<u8>, SaveError> {
-    scripts.admit_type_state_for_save_v6()?;
+    scripts.admit_type_state_for_save()?;
     save_sim(sim)
 }
 

@@ -3,7 +3,7 @@
 //! [`super::bhs_type_table::TypeBuiltinState`] is the sole mutable owner.  This adapter does
 //! not copy a rule projection into the script VM: it verifies the shipped declaration identity,
 //! executes the owner method, and publishes a revision-bound receipt.  Save and checksum
-//! admission methods remain explicit. DoNSave v6 still rejects the external owner; checksum
+//! admission methods remain explicit. DoNSave v7 still rejects the external owner; checksum
 //! admission requires the exact immutable Type walk source and reprojects the current mutation
 //! revision. [`crate::bhs_session::BhsSession`] supplies the opaque production owner.
 
@@ -136,12 +136,18 @@ enum OwnerCallError {
 /// Why a larger persistence/checksum operation cannot yet consume this owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeBuiltinBoundaryError {
-    /// DoNSave v6 cannot restore the external owner or prove its synchronized rules/mod source.
+    /// DoNSave v7 cannot restore the external owner or prove its synchronized rules/mod source.
     SaveOwnerUnowned { mutation_revision: u64, dirty: bool },
     /// The partial simulation digest has no complete retail `Types::walk_rules_data` projection.
     Channel13ProjectionUnowned,
     /// The installed projection source no longer admits the live owner/revision.
     Channel13ProjectionRejected(TypeChannel13Error),
+    /// Scenario numeric groups and create-unit receipts live beside the Sim and have no v6 or
+    /// checksum-channel encoding yet. Even a pristine installed owner cannot be omitted.
+    CreateUnitOwnerUnowned {
+        completed_calls: u64,
+        faulted_calls: u64,
+    },
 }
 
 /// One installed, canonical type owner plus its observable dispatch receipts.
@@ -221,10 +227,8 @@ impl TypeBuiltinRuntime {
     }
 
     /// Borrowed persistence contract retaining the full owner, source identity, and live revision.
-    /// This is not an admission for DoNSave v6, whose wire format still cannot restore it.
-    pub fn type_persistence_owner(
-        &self,
-    ) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
+    /// This is not an admission for the current DoNSave format, which still cannot restore it.
+    pub fn type_persistence_owner(&self) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
         Ok(self.projected_type_rules()?.persistence_owner())
     }
 
@@ -236,9 +240,10 @@ impl TypeBuiltinRuntime {
         self.last_fault.as_ref()
     }
 
-    /// DoNSave v6 has no chunk or rules/mod provenance for this externally installed owner.
+    /// The current DoNSave format has no chunk or rules/mod provenance for this externally
+    /// installed owner.
     /// Even pristine state is rejected: `load_sim` returns only `Sim` and could not reattach it.
-    pub fn admit_save_v6(&self) -> Result<(), TypeBuiltinBoundaryError> {
+    pub fn admit_save(&self) -> Result<(), TypeBuiltinBoundaryError> {
         Err(TypeBuiltinBoundaryError::SaveOwnerUnowned {
             mutation_revision: self.state.mutation_revision(),
             dirty: self.state.is_dirty(),

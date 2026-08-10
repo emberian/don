@@ -30,10 +30,16 @@ pub mod armies;
 /// to the complete nearby-spot service; building targets retain perimeter order plus the
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.
 pub mod attack_position;
-/// Exact synchronized-rules producer and immutable-backup provenance for the BHS type owner.
-pub mod bhs_type_factory;
+/// Exact registrations 508--510 wrapper/prefix reversal. Runtime integration consumes this
+/// split plan so the native post-clear authority boundary remains non-atomic.
+pub mod bhs_create_unit_frontier;
+/// Composition-bound, receipt-bearing execution of the fully owned create-unit prefix and
+/// native rejection/zero-count subset. Positive allocation remains explicitly host-gated.
+pub mod bhs_create_unit_runtime;
 /// Exact fail-closed Types prefix of checksum channel 13 over the canonical mutable owner.
 pub mod bhs_type_channel13_frontier;
+/// Exact synchronized-rules producer and immutable-backup provenance for the BHS type owner.
+pub mod bhs_type_factory;
 /// Exact declaration gate, dispatch receipts, and persistence/checksum admission for that owner.
 pub mod bhs_type_runtime;
 /// Instruction-derived BHS type-stat transactions and their canonical owner commit boundary.
