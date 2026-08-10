@@ -125,12 +125,12 @@
     },
     {
       "path": "docs/release-proof/web-wasm-component-provenance.md",
-      "sha256": "e19b4119e1a07472fb764225a8b33750c3c3f3ef8d4ac0cf3012668987215e8d",
+      "sha256": "3517ba3871fd5be8f8aae45838efd1119d6b5c199933a3d27a1dbd2dad1549d9",
       "role": "scope and explicit non-claims for the browser Wasm dependency precursor"
     },
     {
       "path": "release/web-wasm-component-provenance.json",
-      "sha256": "5b29dfd979b6df32a8246581da3e9b46cb673f7696ad0be5e06e8b7a359cea23",
+      "sha256": "3be88848d05005e2fa8050af8265b690a1fd168636d3e9e041d5de7643deefd6",
       "role": "exact browser Wasm component, lock graph, and pending-review package provenance"
     },
     {
