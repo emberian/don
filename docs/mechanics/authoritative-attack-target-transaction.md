@@ -2,17 +2,18 @@
 
 ## Result and honest verb delta
 
-ATTACK now has a non-lossy transaction up to, but not through, the production tick consumer.
-The policy adapter can prepare one exact current target, retain its stable `Handle` and retail
-`(who,o,uid)`, and carry the Sim episode revision plus the opaque visibility revision/frame/
-ordinal through a scheduler phase.  It also proves the target is a distinct, active, currently
-visible enemy Unit before producing an order payload.
+ATTACK now has a non-lossy transaction through the first production tick consumer.  The policy
+adapter can prepare one exact current target, retain its stable `Handle` and retail `(who,o,uid)`,
+and carry the Sim episode revision plus the opaque visibility revision/frame/ordinal through a
+scheduler phase.  It also proves the target is a distinct, active, currently visible enemy Unit
+before producing an order payload.  `Sim::do_attack` consumes that complete identity before its
+first mutable execution gate.
 
 The admitted verb delta is **0**.  `UNIT_INTEGRATION[ATTACK]` remains `SimAttackIssue`, but the
 conditional mask is false and ordinary apply returns `AttackTargetCommitUnavailable` without
-mutation.  This is required because `Sim::do_attack` still resolves only `(who,o)` and neither
-checks the retained Handle/UID nor preflights every dependency which can currently return with an
-unchanged order and world.
+mutation.  This remains required because the production path does not yet preflight every
+dependency which can return with an unchanged order and world, nor does it host the complete
+retail can-hurt/target-eligibility transaction.
 
 ## First lossy owner closed
 
@@ -58,12 +59,18 @@ ordinary mask/apply, with no order or world mutation.
 
 ## Remaining production boundary
 
-Before ATTACK can be admitted, the real `Sim::do_attack` path must consume
-`Order::exact_target_identity()` and retire/refuse on a Handle, owner, object index, or UID
-mismatch before damage, movement, ammo, or RNG mutation.  Its preflight must also prove every
-currently silent dependency, including the attacker/defender type rows and balance entry, and
-must host the complete retail can-hurt/target eligibility transaction.  Merely storing the right
-identity would still permit accepted-no-effect actions, so it does not justify changing the mask.
+The real `Sim::do_attack` path now consumes `Order::exact_target_identity()`.  It requires the
+Handle row, owner Unit registry row, `(who,o)`, and live UID to name the same active, distinct
+object incarnation.  A mismatch retires the order before recharge, balance, movement, ammo,
+damage, or RNG state can change.  A valid exact order retains its attested row for the existing
+executor.  Handle-less legacy orders keep the previous `(who,o)` compatibility path, explicitly
+without becoming authoritative.
+
+Before ATTACK can be admitted, execution still must prove every currently silent dependency,
+including the attacker/defender type rows and balance entry, revalidate the visibility fact at
+the commit/execution boundary, and host the complete retail can-hurt/target-eligibility
+transaction.  Exact identity consumption closes the slot-reuse hazard but does not eliminate
+accepted-no-effect actions, so it does not justify changing the mask.
 
 ## Focused validation
 
@@ -71,9 +78,13 @@ The source tranche is covered by:
 
 ```sh
 cargo test -p don-sim --test attack_target_transaction
+cargo test -p don-sim --test attack_target_execution
 cargo test -p don-env --test authoritative_visibility_integration
 ```
 
 The first target drives exact identity through `Sim::issue`, `OrderList`, `OrderRec` cursor reset,
-publish, DoNSave load, and deterministic resave.  The second freezes preparation, commit refusal,
-visibility-refresh staleness, and reset staleness while checking zero mutation at the red boundary.
+publish, DoNSave load, and deterministic resave.  The second reaches the real object-work tick and
+proves that valid exact identities cross the preflight while Handle, owner, object-index, and UID
+mismatches retire before recharge or movement; it also freezes the legacy compatibility path.
+The third freezes preparation, commit refusal, visibility-refresh staleness, and reset staleness
+while checking zero mutation at the red boundary.

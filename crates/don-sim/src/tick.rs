@@ -2788,6 +2788,43 @@ impl Sim {
             self.world.orders_mut(row).kill_current();
             return;
         }
+        // Authoritative ATTACK orders carry both retail's TargetOrder triple and the stable
+        // port Handle which named that exact incarnation. Consume the complete identity before
+        // recharge, balance, movement, ammo, damage, or RNG state can change. A legacy order
+        // without a Handle keeps the compatibility path below, but it is not authoritative and
+        // can never be admitted by don-env.
+        let exact_target_row = match ord.exact_target_identity() {
+            None => None,
+            Some(target) => {
+                let owner = usize::try_from(target.who).ok();
+                let object_row = owner
+                    .filter(|&who| who < crate::objects::OWNER_SLOTS)
+                    .and_then(|who| {
+                        self.world
+                            .objects
+                            .slot(who)
+                            .band(Band::Unit)
+                            .get(target.o as usize)
+                    })
+                    .copied()
+                    .map(|target_row| target_row as usize);
+                let handle_row = self.world.row_of(target.handle);
+                let exact = handle_row.filter(|&target_row| {
+                    Some(target_row) == object_row
+                        && target_row != row
+                        && target_row < self.world.live_count() as usize
+                        && self.world.units.get_flags(target_row) & OBJ_FLAG_ACTIVE != 0
+                        && self.world.units.get_who(target_row) as i8 == target.who
+                        && self.world.units.o()[target_row] == target.o
+                        && self.world.units.get_uid(target_row) == target.uid
+                });
+                let Some(target_row) = exact else {
+                    self.world.orders_mut(row).kill_current();
+                    return;
+                };
+                Some(target_row)
+            }
+        };
         let recharging = self.world.units.get_recharging(row);
         if recharging > 0 {
             self.world.units.set_recharging(row, recharging - 1);
@@ -2796,19 +2833,22 @@ impl Sim {
         let Some(balance) = self.world.rules.balance.clone() else {
             return;
         };
-        let trow = match self
-            .world
-            .objects
-            .slot(ord.target_who as usize)
-            .band(Band::Unit)
-            .get(ord.target_o as usize)
-            .copied()
-        {
-            Some(r) => r as usize,
-            None => {
-                self.world.orders_mut(row).kill_current();
-                return;
-            }
+        let trow = match exact_target_row {
+            Some(target_row) => target_row,
+            None => match self
+                .world
+                .objects
+                .slot(ord.target_who as usize)
+                .band(Band::Unit)
+                .get(ord.target_o as usize)
+                .copied()
+            {
+                Some(r) => r as usize,
+                None => {
+                    self.world.orders_mut(row).kill_current();
+                    return;
+                }
+            },
         };
         if trow >= self.world.live_count() as usize || trow == row {
             self.world.orders_mut(row).kill_current();
