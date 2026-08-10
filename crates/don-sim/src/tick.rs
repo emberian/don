@@ -700,6 +700,28 @@ impl CannonTimeState {
 // The simulation
 // =======================================================================================
 
+/// Why a runtime Unit-type source cannot be installed into this [`Sim`] lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitTypeStatSourceInstallError {
+    AlreadyInstalled {
+        installed: leaders::UnitTypeStatSourceProvenance,
+        offered: leaders::UnitTypeStatSourceProvenance,
+    },
+    SimulationStarted {
+        frame: i32,
+        completed_ticks: u64,
+    },
+    SimulationPopulated {
+        live_units: u32,
+        registered_objects: usize,
+        unit_type_rows: usize,
+        builds: usize,
+        walls: usize,
+        herds: usize,
+    },
+    LeadersActivated,
+}
+
 /// A world plus the state its tick needs, and the executable `Game::do_frame`.
 ///
 /// Deliberately not `Clone`: `movement::PathFinder` owns search containers that are scratch
@@ -1245,6 +1267,67 @@ impl Sim {
             traversal_buf: Vec::new(),
             seen_buf: Vec::new(),
         }
+    }
+
+    /// Install the validated local post-load Unit type source used by step 8 stat refreshes.
+    ///
+    /// Redistributable builds intentionally start without this retail-derived source. Until the
+    /// product host supplies one, automatic Unit type queries fail closed and preserve the prior
+    /// walked speed/armor values.
+    pub fn install_unit_type_stat_source(
+        &mut self,
+        source: leaders::UnitTypeStatSource,
+    ) -> Result<(), UnitTypeStatSourceInstallError> {
+        if let Some(installed) = self.step8_env.unit_type_stats.as_ref() {
+            return Err(UnitTypeStatSourceInstallError::AlreadyInstalled {
+                installed: installed.provenance(),
+                offered: source.provenance(),
+            });
+        }
+        if self.world.frame != 0 || self.cover.ticks != 0 {
+            return Err(UnitTypeStatSourceInstallError::SimulationStarted {
+                frame: self.world.frame,
+                completed_ticks: self.cover.ticks,
+            });
+        }
+        let registered_objects = self.world.objects.total_objects();
+        if self.world.live_count() != 0
+            || registered_objects != 0
+            || !self.unit_type.is_empty()
+            || !self.builds.is_empty()
+            || !self.walls.is_empty()
+            || !self.herds.is_empty()
+        {
+            return Err(UnitTypeStatSourceInstallError::SimulationPopulated {
+                live_units: self.world.live_count(),
+                registered_objects,
+                unit_type_rows: self.unit_type.len(),
+                builds: self.builds.len(),
+                walls: self.walls.len(),
+                herds: self.herds.len(),
+            });
+        }
+        if self.leaders.iter().any(|leader| leader.active)
+            || self
+                .step8
+                .leaders
+                .iter()
+                .any(|leader| leader.flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS) != 0)
+            || self.world.objects.active_slots().next().is_some()
+        {
+            return Err(UnitTypeStatSourceInstallError::LeadersActivated);
+        }
+        self.step8_env.unit_type_stats = Some(source);
+        Ok(())
+    }
+
+    pub fn unit_type_stat_source_provenance(
+        &self,
+    ) -> Option<leaders::UnitTypeStatSourceProvenance> {
+        self.step8_env
+            .unit_type_stats
+            .as_ref()
+            .map(leaders::UnitTypeStatSource::provenance)
     }
 
     // -- population -------------------------------------------------------------------

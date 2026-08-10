@@ -30,8 +30,11 @@ Because BHS runs at step 4, before the normal step-8 view refresh, the host refr
 owner's unit/build/wall bands from the authoritative object registry first. It projects mutated
 hits, LOS, armor, and movement speed from the canonical type rows, invokes the recovered
 `calc_wall_stats` / `calc_unit_stats` bodies, and commits their live object outputs before the
-script resumes. Structural unit facts still come from the shipped type table; the mutable armor
-and movement scalars are substituted only after that exact package is rebuilt.
+script resumes. Structural unit facts come from the provenance-bound post-load Unit source that
+the product host explicitly installs from the user's local retail data; it is not part of the
+redistributable source tree. Without that source, cache derivation records a miss and preserves
+the walked values. Mutable armor and movement scalars are substituted only after the exact
+structural package is rebuilt.
 
 After application, the runtime confirms only the currently published index/request/revision
 receipt. A delayed acknowledgement cannot bless a newer mutation. `BhsSession` therefore exposes

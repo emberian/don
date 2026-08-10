@@ -90,9 +90,11 @@
 //!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
 //!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band's complete
 //!   `Wall::update_hits/update_los` overrides and `Unit::update_speed` now execute. Unit
-//!   speed/armor packages are rebuilt from the checked-in shipped type table plus live
-//!   leader/object state; missing type identities remain explicit. Wall query population,
-//!   `Wall::update_construct_time`, and reached `Object::eject_contents` remain explicit.
+//!   speed/armor packages are rebuilt from an explicitly installed, provenance-bound local
+//!   post-load type source plus live leader/object state. The retail-derived table is not
+//!   compiled into or conveyed by `don-sim`; an absent source and missing type identities remain
+//!   explicit misses. Wall query population, `Wall::update_construct_time`, and reached
+//!   `Object::eject_contents` remain explicit.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
 //!
@@ -1274,7 +1276,33 @@ pub struct UnitTypeStatOverride {
     pub armor: i32,
 }
 
-/// The scalar slice of shipped `UnitTypeData` needed by the two recovered Unit stat bodies.
+/// The supported post-load Unit table covers the 364 consecutive retail Type slots 50..414.
+pub const UNIT_TYPE_STAT_FIRST: i32 = 50;
+pub const UNIT_TYPE_STAT_END: i32 = 414;
+pub const UNIT_TYPE_STAT_ROWS: usize = (UNIT_TYPE_STAT_END - UNIT_TYPE_STAT_FIRST) as usize;
+
+/// SHA-256 of the supported post-load `live-tables-unit.tsv` capture.
+///
+/// The capture itself is local retail-derived evidence and is deliberately excluded from a
+/// source archive. The digest is only an admission identity supplied by the runtime loader; it
+/// does not convey the table.
+pub const SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256: [u8; 32] = [
+    0x59, 0xf5, 0x28, 0x7f, 0x4c, 0x33, 0x87, 0x61, 0x7b, 0xfe, 0x76, 0xab, 0x26, 0x10, 0xc2, 0x42,
+    0x23, 0xb2, 0x22, 0x0e, 0xe0, 0xbd, 0xf0, 0xe0, 0x84, 0xaa, 0xe0, 0x28, 0xc5, 0x7a, 0x90, 0xd5,
+];
+
+/// Identity attached by the local extractor/loader to one post-load Unit stat source.
+///
+/// The loader must compute `table_sha256` over the exact TSV bytes before calling
+/// [`UnitTypeStatSource::from_live_tsv`]. Requiring both identities keeps an unrelated game
+/// generation or a hand-edited table from silently becoming the simulation's shipped truth.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UnitTypeStatSourceProvenance {
+    pub executable_sha256: [u8; 32],
+    pub table_sha256: [u8; 32],
+}
+
+/// One admitted scalar slice of post-load retail `UnitTypeData`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct UnitTypeStatRow {
     type_id: i32,
@@ -1289,106 +1317,184 @@ struct UnitTypeStatRow {
     moves: i32,
 }
 
-/// Parse the tracked post-load retail table once. The table is the exact source for the
-/// load-time-added `unit_flags` bits; reading `unitrules.xml` directly would lose them.
-fn shipped_unit_stat_rows() -> &'static [Option<UnitTypeStatRow>] {
-    static ROWS: std::sync::OnceLock<Vec<Option<UnitTypeStatRow>>> = std::sync::OnceLock::new();
-    ROWS.get_or_init(|| {
-        let tsv = include_str!("../../../../schema/live/live-tables-unit.tsv");
-        let mut lines = tsv.lines();
-        let Some(header) = lines.next() else {
-            return Vec::new();
-        };
-        let names: Vec<&str> = header.split('\t').collect();
-        let col = |name: &str| names.iter().position(|candidate| *candidate == name);
-        let Some(type_id_col) = col("type_id") else {
-            return Vec::new();
-        };
-        let Some(from_col) = col("from") else {
-            return Vec::new();
-        };
-        let Some(where_col) = col("where") else {
-            return Vec::new();
-        };
-        let Some(obj_masks_col) = col("obj_masks") else {
-            return Vec::new();
-        };
-        let Some(armor_col) = col("armor") else {
-            return Vec::new();
-        };
-        let Some(domain_col) = col("domain") else {
-            return Vec::new();
-        };
-        let Some(graft_col) = col("graft") else {
-            return Vec::new();
-        };
-        let Some(unit_flags_col) = col("unit_flags") else {
-            return Vec::new();
-        };
-        let Some(unit_flags2_col) = col("unit_flags2") else {
-            return Vec::new();
-        };
-        let Some(moves_col) = col("moves") else {
-            return Vec::new();
-        };
-        let max_col = [
-            type_id_col,
-            from_col,
-            where_col,
-            obj_masks_col,
-            armor_col,
-            domain_col,
-            graft_col,
-            unit_flags_col,
-            unit_flags2_col,
-            moves_col,
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
-
-        let mut rows = Vec::<Option<UnitTypeStatRow>>::new();
-        for line in lines {
-            let cells: Vec<&str> = line.split('\t').collect();
-            if cells.len() <= max_col {
-                continue;
-            }
-            let parse_i32 = |column: usize| cells[column].parse::<i32>().ok();
-            let Some(type_id) = parse_i32(type_id_col) else {
-                continue;
-            };
-            let Ok(index) = usize::try_from(type_id) else {
-                continue;
-            };
-            let Some(row) = (|| {
-                Some(UnitTypeStatRow {
-                    type_id,
-                    from: parse_i32(from_col)?,
-                    where_type: parse_i32(where_col)?,
-                    obj_masks: parse_i32(obj_masks_col)? as u32,
-                    armor: parse_i32(armor_col)?,
-                    domain: parse_i32(domain_col)?,
-                    graft: parse_i32(graft_col)?,
-                    unit_flags: parse_i32(unit_flags_col)? as u32,
-                    unit_flags2: parse_i32(unit_flags2_col)? as u32,
-                    moves: parse_i32(moves_col)?,
-                })
-            })() else {
-                continue;
-            };
-            if rows.len() <= index {
-                rows.resize(index + 1, None);
-            }
-            rows[index] = Some(row);
-        }
-        rows
-    })
+/// A validated runtime-owned source for the two recovered Unit stat bodies.
+///
+/// No retail table is compiled into `don-sim`. A product host may read the user's local capture,
+/// verify its SHA-256, and install this source. Without one, every automatic type query records a
+/// miss and leaves the Unit's prior walked stats untouched.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct UnitTypeStatSource {
+    provenance: UnitTypeStatSourceProvenance,
+    rows: Box<[Option<UnitTypeStatRow>]>,
 }
 
-#[inline]
-fn shipped_unit_stat_row(type_id: i32) -> Option<UnitTypeStatRow> {
-    let index = usize::try_from(type_id).ok()?;
-    shipped_unit_stat_rows().get(index).copied().flatten()
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum UnitTypeStatSourceError {
+    UnsupportedExecutable,
+    UnsupportedTable,
+    MissingHeader,
+    MissingColumn(&'static str),
+    WrongRowCount {
+        got: usize,
+    },
+    ShortRow {
+        line: usize,
+    },
+    InvalidInteger {
+        line: usize,
+        column: &'static str,
+    },
+    TypeIdOutOfRange {
+        line: usize,
+        type_id: i32,
+    },
+    DuplicateType {
+        type_id: i32,
+    },
+    MissingType {
+        type_id: i32,
+    },
+    RelationOutOfRange {
+        type_id: i32,
+        column: &'static str,
+        target: i32,
+    },
+}
+
+impl std::fmt::Display for UnitTypeStatSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for UnitTypeStatSourceError {}
+
+impl UnitTypeStatSource {
+    /// Parse an exact supported local post-load capture after its host computed both identities.
+    pub fn from_live_tsv(
+        tsv: &str,
+        provenance: UnitTypeStatSourceProvenance,
+    ) -> Result<Self, UnitTypeStatSourceError> {
+        if provenance.executable_sha256 != super::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256 {
+            return Err(UnitTypeStatSourceError::UnsupportedExecutable);
+        }
+        if provenance.table_sha256 != SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256 {
+            return Err(UnitTypeStatSourceError::UnsupportedTable);
+        }
+
+        let mut lines = tsv.lines();
+        let header = lines.next().ok_or(UnitTypeStatSourceError::MissingHeader)?;
+        let names: Vec<&str> = header.split('\t').collect();
+        let col = |name: &'static str| {
+            names
+                .iter()
+                .position(|candidate| *candidate == name)
+                .ok_or(UnitTypeStatSourceError::MissingColumn(name))
+        };
+        let columns = [
+            ("type_id", col("type_id")?),
+            ("from", col("from")?),
+            ("where", col("where")?),
+            ("obj_masks", col("obj_masks")?),
+            ("armor", col("armor")?),
+            ("domain", col("domain")?),
+            ("graft", col("graft")?),
+            ("unit_flags", col("unit_flags")?),
+            ("unit_flags2", col("unit_flags2")?),
+            ("moves", col("moves")?),
+        ];
+        let max_col = columns.iter().map(|(_, index)| *index).max().unwrap_or(0);
+        let data: Vec<&str> = lines.collect();
+        if data.len() != UNIT_TYPE_STAT_ROWS {
+            return Err(UnitTypeStatSourceError::WrongRowCount { got: data.len() });
+        }
+
+        let mut rows = vec![None; UNIT_TYPE_STAT_END as usize];
+        for (row_index, line) in data.into_iter().enumerate() {
+            let line_number = row_index + 2;
+            let cells: Vec<&str> = line.split('\t').collect();
+            if cells.len() <= max_col {
+                return Err(UnitTypeStatSourceError::ShortRow { line: line_number });
+            }
+            let parse = |name: &'static str| -> Result<i32, UnitTypeStatSourceError> {
+                let column = columns
+                    .iter()
+                    .find_map(|(candidate, index)| (*candidate == name).then_some(*index))
+                    .expect("closed parser column list");
+                cells[column]
+                    .parse::<i32>()
+                    .map_err(|_| UnitTypeStatSourceError::InvalidInteger {
+                        line: line_number,
+                        column: name,
+                    })
+            };
+            let parse_u32 = |name: &'static str| -> Result<u32, UnitTypeStatSourceError> {
+                let column = columns
+                    .iter()
+                    .find_map(|(candidate, index)| (*candidate == name).then_some(*index))
+                    .expect("closed parser column list");
+                cells[column]
+                    .parse::<u32>()
+                    .map_err(|_| UnitTypeStatSourceError::InvalidInteger {
+                        line: line_number,
+                        column: name,
+                    })
+            };
+            let row = UnitTypeStatRow {
+                type_id: parse("type_id")?,
+                from: parse("from")?,
+                where_type: parse("where")?,
+                obj_masks: parse_u32("obj_masks")?,
+                armor: parse("armor")?,
+                domain: parse("domain")?,
+                graft: parse("graft")?,
+                unit_flags: parse_u32("unit_flags")?,
+                unit_flags2: parse_u32("unit_flags2")?,
+                moves: parse("moves")?,
+            };
+            if !(UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END).contains(&row.type_id) {
+                return Err(UnitTypeStatSourceError::TypeIdOutOfRange {
+                    line: line_number,
+                    type_id: row.type_id,
+                });
+            }
+            let index = row.type_id as usize;
+            if rows[index].replace(row).is_some() {
+                return Err(UnitTypeStatSourceError::DuplicateType {
+                    type_id: row.type_id,
+                });
+            }
+        }
+
+        for type_id in UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END {
+            let row =
+                rows[type_id as usize].ok_or(UnitTypeStatSourceError::MissingType { type_id })?;
+            for (column, target) in [("from", row.from), ("graft", row.graft)] {
+                if target != -1 && !(UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END).contains(&target) {
+                    return Err(UnitTypeStatSourceError::RelationOutOfRange {
+                        type_id,
+                        column,
+                        target,
+                    });
+                }
+            }
+        }
+
+        Ok(Self {
+            provenance,
+            rows: rows.into_boxed_slice(),
+        })
+    }
+
+    #[inline]
+    fn row(&self, type_id: i32) -> Option<UnitTypeStatRow> {
+        let index = usize::try_from(type_id).ok()?;
+        self.rows.get(index).copied().flatten()
+    }
+
+    pub fn provenance(&self) -> UnitTypeStatSourceProvenance {
+        self.provenance
+    }
 }
 
 /// `ObjectTypeData::is(type, 0)` over the exact load-time source relation.
@@ -1396,12 +1502,11 @@ fn shipped_unit_stat_row(type_id: i32) -> Option<UnitTypeStatRow> {
 /// `ObjectType::init_is_list` caches this result, but the cache is derived rather than
 /// walked source data: identity, then `graft`, then recursive `from`. A malformed cycle or
 /// a missing ancestor is an explicit missing fact.
-fn shipped_unit_is(mut type_id: i32, target: i32) -> Option<bool> {
-    let rows = shipped_unit_stat_rows();
-    let mut remaining = rows.len().max(1);
+fn shipped_unit_is(source: &UnitTypeStatSource, mut type_id: i32, target: i32) -> Option<bool> {
+    let mut remaining = source.rows.len().max(1);
     while remaining != 0 {
         remaining -= 1;
-        let row = shipped_unit_stat_row(type_id)?;
+        let row = source.row(type_id)?;
         if row.type_id == target || row.graft == target {
             return Some(true);
         }
@@ -1415,10 +1520,11 @@ fn shipped_unit_is(mut type_id: i32, target: i32) -> Option<bool> {
 
 /// Rebuild both global query packages from current shipped type, leader, and object state.
 fn derive_unit_query_packages(
+    table: &UnitTypeStatSource,
     source: UnitQuerySource,
     leader: &Leader,
 ) -> Option<(UnitSpeedInputs, UnitArmorInputs)> {
-    let row = shipped_unit_stat_row(source.type_id)?;
+    let row = table.row(source.type_id)?;
     let live = leader.unit_stats;
     let supply = row.unit_flags2 & 0x40 != 0;
     let speed = UnitSpeedInputs {
@@ -1428,12 +1534,12 @@ fn derive_unit_query_packages(
         unit_data_flags: source.unit_masks2,
         military_epoch: live.military_epoch,
         has_objmask_2000: row.obj_masks & 0x2000 != 0,
-        is_68: shipped_unit_is(source.type_id, 0x68)?,
-        is_66: shipped_unit_is(source.type_id, 0x66)?,
-        is_64: shipped_unit_is(source.type_id, 0x64)?,
-        is_62: shipped_unit_is(source.type_id, 0x62)?,
-        is_42: shipped_unit_is(source.type_id, 0x42)?,
-        is_3a: shipped_unit_is(source.type_id, 0x3a)?,
+        is_68: shipped_unit_is(table, source.type_id, 0x68)?,
+        is_66: shipped_unit_is(table, source.type_id, 0x66)?,
+        is_64: shipped_unit_is(table, source.type_id, 0x64)?,
+        is_62: shipped_unit_is(table, source.type_id, 0x62)?,
+        is_42: shipped_unit_is(table, source.type_id, 0x42)?,
+        is_3a: shipped_unit_is(table, source.type_id, 0x3a)?,
         type_line: row.where_type,
         type_id: row.type_id,
         bantu: live.has_tribe_bonus(3),
@@ -2114,7 +2220,7 @@ pub fn calc_unit_stats(
     gates: &AttritionGates,
     objs: &mut OwnerObjects,
 ) -> StatPassCounts {
-    calc_unit_stats_with_type_overrides(leader, rules, gates, objs, &[])
+    calc_unit_stats_with_source_and_type_overrides(leader, rules, gates, objs, None, &[])
 }
 
 /// `Leader::calc_unit_stats` with the canonical BHS-mutated `moves`/`armor` row projection.
@@ -2125,6 +2231,21 @@ pub fn calc_unit_stats_with_type_overrides(
     rules: &Step8Rules,
     gates: &AttritionGates,
     objs: &mut OwnerObjects,
+    type_overrides: &[UnitTypeStatOverride],
+) -> StatPassCounts {
+    calc_unit_stats_with_source_and_type_overrides(leader, rules, gates, objs, None, type_overrides)
+}
+
+/// Runtime-source form of [`calc_unit_stats_with_type_overrides`].
+///
+/// `type_source=None` is an intentional fail-closed state: automatic packages are cleared and
+/// counted as misses, while explicitly supplied `speed_inputs`/`armor_inputs` remain usable.
+pub fn calc_unit_stats_with_source_and_type_overrides(
+    leader: &mut Leader,
+    rules: &Step8Rules,
+    gates: &AttritionGates,
+    objs: &mut OwnerObjects,
+    type_source: Option<&UnitTypeStatSource>,
     type_overrides: &[UnitTypeStatOverride],
 ) -> StatPassCounts {
     calc_attrition(leader, rules, gates);
@@ -2150,7 +2271,9 @@ pub fn calc_unit_stats_with_type_overrides(
                 // generated on the previous dirty edge.
                 u.speed_inputs = None;
                 u.armor_inputs = None;
-                if let Some((mut speed, mut armor)) = derive_unit_query_packages(source, leader) {
+                if let Some((mut speed, mut armor)) =
+                    type_source.and_then(|table| derive_unit_query_packages(table, source, leader))
+                {
                     if let Some(override_row) = type_overrides
                         .iter()
                         .find(|row| row.type_id == source.type_id)
@@ -2282,6 +2405,9 @@ pub struct LeaderEnv {
 /// The eight per-leader environments, indexed by slot.
 #[derive(Clone, Debug, Default)]
 pub struct Step8Env {
+    /// Validated local retail-derived input. It is absent in redistributable source builds and
+    /// must be installed explicitly by the product host before automatic Unit stat queries run.
+    pub(crate) unit_type_stats: Option<UnitTypeStatSource>,
     pub leaders: [LeaderEnv; NUM_LEADER_SLOTS],
 }
 
@@ -2345,6 +2471,7 @@ pub fn process_all(
     env: &mut Step8Env,
 ) -> Step8Trace {
     let mut trace = Step8Trace::default();
+    let unit_type_stats = env.unit_type_stats.as_ref();
 
     for i in 0..NUM_LEADER_SLOTS {
         // 0x006ED2B0 — the outer gate is bit 1, not bit 0.
@@ -2390,8 +2517,14 @@ pub fn process_all(
         // 0x006ED341.
         if ls.leaders[i].flags & flag::UNIT_STATS_DIRTY != 0 {
             ls.leaders[i].flags &= !flag::UNIT_STATS_DIRTY;
-            trace.unit_pass[i] =
-                calc_unit_stats(&mut ls.leaders[i], rules, &e.attrition, &mut e.objects);
+            trace.unit_pass[i] = calc_unit_stats_with_source_and_type_overrides(
+                &mut ls.leaders[i],
+                rules,
+                &e.attrition,
+                &mut e.objects,
+                unit_type_stats,
+                &[],
+            );
             trace.unit_stats_ran[i] = true;
         }
 
@@ -3098,6 +3231,147 @@ impl Step8Driver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unit_type_stat_source_fixture() -> UnitTypeStatSource {
+        let mut rows = vec![None; UNIT_TYPE_STAT_END as usize];
+        let mut insert = |row: UnitTypeStatRow| rows[row.type_id as usize] = Some(row);
+        insert(UnitTypeStatRow {
+            type_id: 50,
+            from: -1,
+            where_type: 414,
+            moves: 25,
+            ..Default::default()
+        });
+        insert(UnitTypeStatRow {
+            type_id: 59,
+            from: -1,
+            where_type: 427,
+            moves: 26,
+            ..Default::default()
+        });
+        insert(UnitTypeStatRow {
+            type_id: 100,
+            from: -1,
+            where_type: 427,
+            moves: 32,
+            armor: 4,
+            ..Default::default()
+        });
+        insert(UnitTypeStatRow {
+            type_id: 103,
+            from: 100,
+            graft: 102,
+            where_type: 427,
+            moves: 32,
+            armor: 4,
+            ..Default::default()
+        });
+        UnitTypeStatSource {
+            provenance: UnitTypeStatSourceProvenance {
+                executable_sha256: super::super::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256,
+                table_sha256: SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+            },
+            rows: rows.into_boxed_slice(),
+        }
+    }
+
+    fn synthetic_live_tsv() -> String {
+        let mut tsv = String::from(
+            "type_id\tfrom\twhere\tobj_masks\tarmor\tdomain\tgraft\tunit_flags\tunit_flags2\tmoves\n",
+        );
+        for type_id in UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END {
+            tsv.push_str(&format!("{type_id}\t-1\t414\t0\t0\t0\t-1\t0\t0\t25\n"));
+        }
+        tsv
+    }
+
+    fn supported_source_provenance() -> UnitTypeStatSourceProvenance {
+        UnitTypeStatSourceProvenance {
+            executable_sha256: super::super::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256,
+            table_sha256: SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+        }
+    }
+
+    #[test]
+    fn runtime_unit_type_source_is_strict_and_generation_bound() {
+        let tsv = synthetic_live_tsv();
+        let source = UnitTypeStatSource::from_live_tsv(&tsv, supported_source_provenance())
+            .expect("closed 364-row fixture");
+        assert_eq!(source.rows.iter().filter(|row| row.is_some()).count(), 364);
+        assert_eq!(source.row(50).unwrap().moves, 25);
+        assert!(source.row(49).is_none());
+
+        let mut wrong = supported_source_provenance();
+        wrong.table_sha256[0] ^= 1;
+        assert_eq!(
+            UnitTypeStatSource::from_live_tsv(&tsv, wrong),
+            Err(UnitTypeStatSourceError::UnsupportedTable)
+        );
+
+        let short = tsv.lines().take(364).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            UnitTypeStatSource::from_live_tsv(&short, supported_source_provenance()),
+            Err(UnitTypeStatSourceError::WrongRowCount { got: 363 })
+        );
+    }
+
+    #[test]
+    fn local_supported_capture_is_consumed_only_at_runtime() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schema/live/live-tables-unit.tsv");
+        let Ok(tsv) = std::fs::read_to_string(&path) else {
+            eprintln!("skipping local retail-derived input: {}", path.display());
+            return;
+        };
+        let source = UnitTypeStatSource::from_live_tsv(&tsv, supported_source_provenance())
+            .expect("supported local post-load capture");
+        let row = source.row(103).unwrap();
+        assert_eq!(
+            (row.from, row.graft, row.where_type, row.moves, row.armor),
+            (100, 102, 427, 32, 4)
+        );
+    }
+
+    #[test]
+    fn absent_unit_type_source_clears_packages_and_preserves_walked_stats() {
+        let mut leader = Leader::new(0);
+        let mut objects = OwnerObjects {
+            units: vec![StatObject {
+                active: true,
+                captain: true,
+                owner_in_game: true,
+                hit_inputs: Some(ObjectHitInputs {
+                    base_hits: 100,
+                    ..Default::default()
+                }),
+                type_los: Some(3),
+                unit_query_source: Some(UnitQuerySource {
+                    type_id: 50,
+                    unit_masks2: 0,
+                }),
+                speed_inputs: Some(UnitSpeedInputs::default()),
+                armor_inputs: Some(UnitArmorInputs::default()),
+                myspeed: 91,
+                myarmor: 92,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let counts = calc_unit_stats(
+            &mut leader,
+            &Step8Rules::shipped(),
+            &AttritionGates::default(),
+            &mut objects,
+        );
+        let unit = &objects.units[0];
+        assert_eq!((unit.myspeed, unit.myarmor), (91, 92));
+        assert!(unit.speed_inputs.is_none() && unit.armor_inputs.is_none());
+        assert!(!unit.speed_written && !unit.armor_written);
+        assert_eq!(counts.unit_query_populations, 0);
+        assert_eq!(counts.unit_query_misses, 1);
+        assert_eq!(counts.unresolved_calls, 2);
+    }
 
     /// The loop bounds are self-consistent: eight leaders, exactly.
     #[test]
@@ -4249,6 +4523,7 @@ mod tests {
 
     #[test]
     fn shipped_unit_packages_rebuild_type_families_and_live_leader_queries() {
+        let table = unit_type_stat_source_fixture();
         let mut leader = Leader::new(0);
         leader.unit_stats.military_epoch = 4;
         leader.unit_stats.set_tribe_bonus(0, true);
@@ -4263,6 +4538,7 @@ mod tests {
         // InfantryGerman (103) has `graft=102` and `from=100` in the post-load retail
         // table. Both relations participate in non-strict ObjectTypeData::is.
         let (speed, armor) = derive_unit_query_packages(
+            &table,
             UnitQuerySource {
                 type_id: 103,
                 unit_masks2: 0x200,
@@ -4288,6 +4564,7 @@ mod tests {
 
     #[test]
     fn automatic_unit_packages_refresh_and_missing_types_cannot_replay_stale_stats() {
+        let table = unit_type_stat_source_fixture();
         let mut leader = Leader::new(0);
         let rules = Step8Rules::shipped();
         let mut objects = OwnerObjects {
@@ -4309,11 +4586,13 @@ mod tests {
             ..Default::default()
         };
 
-        let c = calc_unit_stats(
+        let c = calc_unit_stats_with_source_and_type_overrides(
             &mut leader,
             &rules,
             &AttritionGates::default(),
             &mut objects,
+            Some(&table),
+            &[],
         );
         let unit = &objects.units[0];
         assert_eq!((unit.myspeed, unit.myarmor), (25, 0));
@@ -4324,11 +4603,13 @@ mod tests {
         // Mutating only the live type identity must replace both packages on the next
         // dirty pass. Caravan is shipped type 59: speed 26, armor 0.
         objects.units[0].unit_query_source.as_mut().unwrap().type_id = 59;
-        let c = calc_unit_stats(
+        let c = calc_unit_stats_with_source_and_type_overrides(
             &mut leader,
             &rules,
             &AttritionGates::default(),
             &mut objects,
+            Some(&table),
+            &[],
         );
         assert_eq!(
             (objects.units[0].myspeed, objects.units[0].myarmor),
@@ -4346,11 +4627,13 @@ mod tests {
         unit.myarmor = 92;
         unit.speed_written = false;
         unit.armor_written = false;
-        let c = calc_unit_stats(
+        let c = calc_unit_stats_with_source_and_type_overrides(
             &mut leader,
             &rules,
             &AttritionGates::default(),
             &mut objects,
+            Some(&table),
+            &[],
         );
         let unit = &objects.units[0];
         assert_eq!((unit.myspeed, unit.myarmor), (91, 92));

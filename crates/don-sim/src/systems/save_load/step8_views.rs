@@ -152,6 +152,12 @@ pub(super) fn is_supported_derived_snapshot(sim: &Sim) -> bool {
     if sim.step8_rules != leaders::Step8Rules::shipped() {
         return false;
     }
+    // The local post-load type catalog is an external runtime input. DoNSave has no chunk for
+    // its two provenance digests or admitted rows, so accepting it here would reload a Sim that
+    // answers the same dirty-edge query differently.
+    if sim.step8_env.unit_type_stats.is_some() {
+        return false;
+    }
 
     let fresh = leaders::Leaders::new();
     if sim.step8.end != fresh.end || sim.step8.event != fresh.event {

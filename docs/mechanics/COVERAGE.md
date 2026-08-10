@@ -421,8 +421,11 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    bodies when query packages are supplied, committing full/construction HP and signed-byte
    LOS into real `BuildData`. The
    1,341-byte `Unit::update_speed` body now executes from packages automatically rebuilt
-   per reached captain from the tracked post-load retail Unit table and current decoded
-   leader/object state, including retail's signed rounding and `o_down` propagation. The
+   per reached captain from a provenance-bound post-load Unit source explicitly installed by
+   the product host from local retail data, plus current decoded leader/object state. The
+   retail-derived table is excluded from source archives; absence fails closed instead of
+   compiling or synthesizing it. The body includes retail's signed rounding and `o_down`
+   propagation. The
    same population drives the 215-byte `ObjectData::armor` body and 249-byte
    `Unit::update_armor` suffix, including Dutch age armor, the rare-31 cattle bonus, and
    `o_down` propagation. Unknown type rows clear prior packages and remain charged red;

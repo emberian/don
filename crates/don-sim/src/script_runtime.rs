@@ -1656,11 +1656,12 @@ impl Sim {
                 leaders::calc_wall_stats(leader, &self.step8_rules, &mut env.objects);
                 wall_ran = true;
             }
-            leaders::calc_unit_stats_with_type_overrides(
+            leaders::calc_unit_stats_with_source_and_type_overrides(
                 leader,
                 &self.step8_rules,
                 &env.attrition,
                 &mut env.objects,
+                self.step8_env.unit_type_stats.as_ref(),
                 &type_overrides,
             );
             self.commit_bhs_stat_views(who, wall_ran, true);

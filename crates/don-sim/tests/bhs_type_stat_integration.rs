@@ -6,6 +6,11 @@ use don_sim::systems::bhs_type_factory::*;
 use don_sim::systems::bhs_type_runtime::{TypeBuiltinOutcome, TypeBuiltinRuntime};
 use don_sim::systems::bhs_type_stat_frontier::{LeaderStatRecalc, TypeStatBuiltin};
 use don_sim::systems::bhs_type_table::*;
+use don_sim::systems::leaders::{
+    UnitTypeStatSource, UnitTypeStatSourceProvenance, SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+    UNIT_TYPE_STAT_END, UNIT_TYPE_STAT_FIRST,
+};
+use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use don_sim::tick::Sim;
 
 fn digest(byte: u8) -> Sha256Digest {
@@ -90,6 +95,23 @@ fn factory_input() -> TypeBuiltinFactoryInput {
                 .collect(),
         },
     }
+}
+
+fn unit_stat_source() -> UnitTypeStatSource {
+    let mut tsv = String::from(
+        "type_id\tfrom\twhere\tobj_masks\tarmor\tdomain\tgraft\tunit_flags\tunit_flags2\tmoves\n",
+    );
+    for type_id in UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END {
+        tsv.push_str(&format!("{type_id}\t-1\t414\t0\t0\t0\t-1\t0\t0\t25\n"));
+    }
+    UnitTypeStatSource::from_live_tsv(
+        &tsv,
+        UnitTypeStatSourceProvenance {
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            table_sha256: SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+        },
+    )
+    .unwrap()
 }
 
 fn one_builtin_program(index: u32, name: &str, value: i32) -> Program {
@@ -213,6 +235,8 @@ fn live_script_host_rebuilds_a_captain_cache_from_the_mutated_owner_row() {
     scripts.install_type_builtins(state).unwrap();
 
     let mut sim = Sim::new(0x531, 8);
+    sim.install_unit_type_stat_source(unit_stat_source())
+        .unwrap();
     sim.activate(0);
     let unit = sim.spawn_unit(0, 50, 192, 192, 2).unwrap();
     let row = sim.world.row_of(unit).unwrap();
