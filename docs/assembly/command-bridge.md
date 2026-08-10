@@ -28,9 +28,9 @@ Concretely, what executes now:
   writes the slot into `CommandPackage::group`, and back-links every member's
   `ObjectData::group`. Without this every other command is a no-op, which is exactly why
   nothing downstream could act before.
-* **28 of the 35 wire-reachable `Group::action_*`** — 15 partial order installers, eight
-  complete transactional actions, and five exact state-wired prefixes with typed open
-  world tails.
+* **All 35 wire-reachable `Group::action_*` have a recovered executable boundary** — 14
+  partial order installers, nine complete transactional actions, and 12 exact state-wired
+  prefixes with typed open world tails. Only the nine complete rows are closure-green.
 * **Twenty-six inline handlers** — control-group save/camera, Ping/Spline presentation
   delivery, MP-log toggle, speed set/up/down, all eight player-speed accumulators, two
   lockstep report stores, chat-route status, reveal-map/turn telemetry, three bounded
@@ -86,15 +86,15 @@ They carry **209 direct `call`/`jmp` sites** across all named procedures in `.te
 
 | status | count | meaning |
 |---|---:|---|
-| `Port::Complete` | 8 | complete transactional mutation, including `stop_spell` |
-| `Port::Orders` | 15 | installs orders per member, with `QueuePos`, from a command |
+| `Port::Complete` | 9 | complete transactional mutation, including `follow` and `stop_spell` |
+| `Port::Orders` | 14 | installs orders per member, with `QueuePos`, from a command |
 | `Port::State` | 0 | no remaining state-only intermediate rows |
-| `Port::StateWired` | 5 | exact deterministic group prefix with an explicit world-owning tail |
-| `Port::Todo` | 7 | dispatched and counted, body not ported |
+| `Port::StateWired` | 12 | exact deterministic group prefix with an explicit world-owning tail |
+| `Port::Todo` | 0 | no wire-reachable action remains bodyless |
 | `Port::NotOnTheWire` | 7 | no `CommandPackage` handler reaches them |
 
-So **28 of the 35 wire-reachable actions execute a recovered mutation** and seven remain
-bodyless. Eight are whole-receiver closure-green; the 15 order-producing and five
+So **all 35 wire-reachable actions execute a recovered mutation or typed prefix** and none
+remain bodyless. Nine are whole-receiver closure-green; the 14 order-producing and 12
 state-wired rows remain honest partials until their full retail tails are present.
 `BridgeStats` counts the runtime split (`acted` vs `unported`).
 
@@ -110,16 +110,16 @@ state-wired rows remain honest partials until their full retail tails are presen
 | `move_near` | `0x00704990` | 9205 | 23 | each member gets `MOVE_TO`/`ATTACK_TO`/`EXPLORE_TO`/`FLEE_TO` per the `orders` byte, at the commanded coords + tolerance; `GROUP_MOVE`/`GROUP_ATTACK_TO` when marching, `GARRISON` on the transport branch → `halt` | Orders (spine) |
 | `attack` | `0x00712490` | 3833 | 16 | `ATTACK` on each member; retail also splits out `CAST_SPELL` casters and sends out-of-reach members via `move_to` → `halt`, `move_to` | Orders (no split) |
 | `halt` | `0x0070D0C0` | 685 | 14 | atomically retires orders, applies the exact masks and aircraft skip, and resets `GroupData::form` to −1 | Complete |
-| `swarm_around` | `0x0070FBE0` | 3044 | 13 | `BUILD_AT`/`REPAIR`/`CAST_SPELL` + move, spread around a target → `halt`, `move_to` | Todo |
+| `swarm_around` | `0x0070FBE0` | 3044 | 13 | `BUILD_AT`/`REPAIR`/`CAST_SPELL` + move, spread around a target → `halt`, `move_to` | StateWired |
 | `guard` | `0x006FCD30` | 2012 | 8 | `GUARD` on each member, plus pulls nearby idle units into the group → `halt` | Orders |
 | `stance` | `0x0070D440` | 928 | 8 | atomically resolves the exact type/modal cycle and writes build/unit stance plus the type-zero order tail | Complete |
 | `garrison` | `0x00700490` | 1791 | 7 | `GARRISON` on each member → `halt` | Orders |
-| `flight` | `0x006FB260` | 3398 | 6 | `STRAFE` for aircraft → `attack`, `guard`, `launch_flight` | Todo |
-| `queue_up` | `0x006FDBB0` | 1516 | 6 | `Build::queue_up` `0x00620F40` on producers; installs no unit order | Todo |
+| `flight` | `0x006FB260` | 3398 | 6 | `STRAFE` for aircraft → `attack`, `guard`, `launch_flight` | StateWired |
+| `queue_up` | `0x006FDBB0` | 1516 | 6 | `Build::queue_up` `0x00620F40` on producers; installs no unit order | StateWired |
 | `form` | `0x00707220` | 746 | 6 | sets `GroupData::form`, computes the captain destination, then installs `GROUP_MOVE`/`GROUP_ATTACK_TO` | Orders |
 | `air_patrol` | `0x007029D0` | 1763 | 5 | `AIR_PATROL` → `move_to` | NotOnTheWire |
 | `patrol` | `0x007030C0` | 1215 | 5 | **`GROUP_PATROL`** (not `PATROL`) → `air_patrol` for aircraft | Orders |
-| `follow` | `0x006FD510` | 645 | 4 | `FOLLOW` on each member except the target itself → `halt`; dedicated exact transaction is not integrated yet | Orders |
+| `follow` | `0x006FD510` | 645 | 4 | complete atomic `FOLLOW` installation on each member except the target itself, including halt/idle/form-reset tails | Complete |
 | `alarm` | `0x0070EC30` | 3169 | 4 | exact `action_begin` prefix; city/peasant garrison cascade remains typed-open → `alarm_peasant`, `garrison` | StateWired |
 | `board_ship` | `0x00700010` | 1149 | 3 | `BOARD_SHIP` on passengers, `AWAIT_BOARD` on the ship → `halt` | Orders |
 | `gather` | `0x00700B90` | 3052 | 3 | `GATHER`, `CAST_SPELL` → `move_near` | Orders |
@@ -129,10 +129,10 @@ state-wired rows remain honest partials until their full retail tails are presen
 | `disband` | `0x0070E260` | 693 | 3 | atomically executes the reverse direct/build-queue plan; `all == 0` stops after one and dead identities remain in the group | Complete |
 | `eject_all` | `0x00710B40` | 766 | 3 | exact begin/bulk-form prefix; containment/ejection/death cascade remains typed-open | StateWired |
 | `hotkey` | `0x006FA7A0` | 64 | 2 | binds a control group; **only caller is `Console::on_key_down`** | NotOnTheWire |
-| `recall` | `0x006FA7E0` | 1373 | 2 | `STRAFE` → `return` | Todo |
+| `recall` | `0x006FA7E0` | 1373 | 2 | `STRAFE` → `return`; exact recall/return transaction is host-wired | StateWired |
 | `return` | `0x006FAD40` | 1307 | 2 | `STRAFE` back to base | NotOnTheWire |
 | `buildmask` | `0x006FC9A0` | 487 | 2 | atomically toggles `BuildData::build_masks` for `WallData::valid_buildmask`-eligible members and emits local feedback | Complete |
-| `spell` | `0x006FE1A0` | 4100 | 2 | `CAST_SPELL` | Todo |
+| `spell` | `0x006FE1A0` | 4100 | 2 | `CAST_SPELL`; deterministic dispatcher prefix is host-wired | StateWired |
 | `gather_point` | `0x006FF1B0` | 3668 | 2 | exact begin/wire prefix; rally-list/world/flight tail remains typed-open → `flight` | StateWired |
 | `transport` | `0x00702620` | 932 | 2 | exact begin/form prefix; spawn/place/board cascade remains typed-open | StateWired |
 | `air_attack_ground` | `0x00703D80` | 1939 | 2 | `AIR_ATTACK_GROUND` | NotOnTheWire |
@@ -145,8 +145,8 @@ state-wired rows remain honest partials until their full retail tails are presen
 | `city_gather` | `0x00701780` | 1333 | 1 | exact begin/wire prefix; ordered city-chain gather-list tail remains typed-open | StateWired |
 | `set_transport` | `0x007024B0` | 357 | 1 | atomically toggles unit mask `0x00800000` under the exact owner transport ladder and capability facts | Complete |
 | `launch_patrol` | `0x00703580` | 2043 | 1 | **`AIR_PATROL`** | Orders |
-| `siege_attack` | `0x00706FF0` | 549 | 1 | → `attack`, `guard` | Todo |
-| `build` | `0x00707510` | 1256 | 1 | → `swarm_around` | Todo |
+| `siege_attack` | `0x00706FF0` | 549 | 1 | → `attack`, `guard`; deterministic dispatcher prefix is host-wired | StateWired |
+| `build` | `0x00707510` | 1256 | 1 | → `swarm_around`; deterministic dispatcher prefix is host-wired | StateWired |
 | `begin` | `0x00714100` | 8 | 0 | virtual receiver; writes `GroupData::disband = 0` | Complete |
 
 ### Simple state opcode tranche (2026-08-09)
@@ -583,8 +583,9 @@ Two sentences each, per the standing rule. None of these files was edited.
   cycles whose modulus is 6/4/2/2 by stance type `[measured, the switch at 0x0070D47B]`.
   The type needs unit-type data the bridge does not hold, so a negative argument resolves
   against the combat cycle of 6 and the assumption is stated in the doc comment.
-* **The 13 `Port::Todo` actions.** They dispatch and increment `BridgeStats::unported`
-  rather than pretending to act, so a replay run reports its own coverage.
+* **The 26 partial wire actions.** The 14 `Port::Orders` rows and 12
+  `Port::StateWired` rows still report their open executor/world tails rather than
+  pretending to be closure-complete, so a replay run retains its own dynamic coverage.
 
 ## Regenerating `command_tables.rs`
 

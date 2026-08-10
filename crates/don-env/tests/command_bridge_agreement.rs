@@ -405,8 +405,10 @@ fn env_patrol_queue_and_executor_preserve_retail_transitions() {
 
     let ground = w.spawn(0, 50, 0, 0).unwrap();
     let grow = w.sim.row_of(ground).unwrap();
-    w.install_group_patrol_order(grow, 48, 48, QueuePos::New);
-    w.install_group_patrol_order(grow, 111, 222, QueuePos::Last);
+    w.install_group_patrol_order(grow, 48, 48, QueuePos::New)
+        .unwrap();
+    w.install_group_patrol_order(grow, 111, 222, QueuePos::Last)
+        .unwrap();
     let group = match &w.orders[grow].front().unwrap().patrol_payload {
         PatrolPayload::Group(group) => group,
         other => panic!("expected concrete group-patrol body, got {other:?}"),
@@ -417,7 +419,8 @@ fn env_patrol_queue_and_executor_preserve_retail_transitions() {
         (111, 222),
         "QUEUE_LAST extension writes the raw command Coord"
     );
-    w.install_group_patrol_order(grow, 48, 48, QueuePos::First);
+    w.install_group_patrol_order(grow, 48, 48, QueuePos::First)
+        .unwrap();
     assert_eq!(w.orders[grow].len(), 1);
     let group = match &w.orders[grow].front().unwrap().patrol_payload {
         PatrolPayload::Group(group) => group,
@@ -439,8 +442,10 @@ fn env_patrol_queue_and_executor_preserve_retail_transitions() {
 
     let air = w.spawn(0, 289, 0, 0).unwrap();
     let arow = w.sim.row_of(air).unwrap();
-    w.install_air_patrol_order(arow, 24, 24, QueuePos::New);
-    w.install_air_patrol_order(arow, 900, 900, QueuePos::Last);
+    w.install_air_patrol_order(arow, 24, 24, QueuePos::New)
+        .unwrap();
+    w.install_air_patrol_order(arow, 900, 900, QueuePos::Last)
+        .unwrap();
     assert_eq!(w.orders[arow].len(), 1);
     let PatrolPayload::Air(route) = &w.orders[arow].front().unwrap().patrol_payload else {
         unreachable!()
@@ -542,7 +547,7 @@ fn the_ported_share_of_wire_reachable_actions_is_recorded() {
         })
         .count();
     assert_eq!(
-        ported, 22,
+        ported, 35,
         "ported action count changed; update docs/assembly/command-bridge.md"
     );
 }
