@@ -1,9 +1,48 @@
+use don_sim::systems::leaders::{
+    UnitTypeStatSource, UnitTypeStatSourceProvenance, SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+    UNIT_TYPE_STAT_END, UNIT_TYPE_STAT_FIRST,
+};
+use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use don_sim::systems::{leaders, production, walls};
 use don_sim::tick::{Gap, Sim, StepRun};
+
+/// Citizen is type `0x32`, the first stat row. Giving it a `moves` value no other row
+/// carries makes the walked speed below prove that step 8 resolved the row from the
+/// live type id, rather than from a default or from a neighbouring row.
+const CITIZEN_MOVES: i32 = 25;
+const OTHER_MOVES: i32 = 7;
+
+/// Redistributable builds start with no unit type stat source, so every automatic
+/// speed/armor query fails closed and leaves the walked value alone. A test that wants to
+/// observe `Unit::update_speed` must install one, and installation is one-time and
+/// pre-frame/pre-population — hence before `activate` and before any spawn.
+fn unit_type_stat_source() -> UnitTypeStatSource {
+    let mut tsv = String::from(
+        "type_id\tfrom\twhere\tobj_masks\tarmor\tdomain\tgraft\tunit_flags\tunit_flags2\tmoves\n",
+    );
+    for type_id in UNIT_TYPE_STAT_FIRST..UNIT_TYPE_STAT_END {
+        let moves = if type_id == 0x32 {
+            CITIZEN_MOVES
+        } else {
+            OTHER_MOVES
+        };
+        tsv.push_str(&format!("{type_id}\t-1\t414\t0\t0\t0\t-1\t0\t0\t{moves}\n"));
+    }
+    UnitTypeStatSource::from_live_tsv(
+        &tsv,
+        UnitTypeStatSourceProvenance {
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            table_sha256: SUPPORTED_UNIT_TYPE_STAT_TSV_SHA256,
+        },
+    )
+    .expect("synthetic post-load unit table")
+}
 
 #[test]
 fn real_tick_executes_the_recovered_step8_dispatcher() {
     let mut sim = Sim::new(0x8eed, 16);
+    sim.install_unit_type_stat_source(unit_type_stat_source())
+        .expect("install precedes activation and population");
     sim.activate(0);
     sim.activate(1);
 
@@ -94,7 +133,7 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.leader_taunt_dispatches, 0);
     assert_eq!(sim.world.units.myhits()[unit_row], 333);
     assert_eq!(sim.world.units.mylos()[unit_row], 7);
-    assert_eq!(sim.world.units.myspeed()[unit_row], 25);
+    assert_eq!(sim.world.units.myspeed()[unit_row], CITIZEN_MOVES as i16);
     assert_eq!(sim.world.units.myarmor()[unit_row], 0);
     assert_eq!(
         sim.step8_env.leaders[0].objects.units[0].unit_query_populations,
