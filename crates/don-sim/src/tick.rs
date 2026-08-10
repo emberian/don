@@ -35,6 +35,12 @@
 //! * **`Objects::inc_time` is step 15** — after every unit, building and wall has processed.
 //!   Projectile flight, impact and death therefore land at the *end* of the tick, in
 //!   ammo-pool slot order, never interleaved with the object pass.
+//! * **Step 15's own object walk does not rotate and never visits the wall band**
+//!   (`0x0065DB87`/`0x0065DBFF`: ten leader records at `0x00E3A390` stride `0x6EEC`, bounded
+//!   only by `Objects+0x15C` and `Objects+0x184`). Reusing step 14's rotated traversal here
+//!   would be wrong, and step 15 covers the building band for all ten owners rather than the
+//!   eight step 14 uses. Inside step 15 the object bands run **before** the ammo pool, and
+//!   the death ring runs after it.
 //! * `Groups::process` runs at the **tail** of `GameDaemon::process_all` (step 12), before
 //!   any unit moves, not after.
 //! * A construction site's `helpers` counter is a **single-frame accumulator**: it is
@@ -63,7 +69,7 @@ use crate::systems::{
     order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
-    victory_score, walls, wonders,
+    unit_inctime, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -110,10 +116,15 @@ pub enum Gap {
     UnitIncTime,
     RoadsScanStray,
     WonderValueWorld,
+    NukeDoDamage,
+    UnitExecuteEvents,
+    WallIncTime,
+    DeathObjIncTime,
+    FarmsIncTime,
 }
 
 impl Gap {
-    pub const COUNT: usize = Gap::WonderValueWorld as usize + 1;
+    pub const COUNT: usize = Gap::FarmsIncTime as usize + 1;
     #[inline]
     pub fn index(self) -> usize {
         self as usize
@@ -143,9 +154,14 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 14 Ammo::init anti-air dud roll - unported; it draws game_random 1-2 times per launch, so every launch shifts the stream",
     "step 14 UnitData::needs_transport 0x00609920 - unported; the UnitWorld view answers 0",
     "step 14 Objects::process_all wildlife spawn (frame%32) - draws game_random an unknown number of times; drawing wrongly is worse than not drawing",
-    "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - uncited; only the Ammo half of Objects::inc_time runs",
+    "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - the exact 0x00610B43 gate executes over live inside_up/TypeIndex; the guy clocks it owes stay absent because Guy::inc_time 0x005D9E10 runs Guy::set_anim 0x005DA300, whose head resolves the animation and draws game_random 0-1 times per activation with unbounded recursion",
     "step 22 Roads::scan_and_kill_stray_roads - exact scanner executes; live road tiles without their renderer-owned RoadElementCandidate fail closed",
     "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
+    "step 15 Nuke::do_damage 0x0092BC80 - called unconditionally at 0x0065DB82 ahead of every loop; reaches Object::do_damage and Leader::action_declare, and no nuke registry exists here (Nuke::add_nuke 0x0092BA30 is only reachable from Ammo::do_damage)",
+    "step 15 Unit::execute_events 0x0060EDC0 (vtable +0x154) - the exact path branch executes; the ExecuteGuyEvents arm needs live Guy storage plus the shipped GraphicEvents tables and the RELEASE/RELEASE_PLANE sinks",
+    "step 15 Wall::inc_time 0x0063FB60 - the building band 2000..build_mark is walked, but the 2,273-byte body is unported; its simulation payload is Wall::update_hits 0x0063F0D0 on the !is_active arm plus GraphicEvents::execute_game_events",
+    "step 15 DeathObj::inc_time 0x008D5240 - the exact body is systems::death_inctime, still unadmitted: no authoritative gpiece/type pack, no clear_blocking terrain adapter, no Scene::recalc_deaths field",
+    "step 15 Farms::inc_time 0x008D8600 - the tail call is unconditional but its body is empty when Farms::num is 0 and its two game_random sites are per-farm and conditional; this Sim has no Farms array to establish either",
 ];
 
 // =======================================================================================
@@ -303,6 +319,20 @@ pub struct Coverage {
     pub ammo_steps: u64,
     pub ammo_impacts: u64,
     pub ammo_closed: u64,
+    /// Step-15 unit-band `Unit::inc_time` `0x00610B40` entries whose `0x00610B43` gate
+    /// passed, i.e. units that owe guy clocks this tick.
+    pub inc_time_units: u64,
+    /// Unit-band entries the same gate rejected. Retail does nothing for these, so this
+    /// count is exactly reproduced work, not a gap.
+    pub inc_time_units_gated: u64,
+    /// Step-15 building-band `Wall::inc_time` `0x0063FB60` call sites reached.
+    pub inc_time_builds: u64,
+    /// `Unit::execute_events` `0x0060EDC0` entries that took the `VerifyGraphicLoads` arm —
+    /// `GraphicEvents::verify_load` `0x008E4780` over the guy prefix, which is graphics
+    /// resource admission rather than simulation.
+    pub inc_time_verify_paths: u64,
+    /// Nonzero-`valid` corpses the step-15 death loop reached.
+    pub inc_time_deaths_visited: u64,
     pub crash_spawned: u64,
     pub crash_ineligible: u64,
     pub crash_missing_facts: u64,
@@ -351,6 +381,11 @@ impl Default for Coverage {
             ammo_steps: 0,
             ammo_impacts: 0,
             ammo_closed: 0,
+            inc_time_units: 0,
+            inc_time_units_gated: 0,
+            inc_time_builds: 0,
+            inc_time_verify_paths: 0,
+            inc_time_deaths_visited: 0,
             crash_spawned: 0,
             crash_ineligible: 0,
             crash_missing_facts: 0,
@@ -3433,16 +3468,169 @@ impl Sim {
 
     // -- step 15 ----------------------------------------------------------------------
 
-    /// `Objects::inc_time` `0x0065DB70`.
+    /// `Objects::inc_time` `0x0065DB70` — the whole 360-byte shell, in retail's own order.
     ///
-    /// Retail advances every object's animation clock here and flies every projectile.
-    /// Only the projectile half is ported. It runs in **pool-slot order**, after every
-    /// unit, building and wall has processed — so an impact that kills a unit does so at
-    /// the end of the tick, and the corpse enters the death ring in slot order.
+    /// Retail advances every object's animation clock here and flies every projectile. This
+    /// driver executes the **shell**: one head call and six loops, at the exact call sites
+    /// [measured, capstone over `0x0065DB70..0x0065DCD8`].
+    ///
+    /// | site | call | here |
+    /// |---|---|---|
+    /// | `0x0065DB82` | `Nuke::do_damage` `0x0092BC80` | [`Gap::NukeDoDamage`] |
+    /// | `0x0065DBBF` | unit band `vt+0xA0` `Unit::inc_time` `0x00610B40` | gate exact; guy clocks [`Gap::UnitIncTime`] |
+    /// | `0x0065DBC9` | unit band `vt+0x154` `Unit::execute_events` `0x0060EDC0` | branch exact; body [`Gap::UnitExecuteEvents`] |
+    /// | `0x0065DBF1` | build band `vt+0xA0` `Wall::inc_time` `0x0063FB60` | [`Gap::WallIncTime`] |
+    /// | `0x0065DCCD` | goods band `vt+0xA0` | **faithfully empty**, see below |
+    /// | `0x0065DC6F` | `Ammo::inc_time` `0x0067D380` | ported, [`ammo`] |
+    /// | `0x0065DC9D` | `DeathObj::inc_time` `0x008D5240` | [`Gap::DeathObjIncTime`] |
+    /// | `0x0065DCB2` | `Farms::inc_time` `0x008D8600` | [`Gap::FarmsIncTime`] |
+    /// | `0x0065DCBC` | `Doober::inc_time` `0x00846770` | presentation |
+    /// | `0x0065DCC1` | `Surf::inc_time` `0x008A1A00` | presentation, `internal_random` |
+    ///
+    /// **The goods loop is the one child that is genuinely finished by being empty.** At
+    /// `0x0065DC40` retail compares the object's vtable against `Good::vftable` `0x00B447E8`
+    /// and *skips the indirect call entirely* when it matches; and `Good::inc_time`
+    /// `0x0066D850` is a one-byte `ret` in any case, as are the folded `+0xA0` slots of
+    /// `Object`, `SubObject` and `Item` at `0x0041C150`. Goods and items have no per-tick
+    /// clock, so there is nothing here to charge.
+    ///
+    /// Ordering facts this body is obliged to honour, and now does:
+    ///
+    /// * the object bands run **before** the ammo pool, not after — an impact therefore
+    ///   lands after every animation clock of the same tick;
+    /// * the owner walk **does not rotate** (step 14 does) and **never visits the wall
+    ///   band**, and it covers the building band for all ten owners rather than eight;
+    /// * the death loop runs after all ammo, so a corpse filed by an impact this tick is
+    ///   visited by the same step 15.
     fn objects_inc_time(&mut self) -> (StepRun, u32) {
-        self.cover.gaps[Gap::UnitIncTime.index()] += 1;
+        // 0x0065DB82 — Nuke::do_damage, unconditionally and ahead of every loop.
+        self.cover.gaps[Gap::NukeDoDamage.index()] += 1;
+
+        // 0x0065DBA0..0x0065DC17 — the ten leader records in address order.
+        let mut work = self.inc_time_object_bands();
+
+        // 0x0065DC30 — the goods band. Faithfully empty; nothing to run, nothing to charge.
+
+        // 0x0065DC60 — the ammo pool.
+        work = work.wrapping_add(self.inc_time_ammo());
+
+        // 0x0065DC90 — the death ring, after every projectile.
+        work = work.wrapping_add(self.inc_time_deaths());
+
+        // 0x0065DCB2 / 0x0065DCBC / 0x0065DCC1 — Farms, Doober, Surf. Doober is an alpha
+        // fade over terrain clutter and Surf draws only `internal_random`; neither is
+        // simulation. Farms is, and is charged.
+        self.cover.gaps[Gap::FarmsIncTime.index()] += 1;
+
+        if work == 0 {
+            (StepRun::Vacuous, 0)
+        } else {
+            (StepRun::Executed, work)
+        }
+    }
+
+    /// The unit and building bands of `Objects::inc_time`, `0x0065DBA0..0x0065DC17`.
+    ///
+    /// Retail reads every slot below the mark and gates on the object's own `flags & 1`
+    /// (`test byte [edi+8], 1` at `0x0065DBB5`; `test byte [ecx+8], 1` at `0x0065DBE9`), so
+    /// this walks the same live registry step 14 walks and applies the same active test.
+    /// Unlike step 14 there is no tombstone hold to tick here: `Objects::inc_time` has no
+    /// analogue of the `hold_frames` arm.
+    fn inc_time_object_bands(&mut self) -> u32 {
+        let mut order = std::mem::take(&mut self.traversal_buf);
+        unit_inctime::inc_time_band_traversal(self.world.object_bands(), &mut order);
+        let mut work = 0u32;
+
+        for entry in order.iter().copied() {
+            match (entry.address.band, entry.lifecycle) {
+                (
+                    RetailBand::Unit,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::Unit { id, generation }),
+                ) => {
+                    let Some(row) = self.world.row_of(Handle { id, generation }) else {
+                        continue;
+                    };
+                    if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                        continue;
+                    }
+                    work += 1;
+                    let inside_up = self.world.units.inside_up()[row];
+                    let type_index = self.unit_type.get(row).copied().unwrap_or(0);
+
+                    // vtable +0xA0 — Unit::inc_time 0x00610B40. Its 0x00610B43 gate is
+                    // exact; the two guy loops it dispatches are not, so a unit the gate
+                    // rejects is reproduced work and a unit it accepts is a charged gap.
+                    if unit_inctime::unit_inc_time_animates(inside_up, type_index) {
+                        self.cover.inc_time_units += 1;
+                        self.cover.gaps[Gap::UnitIncTime.index()] += 1;
+                    } else {
+                        self.cover.inc_time_units_gated += 1;
+                    }
+
+                    // vtable +0x154 — Unit::execute_events 0x0060EDC0. The dispatcher's
+                    // only branch is decidable from live Unit state: `is_valid_unit` is the
+                    // `flags & 1` already tested by the band loop, `is_on_map` 0x0046CE30 is
+                    // `(u16)inside_up >> 15`, and bit 0x10 of `unit_masks2` selects
+                    // verify-load. The verify arm is graphics resource admission over the
+                    // guy prefix, so only the execute arm is charged as simulation.
+                    let events = unit_inctime::UnitEventView {
+                        unit_is_valid: true,
+                        unit_is_on_map: (inside_up as u16) >> 15 != 0,
+                        unit_masks2: self.world.units.get_unit_masks2(row),
+                    };
+                    match events.path() {
+                        unit_inctime::UnitEventPath::ExecuteGuyEvents => {
+                            self.cover.gaps[Gap::UnitExecuteEvents.index()] += 1;
+                        }
+                        unit_inctime::UnitEventPath::VerifyGraphicLoads => {
+                            self.cover.inc_time_verify_paths += 1;
+                        }
+                    }
+                }
+                (
+                    RetailBand::Build,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::BuildRow(_)),
+                ) => {
+                    // vtable +0xA0 — Wall::inc_time 0x0063FB60, 2,273 bytes, unported.
+                    work += 1;
+                    self.cover.inc_time_builds += 1;
+                    self.cover.gaps[Gap::WallIncTime.index()] += 1;
+                }
+                // Tombstones carry `flags & 1 == 0`, so retail skips their virtual calls;
+                // the wall band is never reached by this traversal at all.
+                _ => {}
+            }
+        }
+
+        self.traversal_buf = order;
+        work
+    }
+
+    /// The death ring loop, `0x0065DC7D..0x0065DCAF`.
+    ///
+    /// `cmp dword ptr [ecx], 0; je` at `0x0065DC98` is the `DeathObjData::valid` test, and
+    /// the loop strides `0xA4` through `Objects+0x14C` for `Objects+0x140` records — slot
+    /// order from zero, including a corpse filed moments earlier by the ammo loop above.
+    /// The 540-byte body is recovered in [`crate::systems::death_inctime`] but its live
+    /// adapter is unadmitted, so each reached corpse is charged rather than advanced.
+    fn inc_time_deaths(&mut self) -> u32 {
+        let mut work = 0u32;
+        for slot in 0..self.deaths.slots.len() {
+            if self.deaths.slots[slot].valid == 0 {
+                continue;
+            }
+            work += 1;
+            self.cover.inc_time_deaths_visited += 1;
+            self.cover.gaps[Gap::DeathObjIncTime.index()] += 1;
+        }
+        work
+    }
+
+    /// The ammo pool loop, `0x0065DC54..0x0065DC7B`: `Ammo::inc_time` `0x0067D380` is a
+    /// direct, non-virtual call gated on `flags & 3`.
+    fn inc_time_ammo(&mut self) -> u32 {
         if self.ammo.live() == 0 {
-            return (StepRun::Vacuous, 0);
+            return 0;
         }
         let mut work = 0u32;
         // `(slot, call)` in pool-slot order. `Object::do_damage` is not this module's, so
@@ -3543,7 +3731,7 @@ impl Sim {
                 self.apply_damage(trow, dmg);
             }
         }
-        (StepRun::Executed, work)
+        work
     }
 
     /// Launch a projectile into the pool the way `Objects::add_ammo` + `Ammo::init` do,
@@ -4278,7 +4466,10 @@ mod tests {
         assert!(!t.steps[8].ran(), "no active leaders, so no economy ran");
         assert!(t.steps[12].ran(), "the GameDaemon shell is unconditional");
         assert!(!t.steps[14].ran(), "no objects, so no object pass ran");
-        assert!(!t.steps[15].ran(), "no projectiles, so no flight ran");
+        assert!(
+            !t.steps[15].ran(),
+            "no objects, projectiles or corpses, so the inc_time shell had nothing to visit"
+        );
         assert!(t.steps[20].ran() && t.steps[23].ran());
         assert_eq!(t.executed(), 3);
     }

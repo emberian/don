@@ -12,10 +12,12 @@
 //!
 //! The `ammo` lane established that `Ammo::process` is a one-byte `ret` and that all
 //! projectile motion happens in `Ammo::inc_time` from this step. The same reading of
-//! `Objects::inc_time` `0x0065DB70` gives the rest of the step, and it is **six loops, not
-//! one** [measured, capstone + `re/decomp-all/0065db70.c`]:
+//! `Objects::inc_time` `0x0065DB70` gives the rest of the step, and it is **one head call
+//! and six loops, not one loop** [measured, capstone over the whole 360-byte body +
+//! `re/decomp-all/0065db70.c`]:
 //!
 //! ```text
+//! Nuke::do_damage()                            # 0x0065DB82, before every loop
 //! for s in 0..10:                              # NO ROTATION. Fixed 0..9.
 //!     if leaders[s].flags & 1:
 //!         for k in 0 .. unit_mark[s]:          # the unit band
@@ -29,15 +31,24 @@
 //! Farms::inc_time(x);  Doober::inc_time();  Surf::inc_time()
 //! ```
 //!
-//! Three things fall out that were not previously recorded anywhere in this repository:
+//! Four things fall out that were not previously recorded anywhere in this repository:
 //!
+//! * **Step 15 opens with `Nuke::do_damage` `0x0092BC80` (2,728 B).** `0x0065DB82` calls it
+//!   unconditionally, before the owner loop, and its only other caller is
+//!   `Ammo::do_damage` [measured, `tools/pdb/callers.py 92bc80`]. It is simulation, not
+//!   presentation: it reaches `Object::do_damage` `0x0064A480` and `Leader::action_declare`
+//!   `0x006DAB50`. It reads no `game_random` (`0x00C06184` appears nowhere in its extent),
+//!   and with an empty nuke array (`[0x00C0A7FC] <= 0` at `0x0092BC93`) it falls straight to
+//!   `NukeOut::graph_do_damage` `0x00925970` and returns.
 //! * **Step 15 does not rotate owners.** `Objects::process_all` (step 14) walks
 //!   `(frame + i) % 10`; `Objects::inc_time` walks the ten leader records straight through
 //!   as a pointer walk `0x00E3A390 .. 0x00E7F8C8` step `0x6EEC`, which is exactly ten
 //!   iterations. A scheduler that reuses step 14's rotation for step 15 is wrong.
-//! * **Step 15 never visits the wall band.** The second inner loop is bounded by
-//!   `build_mark` (`Objects +0x184`), and there is no third loop at base 3000. Walls get
-//!   `process` and never `inc_time`.
+//! * **Step 15 never visits the wall band, and it walks the building band for all ten
+//!   owners.** The second inner loop is bounded by `build_mark` (`Objects +0x184`) and there
+//!   is no third loop at base 3000; both inner loops live inside the same ten-iteration
+//!   owner walk, so the building band is *not* restricted to the eight banded owners the way
+//!   step 14 restricts it. Walls get `process` and never `inc_time`.
 //! * **The unit band calls a second virtual, `+0x154` `Unit::execute_events`
 //!   `0x0060EDC0`**, that the building band does not. Its exact 131-byte dispatcher is
 //!   [`unit_execute_events`]. The exact Guy-side body is [`guy_execute_events`]; shipped
@@ -72,10 +83,20 @@
 //! almost all is presentation: 9× `GraphicPieces::emit_build_particles`,
 //! `GraphicPieces::emit_queue_particles`, `GraphicChad::GraphicChad`,
 //! `fast_angle_to_degrees`, `WallOut::get_gpiece`. Its two non-presentation calls are
-//! **`Wall::update_hits` `0x0063F0D0`** (1,509 B, gated on `vt[+0x4C] == WallData::is_active`
-//! and `flags & 4`, i.e. real walls only) and `GraphicEvents::execute_game_events`. It is
-//! **not** ported here; it is a different lane's shape and this module names it rather than
-//! guessing at it. `DeathObj::inc_time` `0x008D5240` (540 B) is the corpse clock —
+//! **`Wall::update_hits` `0x0063F0D0`** (1,509 B) and `GraphicEvents::execute_game_events`
+//! `0x008E48E0`.
+//!
+//! **Correction, [measured] at `0x0063FBD9..0x0063FBFF`.** This header previously recorded
+//! `update_hits` as "gated on `vt[+0x4C] == WallData::is_active` and `flags & 4`, i.e. real
+//! walls only". That reads MSVC's devirtualisation as if it were the gate. The instructions
+//! are `mov eax,[vt+0x4C]; cmp eax,0x472350; jne` — a test for *whether slot `+0x4C` is
+//! `WallData::is_active` `0x00472350`*, taking the inlined `flags & 4` when it is and an
+//! indirect `call eax` when it is not — followed by `test eax,eax; jne 0x0063FC04`. So
+//! `Wall::update_hits(0)` runs when `is_active()` is **false**, for buildings as well as
+//! walls, and it is reachable from step 15's building band on every under-construction
+//! building. The 2,273-byte body is **not** ported here.
+//!
+//! `DeathObj::inc_time` `0x008D5240` (540 B) is the corpse clock —
 //! `DeathObj::clear_blocking` is its sim payload. `Doober::inc_time` `0x00846770` is an
 //! alpha fade over terrain clutter with no RNG. `Surf::inc_time` `0x008A1A00` draws from
 //! **`internal_random`** `0x00EB697C`, not the sim stream, and is cosmetic water.
@@ -92,12 +113,19 @@
 //! Animation transitions therefore *move the simulation RNG stream*, which means a port
 //! that skips them silently desyncs everything drawn afterwards in the tick.
 //!
-//! Two more `game_random` consumers live in step 15 and are recorded here because nothing
-//! else in the repository records them: **`Farms::inc_time` `0x008D8600` draws twice**
-//! (`Random::get(0,0xFFFF) % 1000` at `0x008D87A9`, then `% (n-1)` at `0x008D87D9`) and it
-//! runs unconditionally at the tail of every step 15. `GuyOut::graph_inc_frame`
-//! `0x005DD200`, called from the tail of `Guy::inc_time` for owners 0..7, draws six times
-//! but from `internal_random`, so it does not perturb the sim stream.
+//! One more `game_random` consumer lives in step 15's tail. **Correction, [measured] over
+//! the whole 667-byte `Farms::inc_time` `0x008D8600`:** this header previously recorded it
+//! as drawing twice, unconditionally, on every step 15. The *call* is unconditional; the
+//! draws are not, and charging two per tick would be a fabricated divergence. The whole body
+//! is inside `for f in 0 .. [0x00C0A908]` (`cmp dword [0x00C0A908],0; jle 0x008D8877` at
+//! `0x008D8619`), so an empty farm array draws **nothing**. Inside one farm the first draw
+//! `Random::get(0,0xFFFF) % 1000` at `0x008D87A9` is reached only when the count of cells
+//! that fell to zero this pass is `>= 12`, or is in `5..12` with `(n-4)*20/8 > 0`; the second
+//! draw `% (n-1)` at `0x008D87D9` needs `n - 1 > 0` on top of that. **Zero, one or two draws
+//! per farm record**, and no fixed per-tick number exists.
+//!
+//! `GuyOut::graph_inc_frame` `0x005DD200`, called from the tail of `Guy::inc_time` for owners
+//! 0..7, draws six times but from `internal_random`, so it does not perturb the sim stream.
 //!
 //! The partial `Guy`/`Unit` drivers draw nothing. They **count** every skipped root call in
 //! [`IncTimeGaps`], the way the tick driver counts the anti-air dud roll: drawing the wrong
@@ -158,8 +186,18 @@
 use crate::objects::{Band, ObjectRegistry, BUILD_BAND_BASE, OWNER_SLOTS};
 use crate::rng::Random;
 use crate::systems::groups_guys::{GuyData, UnitGuys, UnitTypeStats};
+use crate::systems::sparse_object_bands_authority_frontier::{
+    RetailBand, RetailObjectAddress, SparseObjectBands, TraversalEntry,
+};
 
 /// Whether this module may serve step 15 on a fidelity or product surface.
+///
+/// This stays `false`. Two *shell* pieces are separately runtime-admitted because they are
+/// complete transcriptions with no missing input — [`inc_time_band_traversal`], the object
+/// walk of `Objects::inc_time` `0x0065DB70`, and [`unit_inc_time_animates`], the whole gate
+/// of `Unit::inc_time` `0x00610B40` — and `tick.rs` drives step 15 through them. Neither
+/// executes a `Guy`, `Wall`, `Farms`, `Doober` or `Surf` body, so neither upgrades this flag;
+/// see [`RUNTIME_FIDELITY_BLOCKERS`].
 pub const RUNTIME_FIDELITY_READY: bool = false;
 
 /// Retail step-15 work still absent from the recovered driver.
@@ -173,9 +211,10 @@ pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
     "complete Objects::add_ammo/Ammo::init RELEASE adapter (target abort, anti-air RNG, scatter, counter/checksum)",
     "complete Unit::come_out/launching/Guy storage RELEASE_PLANE adapter with transitive RNG accounting",
     "retail AnimationPacket/.anm data",
-    "Wall::inc_time 0x0063FB60",
+    "Nuke::do_damage 0x0092BC80 (head call at 0x0065DB82; no nuke registry exists)",
+    "Wall::inc_time 0x0063FB60, including the Wall::update_hits 0x0063F0D0 inactive arm",
     "DeathObj::inc_time 0x008D5240",
-    "Farms::inc_time 0x008D8600 (including game_random draws)",
+    "Farms::inc_time 0x008D8600 (including its 0-2 per-farm game_random draws)",
     "Guy::set_new_location recursive squad path 0x005D86F0",
     "Doober::inc_time 0x00846770",
     "Surf::inc_time 0x008A1A00",
@@ -1552,19 +1591,37 @@ pub struct UnitAnimView {
     pub ut: UnitTypeStats,
 }
 
+/// The whole of `Unit::inc_time` `0x00610B40`'s gate, transcribed from
+/// `0x00610B43..0x00610B5B` [measured]:
+///
+/// ```text
+/// 00610b43  cmp word ptr [esi+0x82], 0   ; UnitData::inside_up, signed 16-bit
+/// 00610b4b  jl  0x610b5d                 ; not inside anything -> run the guy loops
+/// 00610b4d  mov eax, [[esi+0x18]+4]      ; ObjectType::type, the TypeIndex
+/// 00610b53  cmp eax, 0x34                ; SCHOLARS
+/// 00610b56  je  0x610b5d
+/// 00610b58  cmp eax, 0x35                ; SCHOLARSKOREAN
+/// 00610b5b  jne 0x610bb8                 ; otherwise return without touching a guy
+/// ```
+///
+/// A unit that is *inside* something — garrisoned in a building, loaded on a transport — has
+/// its guys' clocks stopped entirely. **Scholars are the sole exception**, and the exception
+/// is spelled as two literal type ids in the machine code, not as a rule field, so it cannot
+/// be reached from `unitrules.xml`.
+///
+/// This is the one part of `Unit::inc_time` that needs no `Guy` storage, so it is exposed
+/// separately from [`UnitAnimView`] and is runtime-admitted: the live tick evaluates it over
+/// real `UnitData::inside_up` and `ObjectType::type` and skips exactly the units retail skips.
+#[inline]
+pub const fn unit_inc_time_animates(inside_up: i16, type_index: i32) -> bool {
+    inside_up < 0 || type_index == TYPE_SCHOLARS || type_index == TYPE_SCHOLARS_KOREAN
+}
+
 impl UnitAnimView {
-    /// The whole of `Unit::inc_time`'s gate, at `0x00610B43`:
-    /// `inside_up < 0 || type == SCHOLARS || type == SCHOLARSKOREAN`.
-    ///
-    /// A unit that is *inside* something — garrisoned in a building, loaded on a
-    /// transport — has its guys' clocks stopped entirely. **Scholars are the sole
-    /// exception**, and the exception is spelled as two literal type ids in the machine
-    /// code, not as a rule field, so it cannot be reached from `unitrules.xml`.
+    /// [`unit_inc_time_animates`] over this view's own fields.
     #[inline]
     pub fn animates(&self) -> bool {
-        self.inside_up < 0
-            || self.type_index == TYPE_SCHOLARS
-            || self.type_index == TYPE_SCHOLARS_KOREAN
+        unit_inc_time_animates(self.inside_up, self.type_index)
     }
 
     /// `UnitData::is_hero` `0x0046CE60`, devirtualised the way `Guy::inc_time` does it at
@@ -2168,6 +2225,54 @@ pub fn inc_time_traversal(reg: &ObjectRegistry, out: &mut Vec<(usize, Band, u32,
         }
         for (k, &row) in reg.slot(s).band(Band::Build).iter().enumerate() {
             out.push((s, Band::Build, BUILD_BAND_BASE + k as u32, row));
+        }
+    }
+}
+
+/// The same walk over the authoritative sparse band registry — the one the live tick owns.
+///
+/// [`inc_time_traversal`] answers for [`ObjectRegistry`]; this answers for
+/// [`SparseObjectBands`], so `tick.rs` can drive step 15 off the same store step 14 uses and
+/// the two orders can be compared directly. It emits [`TraversalEntry`] exactly as
+/// `SparseObjectBands::traversal_into` does, including tombstones, because retail reads every
+/// slot below the mark and only then tests the object's own `flags & 1`
+/// (`test byte [edi+8], 1` at `0x0065DBB5`, `test byte [ecx+8], 1` at `0x0065DBE9`).
+///
+/// Three differences from the step-14 traversal, all [measured] in
+/// `Objects::inc_time` `0x0065DB70` and all asserted in this module's tests:
+///
+/// * **no owner rotation** — `0x0065DB87` seeds the leader pointer at `0x00E3A390` and
+///   `0x0065DBFF` advances it by `0x6EEC` until `0x00E7F8C8`, exactly ten records in address
+///   order, so the traversal does not depend on `Game::frame` at all;
+/// * **no wall band** — the only bounds are `Objects+0x15C` (`[ebx-0x28]`) and
+///   `Objects+0x184` (`[ebx]`), and no loop starts at base 3000;
+/// * **the building band is walked for all ten owners**, because both inner loops sit inside
+///   the single ten-iteration owner walk rather than in a separate eight-owner loop.
+pub fn inc_time_band_traversal<I: Copy + Ord>(
+    bands: &SparseObjectBands<I>,
+    out: &mut Vec<TraversalEntry<I>>,
+) {
+    out.clear();
+    for owner in 0..OWNER_SLOTS {
+        // `test byte ptr [edi], 1` at `0x0065DBA0` — the LeaderData active flag.
+        if bands.is_active(owner) != Some(true) {
+            continue;
+        }
+        for band in [RetailBand::Unit, RetailBand::Build] {
+            let Some(mark) = bands.mark(owner, band) else {
+                continue;
+            };
+            for o in band.base()..mark {
+                let address = RetailObjectAddress::new(owner as u8, band, o);
+                let Some(slot) = bands.slot(address) else {
+                    continue;
+                };
+                out.push(TraversalEntry {
+                    address,
+                    storage: slot.storage,
+                    lifecycle: slot.lifecycle,
+                });
+            }
         }
     }
 }
@@ -3868,6 +3973,112 @@ mod tests {
             .map(|e| e.0)
             .collect();
         assert_ne!(s14, slots);
+    }
+
+    /// The same three retail differences, over the sparse registry the live tick owns.
+    ///
+    /// Kills: reusing `SparseObjectBands::traversal_into` for step 15 (rotation would appear
+    /// in the owner sequence and the wall band would appear in the output), and restricting
+    /// the building band to the eight banded owners the way step 14 does.
+    #[test]
+    fn sparse_step_15_traversal_is_unrotated_wall_free_and_ten_owners_wide() {
+        use crate::systems::sparse_object_bands_authority_frontier::{
+            FindFreeOutcome, FindFreeRequest, SparseObjectBands,
+        };
+
+        let mut bands: SparseObjectBands<u32> = SparseObjectBands::new();
+        let mut identity = 0u32;
+        for owner in 0..OWNER_SLOTS as u8 {
+            for band in RetailBand::ALL {
+                let receipt = bands
+                    .find_free(FindFreeRequest { owner, band })
+                    .expect("fresh band has room");
+                let FindFreeOutcome::Reserved(reservation) = receipt.outcome else {
+                    panic!("fresh band must reserve");
+                };
+                bands.commit(reservation, identity).expect("fresh identity");
+                identity += 1;
+            }
+        }
+
+        let mut step15 = Vec::new();
+        inc_time_band_traversal(&bands, &mut step15);
+
+        assert_eq!(
+            step15.iter().filter(|e| e.address.band == RetailBand::Wall).count(),
+            0,
+            "0x0065DB70 has no loop at wall base 3000"
+        );
+        let owners: Vec<u8> = step15
+            .iter()
+            .filter(|e| e.address.band == RetailBand::Unit)
+            .map(|e| e.address.owner)
+            .collect();
+        assert_eq!(
+            owners,
+            (0..OWNER_SLOTS as u8).collect::<Vec<_>>(),
+            "the leader pointer walk 0x00E3A390..0x00E7F8C8 is address order, not rotated"
+        );
+        assert_eq!(
+            step15.iter().filter(|e| e.address.band == RetailBand::Build).count(),
+            OWNER_SLOTS,
+            "the building band sits inside the same ten-iteration owner walk"
+        );
+        // Per owner, the unit band precedes the building band.
+        let ordered: Vec<(u8, RetailBand)> =
+            step15.iter().map(|e| (e.address.owner, e.address.band)).collect();
+        let expected: Vec<(u8, RetailBand)> = (0..OWNER_SLOTS as u8)
+            .flat_map(|o| [(o, RetailBand::Unit), (o, RetailBand::Build)])
+            .collect();
+        assert_eq!(ordered, expected);
+
+        // The step-14 traversal really is a different order, on the same registry.
+        let mut step14 = Vec::new();
+        bands.traversal_into(3, &mut step14);
+        let owners14: Vec<u8> = step14
+            .iter()
+            .filter(|e| e.address.band == RetailBand::Unit)
+            .map(|e| e.address.owner)
+            .collect();
+        assert_ne!(owners14, owners, "step 14 rotates by (frame + i) % 10");
+        assert!(step14.iter().any(|e| e.address.band == RetailBand::Wall));
+
+        // And it is frame-independent by construction: two calls agree.
+        let mut again = Vec::new();
+        inc_time_band_traversal(&bands, &mut again);
+        assert_eq!(
+            again.iter().map(|e| e.address).collect::<Vec<_>>(),
+            step15.iter().map(|e| e.address).collect::<Vec<_>>()
+        );
+
+        // An inactive owner drops out entirely (`test byte [edi], 1` at 0x0065DBA0).
+        bands.set_active(4, false).expect("owner 4 exists");
+        inc_time_band_traversal(&bands, &mut again);
+        assert!(again.iter().all(|e| e.address.owner != 4));
+    }
+
+    /// `Unit::inc_time`'s whole gate, including the two literal Scholar type ids that make
+    /// the exception unreachable from `unitrules.xml`.
+    ///
+    /// Kills: dropping either Scholar id, flipping the `inside_up` comparison to `<= 0`, and
+    /// widening it to `inside_up_who`.
+    #[test]
+    fn unit_inc_time_gate_is_inside_up_plus_two_literal_scholar_ids() {
+        assert!(unit_inc_time_animates(-1, 0), "not inside anything");
+        assert!(unit_inc_time_animates(i16::MIN, 999));
+        assert!(!unit_inc_time_animates(0, 0), "inside_up 0 is inside slot 0");
+        assert!(!unit_inc_time_animates(7, 51));
+        assert!(unit_inc_time_animates(7, TYPE_SCHOLARS));
+        assert!(unit_inc_time_animates(7, TYPE_SCHOLARS_KOREAN));
+        assert!(!unit_inc_time_animates(7, TYPE_SCHOLARS_KOREAN + 1));
+        assert_eq!((TYPE_SCHOLARS, TYPE_SCHOLARS_KOREAN), (0x34, 0x35));
+        // The view delegates rather than carrying a second copy of the gate.
+        let view = UnitAnimView {
+            inside_up: 7,
+            type_index: TYPE_SCHOLARS,
+            ..Default::default()
+        };
+        assert!(view.animates());
     }
 
     /// Two identical populations tick identically, and ticking is a pure function of the
