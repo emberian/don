@@ -24,6 +24,11 @@ const MAX_TURNS: u32 = 10_000;
 const HOST_ID: i32 = 1;
 const CLIENT_ID: i32 = 2;
 const PEER_NAME: &str = "Ai";
+/// Retail lobbies show every slot's label side by side, so the owned client must not reuse
+/// the host's. Sharing `Ai` with a `DON_NET_NAME=Ai` host made retail warn about duplicate
+/// names and made both drop-screen rows read `Ai`. Synthetic acceptance still uses
+/// `PEER_NAME` for both of its own peers, where the shared label is the point.
+const RETAIL_PEER_NAME: &str = "DoN";
 const CHECKSUM_OPCODE: u8 = 0x39;
 const CHECKSUM_CHANNELS: usize = 15;
 const CHECKSUM_WORDS: usize = 16;
@@ -41,6 +46,7 @@ enum Mode {
 struct RetailOptions {
     addr: String,
     id: i32,
+    name: String,
     turns: u32,
     timeout_secs: u64,
     game_key: Option<u32>,
@@ -181,6 +187,7 @@ where
     let mut id = CLIENT_ID;
     let mut timeout_secs = DEFAULT_RETAIL_TIMEOUT_SECS;
     let mut game_key = None;
+    let mut name = RETAIL_PEER_NAME.to_string();
     let mut passive = false;
     let mut evidence = None;
     let mut reconnect_after = None;
@@ -207,6 +214,12 @@ where
                     .parse::<u64>()
                     .map_err(|_| format!("invalid --timeout-secs value: {raw}"))?;
             }
+            "--name" => {
+                name = args.next().ok_or("--name requires a value")?;
+                if name.is_empty() {
+                    return Err("--name must not be empty".into());
+                }
+            }
             "--game-key" => {
                 let raw = args.next().ok_or("--game-key requires a value")?;
                 game_key = Some(parse_u32(&raw)?);
@@ -226,7 +239,7 @@ where
             }
             "-h" | "--help" => {
                 println!(
-                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive] [--evidence PATH] [--reconnect-after N]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint as Ai; it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package only after each observed retail turn. --passive reports traffic without returning turn packages. --evidence atomically creates a bounded canonical DONLSTP file. --reconnect-after performs one orderly same-ID reconnect after N completed turns and requires N < --turns."
+                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--name NAME] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive] [--evidence PATH] [--reconnect-after N]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint under --name (default DoN, distinct from the host so retail does not warn about duplicate labels); it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package only after each observed retail turn. --passive reports traffic without returning turn packages. --evidence atomically creates a bounded canonical DONLSTP file. --reconnect-after performs one orderly same-ID reconnect after N completed turns and requires N < --turns."
                 );
                 return Ok(None);
             }
@@ -269,6 +282,7 @@ where
             Ok(Some(Mode::Retail(RetailOptions {
                 addr,
                 id,
+                name,
                 turns,
                 timeout_secs,
                 game_key,
@@ -279,13 +293,14 @@ where
         }
         None => {
             if id != CLIENT_ID
+                || name != RETAIL_PEER_NAME
                 || game_key.is_some()
                 || passive
                 || evidence.is_some()
                 || reconnect_after.is_some()
             {
                 return Err(
-                    "--id, --game-key, --passive, --evidence, and --reconnect-after require --retail-connect"
+                    "--id, --name, --game-key, --passive, --evidence, and --reconnect-after require --retail-connect"
                         .into(),
                 );
             }
@@ -489,7 +504,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
     let start = Instant::now();
     let deadline = Duration::from_secs(options.timeout_secs);
     let transport = bounded_join(options.id, options.addr.clone(), deadline)?;
-    let mut session = Session::new(transport, Role::Client, PEER_NAME);
+    let mut session = Session::new(transport, Role::Client, &options.name);
     let now = || start.elapsed().as_millis() as u64;
     let mut roster_announced = false;
     let mut ready_sent = false;
@@ -519,7 +534,9 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             .poll(now(), Duration::from_millis(10))
             .map_err(|e| format!("retail session poll: {e}"))?;
 
-        if let Some((host, slot)) = authoritative_retail_roster(&session, options.id)? {
+        if let Some((host, slot)) =
+            authoritative_retail_roster_named(&session, options.id, &options.name)?
+        {
             if host_id != 0 && host_id != host {
                 return Err(format!(
                     "authoritative host identity changed across setup epochs: {host_id} -> {host}"
@@ -726,7 +743,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 .checked_sub(start.elapsed())
                 .ok_or("retail-connect deadline expired before bounded reconnect")?;
             let transport = bounded_join(options.id, options.addr.clone(), remaining)?;
-            session = Session::new(transport, Role::Client, PEER_NAME);
+            session = Session::new(transport, Role::Client, &options.name);
             roster_announced = false;
             ready_sent = false;
             all_ready_observed = false;
@@ -842,9 +859,10 @@ fn send_orderly_destroy(session: &mut Session<TcpTransport>, local_id: i32) -> R
         .map_err(|error| format!("send orderly destroy-player: {error}"))
 }
 
-fn authoritative_retail_roster(
+fn authoritative_retail_roster_named(
     session: &Session<TcpTransport>,
     local_id: i32,
+    expected_local_name: &str,
 ) -> Result<Option<(i32, usize)>, String> {
     let players = session.players();
     if players.len() > 2 {
@@ -868,10 +886,15 @@ fn authoritative_retail_roster(
     if local.unique_id != local_id || local.slot != 1 || host.slot != 0 {
         return Ok(None);
     }
-    if local.name != PEER_NAME || host.name != PEER_NAME {
+    // Only our own slot's label is ours to assert. Requiring the HOST to also be called
+    // `Ai` was a synthetic-two-peer assumption: a real retail host is a human whose slot
+    // carries their own profile name, so that clause refused every genuine lobby. The
+    // safety boundary here is the explicit `--retail-connect` address plus the
+    // host-authoritative slot/id checks above, not the host's chosen display name.
+    if local.name != expected_local_name {
         return Err(format!(
-            "retail roster name mismatch: host={:?} local={:?}; expected both Ai",
-            host.name, local.name
+            "retail roster local name mismatch: local={:?}; expected {expected_local_name:?}",
+            local.name
         ));
     }
     if host.unique_id == 0 || host.unique_id == local_id {
