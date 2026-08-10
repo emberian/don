@@ -4,12 +4,12 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 126,
+  "red": 124,
   "summary": {
     "tick": {
       "total": 29,
-      "complete": 20,
-      "red": 9
+      "complete": 22,
+      "red": 7
     },
     "orders": {
       "total": 28,
@@ -202,9 +202,9 @@
         "name": "Leaders::end_process_all",
         "retail_va": "0x006ED070",
         "source": "leaders.cpp:28794",
-        "status": "stub",
-        "note": "post-pass; emits player feedback messages",
-        "complete": false
+        "status": "implemented",
+        "note": "complete eight-Leader deterministic body; localized feedback/audio are emitted as typed presentation requests",
+        "complete": true
       },
       {
         "id": 18,
@@ -220,9 +220,9 @@
         "name": "Leader::process_event_frame",
         "retail_va": "0x006EC180",
         "source": "leaders.cpp:28958",
-        "status": "stub",
-        "note": "deterministic eight-Leader body is live through exact receipts; JukeBox::set_next_mood and Achieve::add_event product tails remain unhosted",
-        "complete": false
+        "status": "implemented",
+        "note": "complete eight-Leader body; exact ordered product outbox owns reached JukeBox and achievement calls",
+        "complete": true
       },
       {
         "id": 20,
@@ -538,7 +538,7 @@
         "retail_va": "0x005E5880",
         "symbol": "Unit::do_spec_anim",
         "status": "unimplemented",
-        "note": "StateWired atomic dispatcher adapter; production Sim::do_frame still bypasses it",
+        "note": "production frame reaches UNIT and object-free EXIT; target relations/external world tails remain typed-unavailable",
         "complete": false
       },
       {
@@ -2275,24 +2275,24 @@
         "slug": "env-air-patrol-physics",
         "title": "don-env lacks the authoritative AIR_PATROL airframe transaction",
         "status": "KnownDrift",
-        "seam": null,
-        "retail_evidence": "Unit::do_air_patrol 0x005EA620; Unit::do_air_physics 0x005E86D0; crates/don-env/src/state.rs::AirPatrolHost",
+        "seam": "don_sim::systems::air_physics_frontier::plan_air_physics",
+        "retail_evidence": "Unit::do_air_patrol 0x005EA620; Unit::do_air_physics 0x005E86D0; crates/don-sim/src/systems/air_physics_frontier.rs; crates/don-env/src/state.rs::AirPatrolHost",
         "complete": false
       },
       {
         "slug": "env-air-patrol-unit-target-search",
         "title": "don-env lacks AIR_PATROL's air/bomber target searches",
         "status": "KnownDrift",
-        "seam": null,
-        "retail_evidence": "Unit::do_air_patrol 0x005EA6EC; find_new_air_target; find_new_bomber_target; crates/don-env/src/state.rs::AirPatrolHost::find_unit_target",
+        "seam": "don_sim::systems::air_patrol_unit_search_frontier::run_patrol_unit_scan",
+        "retail_evidence": "Unit::do_air_patrol 0x005EA6EC; find_new_air_target; find_new_bomber_target; crates/don-sim/src/systems/air_patrol_unit_search_frontier.rs; crates/don-env/src/state.rs::AirPatrolHost::find_unit_target",
         "complete": false
       },
       {
         "slug": "env-air-patrol-building-target-search",
         "title": "don-env lacks AIR_PATROL's building spatial search",
         "status": "KnownDrift",
-        "seam": null,
-        "retail_evidence": "Unit::do_air_patrol 0x005EA84C; ObjectsData::find_building_at; crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
+        "seam": "don_sim::systems::air_patrol_building_search_frontier::AirPatrolBuildingSearchOwner",
+        "retail_evidence": "Unit::do_air_patrol 0x005EA84C; ObjectsData::find_building_at; crates/don-sim/src/systems/air_patrol_building_search_frontier.rs; crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
         "complete": false
       },
       {
