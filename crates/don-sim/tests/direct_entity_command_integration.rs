@@ -26,6 +26,9 @@ use subject::plans::{
     DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts, MarketCommandFacts,
     MarketCommandRequest, MarketSide, SOUND_MARKET_EMBARGO,
 };
+use subject::unit_action_come_out::{
+    preflight_unit_action_come_out, InsideLookupFacts, ObjectIdentity, UnitActionComeOutFacts,
+};
 use subject::*;
 
 fn market_facts(side: MarketSide) -> MarketCommandFacts {
@@ -245,6 +248,19 @@ fn unit_target(active: bool, uid: u16) -> DirectEntityTargetFacts {
     }
 }
 
+fn ordinary_come_out_facts(who: u8, object_index: i16, type_index: i32) -> UnitActionComeOutFacts {
+    UnitActionComeOutFacts {
+        actor: ObjectIdentity::new(who, object_index),
+        actor_type: type_index,
+        unit_masks: 0x0c00_0042,
+        inside: InsideLookupFacts::default(),
+        actor_first_guy: None,
+        actor_inside_down: None,
+        inside_chain: Vec::new(),
+        leader_flags: None,
+    }
+}
+
 #[test]
 fn unsafe_or_missing_entity_resolution_fails_closed() {
     let negative_owner = DirectEntityCommandRequest::ComeOut {
@@ -450,6 +466,133 @@ fn come_out_classifies_supported_scholar_prefix_without_claiming_completion() {
         }),
     );
     assert_eq!(wrong_abi.status, DirectEntityTransactionStatus::Unavailable);
+}
+
+#[test]
+fn come_out_wrapper_preflight_advances_both_type_routes_to_the_general_tail() {
+    let request = DirectEntityCommandRequest::ComeOut {
+        who: 3,
+        object_index: 19,
+        uid: 70,
+    };
+    let target = Some(unit_target(true, 70));
+
+    for type_index in [0x34, 50] {
+        let type_facts = Some(DirectEntityTypeFacts {
+            kind: DirectEntityKind::Unit,
+            type_index,
+        });
+        let preflight = preflight_unit_action_come_out(
+            101,
+            102,
+            103,
+            104,
+            105,
+            ordinary_come_out_facts(3, 19, type_index),
+        )
+        .unwrap();
+        let receipt = preflight_opcode49_unit_action_come_out_command(
+            request,
+            -2,
+            target,
+            type_facts,
+            preflight.clone(),
+        );
+
+        assert_eq!(receipt.status, DirectEntityTransactionStatus::OpenTail);
+        assert_eq!(receipt.unit_action_come_out, Some(preflight));
+        assert_eq!(receipt.unit_unqueue, None);
+        assert_eq!(
+            receipt.disposition,
+            Some(DirectEntityDisposition::OpenTail(
+                DirectEntityOpenTail::GeneralUnitComeOutTransaction {
+                    target: DirectEntityIdentity {
+                        who: 3,
+                        object_index: 19,
+                        uid: 70,
+                        type_index,
+                    },
+                    argument: 0,
+                }
+            ))
+        );
+        assert!(receipt.validates(request));
+    }
+}
+
+#[test]
+fn come_out_wrapper_preflight_fails_closed_on_identity_type_or_plan_drift() {
+    let request = DirectEntityCommandRequest::ComeOut {
+        who: 3,
+        object_index: 19,
+        uid: 70,
+    };
+    let target = Some(unit_target(true, 70));
+    let type_facts = Some(DirectEntityTypeFacts {
+        kind: DirectEntityKind::Unit,
+        type_index: 50,
+    });
+    let make_preflight = |who, object_index, type_index| {
+        preflight_unit_action_come_out(
+            101,
+            102,
+            103,
+            104,
+            105,
+            ordinary_come_out_facts(who, object_index, type_index),
+        )
+        .unwrap()
+    };
+
+    for mismatched in [
+        make_preflight(2, 19, 50),
+        make_preflight(3, 20, 50),
+        make_preflight(3, 19, 51),
+    ] {
+        let receipt = preflight_opcode49_unit_action_come_out_command(
+            request, 9, target, type_facts, mismatched,
+        );
+        assert_eq!(receipt.status, DirectEntityTransactionStatus::Unavailable);
+        assert!(receipt.validates(request));
+    }
+
+    let mut malformed = make_preflight(3, 19, 50);
+    malformed.plan.steps.pop();
+    let receipt =
+        preflight_opcode49_unit_action_come_out_command(request, 9, target, type_facts, malformed);
+    assert_eq!(receipt.status, DirectEntityTransactionStatus::Unavailable);
+    assert!(receipt.validates(request));
+
+    let valid = preflight_opcode49_unit_action_come_out_command(
+        request,
+        9,
+        target,
+        type_facts,
+        make_preflight(3, 19, 50),
+    );
+    let mut changed_tail = valid.clone();
+    changed_tail.disposition = Some(DirectEntityDisposition::OpenTail(
+        DirectEntityOpenTail::GeneralUnitComeOutTransaction {
+            target: DirectEntityIdentity {
+                who: 3,
+                object_index: 19,
+                uid: 70,
+                type_index: 50,
+            },
+            argument: 1,
+        },
+    ));
+    assert!(!changed_tail.validates(request));
+
+    let mut changed_plan = valid;
+    changed_plan
+        .unit_action_come_out
+        .as_mut()
+        .unwrap()
+        .plan
+        .steps
+        .pop();
+    assert!(!changed_plan.validates(request));
 }
 
 #[test]

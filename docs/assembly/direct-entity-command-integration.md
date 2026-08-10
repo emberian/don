@@ -1,7 +1,7 @@
 # Command rows 46–49: atomic adapter boundary
 
-Status: **46/47 deterministic tails hostable; 48/49 prefixes complete and action tails
-explicitly open.**
+Status: **46/47 deterministic tails hostable; 48 Unit receiver complete; 49 action wrapper
+preflight integrated with the general release explicitly open.**
 
 This note covers the exclusive adapter in
 `crates/don-sim/src/systems/direct_entity_command_integration.rs` and its path-import pins in
@@ -16,7 +16,7 @@ did not edit the dispatcher.  The subsequent executable wiring is recorded separ
 | 46 buy | exact gate/embargo plan plus the complete bounded `economy::do_buy` loop | selected leader, signed resource bounds, rules, market, leader economy, demand counter, `MarketPriceGates` | `Applied` |
 | 47 sell | exact lazy gate/embargo plan plus the complete bounded `economy::do_sell` loop | selected leader, signed resource bounds, rules, market, leader economy, supply counter, `MarketPriceGates` | `Applied` |
 | 48 unqueue | signed address validation, concrete Unit/Build class, active/UID guard, target type, exact delegate arguments; complete Carrier implicit-queue Unit receiver | safe owner/object resolution, concrete entity/type fact, installed current-upgrade ObjectType and refund facts, canonical counters/resources/scratch | inactive/stale and active Unit `Complete`; reached Build `OpenTail` |
-| 49 come out | signed address validation, Unit-only ABI, active/UID guard, target type, Scholar/general containment classification | safe unit resolution, concrete entity fact, reached type-table fact | inactive/stale `Complete`; reached action `OpenTail` |
+| 49 come out | signed address validation, Unit-only ABI, active/UID guard, target type, complete 532-byte `Unit::action_come_out` plan, and all five authoritative epochs | safe unit resolution, concrete entity/type fact, exact wrapper facts and recomputable plan | inactive/stale `Complete`; preflighted wrapper still `OpenTail` at `Unit::come_out(0)` |
 
 `Unavailable` is empty by construction: no plan, facts, presentation receipt, or state receipt
 is retained, and no economy state was mutated.  Facts on short-circuited paths stay lazy.  An
@@ -55,15 +55,18 @@ The available subsystem work is narrower than the command action bodies:
   `Build::action_unqueue(type)` also owns repeat-latch presentation and selector/count routing;
 - the complete Carrier `Unit::action_unqueue(1)` receiver is now composed into this receipt and
   committed by the canonical Sim production adapter;
-- containment can preflight the Scholar nearby-placement and inside-link splice, but
-  `Unit::action_come_out()` also clears launch/action state, may repair Scholar chains, and
-  finishes through the general unit-location transaction.
+- the complete 532-byte `Unit::action_come_out()` wrapper is now bound to the opcode-49
+  identity as a recomputable preflight, including launch/order/path steps and the conditional
+  Scholar/University animation-chain repair, but it unconditionally finishes through the
+  unrecovered general `Unit::come_out(0)` transaction.
 
-Consequently the adapter completes the Unit-unqueue tail and retains three typed open tails:
+Consequently the adapter completes the Unit-unqueue tail and retains typed open tails:
 
 - `ProductionBuildActionUnqueue { selector: wire_type }`;
-- `ContainmentScholarActionComeOut` for type `0x34`/`0x35`;
-- `ContainmentGeneralActionComeOut` for every other resolved Unit type.
+- `ContainmentScholarActionComeOut` / `ContainmentGeneralActionComeOut` before wrapper facts
+  have been supplied;
+- `GeneralUnitComeOutTransaction { argument: 0 }` after the complete wrapper preflight has
+  been recomputed and identity-bound.
 
 These names identify the next owner; they are not applied receipts.  This prevents the
 dispatcher from relabelling a partial queue/containment primitive as a complete opcode.
@@ -95,7 +98,8 @@ Dispatcher treatment is deliberately narrow:
 - row 48's reached Unit path may count as complete only when the nested Carrier receiver proof
   validates and the canonical host atomically committed it;
 - rows 48/49 inactive/stale paths remain validating complete no-ops;
-- Build-unqueue and come-out `OpenTail` receipts remain unported;
+- Build-unqueue remains unported; opcode 49's complete wrapper preflight is routable, but its
+  general release remains an `OpenTail` and authorizes no prefix-only mutation;
 - `Unavailable` or any invalid receipt performs no bridge-side success transition.
 
 The method was copied directly onto the existing `Fleet` trait rather than making `Fleet`

@@ -5,13 +5,17 @@
 //! after every required fact is preflighted, this module calls the existing
 //! [`economy::do_buy`] / [`economy::do_sell`] primitives and returns a recomputable
 //! before/after receipt. Opcode 48's Unit receiver can compose the complete Carrier
-//! implicit-queue transaction into the same receipt; its Build receiver and both opcode 49
-//! containment receivers remain explicit open-tail handoffs.
+//! implicit-queue transaction into the same receipt. Opcode 49 can additionally bind the
+//! complete `Unit::action_come_out` wrapper preflight into the receipt without publishing its
+//! state-writing prefix; the mandatory general `Unit::come_out` transaction remains an explicit
+//! open-tail handoff.
 
 #[path = "carrier_implicit_unqueue_frontier.rs"]
 pub mod carrier_implicit_unqueue;
 #[path = "direct_entity_command_plans.rs"]
 pub mod plans;
+#[path = "unit_action_come_out_frontier.rs"]
+pub mod unit_action_come_out;
 
 use self::carrier_implicit_unqueue::{
     CarrierImplicitUnqueueReceipt, CarrierImplicitUnqueueRequest,
@@ -20,6 +24,10 @@ use self::plans::{
     plan_direct_entity_command, plan_market_command, DirectEntityCommandEffect,
     DirectEntityCommandPlan, DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts,
     MarketCommandEffect, MarketCommandFacts, MarketCommandPlan, MarketCommandRequest, MarketSide,
+};
+use self::unit_action_come_out::{
+    preflight_still_valid, preflight_unit_action_come_out, ObjectIdentity,
+    UnitActionComeOutPreflight,
 };
 use crate::objects::{BANDED_SLOTS, OWNER_SLOTS};
 use crate::systems::economy::{
@@ -471,6 +479,12 @@ pub enum DirectEntityOpenTail {
     ContainmentGeneralActionComeOut {
         target: DirectEntityIdentity,
     },
+    /// The complete 532-byte action wrapper has been preflighted, but none of its ordered
+    /// writes may be published until this mandatory general release succeeds atomically.
+    GeneralUnitComeOutTransaction {
+        target: DirectEntityIdentity,
+        argument: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -508,6 +522,10 @@ pub struct DirectEntityCommandTransactionReceipt {
     /// Present only when opcode 48's reached Unit receiver completed the exact Carrier
     /// implicit-queue transaction.  Build unqueue and both come-out receivers remain open.
     pub unit_unqueue: Option<CarrierImplicitUnqueueReceipt>,
+    /// Present only after opcode 49's complete `Unit::action_come_out` wrapper has been
+    /// recomputed and bound to the addressed Unit identity. This is a preflight receipt, not
+    /// permission to publish its writes before the general `Unit::come_out` tail succeeds.
+    pub unit_action_come_out: Option<UnitActionComeOutPreflight>,
 }
 
 impl DirectEntityCommandTransactionReceipt {
@@ -522,6 +540,7 @@ impl DirectEntityCommandTransactionReceipt {
             presentation: Vec::new(),
             disposition: None,
             unit_unqueue: None,
+            unit_action_come_out: None,
         }
     }
 
@@ -538,25 +557,37 @@ impl DirectEntityCommandTransactionReceipt {
                     && self.presentation.is_empty()
                     && self.disposition.is_none()
                     && self.unit_unqueue.is_none()
+                    && self.unit_action_come_out.is_none()
             }
             DirectEntityTransactionStatus::Complete | DirectEntityTransactionStatus::OpenTail => {
                 let (Some(frame), Some(target)) = (self.frame, self.target) else {
                     return false;
                 };
-                let recomputed = match self.unit_unqueue.as_ref() {
-                    Some(receiver) => complete_carrier_unit_unqueue_command(
+                let recomputed = match (
+                    self.unit_unqueue.as_ref(),
+                    self.unit_action_come_out.as_ref(),
+                ) {
+                    (Some(receiver), None) => complete_carrier_unit_unqueue_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                         receiver.clone(),
                     ),
-                    None => classify_direct_entity_command(
+                    (None, Some(preflight)) => preflight_opcode49_unit_action_come_out_command(
+                        expected,
+                        frame,
+                        Some(target),
+                        self.type_facts,
+                        preflight.clone(),
+                    ),
+                    (None, None) => classify_direct_entity_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                     ),
+                    (Some(_), Some(_)) => return false,
                 };
                 &recomputed == self
             }
@@ -617,6 +648,7 @@ pub fn classify_direct_entity_command(
             presentation,
             disposition: Some(DirectEntityDisposition::CompleteNoOp),
             unit_unqueue: None,
+            unit_action_come_out: None,
         };
     }
 
@@ -667,6 +699,7 @@ pub fn classify_direct_entity_command(
         presentation,
         disposition: Some(DirectEntityDisposition::OpenTail(tail)),
         unit_unqueue: None,
+        unit_action_come_out: None,
     }
 }
 
@@ -707,6 +740,64 @@ pub fn complete_carrier_unit_unqueue_command(
         status: DirectEntityTransactionStatus::Complete,
         disposition: Some(DirectEntityDisposition::CompleteUnitActionUnqueue { target, argument }),
         unit_unqueue: Some(receiver),
+        ..prefix
+    }
+}
+
+/// Bind opcode 49's complete wrapper preflight to its decoded, active Unit identity.
+///
+/// This advances the typed action-wrapper handoff to the exact mandatory
+/// `Unit::come_out(0)` tail, but deliberately leaves the transaction `OpenTail`. The wrapper
+/// clears masks, orders, and path state before reaching that call, so a host must eventually
+/// revalidate this snapshot and commit both parts as one transaction; applying only the
+/// returned wrapper plan would be retail-incompatible. Any malformed plan, stale identity,
+/// wrong type, non-come-out command, or non-wrapper prefix fails closed.
+pub fn preflight_opcode49_unit_action_come_out_command(
+    request: DirectEntityCommandRequest,
+    frame: i32,
+    target: Option<DirectEntityTargetFacts>,
+    type_facts: Option<DirectEntityTypeFacts>,
+    preflight: UnitActionComeOutPreflight,
+) -> DirectEntityCommandTransactionReceipt {
+    let prefix = classify_direct_entity_command(request, frame, target, type_facts);
+    let Some(DirectEntityDisposition::OpenTail(wrapper_tail)) = prefix.disposition else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let identity = match wrapper_tail {
+        DirectEntityOpenTail::ContainmentScholarActionComeOut { target }
+        | DirectEntityOpenTail::ContainmentGeneralActionComeOut { target } => target,
+        _ => return DirectEntityCommandTransactionReceipt::unavailable(request),
+    };
+    let expected_actor = ObjectIdentity::new(identity.who, identity.object_index);
+    if preflight.facts.actor != expected_actor
+        || preflight.facts.actor_type != identity.type_index
+        || !preflight.plan.downstream_required
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    let Ok(recomputed) = preflight_unit_action_come_out(
+        preflight.object_epoch,
+        preflight.order_epoch,
+        preflight.containment_epoch,
+        preflight.guy_epoch,
+        preflight.leader_epoch,
+        preflight.facts.clone(),
+    ) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if !preflight_still_valid(&preflight, &recomputed) {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+
+    DirectEntityCommandTransactionReceipt {
+        status: DirectEntityTransactionStatus::OpenTail,
+        disposition: Some(DirectEntityDisposition::OpenTail(
+            DirectEntityOpenTail::GeneralUnitComeOutTransaction {
+                target: identity,
+                argument: 0,
+            },
+        )),
+        unit_action_come_out: Some(preflight),
         ..prefix
     }
 }

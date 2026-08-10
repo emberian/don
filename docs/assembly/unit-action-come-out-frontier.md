@@ -1,10 +1,12 @@
 # Opcode 49 `Unit::action_come_out` frontier
 
-Status: **source-only exact wrapper; zero opcode-closure delta**. The exclusive planner at
+Status: **exact wrapper preflight integrated into the opcode-49 DirectEntity/Fleet receipt;
+zero opcode-closure delta**. The planner at
 `crates/don-sim/src/systems/unit_action_come_out_frontier.rs` freezes the complete 532-byte
 `Unit::action_come_out()` body at `0x005E20B0`. Its path-import tests are
-`crates/don-sim/tests/unit_action_come_out_frontier.rs`; neither file is registered in the
-live dispatcher.
+`crates/don-sim/tests/unit_action_come_out_frontier.rs`. The planner is registered as a nested
+command module, and the dispatcher can validate its exact snapshot and plan; no wrapper
+mutation is authorized until the mandatory general release can commit atomically.
 
 ## Why opcode 49 cannot become complete yet
 
@@ -61,6 +63,7 @@ Opcode 49 can become green only after all four owners converge:
 - complete general `Unit::come_out(0)` transaction, including exact conditional RNG;
 - canonical object/type virtual queries and actual `inside_down` traversal;
 - live order/path/Guy/leader mutation adapter with save/checksum ownership;
-- one atomic callback from the opcode-49 direct-entity dispatcher.
+- one atomic live host adapter that revalidates the wrapper epochs and commits the wrapper
+  plus general release together; the dispatcher receipt-level preflight route is complete.
 
 No retail process was launched or modified for this source recovery.

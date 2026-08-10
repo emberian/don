@@ -4,10 +4,15 @@ use don_sim::command::direct_entity_command_integration::plans::{
     DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts, MarketCommandFacts,
     MarketSide,
 };
+use don_sim::command::direct_entity_command_integration::unit_action_come_out::{
+    preflight_unit_action_come_out, InsideLookupFacts, ObjectIdentity, UnitActionComeOutFacts,
+};
 use don_sim::command::direct_entity_command_integration::{
-    classify_direct_entity_command, execute_market_command, DirectEntityFleetReceipt,
-    DirectEntityFleetRequest, DirectEntityTransactionStatus, DirectEntityTypeFacts,
-    MarketCounterBinding, MarketEconomyBinding, MarketTransactionStatus,
+    classify_direct_entity_command, execute_market_command,
+    preflight_opcode49_unit_action_come_out_command, DirectEntityDisposition,
+    DirectEntityFleetReceipt, DirectEntityFleetRequest, DirectEntityOpenTail,
+    DirectEntityTransactionStatus, DirectEntityTypeFacts, MarketCounterBinding,
+    MarketEconomyBinding, MarketTransactionStatus,
 };
 use don_sim::command::{Bridge, Fleet, InlineDef, InlinePort, Package};
 use don_sim::systems::economy::{
@@ -162,12 +167,45 @@ impl Fleet for TransactionFleet {
                     }),
                     _ => None,
                 };
-                DirectEntityFleetReceipt::Entity(classify_direct_entity_command(
-                    request,
-                    frame,
-                    Some(target),
-                    type_facts,
-                ))
+                let wrapper = match request {
+                    DirectEntityCommandRequest::ComeOut {
+                        who,
+                        object_index: 5,
+                        ..
+                    } => u8::try_from(who).ok().and_then(|who| {
+                        preflight_unit_action_come_out(
+                            401,
+                            402,
+                            403,
+                            404,
+                            405,
+                            UnitActionComeOutFacts {
+                                actor: ObjectIdentity::new(who, 5),
+                                actor_type: 50,
+                                unit_masks: 0x0c00_0042,
+                                inside: InsideLookupFacts::default(),
+                                actor_first_guy: None,
+                                actor_inside_down: None,
+                                inside_chain: Vec::new(),
+                                leader_flags: None,
+                            },
+                        )
+                        .ok()
+                    }),
+                    _ => None,
+                };
+                DirectEntityFleetReceipt::Entity(match wrapper {
+                    Some(preflight) => preflight_opcode49_unit_action_come_out_command(
+                        request,
+                        frame,
+                        Some(target),
+                        type_facts,
+                        preflight,
+                    ),
+                    None => {
+                        classify_direct_entity_command(request, frame, Some(target), type_facts)
+                    }
+                })
             }
         }
     }
@@ -228,7 +266,7 @@ fn buy_and_sell_dispatch_complete_atomic_economy_transactions() {
 }
 
 #[test]
-fn entity_dispatch_completes_only_inactive_or_stale_arms() {
+fn entity_dispatch_carries_a_validated_wrapper_prefix_without_completing_opcode49() {
     let mut bridge = Bridge::new();
     bridge.frame = 144;
     let mut package = Package::new(0, 0);
@@ -259,6 +297,16 @@ fn entity_dispatch_completes_only_inactive_or_stale_arms() {
             DirectEntityTransactionStatus::OpenTail,
         ]
     );
+    let DirectEntityFleetReceipt::Entity(wrapper) = &receipts[2].observed else {
+        unreachable!()
+    };
+    assert!(wrapper.unit_action_come_out.is_some());
+    assert!(matches!(
+        wrapper.disposition,
+        Some(DirectEntityDisposition::OpenTail(
+            DirectEntityOpenTail::GeneralUnitComeOutTransaction { argument: 0, .. }
+        ))
+    ));
     assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::StateWired);
     assert_eq!(InlineDef::find(49).unwrap().port, InlinePort::StateWired);
 }
