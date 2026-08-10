@@ -633,21 +633,24 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         kind: Kind::Drift,
         retail: "Unit::do_air_patrol calls Unit::do_air_physics before it advances a waypoint \
                  or searches for a target; a zero result stops the executor for the frame.",
-        ours: "Routing, dynamic queue ownership and patrol-local transitions are exact. EnvWorld \
-               now leaves AIR_PATROL stationary unless a mandatory AirPatrolHost supplies the \
-               complete physics transaction; its straight-line mover is no longer reused.",
+        ours: "Routing, dynamic queue ownership and patrol-local transitions are exact. The \
+               registered air-physics frontier now freezes the complete top-level control/write \
+               order and atomic receipt contract, and EnvWorld loads exact postload AirTypeData. \
+               EnvWorld still leaves AIR_PATROL stationary unless a mandatory host supplies all \
+               nested fuel/Guy/path/collision/animation/RNG mutations.",
         why: "Moving an aircraft through the ground movement scaffold changes position, facing, \
               altitude, fuel, hosting and later scan timing while appearing plausible.",
         derived_from: &[
             "Unit::do_air_patrol 0x005EA620",
             "Unit::do_air_physics 0x005E86D0",
+            "crates/don-sim/src/systems/air_physics_frontier.rs",
             "crates/don-env/src/state.rs::AirPatrolHost",
         ],
-        evidence: "docs/mechanics/air.md and docs/assembly/command-bridge.md §Agreement \
-                   checks. The call boundary is measured; the physics body is not ported.",
+        evidence: "docs/assembly/air-physics-frontier.md freezes the full 1,794-byte top-level \
+                   CFG and branch-conditional transaction facts. Nested mutations remain hosted.",
         default_in_improved: false,
         affects_checksum: true,
-        seam: "",
+        seam: "don_sim::systems::air_physics_frontier::plan_air_physics",
         surfaces: &[Surface::RlEnvironment],
         implementation: ImplementationStatus::KnownDrift,
     },
@@ -659,21 +662,24 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         kind: Kind::Drift,
         retail: "On the actor-indexed mod-16 cadence, patrol chooses find_new_air_target or \
                  find_new_bomber_target first, then applies the game-option fallback.",
-        ours: "The exact cadence, search origin, fighter-bomber home-relative transform and \
-               StrafeOrder insertion are recovered, but EnvWorld has no spatial search host.",
+        ours: "The exact cadence, post-arrival search origin, fighter-bomber transform, AIR/BOMBER \
+               pass order, scratch fold, option fallback, validation/acceptance and StrafeOrder \
+               insertion are executable. EnvWorld still has no coherent Objects scratch-grid, \
+               valid_target and compare_target host.",
         why: "Always returning no target silently removes opportunistic interception; nearest \
               entity or unordered iteration would choose a different target.",
         derived_from: &[
             "Unit::do_air_patrol 0x005EA6EC",
             "find_new_air_target",
             "find_new_bomber_target",
+            "crates/don-sim/src/systems/air_patrol_unit_search_frontier.rs",
             "crates/don-env/src/state.rs::AirPatrolHost::find_unit_target",
         ],
-        evidence: "docs/mechanics/air.md §patrol cadence and \
-                   crates/don-sim/src/systems/order_dispatch.rs::do_air_patrol. [measured].",
+        evidence: "docs/assembly/air-patrol-unit-search-frontier.md freezes the two complete \
+                   finder CFGs and the caller's primary/fallback/acceptance order. [measured].",
         default_in_improved: false,
         affects_checksum: true,
-        seam: "",
+        seam: "don_sim::systems::air_patrol_unit_search_frontier::run_patrol_unit_scan",
         surfaces: &[Surface::RlEnvironment],
         implementation: ImplementationStatus::KnownDrift,
     },
@@ -684,21 +690,25 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         title: "don-env lacks AIR_PATROL's building spatial search",
         kind: Kind::Drift,
         retail: "On the actor-indexed mod-32 cadence, patrol calls ObjectsData::find_building_at \
-                 with SearchIndexBH(3) and tests the returned type's owner-target bit.",
-        ours: "The cadence, waypoint-derived origin, acceptance bit and mandatory StrafeOrder \
-               insertion are exact, but EnvWorld has no ordered building spatial query.",
+                 with SearchIndexBH(3) and tests the patroller-owner bit in the returned \
+                 building's WallData::ever_seen byte.",
+        ours: "The cadence and prior-return gates, post-arrival waypoint origin, Coord-to-TCoord \
+               projection, fixed nine-cell linked traversal, candidate predicates, dynamic \
+               WallData::ever_seen bit and mandatory StrafeOrder insertion are executable. \
+               EnvWorld still has no coherent building-chain/type-footprint/diplomacy snapshot.",
         why: "Returning no building erases attacks; a nearest-building stand-in leaks different \
               visibility, diplomacy, spatial-order and type-bit behavior.",
         derived_from: &[
             "Unit::do_air_patrol 0x005EA84C",
             "ObjectsData::find_building_at",
+            "crates/don-sim/src/systems/air_patrol_building_search_frontier.rs",
             "crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
         ],
-        evidence: "docs/mechanics/air.md §patrol cadence and \
-                   crates/don-sim/src/systems/order_dispatch.rs::do_air_patrol. [measured].",
+        evidence: "docs/assembly/air-patrol-building-search-frontier.md freezes the complete \
+                   spatial traversal and post-return visibility gate. [measured].",
         default_in_improved: false,
         affects_checksum: true,
-        seam: "",
+        seam: "don_sim::systems::air_patrol_building_search_frontier::AirPatrolBuildingSearchOwner",
         surfaces: &[Surface::RlEnvironment],
         implementation: ImplementationStatus::KnownDrift,
     },
@@ -927,20 +937,21 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         retail: "Retail walks spatial cells in stable order and applies diplomacy, visibility, \
                  pre-fog cloak/detection, validity, region, priority, crowding, stance and \
                  building-territory gates.",
-        ours: "The focused unit-target path is recovered, but the full Arena/Marshal product \
-               behavior is not yet green. Arena also lacks authoritative seen3 detector/cloak \
-               state and ordinary building admission still lacks WData territory ownership.",
-        why: "A partially integrated scan changes combat choices and bot economy. The coarse \
-              blocker remains until full Arena/Marshal gates pass; only then may the residual \
-              building-territory transaction be split out independently.",
+        ours: "The direct-land adapter now consumes mutual diplomacy plus exact circular \
+               seen/seen3 production and cloak/detection before fog/object-memory admission. \
+               The full Arena/Marshal product gate, retail step-12 cadence and incremental \
+               post-construction WData building-territory lifecycle remain incomplete.",
+        why: "A partially integrated scan changes combat choices and bot economy. The blocker \
+              remains until full Arena/Marshal gates, retail visibility scheduling and live \
+              building-territory invalidation all pass.",
         derived_from: &[
             "Object::find_auto_target 0x0064DDA0",
             "Object::check_target building tail",
             "crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
         ],
-        evidence: "docs/assembly/target-selection.md. Focused non-cloaked direct-land target \
-                   integration is green, but full Arena/Marshal validation currently regresses; \
-                   cloak/detection and building-territory hosts remain explicit residuals.",
+        evidence: "docs/assembly/target-selection.md and arena target tests cover diplomacy, \
+                   seen/seen3 and cloak/detection. Full product validation, retail fog cadence \
+                   and incremental building territory remain explicit residuals.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -956,12 +967,12 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         retail: "`Guy::init_real` selects each Guy's gpiece and sets `GUY_FLAG_TURRETS` \
                  when that selected graphics graph has pivot restrictions; initial and live \
                  angles come from the loaded hierarchy before `Unit::fight` plans a volley.",
-        ours: "The supported installed XML catalog, transactional Guy graphics profile \
-               installer and exact pivot-aim arithmetic are recovered, but Arena does not \
-               yet supply the required retail/.bh3 hierarchy extractor and position provider.",
-        why: "The exact supported-roster flank path is complete. Silently treating a turret \
-              type as an ordinary Guy would create a different approximation, so the roster \
-              prerequisite remains independently product-blocking.",
+        ours: "Arena exposes the exact slot-bound materialization transaction and a \
+               frame/target-bound pivot-aim receipt, but its default loader does not yet supply \
+               the required installed retail/.bh3 hierarchy extractor and position provider.",
+        why: "Without that default host, an unknown spawn can still body-aim before proving \
+              whether its selected gpiece is a turret. The reachable exact adapter therefore \
+              narrows the blocker but does not make the product approximation unreachable.",
         derived_from: &[
             "Unit::fight 0x005FD4D0",
             "Guy::init_real 0x005DB6B0",

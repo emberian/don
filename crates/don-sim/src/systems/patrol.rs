@@ -399,8 +399,10 @@ pub struct AirPatrolTarget {
     pub x: i32,
     pub y: i32,
     pub domain: i32,
-    /// For a building result, the bit in `ObjectTypeData+0x62` for the patroller's owner.
-    pub owner_target_bit: bool,
+    /// For a building result, `WallData::ever_seen` (`BuildData+0x62`) contains the bit
+    /// for the patroller's owner. This is dynamic per-building visibility state, not a
+    /// type-level targetability mask.
+    pub ever_seen_by_actor: bool,
 }
 
 /// Work inserted by the post-physics half of `Unit::do_air_patrol`.
@@ -432,11 +434,13 @@ pub struct AirPatrolAfterPhysics {
     pub building_target: Option<AirPatrolTarget>,
 }
 
-/// The half of `Unit::do_air_patrol` after `Unit::do_air_physics` reports success.
+/// Advance the patrol cursor immediately after `Unit::do_air_physics` succeeds and before
+/// either target search runs.
 ///
-/// Target *search* remains a world callback, exactly like damage and gathering in the unit
-/// dispatcher. This function owns the executor's cadence and acceptance conditions.
-pub fn step_air_patrol_after_physics(
+/// Retail performs this transition at `0x005EA6B8..0x005EA6E5`. Keeping it separate from
+/// [`step_air_patrol_after_searches`] prevents callers from querying the prior waypoint on
+/// an arrival frame. Only `Continue` and `KillCurrent` can be returned here.
+pub fn advance_air_patrol_waypoint_after_physics(
     order: &mut AirPatrolOrder,
     flight_target: (i32, i32),
     input: &AirPatrolAfterPhysics,
@@ -446,11 +450,7 @@ pub fn step_air_patrol_after_physics(
         .validate()
         .expect("retail AirPatrolOrder requires paired, non-empty waypoint arrays");
     if input.is_animal {
-        return if input.spell_time == 0 {
-            AirPatrolAction::PrimeAnimalSpellTime
-        } else {
-            AirPatrolAction::Continue
-        };
+        return AirPatrolAction::Continue;
     }
 
     if order.air.returning == 0 {
@@ -466,7 +466,24 @@ pub fn step_air_patrol_after_physics(
                 return AirPatrolAction::KillCurrent;
             }
         }
+    }
+    AirPatrolAction::Continue
+}
 
+/// Consume the mod-16 unit/bomber result before the mod-32 building query is made.
+///
+/// Retail returns immediately after an accepted unit result. Callers must therefore test
+/// this result before invoking a building-search host; eagerly fetching both results makes
+/// an otherwise unreachable building-host failure observable.
+pub fn step_air_patrol_after_unit_search(
+    order: &AirPatrolOrder,
+    input: &AirPatrolAfterPhysics,
+) -> AirPatrolAction {
+    order
+        .points
+        .validate()
+        .expect("retail AirPatrolOrder requires paired, non-empty waypoint arrays");
+    if !input.is_animal && order.air.returning == 0 {
         if (input.actor_o as i32).wrapping_add(input.frame) % 16 == 0 {
             if let Some(target) = input.unit_target {
                 let at_last = order.points.waypoint as usize + 1 == order.points.len();
@@ -479,10 +496,29 @@ pub fn step_air_patrol_after_physics(
             }
         }
     }
+    AirPatrolAction::Continue
+}
+
+/// Finish the patrol-local transition after the (still reachable) building search.
+pub fn step_air_patrol_after_building_search(
+    order: &AirPatrolOrder,
+    input: &AirPatrolAfterPhysics,
+) -> AirPatrolAction {
+    order
+        .points
+        .validate()
+        .expect("retail AirPatrolOrder requires paired, non-empty waypoint arrays");
+    if input.is_animal {
+        return if input.spell_time == 0 {
+            AirPatrolAction::PrimeAnimalSpellTime
+        } else {
+            AirPatrolAction::Continue
+        };
+    }
 
     if (input.actor_o as i32).wrapping_add(input.frame) % 32 == 0 {
         if let Some(target) = input.building_target {
-            if target.owner_target_bit {
+            if target.ever_seen_by_actor {
                 return AirPatrolAction::InsertStrafe {
                     target,
                     mandatory: 1,
@@ -492,6 +528,22 @@ pub fn step_air_patrol_after_physics(
     }
 
     AirPatrolAction::Continue
+}
+
+/// Pure composition for callers that already own both search results.
+///
+/// Product adapters should normally call [`step_air_patrol_after_unit_search`], invoke the
+/// building host only on `Continue`, then call [`step_air_patrol_after_building_search`].
+pub fn step_air_patrol_after_searches(
+    order: &AirPatrolOrder,
+    input: &AirPatrolAfterPhysics,
+) -> AirPatrolAction {
+    let action = step_air_patrol_after_unit_search(order, input);
+    if action != AirPatrolAction::Continue {
+        action
+    } else {
+        step_air_patrol_after_building_search(order, input)
+    }
 }
 
 /// Build the exact patrol-originated `StrafeOrder` body. Both patrol call sites pass
@@ -608,12 +660,12 @@ mod tests {
             ..AirPatrolAfterPhysics::default()
         };
         assert_eq!(
-            step_air_patrol_after_physics(&mut p, (100, 100), &i),
+            advance_air_patrol_waypoint_after_physics(&mut p, (100, 100), &i),
             AirPatrolAction::Continue
         );
         i.order_list_len = 2;
         assert_eq!(
-            step_air_patrol_after_physics(&mut p, (100, 100), &i),
+            advance_air_patrol_waypoint_after_physics(&mut p, (100, 100), &i),
             AirPatrolAction::KillCurrent
         );
     }
@@ -631,7 +683,7 @@ mod tests {
             x: 50,
             y: 60,
             domain: 0,
-            owner_target_bit: true,
+            ever_seen_by_actor: true,
         };
         let mut i = AirPatrolAfterPhysics {
             actor_o: 3,
@@ -642,12 +694,12 @@ mod tests {
         };
         // Ground-domain targets are rejected before the last patrol waypoint.
         assert_eq!(
-            step_air_patrol_after_physics(&mut p, (1000, 1000), &i),
+            step_air_patrol_after_searches(&mut p, &i),
             AirPatrolAction::Continue
         );
         p.points.waypoint = 1;
         assert_eq!(
-            step_air_patrol_after_physics(&mut p, (1000, 1000), &i),
+            step_air_patrol_after_searches(&mut p, &i),
             AirPatrolAction::InsertStrafe {
                 target: ground,
                 mandatory: 0
@@ -657,7 +709,7 @@ mod tests {
         i.unit_target = None;
         i.building_target = Some(ground);
         assert_eq!(
-            step_air_patrol_after_physics(&mut p, (1000, 1000), &i),
+            step_air_patrol_after_searches(&mut p, &i),
             AirPatrolAction::InsertStrafe {
                 target: ground,
                 mandatory: 1

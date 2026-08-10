@@ -22,6 +22,9 @@ No community formula is used. These sources support Tier C, not Tier B.
 | air/flag predicates | `UnitData::is_plane` `0x0046CE40`, `is_flying_low` `0x0060A140`, `is_flying_high` `0x0060A310` | domain, helicopter/missile exclusions, on-map bit, and low/high band decision over caller-supplied order context |
 | order state | `is_air(OrderIndex)` `0x0046F000`, `AirOrder::walk_data` `0x0047F2D0` | three air order indices and the six walked `i32` fields of `AirOrder` |
 | patrol cadence | `Unit::do_air_patrol` `0x005EA620` | 16/32-frame target-scan gates and waypoint-cursor step |
+| patrol unit search | `find_new_air_target` `0x005EBC70`, `find_new_bomber_target` `0x005EB960` | registered exact finder arguments/pass order, ordered scratch folds, option fallback and acceptance; live Objects/target predicates hosted |
+| patrol building search | `ObjectsData::find_building_at` `0x0065AB40` | registered exact Coord projection, nine-cell building-chain walk, candidate gates and dynamic `BuildData::ever_seen` admission; live chain snapshot hosted |
+| air physics | `Unit::do_air_physics` `0x005E86D0` | registered complete top-level transaction planner and atomic receipt contract; nested fuel/Guy/path/collision/animation/RNG mutations hosted |
 | host capacity | `ObjectData::num_aircraft_limit` `0x006454A0`, `num_aircraft_here` `0x00645330`, `Build::train` `0x0062F9B0` | strict carrier/airbase/silo capacities, hosted-aircraft count, and launch predicate |
 | fuel | `UnitData::mana` `0x00609A50`, `Unit::process` `0x00610BC0`, `Unit::check_fuel` `0x005E9BE0` | cap, burn/recharge, return latch, and caller-supplied host-search verdict |
 | air attack ground | `Unit::do_air_attack_ground` `0x005EA420` | release-angle gate, bombing fuel constant, and missile self-destruction predicate |
@@ -51,8 +54,30 @@ fingerprint or Tier-B comparison.
 `arena::retail_systems` now provides a fail-closed host adapter over the anti-air and fuel
 primitives: it obtains `AirTypeData` from the live tables, borrows the caller's main RNG, and
 requires an explicit completed host-search verdict. This is integration scaffolding, not a
-world caller. In particular, `systems/ammo.rs` still does not invoke `apply_antiair_gate` from
-its `Ammo::init` model, and no current world tick executes the full airframe/order path.
+world caller. `don-env::Rules` now loads the same exact static `AirTypeData` fields from the
+captured postload table. In particular, `systems/ammo.rs` still does not invoke
+`apply_antiair_gate` from its `Ammo::init` model, and no current world tick executes the full
+airframe/order path.
+
+### Product-adapter audit
+
+The two current product adapters are intentionally different and neither closes an air
+blocker:
+
+- `don-env` owns exact AIR_PATROL queue/cursor/STRAFE transitions and now exposes captured
+  postload `AirTypeData`. Its no-default `AirPatrolHost` still requires the complete physics,
+  unit-search and building-search transactions. Ordinary frames leave the plane stationary.
+- Arena owns the same live static type fields and several `air.rs` adapters, but
+  `ArenaMoveWorld` still rejects AIR_PATROL physics/type work with panic gates and returns no
+  target from its two search callbacks. This is not proven unreachable: Arena's generic
+  `spawn`, production queue and `tick_queue` accept a `kind_unit` without a complete air-domain
+  prohibition, even though ordinary acquisition and direct-land combat later reject non-land
+  domains. An aircraft can therefore be materialized before the missing order/movement host is
+  encountered.
+
+Consequently neither an always-empty target callback nor Arena's ground mover is an admissible
+adapter for these registered frontiers. The three `env-air-patrol-*` rows and the broader
+`arena-air-model` row remain open because approximation is still reachable on both surfaces.
 
 Declaring the module means its types and 37 local tests compile in the workspace. It does not
 mean:
@@ -67,14 +92,15 @@ mean:
 1. Insert the gate at the measured point inside the live `Ammo::init` implementation, using
    the same main-stream `Random` instance as the rest of the tick. Respect `init_aborted` so
    the wrapper does not materialize a projectile on retail's early-return paths.
-2. Port or connect the retail order-list driver and dispatch the three air orders. The current
-   helpers flatten world/object/order lookups into caller-supplied values; they do not perform
-   those mutations themselves.
+2. Connect the registered physics and target-search frontiers to one receipt-bearing live
+   order-list/world adapter. The current helpers keep world/object reads and nested mutations
+   explicit; they do not synthesize those authorities themselves.
 3. Complete `UnitData::is_flying_low`'s order accessors and target lookup against real object
    state. Their role is identified, but the accessor bodies remain underived in this lane.
 4. Complete the non-carrier queued-aircraft term in `num_aircraft_here`; the module exposes it
    as `leader_queue_adjust` rather than guessing the two `LeaderData` counters.
 5. Implement the nearest-host scans and their exact tie/ordering behavior for `check_fuel`.
+   Do not reuse either recovered patrol target finder: those have different passes and scoring.
 6. Reconstruct and walk the relevant `UnitData`, `AirOrder`, and `AmmoData` state in stable
    retail order, then compare replay channel values.
 7. Add registered oracle cases before promoting any function above Tier C. At minimum, cover

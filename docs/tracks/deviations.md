@@ -250,17 +250,29 @@ transitions and their queue effects exist. `GROUP_PATROL` advances before readin
 its waypoint and inserts the exact `ATTACK_TO` body ahead of itself, then resumes when that
 leg retires. `AIR_PATROL` retains its cursor, post-physics retirement rules, actor-indexed
 mod-16/mod-32 scan cadence, exact search origins, acceptance gates and front-inserted
-`STRAFE` body.
+`STRAFE` body. The integration advances an arrived waypoint before either search and returns
+after an accepted mod-16 target before asking the mod-32 building host. The building
+acceptance byte is the returned `BuildData`'s dynamic `WallData::ever_seen`, not type data.
 
-The three remaining adjacent systems now block RL readiness independently. EnvWorld has
-not ported `Unit::do_air_physics`, the air/bomber primary-plus-fallback target search, or
-the ordered building spatial search. `AirPatrolHost` makes all three mandatory with no
-default callbacks. Ordinary `EnvWorld::frame` leaves AIR_PATROL stationary and preserves
-its order body; it no longer moves aircraft through `advance_towards`. Only
-`frame_with_air_patrol_host` may cross the post-physics transition, after preflight and a
-successful host transaction. An empty search is therefore an explicit host result, not an
-inherited always-`None` approximation.
-*`docs/mechanics/COVERAGE.md` §3.1; `docs/assembly/command-bridge.md`.*
+The three remaining adjacent systems still block RL readiness independently, but their
+literal boundaries are materially narrower. Registered executable frontiers now own the full
+top-level air-physics control/write order, AIR/BOMBER primary/fallback search plans and folds,
+and the building query's fixed nine-cell linked traversal. `Rules` supplies captured postload
+`AirTypeData` without an XML/permissive fallback. What remains is dynamic authority:
+fuel/Guy/path/collision/animation/RNG transactions for physics; coherent Objects scratch
+enumeration plus `valid_target`/`compare_target` for unit search; and one atomic terrain-cell,
+building-chain, type-footprint, diplomacy and `ever_seen` snapshot for building search.
+
+`AirPatrolHost` makes all three mandatory with no default callbacks. Ordinary
+`EnvWorld::frame` leaves AIR_PATROL stationary and preserves its order body; it does not move
+aircraft through `advance_towards`. Only `frame_with_air_patrol_host` may cross the
+post-physics transition, after preflight and a successful host transaction. An empty search
+is therefore an explicit host result, not an inherited always-`None` approximation. The three
+registry entries remain `KnownDrift`; no blocker was removed merely because an isolated
+planner became executable.
+*`docs/assembly/air-physics-frontier.md`;
+`docs/assembly/air-patrol-unit-search-frontier.md`;
+`docs/assembly/air-patrol-building-search-frontier.md`.*
 
 ### `ai-model-simplifications`
 
@@ -284,13 +296,13 @@ playable surface while their runtime path remains incomplete:
 | `arena-construction-schedule-model` | 2a | **resolved**: persistent `BuildData`, `(who,o,uid)` identity, rotated unit-first then fixed build traversal |
 | `arena-construction-placement-model` | 2b | remaining Market/Temple linked-town/max-one arms, fort/city/gather/dock/adjacency/water families and incremental border invalidation; shipped Barracks/Tower outside-city land sites have live identity-bearing terrain/occupancy/visibility/territory claims and transient overlap markers |
 | `arena-construction-lifecycle-model` | 2c | claim-bearing reswarm/animation plus full city/leader/registry activation, special families and `build_done`; ResearchModel Barracks/Tower start/reject/activate has a live identity-bearing transaction |
-| `arena-construction-interruption-model` | 2d | builder death/cancel and target close/disband transactions |
-| `arena-gather-capacity-model` | 3a | complete `calc_gather` terrain/type evaluator and signed-byte capacity refresh |
-| `arena-gather-occupancy-model` | 3b | persistent owner-local chain, generational order identity, attach/prune/detach and close paths |
-| `arena-gather-reservation-model` | 3c | ordered MiningList selection/verification, TData `0x1000` claims and non-flat rotation |
-| `arena-gather-payout-model` | 3d | authoritative six-slot per-worker evaluation and leader income/cap/expense transaction |
-| `arena-target-acquisition-model` | 4 | focused non-cloaked direct-land scan recovered; full Arena/Marshal validation, seen3 cloak/detection and WData building territory remain |
-| `arena-guy-turret-model` | post-5 prerequisite | graphics-turret Guy materialization and state |
+| `arena-construction-interruption-model` | 2d | live `BUILD_AT` builder death and explicit command cancellation now execute the shared zero-RNG interruption receipt; target close/disband/refund/terrain and invalid-target integration remain |
+| `arena-gather-capacity-model` | 3a | admitted completed Farms recheck the literal signed capacity one against the shipped evaluator; generated Camp/Mine capacity and product refresh remain MODEL |
+| `arena-gather-occupancy-model` | 3b | admitted Farms now own exact attach/active-count/retirement chains; generated seating and Camp/Mine product adapters remain |
+| `arena-gather-reservation-model` | 3c | retained-source MiningList selection/verification/close exists below the product seam, but generated Camp/Mine commands still bypass it |
+| `arena-gather-payout-model` | 3d | admitted Farms now compose exact active occupancy with the shipped six-slot evaluator without `PEASANT_RATE`; the full Leader income/cap/expense owner and generated sites remain MODEL |
+| `arena-target-acquisition-model` | 4 | direct-land scan now consumes mutual diplomacy plus exact circular `seen`/`seen3` and cloak/detection; full Arena/Marshal validation, retail fog cadence and incremental building-territory ownership remain |
+| `arena-guy-turret-model` | post-5 prerequisite | exact slot-bound materialize/aim adapter is reachable; installed `.bh3` extractor/position host remains |
 | `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
 | `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
 | `arena-air-model` | 6c | `do_air_physics`, target/host scans, Ammo RNG insertion, orders and walked state |
@@ -298,16 +310,25 @@ playable surface while their runtime path remains incomplete:
 | `arena-attrition-model` | 6e | non-friendly period selection (diplomacy/leader/object graphs) and multi-slot damage cascade; the live 32-frame reset/friendly return and singleton due-damage path are resolved |
 | `arena-supply-model` | 6f | worker/Iroquois foreign-relation consumption, caravan/merchant/captain composition and multi-slot repair; live registry traversal, Antipater/Wellington and Senator/President/CEO auras, reload selection, full supply postlude and same-owner singleton worker/Iroquois healing are resolved |
 
-MODEL 4's focused unit-target integration is substantially narrower: five exact target tests
-cover stable traversal, spatial lifecycle, stance, visibility, region and priority. The
-coarse gate intentionally remains, however, because full Arena/Marshal validation currently
-regresses after integration. The claim is also restricted to the non-cloaked direct-land
-roster: the pre-fog `UnitData::is_seen` path applies cloak/detection gates, Arena has no
-authoritative `seen3` detector materialization, and shipped Partisan/Explorer/Commando/SF
-types can cloak. Separately, `check_target` reads `WData.who` for ordinary building
-admission while Arena materializes every territory cell with the unclaimed sentinel `-1`;
-only the measured BuildType flag `0x10` exception is exact. Split these literal residuals
-only after the complete Arena/Marshal product gate is green.
+MODEL 4's focused unit-target integration is substantially narrower than the complete
+product gate. Its adapter now queries the authoritative mutual diplomacy matrix, consumes
+the exact circular `Object::update_seen` producer, and applies `UnitData::is_cloaked` /
+`is_detected` before current-fog or object-memory admission. Detector types stamp `seen3`,
+so shipped cloak-capable units no longer require a categorical rejection. The remaining fog
+boundary is cadence/producer composition: Arena refreshes these exact planes on its own
+`fog_period`, not retail step 12's scheduled full Build/Wall/Unit/scenario producer.
+Separately, starting-capital WData territory is materialized by the recovered scorer, but
+incremental construction/border invalidation is not; ordinary building admission can
+therefore become stale after match setup. Keep the row open until the complete Arena/Marshal
+product gate, retail visibility cadence and live building-territory lifecycle are green.
+
+The graphics-turret adapter now retains each coherent extractor result's pivot graph name
+beside its Guy slot, evaluates the complete live-Guy prefix transactionally, and gives Arena
+a frame/target-bound aim receipt. That makes an exact installed-data host executable without
+inventing a second combat planner. The default product loader still owns neither the `.bh3`
+hierarchy extractor nor `GraphicPieces::get_position` provider, so it can still spawn units
+without proving whether their selected gpieces are turrets. `arena-guy-turret-model` therefore
+remains open.
 
 The recovered construction and gathering cores do not clear these rows. Construction's
 local frame/builder state machine is guarded by mandatory effect callbacks and explicitly

@@ -115,20 +115,20 @@ form:
 | `refund-repeat-compounding` | `adj` written back over the record, so repeats compound | leave the record alone | **on** |
 | `caravan-heuristic-goal-y` | `pf_dist(dx, −goalY)` at `0x00685FD9`; mode A ≈ Dijkstra | pass `child.y − goalY` | off |
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
-| `env-air-patrol-physics` | `Unit::do_air_physics` completes before patrol-local work | *drift*: exact queue/transition waits behind a mandatory unavailable host | — |
-| `env-air-patrol-unit-target-search` | mod-16 air/bomber primary search and option fallback | *drift*: cadence/origin/insertion exact, spatial search absent | — |
-| `env-air-patrol-building-target-search` | mod-32 ordered building scan and owner-target bit | *drift*: cadence/origin/insertion exact, spatial search absent | — |
+| `env-air-patrol-physics` | `Unit::do_air_physics` completes before patrol-local work | *drift*: top-level transaction/receipt and static live type facts exact; nested fuel/Guy/path/collision/animation/RNG host absent | — |
+| `env-air-patrol-unit-target-search` | mod-16 air/bomber primary search and option fallback | *drift*: cadence, pass plans/folds, fallback and insertion exact; live Objects/target-predicate host absent | — |
+| `env-air-patrol-building-target-search` | mod-32 ordered building scan and returned `WallData::ever_seen` owner bit | *drift*: nine-cell traversal, gates and insertion exact; coherent live spatial/build snapshot absent | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
 | `arena-construction-schedule-model` | owner-local bands, `(who,o,uid)`, unit-first traversal | **resolved**: exact Arena schedule/state host | — |
 | `arena-construction-placement-model` | complete `blocked_site` transaction | *drift*: shipped Barracks/Tower outside-city land sites have identity-bearing live footprint claims and overlap markers; linked-town/special families and border invalidation remain absent | — |
 | `arena-construction-lifecycle-model` | start/activate/reject/complete world transactions | *drift*: ResearchModel runs an identity-bearing Barracks/Tower transaction, but reswarm/animation and broad activation callbacks remain compact projections | — |
-| `arena-construction-interruption-model` | builder/target death and cancellation transactions | *drift*: MODEL 2 lacks close/order integration | — |
-| `arena-gather-capacity-model` | terrain/type-derived signed-byte capacity | *drift*: MODEL 3 lacks complete `calc_gather` | — |
-| `arena-gather-occupancy-model` | persistent chain and generational order identity | *drift*: MODEL 3 has no Arena object/order host | — |
-| `arena-gather-reservation-model` | ordered MiningList and TData reservation lifecycle | *drift*: MODEL 3 has reservation writes only | — |
-| `arena-gather-payout-model` | authoritative six-slot evaluation and leader credit | *drift*: MODEL 3 has local arithmetic only | — |
-| `arena-target-acquisition-model` | complete target path, detection and building admission | *drift*: focused non-cloaked unit path is recovered; full Arena/Marshal, seen3 cloak/detection and territory remain | — |
-| `arena-guy-turret-model` | graphics-turret Guy materialization | *drift*: exact MODEL 5 path hard-gates unresolved turret types | — |
+| `arena-construction-interruption-model` | builder/target death and cancellation transactions | *drift*: live `BUILD_AT` builder death and explicit command replacement use the shared interruption receipt; target close/disband/refund/terrain and invalid-target integration remain | — |
+| `arena-gather-capacity-model` | terrain/type-derived signed-byte capacity | *drift*: admitted completed Farms recheck exact capacity one, while generated Camp/Mine commands still use MODEL slots | — |
+| `arena-gather-occupancy-model` | persistent chain and generational order identity | *drift*: admitted Farms own exact attach/active-count/retirement; generated seating and Camp/Mine product adapters remain | — |
+| `arena-gather-reservation-model` | ordered MiningList and TData reservation lifecycle | *drift*: retained-source runtime primitives exist, but the generated Camp/Mine product path still bypasses them | — |
+| `arena-gather-payout-model` | authoritative six-slot evaluation and leader credit | *drift*: admitted Farms compose exact occupancy with the shipped evaluator without `PEASANT_RATE`; complete Leader payout ownership and generated sites remain MODEL | — |
+| `arena-target-acquisition-model` | complete target path, detection and building admission | *drift*: mutual diplomacy plus circular seen/seen3 cloak detection are integrated; full Arena/Marshal, retail fog cadence and incremental building territory remain | — |
+| `arena-guy-turret-model` | graphics-turret Guy materialization | *drift*: exact slot-bound materialize/aim adapter is reachable; default installed `.bh3` extractor/position host remains absent | — |
 | `arena-water-model` | water terrain/regions and water A* | *drift*: MODEL 6a absent host | — |
 | `arena-naval-model` | naval objects, orders, queues and supply | *drift*: MODEL 6b absent host | — |
 | `arena-air-model` | air physics, orders, ammo RNG and walked state | *drift*: MODEL 6c local adapters only | — |

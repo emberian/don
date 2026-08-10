@@ -21,6 +21,15 @@
 /// slice of the `units` channel plus the `Ammo::init` anti-air gate that the `ammo`
 /// channel depends on. Uses [`crate::rng::Random`], so it needs the crate to build.
 pub mod air;
+/// Exact snapshot owner for AIR_PATROL's mod-32 `find_building_at` traversal and dynamic
+/// `BuildData::ever_seen` gate. Product adapters still require one coherent spatial host.
+pub mod air_patrol_building_search_frontier;
+/// Exact AIR/BOMBER finder-call sequence, ordered scratch folding, inverse fallback, and
+/// patrol acceptance contract. Object enumeration and target predicates remain hosted.
+pub mod air_patrol_unit_search_frontier;
+/// Complete top-level `Unit::do_air_physics` control/state transaction with nested flight,
+/// collision, fuel, path, animation, and RNG mutations represented by atomic receipts.
+pub mod air_physics_frontier;
 pub mod ammo;
 /// Recovered from the cut-off `cg:armies` lane. `Army`/`Armies` is the standing
 /// formation-of-groups layer executed at step 13 of `Game::do_frame`. The module keeps

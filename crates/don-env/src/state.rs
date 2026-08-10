@@ -17,7 +17,8 @@
 
 use crate::generated as g;
 use crate::typecaps::{
-    load_formation_caps, FormationCaps, TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE,
+    load_air_caps, load_formation_caps, AirCaps, FormationCaps, TypeCap, TypeCaps, F_ATTACK,
+    F_BUILDING, F_MOVE,
 };
 use don_sim::command::{
     Fleet, GroupDisbandTransactionReceipt, GroupDisbandTransactionRequest,
@@ -65,6 +66,9 @@ use std::sync::Arc;
 /// Static tables shared by every world in a batch; never mutated after construction.
 pub struct Rules {
     pub caps: TypeCaps,
+    /// Captured postload fields consumed by retail air physics/search predicates. Empty/
+    /// `None` means the source is unavailable; no XML/permissive fallback is admissible.
+    pub air_caps: AirCaps,
     /// Captured postload runtime facts used by `Form::categorize`. Empty/`None` when the
     /// ignored live table is unavailable; formation then remains masked at the host seam.
     pub formation_caps: FormationCaps,
@@ -83,6 +87,7 @@ impl Rules {
         balance: Option<&std::path::Path>,
     ) -> (Arc<Rules>, bool, bool) {
         let (caps, caps_real) = TypeCaps::load_or_permissive(typecaps);
+        let air_caps = load_air_caps(None).unwrap_or_else(|_| vec![None; g::NUM_TYPES]);
         let formation_caps = load_formation_caps(None).unwrap_or_else(|_| vec![None; g::NUM_TYPES]);
         let p = balance.map(|p| p.to_path_buf()).unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -104,6 +109,7 @@ impl Rules {
         (
             Arc::new(Rules {
                 caps,
+                air_caps,
                 formation_caps,
                 balance,
                 building_types,
@@ -120,6 +126,12 @@ impl Rules {
     #[inline]
     pub fn formation_cap(&self, type_id: u16) -> Option<crate::typecaps::FormationTypeCap> {
         self.formation_caps.get(type_id as usize).copied().flatten()
+    }
+
+    /// Exact live runtime air fields for one `TypeIndex`.
+    #[inline]
+    pub fn air_type_data(&self, type_id: u16) -> Option<don_sim::systems::air::AirTypeData> {
+        self.air_caps.get(type_id as usize).copied().flatten()
     }
 
     /// `(i32)(i16) balance[atk * 493 + def]`, the operand `get_damage` reads at
@@ -371,7 +383,8 @@ pub trait AirPatrolHost {
         search: AirPatrolSearch,
     ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError>;
 
-    /// Complete mod-32 building spatial scan and owner-target-bit query.
+    /// Complete mod-32 building spatial scan and the returned building's actor-specific
+    /// `WallData::ever_seen` query.
     fn find_building_target(
         &mut self,
         world: &EnvWorld,
@@ -1822,6 +1835,24 @@ impl EnvWorld {
         }
 
         let phase = (self.sim.units.o()[row] as i32).wrapping_add(self.sim.frame);
+        let mut input = AirPatrolAfterPhysics {
+            actor_x: self.sim.pos_x()[row],
+            actor_y: self.sim.pos_y()[row],
+            actor_o: self.sim.units.o()[row],
+            frame: self.sim.frame,
+            is_animal,
+            spell_time: self.spell_time[row],
+            order_list_len: list_len,
+            unit_target: None,
+            building_target: None,
+        };
+        if matches!(
+            patrol::advance_air_patrol_waypoint_after_physics(&mut air, target, &input),
+            AirPatrolAction::KillCurrent
+        ) {
+            self.retire_front_order(row);
+            return Ok(());
+        }
         let fighter_bomber = host.actor_is_type(self, row, 0x134, false)?;
         let relative_scan_point = |point: (i32, i32)| {
             if fighter_bomber {
@@ -1851,26 +1882,22 @@ impl EnvWorld {
             };
             unit_target = host.find_unit_target(self, row, &air, sx, sy, search)?;
         }
+        input.unit_target = unit_target;
+        let unit_action = patrol::step_air_patrol_after_unit_search(&air, &input);
 
         let mut building_target = None;
-        if !is_animal && phase % 32 == 0 {
+        if unit_action == AirPatrolAction::Continue && !is_animal && phase % 32 == 0 {
             let cursor = air.points.clamp_air_cursor();
             let (sx, sy) = relative_scan_point((air.points.x[cursor], air.points.y[cursor]));
             building_target = host.find_building_target(self, row, &air, sx, sy)?;
         }
 
-        let input = AirPatrolAfterPhysics {
-            actor_x: self.sim.pos_x()[row],
-            actor_y: self.sim.pos_y()[row],
-            actor_o: self.sim.units.o()[row],
-            frame: self.sim.frame,
-            is_animal,
-            spell_time: self.spell_time[row],
-            order_list_len: list_len,
-            unit_target,
-            building_target,
+        input.building_target = building_target;
+        let action = if unit_action != AirPatrolAction::Continue {
+            unit_action
+        } else {
+            patrol::step_air_patrol_after_building_search(&air, &input)
         };
-        let action = patrol::step_air_patrol_after_physics(&mut air, target, &input);
         if let Some(front) = self.orders[row].front_mut() {
             front.patrol_payload = PatrolPayload::Air(air.clone());
         }

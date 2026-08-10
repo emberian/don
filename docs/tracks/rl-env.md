@@ -11,9 +11,10 @@ bounded migration surface, not yet a full-game vector environment: currently onl
 fully hosted MOVE_TO are admitted. A fresh current-frame capture can now expose complete
 non-cloaked external rows and bind ATTACK's one-based target ordinal through stable
 `(Handle,who,o,uid)` identity plus the recovered fog predicate. ATTACK remains masked after
-that preflight: the current walked order cannot retain the target UID/Handle or host the full
-target-eligibility transaction. The admitted verb delta is therefore **0**; the other policy
-verbs still fail at their typed owner boundaries.
+that preflight: the walked order and DoNSave v7 now retain target UID/Handle plus the prepared
+visibility/episode revisions and hostile eligibility, but the production tick does not consume
+the identity or host every accepted-no-effect dependency. The admitted verb delta is therefore
+**0**; the other policy verbs still fail at their typed owner boundaries.
 
 Root convergence validated the target-identity tranche in persvati job
 `rl-target-entity-v2-20260809T232312Z-24206-11858-b8a284f806b0`: 22/22 focused backend, head,
@@ -53,7 +54,9 @@ The authoritative contract is frozen at this boundary:
   economy, alive, and won state.
 * Strict ten-head decoding preserves `TargetEntity` instead of dropping it. ATTACK binds a
   non-zero ordinal only against the exact captured image shown to the policy, then revalidates
-  the target's Handle generation and retail `(who,o,uid)` against the live Sim row. No image is
+  the target's Handle generation and retail `(who,o,uid)` against the live Sim row. A prepared
+  token retains those facts, both owner revisions, the visibility frame/ordinal, and the exact
+  hostile relation; its non-lossy order survives queue conversion and save/load. No image is
   `TargetIdentityVisibilityUnavailable`; a missing/stale ordinal is `TargetVisibility`; a valid
   visible identity reaches `AttackTargetCommitUnavailable`. All three remain masked and change
   no order, path, digest, or reset state. Scenario allocation order and omniscient World
@@ -291,8 +294,11 @@ The env prints this itself (`env.provenance()`); repeated here so it is not only
   `QUEUE_FIRST`/`QUEUE_LAST` rules. Ground patrol executes and inserts its exact `ATTACK_TO`
   node ahead of itself. AIR_PATROL's local transition is available only through the
   fail-closed `AirPatrolHost`: ordinary frames preserve the order and aircraft position.
-  `Unit::do_air_physics` and the mod-16/mod-32 target searches are not ported, so no
-  straight-line movement or always-empty target-search substitute executes.
+  Registered executable frontiers now recover `Unit::do_air_physics`'s top-level transaction,
+  the mod-16 AIR/BOMBER search plans/folds, and the mod-32 nine-cell building traversal. Their
+  dynamic world facts are not yet adapted into `EnvWorld`, so no straight-line movement,
+  unordered scan, or always-empty target-search substitute executes. Captured postload
+  `AirTypeData` is available through `Rules::air_type_data`; absent live tables fail closed.
 * **pathfinding, gathering, economy rates, build-queue timing, tech tree, terrain, map
   generation, real fog** — absent. `QueueUp` and `Build` complete instantly with cost and
   pop enforced from the shipped tables; the timing would otherwise be invented.
@@ -386,9 +392,10 @@ modified.
    generated factored heads into fail-closed typed transactions; do not route unsupported
    verbs through compact `action.rs` behavior.
 2. **Finish cloak/detection and ATTACK target commit.** Replace step 12's hardcoded
-   `detector=false` with authoritative per-object detector facts; then retain target UID/Handle
-   in the walked ATTACK order and host its complete eligibility transaction. Only then may
-   cloaked rows pass capture or ATTACK become an admitted verb.
+   `detector=false` with authoritative per-object detector facts; then make the production ATTACK
+   executor consume the retained UID/Handle and host every silent dependency plus the complete
+   can-hurt eligibility transaction. Only then may cloaked rows pass capture or ATTACK become an
+   admitted verb.
 3. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).

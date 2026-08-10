@@ -1900,7 +1900,7 @@ pub trait WorkWorld: UnitWorld {
     ) -> Option<AirPatrolTarget>;
 
     /// The mod-32 `ObjectsData::find_building_at(..., SearchIndexBH(3), actor.who, 0, 0)`
-    /// boundary, including the building type's owner-target bit in the returned record.
+    /// boundary, including the returned building's actor-specific `ever_seen` bit.
     fn air_patrol_building_target(
         &mut self,
         _actor: &UnitWork,
@@ -4481,6 +4481,24 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
     }
 
     let frame = w.frame();
+    let mut input = AirPatrolAfterPhysics {
+        actor_x: u.body.x,
+        actor_y: u.body.y,
+        actor_o: u.o,
+        frame,
+        is_animal: u.type_is_animal,
+        spell_time: u.spell_time,
+        order_list_len: u.orders.len(),
+        unit_target: None,
+        building_target: None,
+    };
+    if matches!(
+        patrol::advance_air_patrol_waypoint_after_physics(&mut order, flight_target, &input),
+        AirPatrolAction::KillCurrent
+    ) {
+        kill_current_order(u, KillReason::Completed);
+        return ArmResult::Retired(KillReason::Completed);
+    }
     let phase = (u.o as i32).wrapping_add(frame);
     let fighter_bomber = w.patrol_actor_is_type(u, 0x134, false);
     let mut unit_target = None;
@@ -4495,27 +4513,23 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
         };
         unit_target = w.air_patrol_unit_target(u, &order, sx, sy, search);
     }
+    input.unit_target = unit_target;
+    let unit_action = patrol::step_air_patrol_after_unit_search(&order, &input);
 
     let mut building_target = None;
-    if !u.type_is_animal && phase % 32 == 0 {
+    if unit_action == AirPatrolAction::Continue && !u.type_is_animal && phase % 32 == 0 {
         let cursor = order.points.clamp_air_cursor();
         let point = (order.points.x[cursor], order.points.y[cursor]);
         let (sx, sy) = relative_scan_point(point, home, max_x, max_y, fighter_bomber);
         building_target = w.air_patrol_building_target(u, &order, sx, sy);
     }
 
-    let input = AirPatrolAfterPhysics {
-        actor_x: u.body.x,
-        actor_y: u.body.y,
-        actor_o: u.o,
-        frame,
-        is_animal: u.type_is_animal,
-        spell_time: u.spell_time,
-        order_list_len: u.orders.len(),
-        unit_target,
-        building_target,
+    input.building_target = building_target;
+    let action = if unit_action != AirPatrolAction::Continue {
+        unit_action
+    } else {
+        patrol::step_air_patrol_after_building_search(&order, &input)
     };
-    let action = patrol::step_air_patrol_after_physics(&mut order, flight_target, &input);
 
     match action {
         AirPatrolAction::KillCurrent => {
@@ -7632,7 +7646,7 @@ mod tests {
             x: 800,
             y: 900,
             domain: 2,
-            owner_target_bit: true,
+            ever_seen_by_actor: true,
         };
         let mut w = TestWorld::open(16);
         w.air_target = Some(target);

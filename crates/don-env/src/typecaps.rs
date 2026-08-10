@@ -21,6 +21,7 @@
 //! `buildingrules[128]`→`SPACEPROGRAM`. [measured]
 
 use crate::generated::{NUM_COMMON, NUM_TYPES};
+use don_sim::systems::air::AirTypeData;
 use std::path::Path;
 
 /// The runtime type-table facts consumed by retail formation construction.
@@ -84,6 +85,93 @@ impl FormationTypeCap {
 
 /// Dense TypeIndex-keyed formation facts. `None` is a deliberate unavailable result.
 pub type FormationCaps = Vec<Option<FormationTypeCap>>;
+
+/// Dense `TypeIndex`-keyed retail air facts captured after type-table postload.
+///
+/// `None` is a deliberate unavailable result. In particular, callers must not derive
+/// flight bands, fuel, or the plane/helicopter split from the permissive XML capability
+/// table: `Unit::do_air_physics` reads the live runtime fields represented here.
+pub type AirCaps = Vec<Option<AirTypeData>>;
+
+/// Load the captured runtime fields consumed by the recovered air kernels.
+///
+/// As with [`load_formation_caps`], a malformed row rejects the complete source. A host
+/// may therefore either consume one coherent postload table or remain unavailable; it
+/// cannot combine shifted or missing columns with convenient defaults.
+pub fn load_air_caps(path: Option<&Path>) -> std::io::Result<AirCaps> {
+    let path = path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_formation_path);
+    parse_air_caps(&std::fs::read_to_string(path)?)
+}
+
+fn parse_air_caps(text: &str) -> std::io::Result<AirCaps> {
+    use std::io::{Error, ErrorKind};
+    let bad = |message: &str| Error::new(ErrorKind::InvalidData, message.to_string());
+    let mut lines = text.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| bad("live-tables-unit.tsv: missing header"))?;
+    let names: Vec<&str> = header.split('\t').collect();
+    let required = [
+        "type_id",
+        "obj_masks",
+        "domain",
+        "los",
+        "fly_high",
+        "fly_low",
+        "unit_flags",
+        "mana",
+    ];
+    let mut columns = [0usize; 8];
+    for (dst, name) in columns.iter_mut().zip(required) {
+        *dst = names
+            .iter()
+            .position(|candidate| *candidate == name)
+            .ok_or_else(|| bad("live-tables-unit.tsv: air column missing"))?;
+    }
+    let mut out = vec![None; NUM_TYPES];
+    let mut rows = 0usize;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let values: Vec<&str> = line.split('\t').collect();
+        let read_i32 = |column: usize| -> std::io::Result<i32> {
+            values
+                .get(column)
+                .ok_or_else(|| bad("live-tables-unit.tsv: short row"))?
+                .parse::<i32>()
+                .map_err(|_| bad("live-tables-unit.tsv: non-integer air fact"))
+        };
+        let read_u32 = |column: usize| -> std::io::Result<u32> {
+            values
+                .get(column)
+                .ok_or_else(|| bad("live-tables-unit.tsv: short row"))?
+                .parse::<u32>()
+                .map_err(|_| bad("live-tables-unit.tsv: non-integer air mask"))
+        };
+        let type_id = read_i32(columns[0])?;
+        let index = usize::try_from(type_id)
+            .ok()
+            .filter(|index| *index < NUM_TYPES)
+            .ok_or_else(|| bad("live-tables-unit.tsv: TypeIndex out of range"))?;
+        if out[index].is_some() {
+            return Err(bad("live-tables-unit.tsv: duplicate air row"));
+        }
+        out[index] = Some(AirTypeData {
+            obj_masks: read_u32(columns[1])?,
+            domain: read_i32(columns[2])?,
+            los: read_i32(columns[3])?,
+            fly_high: read_i32(columns[4])?,
+            fly_low: read_i32(columns[5])?,
+            unit_flags: read_u32(columns[6])?,
+            mana: read_i32(columns[7])?,
+        });
+        rows += 1;
+    }
+    if rows != 364 {
+        return Err(bad("live-tables-unit.tsv: expected 364 runtime unit rows"));
+    }
+    Ok(out)
+}
 
 /// `FormData::type_cat` `0x0072DFC0`, specialized to the shipped `UnitType` vtable.
 fn formation_category(
@@ -553,6 +641,26 @@ mod tests {
         );
         assert_eq!(citizen.category(0), 10);
         assert!(!citizen.modern_infantry(false));
+    }
+
+    #[test]
+    fn captured_air_table_has_exact_fighter_fields_when_present() {
+        let Ok(table) = load_air_caps(None) else {
+            eprintln!("SKIP: schema/live/live-tables-unit.tsv absent");
+            return;
+        };
+        assert_eq!(table.iter().flatten().count(), 364);
+        let fighter = table[295].expect("Fighter runtime row");
+        assert_eq!(fighter.domain, don_sim::systems::air::DOMAIN_AIR);
+        assert_eq!(
+            (fighter.fly_high, fighter.fly_low, fighter.mana),
+            (0, 10, 500)
+        );
+        assert!(fighter.is_plane());
+
+        let helicopter = table[310].expect("Helicopter runtime row");
+        assert_eq!(helicopter.domain, don_sim::systems::air::DOMAIN_AIR);
+        assert!(!helicopter.is_plane());
     }
 
     /// Only meaningful on a tree that has run the generator; skips otherwise so the
