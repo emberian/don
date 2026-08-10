@@ -105,7 +105,6 @@ fn map() -> InitialWorld {
             world.wdata_mut(x, y).flags = wflag::FOREST;
         }
     }
-    assert_eq!(world.add_starting_location(WCoord(20), WCoord(20)), 0);
     let checksum = world.checksum_sections();
     InitialWorld {
         world,
@@ -127,6 +126,10 @@ fn owned_map() -> InitialWorld {
             world.wdata_mut(x, y).flags = wflag::FOREST;
         }
     }
+    // A real player start makes `Map::check_player_forest` non-vacuous. It sits far
+    // enough from the forest patch that the shipped `city_center_radius = 20` clear
+    // does not consume it, so the nubify passes downstream still have candidates.
+    assert_eq!(world.add_starting_location(WCoord(20), WCoord(20)), 0);
     let ownership = WorldOwnerLedger::from_initial_prefix(
         &world,
         InitialWorldPrefixEvidence {
