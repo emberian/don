@@ -1,8 +1,10 @@
 # BHS type session owner
 
-Status: source-complete opaque integration seam; synchronized rules composition, channel 13,
-and DoNSave ownership remain red. Implementation: `crates/don-sim/src/bhs_session.rs`. Frozen
-tests: `crates/don-sim/tests/bhs_session_owner.rs`.
+Status: opaque owner and Type-prefix channel-13 integration are source-complete; synchronized
+production composition, the remaining Rules-channel sections, independent validation, and
+DoNSave encoding remain red. Implementation: `crates/don-sim/src/bhs_session.rs`. Frozen tests:
+`crates/don-sim/tests/bhs_session_owner.rs` and
+`crates/don-sim/tests/bhs_channel13_integration.rs`.
 
 ## Result
 
@@ -44,6 +46,14 @@ legacy APIs can be called after installation. The session exposes only:
 - `partial_channel_digest`, which always calls the BHS channel-13 admission before the existing
   partial digest.
 
+`new_with_channel13` additionally consumes the immutable normalized Type walk produced by the
+same synchronized composition. The source lives inside `TypeBuiltinRuntime` beside the canonical
+mutable state. Setup projects the pristine state before publishing the session; every later
+checkpoint/persistence request projects again against the live dirty bit and exact mutation
+revision. `type_channel13_checkpoint` exposes the cumulative Adler-32 after the 806 Type walks,
+and `type_persistence_owner` keeps that checkpoint inseparable from the entire owner and its
+provenance.
+
 Read-only status, provenance, type-state, and last-receipt views do not expose the enclosed `Sim`
 or permit replacement of the source witness.
 
@@ -54,11 +64,15 @@ The owner does not fabricate channel 13 and does not serialize unsupported state
 - A pristine session refuses `save_v6` with
   `SaveOwnerUnowned { mutation_revision: 0, dirty: false }`.
 - A mutated session refuses with the live revision and dirty bit.
-- Every session refuses `partial_channel_digest` with `Channel13ProjectionUnowned`.
+- State-only compatibility sessions refuse `partial_channel_digest` with
+  `Channel13ProjectionUnowned`.
+- A source-owned session admits the existing non-retail partial Sim digest only after its live
+  Type-prefix projection passes. A missing or stale projection cannot be collapsed into success.
 
-The provenance is retained so a future complete loader can prove which synchronized rules/mod
+The provenance and immutable Type walk are retained so a future complete loader can prove which synchronized rules/mod
 composition created the immutable restore backups. Retention alone does not make DoNSave v6 able
-to reconstruct those backups, and it is not mixed into a made-up checksum. The executed shipped
+to reconstruct those backups. The Types checkpoint is not mislabeled as the final Rules checksum:
+Constants, Balance, and Tribes still have to continue the same Adler stream. The executed shipped
 call coverage of this source-only seam therefore remains zero until a real synchronized composer
 constructs the input and production creates `BhsSession`.
 

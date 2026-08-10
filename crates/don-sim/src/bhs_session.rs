@@ -14,6 +14,9 @@ use crate::systems::bhs_type_factory::{
     produce_type_builtin_state, TypeBuiltinFactoryError, TypeBuiltinFactoryInput,
     TypeBuiltinProvenance,
 };
+use crate::systems::bhs_type_channel13_frontier::{
+    ProjectedTypeRules, TypeChannel13Error, TypePersistenceOwner, TypeWalkSource,
+};
 use crate::systems::bhs_type_runtime::{
     TypeBuiltinBoundaryError, TypeBuiltinReceipt, TypeBuiltinRuntime,
 };
@@ -38,6 +41,8 @@ pub enum BhsSessionSetupError {
         type_owner: i32,
         sim: u32,
     },
+    /// The immutable normalized Type walk does not admit the produced canonical owner.
+    Channel13(TypeChannel13Error),
 }
 
 impl fmt::Display for BhsSessionSetupError {
@@ -61,6 +66,7 @@ impl fmt::Display for BhsSessionSetupError {
                 f,
                 "BHS type owner Leader flags at slot {slot} are {type_owner:#x}, simulation has {sim:#x}"
             ),
+            Self::Channel13(error) => write!(f, "BHS channel-13 setup failed: {error}"),
         }
     }
 }
@@ -82,6 +88,7 @@ pub struct BhsSessionStatus {
     pub script_bytecodes: u64,
     pub type_mutation_revision: u64,
     pub type_state_dirty: bool,
+    pub type_channel13_owned: bool,
 }
 
 /// One non-cloneable production session.
@@ -104,8 +111,29 @@ impl BhsSession {
     /// paired after the fact with a provenance value that may describe different backups.
     pub fn new(
         sim: Sim,
+        scripts: ScriptRuntime,
+        type_input: TypeBuiltinFactoryInput,
+    ) -> Result<Self, BhsSessionSetupError> {
+        Self::build(sim, scripts, type_input, None)
+    }
+
+    /// Build a session whose canonical owner also retains the exact normalized Type prefix of
+    /// checksum channel 13. The source is admitted while the owner is pristine and then remains
+    /// immutable while script calls mutate only the canonical table.
+    pub fn new_with_channel13(
+        sim: Sim,
+        scripts: ScriptRuntime,
+        type_input: TypeBuiltinFactoryInput,
+        channel13_source: TypeWalkSource,
+    ) -> Result<Self, BhsSessionSetupError> {
+        Self::build(sim, scripts, type_input, Some(channel13_source))
+    }
+
+    fn build(
+        sim: Sim,
         mut scripts: ScriptRuntime,
         type_input: TypeBuiltinFactoryInput,
+        channel13_source: Option<TypeWalkSource>,
     ) -> Result<Self, BhsSessionSetupError> {
         if scripts.type_builtins().is_some() {
             return Err(BhsSessionSetupError::PreinstalledTypeOwner);
@@ -132,9 +160,22 @@ impl BhsSession {
                 });
             }
         }
-        scripts
-            .install_type_builtins(state)
-            .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?;
+        match channel13_source {
+            Some(source) => {
+                let runtime = TypeBuiltinRuntime::new_with_channel13(
+                    state,
+                    type_provenance,
+                    source,
+                )
+                .map_err(BhsSessionSetupError::Channel13)?;
+                scripts
+                    .install_type_builtin_runtime(runtime)
+                    .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?;
+            }
+            None => scripts
+                .install_type_builtins(state)
+                .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?,
+        }
 
         Ok(Self {
             sim,
@@ -166,7 +207,26 @@ impl BhsSession {
             script_bytecodes: self.scripts.bytecodes(),
             type_mutation_revision: state.mutation_revision(),
             type_state_dirty: state.is_dirty(),
+            type_channel13_owned: self.type_runtime().has_channel13_source(),
         }
+    }
+
+    /// Live revision-bound projection of the exact Type prefix of retail checksum channel 13.
+    pub fn projected_type_rules(&self) -> Result<ProjectedTypeRules<'_>, TypeChannel13Error> {
+        self.type_runtime().projected_type_rules()
+    }
+
+    /// Cumulative Adler-32 after the 806 Type virtual walks, before Constants/Balance/Tribes.
+    pub fn type_channel13_checkpoint(&self) -> Result<u32, TypeChannel13Error> {
+        self.type_runtime().type_channel13_checkpoint()
+    }
+
+    /// Borrow the full canonical owner, exact provenance, live revision, and admitted checkpoint.
+    /// DoNSave v6 remains red because it has no encoding/restoration path for this contract.
+    pub fn type_persistence_owner(
+        &self,
+    ) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
+        self.type_runtime().type_persistence_owner()
     }
 
     /// Execute retail step 4 and the remaining frame against the joined owners.
@@ -182,7 +242,8 @@ impl BhsSession {
         save_sim_with_scripts(&self.sim, &self.scripts)
     }
 
-    /// The partial digest remains red until the complete retail channel-13 projection exists.
+    /// Admit the existing non-retail partial Sim digest only after the live Type projection passes.
+    /// The exact Types checkpoint is exposed separately by [`Self::type_channel13_checkpoint`].
     pub fn partial_channel_digest(&self) -> Result<u64, TypeBuiltinBoundaryError> {
         self.scripts.admitted_sim_channel_digest(&self.sim)
     }

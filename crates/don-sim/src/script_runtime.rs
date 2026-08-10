@@ -332,6 +332,22 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    /// Install a pre-admitted canonical owner/runtime pair.
+    ///
+    /// `BhsSession` uses this path after joining the mutable owner to its immutable channel-13
+    /// walk source. The state-only compatibility installer above deliberately remains projection
+    /// unowned and therefore cannot pass checksum admission.
+    pub fn install_type_builtin_runtime(
+        &mut self,
+        runtime: TypeBuiltinRuntime,
+    ) -> Result<(), TypeBuiltinRuntime> {
+        if self.type_builtins.is_some() {
+            return Err(runtime);
+        }
+        self.type_builtins = Some(runtime);
+        Ok(())
+    }
+
     pub fn type_builtins(&self) -> Option<&TypeBuiltinRuntime> {
         self.type_builtins.as_ref()
     }
@@ -362,8 +378,8 @@ impl ScriptRuntime {
     }
 
     /// The opt-in checksum-shaped simulation digest with explicit external-runtime admission.
-    /// Installing the canonical type owner keeps this red until its channel-13 projection is
-    /// complete; callers cannot accidentally omit the owner merely because it is pristine.
+    /// A state-only owner remains red; a source-owned runtime reprojects its live Type prefix
+    /// before admission. Callers cannot accidentally omit the owner merely because it is pristine.
     pub fn admitted_sim_channel_digest(&self, sim: &Sim) -> Result<u64, TypeBuiltinBoundaryError> {
         self.admit_type_state_for_partial_digest()?;
         Ok(sim.channel_digest())

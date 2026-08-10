@@ -32,6 +32,8 @@ pub mod armies;
 pub mod attack_position;
 /// Exact synchronized-rules producer and immutable-backup provenance for the BHS type owner.
 pub mod bhs_type_factory;
+/// Exact fail-closed Types prefix of checksum channel 13 over the canonical mutable owner.
+pub mod bhs_type_channel13_frontier;
 /// Exact declaration gate, dispatch receipts, and persistence/checksum admission for that owner.
 pub mod bhs_type_runtime;
 /// Instruction-derived BHS type-stat transactions and their canonical owner commit boundary.
@@ -79,6 +81,9 @@ pub mod death_inctime;
 /// orders, and both branches clear `unit_masks & 0x40000`.
 pub mod defeat_cleanup;
 pub mod economy;
+/// Canonical policy-facing external Unit frame owner, including exact cloak/detection/fog
+/// projection and revision-bound target ordinals.
+pub mod external_entity_visibility_frontier;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
 pub mod fight;

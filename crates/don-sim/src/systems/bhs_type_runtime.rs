@@ -3,11 +3,17 @@
 //! [`super::bhs_type_table::TypeBuiltinState`] is the sole mutable owner.  This adapter does
 //! not copy a rule projection into the script VM: it verifies the shipped declaration identity,
 //! executes the owner method, and publishes a revision-bound receipt.  Save and checksum
-//! admission methods remain explicit and reject the external owner until their complete
-//! projections exist.  [`crate::bhs_session::BhsSession`] supplies the opaque production owner.
+//! admission methods remain explicit. DoNSave v6 still rejects the external owner; checksum
+//! admission requires the exact immutable Type walk source and reprojects the current mutation
+//! revision. [`crate::bhs_session::BhsSession`] supplies the opaque production owner.
 
 use don_bhs::{builtin, BuiltinDecl, ScriptTy, Value};
 
+use super::bhs_type_channel13_frontier::{
+    project_type_owner, InstalledTypeOwnerReceipt, ProjectedTypeRules, TypeChannel13Error,
+    TypePersistenceOwner, TypeWalkSource,
+};
+use super::bhs_type_factory::TypeBuiltinProvenance;
 use super::bhs_type_stat_frontier::{
     plan_type_stat_mutation, LeaderStatRecalcCall, TypeStatBuiltin, TypeStatFrontierError,
     TypeStatPlan,
@@ -128,18 +134,22 @@ enum OwnerCallError {
 }
 
 /// Why a larger persistence/checksum operation cannot yet consume this owner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeBuiltinBoundaryError {
     /// DoNSave v6 cannot restore the external owner or prove its synchronized rules/mod source.
     SaveOwnerUnowned { mutation_revision: u64, dirty: bool },
     /// The partial simulation digest has no complete retail `Types::walk_rules_data` projection.
     Channel13ProjectionUnowned,
+    /// The installed projection source no longer admits the live owner/revision.
+    Channel13ProjectionRejected(TypeChannel13Error),
 }
 
 /// One installed, canonical type owner plus its observable dispatch receipts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeBuiltinRuntime {
     state: TypeBuiltinState,
+    channel13_provenance: Option<TypeBuiltinProvenance>,
+    channel13_source: Option<TypeWalkSource>,
     last_receipt: Option<TypeBuiltinReceipt>,
     last_fault: Option<TypeBuiltinRuntimeError>,
 }
@@ -148,13 +158,74 @@ impl TypeBuiltinRuntime {
     pub fn new(state: TypeBuiltinState) -> Self {
         Self {
             state,
+            channel13_provenance: None,
+            channel13_source: None,
             last_receipt: None,
             last_fault: None,
         }
     }
 
+    /// Join the canonical mutable owner to its immutable normalized Type walk before scripts run.
+    ///
+    /// Construction projects the pristine owner immediately, so mismatched provenance, Strings,
+    /// relations, scalar bytes, walker bands, or source checkpoints fail before the runtime can
+    /// publish a session. Later checksum/persistence reads project again against the live mutation
+    /// revision rather than retaining a stale digest.
+    pub fn new_with_channel13(
+        state: TypeBuiltinState,
+        provenance: TypeBuiltinProvenance,
+        channel13_source: TypeWalkSource,
+    ) -> Result<Self, TypeChannel13Error> {
+        let runtime = Self {
+            state,
+            channel13_provenance: Some(provenance),
+            channel13_source: Some(channel13_source),
+            last_receipt: None,
+            last_fault: None,
+        };
+        runtime.projected_type_rules()?;
+        Ok(runtime)
+    }
+
     pub fn state(&self) -> &TypeBuiltinState {
         &self.state
+    }
+
+    pub fn has_channel13_source(&self) -> bool {
+        self.channel13_source.is_some()
+    }
+
+    /// Live revision-bound projection of the exact Type prefix of retail checksum channel 13.
+    pub fn projected_type_rules(&self) -> Result<ProjectedTypeRules<'_>, TypeChannel13Error> {
+        let provenance = self
+            .channel13_provenance
+            .ok_or(TypeChannel13Error::SourceUnowned)?;
+        let source = self
+            .channel13_source
+            .as_ref()
+            .ok_or(TypeChannel13Error::SourceUnowned)?;
+        project_type_owner(
+            &self.state,
+            InstalledTypeOwnerReceipt {
+                provenance,
+                dirty: Some(self.state.is_dirty()),
+                mutation_revision: Some(self.state.mutation_revision()),
+            },
+            source,
+        )
+    }
+
+    /// Exact Types-prefix checkpoint admitted for the current owner revision.
+    pub fn type_channel13_checkpoint(&self) -> Result<u32, TypeChannel13Error> {
+        Ok(self.projected_type_rules()?.after_types())
+    }
+
+    /// Borrowed persistence contract retaining the full owner, source identity, and live revision.
+    /// This is not an admission for DoNSave v6, whose wire format still cannot restore it.
+    pub fn type_persistence_owner(
+        &self,
+    ) -> Result<TypePersistenceOwner<'_>, TypeChannel13Error> {
+        Ok(self.projected_type_rules()?.persistence_owner())
     }
 
     pub fn last_receipt(&self) -> Option<&TypeBuiltinReceipt> {
@@ -174,9 +245,15 @@ impl TypeBuiltinRuntime {
         })
     }
 
-    /// No digest may claim this installed owner until channel 13 walks its full live projection.
+    /// Admit the partial simulation digest only after a live revision-bound Types projection.
     pub fn admit_partial_channel_digest(&self) -> Result<(), TypeBuiltinBoundaryError> {
-        Err(TypeBuiltinBoundaryError::Channel13ProjectionUnowned)
+        match self.projected_type_rules() {
+            Ok(_) => Ok(()),
+            Err(TypeChannel13Error::SourceUnowned) => {
+                Err(TypeBuiltinBoundaryError::Channel13ProjectionUnowned)
+            }
+            Err(error) => Err(TypeBuiltinBoundaryError::Channel13ProjectionRejected(error)),
+        }
     }
 
     /// Dispatch one exact global builtin declaration.  `Ok(None)` means this cohort does not own
