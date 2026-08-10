@@ -16,8 +16,10 @@ game:
 - `STOP` asks an active retail callback to restore the five original bytes before acknowledging
   park. A dormant-process fallback suspends every owned thread and refuses on any enumeration,
   suspension, context, or byte-write failure. Deleting `STOP` re-arms a successfully parked DLL.
-- A mapped generation is never overwritten or unloaded. `upgrade` parks it and loads a uniquely
-  named next generation with an independent request/event/STOP directory in the same live PID.
+- A mapped generation is never overwritten. `upgrade` parks it, submits the exact
+  attempt/epoch/process token to `RetailControlPrepareDetach`, requires a distinct
+  `detach-ready` record, unloads it through the hash-bound x86 injector, and only then loads a
+  uniquely named next generation. Any ambiguous detach ends the attempt and requires a fresh PID.
 - `trajectory` drives one bounded retail move, records every distinct simulation frame, restores
   the initial paused state, writes normalized JSON, and parks its hook on every exit path.
 - `observe-player` publishes a coherence-gated, fog-safe observation of only the unique human
@@ -89,6 +91,15 @@ python3 tools/retail-control/retailctl.py marshal-loop --apply --decisions 1 \
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before
 `send` can complete. See `docs/tooling/live-control.md` for the protocol and evidence.
+
+`detach --generation NAME` is an explicit terminal operation for one already-parked controller.
+Before its sole remote attempt, the host writes a create-only `detach-attempt.json` bound to the
+retail process creation time, controller image/base/hash, and the ready record's attempt/epoch.
+Success additionally requires an atomic `detach-ready` publication, original external hook bytes,
+and an absent module before create-only `detach.json` is accepted. A failure after the preintent is
+never retried in that PID. This controller lifecycle is separate from the NetSys experiment:
+`DON_NET_LOAD_ONLY=1` does not inject `retail_control.dll`, so Gen-7 load-only neither needs nor
+exercises controller detach.
 
 ## Resumable owned Friend Game experiment
 

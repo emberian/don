@@ -3445,7 +3445,7 @@ __declspec(dllexport) DWORD WINAPI RetailControlPrepareDetach(LPVOID parameter) 
         return 0;
     }
     InterlockedExchange(&g_detach_prepared, 1);
-    if (!publish_ready("parked")) {
+    if (!publish_ready("detach-ready")) {
         InterlockedExchange(&g_detach_prepared, 0);
         quarantine_controller(QUARANTINE_READY_IO);
         return 0;

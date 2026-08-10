@@ -1,0 +1,3 @@
+LIBRARY retail_control
+EXPORTS
+    RetailControlPrepareDetach=RetailControlPrepareDetach@4

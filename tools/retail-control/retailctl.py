@@ -252,6 +252,17 @@ def process_pids() -> tuple[list[int], str]:
     return sorted({int(value) for value in values}), out
 
 
+def process_creation_token(target_pid: int) -> str:
+    output = guest_ps(
+        f"$p = Get-Process -Id {target_pid} -ErrorAction Stop; "
+        "'0x{0:x16}' -f $p.StartTime.ToUniversalTime().ToFileTimeUtc()"
+    )
+    matches = re.findall(r"(?<![0-9A-Fa-f])0x[0-9A-Fa-f]{16}(?![0-9A-Fa-f])", output)
+    if len(matches) != 1:
+        raise SystemExit("REFUSING ambiguous retail process creation identity")
+    return matches[0].lower()
+
+
 class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
@@ -730,6 +741,78 @@ def parse_inject_output(output: str, returncode: int, target_pid: int,
     }
 
 
+def parse_detach_output(output: str, returncode: int, target_pid: int,
+                        dll_name: str, dll_path: str, module_base: int,
+                        module_size: int, attempt: int, epoch: int,
+                        expected_sha256: str) -> dict:
+    records = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line.startswith("protocol=donject.v2 "):
+            continue
+        fields = parse_donject_fields(line)
+        if (fields is not None and fields.get("protocol") == "donject.v2" and
+                fields.get("command") == "detach"):
+            records.append(fields)
+    if returncode != 0:
+        return {
+            "status": "indeterminate",
+            "detail": output,
+            "restart_required": True,
+        }
+    if len(records) != 1:
+        return {
+            "status": "error",
+            "detail": "detach success record is missing or ambiguous",
+            "restart_required": True,
+        }
+    fields = records[0]
+    expected_fields = {
+        "protocol", "command", "status", "state", "pid", "module_name",
+        "module_path", "module_base", "module_size", "attempt", "epoch",
+        "sha256", "prepare_exit", "unload_exit", "restart_required",
+    }
+    try:
+        observed_pid = int(fields.get("pid", ""))
+        observed_base = int(fields.get("module_base", ""), 16)
+        observed_size = int(fields.get("module_size", ""), 16)
+        observed_attempt = int(fields.get("attempt", ""))
+        observed_epoch = int(fields.get("epoch", ""))
+    except ValueError:
+        return {
+            "status": "error",
+            "detail": "detach success record has invalid numeric fields",
+            "restart_required": True,
+        }
+    if (set(fields) != expected_fields or fields.get("status") != "ok" or
+            fields.get("state") != "unloaded" or observed_pid != target_pid or
+            fields.get("module_name", "").lower() != dll_name.lower() or
+            normalize_windows_path(fields.get("module_path", "")) !=
+            normalize_windows_path(dll_path) or
+            not re.fullmatch(r"0x[0-9A-Fa-f]{8}", fields.get("module_base", "")) or
+            not re.fullmatch(r"0x[0-9A-Fa-f]{8}", fields.get("module_size", "")) or
+            observed_base != module_base or observed_size != module_size or
+            observed_attempt != attempt or observed_epoch != epoch or
+            fields.get("sha256", "").lower() != expected_sha256.lower() or
+            fields.get("prepare_exit") != "1" or fields.get("unload_exit") != "0" or
+            fields.get("restart_required") != "0"):
+        return {
+            "status": "error",
+            "detail": "detach success record does not match the authorized token",
+            "restart_required": True,
+        }
+    return {
+        "status": "unloaded",
+        "module_base": observed_base,
+        "module_size": observed_size,
+        "attempt": observed_attempt,
+        "epoch": observed_epoch,
+        "sha256": fields["sha256"].lower(),
+        "record": fields,
+        "restart_required": False,
+    }
+
+
 def parse_hook_peek_output(output: str) -> dict:
     header_matches: list[dict[str, str]] = []
     byte_matches = []
@@ -929,7 +1012,8 @@ def controller_inventory(target_pid: int, extra_generation: str | None = None) -
                 ready_issues.append("ready pid is missing or invalid")
             state = values.get("state")
             if not isinstance(state, str) or not (
-                    state in {"armed", "parked"} or state.startswith("refused")):
+                    state in {"armed", "parked", "detach-ready"} or
+                    state.startswith("refused")):
                 ready_issues.append("ready state is missing or invalid")
         else:
             ready_pid = None
@@ -947,10 +1031,15 @@ def controller_inventory(target_pid: int, extra_generation: str | None = None) -
             elif state == "armed":
                 armed_mapped.append(row["generation"])
         elif ready["present"] and ready_pid == target_pid:
-            row_issues.extend(ready_issues)
-            row_issues.append(
-                f"current-pid {state or 'invalid'} ready record has no matching mapped module"
-            )
+            if state == "detach-ready":
+                row_issues.extend(
+                    terminal_detach_ready_errors(ready, target_pid, row["root"])
+                )
+            else:
+                row_issues.extend(ready_issues)
+                row_issues.append(
+                    f"current-pid {state or 'invalid'} ready record has no matching mapped module"
+                )
         for name in row["dlls"]:
             normalized_name = name.lower()
             if normalized_name != expected_name and probes.get(normalized_name, {}).get(
@@ -1303,6 +1392,35 @@ def enforce_generation_budget(target_pid: int, generation: str,
     return inventory
 
 
+def preflight_detaching_upgrade(target_pid: int, from_generation: str,
+                                generation: str) -> dict:
+    from_generation = validate_generation(from_generation)
+    generation = validate_generation(generation)
+    if from_generation.lower() == generation.lower():
+        raise SystemExit("REFUSING upgrade that reuses the retiring generation")
+    inventory = controller_inventory(target_pid, generation)
+    if (not inventory["complete"] or inventory["issues"] or
+            inventory["mapped_generation_count"] != 1 or
+            inventory["hook_owner"] != from_generation):
+        detail = "; ".join(inventory["issues"]) or (
+            f"mapped={inventory['mapped_generation_count']} "
+            f"hook_owner={inventory['hook_owner']!r}"
+        )
+        raise SystemExit("REFUSING upgrade before exact detach preflight: " + detail)
+    candidates = [
+        row for row in inventory["generations"]
+        if row["generation"].lower() == generation.lower()
+    ]
+    if len(candidates) != 1:
+        raise SystemExit("REFUSING upgrade with ambiguous destination generation")
+    destination = candidates[0]
+    if (destination["dlls"] or destination["downloads"] or
+            destination["ready"]["present"] or
+            destination["module"]["status"] != "absent"):
+        raise SystemExit("REFUSING upgrade into a non-empty immutable generation root")
+    return inventory
+
+
 def ready_identity_errors(record: dict, target_pid: int, root: str) -> list[str]:
     errors = list(record["errors"])
     values = record["values"]
@@ -1328,6 +1446,150 @@ def ready_identity_errors(record: dict, target_pid: int, root: str) -> list[str]
     if base is None or call != base + TURN_CALL_RVA or turn != base + TURN_DO_FRAME_RVA:
         errors.append("ready executable addresses are missing or inconsistent")
     return errors
+
+
+def _ready_u32(values: dict[str, str], key: str) -> int | None:
+    text = values.get(key, "")
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if 1 <= value <= 0xFFFFFFFF else None
+
+
+def terminal_detach_ready_errors(record: dict, target_pid: int,
+                                 root: str) -> list[str]:
+    """Validate the self-contained terminal receipt after its DLL is absent."""
+    errors = ready_identity_errors(record, target_pid, root)
+    values = record["values"]
+    required = {
+        "state": "detach-ready",
+        "protocol": "don.retail-control.v2",
+        "lifecycle": "detach-ready",
+        "quarantine_reason": "none",
+        "dispatch_gate": "-1",
+        "fence_requested": "1",
+        "detach_prepared": "1",
+        "trampoline_released": "1",
+    }
+    for key, expected in required.items():
+        if values.get(key) != expected:
+            errors.append(f"terminal detach-ready {key} is not exact")
+    for key in ("attempt", "epoch", "ready_revision", "worker_tid"):
+        if _ready_u32(values, key) is None:
+            errors.append(f"terminal detach-ready {key} is missing or invalid")
+    controller_base = values.get("controller_base", "")
+    if (not re.fullmatch(r"0x[0-9A-Fa-f]{8}", controller_base) or
+            int(controller_base, 16) == 0):
+        errors.append("terminal detach-ready controller base is missing or invalid")
+    if not re.fullmatch(
+            r"0x[0-9A-Fa-f]{16}", values.get("process_create_time", "")):
+        errors.append("terminal detach-ready process creation token is missing or invalid")
+    return errors
+
+
+def parked_detach_token(record: dict, target_pid: int, root: str,
+                        module: dict) -> dict:
+    errors = ready_identity_errors(record, target_pid, root)
+    values = record["values"]
+    attempt = _ready_u32(values, "attempt")
+    epoch = _ready_u32(values, "epoch")
+    revision = _ready_u32(values, "ready_revision")
+    worker_tid = _ready_u32(values, "worker_tid")
+    process_create_time = values.get("process_create_time", "")
+    controller_text = values.get("controller_base", "")
+    controller_base = (
+        int(controller_text, 16)
+        if re.fullmatch(r"0x[0-9A-Fa-f]{8}", controller_text) else None
+    )
+    required = {
+        "state": "parked",
+        "protocol": "don.retail-control.v2",
+        "lifecycle": "parked",
+        "quarantine_reason": "none",
+        "dispatch_gate": "-1",
+        "fence_requested": "1",
+        "detach_prepared": "0",
+        "trampoline_released": "0",
+    }
+    for key, expected in required.items():
+        if values.get(key) != expected:
+            errors.append(f"ready {key} is not exact for parked detach")
+    if controller_base != module.get("base"):
+        errors.append("ready controller base does not match mapped module")
+    if attempt is None:
+        errors.append("ready attempt is missing or invalid")
+    if epoch is None:
+        errors.append("ready epoch is missing or invalid")
+    if revision is None:
+        errors.append("ready revision is missing or invalid")
+    if worker_tid is None:
+        errors.append("ready worker tid is missing or invalid")
+    if not re.fullmatch(r"0x[0-9A-Fa-f]{16}", process_create_time):
+        errors.append("ready process creation token is missing or invalid")
+    if errors:
+        raise SystemExit("REFUSING detach without one exact parked token: " + "; ".join(errors))
+    return {
+        "pid": target_pid,
+        "process_create_time": process_create_time.lower(),
+        "root": root,
+        "controller_base": controller_base,
+        "module_size": module["size"],
+        "attempt": attempt,
+        "epoch": epoch,
+        "ready_revision": revision,
+        "worker_tid": worker_tid,
+    }
+
+
+def validate_detach_ready(record: dict, token: dict, root: str) -> dict:
+    errors = ready_identity_errors(record, token["pid"], root)
+    values = record["values"]
+    controller_text = values.get("controller_base", "")
+    controller_base = (
+        int(controller_text, 16)
+        if re.fullmatch(r"0x[0-9A-Fa-f]{8}", controller_text) else None
+    )
+    attempt = _ready_u32(values, "attempt")
+    epoch = _ready_u32(values, "epoch")
+    revision = _ready_u32(values, "ready_revision")
+    required = {
+        "state": "detach-ready",
+        "protocol": "don.retail-control.v2",
+        "lifecycle": "detach-ready",
+        "quarantine_reason": "none",
+        "dispatch_gate": "-1",
+        "fence_requested": "1",
+        "detach_prepared": "1",
+        "trampoline_released": "1",
+    }
+    for key, expected in required.items():
+        if values.get(key) != expected:
+            errors.append(f"ready {key} is not exact after detach preparation")
+    if controller_base != token["controller_base"]:
+        errors.append("detach-ready controller base changed")
+    if attempt != token["attempt"] or epoch != token["epoch"]:
+        errors.append("detach-ready attempt/epoch changed")
+    if revision is None or revision <= token["ready_revision"]:
+        errors.append("detach-ready revision did not advance")
+    if values.get("process_create_time", "").lower() != token["process_create_time"]:
+        errors.append("detach-ready process creation token changed")
+    if _ready_u32(values, "worker_tid") != token["worker_tid"]:
+        errors.append("detach-ready worker identity changed")
+    if errors:
+        raise SystemExit(
+            "INDETERMINATE detach-ready evidence; fresh retail process required: " +
+            "; ".join(errors)
+        )
+    return {
+        "state": "detach-ready",
+        "lifecycle": "detach-ready",
+        "ready_revision": revision,
+        "attempt": attempt,
+        "epoch": epoch,
+        "detach_prepared": True,
+        "trampoline_released": True,
+    }
 
 
 def read_ready(root: str) -> tuple[str, dict]:
@@ -1386,6 +1648,11 @@ def deploy(target_pid: int, port: int, generation: str,
         prepare_injector(injector_port)
     preflight(target_pid)
     enforce_generation_budget(target_pid, generation, max_generations)
+    if (guest_file_record(f"{root}\\detach-attempt.json")["present"] or
+            guest_file_record(f"{root}\\detach.json")["present"]):
+        raise SystemExit(
+            f"REFUSING reuse of retired controller generation {generation!r}"
+        )
     mapped = loaded_module(target_pid, dll_name)
     if mapped:
         raise SystemExit(
@@ -3899,8 +4166,8 @@ def status(root: str) -> None:
                     check=False))
 
 
-def stop(root: str) -> None:
-    target_pid = pid()
+def stop(root: str, target_pid: int | None = None) -> None:
+    target_pid = target_pid or pid()
     guest_cmd(f'(echo stop)>"{root}\\STOP"')
     ready = wait_for_ready_state(root, target_pid, "parked", 8.0)
     hook = hook_call_state(target_pid)
@@ -3910,6 +4177,121 @@ def stop(root: str) -> None:
             f"{hook['status']}"
         )
     print(ready)
+
+
+def detach_controller(root: str, injector_port: int = 18081,
+                      prepare: bool = True,
+                      target_pid: int | None = None) -> dict:
+    if prepare:
+        prepare_injector(injector_port)
+    target_pid = target_pid or pid()
+    preflight(target_pid)
+    root_name = root.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
+    generation = generation_from_root_name(root_name)
+    if generation is None:
+        raise SystemExit(f"REFUSING detach of unrecognized controller root {root!r}")
+    dll_name = generation_dll(generation)
+    dll_path = f"{root}\\{dll_name}"
+    inventory = controller_inventory(target_pid)
+    if (not inventory["complete"] or inventory["issues"] or
+            inventory["mapped_generation_count"] != 1 or
+            inventory["hook"]["status"] != "original"):
+        detail = "; ".join(inventory["issues"]) or (
+            f"mapped={inventory['mapped_generation_count']} "
+            f"hook={inventory['hook']['status']}"
+        )
+        raise SystemExit(
+            "REFUSING detach outside one exact parked controller generation: " + detail
+        )
+    module = module_probe(target_pid, dll_name)
+    if (module["status"] != "mapped" or
+            normalize_windows_path(module.get("module_path", "")) !=
+            normalize_windows_path(dll_path)):
+        raise SystemExit("REFUSING detach without the exact mapped generation module")
+    dll_sha256 = guest_sha256(dll_path)
+    if dll_sha256 is None:
+        raise SystemExit("REFUSING detach without one exact controller DLL hash")
+    ready_raw, ready_record = read_ready(root)
+    token = parked_detach_token(ready_record, target_pid, root, module)
+    if process_creation_token(target_pid) != token["process_create_time"]:
+        raise SystemExit("REFUSING detach after retail process creation identity drift")
+    attempt_path = f"{root}\\detach-attempt.json"
+    receipt_path = f"{root}\\detach.json"
+    if guest_file_record(attempt_path)["present"] or guest_file_record(receipt_path)["present"]:
+        raise SystemExit(
+            "REFUSING repeated detach attempt in this retail process; start a fresh process"
+        )
+    preintent = {
+        "schema": "don.retail-control-detach-attempt.v1",
+        "state": "remote-prepare-authorized",
+        "one_attempt": True,
+        "fresh_process_on_failure": True,
+        "generation": generation,
+        "root": root,
+        "pid": target_pid,
+        "process_create_time": token["process_create_time"],
+        "module": {
+            "name": dll_name,
+            "path": dll_path,
+            "base": f"0x{module['base']:08x}",
+            "size": module["size"],
+            "sha256": dll_sha256,
+        },
+        "token": {
+            key: token[key]
+            for key in ("attempt", "epoch", "ready_revision", "worker_tid")
+        },
+        "parked_ready_sha256": hashlib.sha256(ready_raw.encode("utf-8")).hexdigest(),
+        "hook": inventory["hook"],
+    }
+    preintent_bytes = (json.dumps(preintent, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    preintent_identity = guest_write_bytes_create_only(attempt_path, preintent_bytes)
+    command = (
+        f'"{INJECTOR}" detach {target_pid} "{dll_path}" {dll_sha256} '
+        f'0x{module["base"]:08x} {token["attempt"]} {token["epoch"]}'
+    )
+    returncode, output = guest_cmd_status(command)
+    print(output)
+    result = parse_detach_output(
+        output, returncode, target_pid, dll_name, dll_path,
+        module["base"], module["size"], token["attempt"], token["epoch"],
+        dll_sha256,
+    )
+    if result["status"] != "unloaded":
+        raise SystemExit(
+            "INDETERMINATE controller detach; do not retry or rearm this process; "
+            "start a fresh retail process\n" + result["detail"]
+        )
+    post_raw, post_record = read_ready(root)
+    post = validate_detach_ready(post_record, token, root)
+    post_module = module_probe(target_pid, dll_name)
+    hook = hook_call_state(target_pid)
+    if post_module["status"] != "absent" or hook["status"] != "original":
+        raise SystemExit(
+            "INDETERMINATE controller detach postcondition; fresh retail process required"
+        )
+    receipt = {
+        "schema": "don.retail-control-detach.v1",
+        "state": "unloaded",
+        "one_attempt": True,
+        "fresh_process_on_failure": True,
+        "generation": generation,
+        "root": root,
+        "pid": target_pid,
+        "process_create_time": token["process_create_time"],
+        "module": preintent["module"],
+        "token": preintent["token"],
+        "preintent": preintent_identity,
+        "prepare": post,
+        "detach_ready_sha256": hashlib.sha256(post_raw.encode("utf-8")).hexdigest(),
+        "injector": result["record"],
+        "module_postcondition": "absent",
+        "hook_postcondition": hook,
+    }
+    receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    receipt["artifact"] = guest_write_bytes_create_only(receipt_path, receipt_bytes)
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    return receipt
 
 
 def rearm(root: str) -> None:
@@ -4402,6 +4784,43 @@ def guest_write_bytes(path: str, data: bytes) -> None:
             f'certutil.exe -f -decode "{encoded_temp}" "{decoded_temp}" >nul && '
             f'move /y "{decoded_temp}" "{path}" >nul'
         )
+    finally:
+        guest_cmd(
+            f'del /q "{encoded_temp}" "{decoded_temp}" 2>nul & exit /b 0',
+            check=False,
+        )
+
+
+def guest_write_bytes_create_only(path: str, data: bytes) -> dict:
+    encoded = base64.b64encode(data).decode("ascii")
+    if not encoded or '"' in path or any(char in path for char in "\r\n"):
+        raise ValueError("guest create-only destination or payload is invalid")
+    suffix = f".don-create-{os.getpid()}"
+    encoded_temp = path + suffix + ".b64"
+    decoded_temp = path + suffix + ".tmp"
+    if guest_file_record(path)["present"]:
+        raise SystemExit(f"REFUSING to replace existing guest artifact {path}")
+    if guest_file_record(encoded_temp)["present"] or guest_file_record(decoded_temp)["present"]:
+        raise SystemExit("REFUSING orphaned create-only guest temporary artifact")
+    try:
+        for offset in range(0, len(encoded), 2048):
+            redirect = ">" if offset == 0 else ">>"
+            guest_cmd(f'{redirect}"{encoded_temp}" echo {encoded[offset:offset + 2048]}')
+        guest_cmd(f'certutil.exe -f -decode "{encoded_temp}" "{decoded_temp}" >nul')
+        guest_ps_encoded(
+            "$ErrorActionPreference = 'Stop'\n"
+            f"$source = {ps_literal(decoded_temp)}\n"
+            f"$destination = {ps_literal(path)}\n"
+            "if (Test-Path -LiteralPath $destination) { "
+            "throw 'create-only destination already exists' }\n"
+            "[IO.File]::Move($source, $destination)"
+        )
+        record = guest_file_record(path)
+        digest = hashlib.sha256(data).hexdigest()
+        if (not record["present"] or record.get("size") != len(data) or
+                record.get("sha256") != digest):
+            raise SystemExit("create-only guest artifact identity changed")
+        return {key: record[key] for key in ("path", "size", "sha256")}
     finally:
         guest_cmd(
             f'del /q "{encoded_temp}" "{decoded_temp}" 2>nul & exit /b 0',
@@ -6807,6 +7226,13 @@ def main() -> None:
     add_generation(pq)
     stop_parser = sub.add_parser("stop")
     add_generation(stop_parser)
+    detach_parser = sub.add_parser(
+        "detach",
+        help=("prepare and unload one exact parked controller generation; any failure "
+              "requires a fresh retail process"),
+    )
+    detach_parser.add_argument("--injector-port", type=int, default=18081)
+    add_generation(detach_parser)
     rearm_parser = sub.add_parser("rearm")
     add_generation(rearm_parser)
     a = ap.parse_args()
@@ -6838,10 +7264,12 @@ def main() -> None:
     elif a.action == "upgrade":
         target_pid = a.pid or pid()
         prepare_injector(a.injector_port)
-        enforce_generation_budget(
-            target_pid, a.generation, a.max_generations, require_unhooked=False
+        preflight_detaching_upgrade(target_pid, a.from_generation, a.generation)
+        stop(generation_root(a.from_generation), target_pid)
+        detach_controller(
+            generation_root(a.from_generation), a.injector_port, prepare=False,
+            target_pid=target_pid,
         )
-        stop(generation_root(a.from_generation))
         deploy(
             target_pid, a.port, a.generation, a.max_generations,
             a.injector_port, prepare=False,
@@ -6892,6 +7320,9 @@ def main() -> None:
             a.decisions, a.frames_per_decision, a.apply,
         )
     elif a.action == "stop": stop(generation_root(a.generation))
+    elif a.action == "detach": detach_controller(
+        generation_root(a.generation), a.injector_port
+    )
     elif a.action == "rearm": rearm(generation_root(a.generation))
 
 

@@ -296,6 +296,37 @@ class RetailCtlTests(unittest.TestCase):
         self.assertEqual(result["status"], "indeterminate")
         self.assertTrue(result["restart_required"])
 
+    def test_detach_machine_record_is_exactly_token_bound(self):
+        name = "retail_control-tactical-v21.dll"
+        path = (r"C:\Users\Public\don-retail-control-tactical-v21"
+                r"\retail_control-tactical-v21.dll")
+        digest = "a" * 64
+        record = (
+            "protocol=donject.v2 command=detach status=ok state=unloaded "
+            f'pid=12324 module_name="{name}" module_path="{path}" '
+            "module_base=0x6AF00000 module_size=0x00046000 "
+            f"attempt=7 epoch=11 sha256={digest} prepare_exit=1 unload_exit=0 "
+            "restart_required=0"
+        )
+        parsed = retailctl.parse_detach_output(
+            record, 0, 12324, name, path, 0x6AF00000, 0x46000, 7, 11, digest
+        )
+        self.assertEqual(parsed["status"], "unloaded")
+        self.assertFalse(parsed["restart_required"])
+        tampered = record.replace("epoch=11", "epoch=12")
+        self.assertEqual(
+            retailctl.parse_detach_output(
+                tampered, 0, 12324, name, path, 0x6AF00000, 0x46000, 7, 11,
+                digest,
+            )["status"],
+            "error",
+        )
+        self.assertTrue(
+            retailctl.parse_detach_output(
+                "detach: FAILED stage=prepare-exit restart_required=1", 41,
+                12324, name, path, 0x6AF00000, 0x46000, 7, 11, digest,
+            )["restart_required"]
+        )
     def test_deployed_generation_capture_rejects_marker_and_ready_noise(self):
         payload = [{
             "root_name": "don-retail-control-tactical-v21",
@@ -371,6 +402,135 @@ class RetailCtlTests(unittest.TestCase):
         torn = retailctl.parse_ready_record(raw + "pid=7804\n")
         self.assertTrue(torn["errors"])
 
+    def test_detach_ready_token_requires_exact_lifecycle_and_advancing_revision(self):
+        root = r"C:\Users\Public\don-retail-control-tactical-v21"
+        common = (
+            f"pid=7804\nroot={root}\nbase=0x00d60000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+            "protocol=don.retail-control.v2\nquarantine_reason=none\n"
+            "process_create_time=0x0123456789abcdef\n"
+            "controller_base=0x6af00000\nattempt=7\nepoch=11\nworker_tid=99\n"
+            "dispatch_gate=-1\nfence_requested=1\n"
+        )
+        parked = retailctl.parse_ready_record(
+            "state=parked\nlifecycle=parked\nready_revision=4\n"
+            "detach_prepared=0\ntrampoline_released=0\n" + common
+        )
+        token = retailctl.parked_detach_token(
+            parked, 7804, root, {"base": 0x6AF00000, "size": 0x46000}
+        )
+        self.assertEqual((token["attempt"], token["epoch"]), (7, 11))
+        prepared = retailctl.parse_ready_record(
+            "state=detach-ready\nlifecycle=detach-ready\nready_revision=5\n"
+            "detach_prepared=1\ntrampoline_released=1\n" + common
+        )
+        self.assertTrue(
+            retailctl.validate_detach_ready(prepared, token, root)["detach_prepared"]
+        )
+        stale = retailctl.parse_ready_record(
+            "state=detach-ready\nlifecycle=detach-ready\nready_revision=4\n"
+            "detach_prepared=1\ntrampoline_released=1\n" + common
+        )
+        with self.assertRaisesRegex(SystemExit, "revision did not advance"):
+            retailctl.validate_detach_ready(stale, token, root)
+
+    def test_controller_detach_persists_preintent_and_refuses_any_retry_on_failure(self):
+        root = r"C:\Users\Public\don-retail-control-tactical-v21"
+        name = "retail_control-tactical-v21.dll"
+        path = root + "\\" + name
+        digest = "a" * 64
+        common = (
+            f"pid=12324\nroot={root}\nbase=0x00d60000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+            "protocol=don.retail-control.v2\nquarantine_reason=none\n"
+            "process_create_time=0x0123456789abcdef\n"
+            "controller_base=0x6af00000\nattempt=7\nepoch=11\nworker_tid=99\n"
+            "dispatch_gate=-1\nfence_requested=1\n"
+        )
+        parked_raw = (
+            "state=parked\nlifecycle=parked\nready_revision=4\n"
+            "detach_prepared=0\ntrampoline_released=0\n" + common
+        )
+        prepared_raw = (
+            "state=detach-ready\nlifecycle=detach-ready\nready_revision=5\n"
+            "detach_prepared=1\ntrampoline_released=1\n" + common
+        )
+        mapped = {
+            "status": "mapped", "base": 0x6AF00000, "size": 0x46000,
+            "module_path": path,
+        }
+        inventory = {
+            "complete": True, "issues": [], "mapped_generation_count": 1,
+            "hook": {"status": "original"},
+        }
+        success = (
+            "protocol=donject.v2 command=detach status=ok state=unloaded "
+            f'pid=12324 module_name="{name}" module_path="{path}" '
+            "module_base=0x6AF00000 module_size=0x00046000 "
+            f"attempt=7 epoch=11 sha256={digest} prepare_exit=1 unload_exit=0 "
+            "restart_required=0"
+        )
+        created = []
+
+        def create_only(destination, data):
+            created.append((destination, json.loads(data)))
+            return {"path": destination, "size": len(data),
+                    "sha256": retailctl.hashlib.sha256(data).hexdigest()}
+
+        with (
+            mock.patch.object(retailctl, "pid", return_value=12324),
+            mock.patch.object(retailctl, "preflight"),
+            mock.patch.object(retailctl, "controller_inventory", return_value=inventory),
+            mock.patch.object(retailctl, "module_probe",
+                              side_effect=[mapped, {"status": "absent"}]),
+            mock.patch.object(retailctl, "guest_sha256", return_value=digest),
+            mock.patch.object(retailctl, "process_creation_token",
+                              return_value="0x0123456789abcdef"),
+            mock.patch.object(retailctl, "read_ready", side_effect=[
+                (parked_raw, retailctl.parse_ready_record(parked_raw)),
+                (prepared_raw, retailctl.parse_ready_record(prepared_raw)),
+            ]),
+            mock.patch.object(retailctl, "guest_file_record",
+                              return_value={"present": False}),
+            mock.patch.object(retailctl, "guest_write_bytes_create_only",
+                              side_effect=create_only),
+            mock.patch.object(retailctl, "guest_cmd_status", return_value=(0, success)),
+            mock.patch.object(retailctl, "hook_call_state",
+                              return_value={"status": "original"}),
+            mock.patch("builtins.print"),
+        ):
+            receipt = retailctl.detach_controller(root, prepare=False)
+        self.assertEqual(receipt["state"], "unloaded")
+        self.assertEqual([item[1]["schema"] for item in created], [
+            "don.retail-control-detach-attempt.v1",
+            "don.retail-control-detach.v1",
+        ])
+
+        created.clear()
+        with (
+            mock.patch.object(retailctl, "pid", return_value=12324),
+            mock.patch.object(retailctl, "preflight"),
+            mock.patch.object(retailctl, "controller_inventory", return_value=inventory),
+            mock.patch.object(retailctl, "module_probe", return_value=mapped),
+            mock.patch.object(retailctl, "guest_sha256", return_value=digest),
+            mock.patch.object(retailctl, "process_creation_token",
+                              return_value="0x0123456789abcdef"),
+            mock.patch.object(retailctl, "read_ready", return_value=(
+                parked_raw, retailctl.parse_ready_record(parked_raw)
+            )),
+            mock.patch.object(retailctl, "guest_file_record",
+                              return_value={"present": False}),
+            mock.patch.object(retailctl, "guest_write_bytes_create_only",
+                              side_effect=create_only),
+            mock.patch.object(retailctl, "guest_cmd_status", return_value=(
+                41, "detach: FAILED stage=prepare-exit restart_required=1"
+            )),
+            mock.patch("builtins.print"),
+        ):
+            with self.assertRaisesRegex(SystemExit, "do not retry"):
+                retailctl.detach_controller(root, prepare=False)
+        self.assertEqual(len(created), 1)
+
     def test_donject_machine_parser_preserves_canonical_windows_paths(self):
         path = r"\\?\C:\Users\Public\a generation\controller.dll"
         fields = retailctl.parse_donject_fields(
@@ -436,6 +596,28 @@ class RetailCtlTests(unittest.TestCase):
         with mock.patch.object(retailctl, "controller_inventory", return_value=inventory):
             with self.assertRaisesRegex(SystemExit, "configured maximum 4"):
                 retailctl.enforce_generation_budget(12324, "next", 4)
+
+    def test_detaching_upgrade_requires_one_owned_source_and_empty_destination(self):
+        destination = {
+            "generation": "next", "dlls": [], "downloads": [],
+            "ready": {"present": False}, "module": {"status": "absent"},
+        }
+        exact = {
+            "complete": True, "issues": [], "mapped_generation_count": 1,
+            "hook_owner": "old", "generations": [destination],
+        }
+        with mock.patch.object(retailctl, "controller_inventory", return_value=exact):
+            self.assertIs(
+                retailctl.preflight_detaching_upgrade(12324, "old", "next"), exact
+            )
+        dirty = copy.deepcopy(exact)
+        dirty["generations"][0]["dlls"] = ["retail_control-next.dll"]
+        with mock.patch.object(retailctl, "controller_inventory", return_value=dirty):
+            with self.assertRaisesRegex(SystemExit, "non-empty"):
+                retailctl.preflight_detaching_upgrade(12324, "old", "next")
+        with mock.patch.object(retailctl, "controller_inventory", return_value=exact):
+            with self.assertRaisesRegex(SystemExit, "reuses"):
+                retailctl.preflight_detaching_upgrade(12324, "old", "OLD")
 
     def test_deployment_refuses_incomplete_inventory_and_an_owned_hook(self):
         incomplete = {
@@ -515,6 +697,51 @@ class RetailCtlTests(unittest.TestCase):
             inventory = retailctl.controller_inventory(7804)
         self.assertEqual(inventory["issues"], [])
         self.assertTrue(inventory["complete"])
+
+    def test_inventory_requires_exact_unmapped_detach_ready_terminal_record(self):
+        root = retailctl.generation_root("retired-v1")
+        ready_text = (
+            "state=detach-ready\nprotocol=don.retail-control.v2\n"
+            "lifecycle=detach-ready\nquarantine_reason=none\n"
+            f"pid=7804\nroot={root}\nbase=0x00d60000\n"
+            "process_create_time=0x01dc123456789abc\n"
+            "controller_base=0x6af00000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+            "attempt=3\nepoch=7\nready_revision=5\nworker_tid=91\n"
+            "dispatch_gate=-1\nfence_requested=1\ndetach_prepared=1\n"
+            "trampoline_released=1\n"
+        )
+
+        def inventory_for(raw):
+            row = {
+                "generation": "retired-v1",
+                "root": root,
+                "expected_dll": retailctl.generation_dll("retired-v1"),
+                "dlls": [retailctl.generation_dll("retired-v1")],
+                "downloads": [],
+                "ready": retailctl.parse_ready_record(raw),
+            }
+            with (
+                mock.patch.object(
+                    retailctl, "deployed_generations", return_value=([row], [])
+                ),
+                mock.patch.object(
+                    retailctl, "remote_modules",
+                    return_value={"status": "ok", "pid": 7804, "modules": []},
+                ),
+                mock.patch.object(
+                    retailctl, "hook_call_state", return_value={"status": "original"}
+                ),
+            ):
+                return retailctl.controller_inventory(7804)
+
+        exact = inventory_for(ready_text)
+        self.assertEqual(exact["issues"], [])
+        malformed = inventory_for(ready_text.replace("detach_prepared=1", "detach_prepared=0"))
+        self.assertIn(
+            "generation retired-v1: terminal detach-ready detach_prepared is not exact",
+            malformed["issues"],
+        )
 
     def test_wer_diagnostics_require_both_scoped_views_full_dumps_and_free_space(self):
         views = [{

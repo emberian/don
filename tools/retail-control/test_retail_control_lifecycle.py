@@ -75,6 +75,18 @@ class RetailControlLifecycleTests(unittest.TestCase):
         self.assertRegex(SOURCE, r"#define PACKAGE_CAP\s+0x201u")
         self.assertIn("Random::get(0,2) at 0x00a39d70 is half-open", SOURCE)
 
+    def test_detach_export_publishes_a_distinct_terminal_transition(self):
+        detach = section(
+            "__declspec(dllexport) DWORD WINAPI RetailControlPrepareDetach",
+            "BOOL WINAPI DllMain",
+        )
+        self.assertIn("request.attempt", detach)
+        self.assertIn("request.epoch", detach)
+        self.assertIn("detach_constraints_hold_at(RC_LIFECYCLE_PARKED)", detach)
+        self.assertIn("transition_lifecycle(RC_LIFECYCLE_DETACH_READY)", detach)
+        self.assertIn('publish_ready("detach-ready")', detach)
+        self.assertNotIn('publish_ready("parked")', detach)
+
     def test_network_observation_is_post_only_and_read_only(self):
         callback = section("static void __cdecl on_turn_frame", "static void cancel_main_thread_work")
         dispatch = section("static int dispatch", "static void trace_tick")

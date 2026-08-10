@@ -3,6 +3,7 @@
  *
  *   donject.exe base <pid> <module.exe>
  *   donject.exe inject <pid> <dll path> <expected-sha256>
+ *   donject.exe detach <pid> <dll path> <expected-sha256> <base> <attempt> <epoch>
  *   donject.exe threads <pid>
  *   donject.exe chain <pid> <module.exe> <rva> [offset ...]
  *   donject.exe watch <pid> <module.exe> <rva> [offset ...] <reps> <delay-ms>
@@ -35,6 +36,7 @@
 #endif
 
 #define INJECT_WAIT_MS 15000u
+#define DETACH_WAIT_MS 15000u
 #define MODULE_ENUM_LIMIT 4096u
 #define SUPPORTED_RETAIL_SHA256 \
     "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
@@ -67,6 +69,18 @@ typedef struct OpenedImage_ {
     BY_HANDLE_FILE_INFORMATION identity;
     PeIdentity pe;
 } OpenedImage;
+
+typedef struct RemoteDetachRequest_ {
+    DWORD size;
+    DWORD version;
+    DWORD pid;
+    DWORD controller_base;
+    DWORD attempt;
+    DWORD epoch;
+} RemoteDetachRequest;
+
+#define DETACH_REQUEST_VERSION 1u
+#define DETACH_EXPORT_NAME "RetailControlPrepareDetach"
 
 enum LoadedState {
     LOADED_SCAN_ERROR = -1,
@@ -124,6 +138,27 @@ static int parse_sha256(const char *text, char normalized[65]) {
         else return 0;
     }
     normalized[64] = 0;
+    return 1;
+}
+
+static int parse_u32_decimal(const char *text, DWORD *out) {
+    char *end = NULL;
+    unsigned long value;
+    if (!text || !*text || *text == '-') return 0;
+    value = strtoul(text, &end, 10);
+    if (!end || *end || value == 0 || value > 0xfffffffful) return 0;
+    *out = (DWORD)value;
+    return 1;
+}
+
+static int parse_u32_hex(const char *text, DWORD *out) {
+    char *end = NULL;
+    unsigned long value;
+    if (!text || strlen(text) != 10 || text[0] != '0' ||
+        (text[1] != 'x' && text[1] != 'X')) return 0;
+    value = strtoul(text + 2, &end, 16);
+    if (!end || *end || value == 0 || value > 0xfffffffful) return 0;
+    *out = (DWORD)value;
     return 1;
 }
 
@@ -389,6 +424,133 @@ static int read_pe_identity(HANDLE file, PeIdentity *out) {
                       &optional32, sizeof(optional32)))
         out->image_size = optional32.SizeOfImage;
     return 1;
+}
+
+static int mapped_range(size_t total, size_t offset, size_t length) {
+    return offset <= total && length <= total - offset;
+}
+
+static const unsigned char *pe_file_rva(
+    const unsigned char *view, size_t total, const IMAGE_NT_HEADERS32 *nt,
+    const IMAGE_SECTION_HEADER *sections, DWORD rva, size_t length
+) {
+    WORD i;
+    if (rva < nt->OptionalHeader.SizeOfHeaders &&
+        mapped_range(total, (size_t)rva, length))
+        return view + rva;
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        DWORD span = sections[i].Misc.VirtualSize;
+        DWORD delta;
+        size_t offset;
+        if (span < sections[i].SizeOfRawData) span = sections[i].SizeOfRawData;
+        if (rva < sections[i].VirtualAddress ||
+            rva - sections[i].VirtualAddress >= span)
+            continue;
+        delta = rva - sections[i].VirtualAddress;
+        if (delta > sections[i].SizeOfRawData ||
+            length > (size_t)(sections[i].SizeOfRawData - delta))
+            return NULL;
+        offset = (size_t)sections[i].PointerToRawData;
+        if (!mapped_range(total, offset, (size_t)delta)) return NULL;
+        offset += delta;
+        return mapped_range(total, offset, length) ? view + offset : NULL;
+    }
+    return NULL;
+}
+
+static int pe_export_rva(HANDLE file, const char *wanted, DWORD *out) {
+    LARGE_INTEGER length;
+    HANDLE mapping = NULL;
+    const unsigned char *view = NULL;
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS32 *nt;
+    const IMAGE_SECTION_HEADER *sections;
+    const IMAGE_EXPORT_DIRECTORY *exports;
+    const DWORD *names, *functions;
+    const WORD *ordinals;
+    DWORD export_rva, export_size, i;
+    size_t total, nt_offset, section_offset;
+    int found = 0;
+    if (!GetFileSizeEx(file, &length) || length.QuadPart <= 0 ||
+        (ULONGLONG)length.QuadPart > (ULONGLONG)((size_t)-1))
+        return 0;
+    total = (size_t)length.QuadPart;
+    mapping = CreateFileMappingW(file, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!mapping) return 0;
+    view = (const unsigned char *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!view) goto done;
+    if (!mapped_range(total, 0, sizeof(*dos))) goto done;
+    dos = (const IMAGE_DOS_HEADER *)view;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0) goto done;
+    nt_offset = (size_t)dos->e_lfanew;
+    if (!mapped_range(total, nt_offset, sizeof(*nt))) goto done;
+    nt = (const IMAGE_NT_HEADERS32 *)(view + nt_offset);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
+        nt->FileHeader.SizeOfOptionalHeader < sizeof(nt->OptionalHeader) ||
+        !nt->FileHeader.NumberOfSections ||
+        nt->FileHeader.NumberOfSections > 96 ||
+        nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT)
+        goto done;
+    if (!mapped_range(total, nt_offset,
+                      sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER)) ||
+        !mapped_range(total,
+                      nt_offset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER),
+                      nt->FileHeader.SizeOfOptionalHeader))
+        goto done;
+    section_offset = nt_offset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) +
+                     (size_t)nt->FileHeader.SizeOfOptionalHeader;
+    if (!mapped_range(total, section_offset,
+                      (size_t)nt->FileHeader.NumberOfSections * sizeof(*sections)))
+        goto done;
+    sections = (const IMAGE_SECTION_HEADER *)(view + section_offset);
+    export_rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+    export_size = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+    if (!export_rva || export_size < sizeof(*exports) ||
+        export_size > nt->OptionalHeader.SizeOfImage ||
+        export_rva > nt->OptionalHeader.SizeOfImage - export_size)
+        goto done;
+    exports = (const IMAGE_EXPORT_DIRECTORY *)pe_file_rva(
+        view, total, nt, sections, export_rva, sizeof(*exports));
+    if (!exports || !exports->NumberOfNames || exports->NumberOfNames > 65536 ||
+        !exports->NumberOfFunctions || exports->NumberOfFunctions > 65536)
+        goto done;
+    names = (const DWORD *)pe_file_rva(
+        view, total, nt, sections, exports->AddressOfNames,
+        (size_t)exports->NumberOfNames * sizeof(*names));
+    ordinals = (const WORD *)pe_file_rva(
+        view, total, nt, sections, exports->AddressOfNameOrdinals,
+        (size_t)exports->NumberOfNames * sizeof(*ordinals));
+    functions = (const DWORD *)pe_file_rva(
+        view, total, nt, sections, exports->AddressOfFunctions,
+        (size_t)exports->NumberOfFunctions * sizeof(*functions));
+    if (!names || !ordinals || !functions) goto done;
+    for (i = 0; i < exports->NumberOfNames; i++) {
+        const char *name = (const char *)pe_file_rva(
+            view, total, nt, sections, names[i], 1);
+        size_t maximum, observed;
+        WORD ordinal;
+        DWORD function_rva;
+        if (!name) goto done;
+        maximum = total - (size_t)((const unsigned char *)name - view);
+        observed = 0;
+        while (observed < maximum && name[observed]) observed++;
+        if (observed == maximum) goto done;
+        if (strcmp(name, wanted)) continue;
+        ordinal = ordinals[i];
+        if (ordinal >= exports->NumberOfFunctions) goto done;
+        function_rva = functions[ordinal];
+        if (!function_rva || function_rva >= nt->OptionalHeader.SizeOfImage ||
+            (function_rva >= export_rva && function_rva < export_rva + export_size))
+            goto done;
+        *out = function_rva;
+        found = 1;
+        break;
+    }
+done:
+    if (view) UnmapViewOfFile(view);
+    CloseHandle(mapping);
+    return found;
 }
 
 static uint32_t rotr32(uint32_t x, unsigned n) {
@@ -781,8 +943,9 @@ static int executable_protection(DWORD protection) {
            protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
 }
 
-static int remote_load_library_w(HANDLE process, DWORD pid,
-                                 LPTHREAD_START_ROUTINE *remote_proc) {
+static int remote_system_proc(HANDLE process, DWORD pid, const char *proc_name,
+                              const char *command,
+                              LPTHREAD_START_ROUTINE *remote_proc) {
     HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
     FARPROC local_proc;
     ModuleInfo local_owner, remote_owner;
@@ -796,7 +959,7 @@ static int remote_load_library_w(HANDLE process, DWORD pid,
     local_image.file = INVALID_HANDLE_VALUE;
     remote_image.file = INVALID_HANDLE_VALUE;
     if (!kernel32) return 0;
-    local_proc = GetProcAddress(kernel32, "LoadLibraryW");
+    local_proc = GetProcAddress(kernel32, proc_name);
     if (!local_proc || !local_module_owning((const void *)local_proc, &local_owner)) return 0;
     rva = (uintptr_t)local_proc - local_owner.base;
     status = module_by_name_w(pid, local_owner.name, &remote_owner);
@@ -831,9 +994,9 @@ static int remote_load_library_w(HANDLE process, DWORD pid,
         SetLastError(ERROR_INVALID_ADDRESS);
         goto fail;
     }
-    printf("inject: loader=LoadLibraryW owner=%ls local_base=%08lX remote_base=%08lX "
+    printf("%s: system_proc=%s owner=%ls local_base=%08lX remote_base=%08lX "
            "rva=%08lX remote_proc=%08lX image_timestamp=%08lX image_size=%lu\n",
-           local_owner.name, (unsigned long)local_owner.base,
+           command, proc_name, local_owner.name, (unsigned long)local_owner.base,
            (unsigned long)remote_owner.base, (unsigned long)rva,
            (unsigned long)(remote_owner.base + rva),
            (unsigned long)local_image.pe.timestamp,
@@ -847,6 +1010,11 @@ fail:
     if (images_open || local_image.file != INVALID_HANDLE_VALUE || local_image.path)
         close_opened_image(&local_image);
     return 0;
+}
+
+static int remote_load_library_w(HANDLE process, DWORD pid,
+                                 LPTHREAD_START_ROUTINE *remote_proc) {
+    return remote_system_proc(process, pid, "LoadLibraryW", "inject", remote_proc);
 }
 
 static int inject(DWORD pid, const char *dll_argument, const char *expected_sha_argument) {
@@ -867,6 +1035,7 @@ static int inject(DWORD pid, const char *dll_argument, const char *expected_sha_
     memset(&dll, 0, sizeof(dll));
     dll.file = INVALID_HANDLE_VALUE;
     memset(&loaded, 0, sizeof(loaded));
+    actual_sha[0] = 0;
 
     if (sizeof(void *) != 4) {
         fprintf(stderr, "inject: REFUSED injector-architecture pointer_size=%u expected=4\n",
@@ -1098,6 +1267,277 @@ done:
     return result;
 }
 
+/*
+ * Prepare and unload one exact controller generation.  The caller supplies the
+ * attempt/epoch from an identity-checked parked ready record.  Once the remote
+ * preparation entry point has been invoked, every non-success result is a
+ * fresh-process boundary: retrying cannot prove which lifecycle transition won.
+ */
+static int detach_controller(DWORD pid, const char *dll_argument,
+                             const char *expected_sha_argument,
+                             const char *base_argument,
+                             const char *attempt_argument,
+                             const char *epoch_argument) {
+    HANDLE process = NULL;
+    HANDLE prepare_thread = NULL;
+    HANDLE unload_thread = NULL;
+    void *remote_request = NULL;
+    void *remote_stub = NULL;
+    int prepare_started = 0, prepare_finished = 0;
+    int unload_started = 0, unload_finished = 0;
+    wchar_t *dll_input = NULL;
+    wchar_t *target_path = NULL;
+    OpenedImage dll;
+    ModuleInfo loaded;
+    RemoteDetachRequest request;
+    MEMORY_BASIC_INFORMATION memory;
+    LPTHREAD_START_ROUTINE prepare_proc = NULL;
+    LPTHREAD_START_ROUTINE free_and_exit = NULL;
+    SIZE_T wrote = 0;
+    DWORD expected_base, attempt, epoch, export_rva;
+    DWORD wait_status, exit_code = STILL_ACTIVE, old_protect = 0;
+    char expected_sha[65], actual_sha[65];
+    unsigned char stub[17];
+    int loaded_state;
+    int result = 1;
+    memset(&dll, 0, sizeof(dll));
+    dll.file = INVALID_HANDLE_VALUE;
+    memset(&loaded, 0, sizeof(loaded));
+    actual_sha[0] = 0;
+
+    if (sizeof(void *) != 4) {
+        fprintf(stderr, "detach: REFUSED injector-architecture pointer_size=%u expected=4\n",
+                (unsigned)sizeof(void *));
+        return 30;
+    }
+    if (!parse_sha256(expected_sha_argument, expected_sha) ||
+        !parse_u32_hex(base_argument, &expected_base) ||
+        !parse_u32_decimal(attempt_argument, &attempt) ||
+        !parse_u32_decimal(epoch_argument, &epoch)) {
+        fprintf(stderr,
+                "detach: REFUSED arguments expected=sha256,0xBASE,positive-attempt,positive-epoch "
+                "restart_required=0\n");
+        return 30;
+    }
+    process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+                          PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+                          FALSE, pid);
+    if (!process) {
+        fprintf(stderr, "detach: REFUSED process-open pid=%lu err=%lu restart_required=0\n",
+                pid, GetLastError());
+        return 31;
+    }
+    if (!require_x86_process_pair(process, pid) ||
+        !inspect_target(process, pid, &target_path)) {
+        fprintf(stderr, "detach: REFUSED target-preflight pid=%lu restart_required=0\n", pid);
+        result = 32;
+        goto done;
+    }
+    if (!ascii_argument(dll_argument) || !multibyte_to_wide(dll_argument, &dll_input) ||
+        !open_canonical_image(dll_input, FILE_SHARE_READ, &dll)) {
+        fprintf(stderr, "detach: REFUSED dll-open argument=<redacted> err=%lu restart_required=0\n",
+                GetLastError());
+        result = 33;
+        goto done;
+    }
+    if (dll.pe.machine != IMAGE_FILE_MACHINE_I386 ||
+        dll.pe.optional_magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
+        !dll.pe.image_size || !(dll.pe.characteristics & IMAGE_FILE_DLL) ||
+        !sha256_file(dll.file, actual_sha) || strcmp(actual_sha, expected_sha)) {
+        fprintf(stderr,
+                "detach: REFUSED dll-identity path=%ls sha256=%s expected=%s "
+                "restart_required=0\n",
+                dll.path, actual_sha[0] ? actual_sha : "unavailable", expected_sha);
+        result = 34;
+        goto done;
+    }
+    loaded_state = loaded_dll_state(pid, &dll, &loaded);
+    if (loaded_state != LOADED_EXACT || loaded.base != (uintptr_t)expected_base ||
+        loaded.size != dll.pe.image_size) {
+        fprintf(stderr,
+                "detach: REFUSED mapped-identity state=%d expected_base=%08lX "
+                "observed_base=%08lX restart_required=0\n",
+                loaded_state, (unsigned long)expected_base,
+                (unsigned long)loaded.base);
+        result = 35;
+        goto done;
+    }
+    if (!pe_export_rva(dll.file, DETACH_EXPORT_NAME, &export_rva) ||
+        export_rva >= loaded.size || expected_base > 0xffffffffu - export_rva) {
+        fprintf(stderr,
+                "detach: REFUSED prepare-export name=%s err=%lu restart_required=0\n",
+                DETACH_EXPORT_NAME, GetLastError());
+        result = 36;
+        goto done;
+    }
+    prepare_proc = (LPTHREAD_START_ROUTINE)(uintptr_t)(expected_base + export_rva);
+    if (!VirtualQueryEx(process, (LPCVOID)(uintptr_t)prepare_proc, &memory, sizeof(memory)) ||
+        memory.State != MEM_COMMIT || memory.Type != MEM_IMAGE ||
+        !executable_protection(memory.Protect) ||
+        (uintptr_t)memory.AllocationBase != loaded.base) {
+        fprintf(stderr,
+                "detach: REFUSED prepare-export-memory proc=%08lX restart_required=0\n",
+                (unsigned long)(uintptr_t)prepare_proc);
+        result = 37;
+        goto done;
+    }
+
+    memset(&request, 0, sizeof(request));
+    request.size = sizeof(request);
+    request.version = DETACH_REQUEST_VERSION;
+    request.pid = pid;
+    request.controller_base = expected_base;
+    request.attempt = attempt;
+    request.epoch = epoch;
+    remote_request = VirtualAllocEx(process, NULL, sizeof(request),
+                                    MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote_request ||
+        !WriteProcessMemory(process, remote_request, &request, sizeof(request), &wrote) ||
+        wrote != sizeof(request)) {
+        fprintf(stderr,
+                "detach: REFUSED request-stage address=%08lX wrote=%lu err=%lu "
+                "restart_required=0\n",
+                (unsigned long)(uintptr_t)remote_request, (unsigned long)wrote,
+                GetLastError());
+        result = 38;
+        goto done;
+    }
+    prepare_thread = CreateRemoteThread(process, NULL, 0, prepare_proc,
+                                        remote_request, 0, NULL);
+    if (!prepare_thread) {
+        fprintf(stderr,
+                "detach: REFUSED prepare-thread-create proc=%08lX err=%lu "
+                "restart_required=0\n",
+                (unsigned long)(uintptr_t)prepare_proc, GetLastError());
+        result = 39;
+        goto done;
+    }
+    prepare_started = 1;
+    wait_status = WaitForSingleObject(prepare_thread, DETACH_WAIT_MS);
+    if (wait_status != WAIT_OBJECT_0) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=prepare-wait status=%08lX err=%lu "
+                "allocation=retained restart_required=1\n",
+                (unsigned long)wait_status, GetLastError());
+        result = 40;
+        goto done;
+    }
+    prepare_finished = 1;
+    if (!GetExitCodeThread(prepare_thread, &exit_code) || exit_code != 1) {
+        fprintf(stderr,
+                "detach: FAILED stage=prepare-exit exit=%08lX err=%lu restart_required=1\n",
+                (unsigned long)exit_code, GetLastError());
+        result = 41;
+        goto done;
+    }
+    if (!VirtualFreeEx(process, remote_request, 0, MEM_RELEASE)) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=request-release address=%08lX err=%lu "
+                "restart_required=1\n",
+                (unsigned long)(uintptr_t)remote_request, GetLastError());
+        result = 42;
+        goto done;
+    }
+    remote_request = NULL;
+
+    if (!remote_system_proc(process, pid, "FreeLibraryAndExitThread", "detach",
+                            &free_and_exit)) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-resolution err=%lu restart_required=1\n",
+                GetLastError());
+        result = 43;
+        goto done;
+    }
+    /* push 0; push module; mov eax,FreeLibraryAndExitThread; call eax */
+    stub[0] = 0x68; memset(stub + 1, 0, 4);
+    stub[5] = 0x68; memcpy(stub + 6, &expected_base, 4);
+    stub[10] = 0xb8; memcpy(stub + 11, &free_and_exit, 4);
+    stub[15] = 0xff; stub[16] = 0xd0;
+    remote_stub = VirtualAllocEx(process, NULL, sizeof(stub),
+                                 MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    wrote = 0;
+    if (!remote_stub ||
+        !WriteProcessMemory(process, remote_stub, stub, sizeof(stub), &wrote) ||
+        wrote != sizeof(stub) ||
+        !VirtualProtectEx(process, remote_stub, sizeof(stub), PAGE_EXECUTE_READ,
+                          &old_protect) ||
+        !FlushInstructionCache(process, remote_stub, sizeof(stub))) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-stage address=%08lX wrote=%lu "
+                "err=%lu restart_required=1\n",
+                (unsigned long)(uintptr_t)remote_stub, (unsigned long)wrote,
+                GetLastError());
+        result = 44;
+        goto done;
+    }
+    unload_thread = CreateRemoteThread(
+        process, NULL, 0, (LPTHREAD_START_ROUTINE)remote_stub, NULL, 0, NULL);
+    if (!unload_thread) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-thread-create err=%lu "
+                "restart_required=1\n", GetLastError());
+        result = 45;
+        goto done;
+    }
+    unload_started = 1;
+    wait_status = WaitForSingleObject(unload_thread, DETACH_WAIT_MS);
+    if (wait_status != WAIT_OBJECT_0) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-wait status=%08lX err=%lu "
+                "allocation=retained restart_required=1\n",
+                (unsigned long)wait_status, GetLastError());
+        result = 46;
+        goto done;
+    }
+    unload_finished = 1;
+    if (!GetExitCodeThread(unload_thread, &exit_code) || exit_code != 0) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-exit exit=%08lX err=%lu "
+                "restart_required=1\n",
+                (unsigned long)exit_code, GetLastError());
+        result = 47;
+        goto done;
+    }
+    if (!VirtualFreeEx(process, remote_stub, 0, MEM_RELEASE)) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=unloader-release address=%08lX err=%lu "
+                "restart_required=1\n",
+                (unsigned long)(uintptr_t)remote_stub, GetLastError());
+        result = 48;
+        goto done;
+    }
+    remote_stub = NULL;
+    loaded_state = loaded_dll_state(pid, &dll, NULL);
+    if (loaded_state != LOADED_ABSENT) {
+        fprintf(stderr,
+                "detach: INDETERMINATE stage=module-postcondition state=%d "
+                "restart_required=1\n", loaded_state);
+        result = 49;
+        goto done;
+    }
+    printf("protocol=donject.v2 command=detach status=ok state=unloaded "
+           "pid=%lu module_name=\"%ls\" module_path=\"%ls\" "
+           "module_base=0x%08lX module_size=0x%08lX attempt=%lu epoch=%lu "
+           "sha256=%s prepare_exit=1 unload_exit=0 restart_required=0\n",
+           pid, loaded.name, loaded.path, (unsigned long)expected_base,
+           (unsigned long)loaded.size, (unsigned long)attempt,
+           (unsigned long)epoch, actual_sha);
+    result = 0;
+
+done:
+    if (remote_request && (!prepare_started || prepare_finished))
+        VirtualFreeEx(process, remote_request, 0, MEM_RELEASE);
+    if (remote_stub && (!unload_started || unload_finished))
+        VirtualFreeEx(process, remote_stub, 0, MEM_RELEASE);
+    if (unload_thread) CloseHandle(unload_thread);
+    if (prepare_thread) CloseHandle(prepare_thread);
+    close_opened_image(&dll);
+    free(dll_input);
+    free(target_path);
+    if (process) CloseHandle(process);
+    return result;
+}
+
 /* Follow a pointer chain in another process, read-only. */
 static int chain(DWORD pid, const char *mod, char **offs, int noffs, int reps, int delay) {
     HANDLE process;
@@ -1250,6 +1690,8 @@ static void usage(void) {
             "  donject base <pid> <module.exe>\n"
             "  donject modules <pid>\n"
             "  donject inject <pid> <dll path> <expected-sha256>\n"
+            "  donject detach <pid> <dll path> <expected-sha256> "
+            "<module-base> <attempt> <epoch>\n"
             "  donject threads <pid>\n"
             "  donject chain <pid> <module.exe> <rva> [offset ...]\n"
             "  donject watch <pid> <module.exe> <rva> [offset ...] <reps> <delay-ms>\n"
@@ -1289,6 +1731,15 @@ int main(int argc, char **argv) {
             return 2;
         }
         return inject(pid_value, argv[3], argv[4]);
+    }
+    if (!strcmp(argv[1], "detach")) {
+        if (argc != 8) {
+            fprintf(stderr,
+                    "detach: REFUSED arguments expected=detach-pid-dll-path-sha256-"
+                    "base-attempt-epoch restart_required=0\n");
+            return 30;
+        }
+        return detach_controller(pid_value, argv[3], argv[4], argv[5], argv[6], argv[7]);
     }
     if (argc >= 8 && !strcmp(argv[1], "peek"))
         return peek(pid_value, argv[3], (unsigned)strtoul(argv[4], NULL, 16), atoi(argv[5]),

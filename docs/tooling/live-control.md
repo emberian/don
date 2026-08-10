@@ -99,10 +99,20 @@ any instruction pointer is inside the call site, trampoline, or controller image
 ownership while quiescent, restores the bytes, and resumes every suspended thread. Normal STOP
 does not use `WriteProcessMemory` as an emulator-cache workaround.
 
-Only then does the controller publish an identity-bound `parked` acknowledgement. The DLL
-deliberately remains loaded; this avoids unloading code while a thread could retain a return
-address inside it. Deleting `STOP` starts a fresh request epoch, rechecks the original prologue,
-and reinstalls the detour.
+Only then does the controller publish an identity-bound `parked` acknowledgement. Deleting `STOP`
+starts a fresh request epoch, rechecks the original prologue, and reinstalls the detour.
+
+An explicit detach is a separate terminal transition. The host first persists one create-only
+preintent bound to the parked record's PID, process creation time, controller base/hash,
+attempt, epoch, revision, and worker identity. The x86 injector resolves
+`RetailControlPrepareDetach` from that same hash-held PE file, calls it once, and refuses unload
+unless the controller joins its worker, frees its trampoline, and atomically publishes
+`detach-ready`. It then uses an RX-only `FreeLibraryAndExitThread` stub and requires both the
+module to be absent and the retail call bytes to remain original. Any uncertainty after the
+remote preparation call requires a fresh retail process; it is never retried or rearmed.
+
+This path is source- and offline-regression-complete but has not been exercised in retail. It is
+not involved in the NetSys Gen-7 load-only proof, which injects no controller.
 
 ### Live upgrades do not overwrite mapped DLLs
 
@@ -116,11 +126,12 @@ portable upgrade mechanism. The controller therefore treats a generation as immu
   directory, so parked generations cannot consume a newer generation's control files;
 - the x86 Toolhelp probe detects an already-mapped basename before download and refuses a
   same-generation deployment;
-- `upgrade --from-generation OLD --generation NEW` parks `OLD` first, leaving retail's exact
-  five bytes restored, then loads `NEW`. A failed new load leaves the old generation parked and
-  retail unpatched.
+- `upgrade --from-generation OLD --generation NEW` parks `OLD`, performs its one token-bound
+  detach, confirms the old module is absent, then loads `NEW`. A detach ambiguity stops before
+  deployment and requires a fresh retail process; a failed new load leaves retail unpatched.
 
-This path was exercised in place on PID `12324`, without restarting the match. Parked v1 remained
+The earlier park-only upgrade path was exercised in place on PID `12324`, without restarting the
+match; this is not live evidence for the new detach transition. Parked v1 remained
 mapped at `0x6AFC0000`; generation v2 loaded from its unique path at `0x6AF60000`, armed the same
 validated runtime call site `0x00EF1686`, returned a main-thread observation at frame `157`, and
 parked again. A later same-generation deployment of trajectory-v3 was refused from the x86 module
