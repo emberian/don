@@ -239,6 +239,24 @@ pub struct MarkReceipt {
     pub retained_slots: usize,
 }
 
+/// Phase-1 receipt for mirroring one already-committed append in the legacy dense registry.
+/// This does not scan tombstones or exercise the sparse allocation authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DenseMirrorInsertReceipt<I> {
+    pub address: RetailObjectAddress,
+    pub identity: I,
+    pub storage: ParallelStorage,
+}
+
+/// Phase-1 receipt for mirroring legacy swap-removal. `moved` is the stable identity which
+/// inherited the removed dense address, if the removed entry was not already the tail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DenseMirrorRemoveReceipt<I> {
+    pub removed_address: RetailObjectAddress,
+    pub removed_identity: I,
+    pub moved: Option<(I, RetailObjectAddress)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SparseRegistryError {
     InvalidOwner,
@@ -254,6 +272,7 @@ pub enum SparseRegistryError {
     OutstandingReservation,
     DenseBandGap,
     DuplicateAddress,
+    DenseMirrorMismatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +351,93 @@ impl<I: Copy + Ord> SparseObjectBands<I> {
         resolve: impl FnOnce(I) -> Option<u32>,
     ) -> Option<u32> {
         resolve(self.live_identity(address)?)
+    }
+
+    /// Mirror a legacy gap-free append without invoking `find_free` or creating a reservation.
+    ///
+    /// This narrow bridge exists only for the live dual-read phase. It refuses sparse retained
+    /// tails/tombstones so current dense allocation cannot silently erase future sparse state.
+    pub fn mirror_dense_append(
+        &mut self,
+        owner: u8,
+        band_kind: RetailBand,
+        identity: I,
+    ) -> Result<DenseMirrorInsertReceipt<I>, SparseRegistryError> {
+        let owner_index = owner as usize;
+        if owner_index >= OWNER_SLOTS {
+            return Err(SparseRegistryError::InvalidOwner);
+        }
+        if self.reverse.contains_key(&identity) {
+            return Err(SparseRegistryError::DuplicateIdentity);
+        }
+        let band = self.owners[owner_index].band(band_kind);
+        if band.mark != band_kind.base() + band.slots.len() as i32 || band.mark >= band_kind.limit()
+        {
+            return Err(SparseRegistryError::DenseMirrorMismatch);
+        }
+        let address = RetailObjectAddress::new(owner, band_kind, band.mark);
+        let storage = self.allocate_storage(owner, band_kind);
+        let band = self.owners[owner_index].band_mut(band_kind);
+        band.slots.push(SparseSlot {
+            storage,
+            lifecycle: SparseSlotLifecycle::Live(identity),
+        });
+        band.mark += 1;
+        self.reverse.insert(identity, address);
+        self.active[owner_index] = true;
+        Ok(DenseMirrorInsertReceipt {
+            address,
+            identity,
+            storage,
+        })
+    }
+
+    /// Mirror the legacy registry's swap-remove while allocation still belongs to that registry.
+    /// Sparse-native retirement must use [`Self::retire`] instead and preserve the address.
+    pub fn mirror_dense_swap_remove(
+        &mut self,
+        address: RetailObjectAddress,
+        identity: I,
+    ) -> Result<DenseMirrorRemoveReceipt<I>, SparseRegistryError> {
+        let index = self.slot_index(address)?;
+        if self.reverse.get(&identity).copied() != Some(address) {
+            return Err(SparseRegistryError::IdentityMismatch);
+        }
+        let owner_index = address.owner as usize;
+        let band = self.owners[owner_index].band(address.band);
+        if band.mark != address.band.base() + band.slots.len() as i32
+            || index >= band.slots.len()
+            || !matches!(band.slots[index].lifecycle, SparseSlotLifecycle::Live(value) if value == identity)
+        {
+            return Err(SparseRegistryError::DenseMirrorMismatch);
+        }
+        let last = band.slots.len() - 1;
+        let moved = if index == last {
+            None
+        } else {
+            let SparseSlotLifecycle::Live(moved_identity) = band.slots[last].lifecycle else {
+                return Err(SparseRegistryError::DenseMirrorMismatch);
+            };
+            Some((moved_identity, address))
+        };
+
+        let band = self.owners[owner_index].band_mut(address.band);
+        if let Some((moved_identity, _)) = moved {
+            // Storage belongs to the retail slot. Only the live stable identity follows the
+            // legacy tail entry into this address during phase 1.
+            band.slots[index].lifecycle = SparseSlotLifecycle::Live(moved_identity);
+        }
+        band.slots.pop();
+        band.mark -= 1;
+        self.reverse.remove(&identity);
+        if let Some((moved_identity, moved_address)) = moved {
+            self.reverse.insert(moved_identity, moved_address);
+        }
+        Ok(DenseMirrorRemoveReceipt {
+            removed_address: address,
+            removed_identity: identity,
+            moved,
+        })
     }
 
     pub fn find_free(

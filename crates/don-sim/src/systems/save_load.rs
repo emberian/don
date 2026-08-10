@@ -21,16 +21,23 @@ use crate::order::{
 };
 use crate::script_runtime::ScriptRuntime;
 use crate::systems::{
-    bhs_type_runtime::TypeBuiltinBoundaryError, borders_fog, economy, game_daemon_step12,
-    groups_guys, items::Item, map_terrain, movement, production,
+    bhs_type_runtime::TypeBuiltinBoundaryError,
+    borders_fog, economy, game_daemon_step12, groups_guys,
+    items::Item,
+    map_terrain, movement, production,
+    sparse_object_bands_authority_frontier::{
+        RetailBand, SnapshotLifecycle, SparseBandSnapshot, SparseOwnerSnapshot,
+        SparseRegistrySnapshot, TombstoneFacts,
+    },
 };
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
-use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
+use crate::world::{WorldObjectIdentity, WorldSaveError, WorldSaveState, MAX_UNITS};
 
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
+const LEGACY_DENSE_OBJECTS_FORMAT_VERSION: u32 = 7;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
@@ -423,7 +430,125 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
     })
 }
 
-fn write_world_state(state: &WorldSaveState) -> Result<Vec<u8>, SaveError> {
+fn write_sparse_object_bands(
+    w: &mut Writer,
+    snapshot: &SparseRegistrySnapshot<WorldObjectIdentity>,
+) -> Result<(), SaveError> {
+    if snapshot.owners.len() != crate::objects::OWNER_SLOTS {
+        return Err(SaveError::Invalid("sparse object owner count"));
+    }
+    for active in snapshot.active {
+        w.bool(active);
+    }
+    for owner in &snapshot.owners {
+        if owner.bands.len() != RetailBand::ALL.len() {
+            return Err(SaveError::Invalid("sparse object band count"));
+        }
+        for (band_index, band_state) in owner.bands.iter().enumerate() {
+            let band = RetailBand::ALL[band_index];
+            let capacity = (band.limit() - band.base()) as usize;
+            if band_state.mark < band.base()
+                || band_state.mark > band.limit()
+                || band_state.slots.len() > capacity
+            {
+                return Err(SaveError::Invalid("sparse object band bounds"));
+            }
+            w.i32(band_state.mark);
+            w.len(band_state.slots.len(), "sparse object slots")?;
+            for lifecycle in &band_state.slots {
+                match lifecycle {
+                    SnapshotLifecycle::Tombstone(facts) => {
+                        w.u8(0);
+                        w.u8(facts.flags);
+                        w.u16(facts.hold_frames);
+                        w.bool(facts.is_unit);
+                        w.i16(facts.o_up);
+                    }
+                    SnapshotLifecycle::Live(WorldObjectIdentity::Unit { id, generation })
+                        if band == RetailBand::Unit =>
+                    {
+                        w.u8(1);
+                        w.u32(*id);
+                        w.u32(*generation);
+                    }
+                    SnapshotLifecycle::Live(WorldObjectIdentity::BuildRow(row))
+                        if band == RetailBand::Build =>
+                    {
+                        w.u8(2);
+                        w.u32(*row);
+                    }
+                    SnapshotLifecycle::Live(WorldObjectIdentity::WallRow(row))
+                        if band == RetailBand::Wall =>
+                    {
+                        w.u8(3);
+                        w.u32(*row);
+                    }
+                    SnapshotLifecycle::Live(_) => {
+                        return Err(SaveError::Invalid("sparse object identity band"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_sparse_object_bands(
+    r: &mut Reader<'_>,
+) -> Result<SparseRegistrySnapshot<WorldObjectIdentity>, SaveError> {
+    let mut active = [false; crate::objects::OWNER_SLOTS];
+    for value in &mut active {
+        *value = r.bool()?;
+    }
+    let mut owners = Vec::with_capacity(crate::objects::OWNER_SLOTS);
+    for _owner in 0..crate::objects::OWNER_SLOTS {
+        let mut bands = Vec::with_capacity(RetailBand::ALL.len());
+        for band in RetailBand::ALL {
+            let mark = r.i32()?;
+            if mark < band.base() || mark > band.limit() {
+                return Err(SaveError::Invalid("sparse object band mark"));
+            }
+            let capacity = (band.limit() - band.base()) as usize;
+            let count = r.len(capacity, "sparse object slots")?;
+            if (mark - band.base()) as usize > count {
+                return Err(SaveError::Invalid("sparse object mark exceeds storage"));
+            }
+            let mut slots = Vec::with_capacity(count);
+            for _ in 0..count {
+                let lifecycle = match r.u8()? {
+                    0 => SnapshotLifecycle::Tombstone(TombstoneFacts {
+                        flags: r.u8()?,
+                        hold_frames: r.u16()?,
+                        is_unit: r.bool()?,
+                        o_up: r.i16()?,
+                    }),
+                    1 if band == RetailBand::Unit => {
+                        SnapshotLifecycle::Live(WorldObjectIdentity::Unit {
+                            id: r.u32()?,
+                            generation: r.u32()?,
+                        })
+                    }
+                    2 if band == RetailBand::Build => {
+                        SnapshotLifecycle::Live(WorldObjectIdentity::BuildRow(r.u32()?))
+                    }
+                    3 if band == RetailBand::Wall => {
+                        SnapshotLifecycle::Live(WorldObjectIdentity::WallRow(r.u32()?))
+                    }
+                    _ => return Err(SaveError::Invalid("sparse object lifecycle tag")),
+                };
+                slots.push(lifecycle);
+            }
+            bands.push(SparseBandSnapshot { mark, slots });
+        }
+        owners.push(SparseOwnerSnapshot { bands });
+    }
+    Ok(SparseRegistrySnapshot { active, owners })
+}
+
+fn write_world_state_for_version(
+    state: &WorldSaveState,
+    format_version: u32,
+) -> Result<Vec<u8>, SaveError> {
     let mut w = Writer::default();
     w.u32(state.capacity);
     w.u32(state.live);
@@ -488,7 +613,22 @@ fn write_world_state(state: &WorldSaveState) -> Result<Vec<u8>, SaveError> {
             w.u32(row);
         }
     }
+    match format_version {
+        FORMAT_VERSION => {
+            let object_bands = state
+                .object_bands
+                .as_ref()
+                .ok_or(SaveError::Invalid("missing sparse object bands"))?;
+            write_sparse_object_bands(&mut w, object_bands)?;
+        }
+        LEGACY_DENSE_OBJECTS_FORMAT_VERSION => {}
+        _ => return Err(SaveError::Invalid("unsupported save format version")),
+    }
     Ok(w.0)
+}
+
+fn write_world_state(state: &WorldSaveState) -> Result<Vec<u8>, SaveError> {
+    write_world_state_for_version(state, FORMAT_VERSION)
 }
 
 fn read_i32_vec(
@@ -504,6 +644,7 @@ fn read_i32_vec(
 
 fn read_world_state(
     data: &[u8],
+    format_version: u32,
     frame: i32,
     seconds: i32,
     random_state: i32,
@@ -590,6 +731,11 @@ fn read_world_state(
             rows.push(r.u32()?);
         }
     }
+    let object_bands = match format_version {
+        FORMAT_VERSION => Some(read_sparse_object_bands(&mut r)?),
+        LEGACY_DENSE_OBJECTS_FORMAT_VERSION => None,
+        _ => return Err(SaveError::Invalid("unsupported save format version")),
+    };
     r.finish()?;
     Ok(WorldSaveState {
         units,
@@ -601,6 +747,7 @@ fn read_world_state(
         generation,
         active_slots,
         build_rows,
+        object_bands,
         live,
         capacity,
         frame,
@@ -1818,6 +1965,7 @@ fn read_leaders(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CoreState {
+    format_version: u32,
     seed: i32,
     frame: i32,
     seconds: i32,
@@ -1851,7 +1999,11 @@ fn write_core(sim: &Sim) -> Vec<u8> {
 
 fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
     let mut r = Reader::new(data);
-    if r.u32()? != FORMAT_VERSION {
+    let format_version = r.u32()?;
+    if !matches!(
+        format_version,
+        LEGACY_DENSE_OBJECTS_FORMAT_VERSION | FORMAT_VERSION
+    ) {
         return Err(SaveError::Invalid("unsupported save format version"));
     }
     let seed = r.i32()?;
@@ -1874,6 +2026,7 @@ fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
     }
     r.finish()?;
     Ok(CoreState {
+        format_version,
         seed,
         frame,
         seconds,
@@ -2043,7 +2196,13 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     if map.world.seed != core.seed {
         return Err(SaveError::Invalid("core/map seed mismatch"));
     }
-    let world_state = read_world_state(objects, core.frame, core.seconds, core.random_state)?;
+    let world_state = read_world_state(
+        objects,
+        core.format_version,
+        core.frame,
+        core.seconds,
+        core.random_state,
+    )?;
     let builds = read_builds(builds, &world_state)?;
     let expected_types = world_state.unit_type_id.clone();
     let (leaders, market) = read_leaders(leaders)?;
@@ -2380,6 +2539,63 @@ mod tests {
     }
 
     #[test]
+    fn legacy_format_seven_dense_objects_convert_to_canonical_sparse_state() {
+        let original = supported_sim();
+        let state = original.world.export_save_state().unwrap();
+        let payload =
+            write_world_state_for_version(&state, LEGACY_DENSE_OBJECTS_FORMAT_VERSION).unwrap();
+        let decoded = read_world_state(
+            &payload,
+            LEGACY_DENSE_OBJECTS_FORMAT_VERSION,
+            original.world.frame,
+            original.world.seconds,
+            original.world.random.state(),
+        )
+        .unwrap();
+        assert!(decoded.object_bands.is_none());
+
+        let mut converted = crate::World::with_capacity(1, 0);
+        converted.import_save_state(decoded).unwrap();
+        assert!(converted.object_bands_are_dense_equivalent());
+        assert!(converted
+            .export_save_state()
+            .unwrap()
+            .object_bands
+            .is_some());
+    }
+
+    #[test]
+    fn format_eight_sparse_gap_is_preserved_by_codec_and_rejected_by_dense_phase() {
+        let original = supported_sim();
+        let mut state = original.world.export_save_state().unwrap();
+        let snapshot = state.object_bands.as_mut().unwrap();
+        let unit_band = &mut snapshot.owners[2].bands[0];
+        unit_band.slots[0] = SnapshotLifecycle::Tombstone(TombstoneFacts {
+            flags: 0,
+            hold_frames: 3,
+            is_unit: true,
+            o_up: -1,
+        });
+
+        let payload = write_world_state(&state).unwrap();
+        let decoded = read_world_state(
+            &payload,
+            FORMAT_VERSION,
+            original.world.frame,
+            original.world.seconds,
+            original.world.random.state(),
+        )
+        .unwrap();
+        assert_eq!(decoded.object_bands, state.object_bands);
+
+        let mut target = crate::World::with_capacity(1, 0);
+        assert_eq!(
+            target.import_save_state(decoded),
+            Err(WorldSaveError::RegistryMismatch)
+        );
+    }
+
+    #[test]
     fn save_load_resave_and_resume_are_deterministic() {
         let mut original = supported_sim();
         let before_digest = original.channel_digest();
@@ -2698,7 +2914,7 @@ mod tests {
     #[test]
     fn inactive_owner_with_retained_units_roundtrips_without_reactivation() {
         let mut original = supported_sim();
-        original.world.objects.set_active(2, false);
+        assert!(original.world.set_object_owner_active(2, false));
         let bytes = save_sim(&original).unwrap();
         let loaded = load_sim(&bytes).unwrap();
         assert!(!loaded.world.objects.is_active(2));

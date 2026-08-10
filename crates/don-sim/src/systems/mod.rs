@@ -185,6 +185,9 @@ pub mod roads;
 pub mod save_load;
 /// Exact retail setup-team lookup and runtime/static team predicate.
 pub mod setup_diplomacy;
+/// Stable retail `(owner, band, o)` object identity beside the dense simulation rows.
+/// Allocation remains on the legacy dense path until save/digest/lookup consumers migrate.
+pub mod sparse_object_bands_authority_frontier;
 /// Source-exact SPECIAL_ANIM planner plus the typed atomic receipt consumed by the live order
 /// dispatcher. The production [`crate::tick::Sim`] frame bridge remains an explicit red seam.
 pub mod special_anim_executor;

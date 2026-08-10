@@ -1339,7 +1339,7 @@ impl Sim {
         self.leaders[who].border.active = true;
         self.vic_leaders.slots[who].leader_flags |=
             victory_score::leader_flag::VALID | victory_score::leader_flag::ACTIVE;
-        self.world.objects.set_active(who, true);
+        assert!(self.world.set_object_owner_active(who, true));
         self.map.fog.leaders[who].player_mask = 1u8 << who;
     }
 
@@ -1470,8 +1470,10 @@ impl Sim {
         let row = self.builds.len();
         bd.who = who as u8;
         let o = self.world.objects.insert(who, Band::Build, row as u32);
-        let _ = o;
         self.builds.push(bd);
+        self.world
+            .mirror_dense_non_unit_append(who, Band::Build, row as u32, o)
+            .expect("build insertion committed a gap-free dense append");
         row
     }
 
@@ -1482,6 +1484,9 @@ impl Sim {
         let o = self.world.objects.insert(who, Band::Wall, row as u32);
         st.o = (o - crate::objects::WALL_BAND_BASE) as i16;
         self.walls.push(st);
+        self.world
+            .mirror_dense_non_unit_append(who, Band::Wall, row as u32, o)
+            .expect("wall insertion committed a gap-free dense append");
         row
     }
 

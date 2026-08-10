@@ -35,6 +35,10 @@ use crate::order::{ArmStatus, Order, OrderCoverage, OrderIndex, OrderList};
 use crate::rng::Random;
 use crate::schedule::{ScheduleCoverage, DO_FRAME, FRAMES_PER_SECOND, SPEED_NORMAL, TIMINGS_MS};
 use crate::simd;
+use crate::systems::sparse_object_bands_authority_frontier::{
+    DenseRegistryEntry, RetailBand, RetailObjectAddress, SnapshotLifecycle, SparseObjectBands,
+    SparseRegistrySnapshot,
+};
 use crate::trig::{cosx, find_angle, sinx};
 
 /// Sim frames per game **second** — `Game::do_frame`'s own `idiv 15` at `0x005924CF`
@@ -83,6 +87,18 @@ pub const OBJ_FLAG_ACTIVE: u8 = 1;
 pub struct Handle {
     pub id: u32,
     pub generation: u32,
+}
+
+/// Stable identity stored behind a retail `(owner, band, o)` address.
+///
+/// Unit rows already have a generational identity. Build and Wall pools currently expose only
+/// their own dense row ids, so those variants state that narrower authority explicitly instead
+/// of pretending a Unit handle owns all three bands.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum WorldObjectIdentity {
+    Unit { id: u32, generation: u32 },
+    BuildRow(u32),
+    WallRow(u32),
 }
 
 /// What the tick actually executed, counted rather than estimated.
@@ -186,6 +202,12 @@ pub struct World {
 
     /// `Objects` — ten owner slots, three index bands, and the rotation.
     pub objects: ObjectRegistry,
+    /// Stable retail object addresses joined to row-independent identities.
+    ///
+    /// This is live canonical save/checksum state, but allocation deliberately remains on
+    /// [`ObjectRegistry`] during the dual-read phase. Dense mutations mirror their committed
+    /// result here; no sparse tombstone/reuse behavior is enabled yet.
+    object_bands: SparseObjectBands<WorldObjectIdentity>,
     /// Reusable buffer for the per-frame traversal order. Not state; allocating it every
     /// frame was measurably the largest single cost in the object pass.
     traversal_buf: Vec<(usize, Band, u32, u32)>,
@@ -218,9 +240,10 @@ pub struct World {
 
 /// The pointer-free, checksum-relevant portion of [`World`] owned by save/load.
 ///
-/// `row_of_handle`, the object registry, traversal scratch, and coverage are deliberately
-/// absent. They are derived state: import validates the serialized permutation and engine
-/// `(who, o)` addresses, then rebuilds those stores before replacing the live world.
+/// `row_of_handle`, the dense object registry, traversal scratch, and coverage are deliberately
+/// absent. They are derived state. The sparse object-band snapshot is authoritative persisted
+/// state; import rebuilds the dense compatibility view and requires the two representations to
+/// agree before replacing the live world.
 #[derive(Clone)]
 pub(crate) struct WorldSaveState {
     pub units: UnitCols,
@@ -233,6 +256,9 @@ pub(crate) struct WorldSaveState {
     pub active_slots: [bool; OWNER_SLOTS],
     /// Exact row traversal for each owner's retail band-2000 object range.
     pub build_rows: [Vec<u32>; OWNER_SLOTS],
+    /// `None` exists only for conversion of legacy format-7 dense saves. Every newly exported
+    /// state carries the canonical sparse owner and validates it against the dense projection.
+    pub object_bands: Option<SparseRegistrySnapshot<WorldObjectIdentity>>,
     pub live: u32,
     pub capacity: u32,
     pub frame: i32,
@@ -293,7 +319,16 @@ impl std::fmt::Display for WorldSaveError {
 }
 
 impl WorldSaveState {
-    fn validate_and_rebuild(&self) -> Result<(ObjectRegistry, Vec<u32>), WorldSaveError> {
+    fn validate_and_rebuild(
+        &self,
+    ) -> Result<
+        (
+            ObjectRegistry,
+            SparseObjectBands<WorldObjectIdentity>,
+            Vec<u32>,
+        ),
+        WorldSaveError,
+    > {
         let cap = self.capacity as usize;
         let live = self.live as usize;
         if cap > MAX_UNITS || live > cap {
@@ -368,15 +403,25 @@ impl WorldSaveState {
         }
 
         let mut objects = ObjectRegistry::new();
+        let mut object_entries = Vec::with_capacity(live);
         for (owner, entries) in rows_by_owner.iter().enumerate() {
             if entries.iter().any(Option::is_none) {
                 return Err(WorldSaveError::RegistryMismatch);
             }
             for (index, row) in entries.iter().enumerate() {
-                let inserted = objects.insert(owner, Band::Unit, row.unwrap());
+                let row = row.unwrap();
+                let inserted = objects.insert(owner, Band::Unit, row);
                 if inserted as usize != index {
                     return Err(WorldSaveError::RegistryMismatch);
                 }
+                let id = self.handle_of_row[row as usize];
+                object_entries.push(DenseRegistryEntry {
+                    address: RetailObjectAddress::new(owner as u8, RetailBand::Unit, index as i32),
+                    identity: WorldObjectIdentity::Unit {
+                        id,
+                        generation: self.generation[id as usize],
+                    },
+                });
             }
         }
 
@@ -397,6 +442,14 @@ impl WorldSaveState {
                 if inserted != crate::objects::BUILD_BAND_BASE + index as u32 {
                     return Err(WorldSaveError::RegistryMismatch);
                 }
+                object_entries.push(DenseRegistryEntry {
+                    address: RetailObjectAddress::new(
+                        owner as u8,
+                        RetailBand::Build,
+                        crate::objects::BUILD_BAND_BASE as i32 + index as i32,
+                    ),
+                    identity: WorldObjectIdentity::BuildRow(row),
+                });
             }
         }
         for (owner, active) in self.active_slots.iter().copied().enumerate() {
@@ -407,7 +460,32 @@ impl WorldSaveState {
         for (row, &id) in self.handle_of_row.iter().take(live).enumerate() {
             row_of_handle[id as usize] = row as u32;
         }
-        Ok((objects, row_of_handle))
+
+        let (derived_bands, _) =
+            SparseObjectBands::from_dense_entries(self.active_slots, object_entries)
+                .map_err(|_| WorldSaveError::RegistryMismatch)?;
+        let object_bands = if let Some(snapshot) = &self.object_bands {
+            let restored = SparseObjectBands::from_snapshot(snapshot.clone())
+                .map_err(|_| WorldSaveError::RegistryMismatch)?;
+            if restored
+                .snapshot()
+                .map_err(|_| WorldSaveError::RegistryMismatch)?
+                != derived_bands
+                    .snapshot()
+                    .map_err(|_| WorldSaveError::RegistryMismatch)?
+            {
+                // During the dual-read phase the old dense consumers cannot represent a sparse
+                // gap. Persist the new owner, but admit only the exact dense-equivalent subset
+                // until lookup/traversal and allocation have migrated together.
+                return Err(WorldSaveError::RegistryMismatch);
+            }
+            restored
+        } else {
+            // Format 7 carried only the dense rows. Its representable state has no tombstones,
+            // so the conversion is exact and becomes format-8 canonical state on resave.
+            derived_bands
+        };
+        Ok((objects, object_bands, row_of_handle))
     }
 }
 
@@ -427,6 +505,7 @@ impl World {
             move_step_x: Vec::with_capacity(n),
             move_step_y: Vec::with_capacity(n),
             objects: ObjectRegistry::new(),
+            object_bands: SparseObjectBands::new(),
             traversal_buf: Vec::with_capacity(n + 16),
             handle_of_row: (0..n as u32).collect(),
             row_of_handle: vec![NO_ROW; n],
@@ -454,6 +533,101 @@ impl World {
         self.capacity
     }
 
+    /// Read-only access to the canonical sparse retail-address owner.
+    ///
+    /// Mutation stays behind World's dual-write methods until sparse allocation and every dense
+    /// lookup consumer migrate as one transaction.
+    #[inline]
+    pub fn object_bands(&self) -> &SparseObjectBands<WorldObjectIdentity> {
+        &self.object_bands
+    }
+
+    /// Whether every current dense address resolves to the same stable identity and all marks,
+    /// activity bits, and retained slots are still in the gap-free phase-1 subset.
+    pub fn object_bands_are_dense_equivalent(&self) -> bool {
+        let Ok(derived) = self.derive_object_bands_from_dense() else {
+            return false;
+        };
+        self.object_bands.snapshot().ok() == derived.snapshot().ok()
+    }
+
+    /// Activate/deactivate one Objects owner in both live representations.
+    pub fn set_object_owner_active(&mut self, owner: usize, active: bool) -> bool {
+        if owner >= OWNER_SLOTS {
+            return false;
+        }
+        self.objects.set_active(owner, active);
+        self.object_bands
+            .set_active(owner, active)
+            .expect("owner was range-checked");
+        true
+    }
+
+    fn derive_object_bands_from_dense(
+        &self,
+    ) -> Result<SparseObjectBands<WorldObjectIdentity>, WorldSaveError> {
+        let active = std::array::from_fn(|owner| self.objects.is_active(owner));
+        let mut entries = Vec::with_capacity(self.objects.total_objects());
+        for owner in 0..OWNER_SLOTS {
+            for (band, retail_band) in [
+                (Band::Unit, RetailBand::Unit),
+                (Band::Build, RetailBand::Build),
+                (Band::Wall, RetailBand::Wall),
+            ] {
+                for (offset, &row) in self.objects.slot(owner).band(band).iter().enumerate() {
+                    let o = band.base() + offset as u32;
+                    let identity = match band {
+                        Band::Unit => {
+                            let row_index = row as usize;
+                            if row_index >= self.live as usize
+                                || self.units.get_who(row_index) as usize != owner
+                                || self.units.o()[row_index] as i32 != o as i32
+                            {
+                                return Err(WorldSaveError::RegistryMismatch);
+                            }
+                            let id = self.handle_of_row[row_index];
+                            WorldObjectIdentity::Unit {
+                                id,
+                                generation: self.generation[id as usize],
+                            }
+                        }
+                        Band::Build => WorldObjectIdentity::BuildRow(row),
+                        Band::Wall => WorldObjectIdentity::WallRow(row),
+                    };
+                    entries.push(DenseRegistryEntry {
+                        address: RetailObjectAddress::new(owner as u8, retail_band, o as i32),
+                        identity,
+                    });
+                }
+            }
+        }
+        SparseObjectBands::from_dense_entries(active, entries)
+            .map(|(bands, _)| bands)
+            .map_err(|_| WorldSaveError::RegistryMismatch)
+    }
+
+    pub(crate) fn mirror_dense_non_unit_append(
+        &mut self,
+        owner: usize,
+        band: Band,
+        row: u32,
+        expected_o: u32,
+    ) -> Result<(), WorldSaveError> {
+        let (retail_band, identity) = match band {
+            Band::Build => (RetailBand::Build, WorldObjectIdentity::BuildRow(row)),
+            Band::Wall => (RetailBand::Wall, WorldObjectIdentity::WallRow(row)),
+            Band::Unit => return Err(WorldSaveError::RegistryMismatch),
+        };
+        let receipt = self
+            .object_bands
+            .mirror_dense_append(owner as u8, retail_band, identity)
+            .map_err(|_| WorldSaveError::RegistryMismatch)?;
+        if receipt.address.o != expected_o as i32 {
+            return Err(WorldSaveError::RegistryMismatch);
+        }
+        Ok(())
+    }
+
     /// Export the save-owned state after proving that all private/derived stores agree.
     ///
     /// Building bodies are owned by [`crate::tick::Sim`]; this adapter carries only their
@@ -478,13 +652,18 @@ impl World {
             generation: self.generation.clone(),
             active_slots: std::array::from_fn(|i| self.objects.is_active(i)),
             build_rows: std::array::from_fn(|i| self.objects.slot(i).band(Band::Build).to_vec()),
+            object_bands: Some(
+                self.object_bands
+                    .snapshot()
+                    .map_err(|_| WorldSaveError::RegistryMismatch)?,
+            ),
             live: self.live,
             capacity: self.capacity,
             frame: self.frame,
             seconds: self.seconds,
             random_state: self.random.state(),
         };
-        let (rebuilt, _) = state.validate_and_rebuild()?;
+        let (rebuilt, rebuilt_bands, _) = state.validate_and_rebuild()?;
         for owner in 0..OWNER_SLOTS {
             if rebuilt.is_active(owner) != self.objects.is_active(owner)
                 || rebuilt.slot(owner).band(Band::Unit) != self.objects.slot(owner).band(Band::Unit)
@@ -493,6 +672,16 @@ impl World {
             {
                 return Err(WorldSaveError::RegistryMismatch);
             }
+        }
+        if rebuilt_bands
+            .snapshot()
+            .map_err(|_| WorldSaveError::RegistryMismatch)?
+            != self
+                .object_bands
+                .snapshot()
+                .map_err(|_| WorldSaveError::RegistryMismatch)?
+        {
+            return Err(WorldSaveError::RegistryMismatch);
         }
         let build_count: usize = state.build_rows.iter().map(Vec::len).sum();
         if self.objects.total_objects() != self.live as usize + build_count {
@@ -509,7 +698,7 @@ impl World {
         &mut self,
         state: WorldSaveState,
     ) -> Result<(), WorldSaveError> {
-        let (objects, row_of_handle) = state.validate_and_rebuild()?;
+        let (objects, object_bands, row_of_handle) = state.validate_and_rebuild()?;
         let replacement = World {
             units: state.units,
             unit_orders: state.unit_orders,
@@ -517,6 +706,7 @@ impl World {
             move_step_x: state.move_step_x,
             move_step_y: state.move_step_y,
             objects,
+            object_bands,
             traversal_buf: Vec::with_capacity(state.live as usize + 16),
             handle_of_row: state.handle_of_row,
             row_of_handle,
@@ -601,10 +791,23 @@ impl World {
 
         self.row_of_handle[id as usize] = row as u32;
         self.live += 1;
-        Some(Handle {
+        let handle = Handle {
             id,
             generation: self.generation[id as usize],
-        })
+        };
+        let mirror = self
+            .object_bands
+            .mirror_dense_append(
+                owner,
+                RetailBand::Unit,
+                WorldObjectIdentity::Unit {
+                    id: handle.id,
+                    generation: handle.generation,
+                },
+            )
+            .expect("spawn committed a gap-free dense Unit append");
+        assert_eq!(mirror.address.o, o as i32);
+        Some(handle)
     }
 
     /// Allocate one live runtime unit at an exact caller-supplied position without
@@ -646,10 +849,23 @@ impl World {
         self.move_step_y.push(0);
         self.row_of_handle[id as usize] = row as u32;
         self.live += 1;
-        Some(Handle {
+        let handle = Handle {
             id,
             generation: self.generation[id as usize],
-        })
+        };
+        let mirror = self
+            .object_bands
+            .mirror_dense_append(
+                owner,
+                RetailBand::Unit,
+                WorldObjectIdentity::Unit {
+                    id: handle.id,
+                    generation: handle.generation,
+                },
+            )
+            .expect("allocation committed a gap-free dense Unit append");
+        assert_eq!(mirror.address.o, o as i32);
+        Some(handle)
     }
 
     fn type_stats(&self, type_id: i32) -> Option<&UnitTypeStats> {
@@ -696,8 +912,34 @@ impl World {
         //    engine-visible `o` changed and its column must say so.
         let who = self.units.get_who(row) as usize;
         let o = self.units.o()[row] as u32;
-        if let Some((moved_row, new_o)) = self.objects.remove(who, Band::Unit, o) {
+        let dense_moved = self.objects.remove(who, Band::Unit, o);
+        if let Some((moved_row, new_o)) = dense_moved {
             self.units.o_mut()[moved_row as usize] = new_o as i16;
+        }
+        let sparse_removed = self
+            .object_bands
+            .mirror_dense_swap_remove(
+                RetailObjectAddress::new(who as u8, RetailBand::Unit, o as i32),
+                WorldObjectIdentity::Unit {
+                    id: h.id,
+                    generation: h.generation,
+                },
+            )
+            .expect("despawn mirrored one gap-free dense Unit removal");
+        match (dense_moved, sparse_removed.moved) {
+            (None, None) => {}
+            (Some((moved_row, new_o)), Some((moved_identity, moved_address))) => {
+                let moved_id = self.handle_of_row[moved_row as usize];
+                assert_eq!(
+                    moved_identity,
+                    WorldObjectIdentity::Unit {
+                        id: moved_id,
+                        generation: self.generation[moved_id as usize],
+                    }
+                );
+                assert_eq!(moved_address.o, new_o as i32);
+            }
+            _ => panic!("dense and sparse Unit swap-remove receipts diverged"),
         }
 
         // 2. Compact the columns.
@@ -1283,9 +1525,62 @@ impl World {
             }
             acc = acc.wrapping_add(h);
         }
-        let mut out = acc ^ (self.frame as u32 as u64);
+        let mut out = acc ^ self.object_bands_digest().rotate_left(23);
+        out ^= self.frame as u32 as u64;
         out = out.wrapping_mul(0x0000_0100_0000_01B3);
         out ^ (self.live as u64)
+    }
+
+    fn object_bands_digest(&self) -> u64 {
+        #[inline]
+        fn mix(hash: &mut u64, value: u64) {
+            *hash ^= value;
+            *hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+
+        let snapshot = self
+            .object_bands
+            .snapshot()
+            .expect("live World never exposes an outstanding sparse reservation");
+        let mut hash = 0xcbf2_9ce4_8422_2325;
+        mix(&mut hash, 0x4f42_4a53_5041_5253); // "OBJSPARS" domain separator.
+        for (owner, active) in snapshot.active.into_iter().enumerate() {
+            mix(&mut hash, owner as u64);
+            mix(&mut hash, u64::from(active));
+        }
+        for (owner, owner_state) in snapshot.owners.into_iter().enumerate() {
+            for (band, band_state) in owner_state.bands.into_iter().enumerate() {
+                mix(&mut hash, owner as u64);
+                mix(&mut hash, band as u64);
+                mix(&mut hash, band_state.mark as u32 as u64);
+                mix(&mut hash, band_state.slots.len() as u64);
+                for lifecycle in band_state.slots {
+                    match lifecycle {
+                        SnapshotLifecycle::Tombstone(facts) => {
+                            mix(&mut hash, 0);
+                            mix(&mut hash, facts.flags as u64);
+                            mix(&mut hash, facts.hold_frames as u64);
+                            mix(&mut hash, u64::from(facts.is_unit));
+                            mix(&mut hash, facts.o_up as u16 as u64);
+                        }
+                        SnapshotLifecycle::Live(WorldObjectIdentity::Unit { id, generation }) => {
+                            mix(&mut hash, 1);
+                            mix(&mut hash, id as u64);
+                            mix(&mut hash, generation as u64);
+                        }
+                        SnapshotLifecycle::Live(WorldObjectIdentity::BuildRow(row)) => {
+                            mix(&mut hash, 2);
+                            mix(&mut hash, row as u64);
+                        }
+                        SnapshotLifecycle::Live(WorldObjectIdentity::WallRow(row)) => {
+                            mix(&mut hash, 3);
+                            mix(&mut hash, row as u64);
+                        }
+                    }
+                }
+            }
+        }
+        hash
     }
 
     /// `(materialised walked fields, walked fields, materialised walked bytes, walked
@@ -1622,23 +1917,89 @@ mod tests {
         assert_eq!(walked_bytes, 111);
     }
 
+    #[test]
+    fn tombstone_owner_state_moves_digest_but_is_refused_by_phase_one_export() {
+        use crate::systems::sparse_object_bands_authority_frontier::TombstoneFacts;
+
+        let mut world = World::with_capacity(4, 0x4455);
+        let handle = world.spawn_typed(2, 17).unwrap();
+        let address = world
+            .object_bands
+            .address_of(WorldObjectIdentity::Unit {
+                id: handle.id,
+                generation: handle.generation,
+            })
+            .unwrap();
+        let before = world.digest();
+        world
+            .object_bands
+            .retire(
+                address,
+                WorldObjectIdentity::Unit {
+                    id: handle.id,
+                    generation: handle.generation,
+                },
+                TombstoneFacts {
+                    flags: 0,
+                    hold_frames: 3,
+                    is_unit: true,
+                    o_up: -1,
+                },
+            )
+            .unwrap();
+        assert_ne!(world.digest(), before);
+        assert!(!world.object_bands_are_dense_equivalent());
+        assert!(matches!(
+            world.export_save_state(),
+            Err(WorldSaveError::RegistryMismatch)
+        ));
+    }
+
     /// Compaction must not be observable in the digest: only state is.
     #[test]
     fn digest_is_independent_of_row_order() {
-        let mut a = World::with_capacity(64, 5);
-        let ha: Vec<Handle> = (0..64).map(|k| a.spawn((k % 4) as u8).unwrap()).collect();
-        let mut b = a.clone();
-        for k in [3usize, 17, 40, 41, 5] {
-            assert!(a.despawn(ha[k]));
+        fn swap_dense_rows(world: &mut World, a: usize, b: usize) {
+            for plane in 0..unit::W4_PLANES {
+                world.units.w4_plane_mut(plane).swap(a, b);
+            }
+            for plane in 0..unit::W2_PLANES {
+                world.units.w2_plane_mut(plane).swap(a, b);
+            }
+            for plane in 0..unit::W1_PLANES {
+                world.units.w1_plane_mut(plane).swap(a, b);
+            }
+            for plane in 0..unit::WF_PLANES {
+                world.units.wf_slice_mut(plane).swap(a, b);
+            }
+            world.unit_orders.swap(a, b);
+            world.unit_type_id.swap(a, b);
+            world.move_step_x.swap(a, b);
+            world.move_step_y.swap(a, b);
+            world.handle_of_row.swap(a, b);
+            world.row_of_handle[world.handle_of_row[a] as usize] = a as u32;
+            world.row_of_handle[world.handle_of_row[b] as usize] = b as u32;
+            for row in [a, b] {
+                let owner = world.units.get_who(row) as usize;
+                let o = world.units.o()[row] as u32;
+                world.objects.repoint(owner, Band::Unit, o, row as u32);
+            }
         }
-        for k in [5usize, 41, 40, 17, 3] {
-            assert!(b.despawn(ha[k]));
+
+        let mut a = World::with_capacity(64, 5);
+        for k in 0..64 {
+            a.spawn((k % 4) as u8).unwrap();
+        }
+        let mut b = a.clone();
+        for (left, right) in [(3, 17), (40, 41), (5, 63)] {
+            swap_dense_rows(&mut b, left, right);
         }
         assert_ne!(
             a.handles(),
             b.handles(),
             "vacuous unless the row orders differ"
         );
+        assert!(a.object_bands_are_dense_equivalent());
+        assert!(b.object_bands_are_dense_equivalent());
         assert_eq!(a.digest(), b.digest());
     }
 
@@ -1876,8 +2237,12 @@ mod tests {
     #[test]
     fn save_adapter_preserves_build_band_rows_and_rejects_non_permutations() {
         let mut w = World::with_capacity(4, 0x2233);
-        w.objects.insert(2, Band::Build, 1);
-        w.objects.insert(2, Band::Build, 0);
+        let first = w.objects.insert(2, Band::Build, 1);
+        w.mirror_dense_non_unit_append(2, Band::Build, 1, first)
+            .unwrap();
+        let second = w.objects.insert(2, Band::Build, 0);
+        w.mirror_dense_non_unit_append(2, Band::Build, 0, second)
+            .unwrap();
         let state = w.export_save_state().unwrap();
         assert_eq!(state.build_rows[2], vec![1, 0]);
 

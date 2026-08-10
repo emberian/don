@@ -141,7 +141,7 @@ impl Game {
             // Activate only the core object band. Step-8 leader views remain derived from
             // their canonical saved inputs, so live frames roundtrip without serializing a
             // second copy of those views.
-            core.world.objects.set_active(p, true);
+            assert!(core.world.set_object_owner_active(p, true));
             for resource in 0..core.leaders[p].econ.stockpile.len() {
                 let value = play.rules.at(STARTING_GOODS_RULE + resource * 4);
                 core.leaders[p].econ.stockpile[resource] = value;

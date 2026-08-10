@@ -370,3 +370,30 @@ fn full_unit_band_reports_the_native_capacity_minus_one() {
     assert_eq!(receipt.storage, None);
     assert_eq!(receipt.outcome, FindFreeOutcome::CapacityFailure(-1));
 }
+
+#[test]
+fn dense_phase_mirror_appends_and_swap_removes_without_sparse_allocation() {
+    let mut registry = SparseObjectBands::new();
+    let first = registry
+        .mirror_dense_append(2, RetailBand::Unit, identity(1))
+        .unwrap();
+    let second = registry
+        .mirror_dense_append(2, RetailBand::Unit, identity(2))
+        .unwrap();
+    assert_eq!(first.address.o, 0);
+    assert_eq!(second.address.o, 1);
+
+    let removed = registry
+        .mirror_dense_swap_remove(first.address, identity(1))
+        .unwrap();
+    assert_eq!(removed.moved, Some((identity(2), first.address)));
+    assert_eq!(registry.address_of(identity(2)), Some(first.address));
+    assert_eq!(registry.slot(first.address).unwrap().storage, first.storage);
+    assert_eq!(registry.mark(2, RetailBand::Unit), Some(1));
+
+    let appended = registry
+        .mirror_dense_append(2, RetailBand::Unit, identity(3))
+        .unwrap();
+    assert_eq!(appended.address.o, 1);
+    assert_eq!(registry.mark(2, RetailBand::Unit), Some(2));
+}

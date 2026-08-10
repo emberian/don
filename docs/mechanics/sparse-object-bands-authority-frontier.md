@@ -190,8 +190,8 @@ script lookup silently erase. No shared Sim file was edited in this tranche.
 cargo test -p don-sim --test sparse_object_bands_authority_frontier
 ```
 
-The twelve tests cover band bounds, ten-owner independent marks, Unit/Animal projection split,
+The thirteen tests cover band bounds, ten-owner independent marks, Unit/Animal projection split,
 lowest-index reuse, hold/subordinate exclusion, retained storage after mark reduction, stable
 identity across dense row movement, reservation/save refusal, snapshot round-trip, dense
-conversion/gap rejection, retail traversal order including tombstones, and exact Unit-band
-capacity `-1`.
+conversion/gap rejection, the phase-1 dense append/swap-remove mirror, retail traversal order
+including tombstones, and exact Unit-band capacity `-1`.
