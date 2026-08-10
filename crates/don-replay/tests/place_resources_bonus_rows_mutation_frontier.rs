@@ -20,9 +20,10 @@ use place_resources_bonus_mutation_frontier::{
     PLAYER_INIT_GOOD_CALL_VA,
 };
 use place_resources_bonus_rows_mutation_frontier::{
-    execute_next_bonus_mutation, LaterBonusDisposition, LaterBonusMutationEvidence,
-    LaterBonusMutationFacts, RemainingBonusRowsError, RemainingBonusRowsState,
-    BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
+    execute_next_bonus_mutation, later_bonus_facts_digest, LaterBonusDisposition,
+    LaterBonusMutationEvidence, LaterBonusMutationFacts, RemainingBonusRowsError,
+    RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
+    LATER_ROW_MUTATION_ENTRY_VA,
 };
 use place_resources_xml_frontier::{
     BonusXmlRowFact, BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
@@ -165,7 +166,7 @@ fn later_facts(
     num_rare: i32,
 ) -> LaterBonusMutationFacts {
     let row = &entry.rows[state.next_row_index];
-    LaterBonusMutationFacts {
+    let mut facts = LaterBonusMutationFacts {
         capture_ordinal: row.capture_ordinal,
         type_name: "WHALES".to_owned(),
         type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
@@ -180,6 +181,7 @@ fn later_facts(
             fixture: format!("later-row-{}", state.next_row_index),
             entry_va: LATER_BONUS_ENTRY_VA,
             row_body_va: place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_BODY_VA,
+            mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
             row_index: state.next_row_index,
             capture_ordinal: row.capture_ordinal,
             random_state: state.mutation.random_state,
@@ -189,8 +191,20 @@ fn later_facts(
             last_chance_group: state.last_chance_group,
             signed_chance_budget: state.signed_chance_budget,
             winner_seen: state.winner_seen,
+            facts_digest: 0,
         },
-    }
+    };
+    refresh_facts_digest(&mut facts);
+    facts
+}
+
+fn refresh_facts_digest(facts: &mut LaterBonusMutationFacts) {
+    let digest = later_bonus_facts_digest(facts);
+    let LaterBonusMutationEvidence::SyntheticFixture { facts_digest, .. } = &mut facts.evidence
+    else {
+        unreachable!("test helper always constructs synthetic evidence")
+    };
+    *facts_digest = digest;
 }
 
 struct ScriptedHost {
@@ -295,6 +309,9 @@ fn same_nonzero_group_reuses_budget_without_a_second_draw() {
         receipt.next_va,
         place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_BODY_VA
     );
+    assert_eq!(receipt.host_ref_boundary.entry_va, 0x0068_fbb3);
+    assert_eq!(receipt.host_ref_boundary.residual_va, 0x0068_fc0d);
+    assert!(receipt.host_ref_boundary.pointer_identity_external);
     assert_eq!(state.next_row_index, 2);
 }
 
@@ -337,6 +354,7 @@ fn unknown_type_advances_only_the_row_cursor_and_preserves_bucket_state() {
     facts.type_name = "NOT_A_GOOD".to_owned();
     facts.type_resolution = ResourceTypeResolution::Unknown;
     facts.scaled.clear();
+    refresh_facts_digest(&mut facts);
     let before = state.clone();
 
     let receipt = execute_next_bonus_mutation(&mut state, &entry, &facts, &mut host).unwrap();
@@ -397,6 +415,7 @@ fn zero_numrare_retains_the_native_winner_without_calling_placement() {
     let budget = state.signed_chance_budget;
     let mut facts = later_facts(&state, &entry, budget.wrapping_add(1), 13, 0);
     facts.scaled.truncate(1);
+    refresh_facts_digest(&mut facts);
     let calls_before = host.requests.len();
 
     let receipt = execute_next_bonus_mutation(&mut state, &entry, &facts, &mut host).unwrap();
@@ -463,4 +482,37 @@ fn a_spliced_row_array_is_rejected_before_cursor_or_carry_mutation() {
         Err(RemainingBonusRowsError::WrongHandoff)
     );
     assert_eq!(state, before);
+}
+
+#[test]
+fn substituted_behavior_facts_fail_the_capture_content_digest() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 2);
+    let (mut state, mut host) = carry_after_first(&world, &entry, 0, 29, 2);
+    let mut facts = later_facts(&state, &entry, 1, 29, 2);
+    facts.chance = facts.chance.wrapping_add(1);
+    let before = state.clone();
+
+    assert_eq!(
+        execute_next_bonus_mutation(&mut state, &entry, &facts, &mut host),
+        Err(RemainingBonusRowsError::StaleEvidence)
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn first_row_facts_cannot_be_mixed_with_a_different_valid_receipt() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 2);
+    let facts = first_facts(&entry, 0, 31, 2);
+    let mut mutation = PlaceResourcesBonusMutationState::from_handoff(&entry);
+    let mut host = ScriptedHost::no_allocation(&world);
+    let receipt = execute_first_bonus_mutation(&mut mutation, &entry, &facts, &mut host).unwrap();
+    let mut substituted = facts.clone();
+    substituted.chance_group = 32;
+
+    assert_eq!(
+        RemainingBonusRowsState::from_first_row(&entry, &substituted, &receipt, &mutation,),
+        Err(RemainingBonusRowsError::WrongFirstRowReceipt)
+    );
 }

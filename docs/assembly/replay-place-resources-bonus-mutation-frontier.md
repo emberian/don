@@ -37,6 +37,10 @@ handles at `0x0068fb9d`. Retail then:
    `Map::place_region_resource` at `0x006901ec`;
 8. converges at the row iteration tail `0x00690215`.
 
+The receipt records the row’s logical handle shape, but the native pointer identities
+and refcounts in step 2 remain capture-host state; they are not represented as local
+Rust mutations. The executable RNG/World mutation projection begins at `0x0068fc0d`.
+
 At this exact first-row seam the last bucket key is `-1`, the budget is zero, and the
 winner flag is false. Consequently a bucket key of `-1` consumes no direct draw and
 starts from budget zero; any other key consumes exactly one draw. A key of zero also
@@ -70,13 +74,18 @@ The other reads are `pattern` at `0x0068fe35`, `saturate` at `0x0068ff21`, and
 player keep/stay-near values are clamped to at least one. The remaining scaled fields
 are passed without a caller-side clamp.
 
-After `numrare` is scaled at `0x0068fdcf`, a zero result jumps directly to the row
-tail at `0x0068fdd7`. The winner flag has already been set and therefore remains true,
-but neither the remaining placement attributes nor either placement body is called.
+After `numrare` is scaled at `0x0068fdcf`, `test eax,eax` at `0x0068fdd7` and the
+`je` at `0x0068fdd9` send a zero result directly to the actual row tail at
+`0x00690215`. The winner flag has already been set and therefore remains true, but
+neither the remaining placement attributes nor either placement body is called.
 
 The typed placement request names every argument instead of relying on positional
 intuition. It also binds the entry RNG state, complete World section checksum,
 sourced/walked byte count, and six-field resource-pool digest.
+
+`FirstBonusMutationReceipt` retains the exact behavior-driving fact projection it
+consumed. A later-row carry constructor therefore cannot combine a valid first-row
+receipt with different chance-group or placement facts.
 
 ## Opaque placement transaction
 

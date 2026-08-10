@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Source-only owner for the remaining rows of the current `BONUSES` category.
 //!
-//! The first-row owner stops before `0x00690215`.  This module owns the exact
-//! recurrence from that instruction back through `0x0068fbb3..0x00690215`, one
-//! atomic row at a time, until the category-tail seam at `0x00690225`.  It does
-//! not own category cleanup, `GOODIES`, `FISH`, the function return, or caller
-//! token `0x1ef7`.
+//! The first-row owner stops before `0x00690215`. This module owns recurrence
+//! routing there and the mutation cone `0x0068fc0d..0x00690215`, one atomic
+//! projection at a time, until the category-tail seam at `0x00690225`. The
+//! intervening native XML reference assignment remains an explicit captured host
+//! boundary. This module does not own category cleanup, `GOODIES`, `FISH`, the
+//! function return, or caller token `0x1ef7`.
 
 use crate::place_resources_bonus_mutation_frontier::{
     validate_placement_receipt, CallbackKind, ChanceRandomDraw, FirstBonusMutationFacts,
@@ -16,16 +17,17 @@ use crate::place_resources_bonus_mutation_frontier::{
     ITEM_GOOD_IGNORE_CALL_VA, MAP_PLACE_PLAYER_RESOURCE_VA, MAP_PLACE_REGION_RESOURCE_VA,
     MAP_SCALE_NUMBER_VA, NEXT_BONUS_ROW_VA, NUM_RARE_SCALE_CALL_VA, PATTERN_GET_ATTRIB_CALL_VA,
     PLAYER_PLACEMENT_CALL_VA, RANDOM_GET_VA, REGION_PLACEMENT_CALL_VA,
-    SATURATE_GET_ATTRIB_NUM_CALL_VA, SELECTOR_ONE_IGNORE_CALL_VA, SELECTOR_THREE_IGNORE_CALL_VA,
-    SELECTOR_TWO_IGNORE_CALL_VA, SHIPPED_EXE_SHA256, SHIPPED_PDB_SHA256,
-    SPACING_GET_ATTRIB_NUM_CALL_VA, STRING_IGNORE_VA, TYPES_GOOD_KEY_VA, TYPE_GET_ATTRIB_CALL_VA,
-    XMLELEMENT_GET_ATTRIB_NUM_VA, XMLELEMENT_GET_ATTRIB_VA,
+    ROW_NEW_HEAD_ACQUIRE_CALL_VA, ROW_NEW_TAIL_ACQUIRE_CALL_VA, ROW_OLD_HEAD_RELEASE_CALL_VA,
+    ROW_OLD_TAIL_RELEASE_CALL_VA, SATURATE_GET_ATTRIB_NUM_CALL_VA, SELECTOR_ONE_IGNORE_CALL_VA,
+    SELECTOR_THREE_IGNORE_CALL_VA, SELECTOR_TWO_IGNORE_CALL_VA, SHIPPED_EXE_SHA256,
+    SHIPPED_PDB_SHA256, SPACING_GET_ATTRIB_NUM_CALL_VA, STRING_IGNORE_VA, TYPES_GOOD_KEY_VA,
+    TYPE_GET_ATTRIB_CALL_VA, XMLELEMENT_GET_ATTRIB_NUM_VA, XMLELEMENT_GET_ATTRIB_VA,
 };
 use crate::place_resources_bonus_mutation_frontier::{
     PlaceResourcesBonusMutationState, PlacementPattern,
 };
 use crate::place_resources_xml_frontier::{
-    BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
+    BonusXmlRowFact, BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
     PLACE_RESOURCES_XML_RESIDUAL_VA,
 };
 use don_sim::rng::Random;
@@ -36,6 +38,8 @@ pub const ROW_POINTER_STRIDE: u32 = 0x28;
 pub const ROW_COUNT_DECREMENT_VA: u32 = 0x0069_0218;
 pub const ROW_RECURRENCE_BRANCH_VA: u32 = 0x0069_021c;
 pub const BONUS_CATEGORY_TAIL_VA: u32 = 0x0069_0225;
+pub const LATER_ROW_HOST_REF_ENTRY_VA: u32 = 0x0068_fbb3;
+pub const LATER_ROW_MUTATION_ENTRY_VA: u32 = 0x0068_fc0d;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaterBonusMutationEvidence {
@@ -45,6 +49,7 @@ pub enum LaterBonusMutationEvidence {
         capture_sha256: [u8; 32],
         entry_va: u32,
         row_body_va: u32,
+        mutation_entry_va: u32,
         row_index: usize,
         capture_ordinal: u32,
         random_state: i32,
@@ -54,11 +59,13 @@ pub enum LaterBonusMutationEvidence {
         last_chance_group: i32,
         signed_chance_budget: i32,
         winner_seen: bool,
+        facts_digest: u64,
     },
     SyntheticFixture {
         fixture: String,
         entry_va: u32,
         row_body_va: u32,
+        mutation_entry_va: u32,
         row_index: usize,
         capture_ordinal: u32,
         random_state: i32,
@@ -68,13 +75,15 @@ pub enum LaterBonusMutationEvidence {
         last_chance_group: i32,
         signed_chance_budget: i32,
         winner_seen: bool,
+        facts_digest: u64,
     },
 }
 
 impl LaterBonusMutationEvidence {
-    fn admissible(&self, state: &RemainingBonusRowsState, capture_ordinal: u32) -> bool {
+    fn admissible(&self, state: &RemainingBonusRowsState, facts: &LaterBonusMutationFacts) -> bool {
         let fields_match = |entry_va: u32,
                             row_body_va: u32,
+                            mutation_entry_va: u32,
                             row_index: usize,
                             ordinal: u32,
                             random_state: i32,
@@ -83,11 +92,13 @@ impl LaterBonusMutationEvidence {
                             resource_pool_digest: u64,
                             last_chance_group: i32,
                             signed_chance_budget: i32,
-                            winner_seen: bool| {
+                            winner_seen: bool,
+                            facts_digest: u64| {
             entry_va == LATER_BONUS_ENTRY_VA
                 && row_body_va == FIRST_BONUS_ROW_BODY_VA
+                && mutation_entry_va == LATER_ROW_MUTATION_ENTRY_VA
                 && row_index == state.next_row_index
-                && ordinal == capture_ordinal
+                && ordinal == facts.capture_ordinal
                 && random_state == state.mutation.random_state
                 && world_checksum == &state.mutation.world_checksum
                 && sourced_walked_bytes == state.mutation.sourced_walked_bytes
@@ -95,6 +106,7 @@ impl LaterBonusMutationEvidence {
                 && last_chance_group == state.last_chance_group
                 && signed_chance_budget == state.signed_chance_budget
                 && winner_seen == state.winner_seen
+                && facts_digest == later_bonus_facts_digest(facts)
         };
         match self {
             Self::RetailCapture {
@@ -103,6 +115,7 @@ impl LaterBonusMutationEvidence {
                 capture_sha256,
                 entry_va,
                 row_body_va,
+                mutation_entry_va,
                 row_index,
                 capture_ordinal: ordinal,
                 random_state,
@@ -112,6 +125,7 @@ impl LaterBonusMutationEvidence {
                 last_chance_group,
                 signed_chance_budget,
                 winner_seen,
+                facts_digest,
             } => {
                 executable_sha256 == SHIPPED_EXE_SHA256
                     && pdb_sha256 == SHIPPED_PDB_SHA256
@@ -119,6 +133,7 @@ impl LaterBonusMutationEvidence {
                     && fields_match(
                         *entry_va,
                         *row_body_va,
+                        *mutation_entry_va,
                         *row_index,
                         *ordinal,
                         *random_state,
@@ -128,12 +143,14 @@ impl LaterBonusMutationEvidence {
                         *last_chance_group,
                         *signed_chance_budget,
                         *winner_seen,
+                        *facts_digest,
                     )
             }
             Self::SyntheticFixture {
                 fixture,
                 entry_va,
                 row_body_va,
+                mutation_entry_va,
                 row_index,
                 capture_ordinal: ordinal,
                 random_state,
@@ -143,12 +160,14 @@ impl LaterBonusMutationEvidence {
                 last_chance_group,
                 signed_chance_budget,
                 winner_seen,
+                facts_digest,
             } => {
                 cfg!(test)
                     && !fixture.is_empty()
                     && fields_match(
                         *entry_va,
                         *row_body_va,
+                        *mutation_entry_va,
                         *row_index,
                         *ordinal,
                         *random_state,
@@ -158,6 +177,7 @@ impl LaterBonusMutationEvidence {
                         *last_chance_group,
                         *signed_chance_budget,
                         *winner_seen,
+                        *facts_digest,
                     )
             }
         }
@@ -177,6 +197,55 @@ pub struct LaterBonusMutationFacts {
     pub spacing: i32,
     pub scaled: Vec<ScaledAttributeFact>,
     pub evidence: LaterBonusMutationEvidence,
+}
+
+/// Stable logical digest of every behavior-driving later-row fact.
+pub fn later_bonus_facts_digest(facts: &LaterBonusMutationFacts) -> u64 {
+    fn bytes(hash: &mut u64, value: &[u8]) {
+        for byte in value {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    fn i32_value(hash: &mut u64, value: i32) {
+        bytes(hash, &value.to_le_bytes());
+    }
+    fn u32_value(hash: &mut u64, value: u32) {
+        bytes(hash, &value.to_le_bytes());
+    }
+
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    u32_value(&mut hash, facts.capture_ordinal);
+    bytes(&mut hash, facts.type_name.as_bytes());
+    match facts.type_resolution {
+        ResourceTypeResolution::CatalogGood { good_id } => {
+            bytes(&mut hash, &[0]);
+            i32_value(&mut hash, good_id);
+        }
+        ResourceTypeResolution::PoolSelector {
+            selector,
+            matched_call_va,
+        } => {
+            bytes(&mut hash, &[1, selector]);
+            u32_value(&mut hash, matched_call_va);
+        }
+        ResourceTypeResolution::ItemGood => bytes(&mut hash, &[2]),
+        ResourceTypeResolution::Unknown => bytes(&mut hash, &[3]),
+    }
+    i32_value(&mut hash, facts.chance);
+    i32_value(&mut hash, facts.chance_group);
+    bytes(&mut hash, facts.pattern_name.as_bytes());
+    i32_value(&mut hash, facts.pattern as i32);
+    i32_value(&mut hash, facts.saturate);
+    i32_value(&mut hash, facts.spacing);
+    u32_value(&mut hash, facts.scaled.len() as u32);
+    for fact in &facts.scaled {
+        i32_value(&mut hash, fact.attribute as i32);
+        u32_value(&mut hash, fact.call_va);
+        bytes(&mut hash, fact.expression.as_bytes());
+        i32_value(&mut hash, fact.scaled);
+    }
+    hash
 }
 
 impl LaterBonusMutationFacts {
@@ -221,8 +290,9 @@ impl LaterBonusMutationFacts {
 pub struct RemainingBonusRowsState {
     pub next_row_index: usize,
     pub section_source: BonusesSectionSource,
-    pub row_ordinals: Vec<u32>,
-    pub row_handles: Vec<XmlHostHandles>,
+    /// Logical row projection accepted by the preceding XML receipt. This detects
+    /// substitution after construction; it does not authenticate the capture bytes.
+    pub rows: Vec<BonusXmlRowFact>,
     pub last_chance_group: i32,
     pub signed_chance_budget: i32,
     pub winner_seen: bool,
@@ -239,12 +309,26 @@ pub enum LaterBonusDisposition {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaterRowHostRefBoundary {
+    pub entry_va: u32,
+    pub residual_va: u32,
+    pub release_call_vas: [u32; 2],
+    pub acquire_call_vas: [u32; 2],
+    pub previous_row_handles: XmlHostHandles,
+    pub current_row_handles: XmlHostHandles,
+    /// Native pointer identity and refcounts remain owned by the capture host.
+    pub pointer_identity_external: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaterBonusMutationReceipt {
     pub entry_va: u32,
     pub row_pointer_stride: u32,
     pub row_count_decrement_va: u32,
     pub recurrence_branch_va: u32,
     pub row_body_va: u32,
+    pub host_ref_boundary: LaterRowHostRefBoundary,
+    pub mutation_entry_va: u32,
     pub residual_va: u32,
     pub next_va: u32,
     pub section_source: BonusesSectionSource,
@@ -326,6 +410,7 @@ impl RemainingBonusRowsState {
             || receipt.next_va != NEXT_BONUS_ROW_VA
             || receipt.capture_ordinal != entry.rows[0].capture_ordinal
             || facts.capture_ordinal != entry.rows[0].capture_ordinal
+            || receipt.facts != *facts
             || !facts
                 .evidence
                 .admissible(entry, entry.rows[0].capture_ordinal)
@@ -341,8 +426,7 @@ impl RemainingBonusRowsState {
         Ok(Self {
             next_row_index: 1,
             section_source: entry.section_source,
-            row_ordinals: entry.rows.iter().map(|row| row.capture_ordinal).collect(),
-            row_handles: entry.rows.iter().map(|row| row.handles).collect(),
+            rows: entry.rows.clone(),
             last_chance_group: if chance_was_read {
                 facts.chance_group
             } else {
@@ -419,6 +503,16 @@ fn finish_receipt(
         row_count_decrement_va: ROW_COUNT_DECREMENT_VA,
         recurrence_branch_va: ROW_RECURRENCE_BRANCH_VA,
         row_body_va: FIRST_BONUS_ROW_BODY_VA,
+        host_ref_boundary: LaterRowHostRefBoundary {
+            entry_va: LATER_ROW_HOST_REF_ENTRY_VA,
+            residual_va: LATER_ROW_MUTATION_ENTRY_VA,
+            release_call_vas: [ROW_OLD_TAIL_RELEASE_CALL_VA, ROW_OLD_HEAD_RELEASE_CALL_VA],
+            acquire_call_vas: [ROW_NEW_HEAD_ACQUIRE_CALL_VA, ROW_NEW_TAIL_ACQUIRE_CALL_VA],
+            previous_row_handles: before.rows[row_index - 1].handles,
+            current_row_handles: before.rows[row_index].handles,
+            pointer_identity_external: true,
+        },
+        mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
         residual_va: FIRST_BONUS_ROW_RESIDUAL_VA,
         next_va: if after.next_row_index < entry.rows.len() {
             FIRST_BONUS_ROW_BODY_VA
@@ -426,7 +520,7 @@ fn finish_receipt(
             BONUS_CATEGORY_TAIL_VA
         },
         section_source: before.section_source,
-        row_count: before.row_ordinals.len(),
+        row_count: before.rows.len(),
         row_index,
         capture_ordinal: entry.rows[row_index].capture_ordinal,
         row_handles: entry.rows[row_index].handles,
@@ -453,7 +547,8 @@ fn finish_receipt(
     }
 }
 
-/// Execute one later `BONUS` row as an atomic transaction.
+/// Execute one later `BONUS` mutation projection atomically after the captured XML
+/// host-reference boundary.
 pub fn execute_next_bonus_mutation<H: PlacementHost>(
     state: &mut RemainingBonusRowsState,
     entry: &PlaceResourcesBonusRowsHandoff,
@@ -467,20 +562,13 @@ pub fn execute_next_bonus_mutation<H: PlacementHost>(
         || state.next_row_index == 0
         || state.next_row_index >= entry.rows.len()
         || state.section_source != entry.section_source
-        || state.row_ordinals.len() != entry.rows.len()
-        || state.row_handles.len() != entry.rows.len()
-        || !entry.rows.iter().enumerate().all(|(index, row)| {
-            state.row_ordinals[index] == row.capture_ordinal
-                && state.row_handles[index] == row.handles
-        })
+        || state.rows != entry.rows
         || state.mutation.sourced_walked_bytes != entry.sourced_walked_bytes
     {
         return Err(RemainingBonusRowsError::WrongHandoff);
     }
     let row = &entry.rows[state.next_row_index];
-    if facts.capture_ordinal != row.capture_ordinal
-        || !facts.evidence.admissible(state, row.capture_ordinal)
-    {
+    if facts.capture_ordinal != row.capture_ordinal || !facts.evidence.admissible(state, facts) {
         return Err(RemainingBonusRowsError::StaleEvidence);
     }
     let type_projection = facts.type_resolution.good_and_selector();

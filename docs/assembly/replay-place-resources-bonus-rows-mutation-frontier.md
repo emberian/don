@@ -1,9 +1,10 @@
 # Replay `Map::place_resources` later `BONUS` rows mutation frontier
 
 `crates/don-replay/src/place_resources_bonus_rows_mutation_frontier.rs` continues the
-first-row receipt at `0x00690215` and owns every remaining row of the **current**
-`BONUSES` array as a sequence of atomic row transactions. The category-complete
-residual is `0x00690225`.
+first-row receipt at `0x00690215`. It owns the row-pointer recurrence and the
+RNG/World/pool/counter mutation projection from `0x0068fc0d` through the next
+`0x00690215`, for every remaining row of the **current** `BONUSES` array. The
+category-complete residual is `0x00690225`.
 
 This remains a source-only frontier. It does not claim category cleanup, the
 `GOODIES` or `FISH` XML sections, the `Map::place_resources` return, the caller
@@ -14,7 +15,7 @@ Authority is the shipped `ron-bin/riseofnations.exe`, SHA-256
 GUID-matched `rise.pdb`, SHA-256
 `334a3ea1f96e65c0bd7d045449e2cc68d81c51923020f9728e80d1e508d9bff5`.
 
-## Exact recurrence
+## Exact recurrence and open host-reference seam
 
 The first-row owner stops before:
 
@@ -24,9 +25,15 @@ The first-row owner stops before:
 0x0069021c  rows_remaining != 0 ? 0x0068fbb3 : 0x00690225
 ```
 
-Each remaining row therefore reuses the already recovered
-`0x0068fbb3..0x00690215` body. The semantic difference from row zero is the native
-carry in three stack locals:
+Each remaining row routes through `0x0068fbb3`. Its first four calls release the old
+tail/head references (`0x0068fbc0`, `0x0068fbda`) and acquire the new head/tail
+references (`0x0068fbf7`, `0x0068fc0a`). `LaterRowHostRefBoundary` records that exact
+call order and the before/after logical handle shapes, but native pointer identity and
+refcounts remain owned by the capture host. The executable mutation projection begins
+at `0x0068fc0d`; this frontier does not disguise the host-reference transition as a
+local port.
+
+The semantic difference from row zero is the native carry in three stack locals:
 
 ```text
 [ebp-0x90]  last chance-group key
@@ -35,11 +42,17 @@ carry in three stack locals:
 ```
 
 `RemainingBonusRowsState::from_first_row` reconstructs those values from the first
-facts and receipt and retains the category source plus the complete ordered row
-ordinal/handle topology. Every later-row evidence record binds the carry together with
-row index, capture ordinal, RNG state, full World checksum, walked byte count, and the
-logical resource-pool digest. This prevents a capture for one bucket position from
-being replayed at another or applied to a spliced row array.
+facts and the exact fact projection now retained by its receipt. It also retains the
+logical row vector accepted by the preceding XML receipt. This rejects row substitution
+*after* carry construction; it is not a cryptographic proof that the captured XML bytes
+contained that vector.
+
+Every later-row evidence record binds the carry, row index, capture ordinal, RNG state,
+full World checksum, walked byte count, logical resource-pool digest, and a stable
+digest of every behavior-driving row fact. A fact projection cannot therefore be
+substituted under the same admitted evidence record. Retail capture authority still
+comes from the external capture hash; this source does not infer XML contents from a
+merely nonzero digest.
 
 ## Chance-bucket state machine
 
@@ -88,10 +101,11 @@ The direct draw remains the main simulation stream at `[0x00c06184]`, calling
 
 Winning rows retain the first owner’s typed two-phase boundary around
 `Map::place_player_resource` (`0x00691f70`) and `Map::place_region_resource`
-(`0x00690480`). A receipt must validate its complete admitted RNG transcript,
+(`0x00690480`). A receipt validates the admitted RNG chain,
 allocation call sites, allocation identity, resource-pool digest, and World checksum
 before the row cursor, chance carry, RNG, pool digest, counters, or World projection is
-committed.
+committed. The opaque placement host or exact port remains responsible for transcript
+completeness; the caller-side validator does not claim a full placement-body port.
 
 The checksum-visible allocation writes remain:
 
@@ -102,7 +116,9 @@ The checksum-visible allocation writes remain:
 
 The only accepted checksum delta is `WData` when at least one occupancy write exists,
 or no section when none exists. Rejection rolls back the row cursor and chance carry
-as well as the RNG/World/pool/counter projection.
+as well as the RNG/World/pool/counter projection. An external host-reference side
+effect cannot be rolled back here, so capture production must be observational or
+two-phase.
 
 ## Why schedule integration remains open
 
@@ -118,9 +134,10 @@ the first and later-row receipts. Even after that, the public schedule must reta
 `checkpoint: None` and token `0x1ef7` as pending until `GOODIES`, `FISH`, cleanup,
 return, and caller continuation are all owned.
 
-`crates/don-replay/tests/place_resources_bonus_rows_mutation_frontier.rs` freezes ten
+`crates/don-replay/tests/place_resources_bonus_rows_mutation_frontier.rs` freezes twelve
 paths: same-group budget reuse, group-zero redraw, transition-to-`-1` redraw, unknown
 type carry preservation, negative-carry suppression, zero-chance winner reuse,
 zero-`numrare`, admitted WData mutation, and full rollback on a rejected placement
-receipt, plus rejection of a spliced row array. The corrected first-row proof adds the
-matching zero-`numrare` case.
+receipt, plus rejection of a post-construction spliced row array, substituted later-row
+facts, and mismatched first-row facts/receipt pairs. The corrected first-row proof adds
+the matching zero-`numrare` case.
