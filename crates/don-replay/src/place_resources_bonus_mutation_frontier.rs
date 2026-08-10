@@ -7,9 +7,13 @@
 //! remain deliberately external, but their shared-RNG, resource-pool, allocation, and
 //! `World::WData` effects cross a typed, checksum-bound, two-phase receipt.
 
+use crate::place_resources_pool_frontier::{resource_divvy_pool_digest, ResourceDivvyPoolState};
 use crate::place_resources_xml_frontier::{
     BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
     PLACE_RESOURCES_XML_RESIDUAL_VA,
+};
+use crate::resource_divvy_pool_selection_frontier::{
+    validate_resource_pool_selection, ResourcePoolLane, ResourcePoolSelectionReceipt,
 };
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{div_3, WorldChecksum, WorldSection};
@@ -303,6 +307,9 @@ pub struct PlaceResourcesBonusMutationState {
     pub world_checksum: WorldChecksum,
     pub sourced_walked_bytes: u64,
     pub resource_pool_digest: u64,
+    /// Concrete pool continuity is required before a pool-selector placement can execute.
+    /// The digest-only XML handoff may leave this `None` for catalog/item rows.
+    pub resource_pool: Option<ResourceDivvyPoolState>,
     pub allocated_resources: i32,
     pub requested_resources: i32,
 }
@@ -314,9 +321,26 @@ impl PlaceResourcesBonusMutationState {
             world_checksum: handoff.world_checksum.clone(),
             sourced_walked_bytes: handoff.sourced_walked_bytes,
             resource_pool_digest: handoff.resource_pool_digest,
+            resource_pool: None,
             allocated_resources: 0,
             requested_resources: 0,
         }
+    }
+
+    /// Bind the digest-only XML seam to the exact pool projection produced by the prefix owner.
+    pub fn from_handoff_with_pool(
+        handoff: &PlaceResourcesBonusRowsHandoff,
+        pool: &ResourceDivvyPoolState,
+    ) -> Option<Self> {
+        (resource_divvy_pool_digest(pool) == handoff.resource_pool_digest).then(|| Self {
+            random_state: handoff.random_state,
+            world_checksum: handoff.world_checksum.clone(),
+            sourced_walked_bytes: handoff.sourced_walked_bytes,
+            resource_pool_digest: handoff.resource_pool_digest,
+            resource_pool: Some(pool.clone()),
+            allocated_resources: 0,
+            requested_resources: 0,
+        })
     }
 }
 
@@ -390,6 +414,8 @@ pub struct PlacementRequest {
     pub world_checksum_before: WorldChecksum,
     pub sourced_walked_bytes: u64,
     pub resource_pool_digest_before: u64,
+    /// Present when the caller owns the canonical six-field pool projection.
+    pub resource_pool_before: Option<ResourceDivvyPoolState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,6 +502,10 @@ pub struct PlacementReceipt {
     pub world_checksum_after: WorldChecksum,
     pub sourced_walked_bytes_after: u64,
     pub resource_pool_digest_after: u64,
+    /// Ordered exact selector transactions performed by the opaque placement body.
+    pub resource_pool_selections: Vec<ResourcePoolSelectionReceipt>,
+    /// Canonical post-call projection. Required for selector placements.
+    pub resource_pool_after: Option<ResourceDivvyPoolState>,
     pub evidence: PlacementEvidence,
 }
 
@@ -532,6 +562,8 @@ pub enum FirstBonusMutationError {
     InvalidScaledAttributes,
     PlacementReceiptUnavailable { request: PlacementRequest },
     PlacementReceiptMismatch,
+    ConcreteResourcePoolUnavailable,
+    InvalidResourcePoolSelection { index: usize },
     InvalidPlacementEvidence,
     InvalidCalleeRandomDraw { index: usize },
     InvalidAllocation { index: usize },
@@ -578,6 +610,122 @@ fn validate_random_draws(
     }
     if random.state() != expected_after {
         return Err(draws.len());
+    }
+    Ok(())
+}
+
+fn validate_resource_pool_receipt(
+    request: &PlacementRequest,
+    receipt: &PlacementReceipt,
+) -> Result<(), FirstBonusMutationError> {
+    let expected_lane = if request.params.selector == 2 {
+        ResourcePoolLane::Early
+    } else {
+        ResourcePoolLane::Late
+    };
+    if request.params.selector == 0 {
+        if !receipt.resource_pool_selections.is_empty()
+            || receipt.resource_pool_after != request.resource_pool_before
+            || receipt.resource_pool_digest_after != request.resource_pool_digest_before
+        {
+            return Err(FirstBonusMutationError::PlacementReceiptMismatch);
+        }
+        return Ok(());
+    }
+
+    let Some(pool_before) = request.resource_pool_before.as_ref() else {
+        return Err(FirstBonusMutationError::ConcreteResourcePoolUnavailable);
+    };
+    let Some(pool_after) = receipt.resource_pool_after.as_ref() else {
+        return Err(FirstBonusMutationError::ConcreteResourcePoolUnavailable);
+    };
+    if resource_divvy_pool_digest(pool_before) != request.resource_pool_digest_before
+        || resource_divvy_pool_digest(pool_after) != receipt.resource_pool_digest_after
+    {
+        return Err(FirstBonusMutationError::PlacementReceiptMismatch);
+    }
+
+    let mut expected_pool = pool_before;
+    let mut transcript_cursor = 0;
+    let mut selected_goods = Vec::new();
+    for (index, selection) in receipt.resource_pool_selections.iter().enumerate() {
+        if selection.lane != expected_lane
+            || selection.pool_before != *expected_pool
+            || !validate_resource_pool_selection(selection)
+        {
+            return Err(FirstBonusMutationError::InvalidResourcePoolSelection { index });
+        }
+        if selection.random_draws.is_empty() {
+            let state_is_in_placement_chain = selection.random_state_before
+                == request.random_state_before
+                || receipt
+                    .random_draws
+                    .iter()
+                    .any(|draw| draw.state_after == selection.random_state_before);
+            if !state_is_in_placement_chain {
+                return Err(FirstBonusMutationError::InvalidResourcePoolSelection { index });
+            }
+        }
+        if !selection.random_draws.is_empty() {
+            while transcript_cursor < receipt.random_draws.len()
+                && receipt.random_draws[transcript_cursor].call_va
+                    != RESOURCE_POOL_GET_WATER_RANDOM_CALL_VA
+                && receipt.random_draws[transcript_cursor].call_va
+                    != RESOURCE_POOL_GET_LATE_RANDOM_CALL_VA
+                && receipt.random_draws[transcript_cursor].call_va
+                    != RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA
+            {
+                transcript_cursor += 1;
+            }
+            for draw in &selection.random_draws {
+                let Some(global) = receipt.random_draws.get(transcript_cursor) else {
+                    return Err(FirstBonusMutationError::InvalidResourcePoolSelection { index });
+                };
+                if (
+                    global.call_va,
+                    global.random_get_va,
+                    global.low,
+                    global.high,
+                    global.state_before,
+                    global.raw,
+                    global.state_after,
+                ) != (
+                    draw.call_va,
+                    draw.random_get_va,
+                    draw.low,
+                    draw.high,
+                    draw.state_before,
+                    draw.raw,
+                    draw.state_after,
+                ) {
+                    return Err(FirstBonusMutationError::InvalidResourcePoolSelection { index });
+                }
+                transcript_cursor += 1;
+            }
+        }
+        selected_goods.push(selection.selected_good);
+        expected_pool = &selection.pool_after;
+    }
+    let unmatched_pool_draw = receipt
+        .random_draws
+        .iter()
+        .skip(transcript_cursor)
+        .filter(|draw| {
+            draw.call_va == RESOURCE_POOL_GET_WATER_RANDOM_CALL_VA
+                || draw.call_va == RESOURCE_POOL_GET_LATE_RANDOM_CALL_VA
+                || draw.call_va == RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA
+        })
+        .next()
+        .is_some();
+    if unmatched_pool_draw || expected_pool != pool_after {
+        return Err(FirstBonusMutationError::PlacementReceiptMismatch);
+    }
+    if receipt
+        .allocations
+        .iter()
+        .any(|allocation| !selected_goods.contains(&allocation.type_id))
+    {
+        return Err(FirstBonusMutationError::PlacementReceiptMismatch);
     }
     Ok(())
 }
@@ -642,11 +790,7 @@ pub(crate) fn validate_placement_receipt(
     {
         return Err(FirstBonusMutationError::PlacementReceiptMismatch);
     }
-    if request.params.selector == 0
-        && receipt.resource_pool_digest_after != request.resource_pool_digest_before
-    {
-        return Err(FirstBonusMutationError::PlacementReceiptMismatch);
-    }
+    validate_resource_pool_receipt(request, receipt)?;
     if !receipt.evidence.admissible() {
         return Err(FirstBonusMutationError::InvalidPlacementEvidence);
     }
@@ -746,6 +890,10 @@ pub fn execute_first_bonus_mutation<H: PlacementHost>(
         || state.resource_pool_digest != entry.resource_pool_digest
         || state.allocated_resources != 0
         || state.requested_resources != 0
+        || state
+            .resource_pool
+            .as_ref()
+            .is_some_and(|pool| resource_divvy_pool_digest(pool) != state.resource_pool_digest)
     {
         return Err(FirstBonusMutationError::StateMismatch);
     }
@@ -978,6 +1126,7 @@ pub fn execute_first_bonus_mutation<H: PlacementHost>(
         world_checksum_before: state.world_checksum.clone(),
         sourced_walked_bytes: state.sourced_walked_bytes,
         resource_pool_digest_before: state.resource_pool_digest,
+        resource_pool_before: state.resource_pool.clone(),
     };
     let Some(placement) = host.place(&request) else {
         state.random_state = random_state_before;
@@ -991,6 +1140,7 @@ pub fn execute_first_bonus_mutation<H: PlacementHost>(
     state.random_state = placement.random_state_after;
     state.world_checksum = placement.world_checksum_after.clone();
     state.resource_pool_digest = placement.resource_pool_digest_after;
+    state.resource_pool = placement.resource_pool_after.clone();
     state.allocated_resources = state
         .allocated_resources
         .wrapping_add(placement.allocated_count);

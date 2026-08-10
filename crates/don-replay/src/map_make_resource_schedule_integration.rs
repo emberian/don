@@ -18,6 +18,10 @@ use crate::map_make_resource_caller_gap_frontier::{
     MAP_RESOURCE_DIAGNOSTIC_CHECKPOINT_CALL_VA, MAP_RESOURCE_DIAGNOSTIC_SOURCE_TOKEN,
 };
 use crate::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
+use crate::place_resources_bonus_mutation_frontier::{
+    execute_first_bonus_mutation, FirstBonusMutationError, FirstBonusMutationFacts,
+    FirstBonusMutationReceipt, PlaceResourcesBonusMutationState, PlacementHost,
+};
 use crate::place_resources_pool_frontier::{
     execute_place_resources_pool_prefix, resource_divvy_pool_digest, PlaceResourcesEntryHandoff,
     PlaceResourcesLiveFacts, PlaceResourcesPoolError, PlaceResourcesPoolReceipt,
@@ -105,11 +109,24 @@ pub struct PlaceResourcesXmlBoundary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceResourcesFirstBonusBoundary {
+    /// The XML boundary whose typed row handoff this transaction consumed.
+    pub xml: PlaceResourcesXmlBoundary,
+    /// Stops before the `add esi, 0x28` recurrence at `0x00690215`.
+    pub first_bonus: FirstBonusMutationReceipt,
+    /// Authoritative concrete public-pool projection after the placement transaction.
+    pub resource_pool_after: ResourceDivvyPoolState,
+    pub pending_checkpoint_call_va: u32,
+    pub pending_source_token: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MapMakeResourcePlacementReceipt {
     Skipped(PlaceResourcesSkippedBoundary),
     EntryOpen(PlaceResourcesEntryBoundary),
     BodyOpen(PlaceResourcesBodyBoundary),
     XmlRowsOpen(PlaceResourcesXmlBoundary),
+    FirstBonusRowOpen(PlaceResourcesFirstBonusBoundary),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +146,9 @@ pub enum MapMakeResourceScheduleError {
     XmlFactsWithoutPoolPrefix,
     XmlFrontier(PlaceResourcesXmlError),
     XmlContinuityMismatch,
+    BonusContinuationRequiresXmlRows,
+    BonusFrontier(FirstBonusMutationError),
+    BonusContinuityMismatch,
 }
 
 fn post_nubify_receipt_matches(receipt: &PostNubifyTransitionReceipt) -> bool {
@@ -404,5 +424,62 @@ pub fn execute_map_make_resource_schedule_with_xml(
         post_nubify_checkpoint: prior,
         caller_gap,
         placement,
+    })
+}
+
+/// Continue an admitted XML-row schedule receipt through exactly the first `BONUS` row.
+///
+/// The placement host remains two-phase, but its receipt must now carry exact selector
+/// subreceipts and the concrete post-call pool projection. The caller's public pool is committed
+/// only after both the first-row receipt and concrete digest continuity validate. The caller
+/// checkpoint/token remain pending because later rows and category cleanup are still open.
+pub fn continue_map_make_resource_schedule_first_bonus<H: PlacementHost>(
+    pool: &mut ResourceDivvyPoolState,
+    schedule: &MapMakeResourceScheduleReceipt,
+    facts: &FirstBonusMutationFacts,
+    host: &mut H,
+) -> Result<MapMakeResourceScheduleReceipt, MapMakeResourceScheduleError> {
+    let MapMakeResourcePlacementReceipt::XmlRowsOpen(xml) = &schedule.placement else {
+        return Err(MapMakeResourceScheduleError::BonusContinuationRequiresXmlRows);
+    };
+    if pool != &xml.pool_prefix.pool_after
+        || resource_divvy_pool_digest(pool) != xml.xml_frontier.handoff.resource_pool_digest
+    {
+        return Err(MapMakeResourceScheduleError::BonusContinuityMismatch);
+    }
+
+    let mut mutation =
+        PlaceResourcesBonusMutationState::from_handoff_with_pool(&xml.xml_frontier.handoff, pool)
+            .ok_or(MapMakeResourceScheduleError::BonusContinuityMismatch)?;
+    let first_bonus =
+        execute_first_bonus_mutation(&mut mutation, &xml.xml_frontier.handoff, facts, host)
+            .map_err(MapMakeResourceScheduleError::BonusFrontier)?;
+    let resource_pool_after = mutation
+        .resource_pool
+        .clone()
+        .ok_or(MapMakeResourceScheduleError::BonusContinuityMismatch)?;
+    if resource_divvy_pool_digest(&resource_pool_after) != mutation.resource_pool_digest
+        || first_bonus.resource_pool_digest_after != mutation.resource_pool_digest
+        || first_bonus.random_state_after != mutation.random_state
+        || first_bonus.world_checksum_after != mutation.world_checksum
+        || first_bonus.allocated_resources_after != mutation.allocated_resources
+        || first_bonus.requested_resources_after != mutation.requested_resources
+    {
+        return Err(MapMakeResourceScheduleError::BonusContinuityMismatch);
+    }
+
+    *pool = resource_pool_after.clone();
+    Ok(MapMakeResourceScheduleReceipt {
+        post_nubify_checkpoint: schedule.post_nubify_checkpoint.clone(),
+        caller_gap: schedule.caller_gap.clone(),
+        placement: MapMakeResourcePlacementReceipt::FirstBonusRowOpen(
+            PlaceResourcesFirstBonusBoundary {
+                xml: xml.clone(),
+                first_bonus,
+                resource_pool_after,
+                pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
+                pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
+            },
+        ),
     })
 }

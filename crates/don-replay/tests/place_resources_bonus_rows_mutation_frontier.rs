@@ -4,6 +4,12 @@
 #[path = "../src/place_resources_xml_frontier.rs"]
 mod place_resources_xml_frontier;
 
+#[path = "../src/place_resources_pool_frontier.rs"]
+mod place_resources_pool_frontier;
+
+#[path = "../src/resource_divvy_pool_selection_frontier.rs"]
+mod resource_divvy_pool_selection_frontier;
+
 #[path = "../src/place_resources_bonus_mutation_frontier.rs"]
 mod place_resources_bonus_mutation_frontier;
 
@@ -264,6 +270,8 @@ impl PlacementHost for ScriptedHost {
             world_checksum_after: self.world_checksum_after.clone(),
             sourced_walked_bytes_after: request.sourced_walked_bytes,
             resource_pool_digest_after: request.resource_pool_digest_before,
+            resource_pool_selections: Vec::new(),
+            resource_pool_after: request.resource_pool_before.clone(),
             evidence: PlacementEvidence::SyntheticFixture {
                 fixture: "later-row-placement".to_owned(),
             },

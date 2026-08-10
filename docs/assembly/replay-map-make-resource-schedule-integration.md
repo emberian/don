@@ -14,6 +14,7 @@ post_nubify_transitions checkpoint 0x0068c12a / token 0x1ebe
   -> deterministic ResourceDivvyPool prefix
   -> typed selected/default XML document and BONUSES-row owner
   -> typed open row-body boundary 0x0068fb9d
+  -> optional typed first BONUS row through recurrence seam 0x00690215
 ```
 
 `execute_map_make_resource_schedule` constructs the caller-gap prior receipt
@@ -41,6 +42,9 @@ Three outcomes are explicit:
 - `XmlRowsOpen` owns that same pool prefix plus path normalization, selected/default
   document lookup, BONUSES fallback, ordered BONUS rows, and live XML host references,
   then stops at `0x0068fb9d`.
+- `FirstBonusRowOpen` owns the first row's chance/attribute/placement transaction and
+  stops before `add esi, 0x28` at `0x00690215`. It retains the XML boundary and the
+  authoritative concrete post-placement pool while token `0x1ef7` remains pending.
 
 Pool and XML execution use staged copies. Bad catalog shape, stale evidence, or any
 continuity failure leaves both the caller's pool and XML host unchanged. A successful
@@ -55,8 +59,16 @@ digest, not a hash of retail allocator-dependent native bytes. The XML evidence 
 bind that digest together with the exact entry RNG state, World checksum, and sourced
 walked-byte count before the XML owner can execute.
 
-The row body after `0x0068fb9d` remains open. It parses BONUS attributes, performs
-later resource placement and RNG work, proceeds through GOODIES and FISH, returns to
+`continue_map_make_resource_schedule_first_bonus` binds the digest-only XML handoff
+back to `pool_prefix.pool_after`, executes the row against a two-phase placement host,
+and commits the caller's mutable pool only after every selector subreceipt re-executes.
+Each selector subreceipt includes its exact before/after six-field pool, selected lane,
+good/index, retry draws, and exhaustion clear. A selector row may therefore advance the
+public pool without leaving it at the prefix state while publishing a newer digest.
+
+Rows after the first-row recurrence at `0x00690215` remain open in the compiled
+schedule. They carry the chance bucket through later resource placement and RNG work,
+then retail proceeds through GOODIES and FISH, returns to
 `0x0068c70c`, and eventually reaches caller checkpoint `0x0068c72d` / token `0x1ef7`.
 The boundary records that checkpoint as pending, never as completed.
 
@@ -70,8 +82,8 @@ diagnostics and the endpoint gate. Both internal deadlines remain exact in
 stage-ending checkpoint.
 
 The `place_resources` schedule row now states the executable ownership split:
-zero RNG through the pool and XML bootstrap, followed by an open row body at
-`0x0068fb9d` before the known direct and callee RNG sites.
+zero RNG through the pool and XML bootstrap, typed direct/callee RNG and concrete pool
+continuity for the first BONUS row through `0x00690215`, then open later rows.
 
 ## Focused proof
 
@@ -87,6 +99,10 @@ zero RNG through the pool and XML bootstrap, followed by an open row body at
 - the skipped, missing-live-facts, pool-open, and XML-row-open typed residuals;
 - canonical six-field pool digest and exact selected/default XML source/row ownership;
 - unchanged RNG/World/sourced-byte provenance through `0x0068fb9d`; and
+- first-row compiled continuation through `0x00690215`, including both a chance-miss
+  path and a selector path that mutates the caller-visible concrete pool; and
+- end-to-end public-pool rollback when a selector subreceipt is corrupted after the
+  row's direct chance draw; and
 - joint pool/host rollback for stale XML evidence.
 
 The focused local commands are:
@@ -96,6 +112,8 @@ cargo test -p don-replay --test map_make_resource_schedule_integration
 cargo test -p don-replay --test map_make_resource_caller_gap_frontier
 cargo test -p don-replay --test place_resources_pool_frontier
 cargo test -p don-replay --test place_resources_xml_frontier
+cargo test -p don-replay --test resource_divvy_pool_selection_frontier
+cargo test -p don-replay --test place_resources_bonus_mutation_frontier
 cargo test -p don-replay --test map_make_nubify_integration
 ```
 
@@ -107,8 +125,12 @@ No retail process is required or used by these source proofs.
 crates/don-replay/src/lib.rs
 crates/don-replay/src/map_make_resource_schedule_integration.rs
 crates/don-replay/src/map_style.rs
+crates/don-replay/src/place_resources_bonus_mutation_frontier.rs
+crates/don-replay/src/resource_divvy_pool_selection_frontier.rs
 crates/don-replay/src/place_resources_xml_frontier.rs
 crates/don-replay/tests/map_make_resource_schedule_integration.rs
+crates/don-replay/tests/resource_divvy_pool_selection_frontier.rs
 docs/assembly/replay-map-make-resource-schedule-integration.md
 docs/assembly/replay-place-resources-pool-frontier.md
+docs/assembly/replay-resource-divvy-pool-selection-frontier.md
 ```

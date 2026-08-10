@@ -4,6 +4,12 @@
 #[path = "../src/place_resources_xml_frontier.rs"]
 mod place_resources_xml_frontier;
 
+#[path = "../src/place_resources_pool_frontier.rs"]
+mod place_resources_pool_frontier;
+
+#[path = "../src/resource_divvy_pool_selection_frontier.rs"]
+mod resource_divvy_pool_selection_frontier;
+
 #[path = "../src/place_resources_bonus_mutation_frontier.rs"]
 mod place_resources_bonus_mutation_frontier;
 
@@ -22,13 +28,37 @@ use place_resources_bonus_mutation_frontier::{
     RANDOM_GET_VA, RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA, SELECTOR_TWO_IGNORE_CALL_VA,
 };
 use place_resources_bonus_mutation_frontier::{PlaceResourcesBonusMutationState, PlacementPattern};
+use place_resources_pool_frontier::{
+    resource_divvy_pool_digest, ResourceDivvyPoolState, ResourcePoolBitMask,
+};
 use place_resources_xml_frontier::{
     BonusXmlRowFact, BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
     PLACE_RESOURCES_XML_RESIDUAL_VA,
 };
+use resource_divvy_pool_selection_frontier::{execute_resource_pool_selection, ResourcePoolLane};
 
 const SEED: i32 = 0x1234_5678;
 const POOL_DIGEST: u64 = 0x0123_4567_89ab_cdef;
+
+fn concrete_pool() -> ResourceDivvyPoolState {
+    ResourceDivvyPoolState {
+        early_bits: ResourcePoolBitMask {
+            bits: 3,
+            bytes: vec![0],
+        },
+        early_goods: vec![6, 7, 8],
+        late_bits: ResourcePoolBitMask {
+            bits: 2,
+            bytes: vec![0],
+        },
+        late_goods: vec![20, 21],
+        water_bits: ResourcePoolBitMask {
+            bits: 1,
+            bytes: vec![0],
+        },
+        water_goods: vec![30],
+    }
+}
 
 fn handles() -> XmlHostHandles {
     XmlHostHandles {
@@ -195,15 +225,38 @@ impl PlacementHost for ScriptedPlacementHost {
     fn place(&mut self, request: &PlacementRequest) -> Option<PlacementReceipt> {
         self.requests.push(request.clone());
         let mut random = Random::new(request.random_state_before);
-        let random_draws = if self.draw {
+        let mut resource_pool_selections = Vec::new();
+        let resource_pool_after = if request.params.selector != 0 && self.pool_draw {
+            let mut pool = request.resource_pool_before.clone()?;
+            let lane = if request.params.selector == 2 {
+                ResourcePoolLane::Early
+            } else {
+                ResourcePoolLane::Late
+            };
+            let selection = execute_resource_pool_selection(&mut pool, lane, &mut random).ok()?;
+            resource_pool_selections.push(selection);
+            Some(pool)
+        } else {
+            request.resource_pool_before.clone()
+        };
+        let mut random_draws = resource_pool_selections
+            .iter()
+            .flat_map(|selection| selection.random_draws.iter())
+            .map(|draw| CalleeRandomDraw {
+                call_va: draw.call_va,
+                random_get_va: draw.random_get_va,
+                low: draw.low,
+                high: draw.high,
+                state_before: draw.state_before,
+                raw: draw.raw,
+                state_after: draw.state_after,
+            })
+            .collect::<Vec<_>>();
+        if self.draw && !self.pool_draw {
             let state_before = random.state();
             let expected = random.get(0, 0xffff);
-            vec![CalleeRandomDraw {
-                call_va: if self.pool_draw {
-                    RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA
-                } else {
-                    PLAYER_PLACEMENT_RANDOM_CALL_VA
-                },
+            random_draws.push(CalleeRandomDraw {
+                call_va: PLAYER_PLACEMENT_RANDOM_CALL_VA,
                 random_get_va: RANDOM_GET_VA,
                 low: 0,
                 high: 0xffff,
@@ -214,10 +267,8 @@ impl PlacementHost for ScriptedPlacementHost {
                     expected
                 },
                 state_after: random.state(),
-            }]
-        } else {
-            Vec::new()
-        };
+            });
+        }
         let allocations = if self.allocation {
             let coord_x = COORD_PER_WCELL + COORD_PER_WCELL / 2;
             let coord_y = COORD_PER_WCELL * 2 + COORD_PER_WCELL / 2;
@@ -255,11 +306,12 @@ impl PlacementHost for ScriptedPlacementHost {
             allocations,
             world_checksum_after: self.world_checksum_after.clone(),
             sourced_walked_bytes_after: request.sourced_walked_bytes,
-            resource_pool_digest_after: if request.params.selector == 0 {
-                request.resource_pool_digest_before
-            } else {
-                request.resource_pool_digest_before ^ 0x55aa
-            },
+            resource_pool_digest_after: resource_pool_after
+                .as_ref()
+                .map(resource_divvy_pool_digest)
+                .unwrap_or(request.resource_pool_digest_before),
+            resource_pool_selections,
+            resource_pool_after,
             evidence: PlacementEvidence::SyntheticFixture {
                 fixture: "typed-placement-receipt".to_owned(),
             },
@@ -433,7 +485,9 @@ fn unknown_type_exits_before_chance_and_scaling_callbacks() {
 #[test]
 fn pool_selector_receipt_may_advance_the_same_rng_and_pool_digest() {
     let world = World::init_default_rules(4, 4);
-    let entry = handoff(&world, 1);
+    let pool = concrete_pool();
+    let mut entry = handoff(&world, 1);
+    entry.resource_pool_digest = resource_divvy_pool_digest(&pool);
     let mut host = ScriptedPlacementHost {
         world_checksum_after: world.checksum_sections(),
         draw: true,
@@ -452,7 +506,8 @@ fn pool_selector_receipt_may_advance_the_same_rng_and_pool_digest() {
         100,
         0,
     );
-    let mut state = PlaceResourcesBonusMutationState::from_handoff(&entry);
+    let mut state =
+        PlaceResourcesBonusMutationState::from_handoff_with_pool(&entry, &pool).unwrap();
 
     let receipt = execute_first_bonus_mutation(&mut state, &entry, &facts, &mut host).unwrap();
 
@@ -466,7 +521,11 @@ fn pool_selector_receipt_may_advance_the_same_rng_and_pool_digest() {
         receipt.placement.as_ref().unwrap().random_draws[0].call_va,
         RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA
     );
-    assert_ne!(state.resource_pool_digest, POOL_DIGEST);
+    assert_ne!(state.resource_pool_digest, entry.resource_pool_digest);
+    assert_eq!(
+        state.resource_pool.as_ref().map(resource_divvy_pool_digest),
+        Some(state.resource_pool_digest)
+    );
     assert_eq!(state.world_checksum, entry.world_checksum);
 }
 

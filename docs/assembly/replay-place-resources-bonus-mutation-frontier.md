@@ -105,7 +105,15 @@ call sites in this cone are:
 
 Every admitted draw is exactly `Random::get(0, 0xffff)` and must reproduce the retail
 LCG state transition. Pool-call draws are rejected when the row did not select a pool
-alias. For a catalog good, the pool digest must remain unchanged.
+alias. For a catalog good, the concrete pool and digest must remain unchanged.
+
+Pool aliases additionally carry an ordered list of exact selector subreceipts. Selector
+2 must use the early lane; selectors 1 and 3 must use the late lane for these BONUS
+requests. (`good_id == -1` makes the region body's water branch unreachable.) Each
+subreceipt is re-executed from its concrete `ResourceDivvyPoolState` before/after pair,
+and its draw slice must equal the pool-call subset of the placement RNG transcript.
+The final concrete state must hash to the published post-call digest. Allocated selector
+goods must occur among the selected-good results.
 
 The same receipt records every object allocation. The placement call sites are:
 
@@ -147,14 +155,15 @@ Still red:
 - schedule integration of the recovered later-row chance-bucket carry and zero-key
   forced-redraw owner;
 - exact ports of the two placement bodies rather than typed receipts;
-- the full resource-divvy bitmask mutation, candidate scans, and all transitive RNG
-  draws inside those bodies;
+- candidate scans and the remaining transitive placement-body work;
 - `GOODIES` and `FISH`, category/document cleanup, the final return count, and the
   caller checkpoint at `0x0068c72d`.
 
+The first owner and its selector dependency are compiled through `lib.rs`, and
+`continue_map_make_resource_schedule_first_bonus` advances the public schedule to this
+recurrence seam without stale pool state.
+
 `crates/don-replay/tests/place_resources_bonus_mutation_frontier.rs` freezes the direct
 chance hit/miss paths, the special no-draw `-1` bucket, unknown-type early exit,
-resource-pool RNG/digest handoff, exact allocation/WData write, and atomic rejection of
-mutated callee RNG and occupancy receipts. These files remain source-only and are not
-wired into `lib.rs`; the shared integration lane should connect them only after running
-the focused proof with the preceding XML owner.
+resource-pool RNG/concrete-state handoff, exact allocation/WData write, and atomic
+rejection of mutated callee RNG and occupancy receipts.

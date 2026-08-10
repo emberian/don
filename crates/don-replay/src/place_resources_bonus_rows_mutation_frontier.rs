@@ -781,6 +781,7 @@ pub fn execute_next_bonus_mutation<H: PlacementHost>(
         world_checksum_before: staged.mutation.world_checksum.clone(),
         sourced_walked_bytes: staged.mutation.sourced_walked_bytes,
         resource_pool_digest_before: staged.mutation.resource_pool_digest,
+        resource_pool_before: staged.mutation.resource_pool.clone(),
     };
     let Some(placement) = host.place(&request) else {
         return Err(RemainingBonusRowsError::PlacementReceiptUnavailable);
@@ -790,6 +791,7 @@ pub fn execute_next_bonus_mutation<H: PlacementHost>(
     staged.mutation.random_state = placement.random_state_after;
     staged.mutation.world_checksum = placement.world_checksum_after.clone();
     staged.mutation.resource_pool_digest = placement.resource_pool_digest_after;
+    staged.mutation.resource_pool = placement.resource_pool_after.clone();
     staged.mutation.allocated_resources = staged
         .mutation
         .allocated_resources

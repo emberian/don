@@ -6,7 +6,8 @@ RNG/World/pool/counter mutation projection from `0x0068fc0d` through the next
 `0x00690215`, for every remaining row of the **current** `BONUSES` array. The
 category-complete residual is `0x00690225`.
 
-This remains a source-only frontier. It does not claim category cleanup, the
+This later-row owner is compiled but is not yet connected to the public schedule. It
+does not claim category cleanup, the
 `GOODIES` or `FISH` XML sections, the `Map::place_resources` return, the caller
 continuation at `0x0068c72d`, or source token `0x1ef7`.
 
@@ -102,7 +103,8 @@ The direct draw remains the main simulation stream at `[0x00c06184]`, calling
 Winning rows retain the first owner’s typed two-phase boundary around
 `Map::place_player_resource` (`0x00691f70`) and `Map::place_region_resource`
 (`0x00690480`). A receipt validates the admitted RNG chain,
-allocation call sites, allocation identity, resource-pool digest, and World checksum
+allocation call sites, allocation identity, exact selector subreceipts, concrete
+resource-pool state/digest, and World checksum
 before the row cursor, chance carry, RNG, pool digest, counters, or World projection is
 committed. The opaque placement host or exact port remains responsible for transcript
 completeness; the caller-side validator does not claim a full placement-body port.
@@ -120,19 +122,15 @@ as well as the RNG/World/pool/counter projection. An external host-reference sid
 effect cannot be rolled back here, so capture production must be observational or
 two-phase.
 
-## Why schedule integration remains open
+## Why later-row schedule integration remains open
 
-The existing schedule reaches a fully bound `PlaceResourcesBonusRowsHandoff`, but the
-opaque selector placement receipt exposes only a post-call pool **digest**, not the
-validated post-call `ResourceDivvyPoolState`. Wiring later rows into the public
-schedule would leave its mutable pool object at the prefix while claiming a newer
-logical digest. That is not an executable continuity proof.
-
-The integration owner should first add a concrete post-placement pool projection (or
-an exact placement-body port), validate its digest and bitmask mutation, and then wire
-the first and later-row receipts. Even after that, the public schedule must retain
-`checkpoint: None` and token `0x1ef7` as pending until `GOODIES`, `FISH`, cleanup,
-return, and caller continuation are all owned.
+The concrete post-placement pool blocker is resolved: selector receipts now re-execute
+the exact bitmask transaction, and the compiled schedule advances the first row while
+committing the authoritative public pool. The next integration step is to retain the
+typed `RemainingBonusRowsState` across repeated public schedule continuations while
+preserving the explicit XML host-reference seam at each recurrence. Even after that,
+the schedule must retain `checkpoint: None` and token `0x1ef7` as pending until
+`GOODIES`, `FISH`, cleanup, return, and caller continuation are all owned.
 
 `crates/don-replay/tests/place_resources_bonus_rows_mutation_frontier.rs` freezes twelve
 paths: same-group budget reuse, group-zero redraw, transition-to-`-1` redraw, unknown

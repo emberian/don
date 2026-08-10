@@ -12,11 +12,22 @@ use don_replay::map_make_resource_caller_gap_frontier::{
     SHIPPED_EXE_SHA256 as CALLER_EXE_SHA256, SHIPPED_PDB_SHA256 as CALLER_PDB_SHA256,
 };
 use don_replay::map_make_resource_schedule_integration::{
-    execute_map_make_resource_schedule, execute_map_make_resource_schedule_with_xml,
-    MapMakeResourceOwnerProvenance, MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError,
+    continue_map_make_resource_schedule_first_bonus, execute_map_make_resource_schedule,
+    execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
+    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError,
 };
 use don_replay::map_style::MAP_MAKE_SCHEDULE;
 use don_replay::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
+use don_replay::place_resources_bonus_mutation_frontier::{
+    BonusMutationEvidence, CalleeRandomDraw, FirstBonusDisposition, FirstBonusMutationError,
+    FirstBonusMutationFacts, PlacementEvidence, PlacementHost, PlacementPattern, PlacementReceipt,
+    PlacementRequest, ResourceTypeResolution, ScaledAttribute, ScaledAttributeFact,
+    CENTER_KEEP_AWAY_SCALE_CALL_VA, CENTER_STAY_NEAR_SCALE_CALL_VA, CORNER_KEEP_AWAY_SCALE_CALL_VA,
+    CORNER_STAY_NEAR_SCALE_CALL_VA, EDGE_KEEP_AWAY_SCALE_CALL_VA, EDGE_STAY_NEAR_SCALE_CALL_VA,
+    GROUP_SPACING_SCALE_CALL_VA, NUM_RARE_SCALE_CALL_VA, PLAYER_KEEP_AWAY_SCALE_CALL_VA,
+    PLAYER_STAY_NEAR_SCALE_CALL_VA, SELECTOR_THREE_IGNORE_CALL_VA,
+    SHIPPED_EXE_SHA256 as BONUS_EXE_SHA256, SHIPPED_PDB_SHA256 as BONUS_PDB_SHA256,
+};
 use don_replay::place_resources_pool_frontier::{
     resource_divvy_pool_digest, PlaceResourcesFactEvidence, PlaceResourcesLiveFacts,
     PlaceResourcesPoolError, RareGoodLiveFact, ResourceDivvyPoolState, ResourceGoodDisposition,
@@ -37,7 +48,10 @@ use don_replay::post_nubify_transition_frontier::{
     MAP_POST_NUBIFY_SOURCE_TOKEN, MAP_POST_TRANSITIONS_CHECKPOINT_CALL_VA,
     MAP_POST_TRANSITIONS_SOURCE_TOKEN,
 };
-use don_sim::systems::map_terrain::World;
+use don_replay::resource_divvy_pool_selection_frontier::{
+    execute_resource_pool_selection, ResourcePoolLane,
+};
+use don_sim::{rng::Random, systems::map_terrain::World};
 
 const RANDOM_STATE: i32 = 0x1234_5678;
 
@@ -218,6 +232,160 @@ fn xml_facts(
     }
 }
 
+struct NoPlacementExpected;
+
+impl PlacementHost for NoPlacementExpected {
+    fn place(&mut self, _request: &PlacementRequest) -> Option<PlacementReceipt> {
+        panic!("chance-miss integration must not enter an opaque placement body")
+    }
+}
+
+struct ExactSelectorHost;
+
+impl PlacementHost for ExactSelectorHost {
+    fn place(&mut self, request: &PlacementRequest) -> Option<PlacementReceipt> {
+        let mut pool = request.resource_pool_before.clone()?;
+        let mut random = Random::new(request.random_state_before);
+        let selection =
+            execute_resource_pool_selection(&mut pool, ResourcePoolLane::Late, &mut random).ok()?;
+        let random_draws = selection
+            .random_draws
+            .iter()
+            .map(|draw| CalleeRandomDraw {
+                call_va: draw.call_va,
+                random_get_va: draw.random_get_va,
+                low: draw.low,
+                high: draw.high,
+                state_before: draw.state_before,
+                raw: draw.raw,
+                state_after: draw.state_after,
+            })
+            .collect();
+        Some(PlacementReceipt {
+            request: request.clone(),
+            random_draws,
+            random_state_after: random.state(),
+            allocations: Vec::new(),
+            allocated_count: 0,
+            world_checksum_after: request.world_checksum_before.clone(),
+            sourced_walked_bytes_after: request.sourced_walked_bytes,
+            resource_pool_digest_after: resource_divvy_pool_digest(&pool),
+            resource_pool_selections: vec![selection],
+            resource_pool_after: Some(pool),
+            evidence: PlacementEvidence::RetailCapture {
+                executable_sha256: BONUS_EXE_SHA256.to_owned(),
+                capture_sha256: [0xe9; 32],
+            },
+        })
+    }
+}
+
+struct CorruptSelectorHost;
+
+impl PlacementHost for CorruptSelectorHost {
+    fn place(&mut self, request: &PlacementRequest) -> Option<PlacementReceipt> {
+        let mut exact = ExactSelectorHost;
+        let mut receipt = exact.place(request)?;
+        receipt.resource_pool_selections[0]
+            .pool_after
+            .late_bits
+            .bytes[0] ^= 1;
+        Some(receipt)
+    }
+}
+
+fn selector_scaled_facts() -> Vec<ScaledAttributeFact> {
+    [
+        (ScaledAttribute::NumRare, NUM_RARE_SCALE_CALL_VA, 1),
+        (
+            ScaledAttribute::GroupSpacing,
+            GROUP_SPACING_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::PlayerKeepAway,
+            PLAYER_KEEP_AWAY_SCALE_CALL_VA,
+            1,
+        ),
+        (
+            ScaledAttribute::PlayerStayNear,
+            PLAYER_STAY_NEAR_SCALE_CALL_VA,
+            1,
+        ),
+        (
+            ScaledAttribute::CenterKeepAway,
+            CENTER_KEEP_AWAY_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::CenterStayNear,
+            CENTER_STAY_NEAR_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::CornerKeepAway,
+            CORNER_KEEP_AWAY_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::CornerStayNear,
+            CORNER_STAY_NEAR_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::EdgeKeepAway,
+            EDGE_KEEP_AWAY_SCALE_CALL_VA,
+            0,
+        ),
+        (
+            ScaledAttribute::EdgeStayNear,
+            EDGE_STAY_NEAR_SCALE_CALL_VA,
+            0,
+        ),
+    ]
+    .into_iter()
+    .map(|(attribute, call_va, scaled)| ScaledAttributeFact {
+        attribute,
+        call_va,
+        expression: scaled.to_string(),
+        scaled,
+    })
+    .collect()
+}
+
+fn selector_bonus_facts(
+    handoff: &don_replay::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff,
+    chance_group: i32,
+) -> FirstBonusMutationFacts {
+    let row = &handoff.rows[0];
+    FirstBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "Late".to_owned(),
+        type_resolution: ResourceTypeResolution::PoolSelector {
+            selector: 3,
+            matched_call_va: SELECTOR_THREE_IGNORE_CALL_VA,
+        },
+        chance: 100,
+        chance_group,
+        pattern_name: "player".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: selector_scaled_facts(),
+        evidence: BonusMutationEvidence::RetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0xfa; 32],
+            entry_va: handoff.resume_va,
+            capture_ordinal: row.capture_ordinal,
+            random_state: handoff.random_state,
+            world_checksum: handoff.world_checksum.clone(),
+            sourced_walked_bytes: handoff.sourced_walked_bytes,
+            resource_pool_digest: handoff.resource_pool_digest,
+        },
+    }
+}
+
 #[test]
 fn schedule_and_receipts_preserve_checkpoint_rng_world_and_map_identity() {
     let schedule_names = MAP_MAKE_SCHEDULE
@@ -393,7 +561,7 @@ fn stale_post_or_pool_provenance_fails_before_committing_pool_state() {
 fn typed_xml_owner_advances_schedule_to_exact_row_boundary() {
     let place_resources_stage = &MAP_MAKE_SCHEDULE[12];
     assert_eq!(place_resources_stage.name, "place_resources");
-    assert!(place_resources_stage.rng.contains("0x0068fb9d"));
+    assert!(place_resources_stage.rng.contains("0x00690215"));
 
     let post = post_nubify();
     let owner = owner();
@@ -468,6 +636,203 @@ fn typed_xml_owner_advances_schedule_to_exact_row_boundary() {
     );
     assert_eq!(boundary.xml_frontier.handoff.current_category_handles, host);
     assert_eq!(pool, expected_pool);
+}
+
+#[test]
+fn first_bonus_schedule_continuation_preserves_the_authoritative_public_pool() {
+    let post = post_nubify();
+    let owner = owner();
+    let caller = caller_facts(&post, &owner, 0);
+    let resources = resource_facts(&post);
+    let expected_pool = expected_resource_pool();
+    let xml = xml_facts(&post, resource_divvy_pool_digest(&expected_pool));
+    let mut pool = ResourceDivvyPoolState::default();
+    let mut xml_host = XmlHostHandles::default();
+    let schedule = execute_map_make_resource_schedule_with_xml(
+        &mut pool,
+        &mut xml_host,
+        &post,
+        &owner,
+        &caller,
+        Some(&resources),
+        Some(&xml),
+    )
+    .unwrap();
+    let handoff = match &schedule.placement {
+        MapMakeResourcePlacementReceipt::XmlRowsOpen(boundary) => {
+            boundary.xml_frontier.handoff.clone()
+        }
+        _ => panic!("XML facts must produce the first-row handoff"),
+    };
+    let row = &handoff.rows[0];
+    let facts = FirstBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "Salt".to_owned(),
+        type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
+        chance: 0,
+        chance_group: 0,
+        pattern_name: "player".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: Vec::new(),
+        evidence: BonusMutationEvidence::RetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0xd8; 32],
+            entry_va: handoff.resume_va,
+            capture_ordinal: row.capture_ordinal,
+            random_state: handoff.random_state,
+            world_checksum: handoff.world_checksum.clone(),
+            sourced_walked_bytes: handoff.sourced_walked_bytes,
+            resource_pool_digest: handoff.resource_pool_digest,
+        },
+    };
+    let pool_before = pool.clone();
+    let mut placement_host = NoPlacementExpected;
+
+    let continued = continue_map_make_resource_schedule_first_bonus(
+        &mut pool,
+        &schedule,
+        &facts,
+        &mut placement_host,
+    )
+    .unwrap();
+    let MapMakeResourcePlacementReceipt::FirstBonusRowOpen(boundary) = continued.placement else {
+        panic!("first row must advance to its exact recurrence boundary");
+    };
+
+    assert_eq!(
+        boundary.first_bonus.disposition,
+        FirstBonusDisposition::ChanceMiss
+    );
+    assert_eq!(boundary.first_bonus.residual_va, 0x0069_0215);
+    assert_eq!(
+        boundary.pending_checkpoint_call_va,
+        MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+    );
+    assert_eq!(
+        boundary.pending_source_token,
+        MAP_POST_RESOURCES_SOURCE_TOKEN
+    );
+    assert_eq!(boundary.resource_pool_after, pool_before);
+    assert_eq!(pool, pool_before);
+    assert_eq!(MAP_MAKE_SCHEDULE[12].checkpoint, None);
+}
+
+#[test]
+fn selector_continuation_commits_the_exact_concrete_post_placement_pool() {
+    let post = post_nubify();
+    let owner = owner();
+    let caller = caller_facts(&post, &owner, 0);
+    let mut resources = resource_facts(&post);
+    resources.goods[2].random_rare_drop = 1;
+    resources.goods[2].resolved_age = 3;
+    let mut expected_pool = expected_resource_pool();
+    expected_pool.late_bits.bits = 2;
+    expected_pool.late_goods.push(FIRST_SCANNED_GOOD_ID + 2);
+    let xml = xml_facts(&post, resource_divvy_pool_digest(&expected_pool));
+    let mut pool = ResourceDivvyPoolState::default();
+    let mut xml_host = XmlHostHandles::default();
+    let schedule = execute_map_make_resource_schedule_with_xml(
+        &mut pool,
+        &mut xml_host,
+        &post,
+        &owner,
+        &caller,
+        Some(&resources),
+        Some(&xml),
+    )
+    .unwrap();
+    assert_eq!(pool, expected_pool);
+    let handoff = match &schedule.placement {
+        MapMakeResourcePlacementReceipt::XmlRowsOpen(boundary) => {
+            boundary.xml_frontier.handoff.clone()
+        }
+        _ => panic!("XML facts must produce the first-row handoff"),
+    };
+    let facts = selector_bonus_facts(&handoff, -1);
+    let digest_before = resource_divvy_pool_digest(&pool);
+    let mut placement_host = ExactSelectorHost;
+
+    let continued = continue_map_make_resource_schedule_first_bonus(
+        &mut pool,
+        &schedule,
+        &facts,
+        &mut placement_host,
+    )
+    .unwrap();
+    let MapMakeResourcePlacementReceipt::FirstBonusRowOpen(boundary) = continued.placement else {
+        panic!("selector row must advance to its exact recurrence boundary");
+    };
+    let placement = boundary.first_bonus.placement.as_ref().unwrap();
+
+    assert_eq!(
+        boundary.first_bonus.disposition,
+        FirstBonusDisposition::Placed(
+            don_replay::place_resources_bonus_mutation_frontier::PlacementPath::Player
+        )
+    );
+    assert_eq!(placement.resource_pool_selections.len(), 1);
+    assert_eq!(
+        placement.resource_pool_selections[0].lane,
+        ResourcePoolLane::Late
+    );
+    assert_eq!(pool, boundary.resource_pool_after);
+    assert_eq!(
+        resource_divvy_pool_digest(&pool),
+        placement.resource_pool_digest_after
+    );
+    assert_ne!(resource_divvy_pool_digest(&pool), digest_before);
+}
+
+#[test]
+fn malformed_selector_subreceipt_rolls_back_the_public_pool_after_direct_chance_rng() {
+    let post = post_nubify();
+    let owner = owner();
+    let caller = caller_facts(&post, &owner, 0);
+    let mut resources = resource_facts(&post);
+    resources.goods[2].random_rare_drop = 1;
+    resources.goods[2].resolved_age = 3;
+    let mut expected_pool = expected_resource_pool();
+    expected_pool.late_bits.bits = 2;
+    expected_pool.late_goods.push(FIRST_SCANNED_GOOD_ID + 2);
+    let xml = xml_facts(&post, resource_divvy_pool_digest(&expected_pool));
+    let mut pool = ResourceDivvyPoolState::default();
+    let mut xml_host = XmlHostHandles::default();
+    let schedule = execute_map_make_resource_schedule_with_xml(
+        &mut pool,
+        &mut xml_host,
+        &post,
+        &owner,
+        &caller,
+        Some(&resources),
+        Some(&xml),
+    )
+    .unwrap();
+    let handoff = match &schedule.placement {
+        MapMakeResourcePlacementReceipt::XmlRowsOpen(boundary) => {
+            boundary.xml_frontier.handoff.clone()
+        }
+        _ => panic!("XML facts must produce the first-row handoff"),
+    };
+    // Group zero consumes the direct row draw before the corrupt placement receipt arrives.
+    let facts = selector_bonus_facts(&handoff, 0);
+    let pool_before = pool.clone();
+    let mut corrupt_host = CorruptSelectorHost;
+
+    assert_eq!(
+        continue_map_make_resource_schedule_first_bonus(
+            &mut pool,
+            &schedule,
+            &facts,
+            &mut corrupt_host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusFrontier(
+            FirstBonusMutationError::InvalidResourcePoolSelection { index: 0 }
+        ))
+    );
+    assert_eq!(pool, pool_before);
 }
 
 #[test]
