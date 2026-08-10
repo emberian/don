@@ -7,7 +7,8 @@ use don_replay::map_make_resource_caller_gap_frontier::{
     MAP_PLACE_RESOURCES_CALL_VA, MAP_PLACE_RESOURCES_ENTRY_VA,
     MAP_POST_RESOURCES_CHECKPOINT_CALL_VA, MAP_POST_RESOURCES_SOURCE_TOKEN,
     MAP_RESOURCE_CALLER_GAP_RESUME_VA, MAP_RESOURCE_DIAGNOSTIC_CHECKPOINT_CALL_VA,
-    MAP_RESOURCE_DIAGNOSTIC_SOURCE_TOKEN, SEMAPHORE_TEST_MASK,
+    MAP_RESOURCE_DIAGNOSTIC_SOURCE_TOKEN, MAP_RESOURCE_PROGRESS_CHECKPOINT_CALL_VA,
+    MAP_RESOURCE_PROGRESS_SOURCE_TOKEN, SEMAPHORE_TEST_MASK,
     SHIPPED_EXE_SHA256 as CALLER_EXE_SHA256, SHIPPED_PDB_SHA256 as CALLER_PDB_SHA256,
 };
 use don_replay::map_make_resource_schedule_integration::{
@@ -172,6 +173,14 @@ fn schedule_and_receipts_preserve_checkpoint_rng_world_and_map_identity() {
     assert_eq!(receipt.post_nubify_checkpoint.source_token, 0x1ebe);
     assert_eq!(receipt.post_nubify_checkpoint.random_state, RANDOM_STATE);
     assert_eq!(receipt.caller_gap.random_draws, 0);
+    assert_eq!(
+        receipt.caller_gap.checkpoints[0].call_va,
+        MAP_RESOURCE_PROGRESS_CHECKPOINT_CALL_VA
+    );
+    assert_eq!(
+        receipt.caller_gap.checkpoints[0].source_token,
+        MAP_RESOURCE_PROGRESS_SOURCE_TOKEN
+    );
     assert_eq!(
         receipt.caller_gap.checkpoints[1].call_va,
         MAP_RESOURCE_DIAGNOSTIC_CHECKPOINT_CALL_VA
