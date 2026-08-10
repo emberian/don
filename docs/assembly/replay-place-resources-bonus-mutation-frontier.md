@@ -70,6 +70,10 @@ The other reads are `pattern` at `0x0068fe35`, `saturate` at `0x0068ff21`, and
 player keep/stay-near values are clamped to at least one. The remaining scaled fields
 are passed without a caller-side clamp.
 
+After `numrare` is scaled at `0x0068fdcf`, a zero result jumps directly to the row
+tail at `0x0068fdd7`. The winner flag has already been set and therefore remains true,
+but neither the remaining placement attributes nor either placement body is called.
+
 The typed placement request names every argument instead of relying on positional
 intuition. It also binds the entry RNG state, complete World section checksum,
 sourced/walked byte count, and six-field resource-pool digest.
@@ -131,7 +135,8 @@ tail at `0x00690225`.
 
 Still red:
 
-- later-row chance-bucket carry and the zero-key forced redraw rule;
+- schedule integration of the recovered later-row chance-bucket carry and zero-key
+  forced-redraw owner;
 - exact ports of the two placement bodies rather than typed receipts;
 - the full resource-divvy bitmask mutation, candidate scans, and all transitive RNG
   draws inside those bodies;

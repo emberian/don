@@ -91,7 +91,7 @@ pub enum ResourceTypeResolution {
 }
 
 impl ResourceTypeResolution {
-    fn good_and_selector(self) -> Option<(i32, i32)> {
+    pub(crate) fn good_and_selector(self) -> Option<(i32, i32)> {
         match self {
             Self::CatalogGood { good_id } if good_id >= 0 => Some((good_id, 0)),
             Self::PoolSelector {
@@ -121,7 +121,7 @@ pub enum PlacementPattern {
 }
 
 impl PlacementPattern {
-    fn path(self) -> PlacementPath {
+    pub(crate) fn path(self) -> PlacementPath {
         if self == Self::Player {
             PlacementPath::Player
         } else {
@@ -193,7 +193,7 @@ pub enum BonusMutationEvidence {
 }
 
 impl BonusMutationEvidence {
-    fn admissible(&self, entry: &PlaceResourcesBonusRowsHandoff, ordinal: u32) -> bool {
+    pub(crate) fn admissible(&self, entry: &PlaceResourcesBonusRowsHandoff, ordinal: u32) -> bool {
         let fields_match = |entry_va: u32,
                             capture_ordinal: u32,
                             random_state: i32,
@@ -288,6 +288,12 @@ impl FirstBonusMutationFacts {
                     fact.attribute == attribute && fact.call_va == call_va
                 },
             )
+    }
+
+    fn validate_num_rare(&self) -> bool {
+        self.scaled.first().is_some_and(|fact| {
+            fact.attribute == ScaledAttribute::NumRare && fact.call_va == NUM_RARE_SCALE_CALL_VA
+        })
     }
 }
 
@@ -483,6 +489,7 @@ pub trait PlacementHost {
 pub enum FirstBonusDisposition {
     UnknownType,
     ChanceMiss,
+    ZeroRequested,
     Placed(PlacementPath),
 }
 
@@ -622,7 +629,7 @@ fn validate_allocation(request: &PlacementRequest, allocation: &ResourceAllocati
         && (write.old_down != write.new_down || write.old_down_who != write.new_down_who)
 }
 
-fn validate_placement_receipt(
+pub(crate) fn validate_placement_receipt(
     request: &PlacementRequest,
     receipt: &PlacementReceipt,
 ) -> Result<(), FirstBonusMutationError> {
@@ -891,7 +898,7 @@ pub fn execute_first_bonus_mutation<H: PlacementHost>(
         ));
     }
 
-    if !facts.validate_scaled() {
+    if !facts.validate_num_rare() {
         // Restore the direct draw too: validation is intentionally ahead of commit.
         state.random_state = random_state_before;
         return Err(FirstBonusMutationError::InvalidScaledAttributes);
@@ -901,6 +908,26 @@ pub fn execute_first_bonus_mutation<H: PlacementHost>(
         MAP_SCALE_NUMBER_VA,
         CallbackKind::Scale(ScaledAttribute::NumRare),
     ));
+    if facts
+        .scaled_value(ScaledAttribute::NumRare)
+        .expect("scaled attributes validated above")
+        == 0
+    {
+        return Ok(finish_without_placement(
+            state,
+            callbacks,
+            chance_draw,
+            budget_before,
+            budget,
+            true,
+            FirstBonusDisposition::ZeroRequested,
+        ));
+    }
+    if !facts.validate_scaled() {
+        // The nine remaining attributes are not read on the zero-`numrare` path.
+        state.random_state = random_state_before;
+        return Err(FirstBonusMutationError::InvalidScaledAttributes);
+    }
     callbacks.push(callback(
         PATTERN_GET_ATTRIB_CALL_VA,
         XMLELEMENT_GET_ATTRIB_VA,

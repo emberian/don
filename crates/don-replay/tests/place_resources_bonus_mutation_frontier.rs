@@ -383,6 +383,31 @@ fn native_minus_one_group_selects_from_zero_budget_without_a_direct_draw() {
 }
 
 #[test]
+fn zero_numrare_keeps_the_native_winner_but_skips_the_placement_body() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 1);
+    let mut host = ScriptedPlacementHost::no_allocation(&world);
+    let mut facts = facts(
+        &entry,
+        ResourceTypeResolution::CatalogGood { good_id: 6 },
+        1,
+        -1,
+    );
+    facts.scaled[0].scaled = 0;
+    facts.scaled.truncate(1);
+    let mut state = PlaceResourcesBonusMutationState::from_handoff(&entry);
+
+    let receipt = execute_first_bonus_mutation(&mut state, &entry, &facts, &mut host).unwrap();
+
+    assert_eq!(receipt.disposition, FirstBonusDisposition::ZeroRequested);
+    assert!(receipt.chance_winner_seen);
+    assert!(receipt.placement.is_none());
+    assert!(host.requests.is_empty());
+    assert_eq!(state.requested_resources, 0);
+    assert_eq!(state.allocated_resources, 0);
+}
+
+#[test]
 fn unknown_type_exits_before_chance_and_scaling_callbacks() {
     let world = World::init_default_rules(4, 4);
     let entry = handoff(&world, 1);
