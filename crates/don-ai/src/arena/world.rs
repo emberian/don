@@ -70,12 +70,14 @@ use don_sim::mechanics::{
 use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BASE};
 use don_sim::rng::Random;
 use don_sim::systems::borders_fog::{
-    claim_tile, leader_border_params, BorderSource, BorderSourceKind, LeaderBorderInput,
-    LeaderBorderParams, TerritoryRules,
+    claim_tile, fine_to_fog, leader_border_params, update_seen, BorderSource, BorderSourceKind,
+    CircleTable as VisibilityCircleTable, Fog, FogLeader, LeaderBorderInput, LeaderBorderParams,
+    SeeingObject, TerritoryRules,
 };
-use don_sim::systems::casters_animals::{
-    CLOAK_OBJECT_FLAG, CLOAK_SECONDARY_OBJECT_FLAG, CLOAK_TYPE_FLAG, CLOAK_WHILE_IDLE_TYPE_FLAG,
+use don_sim::systems::building_gather::{
+    calc_shipped_farm_gather, FarmGatherError, FarmGatherRequest, FarmGatherRules,
 };
+use don_sim::systems::casters_animals::{has_detector_mask, is_cloaked, is_detected};
 use don_sim::systems::collision::{
     self, CollCheck, CollGuy, UnitRow as CollisionUnit, UnitTable as CollisionUnits,
 };
@@ -92,8 +94,17 @@ use don_sim::systems::construction_lifecycle::{
     self, BuildActivationPlan, CloseReceipt, ConstructionLifecycleHost, FarmAnimalSpawn,
     FarmParent, QueryReceipt, TCoord, VisibilityReceipt, WallStartPlan,
 };
+use don_sim::systems::containment::NearbyUnitType;
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
-use don_sim::systems::gather_lifecycle::OrdinaryGatherKind;
+use don_sim::systems::gather_lifecycle::{
+    FarmFirstTickDisposition, OrdinaryGatherKind, OrdinaryGatherTarget,
+};
+use don_sim::systems::gathering::{GatherNearbyPoint, GatherTile};
+use don_sim::systems::graphics_turret::{
+    materialize_unit_graphics_bound, resolve_unit_turret_aim, GraphicsMaterializationStats,
+    GraphicsResourceError, GuyGraphicsExtractor, MaterializedUnitGraphics, PivotOffsetProvider,
+    UnitGraphicsCatalog, UnitTurretAimError,
+};
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
 use don_sim::systems::held_target::{
     attack_distance, AttackDistanceInput, AttackDistanceMode, ObjectFootprint,
@@ -111,7 +122,9 @@ use don_sim::systems::target::{
 
 use super::cmd::{Cmd, EntId};
 use super::gather_runtime::{
-    ArenaGatherRuntime, GatherCapacityAuthority, GatherObjectKey, GatherPrerequisiteRefusal,
+    ArenaGatherRuntime, AuthoritativeFarmFirstTick, AuthoritativeGatherPayoutSource,
+    AuthoritativeGatherSitePlacement, AuthoritativeGatherSiteType, GatherCapacityAuthority,
+    GatherObjectKey, GatherPerWorkerEvaluationRequest, GatherPrerequisiteRefusal,
 };
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
@@ -136,6 +149,10 @@ pub const FPS: i64 = 15;
 
 /// Half a tile, in world units — where an entity stands inside its tile.
 const HALF: i32 = RANGE_UNITS_PER_TILE / 2;
+
+/// `UnitData::is_seen` `0x00607A60` bypasses its detector query when this instance bit is
+/// set. It does not bypass the following current-fog/object-visible admission.
+const UNIT_MASK_DETECTION_BYPASS: u32 = 0x0000_1000;
 
 /// `TypeIndex` constants the arena refers to by name. Every one is checked against the
 /// loaded table by [`Ids::resolve`], so a renamed or renumbered type is a loud failure
@@ -312,6 +329,10 @@ pub struct Ent {
     /// Last mutation-bearing construction receipt for this site. It pins the site,
     /// builder and BUILD_AT identities beside the recovered outcome/checksum effects.
     pub last_construction_receipt: Option<ArenaConstructionReceipt>,
+    /// Exact shared `construction::interrupt_builder` receipt for builder death or an
+    /// explicit re-order/cancel. This lives on the builder, not the site: retail keeps no
+    /// persistent site-side helper membership to decrement.
+    pub last_construction_interruption: Option<construction::BuildReceipt>,
     pub job: Job,
     pub cycle: AttackCycle,
     /// 32-bit turn units. Set when the entity moves or fires.
@@ -348,6 +369,43 @@ pub struct Ent {
     /// Retail allocates `squad_size + crew_size` `GuyData` records per unit.  Keeping the
     /// real records is required by collision, which stamps each live squad guy separately.
     pub guys: UnitGuys,
+    /// Exact selected-gpiece graph identities. `None` means the installed graphics/.bh3
+    /// host has not materialized this unit; it never means "proven non-turret".
+    graphics_binding: Option<MaterializedUnitGraphics>,
+    /// One-frame, target-identity-bound result from the exact graphics-pivot host.
+    prepared_graphics_aim: Option<PreparedGraphicsAim>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedGraphicsAim {
+    frame: i64,
+    target: EntId,
+    target_x: i32,
+    target_y: i32,
+    aim_mode: AimMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArenaGraphicsAdapterError {
+    MissingEntity(EntId),
+    MissingTarget(EntId),
+    Building(EntId),
+    EmptyUnitGraph { id: EntId, type_id: i32 },
+    Unmaterialized(EntId),
+    Resource(GraphicsResourceError),
+    Aim(UnitTurretAimError),
+}
+
+impl From<GraphicsResourceError> for ArenaGraphicsAdapterError {
+    fn from(value: GraphicsResourceError) -> Self {
+        Self::Resource(value)
+    }
+}
+
+impl From<UnitTurretAimError> for ArenaGraphicsAdapterError {
+    fn from(value: UnitTurretAimError) -> Self {
+        Self::Aim(value)
+    }
 }
 
 impl Ent {
@@ -446,6 +504,50 @@ pub enum ConstructionMode {
     FailClosedRetail,
 }
 
+/// Authoritative non-object facts required by the supported completed-Farm gather arm.
+///
+/// These are deliberately installed by a source owner. Arena does not infer a
+/// `FarmData::update` result, game-global gate, city enhancer, or nation power from its
+/// symmetric generated-map labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthoritativeFarmSiteFacts {
+    pub farm_update_result: i32,
+    pub game_gate_value: i32,
+    pub city_enhancer_percent: [i32; don_sim::systems::economy::NUM_RESOURCES],
+    pub has_japanese_fishing_bonus: bool,
+    pub has_egyptian_farm_bonus: bool,
+}
+
+impl Default for AuthoritativeFarmSiteFacts {
+    fn default() -> Self {
+        Self {
+            farm_update_result: 1,
+            game_gate_value: 1,
+            city_enhancer_percent: [100; don_sim::systems::economy::NUM_RESOURCES],
+            has_japanese_fishing_bonus: false,
+            has_egyptian_farm_bonus: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthoritativeFarmSiteReceipt {
+    pub site: EntId,
+    pub capacity: i32,
+    pub footprint_resources: [i32; don_sim::systems::economy::NUM_RESOURCES],
+    pub per_worker_gross: [i32; don_sim::systems::economy::NUM_RESOURCES],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthoritativeFarmSiteError {
+    MissingSite(EntId),
+    NotCompletedFarm(EntId),
+    MissingRetailTerrainSources,
+    TerrainSourceMismatch,
+    FarmEvaluation(FarmGatherError),
+    RuntimeInvariant(&'static str),
+}
+
 impl Default for ArenaParams {
     fn default() -> Self {
         ArenaParams {
@@ -507,9 +609,15 @@ pub struct World {
     /// fails its retail prerequisite preflight and continues only through the separately
     /// labelled MODEL 3 gameplay path below.
     gather_runtime: ArenaGatherRuntime,
+    /// Per-site external facts admitted only after the retained terrain plane and the
+    /// shared completed-Farm evaluator have succeeded transactionally.
+    authoritative_farm_sites: BTreeMap<GatherObjectKey, AuthoritativeFarmSiteFacts>,
     /// `World::wdata`'s target-acquisition chains and checksummed near/targeted fields.
     target_world: TargetWorld,
     target_circle: CircleTable,
+    /// Exact `circle_init` table used by `Object::update_seen`. This is distinct from the
+    /// target-search circle because its coordinates are retail fog cells, not target cells.
+    visibility_circle: VisibilityCircleTable,
     /// Owner-local walked registries used by `Supplies::find_supply` and
     /// `HeroesData::find_hero`. Slots are stable and inactive holes are reused before the
     /// arrays grow, matching the retail init/close transactions.
@@ -1178,6 +1286,7 @@ struct ArenaTargetAdapter<'a> {
     territory: &'a don_sim::systems::map_terrain::World,
     balance: &'a BalanceTable,
     combat: &'a CombatConstants,
+    diplomacy: &'a DiplomacyState,
     frame: i32,
 }
 
@@ -1198,37 +1307,93 @@ impl ArenaTargetAdapter<'_> {
         self.territory.get_tregion(tx, ty)
     }
 
-    fn currently_visible(&self, observer: usize, e: &Ent) -> bool {
-        let (tx, ty) = e.tile();
-        if tx < 0 || ty < 0 || tx >= self.map.w || ty >= self.map.h {
-            return false;
+    fn vision_mask(&self, observer: usize) -> u8 {
+        if observer >= 8 {
+            return 0;
         }
-        self.players[observer].visible[(ty * self.map.w + tx) as usize]
+        (0..self.players.len().min(8)).fold(0u8, |mask, other| {
+            if self.diplomacy.is_ally(observer, other).unwrap_or(false) {
+                mask | (1u8 << other)
+            } else {
+                mask
+            }
+        })
+    }
+
+    fn fog_masks(&self, e: &Ent) -> Option<(u8, u8)> {
+        let fx = fine_to_fog(e.x);
+        let fy = fine_to_fog(e.y);
+        self.territory.valid_f(fx, fy).then(|| {
+            let index = self.territory.f_index(fx, fy);
+            (self.territory.seen[index], self.territory.seen3[index])
+        })
+    }
+
+    fn currently_visible(&self, observer: usize, e: &Ent) -> bool {
+        if usize::from(e.who) == observer {
+            return true;
+        }
+        let Some((seen, _)) = self.fog_masks(e) else {
+            return false;
+        };
+        seen & self.vision_mask(observer) != 0
+    }
+
+    fn detected(&self, observer: usize, e: &Ent) -> bool {
+        let Some((_, detected)) = self.fog_masks(e) else {
+            return false;
+        };
+        is_detected(e.who, observer as u8, self.vision_mask(observer), detected)
     }
 }
 
 impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
     fn is_enemy(&self, observer_who: i16, candidate_who: i16) -> bool {
-        // Arena match construction has no team/shared-control field: every non-negative
-        // distinct participant slot is an opposing FFA leader. Diplomacy expansion remains
-        // a literal MODEL 6 blocker rather than being guessed from object ownership here.
-        observer_who >= 0
-            && candidate_who >= 0
-            && (observer_who as usize) < self.players.len()
-            && (candidate_who as usize) < self.players.len()
-            && observer_who != candidate_who
+        let (Ok(observer), Ok(candidate)) = (
+            usize::try_from(observer_who),
+            usize::try_from(candidate_who),
+        ) else {
+            return false;
+        };
+        observer < self.players.len()
+            && candidate < self.players.len()
+            && self
+                .diplomacy
+                .is_enemy(observer, candidate)
+                .unwrap_or(false)
     }
 
     fn is_seen(&self, observer_who: i16, candidate: ObjRef) -> bool {
         let Ok(observer) = usize::try_from(observer_who) else {
             return false;
         };
+        if observer >= self.players.len() {
+            return false;
+        }
         let Some(e) = self.ent(candidate) else {
             return false;
         };
+        if !e.building {
+            let Some(t) = self.types.get(e.type_id) else {
+                return false;
+            };
+            let Some(motion) = e.motion.as_ref() else {
+                return false;
+            };
+            if is_cloaked(
+                motion.unit_masks,
+                t.unit_flags,
+                motion.unit_masks2,
+                !motion.orders.is_empty(),
+            ) && motion.unit_masks & UNIT_MASK_DETECTION_BYPASS == 0
+                && !self.detected(observer, e)
+            {
+                return false;
+            }
+        }
         // UnitData::is_seen 0x00607A60 and BuildData::is_seen 0x0062E1A0 admit the
-        // current fog plane or the object's remembered-visible bit. Arena memory is that
-        // per-object bit plus the last sighting payload. After that admission retail's
+        // current retail fog plane or the object's remembered-visible bit. Arena memory is
+        // that per-object bit plus the last sighting payload. After that admission retail's
         // find_nearby_target walks the live WData object and check/compare_target read its
         // current coordinates, damage and action. Deliberately do not substitute the
         // Sighting payload here: the simulation-internal acquisition would then diverge
@@ -1255,23 +1420,10 @@ impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
             return None;
         }
 
-        let (target_masks, target_masks2) = target_ent
+        let (target_masks, _) = target_ent
             .motion
             .as_ref()
             .map_or((0, 0), |u| (u.unit_masks, u.unit_masks2));
-        // UnitData::is_seen 0x00607A60 runs cloak/is_detected before its current-or-memory
-        // fog test. Arena does not yet materialise the detector seen3 plane or the exact
-        // action-pointer arm for CLOAK_WHILE_IDLE, so admitting any cloak-capable/dynamic
-        // cloak object would reveal it permissively. Fail closed until that literal target
-        // visibility host exists. CompareTarget's separate unit_masks bit 0 detection read
-        // is gated for the same reason.
-        if !target_ent.building
-            && (dt.unit_flags & (CLOAK_TYPE_FLAG | CLOAK_WHILE_IDLE_TYPE_FLAG) != 0
-                || target_masks & (CLOAK_OBJECT_FLAG | 1) != 0
-                || target_masks2 & CLOAK_SECONDARY_OBJECT_FLAG != 0)
-        {
-            return None;
-        }
 
         let target_terrain = self.map.at(target_ent.tile().0, target_ent.tile().1);
         let valid_target_const =
@@ -1439,8 +1591,11 @@ impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
             t_is_supply: !target_ent.building && dt.unit_flags2 & 0x40 != 0,
             // Non-land candidates are hard-gated above, so air is impossible here.
             t_domain_is_air: false,
-            // unit_masks bit 0 is hard-gated with the missing detector plane above.
-            t_stealth_undetected: false,
+            // `compare_target` carries a second stealth preference for instance bit zero;
+            // unlike the cloak gate in `UnitData::is_seen`, a detected object remains a
+            // candidate and simply clears this preference input.
+            t_stealth_undetected: target_masks & 1 != 0
+                && !self.detected(attacker.who as usize, target_ent),
             t_type_mask_0x10000: dt.role & 0x1_0000 != 0,
             t_type_mask_0x200000: dt.unit_flags & 0x20_0000 != 0,
             t_type_mask_0x10: dt.unit_flags & 0x10 != 0,
@@ -1899,7 +2054,10 @@ impl construction::ConstructionEffects for ArenaResearchConstructionHost<'_> {
         let worker = self.world.ents[self.builder_index].id;
         let site = self.world.ents[self.site_index].id;
         let gather_after = self.world.ents[self.site_index].worker_cap > 0;
-        self.world.detach(worker);
+        self.world
+            .retire_motion_order(self.builder_index, KillReason::Completed);
+        self.world.ents[self.builder_index].build_order = None;
+        self.world.detach_without_construction_interrupt(worker);
         self.world.ents[self.builder_index].job = if gather_after {
             Job::Gather { target: site }
         } else {
@@ -1913,13 +2071,20 @@ impl construction::ConstructionEffects for ArenaResearchConstructionHost<'_> {
 
     fn interrupt_builder(
         &mut self,
-        _builder: ObjectKey,
-        _target: ObjectKey,
+        builder: ObjectKey,
+        target: ObjectKey,
         _reason: construction::BuilderFinish,
     ) -> Result<construction::EffectReceipt, Self::Error> {
-        Err(ArenaConstructionHostError::UnsupportedLifecycle(
-            "construction interruption remains a separate blocker",
-        ))
+        self.require_key(self.builder_index, builder)?;
+        self.require_key(self.site_index, target)?;
+        self.world
+            .retire_motion_order(self.builder_index, KillReason::Failed);
+        self.world.ents[self.builder_index].build_order = None;
+        self.world.ents[self.builder_index].job = Job::Idle;
+        Ok(construction_effect(construction::ChecksumEffects {
+            units: true,
+            ..construction::ChecksumEffects::NONE
+        }))
     }
 }
 
@@ -2433,6 +2598,7 @@ impl World {
             ((map.w + 3) / 4).max(1),
             ((map.h + 3) / 4).max(1),
         );
+        collision_world.seed = sim_seed;
         // Arena's generated bitmap is a declared map model, but once admitted it must
         // have one authoritative retail-shaped TData image. Placement, pathing and
         // collision therefore consume these exact setter projections rather than three
@@ -2504,8 +2670,10 @@ impl World {
             collision_check: CollCheck::new(),
             collision_units: CollisionUnits::default(),
             gather_runtime: ArenaGatherRuntime::default(),
+            authoritative_farm_sites: BTreeMap::new(),
             target_world,
             target_circle: circle_table(),
+            visibility_circle: VisibilityCircleTable::build(),
             supply_records: vec![Vec::new(); tribes.len()],
             hero_records: vec![Vec::new(); tribes.len()],
             diplomacy: DiplomacyState::at_war(),
@@ -2518,6 +2686,131 @@ impl World {
         w.settle_starting_territory();
         w.update_fog();
         Ok(w)
+    }
+
+    /// Bind one live completed Farm to the retained retail terrain plane and the shared
+    /// `BuildTypeData::calc_gather` Farm evaluator.
+    ///
+    /// Every fallible terrain/type/evaluator step completes before runtime, entity, or
+    /// authority state is changed. The generated Arena map therefore cannot opt into this
+    /// path by merely labelling grass as LandData.
+    pub fn bind_authoritative_farm_site(
+        &mut self,
+        site: EntId,
+        facts: AuthoritativeFarmSiteFacts,
+    ) -> Result<AuthoritativeFarmSiteReceipt, AuthoritativeFarmSiteError> {
+        let site_index = site
+            .index()
+            .ok_or(AuthoritativeFarmSiteError::MissingSite(site))?;
+        let ent = self
+            .ents
+            .get(site_index)
+            .filter(|ent| ent.alive)
+            .cloned()
+            .ok_or(AuthoritativeFarmSiteError::MissingSite(site))?;
+        if ent.type_id != self.ids.farm || !ent.building || !ent.complete {
+            return Err(AuthoritativeFarmSiteError::NotCompletedFarm(site));
+        }
+        let ty = self
+            .types
+            .get(ent.type_id)
+            .cloned()
+            .ok_or(AuthoritativeFarmSiteError::NotCompletedFarm(site))?;
+        let sources = self
+            .map
+            .gather_terrain_sources()
+            .map_err(|_| AuthoritativeFarmSiteError::MissingRetailTerrainSources)?;
+        let diplomacy = |a: i32, b: i32| {
+            let a = usize::try_from(a).ok()?;
+            let b = usize::try_from(b).ok()?;
+            self.diplomacy.is_ally(a, b).ok()
+        };
+        let host = sources
+            .executable_host(&self.collision_world, &diplomacy)
+            .map_err(|_| AuthoritativeFarmSiteError::TerrainSourceMismatch)?;
+        let (centre_tx, centre_ty) = ent.tile();
+        let corner = GatherTile {
+            tx: centre_tx - ty.x_size / 2,
+            ty: centre_ty - ty.y_size / 2,
+        };
+        let evaluated = calc_shipped_farm_gather(
+            &host,
+            &FarmGatherRules::shipped(),
+            FarmGatherRequest {
+                type_index: ty.id,
+                is_flat: true,
+                x_size: ty.x_size,
+                y_size: ty.y_size,
+                corner,
+                site_owner: i32::from(ent.who),
+                completed: ent.complete,
+                // The retained value is a per-worker vector. Farm's exact cap is one, so
+                // evaluating the one-active-worker image preserves the Egyptian arm too.
+                active_gatherers: 1,
+                city_enhancer_percent: facts.city_enhancer_percent,
+                has_japanese_fishing_bonus: facts.has_japanese_fishing_bonus,
+                has_egyptian_farm_bonus: facts.has_egyptian_farm_bonus,
+            },
+        )
+        .map_err(AuthoritativeFarmSiteError::FarmEvaluation)?;
+        drop(host);
+
+        let site_key = gather_key(&ent);
+        let source = AuthoritativeGatherPayoutSource {
+            site_type: AuthoritativeGatherSiteType {
+                type_index: ty.id,
+                kind: OrdinaryGatherKind::Farm,
+                x_size: ty.x_size,
+                y_size: ty.y_size,
+                gather_radius: None,
+            },
+            placement: AuthoritativeGatherSitePlacement {
+                centre_x: don_sim::systems::map_terrain::Coord(ent.x),
+                centre_y: don_sim::systems::map_terrain::Coord(ent.y),
+                corner_tx: corner.tx,
+                corner_ty: corner.ty,
+                region: i16::try_from(self.collision_world.get_tregion(centre_tx, centre_ty))
+                    .map_err(|_| {
+                        AuthoritativeFarmSiteError::RuntimeInvariant(
+                            "Farm terrain region does not fit retail i16",
+                        )
+                    })?,
+            },
+        };
+        let per_worker_gross = evaluated.gross;
+        let mut evaluator = |_request: GatherPerWorkerEvaluationRequest<'_>| {
+            Ok::<_, std::convert::Infallible>(per_worker_gross)
+        };
+        let mut trial_runtime = self.gather_runtime.clone();
+        trial_runtime
+            .bind_authoritative_payout_source(site_key, source)
+            .map_err(|_| AuthoritativeFarmSiteError::RuntimeInvariant("payout source refused"))?;
+        trial_runtime
+            .evaluate_authoritative_per_worker(site_key, &mut evaluator)
+            .map_err(|_| {
+                AuthoritativeFarmSiteError::RuntimeInvariant("payout evaluation refused")
+            })?;
+        let capacity = trial_runtime
+            .authoritative_capacity(site_key)
+            .map_err(|_| AuthoritativeFarmSiteError::RuntimeInvariant("capacity source missing"))?
+            .ok_or(AuthoritativeFarmSiteError::RuntimeInvariant(
+                "Farm capacity was not authoritative",
+            ))?;
+        if capacity != evaluated.max_gatherers {
+            return Err(AuthoritativeFarmSiteError::RuntimeInvariant(
+                "Farm capacity disagrees with calc_gather",
+            ));
+        }
+
+        self.gather_runtime = trial_runtime;
+        self.authoritative_farm_sites.insert(site_key, facts);
+        self.ents[site_index].worker_cap = capacity;
+        Ok(AuthoritativeFarmSiteReceipt {
+            site,
+            capacity,
+            footprint_resources: evaluated.footprint_resources,
+            per_worker_gross,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -2808,6 +3101,7 @@ impl World {
             construction_refusal: None,
             last_construction_placement_receipt: None,
             last_construction_receipt: None,
+            last_construction_interruption: None,
             job: Job::Idle,
             cycle: AttackCycle::default(),
             facing: if t.kind_unit { INITIAL_UNIT_ANGLE } else { 0 },
@@ -2824,6 +3118,8 @@ impl World {
             attrition_period: 0,
             motion: motion.take(),
             guys,
+            graphics_binding: None,
+            prepared_graphics_aim: None,
         });
         if t.kind_building {
             let corner_x = tx - t.x_size / 2;
@@ -2902,6 +3198,97 @@ impl World {
                 .expect("Arena entity slots never recycle within a World");
         }
         id
+    }
+
+    /// Install the exact selected-gpiece state for one Arena unit.
+    ///
+    /// The live table's `name_internal` column is byte-for-byte the 351 shipped
+    /// `unitrules.xml` `<GRAPH>` identities (case aside), so it is the catalog selector;
+    /// the extractor still owns selected RData/gpiece and `.bh3` hierarchy authority.
+    pub fn materialize_unit_graphics<E: GuyGraphicsExtractor>(
+        &mut self,
+        id: EntId,
+        catalog: &UnitGraphicsCatalog,
+        extractor: &mut E,
+    ) -> Result<GraphicsMaterializationStats, ArenaGraphicsAdapterError> {
+        let index = id
+            .index()
+            .filter(|&index| self.ents.get(index).is_some_and(|ent| ent.alive))
+            .ok_or(ArenaGraphicsAdapterError::MissingEntity(id))?;
+        if self.ents[index].building {
+            return Err(ArenaGraphicsAdapterError::Building(id));
+        }
+        let type_id = self.ents[index].type_id;
+        let graph_name = self
+            .types
+            .get(type_id)
+            .map(|row| row.internal.clone())
+            .filter(|graph| !graph.is_empty())
+            .ok_or(ArenaGraphicsAdapterError::EmptyUnitGraph { id, type_id })?;
+        let (stats, binding) = materialize_unit_graphics_bound(
+            catalog,
+            &graph_name,
+            &mut self.ents[index].guys,
+            extractor,
+        )?;
+        self.ents[index].graphics_binding = Some(binding);
+        self.ents[index].prepared_graphics_aim = None;
+        Ok(stats)
+    }
+
+    /// Evaluate and retain the exact one-frame graphics-turret result consumed by the next
+    /// ready volley against `target`. The receipt is tied to frame, target identity and
+    /// coordinates; movement or delay makes it unusable rather than stale approximation.
+    pub fn prepare_unit_graphics_aim<P: PivotOffsetProvider>(
+        &mut self,
+        id: EntId,
+        target: EntId,
+        catalog: &UnitGraphicsCatalog,
+        provider: &mut P,
+    ) -> Result<(), ArenaGraphicsAdapterError> {
+        let index = id
+            .index()
+            .filter(|&index| self.ents.get(index).is_some_and(|ent| ent.alive))
+            .ok_or(ArenaGraphicsAdapterError::MissingEntity(id))?;
+        if self.ents[index].building {
+            return Err(ArenaGraphicsAdapterError::Building(id));
+        }
+        let target_ent = self
+            .ent(target)
+            .ok_or(ArenaGraphicsAdapterError::MissingTarget(target))?;
+        let (target_x, target_y) = (target_ent.x, target_ent.y);
+        let binding = self.ents[index]
+            .graphics_binding
+            .clone()
+            .ok_or(ArenaGraphicsAdapterError::Unmaterialized(id))?;
+        let (unit_x, unit_y) = (self.ents[index].x, self.ents[index].y);
+        // A failed refresh must not leave an older same-target receipt available.
+        self.ents[index].prepared_graphics_aim = None;
+        let resolution = resolve_unit_turret_aim(
+            catalog,
+            &binding,
+            &mut self.ents[index].guys,
+            unit_x,
+            unit_y,
+            target_x,
+            target_y,
+            provider,
+        )?;
+        let aim_mode = if resolution.graphics_turret {
+            AimMode::GraphicsTurret {
+                aligned: resolution.aligned,
+            }
+        } else {
+            AimMode::BodyTracksTarget
+        };
+        self.ents[index].prepared_graphics_aim = Some(PreparedGraphicsAim {
+            frame: self.frame,
+            target,
+            target_x,
+            target_y,
+            aim_mode,
+        });
+        Ok(())
     }
 
     /// `Supplies::init_supply` (`0x0073AD40`): reuse the first inactive six-byte
@@ -3291,9 +3678,6 @@ impl World {
                 if target_owner != who || !building || !complete || worker_cap <= 0 {
                     return OrderResult::Invalid;
                 }
-                if workers >= worker_cap {
-                    return OrderResult::Refused;
-                }
                 if self.ty(unit).map(|t| t.id) != Some(self.ids.citizen) {
                     return OrderResult::Invalid;
                 }
@@ -3304,6 +3688,14 @@ impl World {
                     return OrderResult::Invalid;
                 };
                 let worker_key = gather_key(worker);
+                if kind == OrdinaryGatherKind::Farm {
+                    if let Some(facts) = self.authoritative_farm_sites.get(&site_key).copied() {
+                        return self.submit_authoritative_farm_gather(unit, target, facts);
+                    }
+                }
+                if workers >= worker_cap {
+                    return OrderResult::Refused;
+                }
                 let Ok(refusal) = self
                     .gather_runtime
                     .generated_map_preflight(worker_key, site_key, kind)
@@ -3362,6 +3754,59 @@ impl World {
     /// Release a citizen from whatever slot it holds. Called before every re-order so a
     /// worker cannot be counted twice.
     fn detach(&mut self, unit: EntId) {
+        self.interrupt_live_construction(unit, construction::BuilderFinish::OrderCancelled);
+        self.detach_without_construction_interrupt(unit);
+    }
+
+    /// Apply the shared builder-death/explicit-cancel transaction while both generational
+    /// identities are still addressable. Target invalidation follows `do_build`'s separate
+    /// invalid-target arm and never enters this helper.
+    fn interrupt_live_construction(&mut self, unit: EntId, reason: construction::BuilderFinish) {
+        let Some(builder_index) = unit.index() else {
+            return;
+        };
+        let Some(order) = self
+            .ents
+            .get(builder_index)
+            .and_then(|builder| builder.build_order)
+        else {
+            return;
+        };
+        let Some(site_index) = self.ents.iter().position(|site| {
+            i32::from(site.who) == order.target.who
+                && i32::from(site.object_o) == order.target.o
+                && site.object_uid == order.target.uid
+        }) else {
+            return;
+        };
+        let builder = &self.ents[builder_index];
+        let builder_key = ObjectKey {
+            who: i32::from(builder.who),
+            o: i32::from(builder.object_o),
+            uid: builder.object_uid,
+        };
+        let receipt = {
+            let mut effects = ArenaResearchConstructionHost {
+                world: self,
+                builder_index,
+                site_index,
+                // Interruption does not consult the builder gate; retain an explicit
+                // inert value so this host cannot manufacture presentation work.
+                gate: PreflightPlan::AnimateFace {
+                    animation: construction_builder::CHAR_BUILD,
+                    set_angle: None,
+                    contribute: false,
+                },
+            };
+            construction::interrupt_builder(&mut effects, builder_key, order.target, reason)
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena construction interruption failed for builder {builder_key:?}: {error:?}")
+        });
+        self.ents[builder_index].last_construction_interruption = Some(receipt);
+    }
+
+    fn detach_without_construction_interrupt(&mut self, unit: EntId) {
         let Some(e) = self.ent(unit) else { return };
         let worker_owner = e.who;
         let seat = e.assigned_to;
@@ -3379,6 +3824,109 @@ impl World {
                 u.orders.clear();
                 order_dispatch::clear_partial_path(u);
                 u.unit_masks &= !order_dispatch::masks::PATH_EXHAUSTED;
+            }
+        }
+    }
+
+    /// Execute the supported retained-source completed-Farm attachment. The one-in-256
+    /// movement arm remains fail-closed until Arena can install its exact queued move
+    /// behind the still-live Gather order; it never falls through to MODEL 3 seating.
+    fn submit_authoritative_farm_gather(
+        &mut self,
+        unit: EntId,
+        target: EntId,
+        facts: AuthoritativeFarmSiteFacts,
+    ) -> OrderResult {
+        let Some(worker_index) = unit.index() else {
+            return OrderResult::Invalid;
+        };
+        let Some(site_index) = target.index() else {
+            return OrderResult::Invalid;
+        };
+        let Some(worker) = self.ents.get(worker_index).cloned() else {
+            return OrderResult::Invalid;
+        };
+        let Some(site) = self.ents.get(site_index).cloned() else {
+            return OrderResult::Invalid;
+        };
+        let Some(worker_type) = self.types.get(worker.type_id).cloned() else {
+            return OrderResult::Invalid;
+        };
+        let Some(site_type) = self.types.get(site.type_id).cloned() else {
+            return OrderResult::Invalid;
+        };
+        let worker_key = gather_key(&worker);
+        let site_key = gather_key(&site);
+        if self.authoritative_farm_sites.get(&site_key) != Some(&facts) {
+            return OrderResult::Invalid;
+        }
+
+        let initial_move_gate = facts
+            .game_gate_value
+            .wrapping_add(i32::from(worker.object_o).wrapping_mul(7))
+            .wrapping_add(i32::from(worker.who))
+            & 0xff;
+        if initial_move_gate == 0 {
+            // `farm_first_gather_tick` would return an exact queued movement request.
+            // Arena cannot yet install it without replacing the live Gather action, so
+            // refuse before attachment or RNG rather than seating the citizen at centre.
+            return OrderResult::Refused;
+        }
+
+        self.detach(unit);
+        let (centre_tx, centre_ty) = site.tile();
+        let outcome = self.gather_runtime.begin_farm(
+            &self.collision_units,
+            worker_key,
+            site_key,
+            OrdinaryGatherTarget {
+                kind: OrdinaryGatherKind::Farm,
+                centre: GatherNearbyPoint {
+                    x: don_sim::systems::map_terrain::Coord(site.x),
+                    y: don_sim::systems::map_terrain::Coord(site.y),
+                },
+                corner: GatherTile {
+                    tx: centre_tx - site_type.x_size / 2,
+                    ty: centre_ty - site_type.y_size / 2,
+                },
+                x_size: site_type.x_size,
+                y_size: site_type.y_size,
+                domain: site_type.domain,
+                completed: site.complete,
+            },
+            NearbyUnitType {
+                type_index: worker_type.id,
+                domain: worker_type.domain,
+                big_radius: worker_type.big_radius,
+                block_radius: worker_type.new_block_radius,
+                unit_flags: worker_type.unit_flags,
+            },
+            AuthoritativeFarmFirstTick {
+                farm_update_result: facts.farm_update_result,
+                game_gate_value: facts.game_gate_value,
+            },
+            &mut self.game_random,
+        );
+        let Ok(outcome) = outcome else {
+            return OrderResult::Invalid;
+        };
+        self.ents[site_index].workers = outcome.active_workers_after;
+        match outcome.disposition {
+            FarmFirstTickDisposition::Active {
+                move_order: None, ..
+            } => {
+                self.ents[worker_index].assigned_to = target;
+                self.ents[worker_index].job = Job::Gather { target };
+                OrderResult::Ok(1)
+            }
+            FarmFirstTickDisposition::Active {
+                move_order: Some(_),
+                ..
+            } => unreachable!("zero movement gate was refused before the exact transaction"),
+            FarmFirstTickDisposition::RetiredAtCapacity(_) => {
+                self.ents[worker_index].assigned_to = EntId::NONE;
+                self.ents[worker_index].job = Job::Idle;
+                OrderResult::Refused
             }
         }
     }
@@ -3613,6 +4161,18 @@ impl World {
         }
         for e in self.own_ents(pi) {
             if e.building {
+                if e.complete && ordinary_gather_kind(&self.ids, e.type_id).is_some() {
+                    let exact_gross = self
+                        .gather_runtime
+                        .authoritative_site_gross(gather_key(e))
+                        .expect("registered gather site keeps a valid exact payout chain");
+                    if let Some(exact_gross) = exact_gross {
+                        for (slot, value) in gross.iter_mut().zip(exact_gross) {
+                            *slot += value;
+                        }
+                        continue;
+                    }
+                }
                 let active_workers = if ordinary_gather_kind(&self.ids, e.type_id).is_some() {
                     self.gather_runtime
                         .exact_active_workers(gather_key(e))
@@ -4077,12 +4637,12 @@ impl World {
             }
             Job::Work { target } => {
                 let Some(b) = self.ent(target).cloned() else {
-                    self.detach(self.ents[i].id);
+                    self.detach_without_construction_interrupt(self.ents[i].id);
                     self.ents[i].job = Job::Idle;
                     return;
                 };
                 if b.complete && b.hits_left() >= b.hp.myhits {
-                    self.detach(self.ents[i].id);
+                    self.detach_without_construction_interrupt(self.ents[i].id);
                     // Finished and undamaged: a gatherer keeps its builder, everything
                     // else releases them.
                     self.ents[i].job = if b.worker_cap > 0 {
@@ -4105,7 +4665,7 @@ impl World {
                         }
                     }
                     MoveProgress::Failed => {
-                        self.detach(self.ents[i].id);
+                        self.detach_without_construction_interrupt(self.ents[i].id);
                         self.ents[i].job = Job::Idle;
                     }
                     MoveProgress::Working => {}
@@ -4223,12 +4783,12 @@ impl World {
                 ConstructionRefusal::MissingBuilderAnimationTransaction
             }
             PreflightPlan::RetireInvalid { .. } => {
-                self.detach(self.ents[i].id);
+                self.detach_without_construction_interrupt(self.ents[i].id);
                 self.ents[i].job = Job::Idle;
                 return;
             }
             PreflightPlan::RetireActive => {
-                self.detach(self.ents[i].id);
+                self.detach_without_construction_interrupt(self.ents[i].id);
                 self.ents[i].job = Job::Idle;
                 return;
             }
@@ -4779,6 +5339,7 @@ impl World {
             territory: &self.collision_world,
             balance: &self.balance,
             combat: &self.combat,
+            diplomacy: &self.diplomacy,
             frame: self.frame as i32,
         };
         let step =
@@ -4845,7 +5406,21 @@ impl World {
             if at.domain != 0 {
                 return;
             }
-            let aim_mode = AimMode::from_guys(&self.ents[i].guys);
+            let aim_mode = match AimMode::from_guys(&self.ents[i].guys) {
+                AimMode::UnresolvedGraphicsTurret => self.ents[i]
+                    .prepared_graphics_aim
+                    .take()
+                    .filter(|prepared| {
+                        prepared.frame == self.frame
+                            && prepared.target == target
+                            && prepared.target_x == tgt.x
+                            && prepared.target_y == tgt.y
+                    })
+                    .map_or(AimMode::UnresolvedGraphicsTurret, |prepared| {
+                        prepared.aim_mode
+                    }),
+                body_mode => body_mode,
+            };
             let input = UnitVolleyInput {
                 attacker_x: attacker.x,
                 attacker_y: attacker.y,
@@ -5076,6 +5651,10 @@ impl World {
             if self.ents[i].hp.hits_left() > 0 {
                 continue;
             }
+            if self.ents[i].build_order.is_some() {
+                let builder = self.ents[i].id;
+                self.interrupt_live_construction(builder, construction::BuilderFinish::BuilderDied);
+            }
             let e = self.ents[i].clone();
             assert!(
                 self.target_world.remove(target_ref(&e)),
@@ -5149,29 +5728,63 @@ impl World {
     // Fog
     // -----------------------------------------------------------------------
 
+    fn visibility_policy(&self) -> Fog {
+        let mut fog = Fog::new();
+        for viewer in 0..self.players.len().min(8) {
+            let player_mask = (0..self.players.len().min(8)).fold(0u8, |mask, other| {
+                if self.diplomacy.is_ally(viewer, other).unwrap_or(false) {
+                    mask | (1u8 << other)
+                } else {
+                    mask
+                }
+            });
+            fog.leaders[viewer] = FogLeader {
+                player_mask,
+                ..FogLeader::default()
+            };
+        }
+        fog
+    }
+
     fn update_fog(&mut self) {
         let (w, h) = (self.map.w, self.map.h);
-        for pi in 0..self.players.len() {
-            for v in self.players[pi].visible.iter_mut() {
-                *v = false;
-            }
-        }
+        let fog = self.visibility_policy();
+        fog.begin_frame(&mut self.collision_world);
+        let mut newly_explored = Vec::new();
         for e in self.ents.iter().filter(|e| e.alive) {
-            let pi = e.who as usize;
-            if pi >= self.players.len() {
+            let Some(t) = self.types.get(e.type_id) else {
+                continue;
+            };
+            if usize::from(e.who) >= self.players.len() || t.los < 0 {
                 continue;
             }
-            let los = self.types.get(e.type_id).map(|t| t.los).unwrap_or(0);
-            let (tx, ty) = e.tile();
-            for dy in -los..=los {
-                for dx in -los..=los {
-                    let (x, y) = (tx + dx, ty + dy);
-                    if x < 0 || y < 0 || x >= w || y >= h {
-                        continue;
-                    }
-                    let i = (y * w + x) as usize;
-                    self.players[pi].visible[i] = true;
-                    self.players[pi].explored[i] = true;
+            update_seen(
+                &fog,
+                &mut self.collision_world,
+                &self.visibility_circle,
+                &SeeingObject {
+                    fine_x: e.x,
+                    fine_y: e.y,
+                    owner: e.who,
+                    los_tiles: t.los,
+                    // `Object::init` derives OBJECT_DETECTOR from this exact type mask.
+                    detector: has_detector_mask(t.obj_masks),
+                    grant_seen2_to: 0,
+                },
+                &mut newly_explored,
+            );
+        }
+        for pi in 0..self.players.len().min(8) {
+            let mask = fog.leaders[pi].player_mask;
+            for ty in 0..h {
+                for tx in 0..w {
+                    let fx = fine_to_fog(tx * RANGE_UNITS_PER_TILE + HALF);
+                    let fy = fine_to_fog(ty * RANGE_UNITS_PER_TILE + HALF);
+                    let visible =
+                        self.collision_world.seen[self.collision_world.f_index(fx, fy)] & mask != 0;
+                    let index = (ty * w + tx) as usize;
+                    self.players[pi].visible[index] = visible;
+                    self.players[pi].explored[index] |= visible;
                 }
             }
         }
@@ -5649,8 +6262,9 @@ impl WorkWorld for ArenaMoveWorld<'_> {
         _: i32,
         _: order_dispatch::AirPatrolSearch,
     ) -> Option<don_sim::systems::patrol::AirPatrolTarget> {
-        // Fail closed at ArenaAirModel/MODEL 6: spawn and ordinary acquisition reject air
-        // domains, and the host has no retail air-patrol object search to delegate to.
+        // Fail closed at ArenaAirModel/MODEL 6: Arena can materialize an air TypeRow, but
+        // ordinary acquisition/combat reject its domain and this movement host owns no
+        // retail air-patrol object search to delegate to.
         None
     }
 
@@ -6820,7 +7434,7 @@ mod target_integration {
     }
 
     #[test]
-    fn cloak_capable_targets_fail_closed_without_the_retail_detector_plane() {
+    fn undetected_idle_cloak_stays_hidden_even_with_an_object_memory_bit() {
         let Some(mut w) = world() else { return };
         let ty = minuteman(&w);
         let (cx, cy) = (w.map.w / 2, w.map.h / 2);
@@ -6834,7 +7448,8 @@ mod target_integration {
         w.players[0].memory.clear();
         remember(&mut w, 0, target, cx + 3, cy);
         w.frame = due_frame(w.ents[ai].object_o);
-        w.types.rows.get_mut(&w.ids.citizen).unwrap().unit_flags |= CLOAK_WHILE_IDLE_TYPE_FLAG;
+        w.types.rows.get_mut(&w.ids.citizen).unwrap().unit_flags |=
+            don_sim::systems::casters_animals::CLOAK_WHILE_IDLE_TYPE_FLAG;
 
         w.auto_acquire(ai);
 
@@ -6843,6 +7458,67 @@ mod target_integration {
             Job::Idle,
             "memory must not bypass UnitData::is_seen's detector gate"
         );
+    }
+
+    #[test]
+    fn exact_detector_disc_admits_an_idle_cloak_target() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for x in cx..=cx + 2 {
+            w.map.test_set(x, cy, Terrain::Grass);
+        }
+        // Test fixture mutation precedes Object/Unit creation: retail Object::init derives
+        // its OBJECT_DETECTOR instance bit from this exact type mask at that point.
+        w.types.rows.get_mut(&ty).unwrap().obj_masks |=
+            don_sim::systems::casters_animals::OBJECT_MASK_DETECT;
+        w.types.rows.get_mut(&w.ids.citizen).unwrap().unit_flags |=
+            don_sim::systems::casters_animals::CLOAK_WHILE_IDLE_TYPE_FLAG;
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 1, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.players[0].memory.clear();
+        w.update_fog();
+        w.frame = due_frame(w.ents[ai].object_o);
+
+        let target_ent = w.ent(target).unwrap();
+        let fx = fine_to_fog(target_ent.x);
+        let fy = fine_to_fog(target_ent.y);
+        assert_ne!(
+            w.collision_world.seen3[w.collision_world.f_index(fx, fy)] & 1,
+            0,
+            "the exact detector producer stamps viewer zero's seen3 bit"
+        );
+
+        w.auto_acquire(ai);
+
+        assert_eq!(w.ents[ai].job, Job::Attack { target });
+    }
+
+    #[test]
+    fn target_host_queries_mutual_diplomacy_instead_of_owner_inequality() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for x in cx..=cx + 3 {
+            w.map.test_set(x, cy, Terrain::Grass);
+        }
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 2, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        remember(&mut w, 0, target, cx + 2, cy);
+        w.frame = due_frame(w.ents[ai].object_o);
+        use don_sim::systems::victory_score::Diplo;
+        w.diplomacy
+            .write_declaration_state_only(0, 1, Diplo::Peace)
+            .unwrap();
+        w.diplomacy
+            .write_declaration_state_only(1, 0, Diplo::Peace)
+            .unwrap();
+
+        w.auto_acquire(ai);
+
+        assert_eq!(w.ents[ai].job, Job::Idle);
     }
 
     #[test]
@@ -7040,7 +7716,7 @@ mod combat_integration {
     }
 
     #[test]
-    fn unresolved_graphics_turret_cannot_be_laundered_into_body_aim() {
+    fn graphics_turret_requires_a_current_exact_target_bound_receipt() {
         let Some(mut w) = world() else { return };
         let (ai, defender, _) = cardinal_pair(&mut w, 1, 0);
         let old_facing = w.ents[ai].facing;
@@ -7051,6 +7727,29 @@ mod combat_integration {
         assert_eq!(w.shots, 0);
         assert_eq!(w.ents[ai].cycle.recharging, 0);
         assert_eq!(w.ents[ai].facing, old_facing);
+
+        let target = w.ent(defender).unwrap().clone();
+        w.ents[ai].prepared_graphics_aim = Some(PreparedGraphicsAim {
+            frame: w.frame,
+            target: defender,
+            target_x: target.x + 1,
+            target_y: target.y,
+            aim_mode: AimMode::GraphicsTurret { aligned: false },
+        });
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 0, "a stale target coordinate is fail-closed");
+        assert!(w.ents[ai].prepared_graphics_aim.is_none());
+
+        w.ents[ai].prepared_graphics_aim = Some(PreparedGraphicsAim {
+            frame: w.frame,
+            target: defender,
+            target_x: target.x,
+            target_y: target.y,
+            aim_mode: AimMode::GraphicsTurret { aligned: false },
+        });
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 1, "the exact one-use receipt reaches Unit::fight");
+        assert!(w.ents[ai].prepared_graphics_aim.is_none());
     }
 }
 

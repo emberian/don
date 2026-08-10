@@ -67,6 +67,21 @@ offsets are gathered and validated before Guy state changes, so a missing node o
 failure cannot leave a partial pivot update. The returned `aligned` bit can be passed directly
 as `AimMode::GraphicsTurret { aligned }`.
 
+`materialize_unit_graphics_bound` now retains the exact slot-aligned pivot graph names from
+the coherent extractor transaction. This closes an ownership hole: `GuyData` keeps `gpiece`
+and angles but not the name returned by `GraphicPieces::get_type(gpiece)`, so a headless host
+could not honestly run the next pivot lookup after the extractor returned. The paired
+`resolve_unit_turret_aim` walks an all-turret live `guy_mark` prefix in retail order, returns
+the final Guy's alignment result, and commits all Guy writes atomically. A later provider
+failure rolls back earlier Guys too. A mixed turret/non-turret prefix stops at the still
+unported body-pivot arm instead of inventing that Guy's return.
+
+Arena exposes that pair through `World::materialize_unit_graphics` and
+`World::prepare_unit_graphics_aim`. The latter produces a one-frame receipt bound to the exact
+target identity and coordinates. `World::do_attack` consumes it only for an unresolved turret
+volley with the same frame and target; stale or absent receipts preserve
+`AimMode::UnresolvedGraphicsTurret` and no shot occurs.
+
 ## Exact remaining boundary
 
 `unit_graphics.xml` names `.bh3` models but does not contain their hierarchy transforms.
@@ -79,13 +94,16 @@ per-frame local node offsets. Arena must still provide:
 
 Until that host exists, `AimMode::UnresolvedGraphicsTurret` remains the correct fidelity-mode
 result. Treating the body as an ordinary non-turret Guy or using a zero-offset provider is not
-an accepted fallback.
+an accepted fallback. Arena's default match loader still has no installed catalog/extractor or
+`.bh3` position provider, so the `arena-guy-turret-model` deviation remains open even though an
+exact host now has an executable product adapter.
 
 ## Verification
 
-- Ten hermetic catalog/materialization/aim tests cover case-insensitive names, ordered and
+- Fourteen hermetic catalog/materialization/aim tests cover case-insensitive names, ordered and
   circular restrictions, transactional failure, non-turret rejection, strict slew flags,
-  provider arguments and non-mutation on hierarchy failure.
+  provider arguments, retained pivot identities, whole-Unit rollback and final-Guy return
+  semantics.
 - An ignored installed-data smoke test parses the user's exact supported file and verifies
   355 UnitType graph prefixes, 66 pivot graphs and all 81 restriction rows. Run it with
   `RON_UNIT_GRAPHICS_XML=/path/to/unit_graphics.xml cargo test -p don-sim \

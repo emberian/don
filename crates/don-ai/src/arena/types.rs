@@ -430,6 +430,7 @@ impl Types {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn types() -> Option<Types> {
         Types::load_default().ok()
@@ -446,6 +447,33 @@ mod tests {
         assert_eq!(t.get(414).unwrap().name, "Small City");
         assert!(t.get(414).unwrap().kind_building);
         assert!(t.get(170).unwrap().kind_unit);
+    }
+
+    #[test]
+    fn live_internal_names_are_the_shipped_unit_graph_catalog_keys() {
+        let Some(t) = types() else { return };
+        let Ok(xml) =
+            std::fs::read_to_string(crate::rules::default_data_dir().join("unitrules.xml"))
+        else {
+            return;
+        };
+        let shipped = xml
+            .lines()
+            .filter_map(|line| {
+                let start = line.find("<GRAPH>")? + "<GRAPH>".len();
+                let end = line[start..].find("</GRAPH>")? + start;
+                Some(line[start..end].trim().to_ascii_uppercase())
+            })
+            .collect::<BTreeSet<_>>();
+        let live = t
+            .rows
+            .values()
+            .filter(|row| row.kind_unit)
+            .map(|row| row.internal.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(shipped.len(), 351);
+        assert_eq!(live, shipped);
     }
 
     #[test]

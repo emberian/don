@@ -1219,6 +1219,51 @@ impl ArenaGatherRuntime {
             .map_err(GatherRuntimeError::Retirement)
     }
 
+    /// Return the signed-byte capacity owned by the authoritative site record.
+    /// `None` is the explicit non-retail terrain-source state, never an Arena-derived cap.
+    pub(crate) fn authoritative_capacity(
+        &self,
+        site_key: GatherObjectKey,
+    ) -> Result<Option<i32>, GatherRuntimeError> {
+        let state = self
+            .sites
+            .get(&site_key)
+            .ok_or(GatherRuntimeError::MissingSite(site_key))?;
+        if state.capacity == GatherCapacityAuthority::MissingRetailTerrainSource {
+            Ok(None)
+        } else {
+            Ok(Some(state.site.max_gatherers()))
+        }
+    }
+
+    /// Compose one site's exact active occupancy with its retained six-slot per-worker
+    /// evaluator result. `None` means this site has not crossed the authoritative payout
+    /// boundary; callers must keep that case visibly separate from a zero gross result.
+    pub(crate) fn authoritative_site_gross(
+        &self,
+        site_key: GatherObjectKey,
+    ) -> Result<Option<[i32; NUM_RESOURCES]>, GatherRuntimeError> {
+        let state = self
+            .sites
+            .get(&site_key)
+            .ok_or(GatherRuntimeError::MissingSite(site_key))?;
+        let Some(per_worker) = state.per_worker_gross else {
+            return Ok(None);
+        };
+        let active = gathering::num_gatherers(
+            &state.site,
+            &self.workers,
+            gathering::GatherCount::Active,
+            0,
+        )
+        .map_err(GatherRuntimeError::Retirement)?;
+        Ok(Some(gathering::site_gross(
+            per_worker,
+            active,
+            state.site.gather_max,
+        )))
+    }
+
     #[cfg(test)]
     fn site(&self, key: GatherObjectKey) -> Option<GatherSite> {
         self.sites.get(&key).map(|state| state.site)

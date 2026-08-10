@@ -416,6 +416,18 @@ pub struct GraphicsMaterializationStats {
     pub turret_guys: usize,
 }
 
+/// Arena/replay-owned identity retained after exact hierarchy materialization.
+///
+/// `GuyData` stores the selected gpiece and pivot angles, but retail obtains the
+/// restriction-list identity from `GraphicPieces::get_type(gpiece)` again while aiming.
+/// Headless hosts cannot reconstruct that name from the integer gpiece, so the exact
+/// extractor result must remain slot-aligned beside `UnitGuys`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterializedUnitGraphics {
+    pub graph_name: String,
+    pub pivot_graph_names: Vec<Option<String>>,
+}
+
 /// Install exact graphics-derived state into a fully allocated [`UnitGuys`].
 ///
 /// Validation completes against a clone before any caller-visible write. This matters for
@@ -517,6 +529,60 @@ pub fn materialize_unit_graphics<E: GuyGraphicsExtractor>(
     Ok(stats)
 }
 
+/// Materialize `UnitGuys` and retain the exact per-slot pivot graph identities required by
+/// later `Guy::set_all_pivots` calls.
+///
+/// This is an ownership adapter over [`materialize_unit_graphics`], not a second
+/// materializer. The wrapper records the one coherent extractor result consumed by that
+/// transaction and returns no binding unless the complete UnitGuys commit succeeds.
+pub fn materialize_unit_graphics_bound<E: GuyGraphicsExtractor>(
+    catalog: &UnitGraphicsCatalog,
+    graph_name: &str,
+    guys: &mut UnitGuys,
+    extractor: &mut E,
+) -> Result<(GraphicsMaterializationStats, MaterializedUnitGraphics), GraphicsResourceError> {
+    struct RecordingExtractor<'a, E> {
+        inner: &'a mut E,
+        extracted: Option<ExtractedUnitGraphics>,
+    }
+
+    impl<E: GuyGraphicsExtractor> GuyGraphicsExtractor for RecordingExtractor<'_, E> {
+        fn provenance(&self) -> GraphicsProvenance {
+            self.inner.provenance()
+        }
+
+        fn extract_unit_graphics(
+            &mut self,
+            graph_name: &str,
+            guy_numbers: &[Option<i8>],
+        ) -> Result<ExtractedUnitGraphics, GraphicsResourceError> {
+            let extracted = self.inner.extract_unit_graphics(graph_name, guy_numbers)?;
+            self.extracted = Some(extracted.clone());
+            Ok(extracted)
+        }
+    }
+
+    let mut recording = RecordingExtractor {
+        inner: extractor,
+        extracted: None,
+    };
+    let stats = materialize_unit_graphics(catalog, graph_name, guys, &mut recording)?;
+    let extracted = recording
+        .extracted
+        .expect("successful graphics materialization consumed one extractor result");
+    Ok((
+        stats,
+        MaterializedUnitGraphics {
+            graph_name: extracted.graph_name,
+            pivot_graph_names: extracted
+                .slots
+                .into_iter()
+                .map(|profile| profile.and_then(|profile| profile.pivot_graph_name))
+                .collect(),
+        },
+    ))
+}
+
 /// Exact arguments needed by `GraphicPieces::get_position` for one pivot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PivotOffsetRequest {
@@ -567,6 +633,134 @@ pub struct TurretAimResolution {
     /// Exact return value of the recovered graphics-pivot arm.
     pub aligned: bool,
     pub evaluated_nodes: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnitTurretAimError {
+    BindingSlotCount {
+        guys: usize,
+        bindings: usize,
+    },
+    InvalidGuyMark {
+        guy_mark: i8,
+        slots: usize,
+    },
+    MissingGuy {
+        slot: usize,
+    },
+    /// A mixed live prefix reaches the still-unported non-turret body-pivot arm for this
+    /// slot, so the final `Unit::target_guy` return cannot be inferred from turret state.
+    MixedUnresolvedBodyPivot {
+        slot: usize,
+    },
+    TurretOutsideTargetGuyPrefix {
+        slot: usize,
+        guy_mark: usize,
+    },
+    Aim {
+        slot: usize,
+        error: TurretAimError,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitTurretAimResolution {
+    /// At least one live squad Guy entered the graphics-turret arm.
+    pub graphics_turret: bool,
+    /// Exact return from the final live Guy's `set_all_pivots` call when a graphics turret
+    /// exists. This is the value `Unit::target_guy` returns to `Unit::fight`.
+    pub aligned: bool,
+    pub evaluated_guys: usize,
+    pub evaluated_nodes: usize,
+}
+
+/// Execute the slot-aligned `Unit::target_guy` graphics-pivot loop transactionally.
+///
+/// Retail calls `Guy::set_all_pivots` for every live squad slot and returns the final
+/// call's result. Crew are outside that prefix. A mixed turret/non-turret prefix stops at
+/// the still-unported body-pivot arm rather than inventing its return. All graphics-turret
+/// mutations stage on a cloned `UnitGuys` so a provider failure in a later Guy cannot leave
+/// earlier pivot writes committed.
+pub fn resolve_unit_turret_aim<P: PivotOffsetProvider>(
+    catalog: &UnitGraphicsCatalog,
+    binding: &MaterializedUnitGraphics,
+    guys: &mut UnitGuys,
+    unit_x: i32,
+    unit_y: i32,
+    target_x: i32,
+    target_y: i32,
+    provider: &mut P,
+) -> Result<UnitTurretAimResolution, UnitTurretAimError> {
+    if binding.pivot_graph_names.len() != guys.guys.len() {
+        return Err(UnitTurretAimError::BindingSlotCount {
+            guys: guys.guys.len(),
+            bindings: binding.pivot_graph_names.len(),
+        });
+    }
+    let Ok(live) = usize::try_from(guys.guy_mark) else {
+        return Err(UnitTurretAimError::InvalidGuyMark {
+            guy_mark: guys.guy_mark,
+            slots: guys.guys.len(),
+        });
+    };
+    if live > guys.guys.len() {
+        return Err(UnitTurretAimError::InvalidGuyMark {
+            guy_mark: guys.guy_mark,
+            slots: guys.guys.len(),
+        });
+    }
+    if let Some((slot, _)) = guys.guys.iter().enumerate().skip(live).find(|(_, guy)| {
+        guy.as_ref()
+            .is_some_and(|guy| guy.guy_flags & GUY_FLAG_TURRETS != 0)
+    }) {
+        return Err(UnitTurretAimError::TurretOutsideTargetGuyPrefix {
+            slot,
+            guy_mark: live,
+        });
+    }
+
+    let mut has_graphics_turret = false;
+    for slot in 0..live {
+        let guy = guys.guys[slot]
+            .as_ref()
+            .ok_or(UnitTurretAimError::MissingGuy { slot })?;
+        has_graphics_turret |= guy.guy_flags & GUY_FLAG_TURRETS != 0;
+    }
+    if !has_graphics_turret {
+        return Ok(UnitTurretAimResolution::default());
+    }
+    if let Some(slot) = (0..live).find(|&slot| {
+        guys.guys[slot]
+            .as_ref()
+            .is_some_and(|guy| guy.guy_flags & GUY_FLAG_TURRETS == 0)
+    }) {
+        return Err(UnitTurretAimError::MixedUnresolvedBodyPivot { slot });
+    }
+
+    let mut staged = guys.clone();
+    let mut result = UnitTurretAimResolution::default();
+    for slot in 0..live {
+        let guy = staged.guys[slot]
+            .as_mut()
+            .ok_or(UnitTurretAimError::MissingGuy { slot })?;
+        let resolution = resolve_turret_aim(
+            catalog,
+            binding.pivot_graph_names[slot].as_deref(),
+            guy,
+            unit_x,
+            unit_y,
+            target_x,
+            target_y,
+            provider,
+        )
+        .map_err(|error| UnitTurretAimError::Aim { slot, error })?;
+        result.graphics_turret = true;
+        result.aligned = resolution.aligned;
+        result.evaluated_guys += 1;
+        result.evaluated_nodes += resolution.evaluated_nodes;
+    }
+    *guys = staged;
+    Ok(result)
 }
 
 /// Evaluate the graphics-pivot arm of `Guy::set_all_pivots` `0x005D8BC0`.
@@ -866,6 +1060,39 @@ mod tests {
     }
 
     #[test]
+    fn bound_materializer_retains_the_extracted_pivot_graph_identity() {
+        let catalog = catalog();
+        let mut guys = one_guy();
+        let profile = ExtractedGuyGraphics {
+            guy_num: 0,
+            gpiece: 77,
+            pivot_graph_name: Some("HeavyTank".into()),
+            track_dx: 0,
+            track_dy: 0,
+            turret_angles: [0; 4],
+            des_turret_angles: [0; 4],
+            node_flags: 0,
+            des_node_flags: 0,
+        };
+
+        let (stats, binding) = materialize_unit_graphics_bound(
+            &catalog,
+            "HeavyTank",
+            &mut guys,
+            &mut extracted("HEAVYTANK", profile),
+        )
+        .unwrap();
+
+        assert_eq!(stats.turret_guys, 1);
+        assert_eq!(binding.graph_name, "HEAVYTANK");
+        assert_eq!(binding.pivot_graph_names, [Some("HeavyTank".into())]);
+        assert_ne!(
+            guys.guys[0].as_ref().unwrap().guy_flags & GUY_FLAG_TURRETS,
+            0
+        );
+    }
+
+    #[test]
     fn materializer_is_transactional_on_slot_mismatch() {
         let catalog = catalog();
         let mut guys = one_guy();
@@ -1030,6 +1257,138 @@ mod tests {
             TurretAimError::ProviderFailure { node: 4, .. }
         ));
         assert_eq!(guy, before);
+    }
+
+    #[test]
+    fn unit_turret_adapter_rolls_back_every_guy_when_a_later_provider_call_fails() {
+        struct FailSecond {
+            calls: usize,
+        }
+
+        impl PivotOffsetProvider for FailSecond {
+            fn pivot_offset(
+                &mut self,
+                _request: PivotOffsetRequest,
+            ) -> Result<PivotOffset, String> {
+                self.calls += 1;
+                if self.calls == 2 {
+                    Err("second hierarchy missing".into())
+                } else {
+                    Ok(PivotOffset { x: 0.0, y: 0.0 })
+                }
+            }
+        }
+
+        let catalog = catalog();
+        let mut guys = UnitGuys {
+            guys: vec![Some(turret_guy()), Some(turret_guy())],
+            size: 2,
+            increment: 0,
+            flags: 0,
+            guy_mark: 2,
+        };
+        guys.guys[0].as_mut().unwrap().des_turret_angles = [7, 0, 0, 0];
+        let before = guys.clone();
+        let binding = MaterializedUnitGraphics {
+            graph_name: "HeavyTank".into(),
+            pivot_graph_names: vec![Some("HeavyTank".into()), Some("HeavyTank".into())],
+        };
+
+        let error = resolve_unit_turret_aim(
+            &catalog,
+            &binding,
+            &mut guys,
+            100,
+            100,
+            100,
+            0,
+            &mut FailSecond { calls: 0 },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UnitTurretAimError::Aim {
+                slot: 1,
+                error: TurretAimError::ProviderFailure { node: 4, .. }
+            }
+        ));
+        assert_eq!(guys, before);
+    }
+
+    #[test]
+    fn unit_turret_adapter_returns_the_final_live_guys_alignment() {
+        let catalog = catalog();
+        let mut guys = UnitGuys {
+            guys: vec![Some(turret_guy()), Some(turret_guy())],
+            size: 2,
+            increment: 0,
+            flags: 0,
+            guy_mark: 2,
+        };
+        let binding = MaterializedUnitGraphics {
+            graph_name: "HeavyTank".into(),
+            pivot_graph_names: vec![Some("HeavyTank".into()), Some("HeavyTank".into())],
+        };
+
+        let result = resolve_unit_turret_aim(
+            &catalog,
+            &binding,
+            &mut guys,
+            100,
+            100,
+            100,
+            0,
+            &mut Offsets::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            UnitTurretAimResolution {
+                graphics_turret: true,
+                aligned: true,
+                evaluated_guys: 2,
+                evaluated_nodes: 2,
+            }
+        );
+        assert!(guys
+            .guys
+            .iter()
+            .flatten()
+            .all(|guy| guy.des_node_flags == 1));
+    }
+
+    #[test]
+    fn mixed_turret_prefix_stops_at_the_unported_body_pivot_arm() {
+        let catalog = catalog();
+        let mut guys = UnitGuys {
+            guys: vec![Some(turret_guy()), Some(GuyData::default())],
+            size: 2,
+            increment: 0,
+            flags: 0,
+            guy_mark: 2,
+        };
+        let before = guys.clone();
+        let binding = MaterializedUnitGraphics {
+            graph_name: "HeavyTank".into(),
+            pivot_graph_names: vec![Some("HeavyTank".into()), None],
+        };
+
+        assert_eq!(
+            resolve_unit_turret_aim(
+                &catalog,
+                &binding,
+                &mut guys,
+                100,
+                100,
+                100,
+                0,
+                &mut Offsets::default(),
+            ),
+            Err(UnitTurretAimError::MixedUnresolvedBodyPivot { slot: 1 })
+        );
+        assert_eq!(guys, before);
     }
 
     #[test]
