@@ -146,16 +146,20 @@ fn command_bridge_disband_uses_the_atomic_envworld_host() {
     assert!(world.sim.row_of(unit).is_none());
 }
 
+/// `Group::action_halt` gates its whole body on a building selection, and an active
+/// building's DISBAND takes the unrecovered `Build::queue_up(DISBAND)` branch. Both stay
+/// fail-closed here.
+///
+/// STANCE is deliberately absent: the group-state cohort recovered it, and
+/// `env_group_state_actions.rs` owns both its applied and unavailable domains
+/// (`exact_noncombat_stance_is_advertised_and_applied`,
+/// `unsupported_type_zero_stance_is_unavailable_without_mutation`).
 #[test]
-fn building_lifecycle_and_unrecovered_stance_requests_fail_closed() {
-    let Some((cfg, mut world, unit, building)) = fixture() else {
+fn building_halt_and_disband_requests_fail_closed() {
+    let Some((cfg, mut world, _unit, building)) = fixture() else {
         return;
     };
-    for (actor, verb) in [
-        (building, g::uv::HALT),
-        (building, g::uv::DISBAND),
-        (unit, g::uv::STANCE),
-    ] {
+    for (actor, verb) in [(building, g::uv::HALT), (building, g::uv::DISBAND)] {
         let before_live = world.sim.live_count();
         let mut stats = ApplyStats::default();
         apply_unit(
@@ -170,8 +174,12 @@ fn building_lifecycle_and_unrecovered_stance_requests_fail_closed() {
             },
             &mut stats,
         );
-        assert_eq!(stats.illegal, 1);
-        assert_eq!(world.sim.live_count(), before_live);
+        assert_eq!(stats.illegal, 1, "actor={actor:?} verb={verb}");
+        assert_eq!(
+            world.sim.live_count(),
+            before_live,
+            "actor={actor:?} verb={verb}"
+        );
     }
 }
 
