@@ -75,12 +75,11 @@ object-graph coverage.
 
 ## Container and validation
 
-The root chunk (`0x444e`) has seven required leaf children in deterministic order. The
-current DoN format version is 7. Versions 1 through 6 are rejected rather than silently
-inventing missing checksum-visible state. Version 7 adds the retail target UID and optional
-stable Handle to every flattened order before the existing SPECIAL_ANIM, FORM, and FOLLOW
-payloads; this closes authoritative ATTACK identity persistence without admitting ATTACK's
-still-incomplete production consumer.
+The root chunk (`0x444e`) has eight required leaf children in deterministic order. The
+current DoN format version is 9. Version 7 added retail target UID/Handle identity, version 8
+added sparse object-band lifecycle, and both remain readable. Version 9 adds a reconstructive
+frame-zero PlayerSetup owner. Earlier versions are rejected rather than silently inventing
+missing checksum-visible state.
 
 | id | section |
 |---:|---|
@@ -91,6 +90,13 @@ still-incomplete production consumer.
 | `0x0005` | unit type/path state |
 | `0x0006` | item-producer state and exact stable-slot records |
 | `0x0007` | `BuildData`, construction state, and production queues |
+| `0x0008` | optional frame-zero PlayerSetup request, full `MatchOptions`, and semaphore input |
+
+The PlayerSetup leaf begins with a canonical presence byte. A present record does not duplicate
+the eight large Leader diplomacy/treaty rows: load reruns the canonical sequential transaction
+from its request/options/semaphore facts. Save and load require that reconstructed owner to agree
+with victory Leaders, match team projection, step-8 activation, Objects owner bits, and fog masks.
+Only frame zero is admitted; a divergent projection or advanced active match fails closed.
 
 Loading rejects unknown, missing, duplicate, nested top-level, escaping, truncated, or
 trailing chunks. It also bounds the total stream, map geometry, population, order count,

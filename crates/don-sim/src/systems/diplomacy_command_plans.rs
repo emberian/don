@@ -2,9 +2,11 @@
 //! Transaction plans for retail diplomacy command opcodes 37 through 45.
 //!
 //! The small proposal actions are reproduced here without depending on the command bridge's
-//! shared dispatcher.  The three large branches (`DECLARE`, `ACCEPT`, and hostile `REJECT`)
-//! stop at an explicit boundary: retail continues through declaration costs, resource
-//! transfer, `Leader::set_diplo`, unit retargeting, vision, victory, and event callbacks.
+//! shared dispatcher.  The two large branches (`DECLARE` and `ACCEPT`) stop at an explicit
+//! boundary: retail continues through declaration costs, resource transfer,
+//! `Leader::set_diplo`, unit retargeting, vision, victory, and event callbacks.
+//! Mode-2 `REJECT` is complete: its apparent recursive declaration is unreachable under
+//! retail's required `leader slot == LeaderData::who` invariant.
 //! A host cannot turn one of those boundary descriptions into an applied receipt.
 //!
 //! [`SetupDiplomacy`] remains the sole owner of retail team lookup.  This module delegates
@@ -320,8 +322,17 @@ pub enum LocalNotice {
     TributesCleared,
     ProposalsCleared,
     Rejected,
+    CounterproposalRejected,
     NoRushDeclaration,
     InsufficientTribute,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResponseCounterField {
+    /// Retail `LeaderData+0x334`, cleared first by `action_respond`.
+    TributeDemanded334,
+    /// Retail `LeaderData+0x314`, cleared second by `action_respond`.
+    Counteroffer314,
 }
 
 /// Instruction-ordered evidence from the action prefix.
@@ -347,6 +358,12 @@ pub enum DiplomacyStep {
         sender: usize,
         target: usize,
     },
+    /// One directional 92-byte record clear. Mode-2 reject uses two of these so its
+    /// retail reverse-pair-first order remains observable in the receipt.
+    ClearProposalRecord {
+        leader: usize,
+        target: usize,
+    },
     WriteTreaty {
         sender: usize,
         target: usize,
@@ -364,9 +381,18 @@ pub enum DiplomacyStep {
         whose: usize,
         onoff: i32,
     },
-    ClearResponseCounters {
+    ClearResponseCounter {
         sender: usize,
         target: usize,
+        field: ResponseCounterField,
+    },
+    /// Mode-2 `action_respond` examined one nonzero attack counterproposal, but retail's
+    /// next self-enemy query was false under the validated `slot == who` invariant.  The
+    /// otherwise recursive `action_declare` call is therefore unreachable.
+    RejectCounterproposalSelfGate {
+        sender: usize,
+        target: usize,
+        candidate: usize,
     },
     DeclarationAlreadyEnemy {
         sender: usize,
@@ -386,6 +412,11 @@ pub enum DiplomacyStep {
         who: usize,
         notice: LocalNotice,
     },
+    /// Ordered `SoundGlobal::play` presentation request.  Planning consumes no sound RNG;
+    /// the presentation host owns that stream when it delivers the retained receipt.
+    Sound {
+        category: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,8 +432,6 @@ pub enum DiplomacyBoundary {
     /// `action_respond(..., 1)`: tribute movement, attack proposals, treaty agreement,
     /// `set_diplo`, and product events.
     AcceptTransferAndDiploChange { sender: usize, target: usize },
-    /// The mode-2 response may recursively declare war before clearing the pair.
-    RejectCounterproposal { sender: usize, target: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -529,9 +558,24 @@ fn clear_pair_agreements(
     clear_agreement(state, target, sender, steps);
 }
 
-fn clear_response_counters(state: &mut DiplomacyCommandState, sender: usize, target: usize) {
-    state.leaders[sender].response_314[target] = 0;
+fn clear_response_counters(
+    state: &mut DiplomacyCommandState,
+    sender: usize,
+    target: usize,
+    steps: &mut Vec<DiplomacyStep>,
+) {
     state.leaders[sender].response_334[target] = 0;
+    steps.push(DiplomacyStep::ClearResponseCounter {
+        sender,
+        target,
+        field: ResponseCounterField::TributeDemanded334,
+    });
+    state.leaders[sender].response_314[target] = 0;
+    steps.push(DiplomacyStep::ClearResponseCounter {
+        sender,
+        target,
+        field: ResponseCounterField::Counteroffer314,
+    });
 }
 
 pub fn plan_diplomacy_command(
@@ -631,7 +675,7 @@ pub fn plan_diplomacy_command(
             steps.push(DiplomacyStep::ClearAll { sender, target });
         }
         DiplomacyWireCommand::Accept { .. } => {
-            steps.push(DiplomacyStep::ClearResponseCounters { sender, target });
+            clear_response_counters(&mut state, sender, target, &mut steps);
             return Ok(DiplomacyPlanDecision::Boundary(DiplomacyBoundaryPlan {
                 command,
                 prefix: steps,
@@ -642,21 +686,61 @@ pub fn plan_diplomacy_command(
             // `process_reject` chooses mode zero from the receiver's pair-record dword
             // `+0x00`, not from `LeaderData::get_diplo` or either raw declaration.
             if before.leaders[sender].proposals[target].agreement_pending != 1 {
-                steps.push(DiplomacyStep::ClearResponseCounters { sender, target });
-                return Ok(DiplomacyPlanDecision::Boundary(DiplomacyBoundaryPlan {
-                    command,
-                    prefix: steps,
-                    boundary: DiplomacyBoundary::RejectCounterproposal { sender, target },
-                }));
-            }
-            clear_response_counters(&mut state, sender, target);
-            steps.push(DiplomacyStep::ClearResponseCounters { sender, target });
-            clear_agreement(&mut state, sender, target, &mut steps);
-            if before.local_who == target as i32 {
-                steps.push(DiplomacyStep::LocalNotice {
-                    who: target,
-                    notice: LocalNotice::Rejected,
+                clear_response_counters(&mut state, sender, target, &mut steps);
+
+                // `action_respond(target, 2)` appears to contain a recursive declaration,
+                // but its gate at 0x006D04A9 calls `leaders[target].is_enemy(target)` and
+                // requires a nonzero result. `pair` has already proved the retail setup
+                // invariant `leaders[target].who == target`, so this self query is always
+                // false. Preserve the candidate scan as evidence without inventing the
+                // unreachable DOW/set_diplo transaction.
+                if before.setup.leaders[sender].leader_flags & 4 != 0
+                    && before.setup.leaders[target].leader_flags & 4 == 0
+                    && before.is_ally(sender, target)?
+                {
+                    for candidate in 0..DIPLOMACY_SLOTS {
+                        if before.setup.leaders[candidate].is_present()
+                            && before.leaders[sender].proposals[target].attacks[candidate] != 0
+                        {
+                            debug_assert!(!before.is_enemy(target, target)?);
+                            steps.push(DiplomacyStep::RejectCounterproposalSelfGate {
+                                sender,
+                                target,
+                                candidate,
+                            });
+                        }
+                    }
+                }
+
+                // Retail then clears both agreements before clearing the reciprocal record
+                // first and the sender record second.
+                clear_pair_agreements(&mut state, sender, target, &mut steps);
+                state.leaders[target].proposals[sender].clear_all();
+                steps.push(DiplomacyStep::ClearProposalRecord {
+                    leader: target,
+                    target: sender,
                 });
+                state.leaders[sender].proposals[target].clear_all();
+                steps.push(DiplomacyStep::ClearProposalRecord {
+                    leader: sender,
+                    target,
+                });
+                if before.local_who == target as i32 {
+                    steps.push(DiplomacyStep::LocalNotice {
+                        who: target,
+                        notice: LocalNotice::CounterproposalRejected,
+                    });
+                    steps.push(DiplomacyStep::Sound { category: 0x18 });
+                }
+            } else {
+                clear_response_counters(&mut state, sender, target, &mut steps);
+                clear_agreement(&mut state, sender, target, &mut steps);
+                if before.local_who == target as i32 {
+                    steps.push(DiplomacyStep::LocalNotice {
+                        who: target,
+                        notice: LocalNotice::Rejected,
+                    });
+                }
             }
         }
         DiplomacyWireCommand::Offer { good, amount, .. } => {

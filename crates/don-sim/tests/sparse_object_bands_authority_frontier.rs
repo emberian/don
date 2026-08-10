@@ -311,6 +311,9 @@ fn traversal_rotates_units_including_tombstones_and_skips_nature_builds() {
     commit(&mut registry, 8, RetailBand::Build, identity(100));
 
     let traversal = registry.traversal(3);
+    let mut retained = Vec::with_capacity(64);
+    registry.traversal_into(3, &mut retained);
+    assert_eq!(retained, traversal);
     let unit_owners: Vec<u8> = traversal
         .iter()
         .filter(|entry| entry.address.band == RetailBand::Unit)

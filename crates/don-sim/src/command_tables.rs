@@ -431,7 +431,7 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 39, name: "clear_tributes", port: InlinePort::Complete },
     InlineDef { op: 40, name: "clear_all", port: InlinePort::Complete },
     InlineDef { op: 41, name: "accept", port: InlinePort::StateWired },
-    InlineDef { op: 42, name: "reject", port: InlinePort::StateWired },
+    InlineDef { op: 42, name: "reject", port: InlinePort::Complete },
     InlineDef { op: 43, name: "tribute", port: InlinePort::Complete },
     InlineDef { op: 44, name: "demand_tribute", port: InlinePort::Complete },
     InlineDef { op: 45, name: "propose_attack", port: InlinePort::Complete },

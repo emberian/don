@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use don_sim::command::diplomacy_command_plans::{
-    DiplomacyCommandRequest, DiplomacyCommandState, DiplomacyTransactionStatus, REJECT_OPCODE,
+    DiplomacyCommandRequest, DiplomacyCommandState, DiplomacyStep, DiplomacyTransactionStatus,
+    LocalNotice, REJECT_OPCODE,
 };
 use don_sim::command::setup_diplomacy::{LeaderTeamState, PlayerSetup, DIPLO_ALLY, SETUP_SLOTS};
 use don_sim::command::{Bridge, Fleet, ObjectTable, Package};
@@ -66,17 +67,46 @@ fn pending_reject_commits_the_exact_host_after_image_and_receipt() {
 }
 
 #[test]
-fn hostile_reject_remains_atomic_and_unavailable() {
-    let before = state();
+fn nonpending_reject_commits_atomically_without_recursive_diplomacy() {
+    let mut before = state();
+    before.setup.leaders[1].leader_flags |= 4;
+    before.setup.leaders[1].diplos[2] = DIPLO_ALLY;
+    before.setup.leaders[2].diplos[1] = DIPLO_ALLY;
+    before.leaders[1].proposals[2].attacks[3] = 1;
+    before.leaders[2].proposals[1].agreement_pending = 1;
+    before.leaders[2].proposals[1].declaration_costs[0] = 4;
+    before.leaders[2].reserved_resources[0] = 4;
     let wire = reject(1, 2);
     let mut host = ObjectTable::new(0);
-    host.set_diplomacy_command_state(before.clone());
+    host.set_diplomacy_command_state(before);
     let mut bridge = Bridge::new();
     let mut package = Package::new(0, 0);
     bridge.process_all(&mut package, &wire, &mut host).unwrap();
 
-    assert_eq!(host.diplomacy_command_state_ref(), Some(&before));
-    assert!(host.take_diplomacy_command_receipts().is_empty());
+    let after = host.diplomacy_command_state_ref().unwrap();
+    assert_eq!(after.setup.leaders[1].diplos[2], DIPLO_ALLY);
+    assert_eq!(after.setup.leaders[2].diplos[1], DIPLO_ALLY);
+    assert_eq!(after.leaders[2].buckets[0], 4);
+    assert_eq!(after.leaders[1].proposals[2], Default::default());
+    assert_eq!(after.leaders[2].proposals[1], Default::default());
+    let receipts = host.take_diplomacy_command_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].status, DiplomacyTransactionStatus::Applied);
+    assert!(receipts[0].validates(&receipts[0].request));
+    let steps = &receipts[0].plan.as_ref().unwrap().steps;
+    assert!(steps
+        .iter()
+        .any(|step| matches!(step, DiplomacyStep::RejectCounterproposalSelfGate { .. })));
+    assert_eq!(
+        &steps[steps.len() - 2..],
+        &[
+            DiplomacyStep::LocalNotice {
+                who: 2,
+                notice: LocalNotice::CounterproposalRejected,
+            },
+            DiplomacyStep::Sound { category: 0x18 },
+        ]
+    );
 }
 
 #[test]

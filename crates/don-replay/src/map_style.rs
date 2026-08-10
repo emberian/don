@@ -328,7 +328,7 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 15] = [
     MapGenerationStage {
         name: "place_resources",
         evidence_va: Some(MAP_PLACE_RESOURCES_VA),
-        rng: "pool/XML bootstrap none; typed first BONUS row owns direct/callee draws and concrete pool through 0x00690215; later rows open",
+        rng: "pool/XML bootstrap none; typed nonempty BONUS rows own direct/callee draws and concrete pool through category tail 0x00690225; empty-row bridge/cleanup open",
         checkpoint: None,
     },
     MapGenerationStage {

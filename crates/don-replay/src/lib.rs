@@ -76,6 +76,7 @@ pub mod script_channel;
 pub mod state;
 pub mod walk;
 pub mod wire;
+pub mod world_owner_frontier;
 
 pub mod walk_gen;
 mod wire_gen;

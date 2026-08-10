@@ -82,7 +82,12 @@ fn identical_scenarios_drive_the_same_retail_ordered_tick_receipts() {
     assert_eq!(ar.start_frame, 0);
     assert_eq!(ar.end_frame, 45);
     assert_eq!(a.sim().world.seconds, 3);
-    assert!(ar.top_level_complete());
+    // Ordinary frame 33 reaches the exact Step-12 visibility-producer preflight. This bounded
+    // scenario supplies Units but no Build/Wall/reveal-fog authority, so the honest result is
+    // the named `GameDaemonUpdateAllSeen` gap at top-level stage 12, with zero producer mutation.
+    assert!(!ar.top_level_complete());
+    assert_eq!(ar.unimplemented[12], 1);
+    assert_eq!(ar.unimplemented.iter().sum::<u64>(), 1);
     // Step 14 is Objects::process_all and must actually visit the two declared units.
     assert_eq!(ar.executed[14], 45);
     assert!(ar.work[14] >= 90);

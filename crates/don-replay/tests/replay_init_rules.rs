@@ -11,6 +11,7 @@ use don_replay::rules_channel::{
     BALANCE_BYTES, RETAIL_AFTER_BALANCE, RETAIL_AFTER_CONSTANTS, RETAIL_AFTER_TYPES,
     RETAIL_WALKED_BYTES, RULES_BLOCK_BYTES, SHIPPED_RULES_CHANNEL,
 };
+use don_replay::world_owner_frontier::sha256;
 use std::path::{Path, PathBuf};
 
 fn supported_replay() -> PathBuf {
@@ -54,6 +55,19 @@ fn replay_rules_are_independently_projected_and_survive_the_whole_recording() {
     assert_eq!(rules.after_constants, RETAIL_AFTER_CONSTANTS);
     assert_eq!(rules.after_balance, RETAIL_AFTER_BALANCE);
     assert_eq!(rules.checksum, SHIPPED_RULES_CHANNEL);
+    let payload = load_payload(&rep.path).expect("supported replay payload");
+    assert_eq!(rep.initial.payload_sha256, sha256(&payload));
+    assert_eq!(
+        rules.serialized_sha256,
+        sha256(&payload[rules.serialized_offset..rules.serialized_offset + rules.serialized_bytes])
+    );
+
+    let initial_world = rep
+        .initial
+        .reconstruct_world()
+        .expect("ordinary recording has procedural world prefix");
+    assert_eq!(initial_world.exact_sourced_walked_bytes(), 76);
+    assert!(initial_world.ownership_is_coherent());
 
     let mut sim = WorldSim::from_replay(&rep);
     let run = harness::run(&rep, &mut sim, Phase::BeforeCommands, 0);

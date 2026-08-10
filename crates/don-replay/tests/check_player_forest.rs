@@ -37,6 +37,7 @@ fn rules() -> InitialRules {
     InitialRules {
         serialized_offset: 0,
         serialized_bytes: 0,
+        serialized_sha256: [1; 32],
         walked_bytes: RETAIL_WALKED_BYTES,
         checksum: SHIPPED_RULES_CHANNEL,
         after_types: RETAIL_AFTER_TYPES,
@@ -98,6 +99,7 @@ fn map(all_fertile: bool) -> InitialWorld {
         world,
         generation_regions: Regions::default(),
         checksum,
+        ownership: None,
         sourced_walked_bytes: 52,
     }
 }

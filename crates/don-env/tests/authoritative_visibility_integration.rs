@@ -1,12 +1,15 @@
-//! The authoritative backend consumes one complete Sim-owned visibility image without
-//! admitting ATTACK past its still-lossy target-order boundary.
+//! The authoritative backend consumes one complete Sim-owned visibility/combat preflight
+//! without admitting ATTACK past its production-proof boundary.
 
 use don_env::authoritative_backend::{
     ApplyRefusal, IntegrationBoundary, QueuePosition, UnitActionRequest, VisibilityCaptureRefusal,
 };
 use don_env::{AuthoritativeBackend, ScenarioSpec, ScenarioUnit};
+use don_sim::balance::{BalanceTable, BYTES as BALANCE_BYTES};
 use don_sim::systems::external_entity_visibility_frontier::TYPE_UNIT_FLAG_CLOAK;
 use don_sim::systems::map_terrain::COORD_PER_WCELL;
+use don_sim::world::UnitTypeStats;
+use std::sync::Arc;
 
 fn spec() -> ScenarioSpec {
     ScenarioSpec {
@@ -33,6 +36,36 @@ fn spec() -> ScenarioSpec {
 }
 
 fn install_non_cloaked_type_sources(backend: &mut AuthoritativeBackend) {
+    let mut balance = vec![0u8; BALANCE_BYTES];
+    for (attacker, defender) in [(50, 51), (51, 50)] {
+        let cell = don_sim::balance_path::table_index(attacker, defender).unwrap() * 2;
+        balance[cell..cell + 2].copy_from_slice(&100i16.to_le_bytes());
+    }
+    backend
+        .install_attack_execution_sources(
+            Arc::new(BalanceTable::from_bytes(&balance).unwrap()),
+            vec![
+                UnitTypeStats {
+                    type_id: 50,
+                    attack: 100,
+                    armor: 0,
+                    hits: 100,
+                    recharge: 15,
+                    max_range: COORD_PER_WCELL,
+                    min_range: 0,
+                },
+                UnitTypeStats {
+                    type_id: 51,
+                    attack: 100,
+                    armor: 0,
+                    hits: 100,
+                    recharge: 15,
+                    max_range: COORD_PER_WCELL,
+                    min_range: 0,
+                },
+            ],
+        )
+        .unwrap();
     backend.install_visibility_type_flags(50, 0).unwrap();
     backend.install_visibility_type_flags(51, 0).unwrap();
     backend
@@ -86,9 +119,11 @@ fn current_frame_capture_projects_only_visible_external_stable_identities() {
     assert!(hidden.external_entities_complete);
     assert!(hidden.external_entities.is_empty());
 
-    // `GameDaemon::update_all_seen` runs at frame 33, before the frame increments.
+    // Without installed Step-12 authority, phase 33 correctly leaves the fog planes unchanged.
+    // Fog option 3 is an explicit visibility policy fact, not a synthetic `seen` stamp.
     backend.step_frames(34);
     assert!(!backend.observe(0).unwrap().external_entities_complete);
+    backend.install_visibility_fog_option(3).unwrap();
     backend.capture_external_visibility().unwrap();
 
     let visible = backend.observe(0).unwrap();
@@ -109,6 +144,7 @@ fn current_frame_capture_projects_only_visible_external_stable_identities() {
 fn attack_reaches_identity_visibility_preflight_but_stays_masked_at_commit_host() {
     let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
     install_non_cloaked_type_sources(&mut backend);
+    backend.install_visibility_fog_option(3).unwrap();
     backend.step_frames(34);
     backend.capture_external_visibility().unwrap();
 
@@ -137,6 +173,7 @@ fn attack_reaches_identity_visibility_preflight_but_stays_masked_at_commit_host(
 fn prepared_attack_retains_revisions_visibility_hostility_and_exact_queue_identity() {
     let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
     install_non_cloaked_type_sources(&mut backend);
+    backend.install_visibility_fog_option(3).unwrap();
     backend.step_frames(34);
     backend.capture_external_visibility().unwrap();
 
@@ -157,6 +194,16 @@ fn prepared_attack_retains_revisions_visibility_hostility_and_exact_queue_identi
         prepared.relation(),
         don_sim::systems::victory_score::Diplo::War
     );
+    assert_eq!(prepared.target_public(), target.public);
+    let execution = prepared.execution_proof();
+    assert_eq!(
+        (execution.actor_type_id(), execution.target_type_id()),
+        (50, 51)
+    );
+    assert_eq!(execution.balance_pct(), 100);
+    assert!(execution.predicted_damage() > 0);
+    assert_eq!(execution.recharge_frames(), 15);
+    assert!(!execution.uses_projectile());
     let retained = prepared.retained_order();
     assert_eq!(retained.kind, don_sim::order::OrderIndex::Attack);
     assert_eq!(

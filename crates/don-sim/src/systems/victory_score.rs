@@ -517,7 +517,7 @@ impl TypeTable {
 
 /// The `GameInfo` bytes that select victory behaviour. `GameInfo` sits at
 /// `Game+0x0C`; the byte offsets below are relative to `GameInfo`.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct MatchOptions {
     /// `GameInfo+0x18` (`Game+0x24`). 7 selects the mode where a slot can be neutral.
     pub team_style: u8,
@@ -525,6 +525,16 @@ pub struct MatchOptions {
     pub game_rules: u8,
     /// `GameInfo+0x21` (`Game+0x2D`). Indexes `<CATEGORIES id="startingresources">`.
     pub starting_resources: u8,
+    /// `GameInfo+0x24` (`Game+0x30`). `Leader::init` uses 3 for the treaty base and
+    /// any value >= 1 as the shared-vision fallback.
+    pub reveal_map: u8,
+    /// `GameInfo+0x26` (`Game+0x32`). Compared with `LeaderData::starting_age` while
+    /// selecting the initial raw non-team relation.
+    pub rush_rules: u8,
+    /// `GameInfo+0x28` (`Game+0x34`). Primary starting age, capped at 7.
+    pub starting_technology: u8,
+    /// `GameInfo+0x29` (`Game+0x35`). Team-zero secondary starting age, capped at 7.
+    pub starting_technology2: u8,
     /// `GameInfo+0x2A` (`Game+0x36`). Final age count used by the ordinary Tech Race arm.
     pub ending_technology: u8,
     /// `GameInfo+0x2B` (`Game+0x37`). [`Elimination`].
@@ -764,6 +774,9 @@ pub struct LeaderState {
 
     /// `+0x74` `diplos[8]`.
     pub diplos: [i32; NUM_LEADERS],
+    /// Exact fields initialized by the remaining `Leader::init` diplomacy loop from
+    /// `+0x94..+0x394`, plus `ally_mask` at `+0x6929`.
+    pub init_diplomacy: super::leader_init_diplomacy_loop::LeaderInitDiplomacyRow,
 
     /// `+0x440` `popwin_stamp`.
     pub popwin_stamp: i32,
@@ -825,6 +838,9 @@ pub struct LeaderState {
     /// `LeaderData::get_economic()` @ `0x006D6490` — the per-player income figure the
     /// Economic victory averages over the team.
     pub economic: i32,
+    /// Exact setup-time result of `LeaderData::has_preq(0x2B0)`, consumed by the
+    /// recovered `Leader::init` shared-vision arm.
+    pub has_preq_2b0: bool,
     /// `LeaderData::has_preq(0x2B9)` in the Wonder-victory block at
     /// `0x00730FFA..0x00731010`. Any valid member of the qualifying alliance with this
     /// prerequisite bypasses the Standard-mode Wonder countdown.
@@ -851,6 +867,7 @@ impl Default for LeaderState {
             score_wonders: 0,
             score_combat: 0,
             diplos: [Diplo::War as i32; NUM_LEADERS],
+            init_diplomacy: super::leader_init_diplomacy_loop::LeaderInitDiplomacyRow::default(),
             popwin_stamp: 0,
             popwin_timer: 0,
             wonderwin_stamp: 0,
@@ -876,6 +893,7 @@ impl Default for LeaderState {
             researching: [vec![false; NUM_TYPES], vec![false; NUM_TYPES]],
             resource_avail: [true; NUM_RESOURCES],
             economic: 0,
+            has_preq_2b0: false,
             has_preq_2b9: false,
         }
     }
@@ -951,6 +969,7 @@ impl LeaderState {
         for v in &self.diplos {
             out.extend_from_slice(&v.to_le_bytes());
         }
+        self.init_diplomacy.walk_prefix_bytes(out);
         for v in [
             self.popwin_stamp,
             self.popwin_timer,
@@ -970,6 +989,7 @@ impl LeaderState {
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }
+        out.push(self.init_diplomacy.ally_mask);
     }
 }
 
@@ -2511,7 +2531,9 @@ mod tests {
 
         let mut walked = Vec::new();
         leader.walk_bytes(&mut walked);
-        let tail = &walked[walked.len() - 20..];
+        // `ally_mask` at +0x6929 is the final currently-owned field, after these
+        // +0x7F8..+0x9D8 policy/territory words.
+        let tail = &walked[walked.len() - 21..walked.len() - 1];
         let mut expected = Vec::new();
         for value in [
             leader.give_attrition_disabled,

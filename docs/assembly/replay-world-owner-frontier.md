@@ -3,9 +3,10 @@
 ## Result
 
 `crates/don-replay/src/world_owner_frontier.rs` replaces the ambiguous idea of
-“N sourced World bytes” with an isolated, typed byte-owner ledger over the exact
-`World::walk_data(-1)` stream. It is not wired into the shared replay bridge yet; this
-tranche deliberately avoids the live replay schedule and library convergence surface.
+“N sourced World bytes” with a typed byte-owner ledger over the exact
+`World::walk_data(-1)` stream. The canonical replay prefix now installs the ledger during
+`InitialState::reconstruct_world`; the legacy scalar remains a checked compatibility mirror
+while the generator receipt chain is migrated.
 
 The ledger does four bounded things:
 
@@ -19,9 +20,10 @@ The ledger does four bounded things:
    captured retail walk may localise the first difference only after its image hashes to a
    peer-agreed recorded channel-12 value.
 
-The focused integration tests live in the exclusive
-`crates/don-replay/tests/world_owner_frontier.rs` file and path-include the frontier until
-the shared library owner chooses to expose it.
+The module is registered in the shared replay library. Focused ledger tests remain in
+`crates/don-replay/tests/world_owner_frontier.rs`; production-prefix tests additionally bind
+the decompressed payload and serialized Rules spans by SHA-256 and require scalar/ledger
+coverage and checksum images to agree.
 
 ## The first substantive mismatch
 
@@ -89,10 +91,13 @@ unknown neighbouring zeroes remain unknown. This is intentionally narrower than 
 “the completed function owns its whole output domain”: proving a routine ran does not prove
 that every unchanged byte has the right value or provenance.
 
-The first consumer should be the receipt chain already reconstructed under
-`Map::make`: continent/common tail, fertility, `place_all`, `check_player_forest`, and
-`nubify_forest`. Each receipt already carries before/after `WorldChecksum` values and a
-known section scope. The ledger supplies the missing byte-level composition between them.
+The first production consumer is the atomic post-`place_all` repair chain:
+`check_player_forest`, `nubify_forest`, and the post-nubify base/transition transaction.
+Each stage binds its source implementation and complete typed receipt, admits only WData
+changes, and updates the compatibility scalar from the ledger's actual newly owned bytes.
+A late fact/provenance failure rolls back World, checksum, owner map, and scalar together.
+The earlier continent/fertility/`place_all` stages and the later resource scheduler still
+need the same composition; they must not infer ownership from a successful call alone.
 
 ## Retail-walk capture contract
 
@@ -126,16 +131,18 @@ Primary structural truth:
 - replay Rules checkpoints `0x50625668` / `0x12ba3104`.
 
 This tranche does **not** claim a channel-12 match, a complete generated map, provenance for
-unchanged generator outputs, or a captured retail walk. It does not add the module to
-`lib.rs`, alter `state.rs`, change cached checksums, change replay timing, or move the
-scoreboard. Its closure delta is zero; it turns the existing 76-byte scalar into a precise
-and composable ownership contract.
+unchanged generator outputs, or a captured retail walk. It does not change cached checksums,
+replay timing, or the scoreboard. Its closure delta is zero; it turns the canonical initial
+52-byte replay-only / 76-byte replay-plus-Rules scalar into a precise content-bound ownership
+contract. Generator transitions remain red until their receipts carry and atomically advance
+the ledger rather than only copying the compatibility scalar.
 
 ## Validation boundary
 
-Per lane order, no Cargo, rustc, formatter, build, stage, commit or push was run. The only
-local gate for this isolated pack is static `git diff --check`. The convergence owner should
-wire the module, then run the focused integration test before adopting it in `SimBridge`.
+The canonical-prefix convergence runs the focused ledger tests plus the initial parser/world
+tests and full replay suite. The next owner should move the earlier `Map::make` stages and
+resource scheduler from scalar equality to `advance_exact_port`, then rerun the corpus
+scoreboard before changing any replay-wide sourced-byte total.
 
 The isolated owner ledger passed both independent profiles on 2026-08-09: hbox
 `replay-world-owner-20260809T223815Z-77949-24644-fede3d11b0b3` and persvati release

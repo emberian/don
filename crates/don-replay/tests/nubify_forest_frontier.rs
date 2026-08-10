@@ -143,6 +143,7 @@ fn map_with_shape(xs: i32, ys: i32) -> InitialWorld {
         world,
         generation_regions: Regions::default(),
         checksum,
+        ownership: None,
         sourced_walked_bytes: 52,
     }
 }

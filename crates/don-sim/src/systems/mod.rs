@@ -193,6 +193,11 @@ pub mod sparse_object_bands_authority_frontier;
 /// Source-exact SPECIAL_ANIM planner plus the typed atomic receipt consumed by the live order
 /// dispatcher. The production [`crate::tick::Sim`] frame bridge remains an explicit red seam.
 pub mod special_anim_executor;
+/// Exact, non-mutating Unit/detector frontier for the retail phase-33 visibility producer.
+pub mod step12_visibility_producer_frontier;
+/// Sim-attached revisioned join for Step-12 Unit visibility facts. Plane publication remains
+/// fail-closed until Build/Wall and reveal-fog effects can join the same transaction.
+pub mod step12_visibility_runtime;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on

@@ -12,9 +12,10 @@ fully hosted MOVE_TO are admitted. A fresh current-frame capture can now expose 
 non-cloaked external rows and bind ATTACK's one-based target ordinal through stable
 `(Handle,who,o,uid)` identity plus the recovered fog predicate. ATTACK remains masked after
 that preflight: the walked order and DoNSave v7 now retain target UID/Handle plus the prepared
-visibility/episode revisions and hostile eligibility, but the production tick does not consume
-the identity or host every accepted-no-effect dependency. The admitted verb delta is therefore
-**0**; the other policy verbs still fail at their typed owner boundaries.
+visibility/episode revisions and hostile eligibility. The production tick consumes the exact
+identity, and the RL preflight now proves the current executor's type/balance/damage inputs, but
+production does not yet atomically consume that proof under authoritative Step-12 freshness. The
+admitted verb delta is therefore **0**; the other policy verbs still fail at typed owner boundaries.
 
 Root convergence validated the target-identity tranche in persvati job
 `rl-target-entity-v2-20260809T232312Z-24206-11858-b8a284f806b0`: 22/22 focused backend, head,
@@ -48,6 +49,8 @@ The authoritative contract is frozen at this boundary:
   Capture refuses zero-filled default type flags and any viewer without an explicit captured
   `LeaderData::ally_mask`; it snapshots the Sim-owned object columns, fog/detection planes,
   territory and viewer policy, and invalidates on tick, reset, or order mutation.
+  A validated retained fog-option source may select retail option 3 for current-fog visibility
+  without pretending that Step 12 stamped either visibility plane.
   `external_entities_complete` stays false without that fresh image. The step-12
   detector producer still hardcodes `detector=false`, so any cloak requiring detection refuses
   capture instead of presenting an incomplete row image. Reward deltas use Sim-owned score,
@@ -393,9 +396,8 @@ modified.
    verbs through compact `action.rs` behavior.
 2. **Finish cloak/detection and ATTACK target commit.** Replace step 12's hardcoded
    `detector=false` with authoritative per-object detector facts; then make the production ATTACK
-   executor consume the retained UID/Handle and host every silent dependency plus the complete
-   can-hurt eligibility transaction. Only then may cloaked rows pass capture or ATTACK become an
-   admitted verb.
+   executor atomically consume the retained identity plus the prepared combat-dependency/can-hurt
+   proof. Only then may cloaked rows pass capture or ATTACK become an admitted verb.
 3. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).

@@ -16,6 +16,9 @@ use crate::rules_channel::{
     RETAIL_AFTER_TYPES, RETAIL_WALKED_BYTES, RULES_BLOCK_BYTES, RULES_DUPLICATE_OFFSET,
     SHIPPED_RULES_CHANNEL, TRIBE_COUNT, TRIBE_SIZE, TYPE_SLOTS,
 };
+use crate::world_owner_frontier::{
+    sha256, InitialWorldPrefixEvidence, ReplaySpan, RulesWorldEvidence, WorldOwnerLedger,
+};
 use don_sim::systems::map_terrain::{World, WorldChecksum};
 use don_sim::systems::regions::Regions;
 use std::path::Path;
@@ -274,6 +277,9 @@ pub struct InitialState {
     pub game: InitialGame,
     pub save_name: String,
     pub bytes_walked: usize,
+    /// SHA-256 of the complete decompressed replay payload. Ownership claims
+    /// bind to content, never to a filename or corpus position.
+    pub payload_sha256: [u8; 32],
     /// Exact decompressed-payload locations of the procedural world inputs.
     pub worldgen_sources: WorldgenSourceSpans,
     /// Static rules recovered from the replay's own SaveGame section.
@@ -294,6 +300,8 @@ pub struct InitialState {
 pub struct InitialRules {
     pub serialized_offset: usize,
     pub serialized_bytes: usize,
+    /// SHA-256 of the exact serialized Rules span, including its outer tag.
+    pub serialized_sha256: [u8; 32],
     pub walked_bytes: u64,
     pub checksum: u32,
     pub after_types: u32,
@@ -318,6 +326,11 @@ pub struct InitialWorld {
     /// later terrain/item placement consume these exact coordinate lists.
     pub generation_regions: Regions,
     pub checksum: WorldChecksum,
+    /// Exact byte-level provenance for the canonical replay-derived world.
+    ///
+    /// Synthetic isolated fixtures may leave this absent, but production
+    /// replay construction always installs it and derives coverage from it.
+    pub ownership: Option<WorldOwnerLedger>,
     pub sourced_walked_bytes: u64,
 }
 
@@ -496,6 +509,9 @@ pub struct MapTerrainRepairReceipt {
     pub nubify_forest: crate::nubify_forest_frontier::NubifyForestReceipt,
     pub post_nubify_transitions:
         crate::post_nubify_transition_frontier::PostNubifyTransitionReceipt,
+    /// Byte ranges newly owned by each exact World-mutating stage. Empty only
+    /// for isolated synthetic maps which intentionally carry no owner ledger.
+    pub ownership_transitions: Vec<crate::world_owner_frontier::TransitionReceipt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -503,6 +519,29 @@ pub enum MapTerrainRepairError {
     CheckPlayerForest(crate::check_player_forest::CheckPlayerForestError),
     NubifyForest(crate::nubify_forest_frontier::NubifyForestError),
     PostNubifyTransitions(crate::post_nubify_transition_frontier::PostNubifyTransitionError),
+    Ownership(crate::world_owner_frontier::WorldOwnerError),
+}
+
+fn receipt_digest(label: &str, receipt: &impl std::fmt::Debug) -> [u8; 32] {
+    let encoded = format!("{label}\0{receipt:?}");
+    sha256(encoded.as_bytes())
+}
+
+fn advance_world_ownership(
+    map: &mut InitialWorld,
+    proof: crate::world_owner_frontier::ExactPortTransitionProof,
+) -> Result<
+    (u64, Option<crate::world_owner_frontier::TransitionReceipt>),
+    crate::world_owner_frontier::WorldOwnerError,
+> {
+    let Some(ledger) = map.ownership.as_mut() else {
+        return Ok((map.sourced_walked_bytes, None));
+    };
+    let transition = ledger.advance_exact_port(&map.world, proof)?;
+    let coverage = ledger.coverage();
+    map.checksum = ledger.snapshot().checksum.clone();
+    map.sourced_walked_bytes = coverage.owned_bytes as u64;
+    Ok((map.sourced_walked_bytes, Some(transition)))
 }
 
 impl InitialItemReconstruction {
@@ -533,32 +572,96 @@ impl InitialItemReconstruction {
         transition_facts: &crate::post_nubify_transition_frontier::TerrainTransitionLiveFacts,
     ) -> Result<MapTerrainRepairReceipt, MapTerrainRepairError> {
         let mut staged = map.clone();
-        let check_player_forest = crate::check_player_forest::execute_check_player_forest(
+        let mut check_player_forest = crate::check_player_forest::execute_check_player_forest(
             self,
             &mut staged,
             place_all,
             forest_facts,
         )
         .map_err(MapTerrainRepairError::CheckPlayerForest)?;
-        let nubify_forest = crate::nubify_forest_frontier::execute_nubify_forest_frontier(
+        let (sourced, check_player_ownership) = advance_world_ownership(
+            &mut staged,
+            crate::world_owner_frontier::ExactPortTransitionProof {
+                entry_va: check_player_forest.entry_va,
+                resume_va: check_player_forest.caller_resume_va,
+                implementation_sha256: sha256(include_bytes!("check_player_forest.rs")),
+                receipt_sha256: receipt_digest("Map::check_player_forest", &check_player_forest),
+                proof_document: "docs/assembly/replay-check-player-forest.md",
+                input_checksum: check_player_forest.checksum_before.full,
+                output_checksum: check_player_forest.checksum_after.full,
+                allowed_sections: crate::world_owner_frontier::WorldSectionMask::only(
+                    don_sim::systems::map_terrain::WorldSection::WData,
+                ),
+            },
+        )
+        .map_err(MapTerrainRepairError::Ownership)?;
+        check_player_forest.sourced_walked_bytes = sourced;
+        let mut nubify_forest = crate::nubify_forest_frontier::execute_nubify_forest_frontier(
             &mut staged,
             &check_player_forest,
             edge_host,
         )
         .map_err(MapTerrainRepairError::NubifyForest)?;
-        let post_nubify_transitions =
+        let (sourced, nubify_ownership) = advance_world_ownership(
+            &mut staged,
+            crate::world_owner_frontier::ExactPortTransitionProof {
+                entry_va: nubify_forest.entry_va,
+                resume_va: nubify_forest.caller_resume_va,
+                implementation_sha256: sha256(include_bytes!("nubify_forest_frontier.rs")),
+                receipt_sha256: receipt_digest("TerrainGroups::nubify_forest", &nubify_forest),
+                proof_document: "docs/assembly/replay-nubify-forest-frontier.md",
+                input_checksum: nubify_forest.checksum_before.full,
+                output_checksum: nubify_forest.checksum_after.full,
+                allowed_sections: crate::world_owner_frontier::WorldSectionMask::only(
+                    don_sim::systems::map_terrain::WorldSection::WData,
+                ),
+            },
+        )
+        .map_err(MapTerrainRepairError::Ownership)?;
+        nubify_forest.sourced_walked_bytes = sourced;
+        let mut post_nubify_transitions =
             crate::post_nubify_transition_frontier::execute_post_nubify_transitions(
                 &mut staged,
                 &nubify_forest,
                 transition_facts,
             )
             .map_err(MapTerrainRepairError::PostNubifyTransitions)?;
+        let (sourced, post_nubify_ownership) = advance_world_ownership(
+            &mut staged,
+            crate::world_owner_frontier::ExactPortTransitionProof {
+                entry_va: post_nubify_transitions.caller_resume_va,
+                resume_va: post_nubify_transitions.next_checkpoint_call_va,
+                implementation_sha256: sha256(include_bytes!("post_nubify_transition_frontier.rs")),
+                receipt_sha256: receipt_digest(
+                    "Map::post_nubify_transitions",
+                    &post_nubify_transitions,
+                ),
+                proof_document: "docs/assembly/replay-post-nubify-transition-frontier.md",
+                input_checksum: post_nubify_transitions.checksum_before.full,
+                output_checksum: post_nubify_transitions.checksum_after.full,
+                allowed_sections: crate::world_owner_frontier::WorldSectionMask::only(
+                    don_sim::systems::map_terrain::WorldSection::WData,
+                ),
+            },
+        )
+        .map_err(MapTerrainRepairError::Ownership)?;
+        post_nubify_transitions.sourced_walked_bytes = sourced;
+
+        let ownership_transitions = [
+            check_player_ownership,
+            nubify_ownership,
+            post_nubify_ownership,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
         *map = staged;
         Ok(MapTerrainRepairReceipt {
             check_player_forest,
             nubify_forest,
             post_nubify_transitions,
+            ownership_transitions,
         })
     }
 
@@ -787,10 +890,33 @@ impl InitialItemReconstruction {
 }
 
 impl InitialWorld {
+    /// Canonical byte coverage. Production replay worlds carry a ledger; the
+    /// scalar remains only as a compatibility mirror for isolated fixtures and
+    /// receipt types which have not yet moved the full owner map.
+    pub fn exact_sourced_walked_bytes(&self) -> u64 {
+        self.ownership
+            .as_ref()
+            .map_or(self.sourced_walked_bytes, |ledger| {
+                ledger.coverage().owned_bytes as u64
+            })
+    }
+
+    pub fn ownership_is_coherent(&self) -> bool {
+        match &self.ownership {
+            None => true,
+            Some(ledger) => {
+                let coverage = ledger.coverage();
+                coverage.walked_bytes as u64 == self.checksum.bytes
+                    && coverage.owned_bytes as u64 == self.sourced_walked_bytes
+                    && ledger.snapshot().checksum == self.checksum
+            }
+        }
+    }
+
     pub fn unsourced_walked_bytes(&self) -> u64 {
         self.checksum
             .bytes
-            .saturating_sub(self.sourced_walked_bytes)
+            .saturating_sub(self.exact_sourced_walked_bytes())
     }
 }
 
@@ -910,40 +1036,41 @@ impl InitialState {
         let mut world = World::init_default_rules(edge, edge);
         // `GameInfo::seed` is unsigned, but Map::make's argument is signed and
         // its exact prefix preserves prior state for negative values.
-        let seed_installed = world.seed_map_generation(self.info.seed as i32).is_some();
+        world.seed_map_generation(self.info.seed as i32)?;
         let checksum = world.checksum_sections();
-
-        // Prefix-proven bytes in World::walk_data:
-        //   §1: xs/ys (8)
-        //   §4: ten dimensions/derived sizes (40), the six default territory
-        //       limits (24, for the unmodded shipped rule load), and seed (4).
-        // Nothing in the prefix proves the remaining arrays or generated map.
-        let unmodded = self.info.settings.mods == 0
-            && match &self.info.mods {
-                ModBlock::V16 {
-                    checksum,
-                    total_size,
-                    checksum2,
-                    total_size2,
-                    mod_name,
-                    mod_name2,
-                    ..
-                } => {
-                    *checksum == 0
-                        && *total_size == 0
-                        && *checksum2 == 0
-                        && *total_size2 == 0
-                        && mod_name.is_empty()
-                        && mod_name2.is_empty()
-                }
-                ModBlock::V15 { mod_name, .. } => mod_name.is_empty(),
-            };
-        let sourced_walked_bytes =
-            8 + 40 + if seed_installed { 4 } else { 0 } + if unmodded { 24 } else { 0 };
+        let rules = self.rules.map(|rules| RulesWorldEvidence {
+            serialized_span: ReplaySpan::new(rules.serialized_offset, rules.serialized_bytes),
+            serialized_sha256: rules.serialized_sha256,
+            checksum: rules.checksum,
+            after_constants: rules.after_constants,
+            player_base: 44,
+            player_civic: 4,
+            player_city: 4,
+        });
+        let ownership = WorldOwnerLedger::from_initial_prefix(
+            &world,
+            InitialWorldPrefixEvidence {
+                replay_sha256: self.payload_sha256,
+                map_size: self.info.settings.map_size,
+                map_size_span: ReplaySpan::new(
+                    self.worldgen_sources.map_size.offset,
+                    self.worldgen_sources.map_size.bytes,
+                ),
+                seed: self.info.seed,
+                seed_span: ReplaySpan::new(
+                    self.worldgen_sources.seed.offset,
+                    self.worldgen_sources.seed.bytes,
+                ),
+                rules,
+            },
+        )
+        .ok()?;
+        let sourced_walked_bytes = ownership.coverage().owned_bytes as u64;
         Some(InitialWorld {
             world,
             generation_regions: Regions::default(),
             checksum,
+            ownership: Some(ownership),
             sourced_walked_bytes,
         })
     }
@@ -1245,6 +1372,7 @@ pub fn parse_serialized_rules_at(
         Ok(InitialRules {
             serialized_offset: offset,
             serialized_bytes: r.p,
+            serialized_sha256: sha256(&section[..r.p]),
             walked_bytes: adler.bytes,
             checksum: adler.checksum,
             after_types,
@@ -1438,6 +1566,7 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
         },
         save_name,
         bytes_walked,
+        payload_sha256: sha256(payload),
         worldgen_sources: WorldgenSourceSpans {
             seed: seed_source,
             map_style: ReplayByteSpan::new(settings_offset + 1, 1),
@@ -1558,6 +1687,10 @@ mod tests {
         let w = s.reconstruct_world().unwrap();
         assert_eq!((w.world.xs, w.world.ys), (70, 70));
         assert_eq!(w.world.seed, 0x1234_5678);
+        assert_eq!(w.sourced_walked_bytes, 52);
+        assert_eq!(w.exact_sourced_walked_bytes(), 52);
+        assert!(w.ownership.is_some());
+        assert!(w.ownership_is_coherent());
         assert!(w.checksum.bytes > w.sourced_walked_bytes);
         assert!(w.unsourced_walked_bytes() > 100_000);
         assert_ne!(w.checksum.full, 1);
@@ -1601,6 +1734,7 @@ mod tests {
         s.rules = Some(InitialRules {
             serialized_offset: s.bytes_walked,
             serialized_bytes: SHIPPED_RULES_SERIALIZED_BYTES,
+            serialized_sha256: [1; 32],
             walked_bytes: RETAIL_WALKED_BYTES,
             checksum: SHIPPED_RULES_CHANNEL,
             after_types: RETAIL_AFTER_TYPES,
@@ -1619,6 +1753,8 @@ mod tests {
             .all(|input| input.replay_bytes == 0));
 
         let mut initial = s.reconstruct_world().unwrap();
+        assert_eq!(initial.sourced_walked_bytes, 76);
+        assert!(initial.ownership_is_coherent());
         let mut sim = don_sim::World::with_capacity(16, 1);
         assert_eq!(
             plan.apply(&mut sim, &mut initial.world),

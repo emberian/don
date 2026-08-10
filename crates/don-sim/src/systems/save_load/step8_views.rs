@@ -5,8 +5,9 @@
 //! the canonical `victory_score::LeaderState`, and unit/build views from the authoritative
 //! `World`/`BuildData` stores. An inactive leader never consumes or mutates those views.
 //! They are therefore reconstructible adapter state, not another save owner. This validator
-//! admits only the constructor-empty form or the exact post-sync form; every query package,
-//! persistent call counter, active leader, and non-default external host remains refused.
+//! admits only the constructor-empty form, canonical PlayerSetup activation, or the exact
+//! post-sync form; every query package, persistent call counter, and non-default external host
+//! remains refused.
 
 use crate::objects::Band;
 use crate::systems::{economy, leaders, production};
@@ -38,9 +39,15 @@ fn leader_has_only_mirrors(
     let population_cap_is_empty = actual.pop_cap == fresh.pop_cap;
     let population_cap_is_synchronized = actual.pop_cap == policy.population_cap;
 
+    let expected_flags = if sim.vic_leaders.setup_owner.is_configured(who) {
+        fresh.flags | leaders::flag::IN_GAME | leaders::flag::PROCESS
+    } else {
+        fresh.flags
+    };
+
     (mirror_is_empty || mirror_is_synchronized)
         && (policy_is_empty || policy_is_synchronized)
-        && actual.flags == fresh.flags
+        && actual.flags == expected_flags
         && actual.slot == fresh.slot
         && actual.diplo == fresh.diplo
         && actual.taunt_kind == fresh.taunt_kind

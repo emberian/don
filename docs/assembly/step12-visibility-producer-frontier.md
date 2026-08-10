@@ -3,8 +3,8 @@
 This note freezes the retail producer which must replace the live Sim bridge's
 `detector: false`. The shipped `riseofnations.exe` and `rise.pdb` are authoritative. The
 isolated executable seam is
-`crates/don-sim/src/systems/step12_visibility_producer_frontier.rs`; it is intentionally not
-wired into shared tick state yet.
+`crates/don-sim/src/systems/step12_visibility_producer_frontier.rs`; the later live-integration
+section records the Sim-attached preflight owner now built on that frozen seam.
 
 Evidence image hashes:
 
@@ -198,3 +198,49 @@ joined transitions:
 Once that owner exists, the prepared Unit pass can join a full-producer transaction. Plane clear
 still remains blocked until the active Wall/started-Wonder pass and newly-explored `reveal_fog`
 effects are owned; publishing an isolated Unit-only clear would delete legitimate building vision.
+
+## Live Sim integration status
+
+`crates/don-sim/src/systems/step12_visibility_runtime.rs` now supplies that maximal honest
+owner and `Sim` carries it as `step12_visibility`. The runtime keeps independent state/type
+revisions and a composition digest; an installed type source contains Constants plus the exact
+`{object_masks, domain, unit_flags2, role, is_siege}` projection. Per-leader state contains the
+complete 352-entry optimized Unit count table and an ordered, identity-bearing HeroesData
+registry. Per-instance state retains either the mask observed at `Object::init` or an explicitly
+authoritative current flags byte, so a missing record is a fault rather than `detector:false`.
+
+The live preparation walks the canonical sparse Unit bands. It validates every reached live
+row against its `{Handle, who, o, uid}` registry identity, validates exact active-owner Unit
+counts, resolves the ordered Ptolemy/CEO `has_general` searches and Constants additions, and
+binds the exact small-LOS projection receipt to the same authority revision. Invalid tombstone
+rows stop at retail's flags gate; reserved rows and any valid tombstone fail closed. No handle is
+unwrapped: a reached valid row without a live handle is a typed preflight fault.
+
+`GameDaemon::process_all` invokes this preflight only at retail's exact signed
+`frame % 100 == 33` cadence. Fog option 3 remains an early success that reads no authority,
+does not set `busy`, and mutates no fog plane. A scheduled ordinary refresh that completes the
+Unit preflight returns the named `GameDaemonUpdateAllSeen` gap with
+`IncompleteProducer { prepared_unit_stamps, residuals }`; the previous `seen`, `seen2`,
+`seen3`, `WData::was_seen`, and `wcoord_seen` bytes remain intact. Thus the former raw-`mylos`,
+hardcoded-`detector:false` tick implementation is no longer a producer of checksum-visible
+state.
+
+Allocation owners can call `Sim::materialize_step12_object_init` immediately after the
+canonical Unit row and type index exist; load or explicit instance mutation can instead call
+`record_step12_authoritative_instance`. `replace_step12_visibility_type_source`,
+`replace_step12_visibility_leader`, and `retire_step12_visibility_unit` expose the other
+revisioned transactions. Canonical `spawn_unit`, BHS creation, despawn, and load owners still
+need to call those hooks atomically; until then, their absence is detected during preflight.
+
+The authority digest is diagnostic and deliberately separate from retail checksum channel 12.
+Channel 12 continues to come from World section 6, whose visibility planes are unchanged on a
+refused refresh. The existing save format also cannot reconstruct detector-init provenance,
+HeroesData, or the synchronized type composition: saving a non-default Step-12 authority is
+therefore rejected as `Unsupported("step-12 visibility authority")` rather than silently
+serializing guessed state. No competing save version or chunk was allocated for this tranche.
+
+The exact residual transaction owners are active Build/Wall vision, the started-Wonder
+local-seen branch, `World::reveal_fog`, scenario reveal points, frame-zero alliance explored
+sharing, the five direct entry routes, and incremental `Object::update_seen(1)`. Plane clearing
+and installation remain blocked until all reached contributors and side effects can preflight
+and commit atomically.

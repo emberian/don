@@ -7,8 +7,8 @@ lane was executed against retail.
 
 The executable planner is
 `crates/don-sim/src/systems/diplomacy_command_plans.rs`; its mutation pins are
-`crates/don-sim/tests/diplomacy_command_plans.rs`.  Both are deliberately path-imported
-and do not edit the shared command dispatcher.
+`crates/don-sim/tests/diplomacy_command_plans.rs`, and the shared command dispatcher reaches
+it through one host-owned atomic transaction.
 
 ## Wire and receiver map
 
@@ -67,7 +67,7 @@ debits the dwords at `+0x498` before adding back to those buckets.
 
 ## Complete deterministic transactions
 
-Six opcodes and the common Reject arm have a bounded state transaction.
+Seven opcodes have a bounded state transaction.
 
 - **Treaty (37):** click-stamp receipt; set sender `proposal_open`; run `clear_agree` on
   sender→target then target→sender; write the treaty value to both pair records.  The
@@ -89,8 +89,13 @@ Six opcodes and the common Reject arm have a bounded state transaction.
 - **Reject (42), pending-agreement arm:** `process_reject` chooses mode zero exactly when
   the receiver's target `Diplomacy` record dword `+0x00` is 1; it does not call symmetric
   `get_diplo` or inspect either raw declaration.  `action_respond` clears
-  `LeaderData+0x314/+0x334` for target, runs only
+  `LeaderData+0x334/+0x314` for target, runs only
   sender→target `clear_agree`, and may emit a local rejection notice.
+- **Reject (42), non-pending arm:** mode two clears `LeaderData+0x334` and then `+0x314`,
+  scans attack counterproposals, clears agreements sender→target and target→sender,
+  then clears the target→sender record before sender→target.  The reverse agreement can
+  refund escrow and declaration costs before record clearing.  A local target receives the
+  distinct string-table `+0xB5B8` notice followed by sound category `0x18`.
 
 Click stamps, local text, and sounds are retained as ordered presentation receipts.  They
 do not mutate walked simulation state and do not authorize skipping a state boundary.
@@ -103,11 +108,18 @@ revalidates the exact state snapshot supplied to the bridge, replaces the image 
 planned after-state, and retains the complete receipt (including ordered presentation
 evidence).  A stale snapshot or any `Boundary` decision returns unavailable before mutation.
 
-This makes the pending-agreement arm of opcode 42 executable in the shipped command host:
-the two response counters, escrow refund, declaration-cost clear, agreement/open flags and
-local-notice receipt commit together.  It does **not** make opcode 42 closure-green.  The
-non-pending arm still reaches `RejectCounterproposal`, whose possible recursive declaration
-must include DOW payment, `set_diplo`, team fan-out and callbacks in the same receipt.
+This makes both arms of opcode 42 executable in the shipped command host.  Response
+counters, reciprocal escrow refunds, declaration-cost clears, both proposal records and
+ordered local presentation commit under one validated receipt.
+
+The apparent mode-two recursive declaration does not occur in a valid image.  Its gate at
+`0x006D04A9` calls `leaders[target].is_enemy(target)` and requires a nonzero result, while
+the planner's entry validation proves `leaders[target].who == target`; retail's self-enemy
+query therefore returns zero.  The planner retains a typed self-gate step for every reached
+attack candidate and proceeds directly to the clears.  A malformed identity image could
+reach `action_declare(sender.who, PEACE, no_payment=1, override=0)`, but that image is
+rejected before planning and is not a supported simulation state.  In particular, no
+reachable opcode-42 path performs DOW payment, `set_diplo`, team fan-out or simulation RNG.
 
 ## Exact diplomacy and team gates
 
@@ -150,29 +162,29 @@ to validate it as applied.
   scaled resources, transfers six goods, resolves attack proposals and treaty state,
   calls `set_diplo`, and emits product callbacks.  Its first two counter clears are prefix
   evidence only; they are not partially committed.
-- **Reject (42), non-pending arm:** mode 2 can recursively call `action_declare` from an
-  attack counterproposal before clearing both records.  It therefore shares the same
-  retarget/vision/victory/event boundary.
 
 This is the reason the lane does not reduce diplomacy to a relation matrix: doing so would
 silently omit deterministic resource, unit, fog, victory, army, and event effects.
 
-## Root integration map
+## Shipped integration map
 
-No shared files were edited.  Convergence can land this pack independently, then:
+`systems::diplomacy_command_plans` is exported beside `setup_diplomacy`, `command::Fleet`
+owns one atomic `DiplomacyCommandRequest` / `DiplomacyCommandReceipt` callback, and the
+bridge dispatches receiver-`Leader` opcodes 37–45 before the group-only action gate.  An
+`Apply` counts as acted only after receipt validation; a `Boundary`, stale snapshot or
+unavailable receipt leaves the host image untouched.  The command ledger therefore marks
+37/39/40/42/43/44/45 complete.  Opcodes 38/41 remain red until their complete
+resource-transfer and `set_diplo` tails share the same transaction.
 
-1. expose `pub mod diplomacy_command_plans;` beside `setup_diplomacy` in
-   `crates/don-sim/src/systems/mod.rs`;
-2. extend `command::Fleet` with one atomic diplomacy transaction callback carrying
-   `DiplomacyCommandRequest` / `DiplomacyCommandReceipt`;
-3. dispatch receiver-`Leader` opcodes 37–45 before the current group-only action gate;
-4. count `Apply` decisions as acted only after receipt validation; count `Boundary` or an
-   unavailable receipt as unported, leaving bridge and world untouched;
-5. only then mark 37/39/40/43/44/45 and the pending-agreement Reject arm state-wired in the command
-   ledger.  Opcodes 38/41 and hostile Reject remain red until the complete host
-   transaction includes resource transfer plus the `set_diplo` tail.
+Opcode 42 consumes no command/simulation RNG and makes no immediate checksum call.  Its
+counter, proposal, reserve and resource-bucket mutations are included by the next leaders
+channel checksum.  The retained sound request is presentation: `SoundGlobal::play` may use
+its own sound-selection RNG when the product renderer delivers category `0x18`, but that
+stream is not simulation authority.  The current narrow save path already refuses active
+leader/diplomacy images; broad persistence of that image remains a save-domain gap, not an
+opcode-42 execution tail.
 
-Focused convergence command (not run in this token-only lane):
+Focused convergence command:
 
 ```sh
 cargo test -p don-sim --test diplomacy_command_plans

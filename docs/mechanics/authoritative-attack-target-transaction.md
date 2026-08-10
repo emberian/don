@@ -7,13 +7,15 @@ adapter can prepare one exact current target, retain its stable `Handle` and ret
 and carry the Sim episode revision plus the opaque visibility revision/frame/ordinal through a
 scheduler phase.  It also proves the target is a distinct, active, currently visible enemy Unit
 before producing an order payload.  `Sim::do_attack` consumes that complete identity before its
-first mutable execution gate.
+first mutable execution gate.  The policy-side prepared transaction also binds the captured
+target public row back to live Sim state and proves every optional combat-table dependency which
+the current executor can otherwise leave silently.
 
 The admitted verb delta is **0**.  `UNIT_INTEGRATION[ATTACK]` remains `SimAttackIssue`, but the
 conditional mask is false and ordinary apply returns `AttackTargetCommitUnavailable` without
 mutation.  This remains required because the production path does not yet preflight every
-dependency which can return with an unchanged order and world, nor does it host the complete
-retail can-hurt/target-eligibility transaction.
+prepared fact atomically and Step 12 does not yet produce the authoritative freshness consumed by
+ATTACK.  A policy-side proof alone cannot close that execution-time gap.
 
 ## First lossy owner closed
 
@@ -45,11 +47,19 @@ unchanged.  Load/resave retains the exact target transaction bit-for-bit.
 - visibility owner revision, captured frame, policy ordinal, and binding;
 - target Handle plus `(who,o,uid)` after a live Sim revalidation;
 - the current retail mutual diplomacy result, which must be `Diplo::War`;
+- the complete captured target public row, re-read byte-for-byte from live Sim;
+- both exact `UnitTypeStats` rows, the installed balance-table cell, combat-rule snapshot,
+  direct/projectile mode, recharge result, and positive damage result produced by the same
+  default-predicate pipeline as the current executor;
 - the exact actor and target rows only as private same-borrow validation cursors, never as stored
   identity.
 
 Only `QueuePosition::Replace` and zero order flags enter this one-unit route.  Missing/stale
 visibility, changed identity, same-object targeting, and non-enemy relations have typed refusals.
+Missing balance/type rows, an out-of-domain balance cell, changed captured public state, a
+non-live target, and a non-positive damage result also refuse before mutation.  Combat sources
+are explicit immutable setup inputs retained across deterministic reset; replacing them
+invalidates every outstanding visibility ordinal.
 `retained_order()` produces the non-lossy queue payload but is deliberately not a commit permit.
 
 `apply_prepared_attack_target` revalidates the opaque visibility binding and the complete prepared
@@ -66,11 +76,12 @@ damage, or RNG state can change.  A valid exact order retains its attested row f
 executor.  Handle-less legacy orders keep the previous `(who,o)` compatibility path, explicitly
 without becoming authoritative.
 
-Before ATTACK can be admitted, execution still must prove every currently silent dependency,
-including the attacker/defender type rows and balance entry, revalidate the visibility fact at
-the commit/execution boundary, and host the complete retail can-hurt/target-eligibility
-transaction.  Exact identity consumption closes the slot-reuse hazard but does not eliminate
-accepted-no-effect actions, so it does not justify changing the mask.
+The RL preflight now proves the current executor's optional type/balance dependencies and its
+positive can-hurt result, and `apply_prepared_attack_target` recomputes the complete opaque token.
+Before ATTACK can be admitted, the production execution transaction itself must consume that
+proof after authoritative Step-12 visibility freshness and before any of the tick stages which
+can change its inputs.  Exact identity consumption plus a policy proof closes two hazards, but
+does not make them one atomic production transaction, so neither justifies changing the mask.
 
 ## Focused validation
 
@@ -79,6 +90,7 @@ The source tranche is covered by:
 ```sh
 cargo test -p don-sim --test attack_target_transaction
 cargo test -p don-sim --test attack_target_execution
+cargo test -p don-env --test authoritative_attack_execution_preflight
 cargo test -p don-env --test authoritative_visibility_integration
 ```
 
@@ -86,5 +98,6 @@ The first target drives exact identity through `Sim::issue`, `OrderList`, `Order
 publish, DoNSave load, and deterministic resave.  The second reaches the real object-work tick and
 proves that valid exact identities cross the preflight while Handle, owner, object-index, and UID
 mismatches retire before recharge or movement; it also freezes the legacy compatibility path.
-The third freezes preparation, commit refusal, visibility-refresh staleness, and reset staleness
-while checking zero mutation at the red boundary.
+The third proves typed missing-table/type refusals, full prepared execution facts, source-change
+staleness, zero mutation, and reset retention.  The fourth freezes preparation, commit refusal,
+visibility-refresh staleness, and reset staleness while checking zero mutation at the red boundary.

@@ -8,9 +8,10 @@
 //! production Sim issue/execution route. A complete current-frame capture now binds its policy
 //! ordinal through retail's cloak/detection/fog predicate and revalidates `(Handle,who,o,uid)`.
 //! The prepared transaction and walked order now retain that identity, visibility revision,
-//! and hostile eligibility. ATTACK remains masked at the next boundary because the production
-//! tick does not consume the retained identity and still has accepted-no-effect dependency
-//! exits. Unsupported verbs fail before mutation; there is no accepted-no-effect result.
+//! hostile eligibility, and an exact proof of the current executor's optional combat inputs.
+//! ATTACK remains masked because Step-12 freshness and that proof are not yet atomically consumed
+//! by the production tick. Unsupported verbs fail before mutation; there is no accepted-no-effect
+//! result.
 
 use crate::authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, StepReceipt};
 use don_sim::order::{Order, OrderIndex, OrderTargetIdentity, ORDER_FLEEING};
@@ -25,10 +26,11 @@ use don_sim::systems::movement_live::{
     LiveCollisionFault, LiveCollisionSource, MovementSourceState,
 };
 use don_sim::systems::victory_score::{leader_flag, Diplo};
-use don_sim::world::{OBJ_FLAG_ACTIVE, SUBTILE};
+use don_sim::world::{UnitTypeStats, OBJ_FLAG_ACTIVE, SUBTILE};
 use don_sim::Handle;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 pub const UNIT_VERB_COUNT: usize = 33;
 pub const PLAYER_VERB_COUNT: usize = 16;
@@ -446,20 +448,26 @@ pub enum ApplyRefusal {
         target_entity: u16,
         fault: VisibilityProjectionFault,
     },
-    /// Identity and current visibility were both revalidated against `Sim`; the remaining
-    /// production ATTACK transaction cannot yet retain the target UID/Handle through the
-    /// walked order and enforce the full combat-target eligibility predicate.
+    /// Identity, visibility, combat dependencies, and can-hurt were revalidated against `Sim`;
+    /// the remaining production ATTACK transaction does not yet consume that prepared proof.
     AttackTargetCommitUnavailable {
         verb_index: usize,
         target: ExternalEntityIdentity,
         boundary: IntegrationBoundary,
     },
     /// Identity and visibility were current, but the target fails a retail-known eligibility
-    /// predicate before the still-unhosted production combat transaction.
+    /// or the current executor's exact positive-damage predicate.
     AttackTargetIneligible {
         verb_index: usize,
         target: ExternalEntityIdentity,
         reason: AttackTargetEligibilityRefusal,
+    },
+    /// The exact target is visible and eligible, but the production executor would reach a
+    /// silent dependency exit. These sources are setup authority, never inferred defaults.
+    AttackExecutionUnavailable {
+        verb_index: usize,
+        target: ExternalEntityIdentity,
+        dependency: AttackExecutionDependencyRefusal,
     },
     InvalidDestination {
         x: i32,
@@ -481,6 +489,47 @@ pub enum AttackTargetEligibilityRefusal {
     ActorIsTarget,
     RelationUnavailable { owner: u8 },
     NotEnemy { relation: Diplo },
+    TargetNotAlive { hits: i32 },
+    CannotHurt { predicted_damage: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackExecutionDependencyRefusal {
+    ActorTypeUnavailable {
+        row: usize,
+    },
+    TargetTypeUnavailable {
+        row: usize,
+    },
+    TargetPublicStateChanged {
+        captured: ExternalEntityPublicState,
+        observed: ExternalEntityPublicState,
+    },
+    BalanceTableUnavailable,
+    AttackerTypeStatsUnavailable {
+        type_id: i32,
+    },
+    DefenderTypeStatsUnavailable {
+        type_id: i32,
+    },
+    BalanceEntryUnavailable {
+        attacker_type_id: i32,
+        defender_type_id: i32,
+    },
+}
+
+/// Setup-source validation for the ATTACK executor's optional combat tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackExecutionSourceRefusal {
+    InvalidTypeId {
+        index: usize,
+        type_id: i32,
+    },
+    DuplicateTypeId {
+        first: usize,
+        second: usize,
+        type_id: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -542,6 +591,7 @@ pub enum ProjectionRefusal {
 pub enum VisibilityStaticSourceRefusal {
     InvalidType(i32),
     InvalidViewer(u8),
+    InvalidFogOption(u8),
     ViewerMaskExcludesSelf { viewer: u8, mask: u8 },
 }
 
@@ -618,13 +668,69 @@ pub struct PreparedUnitAction {
     source: MovementSourceState,
 }
 
+/// Exact production inputs which must stay unchanged between ATTACK prepare and commit.
+///
+/// This is evidence, not an admission permit: the production tick does not yet consume this
+/// proof atomically, so [`PreparedAttackTargetTransaction`] remains fail-closed at commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttackExecutionProof {
+    frame: i32,
+    actor_who: u8,
+    actor_x: i32,
+    actor_y: i32,
+    actor_speed: i16,
+    actor_recharge: u8,
+    actor_type_id: i32,
+    target_type_id: i32,
+    attacker: UnitTypeStats,
+    defender: UnitTypeStats,
+    balance_pct: i32,
+    combat_rules: don_sim::mechanics::CombatRules,
+    recharge_rules: don_sim::systems::combat::CombatConstants,
+    shooter: Option<don_sim::systems::ammo::ShooterRules>,
+    predicted_damage: i32,
+    recharge_frames: i32,
+}
+
+impl AttackExecutionProof {
+    pub const fn actor_type_id(self) -> i32 {
+        self.actor_type_id
+    }
+
+    pub const fn target_type_id(self) -> i32 {
+        self.target_type_id
+    }
+
+    pub const fn balance_pct(self) -> i32 {
+        self.balance_pct
+    }
+
+    pub const fn predicted_damage(self) -> i32 {
+        self.predicted_damage
+    }
+
+    pub const fn recharge_frames(self) -> i32 {
+        self.recharge_frames
+    }
+
+    pub const fn uses_projectile(self) -> bool {
+        self.shooter.is_some()
+    }
+}
+
+#[derive(Clone)]
+struct AttackExecutionSources {
+    balance: Arc<don_sim::balance::BalanceTable>,
+    unit_stats: Arc<Vec<UnitTypeStats>>,
+}
+
 /// Maximal fail-closed ATTACK transaction before the production executor boundary.
 ///
 /// This token retains the policy request, Sim episode revision, opaque visibility binding,
-/// exact stable/retail target identity, and the retail-known hostile eligibility result.  It
-/// can produce the non-lossy queue node, but it is not an admission token: the normal mask and
-/// apply routes remain red until the production tick consumes the identity and preflights every
-/// dependency which can currently yield an accepted-no-effect ATTACK.
+/// exact stable/retail target identity, hostile eligibility, captured public state, and every
+/// optional input read by the current executor. It can produce the non-lossy queue node, but it
+/// is not an admission token: the normal mask and apply routes remain red until the production
+/// tick atomically consumes the proof under authoritative Step-12 freshness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreparedAttackTargetTransaction {
     who: u8,
@@ -634,7 +740,9 @@ pub struct PreparedAttackTargetTransaction {
     target_row: usize,
     binding: VisibleTargetBinding,
     target: ExternalEntityIdentity,
+    target_public: ExternalEntityPublicState,
     relation: Diplo,
+    execution: AttackExecutionProof,
 }
 
 impl PreparedAttackTargetTransaction {
@@ -664,6 +772,14 @@ impl PreparedAttackTargetTransaction {
 
     pub const fn relation(&self) -> Diplo {
         self.relation
+    }
+
+    pub const fn target_public(&self) -> ExternalEntityPublicState {
+        self.target_public
+    }
+
+    pub const fn execution_proof(&self) -> AttackExecutionProof {
+        self.execution
     }
 
     /// Build the exact queue payload without claiming that the production consumer is ready.
@@ -702,6 +818,8 @@ pub struct AuthoritativeBackend {
     external_visibility: ExternalEntityVisibilityOwner,
     visibility_type_flags: BTreeMap<i32, u32>,
     visibility_viewer_masks: BTreeMap<u8, u8>,
+    visibility_fog_option: Option<u8>,
+    attack_execution_sources: Option<AttackExecutionSources>,
 }
 
 impl AuthoritativeBackend {
@@ -713,6 +831,8 @@ impl AuthoritativeBackend {
             external_visibility: ExternalEntityVisibilityOwner::default(),
             visibility_type_flags: BTreeMap::new(),
             visibility_viewer_masks: BTreeMap::new(),
+            visibility_fog_option: None,
+            attack_execution_sources: None,
         })
     }
 
@@ -738,6 +858,8 @@ impl AuthoritativeBackend {
             external_visibility: ExternalEntityVisibilityOwner::default(),
             visibility_type_flags: BTreeMap::new(),
             visibility_viewer_masks: BTreeMap::new(),
+            visibility_fog_option: None,
+            attack_execution_sources: None,
         })
     }
 
@@ -750,6 +872,15 @@ impl AuthoritativeBackend {
         })?;
         replacement.visibility_type_flags = self.visibility_type_flags.clone();
         replacement.visibility_viewer_masks = self.visibility_viewer_masks.clone();
+        replacement.visibility_fog_option = self.visibility_fog_option;
+        if let Some(option) = replacement.visibility_fog_option {
+            replacement.episode.sim_mut_for_backend().map.fog.option =
+                don_sim::systems::borders_fog::FogOption(option);
+        }
+        replacement.attack_execution_sources = self.attack_execution_sources.clone();
+        if let Some(sources) = replacement.attack_execution_sources.as_ref() {
+            apply_attack_execution_sources(replacement.episode.sim_mut_for_backend(), sources);
+        }
         apply_visibility_type_flags(
             replacement.episode.sim_mut_for_backend(),
             &replacement.visibility_type_flags,
@@ -797,6 +928,28 @@ impl AuthoritativeBackend {
             .install_movement_collision_source(actor, source)
     }
 
+    /// Atomically install the captured combat tables which the production ATTACK executor
+    /// reads. The backend retains these immutable sources across deterministic reset.
+    ///
+    /// This is setup authority, not a permissive fallback: incomplete type coverage remains a
+    /// typed per-action refusal. Replacing the source invalidates every visible target ordinal
+    /// so a prepared action can never combine an old observation with new combat content.
+    pub fn install_attack_execution_sources(
+        &mut self,
+        balance: Arc<don_sim::balance::BalanceTable>,
+        unit_stats: Vec<UnitTypeStats>,
+    ) -> Result<(), AttackExecutionSourceRefusal> {
+        validate_attack_execution_sources(&unit_stats)?;
+        let sources = AttackExecutionSources {
+            balance,
+            unit_stats: Arc::new(unit_stats),
+        };
+        apply_attack_execution_sources(self.episode.sim_mut_for_backend(), &sources);
+        self.attack_execution_sources = Some(sources);
+        self.invalidate_external_visibility();
+        Ok(())
+    }
+
     /// Install one exact `UnitTypeData::unit_flags +0x2B4` capture into the Sim-owned type
     /// table. The capture is retained across deterministic reset; changing it invalidates
     /// every outstanding external ordinal.
@@ -832,6 +985,24 @@ impl AuthoritativeBackend {
         }
         self.episode.sim_mut_for_backend().map.fog.leaders[index].player_mask = mask;
         self.visibility_viewer_masks.insert(viewer, mask);
+        self.invalidate_external_visibility();
+        Ok(())
+    }
+
+    /// Install the captured `GameData +0x30` fog policy used by external visibility.
+    ///
+    /// In particular, option 3 is an explicit all-current-fog-visible policy fact; it is not a
+    /// substitute for stamping `seen` or `seen3` when the Step-12 producer is unavailable.
+    pub fn install_visibility_fog_option(
+        &mut self,
+        option: u8,
+    ) -> Result<(), VisibilityStaticSourceRefusal> {
+        if option > 3 {
+            return Err(VisibilityStaticSourceRefusal::InvalidFogOption(option));
+        }
+        self.episode.sim_mut_for_backend().map.fog.option =
+            don_sim::systems::borders_fog::FogOption(option);
+        self.visibility_fog_option = Some(option);
         self.invalidate_external_visibility();
         Ok(())
     }
@@ -922,7 +1093,7 @@ impl AuthoritativeBackend {
     /// Callers may retain this token across scheduler phases. A tick, visibility refresh, or
     /// reset makes its revisions stale; [`Self::apply_prepared_attack_target`] then refuses
     /// before mutation. Even a current token stops at `CombatTargetHost` until the production
-    /// executor consumes the retained Handle/UID and owns every no-effect dependency.
+    /// executor consumes both the retained identity and this execution proof atomically.
     pub fn prepare_attack_target(
         &self,
         who: u8,
@@ -1355,6 +1526,212 @@ fn capture_external_visibility_frame(
     })
 }
 
+fn validate_attack_execution_sources(
+    unit_stats: &[UnitTypeStats],
+) -> Result<(), AttackExecutionSourceRefusal> {
+    let last_type_id = don_sim::balance::FIRST_UNIT_TYPE_ID + don_sim::balance::DIM as i32 - 1;
+    for (index, stats) in unit_stats.iter().enumerate() {
+        if !(don_sim::balance::FIRST_UNIT_TYPE_ID..=last_type_id).contains(&stats.type_id) {
+            return Err(AttackExecutionSourceRefusal::InvalidTypeId {
+                index,
+                type_id: stats.type_id,
+            });
+        }
+        if let Some(first) = unit_stats[..index]
+            .iter()
+            .position(|earlier| earlier.type_id == stats.type_id)
+        {
+            return Err(AttackExecutionSourceRefusal::DuplicateTypeId {
+                first,
+                second: index,
+                type_id: stats.type_id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn apply_attack_execution_sources(sim: &mut don_sim::tick::Sim, sources: &AttackExecutionSources) {
+    sim.world.rules.balance = Some(Arc::clone(&sources.balance));
+    sim.world.rules.unit_stats = Arc::clone(&sources.unit_stats);
+}
+
+fn live_external_public_state(
+    sim: &don_sim::tick::Sim,
+    row: usize,
+    type_id: i32,
+) -> ExternalEntityPublicState {
+    ExternalEntityPublicState {
+        type_id,
+        x: sim.world.units.x_internal()[row],
+        y: sim.world.units.y_internal()[row],
+        hits: sim.world.units.myhits()[row],
+        angle: sim.world.units.angle()[row],
+        speed: sim.world.units.myspeed()[row],
+        recharge: sim.world.units.get_recharging(row),
+        order_index: sim.world.orders(row).order_type() as u16,
+    }
+}
+
+fn preflight_attack_execution(
+    sim: &don_sim::tick::Sim,
+    verb_index: usize,
+    target: ExternalEntityIdentity,
+    captured_target: ExternalEntityPublicState,
+    actor_row: usize,
+    target_row: usize,
+) -> Result<AttackExecutionProof, ApplyRefusal> {
+    let actor_type_id =
+        *sim.unit_type
+            .get(actor_row)
+            .ok_or(ApplyRefusal::AttackExecutionUnavailable {
+                verb_index,
+                target,
+                dependency: AttackExecutionDependencyRefusal::ActorTypeUnavailable {
+                    row: actor_row,
+                },
+            })?;
+    let target_type_id =
+        *sim.unit_type
+            .get(target_row)
+            .ok_or(ApplyRefusal::AttackExecutionUnavailable {
+                verb_index,
+                target,
+                dependency: AttackExecutionDependencyRefusal::TargetTypeUnavailable {
+                    row: target_row,
+                },
+            })?;
+    let observed_target = live_external_public_state(sim, target_row, target_type_id);
+    if observed_target != captured_target {
+        return Err(ApplyRefusal::AttackExecutionUnavailable {
+            verb_index,
+            target,
+            dependency: AttackExecutionDependencyRefusal::TargetPublicStateChanged {
+                captured: captured_target,
+                observed: observed_target,
+            },
+        });
+    }
+    if observed_target.hits <= 0 {
+        return Err(ApplyRefusal::AttackTargetIneligible {
+            verb_index,
+            target,
+            reason: AttackTargetEligibilityRefusal::TargetNotAlive {
+                hits: observed_target.hits,
+            },
+        });
+    }
+
+    let balance =
+        sim.world
+            .rules
+            .balance
+            .as_ref()
+            .ok_or(ApplyRefusal::AttackExecutionUnavailable {
+                verb_index,
+                target,
+                dependency: AttackExecutionDependencyRefusal::BalanceTableUnavailable,
+            })?;
+    let attacker = sim
+        .world
+        .rules
+        .unit_stats
+        .iter()
+        .find(|stats| stats.type_id == actor_type_id)
+        .copied()
+        .ok_or(ApplyRefusal::AttackExecutionUnavailable {
+            verb_index,
+            target,
+            dependency: AttackExecutionDependencyRefusal::AttackerTypeStatsUnavailable {
+                type_id: actor_type_id,
+            },
+        })?;
+    let defender = sim
+        .world
+        .rules
+        .unit_stats
+        .iter()
+        .find(|stats| stats.type_id == target_type_id)
+        .copied()
+        .ok_or(ApplyRefusal::AttackExecutionUnavailable {
+            verb_index,
+            target,
+            dependency: AttackExecutionDependencyRefusal::DefenderTypeStatsUnavailable {
+                type_id: target_type_id,
+            },
+        })?;
+    let balance_pct = balance.get(attacker.type_id, defender.type_id).ok_or(
+        ApplyRefusal::AttackExecutionUnavailable {
+            verb_index,
+            target,
+            dependency: AttackExecutionDependencyRefusal::BalanceEntryUnavailable {
+                attacker_type_id: attacker.type_id,
+                defender_type_id: defender.type_id,
+            },
+        },
+    )?;
+
+    let dx = observed_target.x - sim.world.units.x_internal()[actor_row];
+    let dy = observed_target.y - sim.world.units.y_internal()[actor_row];
+    let combat_rules = sim.world.rules.combat;
+    let predicted_damage = don_sim::mechanics::damage(
+        &don_sim::mechanics::DamageInput {
+            balance_pct,
+            attack: don_sim::mechanics::get_attack(attacker.attack, false, 0, 0),
+            armor: don_sim::mechanics::get_armor(defender.armor, false, 0, 0),
+            attack_dir: don_sim::trig::find_angle(dx, dy),
+            attacker_player: u32::from(sim.world.units.get_who(actor_row)),
+            attacker_type_id: attacker.type_id,
+            defender_type_id: defender.type_id,
+            defender_facing: observed_target.angle,
+            defender_facing_entrench: observed_target.angle,
+            current_frame: sim.world.frame,
+            ..Default::default()
+        },
+        &don_sim::mechanics::DamagePredicates::default(),
+        &combat_rules,
+        &don_sim::mechanics::UnreachedTerms::default(),
+    );
+    if predicted_damage <= 0 {
+        return Err(ApplyRefusal::AttackTargetIneligible {
+            verb_index,
+            target,
+            reason: AttackTargetEligibilityRefusal::CannotHurt { predicted_damage },
+        });
+    }
+    let shooter = sim
+        .shooter_rules
+        .iter()
+        .find(|(type_id, _)| *type_id == attacker.type_id)
+        .map(|(_, rules)| *rules);
+    let recharge_frames = don_sim::systems::combat::recharge_frames(
+        &don_sim::systems::combat::RechargeInput {
+            base_recharge: attacker.recharge,
+            ..Default::default()
+        },
+        &sim.combat_rules,
+    );
+
+    Ok(AttackExecutionProof {
+        frame: sim.world.frame,
+        actor_who: sim.world.units.get_who(actor_row),
+        actor_x: sim.world.units.x_internal()[actor_row],
+        actor_y: sim.world.units.y_internal()[actor_row],
+        actor_speed: sim.world.units.myspeed()[actor_row],
+        actor_recharge: sim.world.units.get_recharging(actor_row),
+        actor_type_id,
+        target_type_id,
+        attacker,
+        defender,
+        balance_pct,
+        combat_rules,
+        recharge_rules: sim.combat_rules,
+        shooter,
+        predicted_damage,
+        recharge_frames,
+    })
+}
+
 fn prepare_attack_target_transaction(
     sim: &don_sim::tick::Sim,
     external_visibility: &ExternalEntityVisibilityOwner,
@@ -1482,6 +1859,14 @@ fn prepare_attack_target_transaction(
     if request.order_flags != 0 {
         return Err(ApplyRefusal::UnsupportedOrderFlags(request.order_flags));
     }
+    let execution = preflight_attack_execution(
+        sim,
+        verb_index,
+        target.identity,
+        target.public,
+        actor_row,
+        target_row,
+    )?;
 
     Ok(PreparedAttackTargetTransaction {
         who,
@@ -1491,7 +1876,9 @@ fn prepare_attack_target_transaction(
         target_row,
         binding,
         target: target.identity,
+        target_public: target.public,
         relation,
+        execution,
     })
 }
 

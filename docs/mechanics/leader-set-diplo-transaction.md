@@ -158,30 +158,37 @@ Opcode 41 therefore remains unavailable until the resource plan, both root `set_
 plans, third-party fan-out, attack declarations, record clearing and typed callbacks share
 one atomic host receipt.
 
-## Hostile opcode 42
+## Opcode 42 self-enemy gate
 
-The non-pending reject arm enters `action_respond(target, 2)`. Its hostile branch can find
-an attack counterproposal and recursively call `action_declare` before clearing the pair.
-That recursion owns DOW payment, `set_diplo`, team fan-out and local callbacks described
-above. The branch cannot be represented honestly by clearing proposal records first; opcode
-42 remains unavailable until the recursive declaration receipt is nested in the reject
-transaction.
+The non-pending reject arm enters `action_respond(target, 2)` and scans attack
+counterproposals, but the apparent recursive declaration is unreachable in a valid image.
+At `0x006D04A9` retail asks `leaders[target].is_enemy(target)` and requires true.
+`LeaderData::is_enemy` returns false for self, and command planning has already validated
+the retail setup invariant `leaders[target].who == target`.
+
+Malformed identity state could instead call
+`leaders[target].action_declare(sender.who, PEACE, no_payment=1, override=0)`.  That
+counterfactual skips affordability, DOW payment and declaration statistics, although it
+could still reach `set_diplo`, team fan-out and callbacks.  The shipped command host rejects
+the malformed image before planning; supported opcode 42 therefore has no `set_diplo`
+dependency and closes by applying the exact counter, reciprocal refund/clear, record-clear
+and presentation transaction.
 
 ## Integration map
 
-No shared dispatcher file is changed by this pack. Convergence should:
+The shared diplomacy dispatcher and atomic host receipt are shipped. Remaining convergence
+is limited to the two genuine boundaries:
 
-1. expose `systems::leader_set_diplo` beside `diplomacy_command_plans`;
-2. add a single diplomacy-host receipt capable of nesting declaration-payment,
+1. extend the diplomacy-host receipt to nest declaration-payment,
    accepted-resource, `SetDiploPlan`, transitive `ally_diplo`, proposal-clear and callback
    plans;
-3. resolve `DiplomacyBoundary::DeclarationResourceAndDiploChange` with the opcode-38 order
+2. resolve `DiplomacyBoundary::DeclarationResourceAndDiploChange` with the opcode-38 order
    above;
-4. resolve `DiplomacyBoundary::AcceptTransferAndDiploChange` with the opcode-41 order above;
-5. resolve `DiplomacyBoundary::RejectCounterproposal` only after its recursive declaration
-   (if any) is included;
-6. keep 38/41/42 state-wired red until receipt validation proves every mandatory authority
-   call; presentation delivery is reported separately.
+3. resolve `DiplomacyBoundary::AcceptTransferAndDiploChange` with the opcode-41 order above;
+4. keep 38/41 state-wired red until receipt validation proves every mandatory authority
+   call; opcode 42 is complete because its recursive gate is impossible after identity
+   validation, and its presentation delivery is reported separately.
 
-Per lane instruction, no build, test, formatter or remote job was run while producing this
-pack.
+The opcode-42 closure is covered by focused planner, command-host, bridge-integration and
+compiled closure-inventory tests.  No retail run is needed for the unreachable-gate proof;
+the proof is the retail instruction sequence plus the admitted identity invariant.

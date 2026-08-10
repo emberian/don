@@ -52,7 +52,8 @@ pub mod typecaps;
 mod py;
 
 pub use authoritative_backend::{
-    decode_unit_heads, ApplyReceipt, ApplyRefusal, AttackTargetEligibilityRefusal,
+    decode_unit_heads, ApplyReceipt, ApplyRefusal, AttackExecutionDependencyRefusal,
+    AttackExecutionProof, AttackExecutionSourceRefusal, AttackTargetEligibilityRefusal,
     AuthoritativeBackend, CoreObservation, CoreReward, CoreRewardSnapshot, FactoredApplyRefusal,
     FactoredUnitActionSpace, HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation,
     PreparedAttackTargetTransaction, PreparedUnitAction, ProjectionRefusal, QueuePosition,

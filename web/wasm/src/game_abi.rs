@@ -1288,6 +1288,8 @@ pub unsafe extern "C" fn game_start_manual_teams(
         team_style: team_style as u8,
         local_player_setup_slot: local_player as usize,
         ranked: ranked != 0,
+        // The browser does not yet expose a technology/prerequisite setup owner.
+        shared_vision_preq_mask: 0,
     };
     match game.core.start_manual_player_setup(request) {
         Ok(_) => {
@@ -2117,7 +2119,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_team_setup_is_atomic_sim_owned_initializes_allies_and_save_refuses() {
+    fn manual_team_setup_is_atomic_sim_owned_initializes_allies_and_roundtrips_save() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -2145,8 +2147,14 @@ mod tests {
         assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 2);
         assert_eq!(unsafe { game_diplomacy(&mut game, 0, 1) }, 0);
 
-        assert_eq!(unsafe { game_save(&mut game) }, 0);
-        assert!(String::from_utf8_lossy(&game.error).contains("player setup owner"));
+        let digest = game.core.channel_digest();
+        assert_eq!(unsafe { game_save(&mut game) }, 1);
+        assert!(!game.save_bytes.is_empty());
+        game.load_bytes = game.save_bytes.clone();
+        assert_eq!(unsafe { game_load_commit(&mut game) }, 1);
+        assert_eq!(game.core.channel_digest(), digest);
+        assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0x0f);
+        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 2);
         assert_eq!(
             unsafe { game_start_manual_teams(&mut game, 0x0f, packed, 1, 0, 0) },
             0

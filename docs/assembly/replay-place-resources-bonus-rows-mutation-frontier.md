@@ -6,8 +6,9 @@ RNG/World/pool/counter mutation projection from `0x0068fc0d` through the next
 `0x00690215`, for every remaining row of the **current** `BONUSES` array. The
 category-complete residual is `0x00690225`.
 
-This later-row owner is compiled but is not yet connected to the public schedule. It
-does not claim category cleanup, the
+This later-row owner is compiled and connected to the public schedule one atomic row at
+a time for nonempty arrays. It does not claim the zero-row XML-to-category-tail bridge,
+category cleanup, the
 `GOODIES` or `FISH` XML sections, the `Map::place_resources` return, the caller
 continuation at `0x0068c72d`, or source token `0x1ef7`.
 
@@ -122,15 +123,33 @@ as well as the RNG/World/pool/counter projection. An external host-reference sid
 effect cannot be rolled back here, so capture production must be observational or
 two-phase.
 
-## Why later-row schedule integration remains open
+## Canonical schedule integration
 
-The concrete post-placement pool blocker is resolved: selector receipts now re-execute
-the exact bitmask transaction, and the compiled schedule advances the first row while
-committing the authoritative public pool. The next integration step is to retain the
-typed `RemainingBonusRowsState` across repeated public schedule continuations while
-preserving the explicit XML host-reference seam at each recurrence. Even after that,
-the schedule must retain `checkpoint: None` and token `0x1ef7` as pending until
-`GOODIES`, `FISH`, cleanup, return, and caller continuation are all owned.
+`continue_map_make_resource_schedule_next_bonus` accepts either the first-row boundary
+or an existing later-row boundary. The boundary retains each row's complete fact
+projection and receipt. Before every new continuation it reconstructs the concrete
+first-row mutation state, replays all prior later rows with their stored placement
+receipts, and requires the rebuilt carry, RNG, World checksum, counters, and concrete
+pool to equal the public boundary. A caller therefore cannot splice a new chance budget
+or pool projection into an otherwise valid receipt.
+
+A singleton nonempty array has no later mutation row; the separate tail-only schedule
+continuation authenticates its first-row state and executes only the final recurrence.
+The schedule also rejects a completed later-row history if its category-tail receipt is
+removed or changed.
+
+After the final row, the schedule owns the exact no-RNG/no-World tail:
+
+```text
+0x00690215  row pointer += 0x28
+0x00690218  --rows_remaining                 // 1 -> 0
+0x0069021c  jne 0x0068fbb3                   // not taken
+0x00690222  restore category pointer
+0x00690225  category cleanup remains open
+```
+
+The schedule retains `checkpoint: None` and token `0x1ef7` as pending until category
+cleanup, `GOODIES`, `FISH`, document cleanup, return, and caller continuation are owned.
 
 `crates/don-replay/tests/place_resources_bonus_rows_mutation_frontier.rs` freezes twelve
 paths: same-group budget reuse, group-zero redraw, transition-to-`-1` redraw, unknown

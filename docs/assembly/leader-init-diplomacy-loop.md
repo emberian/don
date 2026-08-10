@@ -54,19 +54,20 @@ above.
 
 ## Exact product boundary
 
-This wider plan is intentionally not called by `Sim::start_manual_player_setup` or the
-browser ABI. Product publication still needs one owner for:
+`Sim::start_manual_player_setup` now calls the plan in sequential slot order for all eight
+Leaders. `MatchOptions` owns the six exact `GameInfo` bytes, the match supplies both semaphore
+bits, and `ManualPlayerSetup::shared_vision_preq_mask` supplies the setup-time
+`has_preq(0x2B0)` facts. `LeaderState` owns raw diplomacy, every treaty/interaction row, and
+`ally_mask`; its channel-8 walk emits those recovered fields in retail offset order.
 
-- the exact `GameInfo` option image and both semaphore bits;
-- `has_preq(0x2B0)` at the point each Leader row initializes;
-- sequential initialization of the complete eight-Leader table, because a mutual-alliance
-  read can see which reciprocal rows have already run;
-- the treaty, aggression, interaction and `ally_mask` fields, which the current victory
-  `LeaderState` does not own or serialize.
+The transaction retains every fact, row, and ordered receipt. Tests pin the asymmetric early/late
+shared-vision result: an earlier teammate cannot observe a reciprocal declaration that a later
+Leader has not initialized yet, while the later row can observe the earlier write.
 
-The existing PlayerSetup integration therefore remains limited to its option-independent
-active-team raw declarations. DoNSave continues to refuse the active PlayerSetup owner, and
-this tranche neither changes checksum/save channels nor creates a browser shadow table.
+DoNSave v9 stores the small request/option/semaphore input image and reconstructs these derived
+rows through the same transaction on load. Admission compares the retained owner, match projection,
+Leader rows, activation flags, Objects owner bits, and fog masks; it refuses divergent setup state
+or any snapshot after frame zero rather than serializing a plausible shadow roster.
 
 The remaining `Leader::init` body before and after this loop still owns tribe, economy,
 technology, type, personality, scoring, production-script and host callback state. Later
@@ -79,6 +80,8 @@ ejection, shared-vision removal/addition, victory, army and event tails.
 tools/swarm-cargo leader-init-loop test -p don-sim --test leader_init_diplomacy_loop
 ```
 
-The six focused cases cover ordinary team/non-team initialization, exact starting-age and
+The six source cases cover ordinary team/non-team initialization, exact starting-age and
 team-lock ordering, scenario preservation, forced-war override before shared vision,
 negative-tribe bypass, complete interaction resets, invalid identity and stale-plan refusal.
+The PlayerSetup owner suite additionally covers eight-row ordering, option/semaphore projection,
+checksum ownership, deterministic save/load/resave, and divergence refusal.

@@ -20,10 +20,10 @@ complete active frame-zero PlayerSetup cohort. The plan binds the whole expected
 `SetupDiplomacy` image; stale setup/team/diplomacy input refuses without mutation. It records
 the directional ally masks and write count, including each active self cell.
 
-`Sim::start_manual_player_setup` now plans this prefix after the exact deterministic
-`Game::init_teams` mutation and before any leader is activated. It publishes only the cells
-named by the receipt into the authoritative victory leader table. The browser's existing
-read-only `game_diplomacy` query therefore observes real teammate alliances, and its command
+This prefix remains a focused proof fixture. Product PlayerSetup now uses the complete sequential
+loop described in `leader-init-diplomacy-loop.md`, which includes these same teammate writes plus
+the non-team, inactive, treaty, interaction, and shared-vision effects. The browser's existing
+read-only `game_diplomacy` query therefore still observes real teammate alliances, and its command
 ingress refuses ATTACK packets whose target is not hostile before installing a core order.
 
 ## Honest red boundary
@@ -31,19 +31,16 @@ ingress refuses ATTACK packets whose target is not hostile before installing a c
 This is not complete product integration of `Leader::init`, `Leader::set_diplo`, or diplomacy
 setup:
 
-- the wider source-only owner in `leader_init_diplomacy_loop.rs` now recovers the false
-  `is_team` arm and the complete loop. Its byte at `Game+0x32` is
+- the wider owner in `leader_init_diplomacy_loop.rs` recovers and now supplies PlayerSetup's false
+  `is_team` arm and complete loop. Its byte at `Game+0x32` is
   `GameInfo+0x26` (`rush_rules`), and the exact callee is `LeaderData::starting_age`, not
-  `GameInfo+0x32`/`Leader::get_age` as an earlier note stated. PlayerSetup still preserves
-  non-team declarations because it does not own the required option/semaphore image or
-  sequential Leader initialization order;
-- inactive target cells are outside the admitted product prefix;
-- shared-vision publication, prerequisite ownership, tribe, economy, type, scoring, and
-  remaining Leader initialization state in the 6,102-byte body remain red;
+  `GameInfo+0x32`/`Leader::get_age` as an earlier note stated;
+- tribe, economy, type, scoring, production-script callbacks, and the remaining Leader
+  initialization state in the 6,102-byte body remain red;
 - later diplomacy commands still require the atomic `Leader::set_diplo` ejection, vision,
   victory, army, and event tail;
-- PlayerSetup and active leader owners remain unencoded in DoNSave, so live-match save
-  continues to refuse before emitting bytes.
+- DoNSave v9 admits only the canonical frame-zero PlayerSetup snapshot. Advanced active matches
+  remain refused until their later mutable owners are encoded.
 
 The source tests cover alternating teams, free-for-all preservation, inactive rows/columns,
 nonzero-frame and missing-leader refusal, and stale-plan atomicity. The PlayerSetup and native

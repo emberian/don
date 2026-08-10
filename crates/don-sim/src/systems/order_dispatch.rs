@@ -2346,7 +2346,8 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
     ArmStatus::Implemented,     // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
     // Production Sim reaches UNIT and object-free EXIT through the atomic host. Closure stays
-    // red until ENTER/Airbase-EXIT object, Guy, terrain, containment/death, and RNG tails land.
+    // red until target relation, ENTER/Airbase-EXIT object, Guy, terrain, containment/death, and
+    // RNG tails land.
     ArmStatus::Unimplemented, // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
     ArmStatus::Unimplemented, // 26 GARRISON        Unit::do_garrison 0x005E6B80
     ArmStatus::Implemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0

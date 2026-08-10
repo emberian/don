@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 127,
+  "red": 126,
   "summary": {
     "tick": {
       "total": 29,
@@ -23,8 +23,8 @@
     },
     "opcodes": {
       "total": 82,
-      "complete": 45,
-      "red": 37
+      "complete": 46,
+      "red": 36
     },
     "checksums": {
       "total": 15,
@@ -1616,8 +1616,8 @@
         "action": "respond",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 43,

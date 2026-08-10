@@ -7,10 +7,9 @@
 //! `LeaderData::ally_mask`. The body is modeled in instruction order because later
 //! `is_ally` and `is_team` calls observe earlier writes in the same loop.
 //!
-//! The product PlayerSetup path deliberately does not consume this wider plan yet. It
-//! does not own every `GameInfo` option, semaphore bit, prerequisite result, or the
-//! sequential eight-Leader initialization order needed to publish the shared-vision
-//! mask honestly.
+//! The frame-zero PlayerSetup owner consumes this loop in sequential Leader order. That
+//! integration supplies every option, semaphore, and prerequisite fact explicitly so a
+//! host cannot publish a plausible-looking team table without the shipped row effects.
 
 use super::setup_diplomacy::{IsTeamArg, SetupDiplomacy, TeamQueryError, DIPLO_ALLY, SETUP_SLOTS};
 
@@ -79,6 +78,49 @@ pub struct LeaderInitDiplomacyRow {
     pub taunt_frame: [i32; SETUP_SLOTS],
     /// `LeaderData+0x6929`.
     pub ally_mask: u8,
+}
+
+impl LeaderInitDiplomacyRow {
+    /// Emit the owned fields from `LeaderData+0x94..+0x394` in exact PDB order.
+    /// `diplos` immediately precedes this range and remains owned by `LeaderState`.
+    pub fn walk_prefix_bytes(&self, out: &mut Vec<u8>) {
+        for values in [
+            &self.treaties,
+            &self.agendas,
+            &self.good_deeds,
+            &self.attack_stamp,
+            &self.raid_stamp,
+            &self.capital_stamp,
+            &self.ally_stamp,
+            &self.tribute_stamp,
+            &self.gift_stamp,
+            &self.hire_stamp,
+            &self.hire_who,
+            &self.aggression,
+            &self.strong,
+            &self.weak,
+            &self.dow,
+            &self.invaders,
+            &self.broke_alliance,
+            &self.made_peace,
+        ] {
+            for value in values {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.got_diplo_message.to_le_bytes());
+        for values in [
+            &self.last_spoke,
+            &self.counteroffer,
+            &self.tribute_demanded,
+            &self.last_taunt,
+            &self.taunt_frame,
+        ] {
+            for value in values {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
 }
 
 /// Complete state needed to preserve the loop's read-after-write ordering.

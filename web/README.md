@@ -93,22 +93,23 @@ effective diplomacy, victory mode/status, and personal/team score are read-only 
 the authoritative Sim. The team-layout control is the bounded exception: manual start recreates
 the requested seed and sends the complete roster, explicit team bytes, team style, and local slot
 through one frame-zero `Sim::start_manual_player_setup` transaction. That owner applies the
-recovered deterministic/non-ranked `Game::init_teams` body, then the option-independent active-team
-alliance branch of `Leader::init`, before activating any leader. It retains the exact `PlayerSetup`
-image, ordered script-call plan, and directional alliance receipt in the Sim. Random-team byte 5,
+recovered deterministic/non-ranked `Game::init_teams` body, then the full sequential eight-row
+diplomacy/treaty/shared-vision loop from `Leader::init`, before activating any leader. It retains
+the exact `PlayerSetup` image, option/semaphore/prerequisite facts, rows, and ordered receipts in
+the Sim. The browser has no technology prerequisite host yet, so it supplies an explicit zero
+`has_preq(0x2B0)` mask. Random-team byte 5,
 ranked setup, malformed/inactive team bytes, repeated start, and nonzero frames all refuse without
 mutation. JavaScript queries the resulting roster and teams back; it retains no parallel copy.
 Shared-session URLs and command-journal v3 baselines carry the bounded team preset and reconstruct
 it through the same transaction. V1 and v2 journals remain importable as inactive/own-slot-team
 baselines. `setup`, `active`, and `ended` remain live core projections.
 
-This does not make diplomacy or victory setup complete. The recovered `Leader::init` prefix installs
-value 2 only for active pairs where the exact frame-zero team query succeeds. The option-dependent
-non-team peace/war arm, inactive cells, shared vision, and later `Leader::set_diplo` transaction stay
-red. ATTACK ingress refuses self, allied, and other non-hostile targets before installing an order.
-Raw `game_set_team` and `game_set_victory_mode` exports stay forbidden. The active setup owner is not
-yet serialized by DoNSave, so core save fails closed after match start instead of silently dropping
-roster/team state.
+This does not make later diplomacy or victory setup complete. ATTACK ingress refuses self, allied,
+and other non-hostile targets before installing an order; the mutable `Leader::set_diplo`
+transaction stays red. Raw `game_set_team` and `game_set_victory_mode` exports stay forbidden.
+DoNSave v9 reconstructs the exact PlayerSetup transaction at frame zero and refuses divergent or
+advanced active state. Browser-source save/load now roundtrips that owner, pending the next canonical
+Wasm convergence rebuild and smoke.
 
 The authoritative-roster ABI tranche passed six focused native tests in both independent remote
 profiles on 2026-08-09: hbox
@@ -164,6 +165,9 @@ The Save and Load controls exchange the bounded deterministic `DoNSave` byte ima
 unchanged. Supported post-step worlds roundtrip and resume: load derives and verifies the exact
 step-8 leader views from saved canonical inputs instead of serializing a second copy. Unsupported
 subsystems and adapter queue shapes still fail closed rather than being silently dropped.
+Canonical frame-zero manual PlayerSetup is the bounded active-owner exception: v9 stores its small
+request/options/semaphore input image, reruns the sequential transaction on load, and validates all
+derived leader/world/fog projections.
 
 ## Playing
 

@@ -37,7 +37,7 @@ use crate::schedule::{ScheduleCoverage, DO_FRAME, FRAMES_PER_SECOND, SPEED_NORMA
 use crate::simd;
 use crate::systems::sparse_object_bands_authority_frontier::{
     DenseRegistryEntry, RetailBand, RetailObjectAddress, SnapshotLifecycle, SparseObjectBands,
-    SparseRegistrySnapshot,
+    SparseRegistryError, SparseRegistrySnapshot, SparseSlotLifecycle, TraversalEntry,
 };
 use crate::trig::{cosx, find_angle, sinx};
 
@@ -204,13 +204,14 @@ pub struct World {
     pub objects: ObjectRegistry,
     /// Stable retail object addresses joined to row-independent identities.
     ///
-    /// This is live canonical save/checksum state, but allocation deliberately remains on
-    /// [`ObjectRegistry`] during the dual-read phase. Dense mutations mirror their committed
-    /// result here; no sparse tombstone/reuse behavior is enabled yet.
+    /// This is live canonical save/checksum and traversal state, but allocation deliberately
+    /// remains on [`ObjectRegistry`] during the dual-read phase. Dense mutations mirror their
+    /// committed result here. Unit tombstone holds may tick; sparse allocation/reuse remains
+    /// disabled until every dense-address consumer migrates.
     object_bands: SparseObjectBands<WorldObjectIdentity>,
     /// Reusable buffer for the per-frame traversal order. Not state; allocating it every
     /// frame was measurably the largest single cost in the object pass.
-    traversal_buf: Vec<(usize, Band, u32, u32)>,
+    traversal_buf: Vec<TraversalEntry<WorldObjectIdentity>>,
 
     // ---- identity ----
     handle_of_row: Vec<u32>,
@@ -540,6 +541,38 @@ impl World {
     #[inline]
     pub fn object_bands(&self) -> &SparseObjectBands<WorldObjectIdentity> {
         &self.object_bands
+    }
+
+    /// Resolve an exact retail Unit address through its stable generational identity.
+    /// Tombstones, wrong-band identities, stale handles, and malformed coordinates are absent.
+    pub fn unit_row_at(&self, who: i32, o: i32) -> Option<usize> {
+        if who < 0 || who as usize >= OWNER_SLOTS || !RetailBand::Unit.contains(o) {
+            return None;
+        }
+        let identity = self.object_bands.live_identity(RetailObjectAddress::new(
+            who as u8,
+            RetailBand::Unit,
+            o,
+        ))?;
+        let WorldObjectIdentity::Unit { id, generation } = identity else {
+            return None;
+        };
+        self.row_of(Handle { id, generation })
+    }
+
+    /// Exclusive Unit-band high-water mark for one owner.
+    pub fn unit_mark(&self, owner: usize) -> Option<i32> {
+        self.object_bands.mark(owner, RetailBand::Unit)
+    }
+
+    pub(crate) fn tick_unit_tombstone_hold(
+        &mut self,
+        address: RetailObjectAddress,
+    ) -> Result<u16, SparseRegistryError> {
+        if address.band != RetailBand::Unit {
+            return Err(SparseRegistryError::InvalidObjectIndex);
+        }
+        self.object_bands.tick_tombstone_hold(address)
     }
 
     /// Whether every current dense address resolves to the same stable identity and all marks,
@@ -1139,9 +1172,9 @@ impl World {
 
     /// `Objects::process_all` `0x0065DCE0`.
     ///
-    /// The traversal order comes from [`ObjectRegistry::traversal`], which reproduces the
-    /// `(frame + i) % 10` owner rotation for the unit band and the fixed eight-slot order
-    /// for the building and wall bands.
+    /// The traversal order comes from the canonical sparse owner: `(frame + i) % 10` for
+    /// Units, then fixed eight-slot Build/Wall order. Unit tombstones remain in the walk so
+    /// their inactive hold counter advances without inventing a dense row.
     ///
     /// # A recorded divergence
     ///
@@ -1157,14 +1190,16 @@ impl World {
         // Move the buffer out so the loop can mutate `self` while walking it; it goes
         // straight back at the end, so the allocation survives the frame.
         let mut order = std::mem::take(&mut self.traversal_buf);
-        self.objects.traversal_into(frame, &mut order);
-        for &(_who, band, o, row) in order.iter() {
-            match band {
-                Band::Unit => {
-                    let row = row as usize;
-                    if row >= self.live as usize {
+        self.object_bands.traversal_into(frame, &mut order);
+        for entry in order.iter().copied() {
+            match (entry.address.band, entry.lifecycle) {
+                (
+                    RetailBand::Unit,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::Unit { id, generation }),
+                ) => {
+                    let Some(row) = self.row_of(Handle { id, generation }) else {
                         continue;
-                    }
+                    };
                     if self.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0 {
                         self.unit_process(row);
                     } else {
@@ -1175,13 +1210,26 @@ impl World {
                         }
                     }
                 }
-                Band::Build => {
-                    let _ = o;
-                    self.coverage.build_process += 1;
+                (RetailBand::Unit, SparseSlotLifecycle::Tombstone(facts)) => {
+                    if facts.flags & OBJ_FLAG_ACTIVE == 0 && facts.hold_frames != 0 {
+                        self.tick_unit_tombstone_hold(entry.address)
+                            .expect("traversal entry remains the same Unit tombstone");
+                        self.coverage.hold_decrements += 1;
+                    }
                 }
-                Band::Wall => {
-                    self.coverage.wall_process += 1;
+                (
+                    RetailBand::Build,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::BuildRow(_)),
+                ) => self.coverage.build_process += 1,
+                (RetailBand::Wall, SparseSlotLifecycle::Live(WorldObjectIdentity::WallRow(_))) => {
+                    self.coverage.wall_process += 1
                 }
+                (_, SparseSlotLifecycle::Reserved { .. }) => {
+                    panic!("live World traversal observed an outstanding object reservation")
+                }
+                // Phase 2 owns Unit tombstones only. Build/Wall tombstones and wrong-band live
+                // identities remain unadmitted by save/import and have no runtime body here.
+                _ => {}
             }
         }
         self.traversal_buf = order;
@@ -1300,17 +1348,11 @@ impl World {
             self.coverage.damage_skipped_no_tables += 1;
             return;
         };
-        let target = self
-            .objects
-            .slot(ord.target_who as usize)
-            .band(Band::Unit)
-            .get(ord.target_o as usize)
-            .copied();
-        let Some(trow) = target else {
+        let Some(trow) = self.unit_row_at(i32::from(ord.target_who), i32::from(ord.target_o))
+        else {
             self.unit_orders[row].kill_current();
             return;
         };
-        let trow = trow as usize;
         if trow >= self.live as usize || trow == row {
             self.unit_orders[row].kill_current();
             return;
@@ -1704,6 +1746,11 @@ mod tests {
                     Some(row as u32),
                     "round {round}: row {row} says it is ({who}, {o}) but the band disagrees"
                 );
+                assert_eq!(
+                    w.unit_row_at(who as i32, o as i32),
+                    Some(row),
+                    "round {round}: sparse lookup disagrees for ({who}, {o})"
+                );
             }
             let total: usize = (0..OWNER_SLOTS)
                 .map(|s| w.objects.band_len(s, Band::Unit))
@@ -1918,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn tombstone_owner_state_moves_digest_but_is_refused_by_phase_one_export() {
+    fn tombstone_hold_ticks_and_moves_digest_but_export_remains_gap_fail_closed() {
         use crate::systems::sparse_object_bands_authority_frontier::TombstoneFacts;
 
         let mut world = World::with_capacity(4, 0x4455);
@@ -1947,7 +1994,16 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_ne!(world.digest(), before);
+        let retired = world.digest();
+        assert_ne!(retired, before);
+        assert_eq!(world.unit_row_at(2, address.o), None);
+        world.step();
+        assert_eq!(world.coverage().hold_decrements, 1);
+        assert!(matches!(
+            world.object_bands.slot(address).unwrap().lifecycle,
+            SparseSlotLifecycle::Tombstone(facts) if facts.hold_frames == 2
+        ));
+        assert_ne!(world.digest(), retired);
         assert!(!world.object_bands_are_dense_equivalent());
         assert!(matches!(
             world.export_save_state(),

@@ -258,7 +258,7 @@ fn cannon_time_commits_all_effects_before_the_bridge_mirrors_speed() {
 }
 
 #[test]
-fn bounded_diplomacy_commits_but_external_tail_branches_stay_unavailable() {
+fn bounded_diplomacy_and_both_reject_modes_commit_but_external_tails_stay_unavailable() {
     let mut bridge = Bridge::new();
     let mut package = Package::new(1, 0);
     let mut host = TransactionHost::new();
@@ -278,24 +278,34 @@ fn bounded_diplomacy_commits_but_external_tail_branches_stay_unavailable() {
     );
 
     let before_partial_rows = host.diplomacy.clone().unwrap();
-    for wire in [
-        wire13(DECLARE_OPCODE, 1, 4, 0),
-        wire9(ACCEPT_OPCODE, 1, 4),
-        wire9(REJECT_OPCODE, 1, 4),
-    ] {
+    for wire in [wire13(DECLARE_OPCODE, 1, 4, 0), wire9(ACCEPT_OPCODE, 1, 4)] {
         bridge.process_all(&mut package, &wire, &mut host).unwrap();
     }
-    assert_eq!(host.diplomacy_attempts, 4);
+    assert_eq!(host.diplomacy_attempts, 3);
     assert_eq!(host.diplomacy_commits.len(), 1);
-    assert_eq!(host.diplomacy, Some(before_partial_rows));
+    assert_eq!(host.diplomacy, Some(before_partial_rows.clone()));
+
+    bridge
+        .process_all(&mut package, &wire9(REJECT_OPCODE, 1, 4), &mut host)
+        .unwrap();
+    assert_eq!(host.diplomacy_attempts, 4);
+    assert_eq!(host.diplomacy_commits.len(), 2);
+    assert_eq!(
+        host.diplomacy.as_ref().unwrap().leaders[1].proposals[4],
+        Default::default()
+    );
+    assert_eq!(
+        host.diplomacy.as_ref().unwrap().leaders[4].proposals[1],
+        Default::default()
+    );
 }
 
 #[test]
 fn closure_table_keeps_only_unbounded_diplomacy_rows_red() {
-    for opcode in [37, 39, 40, 43, 44, 45, 75, 77] {
+    for opcode in [37, 39, 40, 42, 43, 44, 45, 75, 77] {
         assert_eq!(InlineDef::find(opcode).unwrap().port, InlinePort::Complete);
     }
-    for opcode in [38, 41, 42] {
+    for opcode in [38, 41] {
         assert_eq!(
             InlineDef::find(opcode).unwrap().port,
             InlinePort::StateWired

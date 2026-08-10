@@ -1,14 +1,24 @@
-#[path = "../src/world_owner_frontier.rs"]
-mod world_owner_frontier;
-
+use don_replay::world_owner_frontier;
 use don_sim::checksum::adler32;
 use don_sim::systems::map_terrain::{wflag, World, WorldSection};
 use world_owner_frontier::{
-    ExactPortTransitionProof, InitialWorldPrefixEvidence, ReplaySpan, RetailDifferenceLocation,
-    RetailWorldCheckpoint, RetailWorldWalkCapture, RulesWorldEvidence, WorldByteSource,
-    WorldOwnerError, WorldOwnerLedger, WorldSectionMask, RETAIL_AFTER_CONSTANTS,
+    sha256, ExactPortTransitionProof, InitialWorldPrefixEvidence, ReplaySpan,
+    RetailDifferenceLocation, RetailWorldCheckpoint, RetailWorldWalkCapture, RulesWorldEvidence,
+    WorldByteSource, WorldOwnerError, WorldOwnerLedger, WorldSectionMask, RETAIL_AFTER_CONSTANTS,
     SHIPPED_RULES_CHANNEL, SHIPPED_RULES_SERIALIZED_BYTES,
 };
+
+#[test]
+fn dependency_free_sha256_matches_the_standard_vector() {
+    assert_eq!(
+        sha256(b"abc"),
+        [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ]
+    );
+}
 
 fn digest(byte: u8) -> [u8; 32] {
     [byte; 32]

@@ -1,5 +1,6 @@
+use don_sim::systems::leader_init_diplomacy_loop::{RelationDecision, SharedVisionDecision};
 use don_sim::systems::player_setup::{ManualPlayerSetup, ManualPlayerSetupError, MAX_TEAM_STYLE};
-use don_sim::systems::save_load::{save_sim, SaveError};
+use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
 use don_sim::systems::setup_diplomacy::{SETUP_SLOTS, TEAM_AUTO};
 use don_sim::systems::team_setup_mutation::{InitTeamsError, RANDOM_TEAM};
 use don_sim::systems::victory_score::{game_sem, Diplo};
@@ -30,8 +31,19 @@ fn alternating_teams_apply_once_to_the_authoritative_sim() {
     assert_eq!(applied.state.on_team, [2, 2, 0, 0, 0, 0, 0, 0]);
     assert_eq!((applied.state.num_teams, applied.state.num_sides), (2, 2));
     assert!(applied.receipt.team_mode_enabled);
-    assert_eq!(applied.diplomacy.ally_masks[..4], [0x05, 0x0a, 0x05, 0x0a]);
+    // Without prerequisite/reveal-map authority the shipped loop retains self only,
+    // even though the raw teammate relation is Ally.
+    assert_eq!(applied.diplomacy.ally_masks[..4], [0x01, 0x02, 0x04, 0x08]);
     assert_eq!(applied.diplomacy.writes, 8);
+    assert_eq!(applied.diplomacy.receipts.len(), SETUP_SLOTS);
+    assert!(applied
+        .diplomacy
+        .receipts
+        .iter()
+        .enumerate()
+        .all(|(slot, receipt)| receipt.receiver_slot == slot && receipt.who == slot));
+    assert_eq!(applied.diplomacy.rows[0].treaties[2], 1);
+    assert_eq!(applied.diplomacy.rows[0].aggression[1], 1);
     assert_eq!(sim.vic_match.options.team_style, 1);
     assert_eq!(sim.vic_match.on_team, [2, 2, 0, 0, 0, 0, 0, 0]);
     assert_eq!(sim.vic_match.num_sides, 2);
@@ -49,10 +61,83 @@ fn alternating_teams_apply_once_to_the_authoritative_sim() {
 
     assert_eq!(sim.vic_leaders.get_diplo(0, 2), Diplo::Ally);
     assert_eq!(sim.vic_leaders.get_diplo(0, 1), Diplo::War);
+    let bytes = save_sim(&sim).unwrap();
+    let loaded = load_sim(&bytes).unwrap();
+    assert_eq!(loaded.channel_digest(), sim.channel_digest());
     assert_eq!(
-        save_sim(&sim),
-        Err(SaveError::Unsupported("player setup owner"))
+        loaded.vic_leaders.setup_owner.applied(),
+        sim.vic_leaders.setup_owner.applied()
     );
+    assert_eq!(save_sim(&loaded).unwrap(), bytes);
+}
+
+#[test]
+fn shared_vision_is_computed_in_sequential_eight_leader_order() {
+    let mut sim = Sim::new(0x51a7_2027, 8);
+    let mut setup = request(0x0f, &[(0, 0), (1, 1), (2, 0), (3, 1)], 1, 0);
+    setup.shared_vision_preq_mask = 0x0f;
+    let applied = sim.start_manual_player_setup(setup).unwrap();
+
+    // Leader 0 cannot see a reciprocal Ally declaration from not-yet-initialized 2,
+    // while Leader 2 observes the declaration already published by Leader 0. The same
+    // read-after-write ordering applies to 1/3.
+    assert_eq!(applied.diplomacy.ally_masks[..4], [0x01, 0x02, 0x05, 0x0a]);
+    assert_eq!(
+        applied.diplomacy.receipts[0].targets[2].shared_vision,
+        SharedVisionDecision::NotAllied
+    );
+    assert_eq!(
+        applied.diplomacy.receipts[2].targets[0].shared_vision,
+        SharedVisionDecision::Prerequisite
+    );
+    assert_eq!(sim.vic_leaders.slots[2].init_diplomacy.ally_mask, 0x05);
+    assert!(sim.vic_leaders.slots[2].has_preq_2b0);
+}
+
+#[test]
+fn setup_supplies_option_and_semaphore_facts_to_every_row() {
+    let mut sim = Sim::new(0x51a7_2028, 8);
+    sim.vic_match.options.rush_rules = 4;
+    sim.vic_match.options.starting_technology = 2;
+    sim.vic_match.options.reveal_map = 3;
+    sim.vic_match.set_sem(game_sem::CHECK_VICTORY_MODE);
+
+    let applied = sim
+        .start_manual_player_setup(request(0x03, &[(0, 0), (1, 1)], 0, 0))
+        .unwrap();
+    let target = applied.diplomacy.receipts[0].targets[1];
+
+    assert!(matches!(
+        target.relation_decision,
+        RelationDecision::NonTeam {
+            rush_rules: 4,
+            teams_locked: false,
+            ..
+        }
+    ));
+    assert!(target.forced_war);
+    assert_eq!(target.relation_after, Diplo::War as i32);
+    assert_eq!(target.treaty_after, 1);
+    assert_eq!(target.aggression_after, 1);
+    assert_eq!(applied.diplomacy.facts[7].reveal_map, 3);
+    assert!(applied.diplomacy.facts[7].check_victory_mode);
+}
+
+#[test]
+fn diplomacy_rows_and_shared_vision_are_checksum_owned() {
+    let setup = request(0x05, &[(0, 0), (2, 0)], 1, 0);
+    let mut no_vision = Sim::new(0x51a7_2029, 8);
+    no_vision.start_manual_player_setup(setup).unwrap();
+
+    let mut with_vision = Sim::new(0x51a7_2029, 8);
+    with_vision.vic_match.options.reveal_map = 1;
+    with_vision.start_manual_player_setup(setup).unwrap();
+
+    assert_ne!(
+        no_vision.vic_leaders.slots[2].init_diplomacy.ally_mask,
+        with_vision.vic_leaders.slots[2].init_diplomacy.ally_mask
+    );
+    assert_ne!(no_vision.channel_digest(), with_vision.channel_digest());
 }
 
 #[test]
@@ -160,4 +245,29 @@ fn applied_owner_is_one_shot_and_inactive_slots_keep_the_exact_sentinel() {
         Err(ManualPlayerSetupError::MatchAlreadyStarted)
     );
     assert_eq!(sim.channel_digest(), digest);
+}
+
+#[test]
+fn frame_zero_save_refuses_any_divergent_setup_projection() {
+    let mut sim = Sim::new(5, 8);
+    sim.start_manual_player_setup(request(0x03, &[(0, 0), (1, 1)], 1, 0))
+        .unwrap();
+    sim.vic_leaders.slots[0].init_diplomacy.treaties[1] ^= 1;
+    assert_eq!(
+        save_sim(&sim),
+        Err(SaveError::Invalid("divergent player setup projection"))
+    );
+
+    let mut advanced = Sim::new(6, 8);
+    advanced
+        .start_manual_player_setup(request(0x03, &[(0, 0), (1, 1)], 1, 0))
+        .unwrap();
+    advanced.world.frame = 1;
+    advanced.vic_match.frame = 1;
+    assert_eq!(
+        save_sim(&advanced),
+        Err(SaveError::Unsupported(
+            "player setup after the frame-zero boundary"
+        ))
+    );
 }

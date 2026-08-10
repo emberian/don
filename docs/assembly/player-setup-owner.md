@@ -15,10 +15,11 @@ the fully applied `TeamSetupState`, and the ordered `InitTeamsReceipt` script-ca
    inactive slots;
 3. materialize exact `PlayerSetup` and `LeaderTeamState` records and apply the recovered
    deterministic `Game::init_teams` body on a detached state image;
-4. apply the option-independent active-team alliance branch from `Leader::init`
-   `0x006E3C52..0x006E3CB7`, retaining its directional write receipt;
+4. run the full recovered `Leader::init` diplomacy/shared-vision loop in sequential slot order
+   for all eight rows, supplying the exact option bytes, semaphore bits, and per-Leader
+   `has_preq(0x2B0)` result;
 5. synchronize `MatchOptions::team_style`, `Match::on_team`, `num_sides`, the team-scoring
-   semaphore, and the admitted diplomacy cells, install the owner, and only then call
+   semaphore, raw diplomacy, treaty/interaction rows, and `ally_mask`, install the owner, then call
    `Sim::activate` for the complete roster.
 
 No fallible work follows the owner swap. A refusal therefore leaves the checksum digest, RNG,
@@ -41,17 +42,16 @@ v1/v2 journals map to the older inactive/own-slot-team baseline.
 
 - The retained `InitTeamsReceipt` contains the exact ordered BHS callback facts; no browser BHS
   host is installed, so the callbacks are not claimed executed.
-- The bounded `Leader::init` prefix installs active teammate alliances. A detached source owner
-  now recovers the full raw relation/treaty/shared-vision loop, but PlayerSetup cannot publish it
-  until it owns the exact options, semaphore bits, prerequisite result, sequential Leader order,
-  and the currently absent treaty/interaction/ally-mask fields. Inactive cells and remaining
-  Leader initialization state stay red. Later diplomacy mutation still requires complete
+- The rest of `Leader::init` still owns tribe, economy, technology, production-script,
+  personality, and callback state. Later diplomacy mutation still requires complete
   `Leader::set_diplo`.
-- The setup owner is not in DoNSave v6. `save_sim` rejects `player setup owner` before emitting
-  bytes, and the browser keeps live-match save disabled.
+- DoNSave v9 reconstructs and validates the canonical transaction, but only at frame zero.
+  Advanced active matches remain refused until their other mutable leader/game owners are encoded.
+- The checked-in Wasm artifact predates this source integration; browser enablement remains gated
+  on root convergence, native ABI validation, canonical rebuild, and smoke.
 - Random-team RNG, ranked ELO balancing, AI slots, and victory-mode mutation remain red.
 
-## Frozen source validation handoff
+## Validation handoff
 
 Root convergence formatted the complete overlap. The first combined run exposed inactive owner
 rows retaining Rust's zero team rather than retail `TEAM_AUTO`; the owner was corrected, not the
@@ -71,8 +71,13 @@ node web/tools/check-play-wasm.mjs
 node web/tools/play-smoke.mjs --json web/play-results.json
 ```
 
-The checked-in `don_web.wasm` was rebuilt from the current owner/diplomacy-aware source at
+The checked-in `don_web.wasm` was previously rebuilt from the then-current active-prefix source at
 771,141 bytes. Nine focused native ABI tests, both five-test Sim suites, the 76-export contract,
 and the complete Chrome/WebGPU smoke passed; the smoke observes P0/P2 as allies and proves that an
 ATTACK packet targeting P2 increments the non-hostile gap without installing an order. Raw
 team/victory setters remain forbidden.
+
+The full-loop/v9 source integration now passes nine PlayerSetup tests, six complete-loop tests,
+five retained prefix tests, 26 save/load tests, and nine native browser ABI tests. The Wasm artifact,
+export contract, and Chrome smoke intentionally await root convergence; no stale artifact was
+rebuilt from an active shared worktree.

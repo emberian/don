@@ -679,21 +679,27 @@ impl<I: Copy + Ord> SparseObjectBands<I> {
     /// tick. Unit owners rotate; Build and Wall visit only owners 0--7 in fixed order.
     pub fn traversal(&self, frame: i32) -> Vec<TraversalEntry<I>> {
         let mut out = Vec::new();
+        self.traversal_into(frame, &mut out);
+        out
+    }
+
+    /// [`Self::traversal`] into retained caller storage for the per-frame object pass.
+    pub fn traversal_into(&self, frame: i32, out: &mut Vec<TraversalEntry<I>>) {
+        out.clear();
         for offset in 0..OWNER_SLOTS {
             let owner = frame
                 .wrapping_add(offset as i32)
                 .rem_euclid(OWNER_SLOTS as i32) as usize;
             if self.active[owner] {
-                self.append_marked(owner, RetailBand::Unit, &mut out);
+                self.append_marked(owner, RetailBand::Unit, out);
             }
         }
         for owner in 0..BANDED_OWNER_SLOTS {
             if self.active[owner] {
-                self.append_marked(owner, RetailBand::Build, &mut out);
-                self.append_marked(owner, RetailBand::Wall, &mut out);
+                self.append_marked(owner, RetailBand::Build, out);
+                self.append_marked(owner, RetailBand::Wall, out);
             }
         }
-        out
     }
 
     pub fn snapshot(&self) -> Result<SparseRegistrySnapshot<I>, SparseRegistryError> {

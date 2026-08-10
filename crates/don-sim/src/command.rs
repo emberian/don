@@ -1312,8 +1312,8 @@ pub trait Fleet {
 
     /// Atomic host boundary for the diplomacy cohort. Hosts may return `Applied` only
     /// after verifying `request.before` is still current and committing a planner `Apply`
-    /// decision. Declaration, acceptance, and hostile-rejection boundary decisions must
-    /// remain `Unavailable` until their resource/`set_diplo` tails are recovered.
+    /// decision. Declaration and acceptance boundary decisions must remain `Unavailable`
+    /// until their resource/`set_diplo` tails are recovered.
     fn apply_diplomacy_command_transaction(
         &mut self,
         request: DiplomacyCommandRequest,
@@ -3990,8 +3990,8 @@ impl Bridge {
     }
 
     /// Opcodes 37..45 through one host-owned diplomacy image and atomic commit. The
-    /// receipt validator rejects every planner boundary, so incomplete declaration,
-    /// acceptance, and hostile-rejection branches cannot partially mutate state here.
+    /// receipt validator rejects every planner boundary, so incomplete declaration and
+    /// acceptance branches cannot partially mutate state here.
     fn process_diplomacy(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
         let Some(before) = f.diplomacy_command_state() else {
             return;

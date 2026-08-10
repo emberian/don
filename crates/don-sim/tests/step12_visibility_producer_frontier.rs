@@ -517,12 +517,7 @@ fn live_no_mutation_entries_do_not_read_or_validate_authority() {
         rows: &rows,
     };
     assert_eq!(
-        prepare_live_unit_pass(
-            0,
-            Step12VisibilityTrigger::ScheduledStep12,
-            malformed,
-            None,
-        ),
+        prepare_live_unit_pass(0, Step12VisibilityTrigger::ScheduledStep12, malformed, None,),
         Ok(LiveStep12Preparation::NoMutation(
             Step12VisibilityCadence::NotScheduled
         ))
@@ -551,13 +546,9 @@ fn live_rows_stopped_by_retail_admission_need_no_authority() {
     rows[0].object_flags = 0;
     rows[1].inside_up = 0;
     let snapshot = snapshot(&rows, [2, 0, 0, 0, 0, 0, 0, 0]);
-    let LiveStep12Preparation::UnitPass(pass) = prepare_live_unit_pass(
-        0,
-        Step12VisibilityTrigger::ScheduledStep12,
-        snapshot,
-        None,
-    )
-    .unwrap()
+    let LiveStep12Preparation::UnitPass(pass) =
+        prepare_live_unit_pass(0, Step12VisibilityTrigger::ScheduledStep12, snapshot, None)
+            .unwrap()
     else {
         panic!("expected preflighted Unit subpass")
     };
@@ -579,12 +570,7 @@ fn reached_live_row_requires_a_bound_authority_receipt() {
     let rows = [live(4, 0, 0)];
     let snapshot = snapshot(&rows, [1, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(
-        prepare_live_unit_pass(
-            0,
-            Step12VisibilityTrigger::ScheduledStep12,
-            snapshot,
-            None,
-        ),
+        prepare_live_unit_pass(0, Step12VisibilityTrigger::ScheduledStep12, snapshot, None,),
         Err(LiveStep12PrepareFault::MissingAuthorityReceipt)
     );
 }
@@ -598,22 +584,21 @@ fn bound_live_rows_prepare_exact_plain_and_detector_stamps() {
     second.detector = Some(DetectorInstanceProvenance::ObjectInit {
         object_masks_at_init: OBJMASK_DETECT,
     });
-    let receipt = authority_batch(
-        snapshot,
-        vec![Some(authority(rows[0])), Some(second)],
-    );
+    let receipt = authority_batch(snapshot, vec![Some(authority(rows[0])), Some(second)]);
     let LiveStep12Preparation::UnitPass(pass) = prepare_live_unit_pass(
         0,
         Step12VisibilityTrigger::ScheduledStep12,
         snapshot,
         Some(&receipt),
     )
-    .unwrap()
-    else {
+    .unwrap() else {
         panic!("expected preflighted Unit subpass")
     };
     assert!(pass.authority_bound());
-    assert_eq!((pass.frame(), pass.state_revision(), pass.type_revision()), (33, 70, 9));
+    assert_eq!(
+        (pass.frame(), pass.state_revision(), pass.type_revision()),
+        (33, 70, 9)
+    );
     assert_eq!(pass.stamps(), 2);
     let UnitStampDecision::Stamp(plain) = pass.rows()[0].decision() else {
         panic!("expected first stamp")
@@ -675,8 +660,7 @@ fn zero_los_does_not_read_type_projection_or_detector_provenance() {
         snapshot,
         Some(&receipt),
     )
-    .unwrap()
-    else {
+    .unwrap() else {
         panic!("expected preflighted Unit subpass")
     };
     assert_eq!(pass.stamps(), 0);
@@ -745,8 +729,7 @@ fn reached_small_los_type_and_projection_facts_are_lazy_and_exact() {
         snapshot,
         Some(&receipt),
     )
-    .unwrap()
-    else {
+    .unwrap() else {
         panic!("expected preflighted Unit subpass")
     };
     let UnitStampDecision::Stamp(stamp) = pass.rows()[0].decision() else {
@@ -848,12 +831,7 @@ fn live_batch_rejects_partial_reordered_or_revision_mismatched_views() {
         ..snapshot
     };
     assert_eq!(
-        prepare_live_unit_pass(
-            0,
-            Step12VisibilityTrigger::ScheduledStep12,
-            partial,
-            None,
-        ),
+        prepare_live_unit_pass(0, Step12VisibilityTrigger::ScheduledStep12, partial, None,),
         Err(LiveStep12PrepareFault::UnitBandCardinality {
             declared: 2,
             rows: 1,

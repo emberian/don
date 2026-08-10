@@ -60,9 +60,12 @@ use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
     game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
-    order_dispatch, production, special_anim_executor, victory_score, walls, wonders,
+    order_dispatch, production,
+    sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
+    special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
+    victory_score, walls, wonders,
 };
-use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
+use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
 /// The `world` channel's own store, consolidated into `map_terrain` by the sibling lane.
 /// Aliased because this file also names [`crate::world::World`], which is the unit SoA.
@@ -94,6 +97,7 @@ pub enum Gap {
     LeaderPlanStrategy,
     LeaderDiplomacy,
     GameDaemonCalcDanger,
+    GameDaemonUpdateAllSeen,
     GameDaemonProcessCollBlocks,
     ArmiesProcessAll,
     UnitSufferAttrition,
@@ -129,6 +133,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger 0x00732D10 - body absent; exact scheduler charges only frame % 200 == 0",
+    "step 12 GameDaemon::update_all_seen 0x00732840 - exact Unit pass preflights; plane clear remains blocked on Build/Wall/reveal_fog ownership",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
@@ -277,8 +282,8 @@ pub struct Coverage {
     pub unit_process: u64,
     pub unit_move_step: u64,
     pub unit_attack: u64,
-    /// SPECIAL_ANIM frames which reached a complete local transaction (currently the
-    /// object-free EXIT branch).
+    /// SPECIAL_ANIM frames which reached a complete local transaction (currently object-free
+    /// EXIT).
     pub special_anim_completed: u64,
     /// Host-free SPECIAL_UNIT no-op frames reached through the real object pass.
     pub special_anim_working: u64,
@@ -535,11 +540,9 @@ impl<'a> movement::UnitWorld for MapView<'a> {
 /// divergence, not an approximation of one.
 struct AmmoView<'a> {
     map: &'a MapState,
-    units: &'a crate::generated::state::UnitCols,
-    objects: &'a crate::objects::ObjectRegistry,
+    world: &'a World,
     unit_type: &'a [i32],
     shooter_rules: &'a [(i32, ammo::ShooterRules)],
-    live: usize,
 }
 
 impl<'a> AmmoView<'a> {
@@ -547,16 +550,7 @@ impl<'a> AmmoView<'a> {
     /// column row. Resolving it here is what keeps `check_hit`'s `find_unit_near` result
     /// usable by `object()`.
     fn row_of(&self, who: i32, o: i32) -> Option<usize> {
-        if who < 0 || o < 0 || who as usize >= crate::objects::OWNER_SLOTS {
-            return None;
-        }
-        self.objects
-            .slot(who as usize)
-            .band(Band::Unit)
-            .get(o as usize)
-            .copied()
-            .map(|r| r as usize)
-            .filter(|&r| r < self.live)
+        self.world.unit_row_at(who, o)
     }
 
     fn rules_of(&self, row: usize) -> ammo::ShooterRules {
@@ -573,12 +567,12 @@ impl<'a> ammo::AmmoEnv for AmmoView<'a> {
     fn object(&self, who: i32, o: i32) -> Option<ammo::ObjView> {
         let row = self.row_of(who, o)?;
         Some(ammo::ObjView {
-            alive: self.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0,
+            alive: self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0,
             is_unit: true,
-            x: self.units.x_internal()[row],
-            y: self.units.y_internal()[row],
+            x: self.world.units.x_internal()[row],
+            y: self.world.units.y_internal()[row],
             z: 0,
-            guy_mark: self.units.guy_mark()[row] as i32,
+            guy_mark: self.world.units.guy_mark()[row] as i32,
             guy0_z: 0,
             rules: self.rules_of(row),
         })
@@ -594,23 +588,26 @@ impl<'a> ammo::AmmoEnv for AmmoView<'a> {
     fn find_unit_near(&self, x: i32, y: i32, shooter_who: i32) -> Option<(i32, i32, i32)> {
         let mut best: Option<(i32, i32, i32)> = None;
         for who in 0..crate::objects::OWNER_SLOTS {
-            for (o, &row) in self.objects.slot(who).band(Band::Unit).iter().enumerate() {
-                let row = row as usize;
-                if row >= self.live || self.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            let mark = self.world.unit_mark(who).unwrap_or(0);
+            for o in 0..mark {
+                let Some(row) = self.world.unit_row_at(who as i32, o) else {
+                    continue;
+                };
+                if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
                     continue;
                 }
                 if who as i32 == shooter_who {
                     continue;
                 }
                 let d = ammo::vector_dist(
-                    self.units.x_internal()[row] - x,
-                    self.units.y_internal()[row] - y,
+                    self.world.units.x_internal()[row] - x,
+                    self.world.units.y_internal()[row] - y,
                 );
                 if d > 2 * 192 {
                     continue;
                 }
                 if best.is_none_or(|(_, _, bd)| d < bd) {
-                    best = Some((who as i32, o as i32, d));
+                    best = Some((who as i32, o, d));
                 }
             }
         }
@@ -766,6 +763,13 @@ pub struct Sim {
     pub map: MapState,
     /// PDB-shaped `GameDaemon` state driven by the exact step-12 shell.
     pub game_daemon: game_daemon_step12::GameDaemonState,
+    /// Revisioned join of instance detector provenance, visibility type facts, exact leader
+    /// counts/HeroesData, Constants, and projection facts for the Unit visibility subpass.
+    pub step12_visibility: step12_visibility_runtime::Step12VisibilityAuthority,
+    /// Most recent scheduled full-refresh refusal. This is diagnostic state, not a retail
+    /// walked field; the checksum-visible planes remain unchanged when it is populated.
+    pub step12_visibility_error:
+        Option<step12_visibility_runtime::Step12VisibilityPreflightError>,
     /// Exclusive persistent cursor/live-world adapter for `process_coll_blocks`.
     /// `game_daemon.empty_colls` mirrors this runtime and is preflighted every pass.
     pub collision_blocks: collision_blocks_live::CollisionBlockRuntime,
@@ -813,17 +817,16 @@ pub struct Sim {
     pub cover: Coverage,
     /// Reused every tick: allocating the traversal order was measurably the largest cost
     /// in the object pass.
-    traversal_buf: Vec<(usize, Band, u32, u32)>,
-    seen_buf: Vec<(i32, i32)>,
+    traversal_buf: Vec<TraversalEntry<WorldObjectIdentity>>,
 }
 
 /// Production step-14 host for the portion of `Unit::do_spec_anim` whose complete mutation
 /// surface is already owned by [`Sim`].
 ///
-/// The object-free EXIT arm touches only the canonical walked order, queue, Unit columns, and
-/// path stack. ENTER and Airbase EXIT reach object virtuals, containment/death, terrain, a
-/// primary Guy, and (conditionally) the game RNG; those arms return a typed unavailable result
-/// before any byte changes until all of those owners can participate in one transaction.
+/// Object-free EXIT touches only the canonical walked order, queue, Unit columns, and path stack.
+/// Target-backed EXIT first resolves canonical object identity/current type, but its non-strict
+/// `ObjectData::is(AIRBASE, 0)` relation is not owned by `Sim`; ENTER and every target-backed EXIT
+/// therefore remain typed-unavailable before mutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SimSpecialAnimBefore {
     who: u8,
@@ -838,6 +841,20 @@ struct SimSpecialAnimBefore {
     orders_y: i32,
     orders: order_dispatch::OrderQueue,
     path: movement::PathStack,
+}
+
+/// Exact identity/current-type surface reached by target-backed EXIT.
+///
+/// The registry band/row proves the `(who, o)` lookup, `uid` binds object lifetime, and each
+/// band's canonical current-type owner identifies the relation row. The separate non-strict
+/// relation list remains external; a different `type_index` must never be treated as proof that
+/// `is(AIRBASE, 0)` is false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SimSpecialAnimTargetBefore {
+    identity: special_anim_executor::ObjectIdentity,
+    band: Band,
+    row: usize,
+    type_index: i32,
 }
 
 impl SimSpecialAnimBefore {
@@ -859,11 +876,17 @@ impl SimSpecialAnimBefore {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SimSpecialAnimHost {
+#[derive(Clone)]
+struct SimSpecialAnimHost<'a> {
     frame: i32,
     rng_state: i32,
     before: Option<SimSpecialAnimBefore>,
+    target_before: Option<SimSpecialAnimTargetBefore>,
+    world: &'a World,
+    builds: &'a [production::BuildData],
+    walls: &'a [walls::WallState],
+    unit_types: &'a [i32],
+    build_types: &'a [Option<i32>],
 }
 
 fn special_anim_debug_digest(value: &impl std::fmt::Debug) -> u64 {
@@ -871,7 +894,7 @@ fn special_anim_debug_digest(value: &impl std::fmt::Debug) -> u64 {
 }
 
 fn special_anim_snapshot(
-    host: &SimSpecialAnimHost,
+    host: &SimSpecialAnimHost<'_>,
     actor: &order_dispatch::UnitWork,
     order: &order_dispatch::OrderRec,
 ) -> Result<special_anim_executor::SpecialAnimHostSnapshot, order_dispatch::SpecialAnimHostError> {
@@ -898,19 +921,23 @@ fn special_anim_snapshot(
         who: i32::from(actor.who),
         uid: actor.uid,
     };
+    let target = host.resolve_exit_target(state)?;
     Ok(special_anim_executor::SpecialAnimHostSnapshot {
         actor: special_anim_executor::ObjectSnapshot {
             identity,
             version: special_anim_debug_digest(actor),
         },
-        target: None,
+        target: target.map(|target| special_anim_executor::ObjectSnapshot {
+            identity: target.identity,
+            version: special_anim_debug_digest(&target),
+        }),
         current_order: state,
         current_order_digest: special_anim_debug_digest(&state),
         queue_digest: special_anim_debug_digest(&actor.orders),
         path_digest: u64::from(adler32(1, &actor.path.walk_bytes())),
         primary_guy_digest: special_anim_debug_digest(&actor.lead_guy),
         object_epoch: host.frame as u32 as u64,
-        // No terrain/external byte is observed by the only accepted branch. Zero is a
+        // No terrain/external byte is observed by the accepted EXIT branch. Zero is a
         // deliberate not-observed token, not a guessed epoch.
         terrain_epoch: 0,
         external_epoch: 0,
@@ -918,7 +945,106 @@ fn special_anim_snapshot(
     })
 }
 
-impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
+impl SimSpecialAnimHost<'_> {
+    /// Resolve the exact object identity and current relation-row index reached before the
+    /// external non-strict Airbase predicate. Missing facts remain typed-unavailable.
+    fn resolve_exit_target(
+        &self,
+        state: special_anim_executor::SpecialAnimState,
+    ) -> Result<Option<SimSpecialAnimTargetBefore>, order_dispatch::SpecialAnimHostError> {
+        if state.special_type != special_anim_executor::SpecialAnimKind::Exit || state.ox < 0 {
+            return Ok(None);
+        }
+        let owner = usize::try_from(state.whom)
+            .ok()
+            .filter(|&owner| owner < crate::objects::OWNER_SLOTS)
+            .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+        let object_id = u32::try_from(state.ox)
+            .map_err(|_| order_dispatch::SpecialAnimHostError::Unavailable)?;
+        let band = if object_id < crate::objects::BUILD_BAND_BASE {
+            Band::Unit
+        } else if object_id < crate::objects::WALL_BAND_BASE {
+            Band::Build
+        } else {
+            Band::Wall
+        };
+        let offset = object_id
+            .checked_sub(band.base())
+            .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)? as usize;
+        let row = self
+            .world
+            .objects
+            .slot(owner)
+            .band(band)
+            .get(offset)
+            .copied()
+            .map(|row| row as usize)
+            .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+        let (uid, type_index) = match band {
+            Band::Unit => {
+                if row >= self.world.live_count() as usize
+                    || usize::from(self.world.units.get_who(row)) != owner
+                    || i32::from(self.world.units.o()[row]) != state.ox
+                {
+                    return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                        "SPECIAL_ANIM target registry disagrees with Unit columns",
+                    ));
+                }
+                let type_index = self
+                    .unit_types
+                    .get(row)
+                    .copied()
+                    .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+                (self.world.units.get_uid(row), type_index)
+            }
+            Band::Build => {
+                let build = self
+                    .builds
+                    .get(row)
+                    .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+                if usize::from(build.who) != owner {
+                    return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                        "SPECIAL_ANIM target registry owner disagrees with BuildData",
+                    ));
+                }
+                let type_index = self
+                    .build_types
+                    .get(row)
+                    .copied()
+                    .flatten()
+                    .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+                (build.uid, type_index)
+            }
+            Band::Wall => {
+                let wall = self
+                    .walls
+                    .get(row)
+                    .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+                if usize::from(wall.who) != owner {
+                    return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                        "SPECIAL_ANIM target registry owner disagrees with WallData",
+                    ));
+                }
+                let type_index = wall
+                    .ptype
+                    .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?;
+                (wall.uid, type_index)
+            }
+        };
+        Ok(Some(SimSpecialAnimTargetBefore {
+            identity: special_anim_executor::ObjectIdentity {
+                o: state.ox,
+                who: state.whom,
+                uid,
+            },
+            band,
+            row,
+            type_index,
+        }))
+    }
+}
+
+impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost<'_> {
     fn special_anim_preflight(
         &mut self,
         actor: &order_dispatch::UnitWork,
@@ -933,7 +1059,15 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
             .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
                 "missing walked SPECIAL_ANIM payload",
             ))?;
-        if state.special_type != special_anim_executor::SpecialAnimKind::Exit || state.ox >= 0 {
+        if state.special_type != special_anim_executor::SpecialAnimKind::Exit {
+            return Err(order_dispatch::SpecialAnimHostError::Unavailable);
+        }
+        let target = self.resolve_exit_target(state)?;
+        if let Some(target) = target {
+            // `ObjectData::is(type, 0)` delegates to the canonical non-strict TypeData
+            // relation. Equality proves the Airbase true case, but inequality does not prove
+            // false; a related/grafted row can still contain AIRBASE in its `is_list`.
+            let _resolved_surface = (target.identity, target.band, target.row, target.type_index);
             return Err(order_dispatch::SpecialAnimHostError::Unavailable);
         }
         let snapshot = special_anim_snapshot(self, actor, order)?;
@@ -951,7 +1085,7 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
         let receipt = special_anim_executor::preflight_special_anim_executor(snapshot, request)
             .map_err(|_| {
                 order_dispatch::SpecialAnimHostError::InvalidState(
-                    "object-free EXIT preflight rejected",
+                    "locally owned EXIT preflight rejected",
                 )
             })?;
         if receipt.plan.branch != special_anim_executor::SpecialAnimBranch::ExitWithoutAirbase
@@ -965,10 +1099,11 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
             })
         {
             return Err(order_dispatch::SpecialAnimHostError::InvalidState(
-                "object-free EXIT escaped its local effect set",
+                "locally owned EXIT escaped its effect set",
             ));
         }
         self.before = Some(SimSpecialAnimBefore::capture(actor));
+        self.target_before = None;
         Ok(receipt)
     }
 
@@ -982,6 +1117,17 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost {
         if self.before.as_ref() != Some(&SimSpecialAnimBefore::capture(actor)) {
             return Err(order_dispatch::SpecialAnimHostError::InvalidState(
                 "SPECIAL_ANIM local owner changed before commit",
+            ));
+        }
+        let state = order
+            .special_anim
+            .map(order_dispatch::special_anim_state)
+            .ok_or(order_dispatch::SpecialAnimHostError::InvalidState(
+                "missing walked SPECIAL_ANIM payload",
+            ))?;
+        if self.resolve_exit_target(state)? != self.target_before {
+            return Err(order_dispatch::SpecialAnimHostError::InvalidState(
+                "SPECIAL_ANIM target lookup or type changed before commit",
             ));
         }
         let current = special_anim_snapshot(self, actor, order)?;
@@ -1043,22 +1189,38 @@ struct SimGameDaemonHost<'a> {
     work: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SimGameDaemonBridgeFault {
-    daemon_empty_colls: i32,
-    runtime_cursor: i32,
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SimGameDaemonBridgeFault {
+    CollisionCursor {
+        daemon_empty_colls: i32,
+        runtime_cursor: i32,
+    },
+    Visibility(step12_visibility_runtime::Step12VisibilityPreflightError),
 }
 
 impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     type Fault = SimGameDaemonBridgeFault;
 
-    fn preflight(&self, _schedule: &game_daemon_step12::CallSchedule) -> Result<(), Self::Fault> {
+    fn preflight(&self, schedule: &game_daemon_step12::CallSchedule) -> Result<(), Self::Fault> {
         let runtime_cursor = self.sim.collision_blocks.cursor();
         if runtime_cursor != self.expected_empty_colls {
-            return Err(SimGameDaemonBridgeFault {
+            return Err(SimGameDaemonBridgeFault::CollisionCursor {
                 daemon_empty_colls: self.expected_empty_colls,
                 runtime_cursor,
             });
+        }
+        if schedule.contains(game_daemon_step12::GameDaemonCall::UpdateAllSeen) {
+            let leader_active = std::array::from_fn(|who| self.sim.leaders[who].active);
+            self.sim
+                .step12_visibility
+                .preflight_full_producer(
+                    &self.sim.world,
+                    &self.sim.unit_type,
+                    leader_active,
+                    self.sim.map.fog.option.0,
+                    step12_visibility_producer_frontier::Step12VisibilityTrigger::ScheduledStep12,
+                )
+                .map_err(SimGameDaemonBridgeFault::Visibility)?;
         }
         Ok(())
     }
@@ -1112,36 +1274,10 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     }
 
     fn update_all_seen(&mut self) {
-        let sim = &mut *self.sim;
-        sim.map.world.clear_seen();
-        let live = sim.world.live_count() as usize;
-        let mut revealed = 0u64;
-        let mut buf = std::mem::take(&mut sim.seen_buf);
-        for row in 0..live {
-            if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
-                continue;
-            }
-            let obj = borders_fog::SeeingObject {
-                fine_x: sim.world.units.x_internal()[row],
-                fine_y: sim.world.units.y_internal()[row],
-                owner: sim.world.units.get_who(row),
-                los_tiles: sim.world.units.mylos()[row] as i32,
-                detector: false,
-                grant_seen2_to: 0,
-            };
-            buf.clear();
-            borders_fog::update_seen(
-                &sim.map.fog,
-                &mut sim.map.world,
-                &sim.map.circle,
-                &obj,
-                &mut buf,
-            );
-            revealed += buf.len() as u64;
-            self.work = self.work.saturating_add(1);
-        }
-        sim.seen_buf = buf;
-        sim.cover.fog_cells_revealed += revealed;
+        // A successful scheduled callback is currently possible only through the producer's
+        // `fog_option == 3` early return. Every ordinary full refresh was rejected by preflight
+        // before the GameDaemon shell or any channel-12 plane could mutate.
+        debug_assert_eq!(self.sim.map.fog.option.0, 3);
     }
 
     fn calc_markets(&mut self) {
@@ -1240,6 +1376,8 @@ impl Sim {
             cannon_time: CannonTimeState::default(),
             map,
             game_daemon: game_daemon_step12::GameDaemonState::default(),
+            step12_visibility: step12_visibility_runtime::Step12VisibilityAuthority::default(),
+            step12_visibility_error: None,
             collision_blocks: collision_blocks_live::CollisionBlockRuntime::new(),
             road_scan: crate::systems::roads::RoadScanState::default(),
             groups: groups_guys::Groups::default(),
@@ -1265,8 +1403,86 @@ impl Sim {
             crash_env: None,
             cover: Coverage::default(),
             traversal_buf: Vec::new(),
-            seen_buf: Vec::new(),
         }
+    }
+
+    /// Install/replace the revision-bound type and Constants projection consumed by the
+    /// step-12 Unit visibility authority.
+    pub fn replace_step12_visibility_type_source(
+        &mut self,
+        type_revision: u64,
+        composition_digest: u64,
+        constants: step12_visibility_runtime::VisibilityConstants,
+        types: Vec<step12_visibility_runtime::VisibilityTypeProjection>,
+    ) -> Result<(), step12_visibility_runtime::VisibilityAuthorityInstallError> {
+        self.step12_visibility.replace_type_source(
+            type_revision,
+            composition_digest,
+            constants,
+            types,
+        )
+    }
+
+    /// Install one complete owner-local `num_units` table and ordered HeroesData projection.
+    pub fn replace_step12_visibility_leader(
+        &mut self,
+        who: usize,
+        leader: step12_visibility_runtime::VisibilityLeaderAuthority,
+    ) -> Result<(), step12_visibility_runtime::VisibilityAuthorityInstallError> {
+        self.step12_visibility.replace_leader(who, leader)
+    }
+
+    /// Apply `Object::init`'s detector-bit suffix and retain its mask provenance for a newly
+    /// allocated Unit. The shared spawn anchor will call this directly once sparse allocation
+    /// owns the whole creation transaction; callers can use it explicitly in the meantime.
+    pub fn materialize_step12_object_init(
+        &mut self,
+        handle: Handle,
+    ) -> Result<usize, step12_visibility_runtime::VisibilityAuthorityInstallError> {
+        self.step12_visibility
+            .materialize_object_init(&mut self.world, &self.unit_type, handle)
+    }
+
+    /// Remove count and instance provenance immediately before the corresponding World despawn.
+    pub fn retire_step12_visibility_unit(
+        &mut self,
+        handle: Handle,
+    ) -> Result<usize, step12_visibility_runtime::VisibilityAuthorityInstallError> {
+        self.step12_visibility
+            .retire_unit(&self.world, &self.unit_type, handle)
+    }
+
+    /// Bind a loaded or explicitly mutated full instance flags byte to the current authority
+    /// revision without re-deriving its detector bit from the current type.
+    pub fn record_step12_authoritative_instance(
+        &mut self,
+        handle: Handle,
+    ) -> Result<usize, step12_visibility_runtime::VisibilityAuthorityInstallError> {
+        self.step12_visibility
+            .record_authoritative_instance(&self.world, handle)
+    }
+
+    /// Expose the exact non-mutating Unit preflight for diagnostics and product composition.
+    pub fn prepare_step12_visibility_unit_pass(
+        &self,
+        trigger: step12_visibility_producer_frontier::Step12VisibilityTrigger,
+    ) -> Result<
+        step12_visibility_producer_frontier::LiveStep12Preparation,
+        step12_visibility_runtime::VisibilityAuthorityFault,
+    > {
+        self.step12_visibility.prepare_unit_pass(
+            &self.world,
+            &self.unit_type,
+            std::array::from_fn(|who| self.leaders[who].active),
+            self.map.fog.option.0,
+            trigger,
+        )
+    }
+
+    /// Diagnostic digest of the joined authority. It is not mixed into retail World checksum
+    /// channel 12; only committed fog/WData bytes belong to that channel.
+    pub fn step12_visibility_authority_digest(&self) -> u64 {
+        self.step12_visibility.digest()
     }
 
     /// Install the validated local post-load Unit type source used by step 8 stat refreshes.
@@ -2406,11 +2622,27 @@ impl Sim {
         self.map.regions = regions;
 
         match result {
-            Ok(_) => (StepRun::Executed, work),
-            // Both errors are preflight failures, so the adapter has committed no local or
-            // child mutation. Keep the dormant collision gap as the executable bridge-fault
-            // signal instead of pretending the unconditional retail pass was vacuous.
-            Err(_) => (StepRun::Unimplemented(Gap::GameDaemonProcessCollBlocks), 0),
+            Ok(_) => {
+                if frame % 100 == 33 {
+                    self.step12_visibility_error = None;
+                }
+                (StepRun::Executed, work)
+            }
+            Err(game_daemon_step12::ProcessAllError::Host(
+                SimGameDaemonBridgeFault::Visibility(error),
+            )) => {
+                // Host preflight runs before the daemon countdown, victory callback, plane
+                // clear, markets, regions, borders, collision cursor, or groups. Retain the
+                // exact refusal while charging the visibility child rather than collision.
+                self.step12_visibility_error = Some(error);
+                self.cover.gaps[Gap::GameDaemonUpdateAllSeen.index()] += 1;
+                (StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen), 0)
+            }
+            Err(_) => {
+                // Structural/collision errors are also preflight failures, so the adapter has
+                // committed no local or child mutation.
+                (StepRun::Unimplemented(Gap::GameDaemonProcessCollBlocks), 0)
+            }
         }
     }
 
@@ -2448,16 +2680,18 @@ impl Sim {
     fn objects_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
         let mut order = std::mem::take(&mut self.traversal_buf);
-        self.world.objects.traversal_into(frame, &mut order);
+        self.world.object_bands().traversal_into(frame, &mut order);
         let mut work = 0u32;
 
-        for &(_who, band, o, row) in order.iter() {
-            match band {
-                Band::Unit => {
-                    let row = row as usize;
-                    if row >= self.world.live_count() as usize {
+        for entry in order.iter().copied() {
+            match (entry.address.band, entry.lifecycle) {
+                (
+                    RetailBand::Unit,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::Unit { id, generation }),
+                ) => {
+                    let Some(row) = self.world.row_of(Handle { id, generation }) else {
                         continue;
-                    }
+                    };
                     if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0 {
                         self.unit_process(row);
                         work += 1;
@@ -2469,15 +2703,34 @@ impl Sim {
                         }
                     }
                 }
-                Band::Build => {
-                    let _ = o;
+                (RetailBand::Unit, SparseSlotLifecycle::Tombstone(facts)) => {
+                    if facts.flags & OBJ_FLAG_ACTIVE == 0 && facts.hold_frames != 0 {
+                        self.world
+                            .tick_unit_tombstone_hold(entry.address)
+                            .expect("traversal entry remains the same Unit tombstone");
+                        self.cover.hold_decrements += 1;
+                    }
+                }
+                (
+                    RetailBand::Build,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::BuildRow(row)),
+                ) => {
                     self.build_process(row as usize, frame);
                     work += 1;
                 }
-                Band::Wall => {
+                (
+                    RetailBand::Wall,
+                    SparseSlotLifecycle::Live(WorldObjectIdentity::WallRow(row)),
+                ) => {
                     self.wall_process(row as usize, frame);
                     work += 1;
                 }
+                (_, SparseSlotLifecycle::Reserved { .. }) => {
+                    panic!("live Sim traversal observed an outstanding object reservation")
+                }
+                // Unit tombstones are the phase-2 lifecycle owner. Build/Wall tombstones and
+                // wrong-band identities remain unadmitted and have no executable body here.
+                _ => {}
             }
         }
         self.traversal_buf = order;
@@ -2621,6 +2874,12 @@ impl Sim {
             frame: self.world.frame,
             rng_state: self.world.random.state(),
             before: None,
+            target_before: None,
+            world: &self.world,
+            builds: &self.builds,
+            walls: &self.walls,
+            unit_types: &self.unit_type,
+            build_types: &self.production_runtime.build_types,
         };
         let mut dispatch = order_dispatch::DispatchCoverage::default();
         let result =
@@ -2796,18 +3055,9 @@ impl Sim {
         let exact_target_row = match ord.exact_target_identity() {
             None => None,
             Some(target) => {
-                let owner = usize::try_from(target.who).ok();
-                let object_row = owner
-                    .filter(|&who| who < crate::objects::OWNER_SLOTS)
-                    .and_then(|who| {
-                        self.world
-                            .objects
-                            .slot(who)
-                            .band(Band::Unit)
-                            .get(target.o as usize)
-                    })
-                    .copied()
-                    .map(|target_row| target_row as usize);
+                let object_row = self
+                    .world
+                    .unit_row_at(i32::from(target.who), i32::from(target.o));
                 let handle_row = self.world.row_of(target.handle);
                 let exact = handle_row.filter(|&target_row| {
                     Some(target_row) == object_row
@@ -2835,15 +3085,11 @@ impl Sim {
         };
         let trow = match exact_target_row {
             Some(target_row) => target_row,
-            None => match self
-                .world
-                .objects
-                .slot(ord.target_who as usize)
-                .band(Band::Unit)
-                .get(ord.target_o as usize)
-                .copied()
-            {
-                Some(r) => r as usize,
+            None => match self.world.unit_row_at(
+                i32::from(ord.target_who),
+                i32::from(ord.target_o),
+            ) {
+                Some(row) => row,
                 None => {
                     self.world.orders_mut(row).kill_current();
                     return;
@@ -3205,11 +3451,9 @@ impl Sim {
         {
             let view = AmmoView {
                 map: &self.map,
-                units: &self.world.units,
-                objects: &self.world.objects,
+                world: &self.world,
                 unit_type: &self.unit_type,
                 shooter_rules: &self.shooter_rules,
-                live: self.world.live_count() as usize,
             };
             // `Ammo::do_damage`'s ground jitter draws the sim stream twice; bridge the
             // state in and back out so the pool shares one stream with everything else.
@@ -3290,16 +3534,9 @@ impl Sim {
             if dmg == 0 {
                 continue;
             }
-            let Some(&trow) = self
-                .world
-                .objects
-                .slot(c.victim_who.max(0) as usize)
-                .band(Band::Unit)
-                .get(c.victim_o.max(0) as usize)
-            else {
+            let Some(trow) = self.world.unit_row_at(c.victim_who, c.victim_o) else {
                 continue;
             };
-            let trow = trow as usize;
             if trow < self.world.live_count() as usize
                 && self.world.units.get_flags(trow) & OBJ_FLAG_ACTIVE != 0
             {
@@ -4657,23 +4894,144 @@ mod tests {
         );
     }
 
-    /// Fog is stamped by the exact `frame % 100 == 33` GameDaemon gate at step 12,
-    /// before anything moves on that frame.
+    /// Even a receipt-complete detector Unit cannot authorize a Unit-only plane rebuild. The
+    /// real `do_frame` call must fail before the GameDaemon shell and preserve sections 6/7.
     #[test]
-    fn units_explore_the_fog_plane() {
+    fn phase33_preflights_exact_units_but_preserves_planes_until_full_owner_lands() {
+        use crate::systems::map_terrain::WorldSection;
+        use crate::systems::step12_visibility_producer_frontier::OBJMASK_DETECT;
+        use crate::systems::step12_visibility_runtime::{
+            Step12ProducerResiduals, Step12VisibilityPreflightError, VisibilityConstants,
+            VisibilityTypeProjection, UNIT_TYPE_BASE,
+        };
+
         let mut sim = Sim::new(13, 16);
+        sim.replace_step12_visibility_type_source(
+            4,
+            0x4455,
+            VisibilityConstants {
+                ptolemy_los_bonus: 2,
+                the_ceo_unit_los: 2,
+            },
+            vec![VisibilityTypeProjection {
+                type_index: UNIT_TYPE_BASE,
+                object_masks: OBJMASK_DETECT,
+                domain: 0,
+                unit_flags2: 0,
+                role: 0,
+                is_siege: false,
+            }],
+        )
+        .unwrap();
         sim.activate(0);
-        sim.spawn_unit(0, 0, 6000, 6000, 6).unwrap();
-        assert_eq!(sim.cover.fog_cells_revealed, 0);
-        for _ in 0..33 {
-            sim.do_frame();
-        }
-        assert_eq!(sim.cover.fog_cells_revealed, 0);
-        sim.do_frame();
-        assert!(
-            sim.cover.fog_cells_revealed > 0,
-            "no fog cell was newly explored"
+        let unit = sim
+            .spawn_unit(0, UNIT_TYPE_BASE, 6000, 6000, 6)
+            .unwrap();
+        sim.materialize_step12_object_init(unit).unwrap();
+        sim.world.frame = 33;
+        sim.game_daemon.busy = 7;
+        sim.map.world.seen[3] = 0x91;
+        sim.map.world.seen2[3] = 0x22;
+        sim.map.world.seen3[3] = 0x84;
+        sim.map.world.wcoord_seen[0] = 0x48;
+        let before = sim.map.world.checksum_sections();
+
+        let trace = sim.do_frame();
+
+        assert_eq!(trace.steps[12], StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen));
+        assert_eq!(sim.game_daemon.busy, 7, "preflight must precede daemon mutation");
+        assert_eq!(
+            sim.step12_visibility_error,
+            Some(Step12VisibilityPreflightError::IncompleteProducer {
+                prepared_unit_stamps: 1,
+                residuals: Step12ProducerResiduals::MISSING,
+            })
         );
+        let after = sim.map.world.checksum_sections();
+        assert_eq!(
+            after.section(WorldSection::TDataAndFog),
+            before.section(WorldSection::TDataAndFog)
+        );
+        assert_eq!(
+            after.section(WorldSection::WCoordSeen),
+            before.section(WorldSection::WCoordSeen)
+        );
+        assert_eq!((sim.map.world.seen[3], sim.map.world.seen3[3]), (0x91, 0x84));
+    }
+
+    #[test]
+    fn fog_option_three_scheduled_do_frame_reads_no_authority_and_mutates_no_fog_plane() {
+        use crate::systems::map_terrain::WorldSection;
+
+        let mut sim = Sim::new(17, 8);
+        sim.world.frame = 33;
+        sim.map.fog.option = borders_fog::FogOption(3);
+        sim.map.world.seen[2] = 0x12;
+        sim.map.world.seen2[2] = 0x34;
+        sim.map.world.seen3[2] = 0x56;
+        sim.map.world.wcoord_seen[0] = 0x78;
+        let before = sim.map.world.checksum_sections();
+
+        let trace = sim.do_frame();
+
+        assert!(matches!(trace.steps[12], StepRun::Executed));
+        assert_eq!(sim.game_daemon.busy, 0);
+        assert_eq!(sim.step12_visibility_error, None);
+        let after = sim.map.world.checksum_sections();
+        assert_eq!(
+            after.section(WorldSection::TDataAndFog),
+            before.section(WorldSection::TDataAndFog)
+        );
+        assert_eq!(
+            after.section(WorldSection::WCoordSeen),
+            before.section(WorldSection::WCoordSeen)
+        );
+    }
+
+    #[test]
+    fn signed_negative_nonphase_do_frame_never_enters_visibility_authority() {
+        use crate::systems::map_terrain::WorldSection;
+
+        let mut sim = Sim::new(19, 8);
+        sim.world.frame = -67;
+        sim.map.world.seen[1] = 0xa5;
+        sim.map.world.seen3[1] = 0x5a;
+        let before = sim.map.world.checksum_sections();
+
+        let trace = sim.do_frame();
+
+        assert!(matches!(trace.steps[12], StepRun::Executed));
+        assert_eq!(sim.step12_visibility_error, None);
+        assert_eq!(
+            sim.map
+                .world
+                .checksum_sections()
+                .section(WorldSection::TDataAndFog),
+            before.section(WorldSection::TDataAndFog)
+        );
+    }
+
+    #[test]
+    fn step12_authority_digest_changes_without_impersonating_checksum_channel_12() {
+        use crate::systems::step12_visibility_runtime::VisibilityConstants;
+
+        let mut sim = Sim::new(23, 8);
+        let channel_before = sim.channel_digest();
+        let authority_before = sim.step12_visibility_authority_digest();
+
+        sim.replace_step12_visibility_type_source(
+            9,
+            0x12_12_12_12,
+            VisibilityConstants {
+                ptolemy_los_bonus: 2,
+                the_ceo_unit_los: 2,
+            },
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_ne!(sim.step12_visibility_authority_digest(), authority_before);
+        assert_eq!(sim.channel_digest(), channel_before);
     }
 
     /// Every `Gap` has a note, and every note names its step.

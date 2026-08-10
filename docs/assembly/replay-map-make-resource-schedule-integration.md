@@ -15,6 +15,8 @@ post_nubify_transitions checkpoint 0x0068c12a / token 0x1ebe
   -> typed selected/default XML document and BONUSES-row owner
   -> typed open row-body boundary 0x0068fb9d
   -> optional typed first BONUS row through recurrence seam 0x00690215
+  -> repeated typed later BONUS rows with replayed carry
+  -> final no-RNG recurrence fallthrough at category tail 0x00690225
 ```
 
 `execute_map_make_resource_schedule` constructs the caller-gap prior receipt
@@ -45,6 +47,18 @@ Three outcomes are explicit:
 - `FirstBonusRowOpen` owns the first row's chance/attribute/placement transaction and
   stops before `add esi, 0x28` at `0x00690215`. It retains the XML boundary and the
   authoritative concrete post-placement pool while token `0x1ef7` remains pending.
+- `BonusRowsOpen` retains every later row's behavior facts and mutation receipt, the
+  exact carried chance bucket, concrete pool, and recurrence chronology. Before a new
+  row is admitted, the schedule reconstructs the first row and replays every stored
+  later row against its placement receipt. The final row adds an explicit
+  `0x00690215..0x00690225` fallthrough receipt and stops before category cleanup.
+  A singleton array uses a tail-only continuation from its first-row boundary.
+
+Later continuations also revalidate the state-carrying caller, pool-prefix, and XML
+RNG/World/pool chronology against each other. Descriptive capture provenance retained
+inside the upstream receipts is admitted by the original constructor and is not
+re-read from retail during continuation; “history replay” below refers specifically to
+the behavior-driving BONUS row transactions.
 
 Pool and XML execution use staged copies. Bad catalog shape, stale evidence, or any
 continuity failure leaves both the caller's pool and XML host unchanged. A successful
@@ -66,9 +80,10 @@ Each selector subreceipt includes its exact before/after six-field pool, selecte
 good/index, retry draws, and exhaustion clear. A selector row may therefore advance the
 public pool without leaving it at the prefix state while publishing a newer digest.
 
-Rows after the first-row recurrence at `0x00690215` remain open in the compiled
-schedule. They carry the chance bucket through later resource placement and RNG work,
-then retail proceeds through GOODIES and FISH, returns to
+All rows in a nonempty current `BONUSES` array can now execute in the compiled schedule.
+The new exact residual for that path is `0x00690225`, where category cleanup begins.
+The zero-row XML-to-category-tail bridge remains open. Retail then proceeds through
+GOODIES and FISH, returns to
 `0x0068c70c`, and eventually reaches caller checkpoint `0x0068c72d` / token `0x1ef7`.
 The boundary records that checkpoint as pending, never as completed.
 
@@ -83,7 +98,9 @@ stage-ending checkpoint.
 
 The `place_resources` schedule row now states the executable ownership split:
 zero RNG through the pool and XML bootstrap, typed direct/callee RNG and concrete pool
-continuity for the first BONUS row through `0x00690215`, then open later rows.
+continuity for every row of a nonempty current BONUS array, then the exact category-tail
+fallthrough at `0x00690225`. The zero-row bridge and category/document cleanup remain
+open.
 
 ## Focused proof
 
@@ -103,6 +120,15 @@ continuity for the first BONUS row through `0x00690215`, then open later rows.
   path and a selector path that mutates the caller-visible concrete pool; and
 - end-to-end public-pool rollback when a selector subreceipt is corrupted after the
   row's direct chance draw; and
+- repeated later-row continuation with full BONUS-row history replay, exact shared-RNG chaining,
+  concrete-pool continuity, final recurrence fallthrough to `0x00690225`, and refusal
+  to execute another row after the category is complete;
+- singleton tail-only advancement and rejection of a removed or forged category-tail receipt;
+- a later selector row whose direct chance draw, callee pool draw, concrete bitmask
+  mutation, and published digest form one chronology, plus schedule-level rollback for
+  a corrupted selector subreceipt;
+- fail-closed later-row evidence rollback before public pool or schedule carry changes;
+- rejection of state-carrying caller/XML prefix tampering before a later-row host call;
 - joint pool/host rollback for stale XML evidence.
 
 The focused local commands are:
@@ -114,6 +140,7 @@ cargo test -p don-replay --test place_resources_pool_frontier
 cargo test -p don-replay --test place_resources_xml_frontier
 cargo test -p don-replay --test resource_divvy_pool_selection_frontier
 cargo test -p don-replay --test place_resources_bonus_mutation_frontier
+cargo test -p don-replay --test place_resources_bonus_rows_mutation_frontier
 cargo test -p don-replay --test map_make_nubify_integration
 ```
 
@@ -126,10 +153,12 @@ crates/don-replay/src/lib.rs
 crates/don-replay/src/map_make_resource_schedule_integration.rs
 crates/don-replay/src/map_style.rs
 crates/don-replay/src/place_resources_bonus_mutation_frontier.rs
+crates/don-replay/src/place_resources_bonus_rows_mutation_frontier.rs
 crates/don-replay/src/resource_divvy_pool_selection_frontier.rs
 crates/don-replay/src/place_resources_xml_frontier.rs
 crates/don-replay/tests/map_make_resource_schedule_integration.rs
 crates/don-replay/tests/resource_divvy_pool_selection_frontier.rs
+crates/don-replay/tests/place_resources_bonus_rows_mutation_frontier.rs
 docs/assembly/replay-map-make-resource-schedule-integration.md
 docs/assembly/replay-place-resources-pool-frontier.md
 docs/assembly/replay-resource-divvy-pool-selection-frontier.md

@@ -12,21 +12,30 @@ use don_replay::map_make_resource_caller_gap_frontier::{
     SHIPPED_EXE_SHA256 as CALLER_EXE_SHA256, SHIPPED_PDB_SHA256 as CALLER_PDB_SHA256,
 };
 use don_replay::map_make_resource_schedule_integration::{
-    continue_map_make_resource_schedule_first_bonus, execute_map_make_resource_schedule,
+    continue_map_make_resource_schedule_bonus_category_tail,
+    continue_map_make_resource_schedule_first_bonus,
+    continue_map_make_resource_schedule_next_bonus, execute_map_make_resource_schedule,
     execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
-    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError,
+    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
+    BONUS_CATEGORY_TAIL_RESTORE_VA,
 };
 use don_replay::map_style::MAP_MAKE_SCHEDULE;
 use don_replay::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
 use don_replay::place_resources_bonus_mutation_frontier::{
     BonusMutationEvidence, CalleeRandomDraw, FirstBonusDisposition, FirstBonusMutationError,
-    FirstBonusMutationFacts, PlacementEvidence, PlacementHost, PlacementPattern, PlacementReceipt,
-    PlacementRequest, ResourceTypeResolution, ScaledAttribute, ScaledAttributeFact,
-    CENTER_KEEP_AWAY_SCALE_CALL_VA, CENTER_STAY_NEAR_SCALE_CALL_VA, CORNER_KEEP_AWAY_SCALE_CALL_VA,
-    CORNER_STAY_NEAR_SCALE_CALL_VA, EDGE_KEEP_AWAY_SCALE_CALL_VA, EDGE_STAY_NEAR_SCALE_CALL_VA,
-    GROUP_SPACING_SCALE_CALL_VA, NUM_RARE_SCALE_CALL_VA, PLAYER_KEEP_AWAY_SCALE_CALL_VA,
-    PLAYER_STAY_NEAR_SCALE_CALL_VA, SELECTOR_THREE_IGNORE_CALL_VA,
-    SHIPPED_EXE_SHA256 as BONUS_EXE_SHA256, SHIPPED_PDB_SHA256 as BONUS_PDB_SHA256,
+    FirstBonusMutationFacts, PlaceResourcesBonusMutationState, PlacementEvidence, PlacementHost,
+    PlacementPattern, PlacementReceipt, PlacementRequest, ResourceTypeResolution, ScaledAttribute,
+    ScaledAttributeFact, CENTER_KEEP_AWAY_SCALE_CALL_VA, CENTER_STAY_NEAR_SCALE_CALL_VA,
+    CORNER_KEEP_AWAY_SCALE_CALL_VA, CORNER_STAY_NEAR_SCALE_CALL_VA, EDGE_KEEP_AWAY_SCALE_CALL_VA,
+    EDGE_STAY_NEAR_SCALE_CALL_VA, FIRST_BONUS_ROW_BODY_VA, GROUP_SPACING_SCALE_CALL_VA,
+    NUM_RARE_SCALE_CALL_VA, PLAYER_KEEP_AWAY_SCALE_CALL_VA, PLAYER_STAY_NEAR_SCALE_CALL_VA,
+    SELECTOR_THREE_IGNORE_CALL_VA, SHIPPED_EXE_SHA256 as BONUS_EXE_SHA256,
+    SHIPPED_PDB_SHA256 as BONUS_PDB_SHA256,
+};
+use don_replay::place_resources_bonus_rows_mutation_frontier::{
+    later_bonus_facts_digest, LaterBonusMutationEvidence, LaterBonusMutationFacts,
+    RemainingBonusRowsError, RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
+    LATER_ROW_MUTATION_ENTRY_VA,
 };
 use don_replay::place_resources_pool_frontier::{
     resource_divvy_pool_digest, PlaceResourcesFactEvidence, PlaceResourcesLiveFacts,
@@ -386,6 +395,202 @@ fn selector_bonus_facts(
     }
 }
 
+fn first_chance_miss_facts(
+    handoff: &don_replay::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff,
+) -> FirstBonusMutationFacts {
+    let row = &handoff.rows[0];
+    FirstBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "Salt".to_owned(),
+        type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
+        chance: 0,
+        chance_group: 0,
+        pattern_name: "player".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: Vec::new(),
+        evidence: BonusMutationEvidence::RetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0xd8; 32],
+            entry_va: handoff.resume_va,
+            capture_ordinal: row.capture_ordinal,
+            random_state: handoff.random_state,
+            world_checksum: handoff.world_checksum.clone(),
+            sourced_walked_bytes: handoff.sourced_walked_bytes,
+            resource_pool_digest: handoff.resource_pool_digest,
+        },
+    }
+}
+
+fn remaining_state_from_first(
+    first: &don_replay::map_make_resource_schedule_integration::PlaceResourcesFirstBonusBoundary,
+) -> RemainingBonusRowsState {
+    let receipt = &first.first_bonus;
+    let mutation = PlaceResourcesBonusMutationState {
+        random_state: receipt.random_state_after,
+        world_checksum: receipt.world_checksum_after.clone(),
+        sourced_walked_bytes: receipt.sourced_walked_bytes,
+        resource_pool_digest: receipt.resource_pool_digest_after,
+        resource_pool: Some(first.resource_pool_after.clone()),
+        allocated_resources: receipt.allocated_resources_after,
+        requested_resources: receipt.requested_resources_after,
+    };
+    RemainingBonusRowsState::from_first_row(
+        &first.xml.xml_frontier.handoff,
+        &receipt.facts,
+        receipt,
+        &mutation,
+    )
+    .unwrap()
+}
+
+fn later_chance_miss_facts(
+    state: &RemainingBonusRowsState,
+    handoff: &don_replay::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff,
+) -> LaterBonusMutationFacts {
+    let row = &handoff.rows[state.next_row_index];
+    let mut facts = LaterBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "Salt".to_owned(),
+        type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
+        chance: 0,
+        chance_group: 0,
+        pattern_name: "player".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: Vec::new(),
+        evidence: LaterBonusMutationEvidence::RetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0xab; 32],
+            entry_va: LATER_BONUS_ENTRY_VA,
+            row_body_va: FIRST_BONUS_ROW_BODY_VA,
+            mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
+            row_index: state.next_row_index,
+            capture_ordinal: row.capture_ordinal,
+            random_state: state.mutation.random_state,
+            world_checksum: state.mutation.world_checksum.clone(),
+            sourced_walked_bytes: state.mutation.sourced_walked_bytes,
+            resource_pool_digest: state.mutation.resource_pool_digest,
+            last_chance_group: state.last_chance_group,
+            signed_chance_budget: state.signed_chance_budget,
+            winner_seen: state.winner_seen,
+            facts_digest: 0,
+        },
+    };
+    let digest = later_bonus_facts_digest(&facts);
+    if let LaterBonusMutationEvidence::RetailCapture { facts_digest, .. } = &mut facts.evidence {
+        *facts_digest = digest;
+    }
+    facts
+}
+
+fn later_selector_facts(
+    state: &RemainingBonusRowsState,
+    handoff: &don_replay::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff,
+) -> LaterBonusMutationFacts {
+    let row = &handoff.rows[state.next_row_index];
+    let mut facts = LaterBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "Late".to_owned(),
+        type_resolution: ResourceTypeResolution::PoolSelector {
+            selector: 3,
+            matched_call_va: SELECTOR_THREE_IGNORE_CALL_VA,
+        },
+        chance: 100,
+        chance_group: 0,
+        pattern_name: "player".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: selector_scaled_facts(),
+        evidence: LaterBonusMutationEvidence::RetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0xbc; 32],
+            entry_va: LATER_BONUS_ENTRY_VA,
+            row_body_va: FIRST_BONUS_ROW_BODY_VA,
+            mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
+            row_index: state.next_row_index,
+            capture_ordinal: row.capture_ordinal,
+            random_state: state.mutation.random_state,
+            world_checksum: state.mutation.world_checksum.clone(),
+            sourced_walked_bytes: state.mutation.sourced_walked_bytes,
+            resource_pool_digest: state.mutation.resource_pool_digest,
+            last_chance_group: state.last_chance_group,
+            signed_chance_budget: state.signed_chance_budget,
+            winner_seen: state.winner_seen,
+            facts_digest: 0,
+        },
+    };
+    let digest = later_bonus_facts_digest(&facts);
+    if let LaterBonusMutationEvidence::RetailCapture { facts_digest, .. } = &mut facts.evidence {
+        *facts_digest = digest;
+    }
+    facts
+}
+
+fn chance_miss_first_bonus_schedule(
+    row_count: usize,
+) -> (ResourceDivvyPoolState, MapMakeResourceScheduleReceipt) {
+    assert!(matches!(row_count, 1 | 3));
+    let post = post_nubify();
+    let owner = owner();
+    let caller = caller_facts(&post, &owner, 0);
+    let mut resources = resource_facts(&post);
+    resources.goods[2].random_rare_drop = 1;
+    resources.goods[2].resolved_age = 3;
+    let mut expected_pool = expected_resource_pool();
+    expected_pool.late_bits.bits = 2;
+    expected_pool.late_goods.push(FIRST_SCANNED_GOOD_ID + 2);
+    let mut xml = xml_facts(&post, resource_divvy_pool_digest(&expected_pool));
+    let rows = &mut xml.selected_bonuses.as_mut().unwrap().bonus_rows;
+    if row_count == 1 {
+        rows.truncate(1);
+    } else {
+        rows.push(BonusXmlRowFact {
+            capture_ordinal: 11,
+            element_name: "BONUS".to_owned(),
+            handles: XmlHostHandles {
+                head: true,
+                tail: true,
+                inline_tail_word: false,
+            },
+        });
+    }
+    let mut pool = ResourceDivvyPoolState::default();
+    let mut xml_host = XmlHostHandles::default();
+    let xml_schedule = execute_map_make_resource_schedule_with_xml(
+        &mut pool,
+        &mut xml_host,
+        &post,
+        &owner,
+        &caller,
+        Some(&resources),
+        Some(&xml),
+    )
+    .unwrap();
+    let handoff = match &xml_schedule.placement {
+        MapMakeResourcePlacementReceipt::XmlRowsOpen(boundary) => {
+            boundary.xml_frontier.handoff.clone()
+        }
+        _ => panic!("XML facts must produce the first-row handoff"),
+    };
+    let facts = first_chance_miss_facts(&handoff);
+    let mut host = NoPlacementExpected;
+    let first_schedule = continue_map_make_resource_schedule_first_bonus(
+        &mut pool,
+        &xml_schedule,
+        &facts,
+        &mut host,
+    )
+    .unwrap();
+    (pool, first_schedule)
+}
+
 #[test]
 fn schedule_and_receipts_preserve_checkpoint_rng_world_and_map_identity() {
     let schedule_names = MAP_MAKE_SCHEDULE
@@ -561,7 +766,7 @@ fn stale_post_or_pool_provenance_fails_before_committing_pool_state() {
 fn typed_xml_owner_advances_schedule_to_exact_row_boundary() {
     let place_resources_stage = &MAP_MAKE_SCHEDULE[12];
     assert_eq!(place_resources_stage.name, "place_resources");
-    assert!(place_resources_stage.rng.contains("0x00690215"));
+    assert!(place_resources_stage.rng.contains("0x00690225"));
 
     let post = post_nubify();
     let owner = owner();
@@ -831,6 +1036,307 @@ fn malformed_selector_subreceipt_rolls_back_the_public_pool_after_direct_chance_
         Err(MapMakeResourceScheduleError::BonusFrontier(
             FirstBonusMutationError::InvalidResourcePoolSelection { index: 0 }
         ))
+    );
+    assert_eq!(pool, pool_before);
+}
+
+#[test]
+fn singleton_bonus_array_advances_through_only_the_no_rng_category_tail() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let pool_before = pool.clone();
+    let first = match &first_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => first,
+        _ => panic!("singleton row must first stop at its recurrence seam"),
+    };
+    let random_state = first.first_bonus.random_state_after;
+    let world_checksum = first.first_bonus.world_checksum_after.clone();
+
+    let continued =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &continued.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton row must publish the authenticated category tail"),
+    };
+    let tail = rows.category_tail.as_ref().unwrap();
+
+    assert!(rows.steps.is_empty());
+    assert_eq!(rows.remaining_state.next_row_index, 1);
+    assert_eq!(rows.residual_va, BONUS_CATEGORY_TAIL_VA);
+    assert_eq!(tail.row_count_before, 1);
+    assert_eq!(tail.row_count_after, 0);
+    assert!(!tail.branch_taken);
+    assert_eq!(tail.random_state, random_state);
+    assert_eq!(tail.world_checksum, world_checksum);
+    assert_eq!(pool, pool_before);
+
+    let (mut incomplete_pool, incomplete) = chance_miss_first_bonus_schedule(3);
+    let incomplete_before = incomplete_pool.clone();
+    assert_eq!(
+        continue_map_make_resource_schedule_bonus_category_tail(&mut incomplete_pool, &incomplete,),
+        Err(MapMakeResourceScheduleError::BonusCategoryTailRequiresCompletedRows)
+    );
+    assert_eq!(incomplete_pool, incomplete_before);
+}
+
+#[test]
+fn later_selector_commits_concrete_pool_and_corruption_rolls_back_the_schedule_boundary() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(3);
+    let first = match &first_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => first,
+        _ => panic!("first continuation must expose its recurrence boundary"),
+    };
+    let state = remaining_state_from_first(first);
+    let facts = later_selector_facts(&state, &first.xml.xml_frontier.handoff);
+    let pool_before = pool.clone();
+    let digest_before = resource_divvy_pool_digest(&pool);
+    let mut exact_host = ExactSelectorHost;
+
+    let continued = continue_map_make_resource_schedule_next_bonus(
+        &mut pool,
+        &first_schedule,
+        &facts,
+        &mut exact_host,
+    )
+    .unwrap();
+    let rows = match &continued.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("later selector must retain a typed schedule boundary"),
+    };
+    let receipt = &rows.steps[0].receipt;
+    let placement = receipt.placement.as_ref().unwrap();
+
+    assert_eq!(pool, rows.resource_pool_after);
+    assert_eq!(state.mutation.resource_pool.as_ref(), Some(&pool_before));
+    assert_eq!(
+        rows.remaining_state.mutation.resource_pool.as_ref(),
+        Some(&pool)
+    );
+    assert_ne!(resource_divvy_pool_digest(&pool), digest_before);
+    assert_eq!(
+        resource_divvy_pool_digest(&pool),
+        receipt.resource_pool_digest_after
+    );
+    assert_eq!(placement.resource_pool_selections.len(), 1);
+    assert_eq!(
+        placement.resource_pool_selections[0].lane,
+        ResourcePoolLane::Late
+    );
+    assert_eq!(
+        placement.random_draws[0].state_before,
+        receipt.chance_draw.as_ref().unwrap().state_after
+    );
+    assert_eq!(placement.random_state_after, receipt.random_state_after);
+
+    let mut rollback_pool = pool_before.clone();
+    let rollback_before = rollback_pool.clone();
+    let schedule_before = first_schedule.clone();
+    let mut corrupt_host = CorruptSelectorHost;
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut rollback_pool,
+            &first_schedule,
+            &facts,
+            &mut corrupt_host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsFrontier(
+            RemainingBonusRowsError::InvalidResourcePoolSelection { index: 0 }
+        ))
+    );
+    assert_eq!(rollback_pool, rollback_before);
+    assert_eq!(first_schedule, schedule_before);
+}
+
+#[test]
+fn repeated_later_bonus_rows_replay_carry_and_reach_only_the_category_tail() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(3);
+    let pool_before = pool.clone();
+    let first = match &first_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => first,
+        _ => panic!("first continuation must expose its recurrence boundary"),
+    };
+    let first_state = remaining_state_from_first(first);
+    let first_later_facts = later_chance_miss_facts(&first_state, &first.xml.xml_frontier.handoff);
+    let mut host = NoPlacementExpected;
+
+    let after_second = continue_map_make_resource_schedule_next_bonus(
+        &mut pool,
+        &first_schedule,
+        &first_later_facts,
+        &mut host,
+    )
+    .unwrap();
+    let second = match &after_second.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("later continuation must retain the typed carry"),
+    };
+    assert_eq!(second.steps.len(), 1);
+    assert!(second.category_tail.is_none());
+    assert_eq!(second.residual_va, LATER_BONUS_ENTRY_VA);
+    assert_eq!(
+        second.steps[0].receipt.random_state_before,
+        first.first_bonus.random_state_after
+    );
+    let second_later_facts = later_chance_miss_facts(
+        &second.remaining_state,
+        &second.first.xml.xml_frontier.handoff,
+    );
+
+    let after_third = continue_map_make_resource_schedule_next_bonus(
+        &mut pool,
+        &after_second,
+        &second_later_facts,
+        &mut host,
+    )
+    .unwrap();
+    let third = match &after_third.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("final later row must retain the category-tail boundary"),
+    };
+    let tail = third.category_tail.as_ref().unwrap();
+
+    assert_eq!(third.steps.len(), 2);
+    assert_eq!(third.remaining_state.next_row_index, 3);
+    assert_eq!(third.residual_va, BONUS_CATEGORY_TAIL_VA);
+    assert_eq!(tail.entry_va, LATER_BONUS_ENTRY_VA);
+    assert_eq!(tail.row_count_before, 1);
+    assert_eq!(tail.row_count_after, 0);
+    assert!(!tail.branch_taken);
+    assert_eq!(
+        tail.restore_category_pointer_va,
+        BONUS_CATEGORY_TAIL_RESTORE_VA
+    );
+    assert_eq!(tail.residual_va, BONUS_CATEGORY_TAIL_VA);
+    assert_eq!(
+        third.steps[1].receipt.random_state_before,
+        third.steps[0].receipt.random_state_after
+    );
+    assert_eq!(tail.random_state, third.steps[1].receipt.random_state_after);
+    assert_eq!(pool, pool_before);
+    assert_eq!(third.resource_pool_after, pool_before);
+    assert_eq!(
+        third.pending_checkpoint_call_va,
+        MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+    );
+    assert_eq!(third.pending_source_token, MAP_POST_RESOURCES_SOURCE_TOKEN);
+    assert_eq!(MAP_MAKE_SCHEDULE[12].checkpoint, None);
+
+    let pool_at_tail = pool.clone();
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut pool,
+            &after_third,
+            &second_later_facts,
+            &mut host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsComplete)
+    );
+    assert_eq!(pool, pool_at_tail);
+
+    let mut missing_tail = after_third.clone();
+    match &mut missing_tail.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => {
+            rows.category_tail = None;
+            rows.residual_va = LATER_BONUS_ENTRY_VA;
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut pool,
+            &missing_tail,
+            &second_later_facts,
+            &mut host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsContinuityMismatch)
+    );
+    assert_eq!(pool, pool_at_tail);
+
+    let mut forged_tail = after_third.clone();
+    match &mut forged_tail.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => {
+            rows.category_tail.as_mut().unwrap().random_state ^= 1;
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut pool,
+            &forged_tail,
+            &second_later_facts,
+            &mut host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsContinuityMismatch)
+    );
+    assert_eq!(pool, pool_at_tail);
+}
+
+#[test]
+fn stale_later_row_evidence_rolls_back_public_pool_and_schedule_carry() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(3);
+    let first = match &first_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => first,
+        _ => panic!("first continuation must expose its recurrence boundary"),
+    };
+    let state = remaining_state_from_first(first);
+    let mut facts = later_chance_miss_facts(&state, &first.xml.xml_frontier.handoff);
+    if let LaterBonusMutationEvidence::RetailCapture { random_state, .. } = &mut facts.evidence {
+        *random_state ^= 1;
+    }
+    let pool_before = pool.clone();
+    let schedule_before = first_schedule.clone();
+    let mut host = NoPlacementExpected;
+
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut pool,
+            &first_schedule,
+            &facts,
+            &mut host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsFrontier(
+            RemainingBonusRowsError::StaleEvidence
+        ))
+    );
+    assert_eq!(pool, pool_before);
+    assert_eq!(first_schedule, schedule_before);
+}
+
+#[test]
+fn state_carrying_upstream_prefix_tampering_is_rejected_before_later_row_execution() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(3);
+    let first = match &first_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => first,
+        _ => panic!("first continuation must expose its recurrence boundary"),
+    };
+    let state = remaining_state_from_first(first);
+    let facts = later_chance_miss_facts(&state, &first.xml.xml_frontier.handoff);
+    let pool_before = pool.clone();
+    let mut host = NoPlacementExpected;
+
+    let mut caller_tamper = first_schedule.clone();
+    caller_tamper.post_nubify_checkpoint.random_state ^= 1;
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(
+            &mut pool,
+            &caller_tamper,
+            &facts,
+            &mut host,
+        ),
+        Err(MapMakeResourceScheduleError::BonusRowsContinuityMismatch)
+    );
+    assert_eq!(pool, pool_before);
+
+    let mut xml_tamper = first_schedule.clone();
+    match &mut xml_tamper.placement {
+        MapMakeResourcePlacementReceipt::FirstBonusRowOpen(first) => {
+            first.xml.xml_frontier.receipt.random_state_before ^= 1;
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        continue_map_make_resource_schedule_next_bonus(&mut pool, &xml_tamper, &facts, &mut host,),
+        Err(MapMakeResourceScheduleError::BonusRowsContinuityMismatch)
     );
     assert_eq!(pool, pool_before);
 }

@@ -352,9 +352,7 @@ pub enum UnitStampDecision {
     Stamp(Step12UnitStamp),
 }
 
-fn checked_resolved_los_radius(
-    resolved_los_tiles: i32,
-) -> Result<Option<i32>, UnitStampFault> {
+fn checked_resolved_los_radius(resolved_los_tiles: i32) -> Result<Option<i32>, UnitStampFault> {
     if resolved_los_tiles == 0 {
         return Ok(None);
     }
@@ -490,9 +488,7 @@ pub struct LiveStep12UnitBandSnapshot<'a> {
 pub enum DetectorInstanceProvenance {
     /// The allocation retained the masks read by `Object::init`. Only the detector bit is
     /// compared: unrelated instance flag bits may legitimately change after initialization.
-    ObjectInit {
-        object_masks_at_init: u32,
-    },
+    ObjectInit { object_masks_at_init: u32 },
     /// Save/load or an explicit later mutation supplied the complete instance byte at the same
     /// revision as the dynamic authority receipt.
     AuthoritativeInstance {
@@ -946,11 +942,11 @@ pub fn prepare_live_unit_pass(
             continue;
         }
 
-        let authority = receipt
-            .and_then(|receipt| receipt.rows[position])
-            .ok_or(LiveStep12PrepareFault::MissingRowAuthority {
+        let authority = receipt.and_then(|receipt| receipt.rows[position]).ok_or(
+            LiveStep12PrepareFault::MissingRowAuthority {
                 row: live.identity.row,
-            })?;
+            },
+        )?;
         if authority.identity != live.identity {
             return Err(LiveStep12PrepareFault::AuthorityIdentityMismatch {
                 row: live.identity.row,
@@ -965,12 +961,11 @@ pub fn prepare_live_unit_pass(
                 receipt: authority.los_facts.mylos,
             });
         }
-        let resolved_los_tiles = resolve_unit_los(authority.los_facts).map_err(|fault| {
-            LiveStep12PrepareFault::Los {
+        let resolved_los_tiles =
+            resolve_unit_los(authority.los_facts).map_err(|fault| LiveStep12PrepareFault::Los {
                 row: live.identity.row,
                 fault,
-            }
-        })?;
+            })?;
         let resolved_radius = checked_resolved_los_radius(resolved_los_tiles).map_err(|fault| {
             LiveStep12PrepareFault::Stamp {
                 row: live.identity.row,
@@ -979,11 +974,12 @@ pub fn prepare_live_unit_pass(
         })?;
         let (unit_domain, type_unit_flags2) = match resolved_radius {
             Some(radius) if radius <= 3 => {
-                let domain = authority.unit_domain.ok_or(
-                    LiveStep12PrepareFault::MissingSmallLosDomain {
-                        row: live.identity.row,
-                    },
-                )?;
+                let domain =
+                    authority
+                        .unit_domain
+                        .ok_or(LiveStep12PrepareFault::MissingSmallLosDomain {
+                            row: live.identity.row,
+                        })?;
                 let flags2 = if domain == 0 {
                     authority.type_unit_flags2.ok_or(
                         LiveStep12PrepareFault::MissingSmallLosTypeFlags2 {
@@ -997,9 +993,9 @@ pub fn prepare_live_unit_pass(
             }
             _ => (0, 0),
         };
-        let projected_small_los_center = authority.small_los_projection.map(|projection| {
-            (projection.projected_fine_x, projection.projected_fine_y)
-        });
+        let projected_small_los_center = authority
+            .small_los_projection
+            .map(|projection| (projection.projected_fine_x, projection.projected_fine_y));
         let decision = plan_unit_stamp(Step12UnitFacts {
             leader_active: true,
             object_flags: live.object_flags,
@@ -1027,12 +1023,13 @@ pub fn prepare_live_unit_pass(
                 ..
             })
         ) {
-            let projection = authority.small_los_projection.ok_or(
-                LiveStep12PrepareFault::Stamp {
-                    row: live.identity.row,
-                    fault: UnitStampFault::MissingSmallLosProjectedCenter,
-                },
-            )?;
+            let projection =
+                authority
+                    .small_los_projection
+                    .ok_or(LiveStep12PrepareFault::Stamp {
+                        row: live.identity.row,
+                        fault: UnitStampFault::MissingSmallLosProjectedCenter,
+                    })?;
             validate_projection_receipt(live, projection).map_err(|fault| {
                 LiveStep12PrepareFault::Projection {
                     row: live.identity.row,
@@ -1041,20 +1038,17 @@ pub fn prepare_live_unit_pass(
             })?;
         }
         if matches!(decision, UnitStampDecision::Stamp(_)) {
-            let detector = authority.detector.ok_or(
-                LiveStep12PrepareFault::MissingDetectorProvenance {
+            let detector =
+                authority
+                    .detector
+                    .ok_or(LiveStep12PrepareFault::MissingDetectorProvenance {
+                        row: live.identity.row,
+                    })?;
+            validate_detector_provenance(detector, live.object_flags, snapshot.state_revision)
+                .map_err(|fault| LiveStep12PrepareFault::DetectorProvenance {
                     row: live.identity.row,
-                },
-            )?;
-            validate_detector_provenance(
-                detector,
-                live.object_flags,
-                snapshot.state_revision,
-            )
-            .map_err(|fault| LiveStep12PrepareFault::DetectorProvenance {
-                row: live.identity.row,
-                fault,
-            })?;
+                    fault,
+                })?;
         }
         if matches!(decision, UnitStampDecision::Stamp(_)) {
             stamps += 1;

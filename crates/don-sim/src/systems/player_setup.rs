@@ -7,8 +7,10 @@
 //! [`Sim`], and only then activates the requested leader cohort.  No adapter-side roster or
 //! team table survives the call.
 
-use super::leader_init_diplomacy::{
-    init_active_team_alliances, LeaderInitTeamAllianceError, LeaderInitTeamAllianceReceipt,
+use super::leader_init_diplomacy_loop::{
+    init_diplomacy_loop, LeaderInitDiplomacyFacts, LeaderInitDiplomacyLoopError,
+    LeaderInitDiplomacyLoopImage, LeaderInitDiplomacyLoopReceipt, LeaderInitDiplomacyLoopRequest,
+    LeaderInitDiplomacyRow,
 };
 use super::setup_diplomacy::{
     LeaderTeamState, PlayerSetup, PLAYER_PRESENT, SETUP_SLOTS, TEAM_AUTO,
@@ -32,6 +34,9 @@ pub struct ManualPlayerSetup {
     pub team_style: u8,
     pub local_player_setup_slot: usize,
     pub ranked: bool,
+    /// Bit `who` supplies the exact setup-time result of
+    /// `LeaderData::has_preq(0x2B0)` to the sequential `Leader::init` loop.
+    pub shared_vision_preq_mask: u8,
 }
 
 impl Default for ManualPlayerSetup {
@@ -42,20 +47,35 @@ impl Default for ManualPlayerSetup {
             team_style: 0,
             local_player_setup_slot: 0,
             ranked: false,
+            shared_vision_preq_mask: 0,
         }
     }
+}
+
+/// Complete, ordered `Leader::init` diplomacy loop result retained by PlayerSetup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedLeaderInitDiplomacy {
+    pub facts: [LeaderInitDiplomacyFacts; SETUP_SLOTS],
+    pub rows: [LeaderInitDiplomacyRow; SETUP_SLOTS],
+    pub receipts: Vec<LeaderInitDiplomacyLoopReceipt>,
+    /// Final `LeaderData::ally_mask` bytes after sequential row initialization.
+    pub ally_masks: [u8; SETUP_SLOTS],
+    /// Active-to-active raw Ally cells, including each active self cell.
+    pub writes: usize,
 }
 
 /// Canonical, Sim-owned result retained after setup.  The ordered script calls remain in
 /// the receipt instead of being silently presented as executed by headless/browser hosts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppliedPlayerSetup {
+    /// Canonical host inputs retained so frame-zero persistence can reconstruct the
+    /// transaction instead of serializing a second copy of every derived row.
+    pub request: ManualPlayerSetup,
     pub active_mask: u8,
     pub state: TeamSetupState,
     pub receipt: InitTeamsReceipt,
-    /// Option-independent active-team declarations from the recovered `Leader::init`
-    /// prefix. Non-team declarations remain owned by the caller's existing leader image.
-    pub diplomacy: LeaderInitTeamAllianceReceipt,
+    /// Full sequential eight-row diplomacy/treaty/shared-vision initialization.
+    pub diplomacy: AppliedLeaderInitDiplomacy,
 }
 
 /// Persistent setup owner embedded in the authoritative victory leader table.
@@ -101,7 +121,7 @@ pub enum ManualPlayerSetupError {
     InactiveSlotHasTeam { slot: usize, team: i8 },
     UnsupportedManualTeam { slot: usize, team: i8 },
     InitTeams(InitTeamsError),
-    LeaderInitDiplomacy(LeaderInitTeamAllianceError),
+    LeaderInitDiplomacy(LeaderInitDiplomacyLoopError),
 }
 
 impl From<InitTeamsError> for ManualPlayerSetupError {
@@ -110,8 +130,8 @@ impl From<InitTeamsError> for ManualPlayerSetupError {
     }
 }
 
-impl From<LeaderInitTeamAllianceError> for ManualPlayerSetupError {
-    fn from(value: LeaderInitTeamAllianceError) -> Self {
+impl From<LeaderInitDiplomacyLoopError> for ManualPlayerSetupError {
+    fn from(value: LeaderInitDiplomacyLoopError) -> Self {
         Self::LeaderInitDiplomacy(value)
     }
 }
@@ -170,6 +190,11 @@ fn plan_manual_setup(
             who: slot as u8,
             team,
         };
+        state.setup.leaders[slot] = LeaderTeamState {
+            leader_flags: i32::from(active),
+            who: slot as i32,
+            diplos: sim.vic_leaders.slots[slot].diplos,
+        };
         if !active {
             if team != TEAM_AUTO {
                 return Err(ManualPlayerSetupError::InactiveSlotHasTeam { slot, team });
@@ -182,11 +207,6 @@ fn plan_manual_setup(
             return Err(ManualPlayerSetupError::UnsupportedManualTeam { slot, team });
         }
         state.setup.players[slot].flags = PLAYER_PRESENT;
-        state.setup.leaders[slot] = LeaderTeamState {
-            leader_flags: 1,
-            who: slot as i32,
-            diplos: sim.vic_leaders.slots[slot].diplos,
-        };
     }
 
     let receipt = init_teams_atomic(
@@ -196,8 +216,69 @@ fn plan_manual_setup(
             ranked: request.ranked,
         },
     )?;
-    let diplomacy = init_active_team_alliances(&mut state.setup, request.active_mask)?;
+    let base_facts = LeaderInitDiplomacyFacts {
+        reveal_map: sim.vic_match.options.reveal_map,
+        game_rules: sim.vic_match.options.game_rules,
+        rush_rules: sim.vic_match.options.rush_rules,
+        starting_technology: sim.vic_match.options.starting_technology,
+        starting_technology2: sim.vic_match.options.starting_technology2,
+        ending_technology: sim.vic_match.options.ending_technology,
+        scenario_rules: sim.vic_match.sem(game_sem::SCENARIO_RULES),
+        check_victory_mode: sim.vic_match.sem(game_sem::CHECK_VICTORY_MODE),
+        has_shared_vision_preq: false,
+    };
+    let facts = std::array::from_fn(|who| LeaderInitDiplomacyFacts {
+        has_shared_vision_preq: request.shared_vision_preq_mask & (1u8 << who) != 0,
+        ..base_facts
+    });
+    let mut rows = std::array::from_fn(|who| sim.vic_leaders.slots[who].init_diplomacy.clone());
+    let mut receipts = Vec::with_capacity(SETUP_SLOTS);
+    for receiver_slot in 0..SETUP_SLOTS {
+        let mut image = LeaderInitDiplomacyLoopImage {
+            setup: state.setup.clone(),
+            row: rows[receiver_slot].clone(),
+        };
+        let receipt = init_diplomacy_loop(
+            &mut image,
+            LeaderInitDiplomacyLoopRequest {
+                receiver_slot,
+                // This recovered slice observes only the sign: a present Player takes
+                // the ordinary arm and an absent slot takes the shipped negative arm.
+                tribe: if request.active_mask & (1u8 << receiver_slot) != 0 {
+                    0
+                } else {
+                    -1
+                },
+            },
+            facts[receiver_slot],
+        )?;
+        state.setup = image.setup;
+        rows[receiver_slot] = image.row;
+        receipts.push(receipt);
+    }
+    let ally_masks = std::array::from_fn(|who| rows[who].ally_mask);
+    let mut writes = 0;
+    for actor in 0..SETUP_SLOTS {
+        if request.active_mask & (1u8 << actor) == 0 {
+            continue;
+        }
+        for target in 0..SETUP_SLOTS {
+            if request.active_mask & (1u8 << target) != 0
+                && state.setup.leaders[actor].diplos[target] == 2
+            {
+                writes += 1;
+            }
+        }
+    }
+    let diplomacy = AppliedLeaderInitDiplomacy {
+        facts,
+        rows,
+        receipts,
+        ally_masks,
+        writes,
+    };
     Ok(AppliedPlayerSetup {
+        request,
         active_mask: request.active_mask,
         state,
         receipt,
@@ -224,13 +305,10 @@ impl Sim {
             self.vic_match.clear_sem(game_sem::TEAM_SCORING);
         }
         for actor in 0..SETUP_SLOTS {
-            let mask = applied.diplomacy.ally_masks[actor];
-            for target in 0..SETUP_SLOTS {
-                if mask & (1u8 << target) != 0 {
-                    self.vic_leaders.slots[actor].diplos[target] =
-                        applied.state.setup.leaders[actor].diplos[target];
-                }
-            }
+            self.vic_leaders.slots[actor].diplos = applied.state.setup.leaders[actor].diplos;
+            self.vic_leaders.slots[actor].init_diplomacy = applied.diplomacy.rows[actor].clone();
+            self.vic_leaders.slots[actor].has_preq_2b0 =
+                applied.diplomacy.facts[actor].has_shared_vision_preq;
         }
         self.vic_leaders.setup_owner.applied = Some(applied);
 

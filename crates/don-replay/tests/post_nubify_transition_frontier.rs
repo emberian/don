@@ -105,6 +105,7 @@ fn map(edge: i32) -> InitialWorld {
         world,
         generation_regions: Regions::default(),
         checksum,
+        ownership: None,
         sourced_walked_bytes: 52,
     }
 }

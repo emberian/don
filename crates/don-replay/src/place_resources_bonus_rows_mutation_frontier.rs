@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Source-only owner for the remaining rows of the current `BONUSES` category.
+//! Compiled owner for the remaining rows of the current `BONUSES` category.
 //!
 //! The first-row owner stops before `0x00690215`. This module owns recurrence
 //! routing there and the mutation cone `0x0068fc0d..0x00690215`, one atomic
-//! projection at a time, until the category-tail seam at `0x00690225`. The
+//! projection at a time, until the category-tail seam at `0x00690225`; the
+//! canonical map-make schedule replays this owner before each continuation. The
 //! intervening native XML reference assignment remains an explicit captured host
 //! boundary. This module does not own category cleanup, `GOODIES`, `FISH`, the
 //! function return, or caller token `0x1ef7`.
@@ -367,6 +368,8 @@ pub enum RemainingBonusRowsError {
     InvalidScaledAttributes,
     PlacementReceiptUnavailable,
     PlacementReceiptMismatch,
+    ConcreteResourcePoolUnavailable,
+    InvalidResourcePoolSelection { index: usize },
     InvalidPlacementEvidence,
     InvalidCalleeRandomDraw { index: usize },
     InvalidAllocation { index: usize },
@@ -382,6 +385,10 @@ impl From<crate::place_resources_bonus_mutation_frontier::FirstBonusMutationErro
         use crate::place_resources_bonus_mutation_frontier::FirstBonusMutationError as First;
         match error {
             First::PlacementReceiptMismatch => Self::PlacementReceiptMismatch,
+            First::ConcreteResourcePoolUnavailable => Self::ConcreteResourcePoolUnavailable,
+            First::InvalidResourcePoolSelection { index } => {
+                Self::InvalidResourcePoolSelection { index }
+            }
             First::InvalidPlacementEvidence => Self::InvalidPlacementEvidence,
             First::InvalidCalleeRandomDraw { index } => Self::InvalidCalleeRandomDraw { index },
             First::InvalidAllocation { index } => Self::InvalidAllocation { index },
@@ -403,11 +410,16 @@ impl RemainingBonusRowsState {
             .callbacks
             .iter()
             .any(|callback| callback.kind == CallbackKind::GetChanceGroup);
-        if entry.rows.len() <= 1
+        let expected_next_va = if entry.rows.len() > 1 {
+            NEXT_BONUS_ROW_VA
+        } else {
+            BONUS_CATEGORY_TAIL_VA
+        };
+        if entry.rows.is_empty()
             || receipt.entry_va != 0x0068_fb9d
             || receipt.row_body_va != FIRST_BONUS_ROW_BODY_VA
             || receipt.residual_va != FIRST_BONUS_ROW_RESIDUAL_VA
-            || receipt.next_va != NEXT_BONUS_ROW_VA
+            || receipt.next_va != expected_next_va
             || receipt.capture_ordinal != entry.rows[0].capture_ordinal
             || facts.capture_ordinal != entry.rows[0].capture_ordinal
             || receipt.facts != *facts
@@ -564,6 +576,10 @@ pub fn execute_next_bonus_mutation<H: PlacementHost>(
         || state.section_source != entry.section_source
         || state.rows != entry.rows
         || state.mutation.sourced_walked_bytes != entry.sourced_walked_bytes
+        || state.mutation.resource_pool.as_ref().is_some_and(|pool| {
+            crate::place_resources_pool_frontier::resource_divvy_pool_digest(pool)
+                != state.mutation.resource_pool_digest
+        })
     {
         return Err(RemainingBonusRowsError::WrongHandoff);
     }

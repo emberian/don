@@ -152,16 +152,16 @@ tail at `0x00690225`.
 
 Still red:
 
-- schedule integration of the recovered later-row chance-bucket carry and zero-key
-  forced-redraw owner;
 - exact ports of the two placement bodies rather than typed receipts;
 - candidate scans and the remaining transitive placement-body work;
+- the zero-row XML-to-category-tail bridge;
 - `GOODIES` and `FISH`, category/document cleanup, the final return count, and the
   caller checkpoint at `0x0068c72d`.
 
-The first owner and its selector dependency are compiled through `lib.rs`, and
-`continue_map_make_resource_schedule_first_bonus` advances the public schedule to this
-recurrence seam without stale pool state.
+The first owner, later-row owner, and selector dependency are compiled through `lib.rs`.
+The public schedule advances the first row to this recurrence seam, replays each later
+row's retained history before continuing, and reaches the category tail at `0x00690225`
+without stale pool state.
 
 `crates/don-replay/tests/place_resources_bonus_mutation_frontier.rs` freezes the direct
 chance hit/miss paths, the special no-draw `-1` bucket, unknown-type early exit,

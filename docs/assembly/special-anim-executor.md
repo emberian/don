@@ -6,9 +6,12 @@ This note bounds `SpecialAnimOrder` installation and every reachable branch of
 `Unit::do_spec_anim` in the shipped Rise of Nations binary. The source planner is now registered
 and consumed by `systems::order_dispatch`: ENTER/EXIT require one snapshot-bound preflight and
 one whole-plan commit receipt, while SPECIAL_UNIT is the shipped host-free no-op. This is
-StateWired, not closure-complete. The real step-14 path now executes SPECIAL_UNIT and the
-object-free `EXIT(ox < 0)` transaction. The strict row remains red because ENTER and Airbase EXIT
-still require world surfaces which the production host deliberately refuses before mutation.
+StateWired, not closure-complete. The real step-14 path executes SPECIAL_UNIT and object-free
+`EXIT(ox < 0)`. Target-backed EXIT now resolves exact Unit/Build/Wall registry identity and its
+canonical current TypeIndex, but still refuses before mutation: `ObjectData::is(AIRBASE, 0)` is a
+non-strict relation query, so TypeIndex inequality alone is not a valid negative answer. The
+strict row remains red because that canonical relation and the ENTER/Airbase world surfaces are
+not jointly owned by the production host.
 
 ## Ground truth
 
@@ -122,7 +125,9 @@ local or external mutation and consumes no RNG.
 The explicit unresolved host adapters are:
 
 - internal `land_plane` installation and its `get_gpiece` observation;
-- object lookup and `is_valid_build`/type predicates;
+- ENTER object lookup and its `is_valid_build`/Aircraft-Carrier predicates;
+- the canonical non-strict Type `is_list` relation needed after the ordinary EXIT three-band
+  identity/current-TypeIndex lookup;
 - canonical game RNG;
 - angle and location mutation;
 - terrain and primary-Guy mutation;
@@ -146,22 +151,29 @@ compact actor before-image; the host contract permits no external partial public
 preflight, malformed commit attestation, and the host-free SPECIAL_UNIT behavior. Its real
 `Sim::do_frame` test now proves the UNIT arm reaches the same adapter through step 14.
 
-`tests/special_anim_core_tick_integration.rs` adds the mutating positive case: an object-free EXIT
+`tests/special_anim_core_tick_integration.rs` adds the mutating positive case: object-free EXIT
 stores `frames = 10`, stores `started = 1`, retires the current order, clears its canonical path,
-and exposes the queued successor in one host commit. A save/load case proves the walked
-`SpecialAnimOrderState` remains the sole payload owner before that frame. Reached ENTER and
-Airbase-EXIT fixtures prove order, path, and RNG remain unchanged when the missing external host
-surfaces return `SpecialAnimHostError::Unavailable`.
+and exposes the queued successor in one host commit. Unit/Build/Wall target fixtures prove the
+new identity/current-TypeIndex lookup never substitutes equality for the required relation: all
+three retain order/path and consume no RNG. A save/load case proves the walked
+`SpecialAnimOrderState` remains the sole payload owner before the positive frame. A second
+checkpoint case records that DoNSave also does not yet serialize
+`production_runtime.build_types`; a loaded target-backed Build EXIT therefore refuses unchanged
+rather than defaulting the missing predicate. Reached ENTER and a canonically registered Airbase
+fixture likewise prove missing external host surfaces return `SpecialAnimHostError::Unavailable`
+without publication.
 
 ## Remaining shared integration map
 
 The remaining convergence work must:
 
-1. supply the production object/type/Guy/terrain/RNG/containment/death host behind the typed
-   preflight and commit boundary;
+1. join the canonical non-strict Type relation and remaining ENTER predicates to the typed
+   preflight/commit boundary;
 2. publish Airbase EXIT's angle/location/Guy changes, queue retirement, and recursive same-tick
    `Unit::work` as one receipt-validated transaction;
-3. only after positive production-frame tests cover every reached branch, flip
+3. persist the canonical current-type sidecars required to resume target-backed predicates after
+   a checkpoint (until then the loaded frame remains deliberately fail-closed);
+4. only after positive production-frame tests cover every reached branch, flip
    `order_dispatch::ARMS[25]` and `order.rs::EXECUTORS[25]`, then regenerate
    `schema/simulation-closure.json` with the normal closure generator.
 

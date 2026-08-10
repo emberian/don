@@ -235,7 +235,7 @@ fn pending_agreement_reject_fast_path_clears_counters_and_only_the_sender_agreem
 }
 
 #[test]
-fn declare_accept_and_hostile_reject_expose_boundaries_without_partial_mutation() {
+fn only_declare_and_accept_expose_external_diplomacy_boundaries() {
     let mut before = state();
     before.setup.leaders[1].diplos[4] = DIPLO_ALLY;
     before.setup.leaders[4].diplos[1] = DIPLO_ALLY;
@@ -259,15 +259,88 @@ fn declare_accept_and_hostile_reject_expose_boundaries_without_partial_mutation(
             ..
         })
     ));
+}
 
+#[test]
+fn nonpending_reject_refunds_reverse_agreement_and_clears_both_records_without_dow() {
+    let mut before = state();
+    before.local_who = 4;
+    before.setup.leaders[1].leader_flags |= 4;
+    before.setup.leaders[1].diplos[4] = DIPLO_ALLY;
+    before.setup.leaders[4].diplos[1] = DIPLO_ALLY;
+    before.leaders[1].response_314[4] = 8;
+    before.leaders[1].response_334[4] = 9;
     before.leaders[1].proposals[4].agreement_pending = 0;
-    assert!(matches!(
-        plan_diplomacy_command(&before, &wire9(REJECT_OPCODE, 1, 4)).unwrap(),
-        DiplomacyPlanDecision::Boundary(DiplomacyBoundaryPlan {
-            boundary: DiplomacyBoundary::RejectCounterproposal { .. },
-            ..
-        })
-    ));
+    before.leaders[1].proposals[4].proposal_open = 1;
+    before.leaders[1].proposals[4].attacks[3] = 1;
+    before.leaders[4].proposals[1].agreement_pending = 1;
+    before.leaders[4].proposals[1].proposal_open = 1;
+    before.leaders[4].proposals[1].declaration_costs[0] = 4;
+    before.leaders[4].proposals[1].offers[0] = 3;
+    before.leaders[4].reserved_resources[0] = 9;
+    before.leaders[4].buckets[0] = 5;
+
+    let plan = applied(plan_diplomacy_command(&before, &wire9(REJECT_OPCODE, 1, 4)).unwrap());
+
+    assert_eq!(plan.state.leaders[1].response_314[4], 0);
+    assert_eq!(plan.state.leaders[1].response_334[4], 0);
+    assert_eq!(plan.state.leaders[4].reserved_resources[0], 2);
+    assert_eq!(plan.state.leaders[4].buckets[0], 12);
+    assert_eq!(
+        plan.state.leaders[1].proposals[4],
+        DiplomacyProposal::default()
+    );
+    assert_eq!(
+        plan.state.leaders[4].proposals[1],
+        DiplomacyProposal::default()
+    );
+    assert_eq!(plan.state.setup.leaders[1].diplos[4], DIPLO_ALLY);
+    assert_eq!(plan.state.setup.leaders[4].diplos[1], DIPLO_ALLY);
+    assert_eq!(
+        &plan.steps[..2],
+        &[
+            DiplomacyStep::ClearResponseCounter {
+                sender: 1,
+                target: 4,
+                field: ResponseCounterField::TributeDemanded334,
+            },
+            DiplomacyStep::ClearResponseCounter {
+                sender: 1,
+                target: 4,
+                field: ResponseCounterField::Counteroffer314,
+            },
+        ]
+    );
+    assert!(plan
+        .steps
+        .contains(&DiplomacyStep::RejectCounterproposalSelfGate {
+            sender: 1,
+            target: 4,
+            candidate: 3,
+        }));
+    assert!(plan.steps.windows(2).any(|steps| {
+        steps
+            == [
+                DiplomacyStep::ClearProposalRecord {
+                    leader: 4,
+                    target: 1,
+                },
+                DiplomacyStep::ClearProposalRecord {
+                    leader: 1,
+                    target: 4,
+                },
+            ]
+    }));
+    assert_eq!(
+        &plan.steps[plan.steps.len() - 2..],
+        &[
+            DiplomacyStep::LocalNotice {
+                who: 4,
+                notice: LocalNotice::CounterproposalRejected,
+            },
+            DiplomacyStep::Sound { category: 0x18 },
+        ]
+    );
 }
 
 #[test]
