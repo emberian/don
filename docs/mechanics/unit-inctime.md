@@ -102,7 +102,10 @@ offline extractor must run the same name resolution. Neither path has an empty d
 - shipped `AnimationPacket` / `.anm` durations
 - `Wall::inc_time` `0x0063FB60`
 - `DeathObj::inc_time` `0x008D5240`
-- `Farms::inc_time` `0x008D8600`, including its two `game_random` sites
+- `Farms::inc_time` `0x008D8600`, including its two `game_random` sites. The **call** is
+  unconditional on every step 15; the **draws** are not. Both sites sit inside
+  `for f in 0..Farms::num`, so a tick draws 0, 1 or 2 per farm and 0 with no farms.
+  Charging two per tick would fabricate an RNG divergence.
 - the recursive squad path of `Guy::set_new_location` `0x005D86F0`
 - `Doober::inc_time` `0x00846770`
 - `Surf::inc_time` `0x008A1A00`

@@ -163,7 +163,7 @@ code actually does.
 | 12 | **`GameDaemon::process_all`** | `0x00732700` | module exists, runtime call unverified | `borders_fog.rs` |
 | 13 | `Armies::process_all` | `0x006F3B00` | **dispatcher + deterministic prefix executed** | exact owner/slot gates and Army state-machine prefix; live Army host and reached AI bodies remain explicit |
 | 14 | **`Objects::process_all`** | `0x0065DCE0` | **implemented** | rotation `(frame+i)%10`, `crate::objects` |
-| 15 | `Objects::inc_time` | `0x0065DB70` | module exists, runtime call unverified | `ammo.rs` lives here |
+| 15 | `Objects::inc_time` | `0x0065DB70` | exact 360-byte shell executes from `do_frame`; five children charged | head `Nuke::do_damage`, unrotated owner walk, empty goods loop, `ammo.rs` in retail position, death ring, Farms/Doober/Surf tail |
 | 16 | `GraphicEvents::process` | `0x008E50A0` | out of scope | |
 | 17 | **`Leaders::end_process_all`** | `0x006ED070` | **implemented** | full Player-warning cleanup and population-cap rate limiter execute in the real tick; UI/audio emitted as inspectable presentation requests |
 | 18 | `Achieve::capture_data` | `0x007AF980` | out of scope | |
