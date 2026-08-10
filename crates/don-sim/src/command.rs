@@ -1167,9 +1167,9 @@ pub trait Fleet {
 
     /// Atomic host boundary for command rows 46 through 49.
     ///
-    /// Buy and sell hosts may return a validated complete economy transaction.  Unqueue
-    /// and come-out can prove their inactive/stale no-op arm, but their reached
-    /// production/containment action tails deliberately remain open.
+    /// Buy and sell hosts may return a validated complete economy transaction. Unqueue
+    /// can additionally complete its active Unit/Carrier receiver; its Build receiver and
+    /// the reached come-out containment receivers deliberately remain open.
     fn apply_direct_entity_command_transaction(
         &mut self,
         request: DirectEntityFleetRequest,
@@ -3960,10 +3960,10 @@ impl Bridge {
 
     /// Rows 46 through 49 through the frozen direct market/entity transaction boundary.
     ///
-    /// Market rows carry a complete deterministic economy tail.  Addressed unqueue and
-    /// come-out rows use the same exact decoder and callback, but their receipt protocol
-    /// can report completion only for the inactive/stale no-op arm; a reached action is
-    /// retained as an open tail and therefore remains closure-red.
+    /// Market rows carry a complete deterministic economy tail. Addressed unqueue and
+    /// come-out rows use the same exact decoder and callback. Inactive/stale arms and the
+    /// active Unit/Carrier unqueue receiver can report completion; Build unqueue and reached
+    /// come-out remain open tails, so both static rows remain closure-red.
     fn process_direct_entity_command(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
         let expected = match cmd.first().copied() {
             Some(46 | 47) => {

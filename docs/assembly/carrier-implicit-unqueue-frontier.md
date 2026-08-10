@@ -1,12 +1,13 @@
 # Carrier implicit-queue unqueue frontier
 
-Status: **complete isolated receiver transaction; source-only and not production-wired**.
+Status: **complete receiver transaction; opcode 48 Unit branch production-wired**.
 
 This pack recovers the bounded Carrier-owned implicit queue cancellation that production's
 Build-row adapter explicitly leaves open. The source is
 `crates/don-sim/src/systems/carrier_implicit_unqueue_frontier.rs`; mutation-sensitive path-import
-tests are `crates/don-sim/tests/carrier_implicit_unqueue_frontier.rs`. Neither file is registered
-in the shared module graph.
+tests are `crates/don-sim/tests/carrier_implicit_unqueue_frontier.rs`. The direct-entity adapter
+now nests this module and the canonical production runtime consumes it for opcode 48's Unit
+receiver without registering another tick system.
 
 ## Authority and extent
 
@@ -80,14 +81,13 @@ carries none of those and authorizes no write.
 
 ## Honest closure and residual
 
-The recovered pair is sufficient to replace production's narrow empty-Carrier special case and
-to close the Unit branch of opcode 48 once integrated. This source-only pack deliberately makes
-that closure delta **zero**: the module is not exported, command row 48 still does not call it,
-and the live Sim adapter does not yet transact the isolated selected aggregate/resource owner.
-The remaining convergence is to install that concrete owner, route
-`DirectEntityTail::ProductionUnitActionUnqueue`, run the generated command closure gate, and add
-retail differential evidence. The Build branch of opcode 48 is a separate
-`Build::action_unqueue(type)` transaction and remains open.
+The canonical Sim adapter now owns the selected Unit row, exact aggregate cell, queued-family
+counters, economy stockpile, production stockpile mirror, and refund scratch. It preflights the
+installed upgrade/type/cost and economy-availability projections, plans this receiver, validates
+the composed direct-entity receipt, and only then publishes the infallible owner updates. Opcode
+48's active Unit branch therefore closes; inactive/stale arms keep the earlier lazy complete
+no-op. The Build branch is a separate `Build::action_unqueue(type)` transaction and remains open,
+so the static row honestly stays `state_wired` and the generated closure delta remains zero.
 
 Root convergence formatted the isolated files and validated all 13 tests in persvati batch
 `gen7-five-pack-20260809T231109Z-3866-5144-5f896c0277b5`. Retail was not run. The focused

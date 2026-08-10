@@ -5,7 +5,22 @@
 //! tick only needs to invoke the phase once from `Build::process`.
 
 use super::*;
-use crate::objects::Band;
+use crate::command::direct_entity_command_integration::carrier_implicit_unqueue::{
+    plan_carrier_implicit_unqueue, ArmedUnitQueueFacts, CarrierImplicitQueueFacts,
+    CarrierImplicitQueueState, CarrierImplicitUnqueueReceipt, CarrierImplicitUnqueueRequest,
+    CarrierImplicitUnqueueStatus, CarrierQueueRow, ObjectQueueFacts, QueueTypeFacts, RefundFacts,
+    RefundGoodFacts, TrainingQueueCounters, TypeQueuedCounter, RESOURCE_XOR_KEY, RETAIL_GOODS,
+    RETAIL_LEADER_SLOTS, TRAIN_AT_BARRACKS, TRAIN_AT_DOCK, TRAIN_AT_FACTORY, TRAIN_AT_STABLE,
+};
+use crate::command::direct_entity_command_integration::plans::{
+    DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts,
+};
+use crate::command::direct_entity_command_integration::{
+    classify_direct_entity_command, complete_carrier_unit_unqueue_command,
+    DirectEntityCommandTransactionReceipt, DirectEntityFleetReceipt, DirectEntityFleetRequest,
+    DirectEntityTransactionStatus, DirectEntityTypeFacts,
+};
+use crate::objects::{Band, BUILD_BAND_BASE};
 use crate::order::{Order, OrderIndex};
 use crate::systems::gathering::{self, GatherAssignment, GatherSite, GatherWorker};
 use crate::systems::tech_cities::{
@@ -25,6 +40,27 @@ pub enum LiveTypeClass {
     Building,
     Research,
     Spell,
+}
+
+/// Installed ObjectType projection read by `Unit::action_unqueue` for the Carrier payload
+/// type.  Optional fields preserve retail's lazy virtual reads instead of filling them with
+/// guessed zeros.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveCarrierUnqueueObjectFacts {
+    pub attack: i32,
+    pub training_site: Option<i32>,
+    pub domain: Option<i32>,
+}
+
+/// Explicit installed type facts for the Carrier implicit-queue receiver.
+///
+/// `object` is present exactly for Unit types. `refund_costs` is the six-good result of the
+/// reached `Type::get_cost(good, owner, -1, -1, 1, 1, -1)` cohort; it may be absent only
+/// while the shared no-costs game flag suppresses that loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveCarrierUnqueueTypeFacts {
+    pub object: Option<LiveCarrierUnqueueObjectFacts>,
+    pub refund_costs: Option<[i32; NUM_RES]>,
 }
 
 /// Unit placement cohorts the live Sim adapter can currently execute without guessing.
@@ -104,6 +140,8 @@ pub struct LiveProductionType {
     /// Exact price for `action_queue(type,0)` after a repeat completion. `None` makes the
     /// repeat payment fail and preserves retail's repeat latch.
     pub repeat_cost: Option<[i32; NUM_RES]>,
+    /// Exact lazy type/refund projection for Carrier-owned `Unit::action_unqueue(1)`.
+    pub carrier_unqueue: Option<LiveCarrierUnqueueTypeFacts>,
 }
 
 impl LiveProductionType {
@@ -135,6 +173,7 @@ impl LiveProductionType {
             carrier_payload_capacity: None,
             tech_effects: LiveTechEffects::GenericOnly,
             repeat_cost: None,
+            carrier_unqueue: None,
         }
     }
 
@@ -213,6 +252,9 @@ pub struct LiveProductionLeader {
     pub ai_speed: i32,
     pub unit_counts: Vec<i32>,
     pub queued_counts: Vec<i32>,
+    /// The six named queued-family dwords at `LeaderData+0xA10..+0xA24`, owned by the
+    /// Carrier implicit-queue transaction as well as ordinary production.
+    pub carrier_training_queued: TrainingQueueCounters,
     pub last_unit_built: i32,
     pub last_unit_finished: Vec<i32>,
     pub age_stamp: [i32; 7],
@@ -238,6 +280,7 @@ impl Default for LiveProductionLeader {
             ai_speed: 1,
             unit_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
             queued_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
+            carrier_training_queued: TrainingQueueCounters::default(),
             last_unit_built: -1,
             last_unit_finished: vec![-1; crate::systems::tech_cities::ty::NUM_TYPES],
             age_stamp: [-1; 7],
@@ -276,6 +319,9 @@ pub struct LiveProductionRuntime {
     pub captured_buildings: Vec<Option<LiveCapturedBuildingState>>,
     /// Typed, presentation-only opponent progress notices emitted by Tech Race research.
     pub tech_race_presentations: Vec<TechRacePresentation>,
+    /// Retail's decoded refund scratch at `0x00CB195C`, written immediately before each
+    /// re-encoded resource cell by `Type::unpay_cost`.
+    pub carrier_resource_scratch: i32,
 }
 
 impl Default for LiveProductionRuntime {
@@ -297,6 +343,7 @@ impl Default for LiveProductionRuntime {
             carrier_payloads: Vec::new(),
             captured_buildings: Vec::new(),
             tech_race_presentations: Vec::new(),
+            carrier_resource_scratch: 0,
         }
     }
 }
@@ -1859,6 +1906,328 @@ impl FinishedEffectHost for SimFinishedHost<'_> {
 
     fn complete_government_hero(&mut self, _build: &BuildData, _hero_type: i32) {
         self.unsupported("government-hero train or upgrade");
+    }
+}
+
+fn live_carrier_queue_type_facts(
+    type_index: i32,
+    installed: &LiveProductionType,
+) -> Option<QueueTypeFacts> {
+    let profile = installed.carrier_unqueue;
+    let is_unit_type = installed.class == LiveTypeClass::Unit;
+    let object = match (is_unit_type, profile.and_then(|profile| profile.object)) {
+        (false, None) => None,
+        (false, Some(_)) | (true, None) => return None,
+        (true, Some(object)) => {
+            let armed = if object.attack == 0 {
+                if object.training_site.is_some() || object.domain.is_some() {
+                    return None;
+                }
+                None
+            } else {
+                let training_site = object.training_site?;
+                let fixed_site = matches!(
+                    training_site,
+                    TRAIN_AT_BARRACKS | TRAIN_AT_STABLE | TRAIN_AT_FACTORY | TRAIN_AT_DOCK
+                );
+                if fixed_site == object.domain.is_some() {
+                    return None;
+                }
+                Some(ArmedUnitQueueFacts {
+                    training_site,
+                    domain: object.domain,
+                })
+            };
+            Some(ObjectQueueFacts {
+                attack: object.attack,
+                armed,
+            })
+        }
+    };
+    Some(QueueTypeFacts {
+        type_index,
+        is_unit_type,
+        object,
+    })
+}
+
+/// Execute opcode 48's reached Unit receiver against the canonical Sim unit columns and
+/// production/economy sidecar.
+///
+/// Inactive or stale commands complete at the already-wired prefix without reading type or
+/// production state. A live target first materializes every reached Unit, upgrade, aggregate,
+/// queued-family, availability, cost, resource, and scratch fact. The isolated receiver is
+/// planned and recomputed through the direct-entity receipt before the first write; the final
+/// commit is then an infallible replacement of those exact owners. Build targets and opcode 49
+/// remain unavailable here so their existing Fleet path retains the explicit open tail.
+pub fn process_sim_carrier_unqueue_command(
+    sim: &mut Sim,
+    runtime: &mut LiveProductionRuntime,
+    request: DirectEntityCommandRequest,
+    frame: i32,
+) -> DirectEntityCommandTransactionReceipt {
+    let DirectEntityCommandRequest::Unqueue {
+        who, object_index, ..
+    } = request
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Ok(owner) = usize::try_from(who) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Ok(object_index_i16) = i16::try_from(object_index) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if owner >= RETAIL_LEADER_SLOTS || object_index_i16 < 0 {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    let Some(&row) = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Unit)
+        .get(object_index as usize)
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let row = row as usize;
+    let Some(&uid) = sim.world.units.uid().get(row) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let target = DirectEntityTargetFacts {
+        kind: DirectEntityKind::Unit,
+        active: sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0,
+        uid: uid as u16,
+    };
+    let prefix_without_type = classify_direct_entity_command(request, frame, Some(target), None);
+    if prefix_without_type.status == DirectEntityTransactionStatus::Complete {
+        return prefix_without_type;
+    }
+
+    let Some(&target_type_index) = sim.unit_type.get(row) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let type_facts = DirectEntityTypeFacts {
+        kind: DirectEntityKind::Unit,
+        type_index: target_type_index,
+    };
+    let Some((&num_queued, &queue_time)) = sim
+        .world
+        .units
+        .num_queued()
+        .get(row)
+        .zip(sim.world.units.queue_time().get(row))
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let mut before = CarrierImplicitQueueState {
+        owner: owner as u8,
+        carrier: CarrierQueueRow {
+            num_queued,
+            queue_time,
+        },
+        aggregate: None,
+        // The receiver returns after the queue-count read when it is empty. These owners are
+        // populated from live state only in the reached non-empty arm below.
+        training: TrainingQueueCounters::default(),
+        encoded_resources: [0; RETAIL_GOODS],
+        resource_scratch: 0,
+    };
+    let mut carrier_facts = CarrierImplicitQueueFacts::default();
+
+    if num_queued != 0 {
+        let Some(leader) = runtime.leaders.get(owner) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        let Some(economy_leader) = sim.leaders.get(owner) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        if leader.resources != economy_leader.econ.stockpile {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        }
+        before.training = leader.carrier_training_queued;
+        before.encoded_resources = std::array::from_fn(|good| {
+            economy_leader.econ.stockpile[good] as u32 ^ RESOURCE_XOR_KEY
+        });
+        before.resource_scratch = runtime.carrier_resource_scratch;
+        let Some(current_upgrade) = leader.helicopter_current_upgrade else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        if current_upgrade < 0 {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        }
+        let Some(installed) = runtime.facts(current_upgrade) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        let Some(queue_type) = live_carrier_queue_type_facts(current_upgrade, installed) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        let Some(&aggregate) = leader.queued_counts.get(current_upgrade as usize) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        let Ok(aggregate) = u16::try_from(aggregate) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        before.aggregate = Some(TypeQueuedCounter {
+            type_index: current_upgrade,
+            value: aggregate,
+        });
+
+        let no_costs_mode = leader.gain_context.suppress_resource_effects;
+        let refund_costs = installed
+            .carrier_unqueue
+            .and_then(|profile| profile.refund_costs);
+        if !no_costs_mode && refund_costs.is_none() {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        }
+        let goods: [RefundGoodFacts; RETAIL_GOODS] = if no_costs_mode {
+            [RefundGoodFacts::default(); RETAIL_GOODS]
+        } else {
+            let refund_costs = refund_costs.expect("preflighted refund costs");
+            std::array::from_fn(|good| {
+                let available = economy_leader.gather_inputs.type_avail[good];
+                RefundGoodFacts {
+                    available: Some(available),
+                    cost: available.then_some(refund_costs[good]),
+                }
+            })
+        };
+        carrier_facts = CarrierImplicitQueueFacts {
+            current_upgrade: Some(current_upgrade),
+            queue_type: Some(queue_type),
+            refund: Some(RefundFacts {
+                type_index: current_upgrade,
+                no_costs_mode,
+                goods,
+            }),
+        };
+    }
+
+    let receiver_request = CarrierImplicitUnqueueRequest { refund_cost: true };
+    let Ok(plan) = plan_carrier_implicit_unqueue(receiver_request, &before, &carrier_facts) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let after = plan.after.clone();
+    let receiver = CarrierImplicitUnqueueReceipt {
+        request: receiver_request,
+        status: CarrierImplicitUnqueueStatus::Complete,
+        before: Some(before),
+        facts: Some(carrier_facts),
+        plan: Some(plan),
+    };
+    let receipt = complete_carrier_unit_unqueue_command(
+        request,
+        frame,
+        Some(target),
+        Some(type_facts),
+        receiver,
+    );
+    if receipt.status != DirectEntityTransactionStatus::Complete || !receipt.validates(request) {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    if num_queued == 0 {
+        return receipt;
+    }
+
+    sim.world.units.num_queued_mut()[row] = after.carrier.num_queued;
+    sim.world.units.queue_time_mut()[row] = after.carrier.queue_time;
+    let leader = &mut runtime.leaders[owner];
+    if let Some(aggregate) = after.aggregate {
+        leader.queued_counts[aggregate.type_index as usize] = i32::from(aggregate.value);
+    }
+    leader.carrier_training_queued = after.training;
+    for (good, encoded) in after.encoded_resources.into_iter().enumerate() {
+        let decoded = (encoded ^ RESOURCE_XOR_KEY) as i32;
+        leader.resources[good] = decoded;
+        sim.leaders[owner].econ.stockpile[good] = decoded;
+        sim.step8.leaders[owner].econ.stockpile[good] = decoded;
+    }
+    runtime.carrier_resource_scratch = after.resource_scratch;
+    receipt
+}
+
+fn classify_sim_build_unqueue_command(
+    sim: &Sim,
+    runtime: &LiveProductionRuntime,
+    request: DirectEntityCommandRequest,
+    frame: i32,
+) -> DirectEntityCommandTransactionReceipt {
+    let DirectEntityCommandRequest::Unqueue {
+        who, object_index, ..
+    } = request
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Ok(owner) = usize::try_from(who) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Ok(object_index_i16) = i16::try_from(object_index) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Some(build_slot) = usize::try_from(object_index)
+        .ok()
+        .and_then(|object| object.checked_sub(BUILD_BAND_BASE as usize))
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if owner >= RETAIL_LEADER_SLOTS || object_index_i16 < 0 {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    let Some(&row) = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Build)
+        .get(build_slot)
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let row = row as usize;
+    let Some(build) = sim.builds.get(row) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let target = DirectEntityTargetFacts {
+        kind: DirectEntityKind::Build,
+        active: build.is_valid(),
+        uid: build.uid,
+    };
+    let prefix_without_type = classify_direct_entity_command(request, frame, Some(target), None);
+    if prefix_without_type.status == DirectEntityTransactionStatus::Complete {
+        return prefix_without_type;
+    }
+    let Some(type_index) = runtime.build_types.get(row).copied().flatten() else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    classify_direct_entity_command(
+        request,
+        frame,
+        Some(target),
+        Some(DirectEntityTypeFacts {
+            kind: DirectEntityKind::Build,
+            type_index,
+        }),
+    )
+}
+
+/// Canonical implementation of the existing Fleet transaction envelope for the opcode-48
+/// Unit cohort owned here. The same owner resolves Build identities only far enough to retain
+/// their explicit open tail; market transactions and opcode 49 retain their existing hosts.
+pub fn apply_sim_carrier_unqueue_fleet_transaction(
+    sim: &mut Sim,
+    runtime: &mut LiveProductionRuntime,
+    envelope: DirectEntityFleetRequest,
+) -> DirectEntityFleetReceipt {
+    match envelope {
+        DirectEntityFleetRequest::Entity {
+            request: request @ DirectEntityCommandRequest::Unqueue { object_index, .. },
+            frame,
+        } if object_index >= BUILD_BAND_BASE as i32 => DirectEntityFleetReceipt::Entity(
+            classify_sim_build_unqueue_command(sim, runtime, request, frame),
+        ),
+        DirectEntityFleetRequest::Entity { request, frame } => DirectEntityFleetReceipt::Entity(
+            process_sim_carrier_unqueue_command(sim, runtime, request, frame),
+        ),
+        DirectEntityFleetRequest::Market { .. } => DirectEntityFleetReceipt::unavailable(envelope),
     }
 }
 

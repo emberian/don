@@ -20,17 +20,17 @@ facts returns `Unavailable` and performs no mutation.
 | --- | --- | --- | --- |
 | 46 | buy | `complete` | The reached tail executes the existing deterministic `economy::do_buy` loop after a single complete preflight. |
 | 47 | sell | `complete` | The reached tail executes the existing deterministic `economy::do_sell` loop after the sell-specific eligibility preflight. |
-| 48 | unqueue | `state_wired` | Decode, target identity, active/UID guard, and inactive/stale no-op are exact; reached `Unit::action_unqueue` / `Build::action_unqueue` remains open. |
+| 48 | unqueue | `state_wired` | Decode, target identity, active/UID guard, inactive/stale no-op, and the complete active Unit/Carrier receiver are exact; reached `Build::action_unqueue` remains open. |
 | 49 | come out | `state_wired` | Decode, unit identity, active/UID guard, and inactive/stale no-op are exact; reached `Unit::action_come_out` remains open. |
 
-Rows 48 and 49 therefore stay red in `don-closure`.  A receipt may validly report
-`Complete` for an inactive or stale target, but a matching active target is represented as
-`OpenTail`; the static row cannot become green until every reachable action body is ported.
+Rows 48 and 49 therefore stay red in `don-closure`. Opcode 48 now also reports `Complete` for a
+validating active Unit/Carrier transaction, while a matching active Build remains `OpenTail`; the
+static row cannot become green until every reachable action body is ported.
 
 ## Focused proof
 
-`command_direct_entity_dispatch.rs` exercises the real packet walker and dispatcher.  It
-proves that buy and sell mutate market/leader/counter state through the existing economy
-primitives, that their receipts validate at the bridge frame, and that inactive/stale
-entity arms complete while a live matching target remains an open tail.  The closure
-binary separately pins 46/47 green and 48/49 `state_wired`.
+`command_direct_entity_dispatch.rs` exercises the original packet walker, market transactions,
+inactive/stale arms, and remaining open tails. `command_carrier_unqueue_integration.rs` drives a
+matching active Unit through that same Bridge/Fleet callback into the canonical Sim owner and
+checks the exact aggregate/family/refund/scratch mutations plus fail-closed lazy edges. The
+closure binary separately pins 46/47 green and 48/49 `state_wired`.

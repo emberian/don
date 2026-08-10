@@ -4,14 +4,18 @@
 //! the shared systems module map.  Rows 46/47 have complete deterministic economy tails:
 //! after every required fact is preflighted, this module calls the existing
 //! [`economy::do_buy`] / [`economy::do_sell`] primitives and returns a recomputable
-//! before/after receipt.  Rows 48/49 stop at an explicit open-tail handoff.  The available
-//! production and containment primitives cover pieces of those action bodies, not the
-//! complete `Unit::action_unqueue`, `Build::action_unqueue`, or `Unit::action_come_out`
-//! transaction, so classifying one is not reported as applying it.
+//! before/after receipt. Opcode 48's Unit receiver can compose the complete Carrier
+//! implicit-queue transaction into the same receipt; its Build receiver and both opcode 49
+//! containment receivers remain explicit open-tail handoffs.
 
+#[path = "carrier_implicit_unqueue_frontier.rs"]
+pub mod carrier_implicit_unqueue;
 #[path = "direct_entity_command_plans.rs"]
 pub mod plans;
 
+use self::carrier_implicit_unqueue::{
+    CarrierImplicitUnqueueReceipt, CarrierImplicitUnqueueRequest,
+};
 use self::plans::{
     plan_direct_entity_command, plan_market_command, DirectEntityCommandEffect,
     DirectEntityCommandPlan, DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts,
@@ -429,7 +433,7 @@ pub fn execute_market_command(
 }
 
 // ---------------------------------------------------------------------------
-// Opcodes 48/49: exact classification, deliberately open action tails
+// Opcodes 48/49: exact classification plus the complete opcode-48 Unit receiver
 // ---------------------------------------------------------------------------
 
 /// Type-table result for the concrete object selected by the entity prefix.
@@ -474,6 +478,12 @@ pub enum DirectEntityDisposition {
     /// The resolved object was inactive or its UID was stale.  Retail stops after the
     /// diagnostic and no type-table read is reached.
     CompleteNoOp,
+    /// The Unit receiver reached the complete Carrier implicit-queue transaction.  The
+    /// recomputable before/facts/after proof is retained separately on the command receipt.
+    CompleteUnitActionUnqueue {
+        target: DirectEntityIdentity,
+        argument: i32,
+    },
     OpenTail(DirectEntityOpenTail),
 }
 
@@ -495,6 +505,9 @@ pub struct DirectEntityCommandTransactionReceipt {
     pub plan: Option<DirectEntityCommandPlan>,
     pub presentation: Vec<DirectEntityPresentationReceipt>,
     pub disposition: Option<DirectEntityDisposition>,
+    /// Present only when opcode 48's reached Unit receiver completed the exact Carrier
+    /// implicit-queue transaction.  Build unqueue and both come-out receivers remain open.
+    pub unit_unqueue: Option<CarrierImplicitUnqueueReceipt>,
 }
 
 impl DirectEntityCommandTransactionReceipt {
@@ -508,6 +521,7 @@ impl DirectEntityCommandTransactionReceipt {
             plan: None,
             presentation: Vec::new(),
             disposition: None,
+            unit_unqueue: None,
         }
     }
 
@@ -523,13 +537,27 @@ impl DirectEntityCommandTransactionReceipt {
                     && self.plan.is_none()
                     && self.presentation.is_empty()
                     && self.disposition.is_none()
+                    && self.unit_unqueue.is_none()
             }
             DirectEntityTransactionStatus::Complete | DirectEntityTransactionStatus::OpenTail => {
                 let (Some(frame), Some(target)) = (self.frame, self.target) else {
                     return false;
                 };
-                let recomputed =
-                    classify_direct_entity_command(expected, frame, Some(target), self.type_facts);
+                let recomputed = match self.unit_unqueue.as_ref() {
+                    Some(receiver) => complete_carrier_unit_unqueue_command(
+                        expected,
+                        frame,
+                        Some(target),
+                        self.type_facts,
+                        receiver.clone(),
+                    ),
+                    None => classify_direct_entity_command(
+                        expected,
+                        frame,
+                        Some(target),
+                        self.type_facts,
+                    ),
+                };
                 &recomputed == self
             }
         }
@@ -588,6 +616,7 @@ pub fn classify_direct_entity_command(
             plan: Some(plan),
             presentation,
             disposition: Some(DirectEntityDisposition::CompleteNoOp),
+            unit_unqueue: None,
         };
     }
 
@@ -637,6 +666,48 @@ pub fn classify_direct_entity_command(
         plan: Some(plan),
         presentation,
         disposition: Some(DirectEntityDisposition::OpenTail(tail)),
+        unit_unqueue: None,
+    }
+}
+
+/// Close opcode 48's reached Unit receiver with the complete Carrier implicit-queue proof.
+///
+/// The caller still owns the live state commit.  This adapter validates the command prefix,
+/// concrete Unit identity, exact retail argument (`1`), receiver owner, and the receiver's
+/// fully recomputable before/facts/after transaction before changing the command status to
+/// `Complete`.  Any Build or come-out tail, mismatched identity, or malformed receiver proof
+/// fails closed without manufacturing a partially complete receipt.
+pub fn complete_carrier_unit_unqueue_command(
+    request: DirectEntityCommandRequest,
+    frame: i32,
+    target: Option<DirectEntityTargetFacts>,
+    type_facts: Option<DirectEntityTypeFacts>,
+    receiver: CarrierImplicitUnqueueReceipt,
+) -> DirectEntityCommandTransactionReceipt {
+    let prefix = classify_direct_entity_command(request, frame, target, type_facts);
+    let Some(DirectEntityDisposition::OpenTail(
+        DirectEntityOpenTail::ProductionUnitActionUnqueue { target, argument },
+    )) = prefix.disposition
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let receiver_request = CarrierImplicitUnqueueRequest { refund_cost: true };
+    if argument != 1
+        || receiver.request != receiver_request
+        || !receiver.validates(receiver_request)
+        || receiver
+            .before
+            .as_ref()
+            .is_none_or(|before| before.owner != target.who)
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+
+    DirectEntityCommandTransactionReceipt {
+        status: DirectEntityTransactionStatus::Complete,
+        disposition: Some(DirectEntityDisposition::CompleteUnitActionUnqueue { target, argument }),
+        unit_unqueue: Some(receiver),
+        ..prefix
     }
 }
 

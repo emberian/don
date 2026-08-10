@@ -15,7 +15,7 @@ did not edit the dispatcher.  The subsequent executable wiring is recorded separ
 |---:|---|---|---|
 | 46 buy | exact gate/embargo plan plus the complete bounded `economy::do_buy` loop | selected leader, signed resource bounds, rules, market, leader economy, demand counter, `MarketPriceGates` | `Applied` |
 | 47 sell | exact lazy gate/embargo plan plus the complete bounded `economy::do_sell` loop | selected leader, signed resource bounds, rules, market, leader economy, supply counter, `MarketPriceGates` | `Applied` |
-| 48 unqueue | signed address validation, concrete Unit/Build class, active/UID guard, target type, exact delegate arguments | safe owner/object resolution, concrete entity fact, reached type-table fact | inactive/stale `Complete`; reached action `OpenTail` |
+| 48 unqueue | signed address validation, concrete Unit/Build class, active/UID guard, target type, exact delegate arguments; complete Carrier implicit-queue Unit receiver | safe owner/object resolution, concrete entity/type fact, installed current-upgrade ObjectType and refund facts, canonical counters/resources/scratch | inactive/stale and active Unit `Complete`; reached Build `OpenTail` |
 | 49 come out | signed address validation, Unit-only ABI, active/UID guard, target type, Scholar/general containment classification | safe unit resolution, concrete entity fact, reached type-table fact | inactive/stale `Complete`; reached action `OpenTail` |
 
 `Unavailable` is empty by construction: no plan, facts, presentation receipt, or state receipt
@@ -47,21 +47,20 @@ The ordered non-state effects are emitted as `DirectEntityPresentationReceipt`. 
 embargo UI, and sound requests are therefore visible without borrowing the sound RNG in the
 simulation adapter.  A product layer may deliver the receipts after the state transaction.
 
-## Why rows 48/49 remain open
+## Why the remaining row 48/49 branches stay open
 
 The available subsystem work is narrower than the command action bodies:
 
 - production owns queue compaction/refund primitives, including routed Library unqueue, but
   `Build::action_unqueue(type)` also owns repeat-latch presentation and selector/count routing;
-- production contains a narrow empty-Carrier `Unit::action_unqueue(1)` proof, while the general
-  Unit action also updates queued/type/category counters and can reach destruction;
+- the complete Carrier `Unit::action_unqueue(1)` receiver is now composed into this receipt and
+  committed by the canonical Sim production adapter;
 - containment can preflight the Scholar nearby-placement and inside-link splice, but
   `Unit::action_come_out()` also clears launch/action state, may repair Scholar chains, and
   finishes through the general unit-location transaction.
 
-Consequently the adapter returns one of four typed open tails:
+Consequently the adapter completes the Unit-unqueue tail and retains three typed open tails:
 
-- `ProductionUnitActionUnqueue { argument: 1 }`;
 - `ProductionBuildActionUnqueue { selector: wire_type }`;
 - `ContainmentScholarActionComeOut` for type `0x34`/`0x35`;
 - `ContainmentGeneralActionComeOut` for every other resolved Unit type.
@@ -93,9 +92,10 @@ delegates to the recomputable transaction receipt.
 Dispatcher treatment is deliberately narrow:
 
 - rows 46/47 may count as applied only for a validating `MarketTransactionStatus::Applied`;
-- rows 48/49 inactive/stale paths may count as complete only for a validating
-  `DirectEntityTransactionStatus::Complete`;
-- `OpenTail` remains unported and must not increment the applied/acted counter;
+- row 48's reached Unit path may count as complete only when the nested Carrier receiver proof
+  validates and the canonical host atomically committed it;
+- rows 48/49 inactive/stale paths remain validating complete no-ops;
+- Build-unqueue and come-out `OpenTail` receipts remain unported;
 - `Unavailable` or any invalid receipt performs no bridge-side success transition.
 
 The method was copied directly onto the existing `Fleet` trait rather than making `Fleet`
