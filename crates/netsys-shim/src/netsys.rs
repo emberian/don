@@ -219,12 +219,53 @@ type ObjectArrayStringCtor =
 const RETAIL_PE_TIMESTAMP: u32 = 0x6674_863f;
 const RETAIL_IMAGE_BASE: u32 = 0x0040_0000;
 const RETAIL_IMAGE_SIZE: usize = 0x00bb_4000;
+// Prefixes are recorded at the PREFERRED base. A loaded image is rebased, and any dword
+// the relocation table covers is rewritten by the loader, so those offsets must be
+// compared after subtracting the delta rather than byte-for-byte. Getting this wrong is
+// silent: the gate simply reports a non-retail executable and every hard-coded RVA —
+// including the two constructors below — is skipped.
+//
+// `LOBBY_DTO_CTOR_PREFIX+5` is `push imm32` (`0x00a5fe2a`), which is relocated. Measured
+// live at module base 0x00190000: the operand read 0x007efe2a, exactly the pinned value
+// plus the -0x270000 delta. See docs/assembly/netsys-retail-identity-relocation.md.
 const LOBBY_DTO_CTOR_PREFIX: &[u8] = &[
     0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0x2a, 0xfe, 0xa5, 0x00, 0x64, 0xa1, 0x00, 0x00, 0x00, 0x00,
 ];
+const LOBBY_DTO_CTOR_RELOCS: &[usize] = &[6];
+// No absolute operand: every byte is position independent.
 const OBJECT_ARRAY_STRING_CTOR_PREFIX: &[u8] = &[
     0x56, 0x8b, 0xf1, 0x83, 0xc8, 0xff, 0x66, 0x89, 0x46, 0x0c, 0xc7, 0x46, 0x04, 0x00, 0x00, 0x00,
 ];
+const OBJECT_ARRAY_STRING_CTOR_RELOCS: &[usize] = &[];
+
+/// Compare a loaded code prefix against its preferred-base recording.
+///
+/// Bytes outside `relocs` must match exactly. Each entry in `relocs` names the offset of a
+/// loader-rewritten dword; it matches when `loaded == pinned.wrapping_add(delta)`. Rebasing
+/// therefore stays invisible while a *different* callee at the same RVA still fails, which
+/// masking the operand out would not catch.
+fn prefix_matches_relocated(loaded: &[u8], pinned: &[u8], relocs: &[usize], delta: u32) -> bool {
+    if loaded.len() != pinned.len() {
+        return false;
+    }
+    for (offset, (actual, expected)) in loaded.iter().zip(pinned).enumerate() {
+        if relocs
+            .iter()
+            .any(|start| offset >= *start && offset < start + 4)
+        {
+            continue;
+        }
+        if actual != expected {
+            return false;
+        }
+    }
+    relocs.iter().all(|start| {
+        match (read_u32(loaded, *start), read_u32(pinned, *start)) {
+            (Some(actual), Some(expected)) => actual == expected.wrapping_add(delta),
+            _ => false,
+        }
+    })
+}
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
@@ -240,19 +281,30 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 
 /// Validate the immutable PE identity fields before any hard-coded executable
 /// RVA is invoked. The filename alone is not a build identity.
-fn pinned_retail_pe_headers(headers: &[u8]) -> bool {
+///
+/// `loaded_base` is the address the image is actually mapped at, or `RETAIL_IMAGE_BASE` when
+/// checking an on-disk copy.
+///
+/// The loader rewrites `OptionalHeader.ImageBase` in the mapped image to the address it chose:
+/// measured live at `0x00190000` on an executable whose file says `0x00400000`. So that field
+/// **stops carrying identity once the image is rebased** — there is no way to recover the
+/// preferred base from a rebased header, and demanding the pinned value simply fails. Treat it
+/// as a mapping sanity check there, and let identity rest on the fields the loader does not
+/// touch (machine, timestamp, magic, size-of-image) plus the two code prefixes.
+fn pinned_retail_pe_headers(headers: &[u8], loaded_base: u32) -> bool {
     if read_u16(headers, 0) != Some(0x5a4d) {
         return false;
     }
     let Some(pe) = read_u32(headers, 0x3c).map(|value| value as usize) else {
         return false;
     };
+    let image_base = read_u32(headers, pe + 24 + 28);
     pe <= 0x800
         && headers.get(pe..pe + 4) == Some(b"PE\0\0")
         && read_u16(headers, pe + 4) == Some(0x014c)
         && read_u32(headers, pe + 8) == Some(RETAIL_PE_TIMESTAMP)
         && read_u16(headers, pe + 24) == Some(0x010b)
-        && read_u32(headers, pe + 24 + 28) == Some(RETAIL_IMAGE_BASE)
+        && (image_base == Some(RETAIL_IMAGE_BASE) || image_base == Some(loaded_base))
         && read_u32(headers, pe + 24 + 56) == Some(RETAIL_IMAGE_SIZE as u32)
 }
 
@@ -282,14 +334,27 @@ unsafe fn retail_executable_base() -> Option<*mut u8> {
         return None;
     }
     let headers = core::slice::from_raw_parts(base, 0x1000);
-    if !pinned_retail_pe_headers(headers)
-        || core::slice::from_raw_parts(base.add(LOBBY_DTO_CTOR_RVA), LOBBY_DTO_CTOR_PREFIX.len())
-            != LOBBY_DTO_CTOR_PREFIX
-        || core::slice::from_raw_parts(
+    let loaded_base = base as usize as u32;
+    if !pinned_retail_pe_headers(headers, loaded_base) {
+        return None;
+    }
+    // ASLR is enabled on the supported executable, so compare the code prefixes against the
+    // actual load delta rather than the preferred base they were recorded at.
+    let delta = loaded_base.wrapping_sub(RETAIL_IMAGE_BASE);
+    if !prefix_matches_relocated(
+        core::slice::from_raw_parts(base.add(LOBBY_DTO_CTOR_RVA), LOBBY_DTO_CTOR_PREFIX.len()),
+        LOBBY_DTO_CTOR_PREFIX,
+        LOBBY_DTO_CTOR_RELOCS,
+        delta,
+    ) || !prefix_matches_relocated(
+        core::slice::from_raw_parts(
             base.add(OBJECT_ARRAY_STRING_CTOR_RVA),
             OBJECT_ARRAY_STRING_CTOR_PREFIX.len(),
-        ) != OBJECT_ARRAY_STRING_CTOR_PREFIX
-    {
+        ),
+        OBJECT_ARRAY_STRING_CTOR_PREFIX,
+        OBJECT_ARRAY_STRING_CTOR_RELOCS,
+        delta,
+    ) {
         return None;
     }
     Some(base)
@@ -2188,6 +2253,89 @@ mod tests {
         assert!(!is_retail_executable_path(&smoke));
     }
 
+    /// Captured from the supported executable running under ASLR on 2026-08-10: module base
+    /// `0x00190000`, so the `push imm32` operand read `0x007efe2a` where the preferred-base
+    /// recording holds `0x00a5fe2a`. Comparing these byte-for-byte is what made the live gate
+    /// report a non-retail executable and skip both constructors.
+    const LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000: &[u8] = &[
+        0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0x2a, 0xfe, 0x7e, 0x00, 0x64, 0xa1, 0x00, 0x00, 0x00,
+        0x00,
+    ];
+    const LIVE_MODULE_BASE: u32 = 0x0019_0000;
+
+    #[test]
+    fn a_rebased_lobby_constructor_prefix_still_identifies_retail() {
+        let delta = LIVE_MODULE_BASE.wrapping_sub(RETAIL_IMAGE_BASE);
+
+        // The defect this replaces: the measured live bytes are not the pinned bytes.
+        assert_ne!(LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000, LOBBY_DTO_CTOR_PREFIX);
+
+        assert!(prefix_matches_relocated(
+            LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000,
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_RELOCS,
+            delta,
+        ));
+
+        // Still exact at the preferred base, where the delta is zero.
+        assert!(prefix_matches_relocated(
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_RELOCS,
+            0,
+        ));
+    }
+
+    #[test]
+    fn relocation_tolerance_does_not_blind_the_gate() {
+        let delta = LIVE_MODULE_BASE.wrapping_sub(RETAIL_IMAGE_BASE);
+
+        // A different callee at the same RVA must still fail, even in the relocated dword.
+        // Masking the operand out instead of adjusting it would accept this.
+        let mut wrong_target = LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000.to_vec();
+        wrong_target[6] ^= 0x01;
+        assert!(!prefix_matches_relocated(
+            &wrong_target,
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_RELOCS,
+            delta,
+        ));
+
+        // A non-relocated opcode byte must still fail.
+        let mut wrong_opcode = LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000.to_vec();
+        wrong_opcode[0] = 0x90;
+        assert!(!prefix_matches_relocated(
+            &wrong_opcode,
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_RELOCS,
+            delta,
+        ));
+
+        // The wrong delta must fail: rebasing is tolerated, arbitrary operands are not.
+        assert!(!prefix_matches_relocated(
+            LIVE_LOBBY_DTO_CTOR_PREFIX_AT_190000,
+            LOBBY_DTO_CTOR_PREFIX,
+            LOBBY_DTO_CTOR_RELOCS,
+            delta.wrapping_add(0x1000),
+        ));
+
+        // The relocation-free prefix keeps byte-exact semantics under any delta.
+        let mut wrong_free = OBJECT_ARRAY_STRING_CTOR_PREFIX.to_vec();
+        wrong_free[15] ^= 0x01;
+        assert!(!prefix_matches_relocated(
+            &wrong_free,
+            OBJECT_ARRAY_STRING_CTOR_PREFIX,
+            OBJECT_ARRAY_STRING_CTOR_RELOCS,
+            delta,
+        ));
+        assert!(prefix_matches_relocated(
+            OBJECT_ARRAY_STRING_CTOR_PREFIX,
+            OBJECT_ARRAY_STRING_CTOR_PREFIX,
+            OBJECT_ARRAY_STRING_CTOR_RELOCS,
+            delta,
+        ));
+    }
+
     #[test]
     fn constructor_rvas_are_gated_by_the_pinned_pe_identity() {
         let mut headers = vec![0u8; 0x400];
@@ -2201,17 +2349,32 @@ mod tests {
         headers[optional + 28..optional + 32].copy_from_slice(&RETAIL_IMAGE_BASE.to_le_bytes());
         headers[optional + 56..optional + 60]
             .copy_from_slice(&(RETAIL_IMAGE_SIZE as u32).to_le_bytes());
-        assert!(pinned_retail_pe_headers(&headers));
+        assert!(pinned_retail_pe_headers(&headers, RETAIL_IMAGE_BASE));
 
         for corrupt in [0usize, 0x13c, 0x140, optional, optional + 28, optional + 56] {
             let mut wrong = headers.clone();
             wrong[corrupt] ^= 0xff;
             assert!(
-                !pinned_retail_pe_headers(&wrong),
+                !pinned_retail_pe_headers(&wrong, RETAIL_IMAGE_BASE),
                 "accepted corruption at {corrupt:#x}"
             );
         }
-        assert!(!pinned_retail_pe_headers(&headers[..0x150]));
+        assert!(!pinned_retail_pe_headers(&headers[..0x150], RETAIL_IMAGE_BASE));
+
+        // A mapped image carries the base the loader chose, measured live at 0x00190000 on
+        // this executable. Demanding the preferred value there is what made the gate refuse
+        // the real game.
+        let mut rebased = headers.clone();
+        rebased[optional + 28..optional + 32]
+            .copy_from_slice(&LIVE_MODULE_BASE.to_le_bytes());
+        assert!(!pinned_retail_pe_headers(&rebased, RETAIL_IMAGE_BASE));
+        assert!(pinned_retail_pe_headers(&rebased, LIVE_MODULE_BASE));
+
+        // It must still reject a header claiming some third base, so the relaxation is
+        // "the loader rewrote it", not "any value goes".
+        let mut elsewhere = headers.clone();
+        elsewhere[optional + 28..optional + 32].copy_from_slice(&0x0666_0000u32.to_le_bytes());
+        assert!(!pinned_retail_pe_headers(&elsewhere, LIVE_MODULE_BASE));
     }
 
     #[test]

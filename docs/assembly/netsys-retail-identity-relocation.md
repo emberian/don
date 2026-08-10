@@ -1,8 +1,12 @@
-# The generation-7 retail identity gate cannot match a live image
+# The retail identity gate could not match a live rebased image
 
-Status: **defect, reproduced live**. Recorded 2026-08-10 from an authorized
-`DON_NET_LOAD_ONLY=1` run of the supported executable with the generation-7
-`CrossplayNetLib.dll` installed.
+Status: **two defects, reproduced live and fixed**. Recorded 2026-08-10 from authorized
+`DON_NET_LOAD_ONLY=1` runs of the supported executable. Generation 7 reported
+`retail_identity=false`; after both fixes the same run reports `retail_identity=true` and
+`factory=lobby-dto-constructed`.
+
+Both defects are the same mistake: a value recorded at the **preferred** base compared
+against a **loaded** image that the Windows loader rewrote.
 
 ## What happens
 
@@ -67,7 +71,7 @@ constructor calls:
 The second is the whole reason generation 7 exists. Generation 5 crashed at
 `SetupWin::draw_ip_address` (`0x005BD635`) dereferencing the array returned by
 `NetSys::get_ip_addresses`; generation 7 fixes that by constructing the array through the
-executable's own constructor at RVA `0x39E80`. **That fix is inert on the real game**,
+executable's own constructor at RVA `0x39E80`. **That fix was inert on the real game**,
 because the constructor is only invoked inside the `Some(exe)` arm.
 
 The live trace records it plainly:
@@ -79,23 +83,52 @@ seq=4 factory=lobby-dto-skipped reason=non-retail-load-only-executable
 
 `load_only` masks the severity here — it merely skips. Outside load-only the same `None`
 takes the `factory=inert reason=retail-executable-identity` arm, so a host or join attempt
-would refuse before any transport. Fixing this gate is a prerequisite for any generation-7
-match attempt.
+would refuse before any transport. Fixing this gate was a prerequisite for any match attempt.
 
 The Wine PE32 smoke cannot catch this: its disposable executable is deliberately not the
 retail image, so it exercises the `None` path by design and passes.
 
-## The fix this implies
+## Defect 2: the mapped `ImageBase` field
 
-Compare only relocation-invariant bytes, or relocation-adjust the operand before comparing
-(the delta is `actual_base - RETAIL_IMAGE_BASE`, both already known at the call site).
-Masking the four operand bytes is the smaller change; adjusting them keeps the check
-sensitive to a different callee. Either way the prefix constants must record which byte
-ranges are relocatable rather than assuming none are. Not yet implemented.
+Fixing the prefix alone did **not** restore identity. A second run still reported
+`retail_identity=false`, isolating `pinned_retail_pe_headers`, which required
+
+```rust
+read_u32(headers, pe + 24 + 28) == Some(RETAIL_IMAGE_BASE)
+```
+
+The loader rewrites `OptionalHeader.ImageBase` in the mapped image to the address it chose.
+Read from the live process at the same module base:
+
+```text
+IN-MEMORY imagebase    = 0x00190000     (the file on disk says 0x00400000)
+IN-MEMORY sizeofimage  = 0x00bb4000     machine 0x014c, timestamp 0x6674863f, magic 0x010b
+```
+
+So **that field carries no identity once the image is rebased**: the preferred base is not
+recoverable from a rebased header, and demanding the pinned value can only fail. It is now a
+mapping sanity check — it must equal either the pinned preferred base or the actual load
+base — and identity rests on the fields the loader does not touch (machine, timestamp,
+magic, size-of-image) plus the two code prefixes.
+
+## The fixes
+
+`prefix_matches_relocated` compares bytes outside a recorded relocation list exactly, and
+each listed dword as `loaded == pinned.wrapping_add(delta)`. Adjusting rather than masking
+keeps the check sensitive to a *different* callee at the same RVA, which masking the four
+operand bytes would have accepted. `LOBBY_DTO_CTOR_RELOCS = [6]`;
+`OBJECT_ARRAY_STRING_CTOR_RELOCS` is empty because that prefix is position independent.
+
+`pinned_retail_pe_headers` takes the loaded base and accepts the `ImageBase` field at either
+the pinned or the actual value, rejecting any third value.
+
+Both are pinned by unit tests built on the **measured** live bytes rather than on
+recomputed arithmetic, including negative cases for a different callee, a corrupted opcode,
+a wrong delta, and a header claiming an unrelated base.
 
 ## Capture protocol
 
-1. Install the generation-7 DLL over
+1. Install the shim DLL over
    `C:\Program Files (x86)\Steam\steamapps\common\Rise of Nations\CrossplayNetLib.dll`;
    the shipped original is preserved at
    `C:\Users\Public\don-netsys-experiment\CrossplayNetLib.shipped.dll`, SHA-256
@@ -109,3 +142,18 @@ ranges are relocatable rather than assuming none are. Not yet implemented.
 The run reached the menu and exercised `ns_init`, `set_p2p_callbacks`, `ns_set_ip_override`,
 `ns_log_connection`, `ns_check_pulse`, `ns_process_system_messages` and `ns_get` before
 termination. No lobby was entered and no transport was enabled.
+
+## Result
+
+The same protocol against the fixed shim:
+
+```text
+seq=3 factory=ready abi=netsys-v65 role=Host load_only=true retail_identity=true
+seq=4 factory=lobby-dto-constructed offset=0xd0 size=0xd0 ctor_rva=0x4b1f0 \
+      ip_array_offset=0x1a0 ip_array_ctor_rva=0x39e80
+```
+
+Both retail constructors execute, so `ip_addresses` at `+0x1A0` is a constructed
+`ObjectArray<String>` rather than the unconstructed shape that faulted generation 5. This is
+the identity gate and the two constructors only — it is **not** evidence that a match, a
+lobby, or any transport works.

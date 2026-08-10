@@ -28,10 +28,11 @@ MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
   wine target/i686-pc-windows-msvc/release/netsys-load-smoke.exe
 # -> one `don.netsys-load-smoke.v4` JSON line with "status":"pass"
 
-# Compile focused unit tests for the retail target. They cannot execute on the
-# arm64 host; the layout assertions also run during the DLL build above.
+# Compile focused unit tests for the retail target, then run them under Wine on the
+# arm64 host (`run-gen7-wine-smoke.sh` shows the prefix seeding these need).
 XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 \
-  XWIN_ARCH=x86 cargo xwin test --no-run
+  XWIN_ARCH=x86 cargo xwin test --release --no-run
+wine target/i686-pc-windows-msvc/release/deps/CrossplayNetLib-*.exe   # 11 passed
 ```
 
 Both variables are intentional on the current build host. `cargo-xwin` splats one architecture
@@ -156,8 +157,8 @@ make the DLL self-describing under `dumpbin /exports`.
 | three by-value callbacks are cloned into owner-lifetime storage at concrete `+0x358/+0x380/+0x3A8`, replacements destroy the old target once, and inputs remain callee-destroyed | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78`; focused v4 inline-target ownership gate compiles |
 | the session/transport underneath works between two processes | `don-net`'s `tcp_session` test and the `donnet-peer` binary |
 | the pinned retail executable constructs the direct-access `LobbyDTO` at concrete `+0xD0` and survives the immediate post-`OnHostUpdated` copy-assignment | generation-5 PID 12080 trace records the retail constructor at exe RVA `0x4B1F0`, then `OnHostUpdated`; the process remained live where generations 3/4 faulted in `std::list::clear` |
-| `get_ip_addresses` returns the shipped borrowed embedded empty `ObjectArray<String>` at concrete `+0x1A0` | PID 5056 faulted at retail `SetupWin::draw_ip_address` `0x005BD635` after the old null result; the replacement uses the pinned executable constructor at RVA `0x39E80`; generation-7 v4 runtime revalidated the non-null offset/layout and ESP gate. **Inert on the real game** — see the identity row below |
-| **the retail identity gate matches a live image** | **no.** `LOBBY_DTO_CTOR_PREFIX` holds a `push imm32` that ASLR relocates, so the in-memory comparison never matches and both retail constructors — `LobbyDTO` and `ip_addresses` — are skipped on the supported executable. Measured live 2026-08-10; see [`docs/assembly/netsys-retail-identity-relocation.md`](../../docs/assembly/netsys-retail-identity-relocation.md). Prerequisite for any generation-7 match attempt |
+| `get_ip_addresses` returns the shipped borrowed embedded empty `ObjectArray<String>` at concrete `+0x1A0` | PID 5056 faulted at retail `SetupWin::draw_ip_address` `0x005BD635` after the old null result; the replacement uses the pinned executable constructor at RVA `0x39E80`; generation-7 v4 runtime revalidated the non-null offset/layout and ESP gate. Confirmed live 2026-08-10: `ip_array_ctor_rva=0x39e80` executes in the real process |
+| **the retail identity gate matches a live image** | **yes, as of 2026-08-10.** Two preferred-base-vs-loaded-image comparisons refused the real game: the `push imm32` inside `LOBBY_DTO_CTOR_PREFIX`, and `OptionalHeader.ImageBase`, which the loader rewrites to the chosen base. Both fixed and pinned by tests on the measured live bytes; the live run now reports `retail_identity=true` and `factory=lobby-dto-constructed`. See [`docs/assembly/netsys-retail-identity-relocation.md`](../../docs/assembly/netsys-retail-identity-relocation.md) |
 | **the retail game reaches a match over this DLL** | **in progress.** Current live frontier is the owned Friend Game UI gate; match/turn/reconnect evidence is not yet claimed. |
 
 The last row is the honest gap. The loader, direct lobby callback, and exact
