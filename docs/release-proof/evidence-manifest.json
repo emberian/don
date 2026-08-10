@@ -74,6 +74,41 @@
       "role": "active-main-thread STOP/rearm and external byte-restoration evidence"
     },
     {
+      "path": "tools/release-proof/retail_control_evidence.py",
+      "sha256": "ae41f113c4065803b9432a1139c4849f344c038b0a2b0eb2180762c1dcb953e0",
+      "role": "offline source-bound controller lifecycle and incident-closure verifier"
+    },
+    {
+      "path": "tools/release-proof/test_retail_control_evidence.py",
+      "sha256": "473e43767db7680e3d73e438e5c8e5ab72a5fe5ae6a35c3f187fa8e4d01552f7",
+      "role": "negative regressions for controller lifecycle and incident-closure evidence"
+    },
+    {
+      "path": "tools/release-proof/retail-control-lifecycle-proof.schema.json",
+      "sha256": "f9a7ce179af163fd3413f4cd0318a0cb8523144246f362f075bc3813c9982022",
+      "role": "strict compact active STOP/rearm lifecycle record contract"
+    },
+    {
+      "path": "tools/release-proof/retail-control-incident-closure.schema.json",
+      "sha256": "191e47b8a170dfab457117f972c9271bd1d6f40f78a0482f8c25a41280d01821",
+      "role": "strict candidate-bound incident-closure record contract"
+    },
+    {
+      "path": "schema/live/retail-control-active-stop-cycles-v1.json",
+      "sha256": "b13e523cedcad28cdd6bd28779902a38291ce4e767cdc6e74e3aadf80eb881a5",
+      "role": "compact aggregate record of five active STOP/rearm cycles and final park"
+    },
+    {
+      "path": "schema/live/retail-control-stop-incident-closure-v1.json",
+      "sha256": "4845b0b79897c58d5c94fd75db69ea1979771d6d8f70ea0a2891edb591fa80de",
+      "role": "candidate-bound later soak closure preserving unresolved incident causality"
+    },
+    {
+      "path": "docs/release-proof/retail-controller-lifecycle.md",
+      "sha256": "b89d9048f55c58d94803f071726d091f243f70cde4cfca0beadd18752e61fbc6",
+      "role": "controller lifecycle evidence scope and non-causality contract"
+    },
+    {
       "path": "Cargo.lock",
       "sha256": "722ecb69996476899711ab5c8f4d6e6d6fc877f22d02869d3618270b16567b6a",
       "role": "root workspace dependency snapshot"
@@ -601,14 +636,18 @@
       "scopes": [
         "distribution"
       ],
-      "status": "blocked",
+      "status": "proved",
       "claim": "The active-solo controller lifecycle has a compact machine record for five consecutive main-thread STOP/rearm acknowledgements plus a final park, zero dropped events, and an independent external read of the exact original five call bytes after every STOP.",
       "evidence": [
         "docs/tooling/live-control.md",
         "tools/retail-control/README.md",
-        "schema/live/retail-control-stop-incident-v1.json"
+        "tools/release-proof/retail_control_evidence.py",
+        "tools/release-proof/test_retail_control_evidence.py",
+        "tools/release-proof/retail-control-lifecycle-proof.schema.json",
+        "docs/release-proof/retail-controller-lifecycle.md",
+        "schema/live/retail-control-active-stop-cycles-v1.json"
       ],
-      "blocker": "The measured five-cycle result is recorded in hash-bound prose, but the public tree has no compact per-cycle machine artifact. The older incident JSON explicitly predates and does not prove the active-main-thread path. Expected artifact: schema/live/retail-control-active-stop-cycles-v1.json."
+      "blocker": null
     },
     {
       "id": "scoped-crash-dump-workflow",
@@ -629,13 +668,19 @@
       "scopes": [
         "distribution"
       ],
-      "status": "blocked",
+      "status": "proved",
       "claim": "The recorded STOP-associated incident is closed by candidate-bound active soak/reversibility evidence; if another crash naturally occurs, its stable retained minidump identity and stack analysis are added without requiring an intentional crash.",
       "evidence": [
         "schema/live/retail-control-stop-incident-v1.json",
-        "docs/tooling/live-control.md"
+        "docs/tooling/live-control.md",
+        "tools/release-proof/retail_control_evidence.py",
+        "tools/release-proof/test_retail_control_evidence.py",
+        "tools/release-proof/retail-control-incident-closure.schema.json",
+        "docs/release-proof/retail-controller-lifecycle.md",
+        "schema/live/retail-control-active-stop-cycles-v1.json",
+        "schema/live/retail-control-stop-incident-closure-v1.json"
       ],
-      "blocker": "The incident record states dump_retained=false and explicitly declines to claim a unique cause. Successful later runs need a compact candidate-bound incident-closure/soak record; a new crash is not required. Expected artifact: schema/live/retail-control-stop-incident-closure-v1.json."
+      "blocker": null
     },
     {
       "id": "release-documentation-consistency",

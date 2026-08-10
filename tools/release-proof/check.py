@@ -79,6 +79,8 @@ KNOWN_LICENSE_TEXT_DIGESTS = {
     },
 }
 BOUND_PROVED_GATES = {
+    "controller-stop-incident-closure",
+    "retail-controller-byte-restoration",
     "source-proprietary-payload-exclusion",
     "owned-data-bootstrap-boundary",
     "scoped-crash-dump-workflow",
@@ -605,6 +607,16 @@ def _validate_archive_reproducibility(root: Path) -> dict[str, Any]:
         raise ProofError(f"archive reproducibility evidence failed: {exc}") from exc
 
 
+def _load_retail_control_evidence_verifier() -> Any:
+    tool = HERE / "retail_control_evidence.py"
+    spec = importlib.util.spec_from_file_location("don_retail_control_evidence", tool)
+    if spec is None or spec.loader is None:
+        raise ProofError("retail-control evidence verifier cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _validate_content_clearance(
     root: Path,
     artifact_path: str,
@@ -1066,6 +1078,45 @@ def _validate_distribution_artifacts(
     return completed
 
 
+def _validate_retail_control_artifacts(
+    root: Path,
+    by_id: dict[str, dict[str, Any]],
+    hash_records: dict[str, dict[str, Any]],
+) -> dict[str, bool]:
+    paths = {
+        gate_id: REQUIRED_COMPLETION_ARTIFACTS[gate_id]
+        for gate_id in (
+            "retail-controller-byte-restoration",
+            "controller-stop-incident-closure",
+        )
+    }
+    loaded = {
+        gate_id: _completion_artifact(
+            root, by_id[gate_id], artifact_path, schema, hash_records
+        )
+        for gate_id, (artifact_path, schema) in paths.items()
+    }
+    lifecycle = loaded["retail-controller-byte-restoration"]
+    closure = loaded["controller-stop-incident-closure"]
+    if closure is not None and lifecycle is None:
+        raise ProofError("controller incident closure exists without lifecycle proof")
+
+    verifier = _load_retail_control_evidence_verifier()
+    try:
+        if lifecycle is not None:
+            verifier.verify_lifecycle(
+                root, root / paths["retail-controller-byte-restoration"][0]
+            )
+        if closure is not None:
+            verifier.verify_closure(root, root / paths["controller-stop-incident-closure"][0])
+    except verifier.EvidenceError as exc:
+        raise ProofError(f"retail-control completion evidence failed: {exc}") from exc
+    return {
+        "retail-controller-byte-restoration": lifecycle is not None,
+        "controller-stop-incident-closure": closure is not None,
+    }
+
+
 def _validate_owned_inputs(root: Path) -> None:
     path = _regular_file(root, "tools/install/owned-inputs.json")
     try:
@@ -1237,9 +1288,22 @@ def _validate_gates(
                 f"expected {expected_status}, found {by_id[gate_id]['status']}"
             )
 
-    distribution_gate_ids = set(distribution_completion)
+    retail_control_completion = _validate_retail_control_artifacts(
+        root, by_id, hash_records
+    )
+    for gate_id, complete in retail_control_completion.items():
+        expected_status = "proved" if complete else "blocked"
+        if by_id[gate_id]["status"] != expected_status:
+            raise ProofError(
+                f"gate {gate_id} contradicts validated retail-control artifacts: "
+                f"expected {expected_status}, found {by_id[gate_id]['status']}"
+            )
+
+    semantically_validated_gate_ids = set(distribution_completion) | set(
+        retail_control_completion
+    )
     for gate_id, (artifact_path, artifact_schema) in REQUIRED_COMPLETION_ARTIFACTS.items():
-        if gate_id in distribution_gate_ids:
+        if gate_id in semantically_validated_gate_ids:
             continue
         artifact = _completion_artifact(
             root, by_id[gate_id], artifact_path, artifact_schema, hash_records

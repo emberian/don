@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://don.invalid/schema/retail-control-lifecycle-proof-v1.json",
+  "title": "DoN retail controller active STOP/rearm lifecycle proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recorded_on", "evidence_source", "supported_retail", "controller", "session", "result"],
+  "properties": {
+    "schema": {"const": "don.retail-control.lifecycle-proof.v1"},
+    "recorded_on": {"const": "2026-08-09"},
+    "evidence_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"const": "docs/tooling/live-control.md"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "supported_retail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable_sha256", "runtime_base"],
+      "properties": {
+        "executable_sha256": {"const": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"},
+        "runtime_base": {"const": "0x00D60000"}
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "dll_sha256", "load_base", "image_size"],
+      "properties": {
+        "generation": {"const": "relaunch-v22"},
+        "dll_sha256": {"const": "e2829ae2ae93e24e95b87d2d9e469fc79e915b67e30f53d9638b84fbe6c92527"},
+        "load_base": {"const": "0x6AEA0000"},
+        "image_size": {"const": "0x165000"}
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "scope"],
+      "properties": {
+        "pid": {"const": 13876},
+        "scope": {"const": "freshly paused solo skirmish"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consecutive_stop_rearm_cycles", "final_park_acknowledged", "acknowledgement_boundary", "dropped_events_after_each_acknowledgement", "external_stop_read", "scoped_wer_dump_directory_new_files"],
+      "properties": {
+        "consecutive_stop_rearm_cycles": {"const": 5},
+        "final_park_acknowledged": {"const": true},
+        "acknowledgement_boundary": {"const": "retail-main-thread"},
+        "dropped_events_after_each_acknowledgement": {"const": 0},
+        "external_stop_read": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["coverage", "bytes_hex"],
+          "properties": {
+            "coverage": {"const": "after-every-stop"},
+            "bytes_hex": {"const": "E8 45 67 3C 00"}
+          }
+        },
+        "scoped_wer_dump_directory_new_files": {"const": 0}
+      }
+    }
+  }
+}

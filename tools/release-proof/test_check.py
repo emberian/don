@@ -303,6 +303,12 @@ class ReleaseProofTests(unittest.TestCase):
             "remote-workspace-license-consistency", report["blockers"]["source"]
         )
         self.assertNotIn("source-archive-reproducibility", report["blockers"]["source"])
+        self.assertNotIn(
+            "retail-controller-byte-restoration", report["blockers"]["distribution"]
+        )
+        self.assertNotIn(
+            "controller-stop-incident-closure", report["blockers"]["distribution"]
+        )
 
     def test_hash_drift_is_refused(self) -> None:
         value = payload()
@@ -412,6 +418,34 @@ class ReleaseProofTests(unittest.TestCase):
         gate = next(item for item in value["gates"] if item["status"] == "proved")
         gate["blocker"] = "synthetic contradiction"
         with self.assertRaisesRegex(release_proof.ProofError, "unexpectedly carries a blocker"):
+            self.validate_payload(value)
+
+    def test_valid_controller_lifecycle_artifact_cannot_be_declared_blocked(self) -> None:
+        value = payload()
+        gate = next(
+            item
+            for item in value["gates"]
+            if item["id"] == "retail-controller-byte-restoration"
+        )
+        gate["status"] = "blocked"
+        gate["blocker"] = "synthetic stale blocker"
+        with self.assertRaisesRegex(
+            release_proof.ProofError, "contradicts validated retail-control artifacts"
+        ):
+            self.validate_payload(value)
+
+    def test_valid_incident_closure_artifact_cannot_be_declared_blocked(self) -> None:
+        value = payload()
+        gate = next(
+            item
+            for item in value["gates"]
+            if item["id"] == "controller-stop-incident-closure"
+        )
+        gate["status"] = "blocked"
+        gate["blocker"] = "synthetic stale blocker"
+        with self.assertRaisesRegex(
+            release_proof.ProofError, "contradicts validated retail-control artifacts"
+        ):
             self.validate_payload(value)
 
 

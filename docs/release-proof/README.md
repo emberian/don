@@ -23,8 +23,9 @@ whole-game/product readiness; gameplay completion remains governed by `GOAL.md` 
   141 build-produced source inputs are hash-bound, the retail/live unit table is absent, and 1,579
   archive `don-sim` library tests pass. There is no standalone
   product payload/installer and no human-cleared manifest for independently licensed art, audio,
-  fonts, and presentation data; the recorded retail-controller incident retained no dump; and the
-  five-cycle STOP/rearm result lacks a compact per-cycle machine record.
+  fonts, and presentation data. The recorded retail-controller incident retained no dump and its
+  cause remains unresolved, while compact source-bound records now prove the later candidate's
+  five-cycle active-main-thread STOP/rearm soak and exact byte restoration.
 
 These findings do not revoke or reinterpret any declaration. They prevent the project from
 claiming that its release proof is complete until the missing evidence is supplied with authority.
@@ -43,8 +44,9 @@ The pack also preserves narrow positive conclusions already supported elsewhere:
   proprietary/local payload classes and signatures;
 - the owned-data bootstrap verifies one executable identity and 51 exact inputs and writes only
   create-only local copies under ignored `ron-data`;
-- the documentation carries measured active-solo five-cycle STOP/rearm results, while the pack
-  keeps distribution proof red until those results have a compact hash-bound machine record;
+- compact hash-bound machine records reproduce the documented active-solo five-cycle STOP/rearm
+  result and close that incident with later candidate-bound reversibility soak while preserving
+  the original record's unresolved-causality boundary;
 - the scoped WER workflow has setup, exact-owned removal, dump preservation, and stable in-place
   MDMP verification logic plus synthetic regressions.
 - the checked-in browser Wasm component and exact five-package lock graph are hash-bound, while
@@ -76,6 +78,8 @@ Run the text-only regressions:
 
 ```sh
 python3 -m unittest tools/release-proof/test_check.py
+python3 -m unittest tools/release-proof/test_retail_control_evidence.py
+python3 tools/release-proof/retail_control_evidence.py
 python3 -m unittest tools/release-proof/test_component_provenance.py
 python3 tools/release-proof/component_provenance.py verify \
   --artifact release/web-wasm-component-provenance.json
@@ -126,12 +130,12 @@ Do not fill a field from memory or by copying a convenient license from elsewher
    certify legal title, and retail content is never assigned a DoN license.
 6. For `standalone-product-installer` and `assembled-product-packaging`, bind an exact payload and
    prove install/configure/repair/remove behavior before marking either gate proved.
-7. For `retail-controller-byte-restoration`, add the redacted compact per-cycle record named by the
-   manifest; prose describing the measurement is not a substitute for that artifact.
-8. For `controller-stop-incident-closure`, add candidate-bound active soak/reversibility evidence.
-   Do not intentionally induce another crash; if one occurs naturally, retain the stable MDMP in
-   its protected local location and publish only a redacted identity/result and stack-supported
-   conclusion.
+7. Keep the now-proved `retail-controller-byte-restoration` and
+   `controller-stop-incident-closure` artifacts bound to the exact measured source, incident, and
+   controller DLL. Do not fill absent per-cycle fields or reinterpret the closure as a crash-cause
+   finding. Do not intentionally induce another crash; if one occurs naturally, retain the stable
+   MDMP in its protected local location and publish only a redacted identity/result and
+   stack-supported conclusion.
 
 Update hashes only after reviewing why the underlying evidence changed. A mechanical hash refresh
 without reviewing the corresponding claim defeats the purpose of this pack.

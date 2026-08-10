@@ -1,0 +1,29 @@
+{
+  "schema": "don.retail-control.incident-closure.v1",
+  "recorded_on": "2026-08-09",
+  "original_incident": {
+    "path": "schema/live/retail-control-stop-incident-v1.json",
+    "sha256": "d20ae37a9a2321df58fbf45a17a196e935dd76d07974ac3efcf86111254ca577",
+    "controller_generation": "tactical-v19",
+    "pid": 12324,
+    "dump_retained": false,
+    "causality_status": "unresolved-no-retained-stack"
+  },
+  "later_active_lifecycle": {
+    "path": "schema/live/retail-control-active-stop-cycles-v1.json",
+    "sha256": "b13e523cedcad28cdd6bd28779902a38291ce4e767cdc6e74e3aadf80eb881a5",
+    "controller_generation": "relaunch-v22",
+    "controller_dll_sha256": "e2829ae2ae93e24e95b87d2d9e469fc79e915b67e30f53d9638b84fbe6c92527",
+    "process_scope": "freshly paused solo skirmish"
+  },
+  "closure": {
+    "active_main_thread_boundary_exercised": true,
+    "consecutive_stop_rearm_cycles": 5,
+    "final_park_acknowledged": true,
+    "dropped_events_after_each_acknowledgement": 0,
+    "exact_original_bytes_restored_after_every_stop": true,
+    "scoped_wer_dump_directory_new_files": 0,
+    "candidate_bound_reversibility_soak": true,
+    "original_incident_causality_remains_unresolved": true
+  }
+}
