@@ -28,6 +28,10 @@ pub use team_continent_partition::{
     MAP_FILL_CONT_RET_VA, MAP_FILL_CONT_VA,
 };
 
+use crate::east_meets_west_place_start::{
+    execute_first_place_start_selector, PlaceStartSelectorError, PlaceStartSelectorNext,
+    PlaceStartSelectorReceipt,
+};
 use crate::east_meets_west_start_boundary::{
     execute_first_place_start_boundary, EastMeetsWestPlaceStartBoundary,
     EastMeetsWestStartBoundaryError, EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
@@ -158,6 +162,25 @@ pub enum ContinentStop {
         edge_canals: EliminateEdgeCanalsReceipt,
         call: EastMeetsWestPlaceStartBoundary,
     },
+    /// The first selector returned success. Caller output copies are complete;
+    /// the next mutator appends the selected start and its city footprint.
+    AddStartingLocation {
+        primitive_va: u32,
+        caller_va: u32,
+        centroids: EastMeetsWestCentroidReceipt,
+        edge_canals: EliminateEdgeCanalsReceipt,
+        call: EastMeetsWestPlaceStartBoundary,
+        selector: PlaceStartSelectorReceipt,
+    },
+    /// The first selector exhausted both passes and returned zero. The
+    /// style-specific caller fallback is deliberately not inferred here.
+    EastMeetsWestStartFallback {
+        next_va: u32,
+        centroids: EastMeetsWestCentroidReceipt,
+        edge_canals: EliminateEdgeCanalsReceipt,
+        call: EastMeetsWestPlaceStartBoundary,
+        selector: PlaceStartSelectorReceipt,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,6 +270,7 @@ pub enum ContinentError {
     RegionCentroid(RegionCentroidError),
     EdgeCanals(EliminateEdgeCanalsError),
     StartBoundary(EastMeetsWestStartBoundaryError),
+    PlaceStartSelector(PlaceStartSelectorError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1414,6 +1438,40 @@ fn east_meets_west(
         place_start.caller_va,
         EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA
     );
+    let selector = execute_first_place_start_selector(
+        world,
+        regions,
+        rng,
+        place_start.region,
+        place_start.min_start_distance,
+        place_start.unread_argument,
+    )
+    .map_err(ContinentError::PlaceStartSelector)?;
+    sites.extend(selector.draws.iter().map(|draw| draw.call_va));
+
+    let selector_next = selector.next.clone();
+    let stop = match selector_next {
+        PlaceStartSelectorNext::AddStartingLocation {
+            caller_va,
+            primitive_va,
+        } => ContinentStop::AddStartingLocation {
+            primitive_va,
+            caller_va,
+            centroids,
+            edge_canals,
+            call: place_start,
+            selector,
+        },
+        PlaceStartSelectorNext::CallerFallback { next_va } => {
+            ContinentStop::EastMeetsWestStartFallback {
+                next_va,
+                centroids,
+                edge_canals,
+                call: place_start,
+                selector,
+            }
+        }
+    };
 
     Ok(PartialReceipt {
         world_inverted: false,
@@ -1428,13 +1486,7 @@ fn east_meets_west(
         east_indies_tail: None,
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::PlaceStartInRegion {
-            primitive_va: MAP_PLACE_START_IN_REGION_VA,
-            first_call_va: EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
-            centroids,
-            edge_canals,
-            call: place_start,
-        },
+        stop,
     })
 }
 

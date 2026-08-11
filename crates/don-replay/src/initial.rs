@@ -945,6 +945,22 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
+            crate::continent::ContinentStop::AddStartingLocation { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_team_continent_add_start",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+            crate::continent::ContinentStop::EastMeetsWestStartFallback { next_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_team_continent_start_fallback",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *next_va,
+                }
+            }
         };
         *map = staged_map;
         self.post_continent = post_continent;

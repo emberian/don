@@ -52,7 +52,7 @@ consolidations, and records four non-input pumps in both cases.
 
 The 2018 checksum change with zero canal writes is the region rebuild changing
 the walked region bytes. The exact continent receipt preserves the growth RNG
-word across this body and advances the coherent stop to
+word across this body and advances the selector input to
 `PlaceStartInRegion { primitive_va: 0x0068ac00, first_call_va: 0x00696fe3 }`.
 The caller-owned boundary receipt also materializes the first selector's exact
 arguments. For 2018 it selects slot/team `0/0`, assigned and selected continent
@@ -64,13 +64,19 @@ conditional direct draw at `0x00696f82`. A population-1 mutation pin proves
 that branch consumes exactly one draw before the boundary and records its RNG
 before/raw/after words.
 
+The selector itself is now executed and documented in
+`docs/assembly/map-place-start-in-region-replay.md`. Both real fixtures return
+success, moving the coherent residual to `World::add_starting_location`
+`0x006b2de0`; this edge-canal receipt remains nested unchanged inside that
+later stop.
+
 ## Validation
 
 - local focused suites: edge canals 4/4, continent reconstruction 4/4 and
   centroid recovery 4/4;
 - local reconstruction/ownership suites: 6/6;
 - local two-header localizer: both boundaries are
-  `map_team_continent_place_start`, both owner ledgers are coherent, and all
+  `map_team_continent_add_start`, both owner ledgers are coherent, and all
   65,081 same-group peer comparisons agree;
 - Persvati clean-HEAD overlay job
   `replay-edge-canals-v2-20260811T184039Z-36613-30596-ff4bbec4ab74`: the three

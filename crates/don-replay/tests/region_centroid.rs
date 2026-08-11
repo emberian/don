@@ -74,9 +74,9 @@ fn generated_style19_centroids(name: &str) -> Option<GeneratedCentroidFacts> {
             .expect("style 19 has a team partition")
             .continent_count,
     );
-    let ContinentStop::PlaceStartInRegion {
-        primitive_va,
+    let ContinentStop::AddStartingLocation {
         centroids,
+        selector,
         ..
     } = &receipt.stop
     else {
@@ -92,7 +92,7 @@ fn generated_style19_centroids(name: &str) -> Option<GeneratedCentroidFacts> {
             .collect(),
         x: centroids.centroid_x.clone(),
         y: centroids.centroid_y.clone(),
-        stop_va: *primitive_va,
+        stop_va: selector.primitive_va,
         pool_eliminations: receipt.pool_eliminations.len(),
     })
 }

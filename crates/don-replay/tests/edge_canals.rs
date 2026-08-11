@@ -206,20 +206,33 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             &mut map.generation_regions,
         )
         .unwrap();
-        let ContinentStop::PlaceStartInRegion {
+        let ContinentStop::AddStartingLocation {
             primitive_va,
-            first_call_va,
+            caller_va,
             centroids,
             edge_canals: got,
             call,
-            ..
+            selector,
         } = &prefix.stop
         else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
         };
-        assert_eq!(*primitive_va, MAP_PLACE_START_IN_REGION_VA, "{name}");
         assert_eq!(
-            *first_call_va, EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
+            *primitive_va,
+            don_replay::east_meets_west_place_start::WORLD_ADD_STARTING_LOCATION_VA,
+            "{name}"
+        );
+        assert_eq!(
+            call.caller_va, EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
+            "{name}"
+        );
+        assert_eq!(
+            selector.primitive_va, MAP_PLACE_START_IN_REGION_VA,
+            "{name}"
+        );
+        assert_eq!(
+            *caller_va,
+            don_replay::east_meets_west_place_start::EAST_MEETS_WEST_ADD_START_CALL_VA,
             "{name}"
         );
         assert_eq!(got.canal_writes(), 0, "{name}");
@@ -300,9 +313,10 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             assert_eq!(singleton_rng.state(), draw.state_after);
         }
         assert_eq!(
-            prefix.rng_final,
+            selector.random_state_before,
             prefix.region_growths.last().unwrap().rng_final,
-            "edge body must not advance the main RNG: {name}"
+            "edge and first-call setup must not advance the main RNG: {name}"
         );
+        assert_eq!(prefix.rng_final, selector.random_state_after, "{name}");
     }
 }

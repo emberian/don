@@ -502,26 +502,23 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         .region_growths
         .iter()
         .all(|growth| growth.completed));
-    assert_eq!(
-        eastwest.rng_final,
-        eastwest.region_growths.last().unwrap().rng_final
-    );
     assert_eq!(eastwest.starts_added, 0);
     match &eastwest.stop {
-        ContinentStop::PlaceStartInRegion {
+        ContinentStop::AddStartingLocation {
             primitive_va,
-            first_call_va,
+            caller_va,
             centroids,
             edge_canals,
             call,
+            selector,
         } => {
             assert_eq!(
                 *primitive_va,
-                don_replay::edge_canals::MAP_PLACE_START_IN_REGION_VA
+                don_replay::east_meets_west_place_start::WORLD_ADD_STARTING_LOCATION_VA
             );
             assert_eq!(
-                *first_call_va,
-                don_replay::edge_canals::EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA
+                *caller_va,
+                don_replay::east_meets_west_place_start::EAST_MEETS_WEST_ADD_START_CALL_VA
             );
             assert_eq!(centroids.centroids.len(), 2);
             assert_eq!(centroids.centroid_x.len(), 2);
@@ -532,6 +529,13 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(call.continent_players, 2);
             assert_eq!(call.min_start_distance, 24);
             assert_eq!(call.random_draw, None);
+            assert_eq!(
+                selector.random_state_before,
+                eastwest.region_growths.last().unwrap().rng_final
+            );
+            assert_eq!(selector.random_state_after, eastwest.rng_final);
+            assert_eq!(selector.draws.len(), 1);
+            assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 edge_canals
                     .passes

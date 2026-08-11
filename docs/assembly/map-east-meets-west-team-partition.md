@@ -109,15 +109,16 @@ The caller schedule transcribed from `0x00696743..0x00696c82` is:
 | centroid continuation | `0x00696c82` | exact one-based `find_region_centroid` loop |
 | pool cleanup | `0x00696d0a` | exact `eliminate_pools(EntireWorld, dead)` |
 | edge-canal body | `0x00696d0f` | exact `eliminate_edge_canals()` plus region rebuild |
-| next start selector | `0x00696fe3` | first `place_start_in_region` call, coherent stop |
+| first start selector | `0x00696fe3` | exact `place_start_in_region` call and return edge |
+| next World mutator | `0x00697461` | `World::add_starting_location`, coherent success stop |
 
 Each growth's dynamic RNG sites are appended in execution order by the existing
 `execute_grow_region` receipt. A nonzero retail growth return is exposed as
 `RetryGeneration`; this bounded call does not pretend it executed the caller's
-whole-pass retry loop. On success it reports
-`PlaceStartInRegion { primitive_va: 0x0068ac00, first_call_va: 0x00696fe3,
-... }` with the complete centroid, pool and edge-canal receipts retained before
-the stop. The edge body has no RNG site. Caller setup through the first call is
+whole-pass retry loop. The exact selector success path reports
+`AddStartingLocation { primitive_va: 0x006b2de0, caller_va: 0x00697461, ... }`
+with the complete centroid, pool, edge-canal, call-argument and selector
+receipts retained before the stop. The edge body has no RNG site. Caller setup through the first call is
 also exact: it resolves the post-rebuild region, computes the centroid angle,
 population spacing, radius/search distance and both integer arguments. When
 the selected continent population is one, it executes and receipts the direct
@@ -139,20 +140,23 @@ binary-derived schedule, not values fitted to any recording.
   output arrays, final RNG words, and zero World mutation;
 - full style-19 caller ordering (orientation, two partition calls, two angle
   calls, then growth-internal calls), exact seed/growth parameters, centroid
-  arrays, the pool transaction, all edge passes and the place-start stop;
+  arrays, the pool transaction, all edge passes, the selector draw/output and
+  the add-start stop;
 - an exact full-World and isolated-WData checksum mutation with every other
   World section unchanged;
 - transactional validation through the existing continent entry point.
 
-The centroid and edge-canal sources are public replay modules because their
-full typed receipts are retained by `ContinentStop::PlaceStartInRegion`. The
-surgical `initial.rs` mapping names the new `map_team_continent_place_start`
-boundary.
+The centroid, edge-canal and selector sources are public replay modules because
+their full typed receipts are retained by `ContinentStop::AddStartingLocation`.
+The surgical `initial.rs` mapping names the new
+`map_team_continent_add_start` boundary. A selector zero return instead names
+`map_team_continent_start_fallback` at `0x00697003`.
 
-The remaining tail begins with caller-owned per-leader start arguments and the
-588-byte `Map::place_start_in_region` selector. Later paths may reach the third
-direct style draw at `0x00696f82`; none of those residual mutations or draws is
-represented here, and this work makes no retail World checksum-match claim.
-The exact centroid and edge bodies are documented in
+The first 588-byte `Map::place_start_in_region` selector is now represented and
+both real headers succeed on pass 1. The remaining tail begins at
+`World::add_starting_location` `0x006b2de0`; no later start mutation is inferred,
+and this work makes no retail World checksum-match claim. The exact centroid,
+edge and selector bodies are documented in
 `docs/assembly/map-find-region-centroid.md` and
-`docs/assembly/map-eliminate-edge-canals.md`.
+`docs/assembly/map-eliminate-edge-canals.md` and
+`docs/assembly/map-place-start-in-region-replay.md`.
