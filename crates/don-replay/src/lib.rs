@@ -82,6 +82,7 @@ pub mod place_all_facts;
 pub mod place_player_resource_body_frontier;
 pub mod place_resources_bonus_mutation_frontier;
 pub mod place_resources_bonus_rows_mutation_frontier;
+pub mod place_resources_canonical_transaction;
 pub mod place_resources_category_frontier;
 pub mod place_region_resource_world_body_frontier;
 pub mod place_resources_pool_frontier;

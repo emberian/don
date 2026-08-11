@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Mutation-sensitive proof for later rows in the current `BONUSES` array.
 
+pub use don_replay::place_resources_category_frontier;
+
 #[path = "../src/place_resources_xml_frontier.rs"]
 mod place_resources_xml_frontier;
 
@@ -26,10 +28,13 @@ use place_resources_bonus_mutation_frontier::{
     PLAYER_INIT_GOOD_CALL_VA,
 };
 use place_resources_bonus_rows_mutation_frontier::{
-    execute_next_bonus_mutation, later_bonus_facts_digest, LaterBonusDisposition,
-    LaterBonusMutationEvidence, LaterBonusMutationFacts, RemainingBonusRowsError,
-    RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
-    LATER_ROW_MUTATION_ENTRY_VA,
+    execute_carried_category_first_mutation, execute_next_bonus_mutation, later_bonus_facts_digest,
+    LaterBonusDisposition, LaterBonusMutationEvidence, LaterBonusMutationFacts,
+    RemainingBonusRowsError, RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA,
+    CARRIED_CATEGORY_FIRST_ENTRY_VA, LATER_BONUS_ENTRY_VA, LATER_ROW_MUTATION_ENTRY_VA,
+};
+use place_resources_category_frontier::{
+    ResourceCategory, ROW_COUNT_TEST_VA, ROW_ENUMERATE_CALL_VA,
 };
 use place_resources_xml_frontier::{
     BonusXmlRowFact, BonusesSectionSource, PlaceResourcesBonusRowsHandoff, XmlHostHandles,
@@ -204,13 +209,108 @@ fn later_facts(
     facts
 }
 
+fn carried_facts(
+    category: ResourceCategory,
+    state: &RemainingBonusRowsState,
+    entry: &PlaceResourcesBonusRowsHandoff,
+    chance: i32,
+    chance_group: i32,
+    num_rare: i32,
+) -> LaterBonusMutationFacts {
+    let row = &entry.rows[0];
+    let mut facts = LaterBonusMutationFacts {
+        capture_ordinal: row.capture_ordinal,
+        type_name: "WHALES".to_owned(),
+        type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
+        chance,
+        chance_group,
+        pattern_name: "PLAYER".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: scaled(num_rare),
+        evidence: LaterBonusMutationEvidence::CarriedSyntheticFixture {
+            fixture: format!("carried-{category:?}-first-row"),
+            category,
+            entry_va: CARRIED_CATEGORY_FIRST_ENTRY_VA,
+            row_enumerate_call_va: ROW_ENUMERATE_CALL_VA,
+            row_count_test_va: ROW_COUNT_TEST_VA,
+            mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
+            row_index: 0,
+            capture_ordinal: row.capture_ordinal,
+            random_state: state.mutation.random_state,
+            world_checksum: state.mutation.world_checksum.clone(),
+            sourced_walked_bytes: state.mutation.sourced_walked_bytes,
+            resource_pool_digest: state.mutation.resource_pool_digest,
+            last_chance_group: state.last_chance_group,
+            signed_chance_budget: state.signed_chance_budget,
+            winner_seen: state.winner_seen,
+            facts_digest: 0,
+        },
+    };
+    refresh_facts_digest(&mut facts);
+    facts
+}
+
 fn refresh_facts_digest(facts: &mut LaterBonusMutationFacts) {
     let digest = later_bonus_facts_digest(facts);
-    let LaterBonusMutationEvidence::SyntheticFixture { facts_digest, .. } = &mut facts.evidence
-    else {
-        unreachable!("test helper always constructs synthetic evidence")
+    let facts_digest = match &mut facts.evidence {
+        LaterBonusMutationEvidence::SyntheticFixture { facts_digest, .. }
+        | LaterBonusMutationEvidence::CarriedSyntheticFixture { facts_digest, .. } => facts_digest,
+        _ => unreachable!("test helper always constructs synthetic evidence"),
     };
     *facts_digest = digest;
+}
+
+fn carried_state(
+    entry: &PlaceResourcesBonusRowsHandoff,
+    last_chance_group: i32,
+    signed_chance_budget: i32,
+    winner_seen: bool,
+) -> RemainingBonusRowsState {
+    RemainingBonusRowsState {
+        next_row_index: 0,
+        section_source: entry.section_source,
+        rows: entry.rows.clone(),
+        last_chance_group,
+        signed_chance_budget,
+        winner_seen,
+        mutation: PlaceResourcesBonusMutationState::from_handoff(entry),
+    }
+}
+
+fn next_category_handoff(
+    prior: &RemainingBonusRowsState,
+    template: &PlaceResourcesBonusRowsHandoff,
+    element_name: &str,
+    capture_ordinal: u32,
+) -> PlaceResourcesBonusRowsHandoff {
+    let mut entry = template.clone();
+    entry.rows = vec![BonusXmlRowFact {
+        capture_ordinal,
+        element_name: element_name.to_owned(),
+        handles: handles(),
+    }];
+    entry.random_state = prior.mutation.random_state;
+    entry.world_checksum = prior.mutation.world_checksum.clone();
+    entry.sourced_walked_bytes = prior.mutation.sourced_walked_bytes;
+    entry.resource_pool_digest = prior.mutation.resource_pool_digest;
+    entry
+}
+
+fn carry_into_category(
+    prior: &RemainingBonusRowsState,
+    entry: &PlaceResourcesBonusRowsHandoff,
+) -> RemainingBonusRowsState {
+    RemainingBonusRowsState {
+        next_row_index: 0,
+        section_source: entry.section_source,
+        rows: entry.rows.clone(),
+        last_chance_group: prior.last_chance_group,
+        signed_chance_budget: prior.signed_chance_budget,
+        winner_seen: prior.winner_seen,
+        mutation: prior.mutation.clone(),
+    }
 }
 
 struct ScriptedHost {
@@ -523,4 +623,140 @@ fn first_row_facts_cannot_be_mixed_with_a_different_valid_receipt() {
         RemainingBonusRowsState::from_first_row(&entry, &substituted, &receipt, &mutation,),
         Err(RemainingBonusRowsError::WrongFirstRowReceipt)
     );
+}
+
+#[test]
+fn carried_first_rows_preserve_bonus_fish_goodies_chance_chronology() {
+    let world = World::init_default_rules(4, 4);
+    let bonus_entry = handoff(&world, 1);
+    let (bonus_tail, mut host) = carry_after_first(&world, &bonus_entry, 100, 41, 0);
+    assert!(bonus_tail.winner_seen);
+    assert!(bonus_tail.signed_chance_budget < 0);
+
+    let fish_entry = next_category_handoff(&bonus_tail, &bonus_entry, "FISH", 70);
+    let mut fish = carry_into_category(&bonus_tail, &fish_entry);
+    let fish_facts = carried_facts(ResourceCategory::Fish, &fish, &fish_entry, 0, 41, 0);
+    let fish_receipt = execute_carried_category_first_mutation(
+        &mut fish,
+        &fish_entry,
+        ResourceCategory::Fish,
+        &fish_facts,
+        &mut host,
+    )
+    .unwrap();
+
+    assert_eq!(fish_receipt.entry_va, CARRIED_CATEGORY_FIRST_ENTRY_VA);
+    assert_eq!(fish_receipt.row_enumerate_call_va, ROW_ENUMERATE_CALL_VA);
+    assert_eq!(fish_receipt.row_count_test_va, ROW_COUNT_TEST_VA);
+    assert_eq!(fish_receipt.previous_row_handles, XmlHostHandles::default());
+    assert_eq!(fish_receipt.current_row_handles, handles());
+    assert!(fish_receipt.chance_draw.is_none());
+    assert_eq!(
+        fish_receipt.disposition,
+        LaterBonusDisposition::ZeroRequested
+    );
+    assert_eq!(fish.signed_chance_budget, bonus_tail.signed_chance_budget);
+    assert!(fish.winner_seen);
+
+    let goodies_entry = next_category_handoff(&fish, &fish_entry, "GOODIES", 90);
+    let mut goodies = carry_into_category(&fish, &goodies_entry);
+    let goodies_facts = carried_facts(
+        ResourceCategory::Goodies,
+        &goodies,
+        &goodies_entry,
+        0,
+        41,
+        0,
+    );
+    let goodies_receipt = execute_carried_category_first_mutation(
+        &mut goodies,
+        &goodies_entry,
+        ResourceCategory::Goodies,
+        &goodies_facts,
+        &mut host,
+    )
+    .unwrap();
+
+    assert!(goodies_receipt.chance_draw.is_none());
+    assert_eq!(
+        goodies_receipt.disposition,
+        LaterBonusDisposition::ZeroRequested
+    );
+    assert_eq!(
+        goodies.signed_chance_budget,
+        bonus_tail.signed_chance_budget
+    );
+    assert!(goodies.winner_seen);
+    assert!(host.requests.is_empty());
+}
+
+#[test]
+fn carried_first_row_refuses_wrong_category_order_and_spliced_state_atomically() {
+    let world = World::init_default_rules(4, 4);
+    let template = handoff(&world, 1);
+    let mut state = carried_state(&template, 43, -1, true);
+    let facts = carried_facts(ResourceCategory::Fish, &state, &template, 0, 43, 0);
+    let before = state.clone();
+    let mut host = ScriptedHost::no_allocation(&world);
+
+    assert_eq!(
+        execute_carried_category_first_mutation(
+            &mut state,
+            &template,
+            ResourceCategory::Goodies,
+            &facts,
+            &mut host,
+        ),
+        Err(RemainingBonusRowsError::StaleEvidence)
+    );
+    assert_eq!(state, before);
+
+    assert_eq!(
+        execute_carried_category_first_mutation(
+            &mut state,
+            &template,
+            ResourceCategory::Bonuses,
+            &facts,
+            &mut host,
+        ),
+        Err(RemainingBonusRowsError::WrongHandoff)
+    );
+    assert_eq!(state, before);
+
+    state.next_row_index = 1;
+    let spliced = state.clone();
+    assert_eq!(
+        execute_carried_category_first_mutation(
+            &mut state,
+            &template,
+            ResourceCategory::Fish,
+            &facts,
+            &mut host,
+        ),
+        Err(RemainingBonusRowsError::WrongHandoff)
+    );
+    assert_eq!(state, spliced);
+}
+
+#[test]
+fn rejected_carried_placement_rolls_back_all_authoritative_state() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 1);
+    let mut state = carried_state(&entry, 47, -1, true);
+    let facts = carried_facts(ResourceCategory::Fish, &state, &entry, 0, 47, 2);
+    let before = state.clone();
+    let mut host = ScriptedHost::no_allocation(&world);
+    host.corrupt_random = true;
+
+    assert_eq!(
+        execute_carried_category_first_mutation(
+            &mut state,
+            &entry,
+            ResourceCategory::Fish,
+            &facts,
+            &mut host,
+        ),
+        Err(RemainingBonusRowsError::InvalidCalleeRandomDraw { index: 0 })
+    );
+    assert_eq!(state, before);
 }
