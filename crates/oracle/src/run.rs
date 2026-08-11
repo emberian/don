@@ -2647,6 +2647,415 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }
 
+        Plan::RandomizeMountains {
+            shipped,
+            random,
+            distribution,
+        } => {
+            use don_sim::rng::Random;
+            use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
+
+            // Every address below is read straight out of the 222-byte body. The three
+            // `add ecx, imm32` immediates at 0x0089caaa / 0x0089caee / 0x0089cb15 are the
+            // `LinkList` bases the seek_index receiver gets; the three
+            // `mov esi, [eax + imm32]` displacements at 0x0089ca7a / 0x0089cabe /
+            // 0x0089cb02 are the length reads that gate the draw. All of them carry base
+            // relocations (16 in the body), so they are preferred-base VAs like any other
+            // address in this file and `ctx.at` is the right way to reach them.
+            const VA_VBPTR: u32 = 0x00E8_5F64;
+            const VA_VBTABLE: u32 = 0x00B2_45C8;
+            const VA_RNG_PTR: u32 = 0x00C0_6184;
+            const VA_LIST_BASE: [u32; 3] = [0x00E8_5F68, 0x00E8_5F80, 0x00E8_5F98];
+            const VA_LIST_LEN: [u32; 3] = [0x00E8_5F74, 0x00E8_5F8C, 0x00E8_5FA4];
+
+            const LIST_BYTES: usize = 0x18;
+            // `MountainsData +0 .. +0x60`: the three 24-byte lists at +4/+0x1c/+0x34, with a
+            // guard word before them and 20 bytes of guard after.
+            const WINDOW_BYTES: usize = 0x60;
+            const MAX_LEN: usize = 16;
+            const NODE_BYTES: usize = 16;
+            const NODES: usize = 3 * MAX_LEN;
+            const O_RNG: usize = 0x40;
+            const O_NODES: usize = 0x100;
+            const ARENA_USED: usize = O_NODES + NODES * NODE_BYTES;
+            const ARENA_BYTES: usize = PAGE;
+
+            // `Random::in_range` 0x00A39D70 installs an SEH frame through `fs:[0]`.
+            if let Err(e) = image::install_fake_teb() {
+                a.skip = Some(format!("fake TEB for Random::in_range's SEH prologue: {e}"));
+                return a;
+            }
+            let required = [VA_VBPTR, VA_VBTABLE, VA_RNG_PTR];
+            let Some(slots) = required
+                .iter()
+                .map(|&va| ctx.at(va))
+                .collect::<Option<Vec<_>>>()
+            else {
+                a.skip = Some("Mountains vbptr/vbtable/game_random VA outside mapped image".into());
+                return a;
+            };
+            let [vbptr_slot, vbtable, rng_slot]: [*mut u8; 3] = slots.try_into().unwrap();
+
+            // The virtual-base displacement is REAL data, not an assumption: the Mountains
+            // constructor stores `0x00b245c8` into the vbptr (`c7 05 64 5f e8 00 c8 45 b2 00`
+            // at file offset 0x3396f), and the body's `mov eax, [ecx+8]` takes entry [2] of
+            // that vbtable. Reading it makes the MountainsData layout something this case
+            // can fail on rather than something it presumes.
+            let disp = unsafe { std::ptr::read_unaligned(vbtable.add(8) as *const i32) };
+            let mountains_data = VA_VBPTR.wrapping_add(disp as u32);
+            a.trials += 1;
+            if disp != 0x16C || mountains_data != 0x00E8_60D0 {
+                a.mismatches += 1;
+                a.first_detail(format!(
+                    "Mountains vbtable[2] is {disp:#x} (MountainsData {mountains_data:#010x}), \
+                     not the 0x16c / 0x00e860d0 the whole layout claim rests on"
+                ));
+                return a;
+            }
+            let mut list_at: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            for i in 0..3 {
+                let base = VA_LIST_BASE[i].wrapping_add(disp as u32);
+                let len_va = VA_LIST_LEN[i].wrapping_add(disp as u32);
+                let want = mountains_data + 4 + (i * LIST_BYTES) as u32;
+                a.trials += 1;
+                if base != want || len_va != base + 0x0C {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "list {i}: body reaches base {base:#010x} (expected {want:#010x}) and \
+                         length {len_va:#010x} (expected base+0xc)"
+                    ));
+                    return a;
+                }
+                let Some(p) = ctx.at(base) else {
+                    a.skip = Some(format!("MountainsData list {i} VA outside mapped image"));
+                    return a;
+                };
+                list_at[i] = p;
+            }
+            let Some(window) = ctx.at(mountains_data) else {
+                a.skip = Some("MountainsData VA outside mapped image".into());
+                return a;
+            };
+            a.phase(
+                "structure",
+                4,
+                "the constructor's real vbtable at 0x00b245c8, read out of the mapped image, \
+                 supplies displacement 0x16c — putting MountainsData at 0x00e860d0 and the \
+                 small/medium/large LinkList states at +4/+0x1c/+0x34 with each length \
+                 exactly 0xc into its own struct. The transcribed base addresses themselves \
+                 are pinned by the differential rather than by this phase: a wrong base \
+                 leaves retail reading an untouched zero length, which disagrees with the \
+                 model on the first trial that installs a non-empty list",
+            );
+
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("mountain node arena mmap failed".into());
+                return a;
+            };
+            let rng_ptr = unsafe { arena.add(O_RNG) as *mut i32 };
+            unsafe {
+                std::ptr::write_unaligned(vbptr_slot as *mut u32, vbtable as usize as u32);
+                std::ptr::write_unaligned(rng_slot as *mut u32, rng_ptr as usize as u32);
+            }
+            let node_at = |list: usize, k: usize| -> *mut u8 {
+                unsafe { arena.add(O_NODES + (list * MAX_LEN + k) * NODE_BYTES) }
+            };
+
+            let f = f as *const u8;
+            let mut expect_window = [0u8; WINDOW_BYTES];
+            let mut expect_nodes = [0u8; NODES * NODE_BYTES];
+            let mut draw_hist = [0u64; 4];
+            let mut selected_hist = [0u64; MAX_LEN];
+            let mut check = |lens: [usize; 3],
+                            datas: &[[i32; MAX_LEN]; 3],
+                            metrics: &[[u8; MAX_LEN]; 3],
+                            seed: i32,
+                            salt: u32,
+                            label: &str,
+                            a: &mut Acc| {
+                debug_assert!(lens.iter().all(|&n| n <= MAX_LEN));
+                unsafe {
+                    for i in 0..ARENA_USED {
+                        let b = (i as u32).wrapping_mul(73).wrapping_add(salt)
+                            ^ salt.rotate_left(9);
+                        std::ptr::write(arena.add(i), b as u8);
+                    }
+                    for i in 0..WINDOW_BYTES {
+                        let b = (i as u32).wrapping_mul(151).wrapping_add(!salt)
+                            ^ salt.rotate_left(23);
+                        std::ptr::write(window.add(i), b as u8);
+                    }
+                    for (list, &n) in lens.iter().enumerate() {
+                        for k in 0..n {
+                            let node = node_at(list, k);
+                            let next = node_at(list, (k + 1) % n);
+                            let prev = node_at(list, (k + n - 1) % n);
+                            std::ptr::write_unaligned(node as *mut u32, next as usize as u32);
+                            std::ptr::write_unaligned(node.add(4) as *mut u32, prev as usize as u32);
+                            std::ptr::write_unaligned(node.add(8) as *mut i32, datas[list][k]);
+                            std::ptr::write(node.add(0xC), metrics[list][k]);
+                        }
+                        // The pre-call cursor is the head, which is where `Mountains::init`
+                        // and `LinkList::close` leave a non-empty list. It is unobservable —
+                        // seek_index restarts from head — but an empty list's cursor IS its
+                        // post-state, and the shipped MountainRangeList represents an empty
+                        // list only as all-zero, so install exactly that.
+                        let l = list_at[list];
+                        let head = if n == 0 {
+                            std::ptr::null_mut()
+                        } else {
+                            node_at(list, 0)
+                        };
+                        std::ptr::write_unaligned(
+                            l as *mut i32,
+                            if n == 0 { 0 } else { datas[list][0] },
+                        );
+                        std::ptr::write(l.add(4), if n == 0 { 0 } else { metrics[list][0] });
+                        std::ptr::write_unaligned(l.add(8) as *mut u32, head as usize as u32);
+                        std::ptr::write_unaligned(l.add(0xC) as *mut i32, n as i32);
+                        std::ptr::write_unaligned(l.add(0x10) as *mut u32, head as usize as u32);
+                    }
+                    std::ptr::write_unaligned(rng_ptr, seed);
+                    std::ptr::copy_nonoverlapping(window, expect_window.as_mut_ptr(), WINDOW_BYTES);
+                    std::ptr::copy_nonoverlapping(
+                        arena.add(O_NODES),
+                        expect_nodes.as_mut_ptr(),
+                        NODES * NODE_BYTES,
+                    );
+                }
+
+                let build = |list: usize| {
+                    MountainRangeList::new(
+                        (0..lens[list])
+                            .map(|k| MountainRangeEntry::new(datas[list][k], metrics[list][k]))
+                            .collect(),
+                    )
+                };
+                let mut model = Mountains {
+                    small_ranges: build(0),
+                    medium_ranges: build(1),
+                    large_ranges: build(2),
+                };
+                let mut model_rng = Random::new(seed);
+                let receipt = model.randomize_mountains(&mut model_rng);
+                let model_lists = [
+                    &model.small_ranges,
+                    &model.medium_ranges,
+                    &model.large_ranges,
+                ];
+                let mut receipt_consistent = true;
+                for (list, ml) in model_lists.iter().enumerate() {
+                    let off = 4 + list * LIST_BYTES;
+                    match ml.current_index() {
+                        Some(k) => {
+                            receipt_consistent &= receipt.selected_indices[list] == k;
+                            let node = node_at(list, k) as usize as u32;
+                            expect_window[off..off + 4]
+                                .copy_from_slice(&ml.current_data().to_le_bytes());
+                            expect_window[off + 4] = ml.current_metric();
+                            expect_window[off + 8..off + 12].copy_from_slice(&node.to_le_bytes());
+                            selected_hist[k] += 1;
+                        }
+                        // An empty list: seek_index returns at `test edx, edx` without a
+                        // single store, and the model leaves its default cursor alone.
+                        None => receipt_consistent &= receipt.selected_indices[list] == 0,
+                    }
+                }
+                let mut s = seed;
+                let mut steps = 0u32;
+                while s != receipt.rng_state_after && steps < 3 {
+                    s = s.wrapping_mul(Random::MUL).wrapping_add(Random::ADD);
+                    steps += 1;
+                }
+                let draws_agree = s == receipt.rng_state_after
+                    && u32::from(receipt.draws) == steps
+                    && steps == lens.iter().filter(|&&n| n > 1).count() as u32;
+                draw_hist[steps.min(3) as usize] += 1;
+
+                unsafe { call_cdecl0(f) };
+
+                let got_window = unsafe { std::slice::from_raw_parts(window, WINDOW_BYTES) };
+                let got_nodes =
+                    unsafe { std::slice::from_raw_parts(arena.add(O_NODES), NODES * NODE_BYTES) };
+                let got_rng = unsafe { std::ptr::read_unaligned(rng_ptr) };
+                a.trials += 1;
+                if got_window != &expect_window[..]
+                    || got_nodes != &expect_nodes[..]
+                    || got_rng != receipt.rng_state_after
+                    || !receipt_consistent
+                    || !draws_agree
+                {
+                    a.mismatches += 1;
+                    let first = got_window
+                        .iter()
+                        .zip(&expect_window)
+                        .position(|(g, w)| g != w);
+                    let node_byte = got_nodes.iter().zip(&expect_nodes).position(|(g, w)| g != w);
+                    a.first_detail(format!(
+                        "{label} lens={lens:?} seed={seed:#010x} model=(idx {:?}, draws {}, \
+                         state {:#010x}) retail_state={got_rng:#010x} \
+                         first_window_byte={first:?} first_node_byte={node_byte:?} \
+                         receipt_consistent={receipt_consistent} draws_agree={draws_agree}",
+                        receipt.selected_indices, receipt.draws, receipt.rng_state_after,
+                    ));
+                }
+            };
+
+            // Two seeds solved rather than guessed: `Random::get(0, 0xffff)`'s successor
+            // state's low 16 bits are a bijection of the seed's, so scanning 0x10000
+            // consecutive seeds is guaranteed to reach both ends of the half-open [0, 0xfffe]
+            // draw domain. They pin `idiv`'s remainder at index 0 and at 0xfffe % length.
+            let (mut seed_lo, mut seed_hi) = (0i32, 0i32);
+            for s in 0..0x1_0000i32 {
+                match Random::new(s).get(0, 0xffff) {
+                    0 => seed_lo = s,
+                    0xfffe => seed_hi = s,
+                    _ => {}
+                }
+            }
+            let mut datas = [[0i32; MAX_LEN]; 3];
+            let mut metrics = [[0u8; MAX_LEN]; 3];
+            for (list, row) in datas.iter_mut().enumerate() {
+                for (k, d) in row.iter_mut().enumerate() {
+                    *d = (list * MAX_LEN + k) as i32;
+                }
+            }
+            // The shipped section is `sm` x1, `med` x8, `lg` x7 in that field order, and
+            // `LinkListBase::add` makes each new node the head, so the payloads run
+            // 15 / 14..7 / 6..0 head-first. Install exactly that for the shipped edges.
+            let shipped_lens = [1usize, 8, 7];
+            let mut shipped_datas = [[0i32; MAX_LEN]; 3];
+            shipped_datas[0][0] = 15;
+            for k in 0..8 {
+                shipped_datas[1][k] = 14 - k as i32;
+            }
+            for k in 0..7 {
+                shipped_datas[2][k] = 6 - k as i32;
+            }
+            let edges: &[([usize; 3], i32, &str)] = &[
+                (shipped_lens, 0, "shipped-1-8-7 zero-seed"),
+                (shipped_lens, 1, "shipped-1-8-7"),
+                (shipped_lens, -1, "shipped-1-8-7"),
+                (shipped_lens, i32::MIN, "shipped-1-8-7"),
+                (shipped_lens, i32::MAX, "shipped-1-8-7"),
+                (shipped_lens, 0x3c6e_f35f, "shipped-1-8-7 lcg-additive"),
+                (shipped_lens, seed_lo, "shipped-1-8-7 draw-floor"),
+                (shipped_lens, seed_hi, "shipped-1-8-7 draw-ceiling"),
+                ([0, 0, 0], 0, "all-empty"),
+                ([0, 0, 0], seed_hi, "all-empty"),
+                ([1, 1, 1], 0, "all-single-no-draw"),
+                ([1, 1, 1], seed_hi, "all-single-no-draw"),
+                ([2, 2, 2], seed_lo, "all-two-three-draws"),
+                ([2, 2, 2], seed_hi, "all-two-three-draws"),
+                ([16, 16, 16], seed_lo, "add_range-cap"),
+                ([16, 16, 16], seed_hi, "add_range-cap"),
+                ([0, 1, 2], seed_hi, "mixed-empty-single-pair"),
+                ([2, 1, 0], seed_hi, "mixed-pair-single-empty"),
+                ([1, 0, 16], seed_lo, "mixed"),
+                ([0, 0, 16], seed_hi, "only-large-draws"),
+                ([16, 0, 0], seed_hi, "only-small-draws"),
+                ([3, 5, 7], seed_lo, "coprime-lengths"),
+                ([3, 5, 7], seed_hi, "coprime-lengths"),
+                ([2, 8, 7], seed_hi, "shipped-shape-with-small-drawing"),
+            ];
+            for &(lens, seed, label) in edges {
+                let d = if lens == shipped_lens {
+                    &shipped_datas
+                } else {
+                    &datas
+                };
+                check(lens, d, &metrics, seed, 0xA5A5_5A5A, label, &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "the shipped 1/8/7 configuration at eight seeds including the solved draw \
+                 floor and ceiling; all-empty, all-length-one and all-length-two; the \
+                 16-slot add_range cap; every mixed empty/single/drawing combination; \
+                 coprime lengths",
+            );
+
+            let n_shipped = ctx.scaled(*shipped);
+            let mut rng = Xs(ctx.seed ^ 0x4D4F_554E_5441_494E);
+            for _ in 0..n_shipped {
+                for row in datas.iter_mut() {
+                    for d in row.iter_mut() {
+                        *d = rng.next() as i32;
+                    }
+                }
+                let seed = rng.next() as i32;
+                let salt = rng.next() as u32;
+                check(
+                    shipped_lens,
+                    &datas,
+                    &metrics,
+                    seed,
+                    salt,
+                    "shipped",
+                    &mut a,
+                );
+            }
+            a.phase(
+                "shipped-configuration",
+                n_shipped as u64,
+                "the 1/8/7 lengths every generated map actually runs, with full-width i32 \
+                 payloads and uniform i32 seeds; the small list must never draw",
+            );
+
+            let n = ctx.scaled(*random);
+            for _ in 0..n {
+                let mut lens = [0usize; 3];
+                for ((len, drow), mrow) in lens
+                    .iter_mut()
+                    .zip(datas.iter_mut())
+                    .zip(metrics.iter_mut())
+                {
+                    // 3 in 8 trials force a no-draw length so the `lea eax,[esi-1]; test; jg`
+                    // false arm and seek_index's null-head exit stay well covered.
+                    *len = match rng.next() & 7 {
+                        0 => 0,
+                        1 | 2 => 1,
+                        _ => 1 + (rng.next() % MAX_LEN as u64) as usize,
+                    };
+                    for (d, m) in drow.iter_mut().zip(mrow.iter_mut()) {
+                        *d = rng.next() as i32;
+                        *m = rng.next() as u8;
+                    }
+                }
+                let seed = rng.next() as i32;
+                let salt = rng.next() as u32;
+                check(lens, &datas, &metrics, seed, salt, "random", &mut a);
+            }
+            a.phase("random", n as u64, distribution);
+
+            a.extras.push((
+                "randomize_draw_counts".into(),
+                format!(
+                    "zero={} one={} two={} three={}",
+                    draw_hist[0], draw_hist[1], draw_hist[2], draw_hist[3]
+                ),
+            ));
+            a.extras.push((
+                "selected_index_histogram".into(),
+                selected_hist
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(k, c)| format!("{k}={c}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+            a.extras.push((
+                "compared_state".into(),
+                "every byte of MountainsData +0..+0x60 (all three LinkList states plus guard \
+                 bands), every byte of all 48 fabricated nodes, the final game_random word, \
+                 and the shipped receipt's selected_indices/draws against the observed LCG \
+                 step count"
+                    .into(),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
         Plan::LandDist {
             random,
             distribution,

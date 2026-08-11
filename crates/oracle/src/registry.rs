@@ -192,6 +192,23 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// Complete `Mountains::randomize_mountains` over the three
+    /// `LinkList<int, unsigned char>` range lists.
+    ///
+    /// The 222-byte body has no arguments and reads no `ECX`: it reaches its object
+    /// through the virtual-base pointer at `0x00E85F64` and draws through
+    /// `GameAccess::game_random` at `0x00C06184`. The fixture installs the **real**
+    /// vbtable the constructor installs, reads the virtual-base displacement out of it
+    /// rather than assuming one, puts the three `LinkList` states at their real
+    /// `MountainsData` addresses in `.data`, and builds the circular node rings in a
+    /// private arena. `Random::get(0, 0xffff)` runs as real retail code inside the call.
+    RandomizeMountains {
+        /// Trials at the shipped `1 / 8 / 7` configuration, which is the one every
+        /// generated map actually runs.
+        shipped: u32,
+        random: u32,
+        distribution: &'static str,
+    },
     /// Complete call-free `Map::land_dist`, with retail-built circle tables and a
     /// patterned World/WData arena compared byte-for-byte after every call.
     LandDist {
@@ -745,6 +762,64 @@ pub static REGISTRY: &[Case] = &[
                            painted at 0, 1/32 and 1/4 density, uniform random flag words, \
                            in-bounds origins biased 3:1 onto ocean, and the third argument \
                            zero one time in four and an arbitrary dword otherwise",
+        },
+    },
+    Case {
+        id: "randomize_mountains",
+        va: 0x0089_CA70,
+        abi: "void __cdecl Mountains::randomize_mountains(); no stack arguments and ECX is \
+              never read. The 222-byte body reaches its object through two fixed globals — \
+              the virtual-base pointer at 0x00E85F64 and GameAccess::game_random at \
+              0x00C06184 — so a receiver would be ignored. All sixteen absolute operands in \
+              the body carry base relocations",
+        model: "don_sim::systems::mountains::Mountains::randomize_mountains, drawing through \
+                don_sim::rng::Random::get",
+        subsystem: "world generation / mountain range selection",
+        ledger: "docs/assembly/replay-place-all-boundary.md §1 and §7 — the three mountain \
+                 range lists, their head-first order, and the two-draw main-stream cost",
+        derivation: "docs/derivation/mountain-range-lists.md; \
+                     docs/assembly/replay-place-all-boundary.md §1; \
+                     re/decomp-all/0089ca70.c, 0046f0e0.c, 004a4af0.c, 0089ad70.c; PDB \
+                     Mountains::randomize_mountains, LinkListBase<int,unsigned char>::seek_index",
+        reachability: "WRITES_GLOBAL. Its only callee besides Random::in_range 0x00A39D70 is \
+                       LinkListBase<int,unsigned char>::seek_index 0x0046F0E0, a call-free \
+                       leaf. The fixture installs the vbtable pointer the constructor writes \
+                       (`mov dword ptr [0xe85f64], 0xb245c8`, file offset 0x3396f), reads the \
+                       displacement out of that real .rdata vbtable, and lets the three \
+                       LinkList states land at their real MountainsData addresses. \
+                       TerrainGroups::place_all 0x006A70D0 calls it at 0x006A7330 as the \
+                       first substantive act of every generated map",
+        caveat: "The virtual-base pointer at 0x00E85F64 is runtime-initialised — .data has no \
+                 raw bytes that far in — so the fixture writes it, pointing at the real \
+                 vbtable the constructor uses, and the displacement is READ BACK rather than \
+                 assumed. Domain is the closed-list state the shipped Rust representation can express: \
+                 the `length` field always agrees with the node ring, and `head` is null \
+                 exactly when `length == 0`, so retail's independently-writable length/head \
+                 pair is never desynchronised and negative lengths are not generated — that \
+                 arm of `lea eax,[esi-1]; test eax,eax; jg` is UNTESTED. An empty list's \
+                 cursor triple is installed as zero because `MountainRangeList` represents an \
+                 empty list only in that state; retail leaves it untouched, so a non-zero \
+                 residue is not modelled. Per-list lengths run 0..=16 independently, which is \
+                 WIDER than retail can reach: Mountains::add_range 0x008992B0 caps the shared \
+                 `ranges` array at 16 slots TOTAL, and the shipped data saturates it exactly \
+                 (1 + 8 + 7). Node metrics are randomised even though LinkListBase::add \
+                 0x004A4AF0 writes metric 0 unconditionally, so the metric byte copy is \
+                 pinned by fixture-only inputs. This case establishes the draw predicate, the \
+                 draw count, the signed remainder, the head-relative seek and the exact \
+                 cursor writes; it does NOT establish which payload value sits at which list \
+                 position — that is Mountains::init's XML walk, and the order half of it rests \
+                 on MSXML's selectNodes contract, outside this image (see \
+                 docs/derivation/mountain-range-lists.md §4). It also does not execute \
+                 Mountains::get_range 0x0089CB50, add_mountain 0x0089C2E0 or place_all.",
+        plan: Plan::RandomizeMountains {
+            shipped: 50_000,
+            random: 150_000,
+            distribution: "xorshift64: each list length drawn independently over 0..=16 and \
+                           biased 3-in-8 onto the no-draw lengths 0 and 1, so both arms of \
+                           `lea eax,[esi-1]; test eax,eax; jg` and seek_index's null-head \
+                           exit stay saturated; full-width i32 node payloads; uniform u8 \
+                           metrics; uniform i32 seeds; a fresh guard pattern per trial over \
+                           the whole MountainsData window and all 48 nodes",
         },
     },
     Case {

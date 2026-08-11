@@ -1239,3 +1239,154 @@ the capital-elimination ending stops at `LeaderData::find_capital` `0x006EB930`;
 `schema/simulation-closure.json`'s `victory_endgame` row moved `required` → **`partial`**
 with that list as its `note`; `complete` stays `false`, so every `summary` count is
 unchanged and the file was **not** regenerated.
+
+### FINDINGS: oracle-mountains — `Mountains::randomize_mountains` is now Tier B
+
+Landed as one new `Plan` variant + one new `Case` in `crates/oracle/src/registry.rs`, one new
+executor arm in `crates/oracle/src/run.rs`, and `docs/derivation/mountain-range-lists.md`.
+Suite record regenerated: **25 cases, 19,022,634 trials, 0 mismatches, 0 skipped, exit 0**
+(was 24 / 18,822,606). The new case is 200,028 trials, 0 excluded.
+
+Do not re-derive these:
+
+- **`MountainsData` is at `0x00e860d0`, and that is now read rather than assumed.** The
+  `Mountains` vbptr at `0x00e85f64` is runtime-initialised (`.data` raw bytes stop at VA
+  `0x00caa000`), and the constructor's store is `mov dword ptr [0xe85f64], 0xb245c8` at file
+  offset `0x3396f`. The vbtable at `0x00b245c8` reads `00000000 6c010000 6c010000 54020000`,
+  so `vbtable[2] = 0x16c`. The three `LinkList<int,unsigned char>` bases are then
+  `0x00e860d4 / 0x00e860ec / 0x00e86104`, `length` at `+0xC` of each.
+- **`docs/assembly/replay-place-all-boundary.md` §1's address triple is mistranscribed.**
+  It quotes `+0xe85f74` (a *length*) beside `+0xe85f80` and `+0xe85f98` (list *bases*). The
+  self-consistent sets are bases `0xe85f68 / 0xe85f80 / 0xe85f98` (stride `0x18`) and lengths
+  `0xe85f74 / 0xe85f8c / 0xe85fa4`. Its conclusions are unaffected.
+- **`area` is internal-string offset `+0x18240`, not `+0x18204`.** `+0x18204` is
+  `TEMPLATE_TEX`. Re-decoded against `ron-data/internal_strings.xml` with a real parser:
+  4939 `MOUNTAINS`, 4940 `MOUNTAIN`, 4941 `TEMPLATE_TEX`, 4942 `MAIN_ALPHA_TEX`,
+  4943 `RING_ALPHA_TEX`, 4944 `area`, 4945–4948 `sm`/`sml`/`med`/`lg`, 743 `file`.
+  `sm` **and** `sml` both select the small list.
+- **A `<MOUNTAIN>` only becomes a range if all three of `TEMPLATE_TEX`/`MAIN_ALPHA_TEX`/
+  `RING_ALPHA_TEX` have a non-empty `file`** — `Mountains::init`'s `add_range` call is gated
+  on that triple, and when it fails the *stale previous* slot index is still pushed into the
+  area list. All 16 shipped elements pass the gate, so payload *k* ↔ document element *k*.
+- **`Mountains::add_range`'s "Too Many Ranges" diagnostic is unreachable.** `0x008992d5`
+  increments the count *before* a free-slot scan that saturates at 16 (`cmp esi, 0x10; jl`),
+  so `cmp esi, count; jge` is never taken and the 17th range is written to `ranges[16]` —
+  one dword past a `malloc(0x40)`. The shipped section has exactly 16 elements, i.e. it
+  saturates the array exactly. Anyone extending `<MOUNTAINS>` meets a heap overflow, not an
+  error message.
+- **`XMLNode::get_elements` `0x00a27720` is `IXMLDOMNode::selectNodes` (vtable `+0x90`) plus
+  `get_length` (`+0x20`) and `nextNode` (`+0x24`)**, keeping `nodeType == 1` and appending in
+  node-list order. `Mountains::init` walks the resulting `ObjectArray<XMLElement>` **forward
+  from index 0** (stride `0x28`). So the head-first payload order `small=[15]`,
+  `medium=[14..7]`, `large=[6..0]` is measured **except** for one dependency: that MSXML
+  returns `selectNodes` matches in document order. That is a library contract, not anything
+  in this image, and closing it needs a live capture rather than more disassembly. This
+  replaces the inherited-and-unverified "walks in document order" claim with its measured
+  half plus a named external.
+- **`don_sim::rng::Random` now has retail execution behind it for the `(0, 0xffff)` shape.**
+  `crates/don-sim/src/rng.rs` says of itself "Tier C … no oracle execution has compared it
+  against retail", and the registry's `rng_next_float` / `rng_in_range` cases point at
+  `oracle::models::rng`, copies that live only in the harness. This case drives retail
+  `Random::in_range` `0x00a39d70` from inside `randomize_mountains` and compares the state
+  against the shipped `Random` — 363,603 in-call draws in the recorded run.
+- **`LinkList` writes `current_metric` as ONE byte at `+4`**; `+5..+7` are untouched
+  (`0x0046f0ff mov al,[edx+0xc]` / `0x0046f102 mov [edi+4],al`). A model that widened that
+  field would pass a scalar comparison and fail this case's byte-for-byte window.
+
+**Mutation evidence** (a differential that cannot fail is worthless): one bit of
+`crates/don-sim/src/systems/mountains.rs:149`, `ranges.len() > 1` → `> 0`, applied **on the
+hbox copy only** so the shared working tree was never touched. The case went
+`FAIL … 1490/2028 mismatches` at `--scale 0.01`, failing on its first edge trial with
+`draws 3` where retail draws 2 and first divergent byte 28 = `medium_ranges.current_data`.
+Remote restored from the unmodified local file; full suite re-run green.
+
+**BUILD NOTE.** `HEAD` (`984a315`) does not build `don-sim`: `command.rs` declares
+`air_containment_host` and `economy_group_actions` (both still untracked) and imports
+`hotkey_group_action`, which `HEAD`'s `systems/mod.rs` does not declare. Any lane that gates
+against clean `HEAD` will hit this; the working set that builds is `HEAD` plus the untracked
+`systems/*.rs` files plus the working tree's `systems/mod.rs`.
+
+### lane: taunt-body — API CHANGE, HOOK NEEDED, and FINDINGS
+
+**Amended file claim.** Two files beyond the original claim, both minimal and both for the
+fail-closed obligation of the API change below:
+`crates/don-sim/src/systems/save_load/step8_views.rs` (two clauses, the `tick8-construct-time`
+precedent) and the two bullets in `docs/assembly/economy-step8.md` /
+`docs/assembly/wall-update-construct-time.md` that described this body as unported.
+
+**API CHANGE (additive, everything `Default`-able, nothing breaks):**
+
+- `leaders::Leader` gains one field, `taunt: leader_process_taunt::TauntLeaderState` — the
+  `LeaderData` slice this body writes (`gift_stamp` `+0x194`, `last_taunt` `+0x354`,
+  `taunt_frame` `+0x374`, `tributes` `+0x498`, the six `+0x794..+0x7A8` AI build-priority
+  scalars, `Personality::raid` `+0x6DEC`, `dip[8]` `+0x692C`). One aggregate, following the
+  `unit_stats`/`build_stats`/`event_frame` idiom, so `step8_views.rs` takes one `&&` clause.
+- `leaders::Step8Env` gains `taunt: leader_process_taunt::TauntEnv` — `Console::who`,
+  `GameInfo::team_style`, `LeaderData::type_avail`, `LeaderData::is_neutral`, the profile
+  audio bit and the `internal_random` draw queue. All absent by default; an absent answer
+  refuses the dispatch. `step8_views.rs` refuses a non-default one, like `unit_type_stats`.
+- `leaders::Step8Trace` gains `taunt_calls: Vec<TauntCall>` and
+  `taunt_pass: TauntPassCounts`. `Step8Trace::taunts` is unchanged in meaning and order.
+- New module `crates/don-sim/src/systems/leader_process_taunt.rs`, one `pub mod` line in
+  `systems/mod.rs`. Nothing else in `systems/mod.rs` touched.
+
+**HOOK NEEDED (`tick.rs` owner — I did not make it, `tick.rs` is not mine).** One line:
+
+```rust
+// crates/don-sim/src/tick.rs ~2255
+self.cover.gaps[Gap::LeaderProcessTaunt.index()] += trace.taunt_pass.unresolved_calls as u64;
+```
+
+replacing `+= trace.taunts.len() as u64`, which is a **dispatch** count and now charges a
+fully executed body as absent. `GAP_NOTES[Gap::LeaderProcessTaunt]` and the doc comment on
+`leaders_process_all` still say "AI-chat body absent"; both are now wrong. Both assertions in
+`crates/don-sim/tests/tick_step8_dispatch.rs` hold under either formula — that fixture
+dispatches `arg = 22`, which is out of `0..8`, so it is one unresolved call either way.
+
+**FINDINGS — do not re-derive:**
+
+- **`Leader::process_taunt` is not "AI chat" and not "a resource transfer" either.** Codes
+  1–5 stage a **two-sided diplomatic tribute ledger**: `Leader::action_offer` `0x006D1780`
+  writes `leaders[me].dip[who].offers[res] += amount` and the exact negation into
+  `leaders[who].dip[me].offers[res]`, and moves **no** stockpile. The stockpile moves in
+  `Leader::action_respond` `0x006D03C0` (3,988 B), still unported. Codes 7–16 — which no
+  earlier note mentioned — rewrite six AI build-priority scalars (`LeaderData::wonder_mod`/
+  `ground_mod`/`air_mod`/`sea_mod`/`infra_mod`/`defense_mod`, `+0x794..+0x7A8`) and
+  `Personality::raid` (`+0x6DEC`) and then clamp five of them to
+  `[1,0x8000]`/`[1,0x8000]`/`[1,0x8000]`/`[0x80,0x8000]`/`[0x10,0x1000]` — **including the
+  unknown-code default arm**. Only code 6 is presentation.
+- **`0x00EB697C` is `internal_random`, not `game_random` `0x00C06184`.** `0x006B929E` loads
+  it for the flavour-line draw, and that draw is *inside* a `who == Console::who` gate. Had
+  it been the simulation stream, every taunt aimed at the local player would desync a
+  lockstep match. Any port of a `Random::get` call site must resolve the **instance** before
+  assuming the sim stream — this is the mirror of `README-LLM.md`'s "skipped draw" hazard.
+- **Ghidra loses the receiver on this whole family, four times.** `re/decomp-all/006b8cc0.c`
+  prints the two `LeaderData::type_avail` calls as one repeated query when `0x006B8D89` uses
+  `leaders[this->who]` and `0x006B8DA7` uses `leaders[who]` (so a tribute needs the resource
+  enabled on **both** leaders); `006d15e0.c`/`006d1780.c` print the second
+  `Leader::clear_agree` on `this` when `0x006D1610`/`0x006D1811` load `leaders[who]`;
+  `006d1af0.c` loses `bucket_add`'s receiver (`leaders[this->who]`) to `extraout_EDX`; and
+  `006d03c0.c` has no parameters at all. Read the disassembly for anything in `leaders.cpp`.
+- **The tribute amount is read twice.** `0x006B8E44` for the `>= 0x96` threshold and
+  `0x006B8EEA` for the `/3` — with `Leader::action_clear_all` in between, which reaches
+  `LeaderData::bucket_add` `0x0043ED10` and *writes* the stockpile. Using one read for both
+  is wrong whenever an escrowed offer is refunded.
+- **`Diplomacy::clear_all` `0x0047E030` sets `treaty = -1`**, not zero. `Diplomacy` is 92
+  bytes at `LeaderData +0x692C + who*0x5C`: `agree`/`any_offer`/`treaty`/`offers[6]`/
+  `dows[6]`/`attacks[8]` at `+0`/`+4`/`+8`/`+0xC`/`+0x24`/`+0x3C`.
+- **`Leader::action_offer` has a dead store**: `dip[who].any_offer = 1` at `0x006D17F8`,
+  overwritten to 0 by the `clear_agree` at `0x006D1803`. And `amount <= 0` skips the
+  affordability test entirely (`0x006D17A9`), so a non-positive offer always lands.
+- **`0x00C8CD00` is `loc_str_array_orig + 0x10`**, a `StringTable` element pointer over
+  20-byte `String` records — byte offset ÷ 20 is the ordinal. It is **not** the
+  `internal_strings.xml` array at `[[0x00C06378] + 0x10]` in the standing findings above.
+  Ordinals reached here: 2285, 2320, 2553, 2554, 2555..2565.
+- **`schema/pdb-types.json` names every offset in this body**, including the `TauntRequest`
+  enum (`TAUNT_NONE`..`TAUNT_HELP`, 0..16) that turns the sixteen jump-table arms into named
+  cases, and `LeaderData::incoming_taunt`/`incoming_taunt_who`/`incoming_taunt_frame` for
+  `+0x394`/`+0x3B4`/`+0x3D4` — the second argument is a **leader slot**, not an opaque arg.
+- **`LeaderData::leader_flags & 4` is `HUMAN`** (`victory_score::leader_flag::HUMAN`), and it
+  is `process_taunt`'s very first gate: a human leader never processes a taunt at all.
+
+**Step 8's `StepStatus` stays `Stub`** — automatic Wall/base-Object query population is still
+a charged child. Three lanes have now correctly refused to flip it.
