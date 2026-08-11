@@ -6,9 +6,11 @@ process or a remote account service?
 
 ## Current answer
 
-**Yes at the connected-session boundary and at the explicitly configured
-discoverable-lobby boundary. The two are not yet one stitched product path.**
-Those are deliberately separate claims.
+**Yes for one headless, DoN-owned loopback product path.** Two independent OS
+processes now execute Crossplay Create/Find/Join through the configured
+directory RPC, discover and converge a `don-net` TCP roster, reach all-ready,
+complete Crossplay StartGame, accept one authoritative MatchStart derived from
+that completed directory state, and exchange a lockstep turn.
 
 `crates/don-net::LocalMatch<TcpTransport>` and the `donnet-peer` executable now
 exercise the complete connected sequence on loopback:
@@ -29,6 +31,7 @@ cargo test -p don-net --test local_match_lifecycle
 cargo test -p don-net --test donnet_peer_cli
 cd crates/don-crossplay
 cargo test --features std-rpc --test directory_rpc_process
+cargo test --features local-match --test service_match_process
 ```
 
 The match-start packet is explicitly DoN policy. It occupies extension id
@@ -113,16 +116,47 @@ configures `listen:127.0.0.1:0`, calls that hook, verifies callback ownership is
 empty, and then succeeds at `FreeLibrary`. The statically imported game has a
 process-lifetime DLL and does not use this diagnostic export.
 
+## The stitched match boundary
+
+`don-crossplay::match_bridge::ServiceMatch` is opt-in behind the
+`local-match` feature. It wraps `don-net::LocalMatch` without changing the
+Crossplay service table, its 58 slots, any DTO, or the configured replacement
+DLL. `Backend` continues to own request/Tick chronology; the adapter consumes
+only completed lobby snapshots.
+
+An observation is admitted only when every Crossplay member id is a canonical
+numeric `i32`, the member set exactly equals the live don-net roster, and the
+Crossplay owner equals the single transport player marked as host. The adapter
+reads the recovered `game_seed` lobby attribute and, after StartGame, derives a
+stable non-zero DoN epoch from `(lobby id, session reference)` with specified
+FNV-1a arithmetic. That epoch policy and the MatchStart extension are DoN-owned;
+neither is presented as retail traffic.
+
+Only the host can publish MatchStart, only after observing a started lobby with
+a non-empty session reference. A client may receive that packet before its next
+GetLobby response. The packet is retained but remains unconfirmed, and
+`send_turn` refuses, until the directory reference/epoch/seed/host tuple agrees
+exactly. The last observed roster and host binding are rechecked at publication
+and turn submission.
+
+The subprocess gate publishes a DoN-only `don_match_endpoint` lobby attribute,
+so the joining process obtains the actual TCP endpoint from the lobby returned
+by Find/Join rather than from a second out-of-band fixture argument. Its output
+must order `directory_started` before `match_confirmed` before `turn` on both
+sides, carry the lobby's non-default seed and derived epoch, and finish with the
+same hash over two independently submitted turn packages. Process-local
+Crossplay storage, a hard-coded MatchStart, a mismatched start reference, or an
+early turn all make the test fail.
+
 ## What remains
 
-This tranche proves only the service discovery transaction
-`CreateLobby → FindLobbies → JoinLobby` across processes. The same protocol has
-operations for the existing update/start/P2P directory semantics; P2P paging,
-detached completion, and identity isolation have real loopback-socket tests but
-not yet an equivalent two-executable match test. The service-discovery result
-is not yet wired to `don-net::LocalMatch` as one executable
-`host → join → ready → start → turn` product path. Do not call
-`CrossplayProxy.dll` a complete local multiplayer service yet.
+This is a headless executable path over the DoN semantic `Backend`, its real
+loopback RPC worker/authority, and real `TcpTransport`. It does not claim that
+`riseofnations.exe` has driven the replacement DLL, that the DLL constructs a
+`don-net` transport, or that retail's PlayFab/Party wire behaves this way. The
+`local-match` feature is deliberately absent from the DLL build: stitching an
+engine-owned `CrossplayNetLib` instance through the C++ boundary is a separate
+integration tranche.
 
 No VM, retail process, injected image, or protected live-state file was touched
 for this track.

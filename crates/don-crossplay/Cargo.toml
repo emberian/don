@@ -26,12 +26,22 @@ local = []
 # allocator-only backend remain `no_std` for consumers that do not need local
 # cross-process discovery.
 std-rpc = ["local"]
+# Stitch the DoN-owned Crossplay lobby lifecycle to don-net's explicit
+# MatchStart and turn gate. Kept out of `std-rpc` so the configured replacement
+# DLL does not acquire a networking-crate dependency or change its lifetime.
+local-match = ["std-rpc", "dep:don-net"]
 
 [[bin]]
 name = "directory-rpc-peer"
 path = "src/bin/directory-rpc-peer.rs"
 required-features = ["std-rpc"]
 
-# No dependencies, deliberately. The backend needs an allocator and nothing
-# else, so a future replacement DLL keeps every option about when it can run.
+[[bin]]
+name = "service-match-peer"
+path = "src/bin/service-match-peer.rs"
+required-features = ["local-match"]
+
+# No mandatory dependencies. The backend needs only an allocator; the
+# headless product-path fixture opts into don-net explicitly.
 [dependencies]
+don-net = { path = "../don-net", optional = true }

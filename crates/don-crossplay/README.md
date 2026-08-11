@@ -11,6 +11,7 @@ The crate is three things, in three layers:
 |---|---|---|
 | the interface | [`src/abi.rs`](src/abi.rs) | generated from the shipped private PDBs; 58 slots, 15 DTOs, compile-time layout and alignment assertions. Retail's, and measured. |
 | the implementation | [`src/local.rs`](src/local.rs), [`src/msvc.rs`](src/msvc.rs), [`src/func.rs`](src/func.rs), [`src/logger.rs`](src/logger.rs), [`src/service.rs`](src/service.rs) | a **DoN-owned** lobby/session/P2P service, and the `ICrossplayLogger` behind export ordinal 1, that present those interfaces. No PlayFab, no accounts, no WinHTTP, no Party, no TURN. |
+| the opt-in match seam | [`src/match_bridge.rs`](src/match_bridge.rs) | exact Crossplay/don-net roster binding and the fail-closed StartGame → MatchStart → turn admission policy. DoN-owned, not part of the DLL or retail ABI. |
 | the image | [`dll/`](dll) | a PE32/i386 `CrossplayProxy.dll` exporting the four shipped names at their shipped ordinals, plus a disposable PE32 loader that executes it |
 
 **Nothing is installed into a game directory and no live process is touched.**
@@ -259,6 +260,10 @@ cd crates/don-crossplay && cargo test --lib --features std-rpc
 # 66 passed; 0 failed (includes detached delivery, paging, and identity gates)
 cd crates/don-crossplay && cargo test --features std-rpc --test directory_rpc_process
 # the second gate launches two OS processes and proves Create -> Find -> Join
+
+cd crates/don-crossplay && cargo test --features local-match --test service_match_process
+# two OS processes prove Create -> Find -> Join -> ready -> StartGame ->
+# authoritative MatchStart -> a complete two-package turn
 
 cd crates/don-crossplay && cargo check --lib --target i686-pc-windows-msvc
 cd crates/don-crossplay && cargo check --lib --no-default-features --target i686-pc-windows-msvc

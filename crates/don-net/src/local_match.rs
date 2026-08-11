@@ -12,10 +12,11 @@
 //! roster is ready.  The extension and this policy are DoN-owned. They are not
 //! presented as recovered retail traffic.
 //!
-//! This is still not a complete local lobby service. `don-crossplay`'s
-//! `Directory` is process-local today, so Create/Find/Join cannot yet cross an
-//! OS-process boundary. This module begins after a transport connection exists
-//! and keeps that blocker explicit.
+//! This module still begins after a transport connection exists and has no
+//! lobby-service dependency. The opt-in `don-crossplay::match_bridge` adapter
+//! now binds its roster and MatchStart to Crossplay Create/Find/Join/StartGame
+//! state across processes; keeping that policy outside this crate leaves the
+//! transport/session layer reusable on its own.
 
 use crate::session::{AnnouncedMatchStart, MatchStartError, Role, Session, TurnPackage};
 use crate::transport::Transport;

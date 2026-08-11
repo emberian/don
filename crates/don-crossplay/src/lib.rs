@@ -72,6 +72,9 @@ pub mod abi;
 #[cfg(feature = "std-rpc")]
 pub mod directory_rpc;
 
+#[cfg(feature = "local-match")]
+pub mod match_bridge;
+
 #[cfg(feature = "local")]
 pub mod func;
 #[cfg(feature = "local")]
