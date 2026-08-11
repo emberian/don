@@ -6,7 +6,8 @@
 //! Unsupported calls remain [`HostError::Unimplemented`]; the adapter never supplies
 //! a plausible map style, object count, command result, or checksum value.
 
-use crate::initial::InitialPlayer;
+use crate::initial::{InitialPlayer, InitialState};
+use crate::map_style::{MapStyleStaticData, StaticFileEvidence, SHIPPED_MAP_STYLE_CATALOG};
 use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 use don_bhs::{
     BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
@@ -107,6 +108,11 @@ pub struct ProductionCityImage {
 pub struct ProductionLeaderImage {
     /// The live 32-bit `LeaderData::leader_flags`, not the replay's two-byte setup copy.
     pub flags: u32,
+    /// The live `LeaderData+0x004` flags. Bit `0x80` forces a nomad-size answer.
+    pub flags2: u32,
+    /// Exact result of `Leader::is_major_power` when game rules select the branch
+    /// that distinguishes the two starting-resource settings.
+    pub is_major_power: Option<bool>,
     /// `LeaderData::city_num` at `+0x3f8`. It is intentionally distinct from the
     /// Cities pointer-array length below because retail reads both independently.
     pub city_num: i32,
@@ -118,12 +124,17 @@ pub struct ProductionLeaderImage {
     pub cities: Vec<ProductionCityImage>,
 }
 
-/// Explicit live image required by the seven admitted handlers.
+/// Explicit live and setup image required by the admitted handlers.
 ///
 /// This is an input receipt, not an initializer. In particular, the replay setup
 /// prefix does not contain city rows, attack stamps, live ages, or rule values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionBuiltinImage {
+    /// Resolved `Rules::map_styles[GameInfo::map_style]` identity. This must come
+    /// from an installed-content owner; the replay ordinal alone is not a name.
+    pub map_style: Option<ProductionMapStyleImage>,
+    /// Replay-carried GameInfo settings and fixed Game semaphore bytes.
+    pub setup: Option<ProductionSetupImage>,
     pub leaders: [ProductionLeaderImage; 8],
     /// `Rules::get_num(0x220 + age)` for ages 0 through 6. `None` is an unowned
     /// rules fact and fails closed if execution reaches it.
@@ -133,10 +144,99 @@ pub struct ProductionBuiltinImage {
 impl Default for ProductionBuiltinImage {
     fn default() -> Self {
         Self {
+            map_style: None,
+            setup: None,
             leaders: std::array::from_fn(|_| ProductionLeaderImage::default()),
             techs_per_age: [None; 7],
         }
     }
+}
+
+/// Replay-backed inputs read by the three setup gates in the reached prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductionSetupImage {
+    pub game_rules: u8,
+    pub starting_town: u8,
+    pub starting_resources: u8,
+    pub starting_resources2: u8,
+    pub semaphore: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionSetupBindError {
+    SemaphoreBytes { actual: usize },
+}
+
+impl ProductionSetupImage {
+    /// Bind the GameInfo bytes and the complete fixed-size Game semaphore without
+    /// defaulting any absent replay bytes.
+    pub fn from_initial(initial: &InitialState) -> Result<Self, ProductionSetupBindError> {
+        let semaphore: [u8; 32] = initial.game.semaphore.as_slice().try_into().map_err(|_| {
+            ProductionSetupBindError::SemaphoreBytes {
+                actual: initial.game.semaphore.len(),
+            }
+        })?;
+        let settings = &initial.info.settings;
+        Ok(Self {
+            game_rules: settings.game_rules,
+            starting_town: settings.starting_town,
+            starting_resources: settings.starting_resources,
+            starting_resources2: settings.starting_resources2,
+            semaphore,
+        })
+    }
+
+    fn semaphore_bit(&self, bit: usize) -> bool {
+        self.semaphore[bit / 8] & (1 << (bit % 8)) != 0
+    }
+}
+
+/// Installed-content receipt for `get_mapstyle` builtin 81.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductionMapStyleImage {
+    pub ordinal: u8,
+    pub name: String,
+    /// The admitted `rules.xml` whose ordered `mapstyles` category selected `name`.
+    pub catalog_source: StaticFileEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionMapStyleBindError {
+    SelectorMismatch {
+        replay_ordinal: u8,
+        installed_ordinal: u8,
+    },
+    CatalogIdentityMismatch {
+        ordinal: u8,
+    },
+}
+
+/// Bind builtin 81 to the same installed-content owner used by world reconstruction.
+///
+/// [`MapStyleStaticData::load_from_ron_data`] has already compared the complete
+/// ordered 23-entry `rules.xml` category with the shipped catalog and loaded the
+/// selected XML. Rechecking both identities here prevents a valid style for another
+/// replay from being attached to this production call.
+pub fn bind_production_map_style(
+    replay_ordinal: u8,
+    style: &MapStyleStaticData,
+) -> Result<ProductionMapStyleImage, ProductionMapStyleBindError> {
+    if style.identity.ordinal != replay_ordinal {
+        return Err(ProductionMapStyleBindError::SelectorMismatch {
+            replay_ordinal,
+            installed_ordinal: style.identity.ordinal,
+        });
+    }
+    if SHIPPED_MAP_STYLE_CATALOG.get(replay_ordinal as usize) != Some(&style.identity) {
+        return Err(ProductionMapStyleBindError::CatalogIdentityMismatch {
+            ordinal: replay_ordinal,
+        });
+    }
+    Ok(ProductionMapStyleImage {
+        ordinal: replay_ordinal,
+        name: style.identity.key.to_owned(),
+        catalog_source: style.catalog_source.clone(),
+    })
 }
 
 /// Scalar call trace retained independently of VM coverage.
@@ -165,7 +265,8 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 7] = [248, 258, 323, 358, 383, 712, 713];
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 11] =
+    [81, 147, 248, 254, 255, 258, 323, 358, 383, 712, 713];
 
 /// A strict host for the first stock-economic prefix.
 pub struct ReplayProductionBuiltinHost<'a> {
@@ -247,6 +348,24 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
 
     fn dispatch(&self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match decl.index {
+            // get_mapstyle(), `0x009e4cc0`: `Rules::map_styles[GameInfo::map_style]`
+            // at 0x58-byte stride, returning its String at +0x14.
+            81 => Ok(Value::str(
+                &self
+                    .image
+                    .map_style
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?
+                    .name,
+            )),
+            // is_conquest_scenario(), `0x009e6040`: Game semaphore bit 17.
+            147 => Ok(Value::Int(
+                self.image
+                    .setup
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?
+                    .semaphore_bit(17) as i32,
+            )),
             // age(who), `0x009e8f50`.
             248 => {
                 let Some(who0) = Self::who0(args, 0)? else {
@@ -255,6 +374,44 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                 Ok(Value::Int(
                     self.leader(who0, true).map_or(-1, |leader| leader.age),
                 ))
+            }
+            // get_starting_town_size(who), `0x009e9170`. Retail patch versions
+            // are always >3; scenario bit 12 or conquest bit 17 maps the answer
+            // to the leader's live city-presence predicate.
+            254 => {
+                let Some(who0) = Self::who0(args, 0)? else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(leader) = self.leader(who0, true) else {
+                    return Ok(Value::Int(-1));
+                };
+                if leader.flags2 & 0x80 != 0 {
+                    return Ok(Value::Int(0));
+                }
+                let setup = self.image.setup.as_ref().ok_or(HostError::Unimplemented)?;
+                if setup.semaphore_bit(12) || setup.semaphore_bit(17) {
+                    Ok(Value::Int((leader.city_num > 0) as i32))
+                } else {
+                    Ok(Value::Int(i32::from(setup.starting_town)))
+                }
+            }
+            // get_starting_resources(who), `0x009e91f0`. Game-rules mode 8
+            // selects the secondary setting only for a live minor power.
+            255 => {
+                let Some(who0) = Self::who0(args, 0)? else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(leader) = self.leader(who0, true) else {
+                    return Ok(Value::Int(-1));
+                };
+                let setup = self.image.setup.as_ref().ok_or(HostError::Unimplemented)?;
+                if setup.game_rules == 8
+                    && !leader.is_major_power.ok_or(HostError::Unimplemented)?
+                {
+                    Ok(Value::Int(i32::from(setup.starting_resources2)))
+                } else {
+                    Ok(Value::Int(i32::from(setup.starting_resources)))
+                }
             }
             // num_cities(who), `0x009e92f0`.
             258 => {

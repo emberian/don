@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 mod initial {
     pub use don_replay::initial::*;
 }
+mod map_style {
+    pub use don_replay::map_style::*;
+}
 mod script_channel {
     pub use don_replay::script_channel::*;
 }
@@ -16,9 +19,10 @@ mod replay_bhs_runtime;
 use don_bhs::{find_builtin, Host, HostError, Value, VmError};
 use don_replay::replay::Replay;
 use replay_bhs_live_bindings::{
-    bind_production_call, run_production_call, ProductionBuiltinImage, ProductionCallBindError,
-    ProductionCityImage, ProductionLeaderImage, ProductionRetainedState, ProductionRunFailure,
-    ReplayProductionBuiltinHost,
+    bind_production_call, bind_production_map_style, run_production_call, ProductionBuiltinImage,
+    ProductionCallBindError, ProductionCityImage, ProductionLeaderImage,
+    ProductionMapStyleBindError, ProductionRetainedState, ProductionRunFailure,
+    ProductionSetupImage, ReplayProductionBuiltinHost,
 };
 use replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 
@@ -103,6 +107,8 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
             if who0 == 0 {
                 ProductionLeaderImage {
                     flags: 3,
+                    flags2: 0,
+                    is_major_power: Some(true),
                     city_num: 1,
                     nation: "Greeks".into(),
                     age: 0,
@@ -149,7 +155,112 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     );
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
-        [248, 258, 323, 358, 383, 712, 713]
+        [81, 147, 248, 254, 255, 258, 323, 358, 383, 712, 713]
+    );
+}
+
+#[test]
+fn mapstyle_binding_requires_the_installed_ordered_catalog_and_exact_replay_selector() {
+    let ron_data = repo_root().join("ron-data");
+    if !ron_data.join("rules.xml").is_file() {
+        skip("ron-data/rules.xml is absent.");
+        return;
+    }
+    let style = don_replay::map_style::MapStyleStaticData::load_from_ron_data(&ron_data, 12)
+        .expect("load the installed Mediterranean owner");
+    let binding = bind_production_map_style(12, &style).unwrap();
+    assert_eq!(
+        (binding.ordinal, binding.name.as_str()),
+        (12, "Mediterranean")
+    );
+    assert!(binding.catalog_source.path.ends_with("rules.xml"));
+    assert_eq!(
+        bind_production_map_style(14, &style),
+        Err(ProductionMapStyleBindError::SelectorMismatch {
+            replay_ordinal: 14,
+            installed_ordinal: 12,
+        })
+    );
+
+    let image = ProductionBuiltinImage {
+        map_style: Some(binding),
+        ..Default::default()
+    };
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    assert_eq!(
+        host.call(find_builtin("get_mapstyle").unwrap(), &[]),
+        Ok(Value::str("Mediterranean"))
+    );
+}
+
+#[test]
+fn setup_gates_preserve_replay_options_and_live_leader_branches() {
+    let mut semaphore = [0; 32];
+    semaphore[1] = 0x10; // Game semaphore bit 12.
+    let mut image = ProductionBuiltinImage {
+        setup: Some(ProductionSetupImage {
+            game_rules: 8,
+            starting_town: 2,
+            starting_resources: 1,
+            starting_resources2: 7,
+            semaphore,
+        }),
+        leaders: std::array::from_fn(|who0| {
+            if who0 == 0 {
+                ProductionLeaderImage {
+                    flags: 3,
+                    flags2: 0,
+                    is_major_power: Some(false),
+                    city_num: 1,
+                    ..Default::default()
+                }
+            } else {
+                ProductionLeaderImage::default()
+            }
+        }),
+        ..Default::default()
+    };
+    {
+        let mut host = ReplayProductionBuiltinHost::new(&image);
+        assert_eq!(
+            host.call(find_builtin("is_conquest_scenario").unwrap(), &[]),
+            Ok(Value::Int(0))
+        );
+        assert_eq!(
+            host.call(
+                find_builtin("get_starting_town_size").unwrap(),
+                &[Value::Int(1)]
+            ),
+            Ok(Value::Int(1)),
+            "scenario bit 12 maps starting town to live city presence"
+        );
+        assert_eq!(
+            host.call(
+                find_builtin("get_starting_resources").unwrap(),
+                &[Value::Int(1)]
+            ),
+            Ok(Value::Int(7)),
+            "game-rules mode 8 selects resources2 for a minor power"
+        );
+    }
+
+    image.leaders[0].is_major_power = Some(true);
+    image.leaders[0].flags2 = 0x80;
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    assert_eq!(
+        host.call(
+            find_builtin("get_starting_resources").unwrap(),
+            &[Value::Int(1)]
+        ),
+        Ok(Value::Int(1))
+    );
+    assert_eq!(
+        host.call(
+            find_builtin("get_starting_town_size").unwrap(),
+            &[Value::Int(1)]
+        ),
+        Ok(Value::Int(0)),
+        "LeaderData flags2 bit 0x80 forces nomad size"
     );
 }
 
@@ -188,7 +299,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_reaches_seven_handlers_then_get_mapstyle_and_rolls_back() {
+fn strict_economic_prefix_reaches_find_city_id_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -210,13 +321,28 @@ fn strict_economic_prefix_reaches_seven_handlers_then_get_mapstyle_and_rolls_bac
         num_loops: 5,
     };
     let before_call = call;
+    let installed_style = don_replay::map_style::MapStyleStaticData::load_from_ron_data(
+        &repo_root().join("ron-data"),
+        12,
+    )
+    .expect("load installed Mediterranean owner");
     let image = ProductionBuiltinImage {
+        map_style: Some(bind_production_map_style(12, &installed_style).unwrap()),
+        setup: Some(ProductionSetupImage {
+            game_rules: 0,
+            starting_town: 2,
+            starting_resources: 1,
+            starting_resources2: 1,
+            semaphore: [0; 32],
+        }),
         leaders: std::array::from_fn(|who0| {
             if who0 == 0 {
                 ProductionLeaderImage {
                     flags: 3,
+                    flags2: 0,
+                    is_major_power: Some(true),
                     city_num: 1,
-                    nation: "Greeks".into(),
+                    nation: "Romans".into(),
                     age: 0,
                     cities: vec![ProductionCityImage {
                         active: true,
@@ -237,8 +363,8 @@ fn strict_economic_prefix_reaches_seven_handlers_then_get_mapstyle_and_rolls_bac
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 81,
-            name: "get_mapstyle"
+            index: 377,
+            name: "find_city_id"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -254,6 +380,23 @@ fn strict_economic_prefix_reaches_seven_handlers_then_get_mapstyle_and_rolls_bac
             "age",
             "num_cities",
             "num_cities",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "get_mapstyle",
+            "find_city_with_num",
+            "find_city_with_num",
+            "is_conquest_scenario",
+            "get_starting_resources",
+            "num_cities",
+            "get_starting_town_size",
+            "find_city_with_num",
+            "find_city_with_num",
+            "find_city_with_num",
         ]
     );
     assert_eq!(
@@ -279,6 +422,13 @@ fn checksum_corpus_supplies_only_who_and_never_fabricates_retained_arguments() {
     let mut who = std::collections::BTreeMap::<u8, usize>::new();
     for name in CHECKSUM_RECORDINGS {
         let replay = Replay::open(&replay_root.join(name)).unwrap();
+        let setup = ProductionSetupImage::from_initial(&replay.initial)
+            .expect("checksum replay carries the complete Game semaphore");
+        assert_eq!(setup.game_rules, replay.initial.info.settings.game_rules);
+        assert_eq!(
+            setup.starting_resources,
+            replay.initial.info.settings.starting_resources
+        );
         let mut in_recording = 0usize;
         for player in replay
             .initial
