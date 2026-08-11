@@ -37,10 +37,13 @@ use crate::systems::{
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldObjectIdentity, WorldSaveError, WorldSaveState, MAX_UNITS};
 
+mod groups;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 9;
+const FORMAT_VERSION: u32 = 10;
+/// The last version whose root ended at [`PLAYER_SETUP`], before [`GROUPS`] was added.
+const PLAYER_SETUP_FORMAT_VERSION: u32 = 9;
 const SPARSE_OBJECTS_FORMAT_VERSION: u32 = 8;
 const LEGACY_DENSE_OBJECTS_FORMAT_VERSION: u32 = 7;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
@@ -61,8 +64,9 @@ const PATHS: u16 = 0x0005;
 const ITEMS: u16 = 0x0006;
 const BUILDS: u16 = 0x0007;
 const PLAYER_SETUP: u16 = 0x0008;
+const GROUPS: u16 = 0x0009;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 8] = [
+const REQUIRED: [u16; 9] = [
     CORE,
     MAP,
     OBJECTS,
@@ -71,7 +75,16 @@ const REQUIRED: [u16; 8] = [
     ITEMS,
     BUILDS,
     PLAYER_SETUP,
+    GROUPS,
 ];
+/// The root sections a stream of `version` must carry, in order.
+fn required_sections(version: u32) -> &'static [u16] {
+    match version {
+        FORMAT_VERSION => &REQUIRED,
+        PLAYER_SETUP_FORMAT_VERSION => &REQUIRED[..8],
+        _ => &LEGACY_REQUIRED,
+    }
+}
 
 /// A bounded, fail-closed save/load failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2266,14 +2279,7 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
             return Err(SaveError::Unsupported("Wonder lifecycle"));
         }
     }
-    let default_groups = crate::systems::groups_guys::Groups::default();
-    if sim.groups.list != default_groups.list || sim.groups.last_group != default_groups.last_group
-    {
-        return Err(SaveError::Unsupported("groups"));
-    }
-    if !(0..groups_guys::GROUPS_PER_PLAYER as i32).contains(&sim.groups.proc_group) {
-        return Err(SaveError::Invalid("groups proc_group"));
-    }
+    groups::validate(&sim.groups)?;
     if sim.game_daemon.empty_colls != sim.collision_blocks.cursor() {
         // The runtime is an execution adapter for the same GameDaemon+0x20 scalar, not a
         // second persistent owner. Refuse divergent public state instead of choosing one.
@@ -2322,6 +2328,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(ITEMS, items),
             Chunk::leaf(BUILDS, builds),
             Chunk::leaf(PLAYER_SETUP, write_player_setup(sim)?),
+            Chunk::leaf(GROUPS, groups::write(&sim.groups)?),
         ],
     )
     .encode()?;
@@ -2359,10 +2366,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     }
     let root = parse_chunk(&bytes[MAGIC.len()..])?;
     if root.header.id != ROOT
-        || !matches!(
-            root.header.num_chunks as usize,
-            count if count == LEGACY_REQUIRED.len() || count == REQUIRED.len()
-        )
+        || !(LEGACY_REQUIRED.len()..=REQUIRED.len()).contains(&(root.header.num_chunks as usize))
     {
         return Err(SaveError::InvalidChunk("root id/child count"));
     }
@@ -2379,27 +2383,18 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         }
     }
     let core = read_core(sections[0].ok_or(SaveError::MissingChunk(CORE))?)?;
-    let required = if core.format_version == FORMAT_VERSION {
-        &REQUIRED[..]
-    } else {
-        &LEGACY_REQUIRED[..]
-    };
+    let required = required_sections(core.format_version);
     if root.children.len() != required.len() {
         return Err(SaveError::InvalidChunk(
             "root child count does not match format version",
         ));
     }
-    for &id in required {
-        let index = REQUIRED
-            .iter()
-            .position(|&candidate| candidate == id)
-            .unwrap();
-        if sections[index].is_none() {
-            return Err(SaveError::MissingChunk(id));
+    for (index, &id) in REQUIRED.iter().enumerate() {
+        match (required.contains(&id), sections[index].is_some()) {
+            (true, false) => return Err(SaveError::MissingChunk(id)),
+            (false, true) => return Err(SaveError::UnknownChunk(id)),
+            _ => {}
         }
-    }
-    if core.format_version != FORMAT_VERSION && sections[7].is_some() {
-        return Err(SaveError::UnknownChunk(PLAYER_SETUP));
     }
     let map = sections[1].unwrap();
     let objects = sections[2].unwrap();
@@ -2423,10 +2418,19 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     let (leaders, market) = read_leaders(leaders)?;
     let (unit_type, paths, path_unit) = read_paths(paths, &expected_types)?;
     let item_runtime = read_items(items, &map.world)?;
-    let player_setup = if core.format_version == FORMAT_VERSION {
-        read_player_setup(sections[7].unwrap())?
-    } else {
-        None
+    let player_setup = match sections[7] {
+        Some(data) => read_player_setup(data)?,
+        None => None,
+    };
+    // A stream older than `GROUPS` carried the section's whole reachable state in its
+    // refusal: `reject_unsupported` would not write one unless the pool was constructor
+    // state, so the default pool is a faithful decode of what those bytes meant.
+    let group_pool = match sections[8] {
+        Some(data) => groups::read(data, core.groups_proc_group)?,
+        None => groups_guys::Groups {
+            proc_group: core.groups_proc_group,
+            ..groups_guys::Groups::default()
+        },
     };
     if let Some(setup) = player_setup {
         if core.frame != 0 {
@@ -2464,7 +2468,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         crate::systems::collision_blocks_live::CollisionBlockRuntime::from_cursor(
             core.game_daemon.empty_colls,
         );
-    sim.groups.proc_group = core.groups_proc_group;
+    sim.groups = group_pool;
     if let Some(setup) = player_setup {
         sim.vic_match.options = setup.options;
         sim.vic_match.semaphore = setup.semaphore;
@@ -2821,7 +2825,7 @@ mod tests {
         let children = parsed
             .children
             .iter()
-            .filter(|child| child.header.id != PLAYER_SETUP)
+            .filter(|child| !matches!(child.header.id, PLAYER_SETUP | GROUPS))
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
@@ -2943,7 +2947,7 @@ mod tests {
     }
 
     #[test]
-    fn divergent_step12_cursor_views_and_live_group_slots_still_fail_closed() {
+    fn divergent_step12_cursor_views_and_impossible_group_slots_still_fail_closed() {
         let mut divergent = supported_sim();
         divergent.game_daemon.empty_colls = 7;
         divergent.collision_blocks =
@@ -2953,9 +2957,21 @@ mod tests {
             Err(SaveError::Invalid("GameDaemon collision cursor mirror"))
         );
 
+        // A live group slot is no longer a refusal — the `GROUPS` section owns it. What
+        // still fails closed is a slot no retail transition can produce: `Group::add`
+        // `0x00714350` returns early on `num >= 0x80`, so `num` above `GROUP_MAX_MEMBERS`
+        // is not a state, it is corruption, and it would index past the walked arrays.
         let mut live_group = supported_sim();
         live_group.groups.list[0].form = 4;
-        assert_eq!(save_sim(&live_group), Err(SaveError::Unsupported("groups")));
+        let live_bytes = save_sim(&live_group).unwrap();
+        assert_eq!(load_sim(&live_bytes).unwrap().groups.list[0].form, 4);
+
+        let mut impossible = supported_sim();
+        impossible.groups.list[0].num = groups_guys::GROUP_MAX_MEMBERS as i32 + 1;
+        assert_eq!(
+            save_sim(&impossible),
+            Err(SaveError::Invalid("group slot shape"))
+        );
 
         let mut invalid_cursor = supported_sim();
         invalid_cursor.groups.proc_group = groups_guys::GROUPS_PER_PLAYER as i32;

@@ -3280,3 +3280,23 @@ by the retail field each stands for. A `don-sim`-backed `Host` needs: `Game::tic
 `GameInfo::flags/rush_rules/victory`, `Game::semaphore`, the `Leaders` flag word, the type
 table by name, the per-owner object band with the six vtable predicates, the local select
 group, and a `ScriptTimers` it owns and checksums. I did not add it; `don-sim` is not mine.
+
+## ⚑ CORRECTION to a standing finding (2026-08-11) — `Array<T>` metadata is not always checksummed
+
+The standing note reads "`Array<T>` capacity AND growth metadata are checksummed, not just
+elements. A `Vec` with a different growth policy desyncs on identical logical state." That
+has been repeated into a dozen lane prompts by the orchestrator.
+
+**It is false for `Array<Group>`.** `CheckSums::check_groups` `0x00937530` addresses only
+`[0xE85F14]` and `[0xE85F20]` — the element array and `last_group`. `size` `[0xE85F18]`,
+`increment` `[0xE85F1C]` and `flags` `[0xE85F24]` are walked by `Groups::walk_data` (the
+**save** path) and never reach the checksum. So for this container the metadata is
+**save-critical but not checksum-critical**, and two lanes could disagree about `proc_group`
+without desyncing.
+
+Treat the general note as "check the specific walker", not as a law. `check_*` and
+`walk_data` are different traversals of the same object and they disagree about metadata.
+Read the `check_` function for the channel you are on.
+
+Related, same lane: `command::Groups::cur` and `groups_guys::Groups::last_group` are the
+**same retail field** `Groups+0x1C` (`0x00E85F2C`) modelled twice under different names.

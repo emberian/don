@@ -22,7 +22,25 @@ DEFAULT_OUT = ROOT / "schema" / "simulation-closure.json"
 GLOBAL_STAGES = [
     ("initial_world", "deterministic map, starts, players, nations, teams, diplomacy",
      "required", ""),
-    ("save_load", "complete save/load and resumed deterministic execution", "required", ""),
+    ("save_load", "complete save/load and resumed deterministic execution", "partial",
+     "DoNSave (crates/don-sim/src/systems/save_load.rs, format 10) writes and reads a "
+     "retail-shaped chunk container for the owned Sim tranche and resumes from it: a "
+     "two-player match with live Groups saves, reloads, resaves byte-identically, and runs "
+     "70 further frames with the groups channel (CheckSums::check_groups 0x00937530) and "
+     "the whole-sim channel digest agreeing every frame. The group pool got its owner this "
+     "wave from Groups::walk_data 0x00713E30 / Array<Group>::walk_data 0x0047EA30 / "
+     "Group::walk_data 0x00708400; evidence: crates/don-sim/tests/save_load_groups.rs, "
+     "docs/derivation/savegame-groups.md. Still red: the save point is frame 0 for any "
+     "match that ran the PlayerSetup transaction, because the PLAYER_SETUP section is "
+     "reconstructive and canonical_player_setup_snapshot refuses world.frame != 0 -- and a "
+     "Sim without that owner cannot have an active leader at all, so no mid-match save "
+     "exists yet; closing it needs real save owners for victory_score::LeaderState "
+     "(vic_leaders.slots diplos/init_diplomacy/has_preq_2b0) and vic_match. Also refused "
+     "by reject_unsupported: step-12 visibility authority, cannon-time state, walls, "
+     "herds, projectile type rules, the live/consumed projectile pool, live death records, "
+     "aircraft crash hosts, the Wonder lifecycle, and installed rule overrides. This is "
+     "DoNSave, not a .svx writer: the retail stream's other 90 WalkDataGame::walk_data "
+     "sections have no owner."),
     ("scenario_runtime", "BHS/scenario execution wired into the retail tick", "required", ""),
     ("victory_endgame", "game modes, victory, defeat, scoring, and end-game transition",
      "partial",

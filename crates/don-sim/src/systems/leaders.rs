@@ -126,6 +126,8 @@ use crate::systems::economy::{
     NUM_RESOURCES,
 };
 use crate::systems::leader_process_taunt as taunt;
+use crate::systems::leader_production_ai;
+use crate::systems::leaders_diplomacy_opening_frontier;
 use crate::systems::leaders_process_event_frame_step19 as step19;
 
 // ===========================================================================================
@@ -810,6 +812,12 @@ pub struct Leader {
     /// `tributes` `+0x498`, the six AI build-priority scalars `+0x794..+0x7A8`,
     /// `Personality::raid` `+0x6DEC`, and `dip[8]` `+0x692C`.
     pub taunt: taunt::TauntLeaderState,
+    /// The `LeaderData` slice step 11's `Leader::plan_strategy` `0x006B9620` and
+    /// `Leader::production_ai` `0x006C1960` own: `leader_flags2` `+0x004`,
+    /// `production_step` `+0x788`, `prod_script_run` `+0x78C`, `script_step` `+0x790`,
+    /// `control` `+0x940`, `effective_pop` `+0x9E0`, plus the host answers those two
+    /// functions cannot compute here. See [`crate::systems::leader_production_ai`].
+    pub ai: crate::systems::leader_production_ai::ProductionState,
 }
 
 /// The `LeaderData::has_preq` answers `Wall::update_construct_time` `0x0063D560` needs.
@@ -1008,6 +1016,24 @@ pub struct Leaders {
     pub leaders: [Leader; NUM_LEADER_SLOTS],
     pub end: EndProcessState,
     pub event: EventProcessState,
+    /// `*GameAccess::ai_off != 0`, the global at `[[0x00C061C4]]`. `Leader::production_ai`
+    /// `0x006C197C` and `Leader::diplomacy` `0x006BC9B9` both refuse while it is set, and
+    /// `Game::action_cheat_ai_toggle` `0x005930C0` flips it. `don-sim` already owns a
+    /// producer — `command::InlineState::ai_off`, inline op 64 — but nothing mirrors it
+    /// here yet, so this defaults to that producer's own default of `0`. See the
+    /// **HOOK NEEDED** note in `docs/assembly/leader-production-ai-step11.md`.
+    pub ai_off: bool,
+    /// `GameInfo::starting_resources`, read by `Leader::production_ai` as
+    /// `byte [game + 0x2D]` and compared against `8` (Infinite). `None` is a host that has
+    /// not answered; the step machine then refuses the branches that depend on it rather
+    /// than choosing one. `victory_score::MatchOptions::starting_resources` is the same
+    /// shipped option byte and is the value a host should mirror.
+    pub starting_resources: Option<u8>,
+    /// The most recent [`strategy_all`] trace. Step 11's two AI children mutate leader
+    /// state and answer with a classification the tick's single `Gap` counter cannot
+    /// carry; keeping the trace here lets a consumer read *why* a call was or was not
+    /// charged without step 11 needing a second return channel.
+    pub last_strategy: StrategyTrace,
 }
 
 impl Default for Leaders {
@@ -1025,6 +1051,9 @@ impl Leaders {
             leaders: std::array::from_fn(|i| Leader::new(i as i32)),
             end: EndProcessState::default(),
             event: EventProcessState::default(),
+            ai_off: false,
+            starting_resources: None,
+            last_strategy: StrategyTrace::default(),
         }
     }
 
@@ -2971,12 +3000,53 @@ pub enum StrategyCall {
     CheckVictory,
 }
 
-/// Measured execution of step 11. The two giant AI bodies remain represented by reached
-/// calls, while the dispatcher, exploration recount, score boundary and victory gate run.
+/// `Leader::diplomacy` `0x006BC950`'s three-condition entry gate, `0x006BC99A`..
+/// `0x006BC9C1`. Every refusal jumps straight to the epilogue at
+/// [`leaders_diplomacy_opening_frontier::FUNCTION_RETURN_VA`] without touching a byte, so a
+/// refused call is 20,348 bytes of AI policy that provably did not run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DiplomacyGate {
+    /// `0x006BC99A`: `leaders[this->who].leader_flags & 4`. Retail reads the gate off the
+    /// *indexed* record, not off `this`.
+    HumanOwner,
+    /// `0x006BC9AC`: game semaphore bit 9. The same bit that arms step 11's
+    /// `Game::check_victory` tail therefore silences every leader's diplomacy.
+    CheckVictoryMode,
+    /// `0x006BC9B9`: `*GameAccess::ai_off != 0`.
+    AiOff,
+    /// Past all three. Everything from the eight-record ally and score scan onward is
+    /// reconstructed in [`leaders_diplomacy_opening_frontier`] but needs a tick-side hook
+    /// to execute at the exact retail interleaving; see
+    /// `docs/assembly/leader-production-ai-step11.md`.
+    Entered { first_unowned_va: u32 },
+    /// `this->who` is not an index into the eight-record array, so retail would read
+    /// outside it and the gate cannot be established at all.
+    OwnerWhoOutsideArray { who: i32 },
+}
+
+impl DiplomacyGate {
+    /// True when the call got past the gate into policy this port does not execute.
+    pub fn charges(self) -> bool {
+        matches!(
+            self,
+            DiplomacyGate::Entered { .. } | DiplomacyGate::OwnerWhoOutsideArray { .. }
+        )
+    }
+}
+
+/// Measured execution of step 11.
+///
+/// [`Self::calls`] is the boundary ledger the tick charges from: a call appears there when
+/// retail entered code this port does not execute. [`Self::plan`] and [`Self::diplomacy`]
+/// say what each AI child actually did, including the arms that reached nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StrategyTrace {
     pub processed: [bool; NUM_LEADER_SLOTS],
     pub explore: [ExploreUpdate; NUM_LEADER_SLOTS],
+    /// `Leader::plan_strategy` `0x006B9620`, per slot it was reached on.
+    pub plan: [Option<leader_production_ai::PlanTrace>; NUM_LEADER_SLOTS],
+    /// `Leader::diplomacy` `0x006BC950`'s entry gate, per slot it was reached on.
+    pub diplomacy: [Option<DiplomacyGate>; NUM_LEADER_SLOTS],
     pub calls: Vec<StrategyCall>,
 }
 
@@ -2990,6 +3060,49 @@ impl StrategyTrace {
             .iter()
             .filter(|update| **update == ExploreUpdate::MissingFacts)
             .count()
+    }
+
+    /// How many reached `Leader::plan_strategy` calls returned without entering a single
+    /// retail instruction this port does not own. That is the whole `0x006B9698` sub-phase
+    /// arm plus a rejected `MakeList` head, and at `ai_speed = 1` it is 193 frames in 200.
+    pub fn plan_calls_fully_owned(&self) -> usize {
+        self.plan
+            .iter()
+            .filter(|plan| plan.as_ref().is_some_and(|plan| !plan.charges()))
+            .count()
+    }
+
+    /// How many reached `Leader::diplomacy` calls were refused by the entry gate.
+    pub fn diplomacy_calls_refused(&self) -> usize {
+        self.diplomacy
+            .iter()
+            .filter(|gate| gate.is_some_and(|gate| !gate.charges()))
+            .count()
+    }
+}
+
+/// `Leader::diplomacy` `0x006BC96E`..`0x006BC9C1`, the entry gate whole.
+///
+/// Ordering matters: retail tests the human bit before it reads either global, so a human
+/// leader's diplomacy is silent regardless of the semaphore or the AI kill switch.
+pub fn diplomacy_entry_gate(ls: &Leaders, slot: usize, check_victory_mode: bool) -> DiplomacyGate {
+    use leaders_diplomacy_opening_frontier as diplo;
+
+    let who = ls.leaders[slot].slot;
+    let Some(owner) = ls.by_slot(who) else {
+        return DiplomacyGate::OwnerWhoOutsideArray { who };
+    };
+    if owner.flags & diplo::LEADER_HUMAN != 0 {
+        return DiplomacyGate::HumanOwner;
+    }
+    if check_victory_mode {
+        return DiplomacyGate::CheckVictoryMode;
+    }
+    if ls.ai_off {
+        return DiplomacyGate::AiOff;
+    }
+    DiplomacyGate::Entered {
+        first_unowned_va: diplo::OPENING_BEGIN_VA,
     }
 }
 
@@ -3055,11 +3168,24 @@ pub fn check_explore(
 }
 
 /// **Step 11 of `Game::do_frame`.** `Leaders::strategy_all` `0x006ED430`, recovered in
-/// full at the dispatcher level. A leader enters only when `(flags & 3) == 3`. Calls are
-/// emitted in their instruction order so the tick can execute the existing score/victory
-/// ports at the exact boundary and charge only the two unresolved AI bodies.
+/// full at the dispatcher level. A leader enters only when `(flags & 3) == 3`.
+///
+/// The two AI children now *run*, as far as they have been recovered:
+/// [`leader_production_ai::plan_strategy`] executes `Leader::plan_strategy`'s entry and
+/// dispatch skeleton and the whole `Leader::production_ai` step machine, and
+/// [`diplomacy_entry_gate`] executes `Leader::diplomacy`'s three-condition gate. A
+/// [`StrategyCall::PlanStrategy`] or [`StrategyCall::Diplomacy`] is emitted **only when
+/// retail entered code this port does not execute**, so the tick's coverage gaps stop
+/// charging the arms that provably touch nothing. [`StrategyTrace::plan`] and
+/// [`StrategyTrace::diplomacy`] record every reached call either way.
 pub fn strategy_all(ls: &mut Leaders, input: StrategyInputs<'_>) -> StrategyTrace {
     let mut trace = StrategyTrace::default();
+    let env = leader_production_ai::AiEnv {
+        frame: input.frame,
+        ai_speed: input.ai_speed,
+        ai_off: ls.ai_off,
+        starting_resources: ls.starting_resources,
+    };
 
     for slot in 0..NUM_LEADER_SLOTS {
         if ls.leaders[slot].flags & (flag::IN_GAME | flag::PROCESS)
@@ -3080,16 +3206,33 @@ pub fn strategy_all(ls: &mut Leaders, input: StrategyInputs<'_>) -> StrategyTrac
         trace
             .calls
             .push(StrategyCall::CheckExplore { slot, update });
-        trace.calls.push(StrategyCall::PlanStrategy(slot));
+
+        // `Leader::plan_strategy` `0x006B9620`.
+        let leader_flags = ls.leaders[slot].flags;
+        let who = ls.leaders[slot].slot;
+        let plan =
+            leader_production_ai::plan_strategy(&mut ls.leaders[slot].ai, leader_flags, who, env);
+        if plan.charges() {
+            trace.calls.push(StrategyCall::PlanStrategy(slot));
+        }
+        trace.plan[slot] = Some(plan);
+
         trace
             .calls
             .push(StrategyCall::ComputeScore { slot, force: 0 });
-        trace.calls.push(StrategyCall::Diplomacy(slot));
+
+        // `Leader::diplomacy` `0x006BC950`.
+        let gate = diplomacy_entry_gate(ls, slot, input.check_victory_mode);
+        if gate.charges() {
+            trace.calls.push(StrategyCall::Diplomacy(slot));
+        }
+        trace.diplomacy[slot] = Some(gate);
     }
 
     if input.check_victory_mode {
         trace.calls.push(StrategyCall::CheckVictory);
     }
+    ls.last_strategy = trace.clone();
     trace
 }
 
@@ -3758,7 +3901,13 @@ mod tests {
         }
     }
 
-    /// `0x006ED440` gates on both low bits and the four calls stay interleaved per slot.
+    /// `0x006ED440` gates on both low bits and the calls stay interleaved per slot.
+    ///
+    /// Both AI children run here and both reach nothing. At frame 1 slot 2's planner phase
+    /// is `51` and slot 4's is `101`; neither is a multiple of 30, so `0x006B9698` returns
+    /// each of them immediately. And the semaphore that arms the `Game::check_victory`
+    /// tail is the *same* bit `Leader::diplomacy` `0x006BC9AC` refuses on, so with it set
+    /// every leader's 20,348-byte diplomacy body is silent.
     #[test]
     fn strategy_all_uses_flags_3_and_preserves_exact_call_order() {
         let seen2 = [0u8; 64];
@@ -3780,18 +3929,96 @@ mod tests {
                     slot: 2,
                     update: ExploreUpdate::NotDue,
                 },
-                StrategyCall::PlanStrategy(2),
                 StrategyCall::ComputeScore { slot: 2, force: 0 },
-                StrategyCall::Diplomacy(2),
                 StrategyCall::CheckExplore {
                     slot: 4,
                     update: ExploreUpdate::NotDue,
                 },
-                StrategyCall::PlanStrategy(4),
                 StrategyCall::ComputeScore { slot: 4, force: 0 },
-                StrategyCall::Diplomacy(4),
                 StrategyCall::CheckVictory,
             ]
+        );
+        assert_eq!(trace.plan_calls_fully_owned(), 2);
+        assert_eq!(trace.diplomacy_calls_refused(), 2);
+        for slot in [2usize, 4] {
+            assert_eq!(
+                trace.plan[slot].as_ref().map(|plan| plan.arm.clone()),
+                Some(leader_production_ai::PlanArm::NotDue {
+                    phase: slot as i32 * 25 + 1
+                })
+            );
+            assert_eq!(trace.diplomacy[slot], Some(DiplomacyGate::CheckVictoryMode));
+        }
+    }
+
+    /// The planner's phase is due here, so the 11,108-byte body is reached and charged,
+    /// and with the semaphore clear so is the diplomacy body.
+    #[test]
+    fn a_due_planner_phase_reaches_both_ai_bodies() {
+        let seen2 = [0u8; 64];
+        let mut ls = Leaders::new();
+        ls.leaders[2].activate();
+
+        let mut input = strategy_input(&seen2);
+        // slot 2's planner phase is `(2*25 + frame) % 200`; frame 150 makes it zero.
+        input.frame = 150;
+        let trace = strategy_all(&mut ls, input);
+
+        assert!(trace.calls.contains(&StrategyCall::PlanStrategy(2)));
+        assert!(trace.calls.contains(&StrategyCall::Diplomacy(2)));
+        assert_eq!(trace.plan_calls_fully_owned(), 0);
+        assert_eq!(trace.diplomacy_calls_refused(), 0);
+        assert_eq!(
+            trace.plan[2].as_ref().map(|plan| plan.arm.clone()),
+            Some(leader_production_ai::PlanArm::PlanningBody {
+                first_unowned_va: leader_production_ai::va::PLAN_STRATEGY_BODY
+            })
+        );
+        assert_eq!(
+            trace.diplomacy[2],
+            Some(DiplomacyGate::Entered {
+                first_unowned_va: leaders_diplomacy_opening_frontier::OPENING_BEGIN_VA
+            })
+        );
+    }
+
+    /// Retail reads the diplomacy human gate off `leaders[this->who]`, and the global AI
+    /// kill switch off `GameAccess::ai_off`, in that order.
+    #[test]
+    fn the_diplomacy_gate_reads_the_indexed_record_then_the_two_globals() {
+        let mut ls = Leaders::new();
+        ls.leaders[3].activate();
+        assert_eq!(
+            diplomacy_entry_gate(&ls, 3, false),
+            DiplomacyGate::Entered {
+                first_unowned_va: leaders_diplomacy_opening_frontier::OPENING_BEGIN_VA
+            }
+        );
+
+        ls.ai_off = true;
+        assert_eq!(diplomacy_entry_gate(&ls, 3, false), DiplomacyGate::AiOff);
+        // The human bit is tested first, before either global.
+        ls.leaders[3].flags |= leaders_diplomacy_opening_frontier::LEADER_HUMAN;
+        assert_eq!(
+            diplomacy_entry_gate(&ls, 3, true),
+            DiplomacyGate::HumanOwner
+        );
+
+        // The gate follows `this->who`, not the array position.
+        let mut ls = Leaders::new();
+        ls.leaders[3].activate();
+        ls.leaders[3].slot = 5;
+        ls.leaders[5].activate();
+        ls.leaders[5].flags |= leaders_diplomacy_opening_frontier::LEADER_HUMAN;
+        assert_eq!(
+            diplomacy_entry_gate(&ls, 3, false),
+            DiplomacyGate::HumanOwner
+        );
+
+        ls.leaders[3].slot = 9;
+        assert_eq!(
+            diplomacy_entry_gate(&ls, 3, false),
+            DiplomacyGate::OwnerWhoOutsideArray { who: 9 }
         );
     }
 

@@ -3913,6 +3913,15 @@ impl Sim {
         for b in self.builds.iter() {
             mix(adler32(1, &b.image()));
         }
+        // `check_groups` `0x00937530`. Without this the digest is blind to a group desync,
+        // so every determinism test built on it — including save/load resume — could pass
+        // across a diverged group pool. Requested as HOOK NEEDED by the save_load lane,
+        // which had to compare `check_groups` explicitly to get real coverage.
+        mix({
+            let mut cs = crate::systems::groups_guys::CheckSum::default();
+            self.groups.check_groups(&mut cs);
+            cs.value
+        });
         mix(self.world.frame as u32);
         mix(self.world.random.state() as u32);
         h

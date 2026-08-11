@@ -57,7 +57,7 @@
 //! 3. **`production_step != 0` bypasses the phase entirely** (`0x006B9655`). The phase is
 //!    computed first but only consulted once the production cycle is idle, so a running
 //!    cycle advances one stage *every frame* of the leader's turn, not once per period.
-//! 4. **196 of every 200 `plan_strategy` calls provably return having touched nothing.**
+//! 4. **193 of every 200 `plan_strategy` calls provably return having touched nothing.**
 //!    With `production_step == 0` the body is `if (frame != 0 && phase != 0) { if (phase %
 //!    30 != 0) return; ... }`, so at `ai_speed = 1` only `phase == 0` (the planning body)
 //!    and the six `phase in {30,60,90,120,150,180}` frames get past the gate. Charging a
@@ -527,7 +527,12 @@ pub fn plan_phase(who: i32, env: AiEnv) -> Option<i32> {
 ///
 /// The 11,108-byte planning body itself is not here; reaching it is
 /// [`PlanArm::PlanningBody`], which names `0x006B96F9`.
-pub fn plan_strategy(st: &mut ProductionState, leader_flags: u32, who: i32, env: AiEnv) -> PlanTrace {
+pub fn plan_strategy(
+    st: &mut ProductionState,
+    leader_flags: u32,
+    who: i32,
+    env: AiEnv,
+) -> PlanTrace {
     let phase = plan_phase(who, env);
 
     // 0x006B9655: the production cycle bypasses the phase entirely.
@@ -656,9 +661,9 @@ pub fn production_ai(
                 }
                 None => {
                     trace.step_after = st.production_step;
-                    trace.stalls.push(Stall::StartingResources {
-                        at_va: 0x006c_19bf,
-                    });
+                    trace
+                        .stalls
+                        .push(Stall::StartingResources { at_va: 0x006c_19bf });
                     return trace;
                 }
             }
@@ -771,9 +776,9 @@ fn make_stuff_arm(st: &mut ProductionState, trace: &mut ProductionTrace, env: Ai
                 st.production_step = 0;
             }
         }
-        None => trace.stalls.push(Stall::StartingResources {
-            at_va: 0x006c_1b63,
-        }),
+        None => trace
+            .stalls
+            .push(Stall::StartingResources { at_va: 0x006c_1b63 }),
     }
 }
 
@@ -786,9 +791,9 @@ fn infinite_tail(trace: &mut ProductionTrace, env: AiEnv) {
                 trace.stages.push(Stage::MakeListClear);
             }
         }
-        None => trace.stalls.push(Stall::StartingResources {
-            at_va: 0x006c_1ae9,
-        }),
+        None => trace
+            .stalls
+            .push(Stall::StartingResources { at_va: 0x006c_1ae9 }),
     }
 }
 
@@ -939,15 +944,7 @@ mod tests {
                 queued_units: Some(3),
                 ..ProductionState::default()
             };
-            let trace = production_ai(
-                &mut st,
-                flags,
-                0,
-                AiEnv {
-                    ai_off,
-                    ..env(1)
-                },
-            );
+            let trace = production_ai(&mut st, flags, 0, AiEnv { ai_off, ..env(1) });
             assert_eq!(trace.gate, expect);
             assert_eq!(st.production_step, 0, "0x006C1B96 resets the counter");
             assert!(trace.stages.is_empty());
@@ -997,7 +994,10 @@ mod tests {
             ..ProductionState::default()
         };
         let trace = production_ai(&mut st, 0, 0, env(1));
-        assert_eq!(st.production_step, 3, "1 -> 2 pre-check, then the step-2 arm");
+        assert_eq!(
+            st.production_step, 3,
+            "1 -> 2 pre-check, then the step-2 arm"
+        );
         assert!(trace.stages.contains(&Stage::ProductionAiSetup));
     }
 
