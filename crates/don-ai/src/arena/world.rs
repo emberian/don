@@ -4035,8 +4035,9 @@ impl World {
     /// Run one `Leader::set_diplo` `0x006EC6A0` transaction against the live Arena.
     ///
     /// Planning completes before anything mutates, so a declaration whose plan reaches an
-    /// authority the Arena does not host — today, `Leader::victory` `0x006EC9B0` — leaves
-    /// the world byte-identical. Both the commit and the refusal are recorded on
+    /// authority the Arena still does not host (contained-object ejection or Army
+    /// processing) leaves the world byte-identical. `Leader::victory` runs against the
+    /// retained canonical Leaders/Match owner. Both commits and refusals are recorded on
     /// [`ArenaDiplomacy::log`].
     pub fn declare(
         &mut self,
@@ -4068,23 +4069,29 @@ impl World {
             })
             .collect();
 
+        self.arena_diplomacy.set_frame(self.frame);
         let planned = {
             let inputs = self
                 .arena_diplomacy
                 .inputs(&self.diplomacy, &leaders, &objects);
-            diplomacy_runtime::plan_declaration(
+            diplomacy_runtime::plan_hosted_declaration(
                 &inputs,
+                self.arena_diplomacy.leader_match(),
                 usize::from(who),
                 usize::from(target),
                 state,
             )
         };
         let outcome = match planned {
-            Ok(planned) => diplomacy_runtime::apply_declaration(
-                &mut self.diplomacy,
-                self.arena_diplomacy.rows_mut(),
-                &planned,
-            ),
+            Ok(planned) => {
+                let (rows, host) = self.arena_diplomacy.split_rows_and_match();
+                diplomacy_runtime::apply_hosted_declaration(
+                    &mut self.diplomacy,
+                    rows,
+                    host,
+                    &planned,
+                )
+            }
             Err(refusal) => Err(refusal),
         };
         self.arena_diplomacy.record(ArenaDeclarationRecord {
@@ -4093,7 +4100,12 @@ impl World {
             state,
             outcome: outcome.clone(),
         });
-        if outcome.is_ok() {
+        if let Ok(committed) = &outcome {
+            for entity in &mut self.ents {
+                if committed.terminal_queue_cleanup & (1u8 << entity.who) != 0 {
+                    entity.queue.clear();
+                }
+            }
             // Shared vision moved, so the fog planes are stale until the next recompute.
             self.update_fog();
         }

@@ -1123,6 +1123,12 @@ impl Leaders {
         self.defeat_unit_cleanup |= owners;
     }
 
+    /// Snapshot the two object-store requests without consuming them. Transaction and
+    /// persistence adapters use this to prove that no terminal side effect is lost.
+    pub(crate) fn pending_cleanup_masks(&self) -> (u8, u8) {
+        (self.terminal_queue_cleanup, self.defeat_unit_cleanup)
+    }
+
     // -- diplomacy -----------------------------------------------------------
 
     /// `LeaderData::get_diplo(int j)` @ `0x006EBA50`. The pairwise state is the

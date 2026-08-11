@@ -1,6 +1,6 @@
 use don_sim::systems::leader_init_diplomacy_loop::{RelationDecision, SharedVisionDecision};
 use don_sim::systems::player_setup::{ManualPlayerSetup, ManualPlayerSetupError, MAX_TEAM_STYLE};
-use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
+use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::setup_diplomacy::{SETUP_SLOTS, TEAM_AUTO};
 use don_sim::systems::team_setup_mutation::{InitTeamsError, RANDOM_TEAM};
 use don_sim::systems::victory_score::{game_sem, Diplo};
@@ -248,15 +248,15 @@ fn applied_owner_is_one_shot_and_inactive_slots_keep_the_exact_sentinel() {
 }
 
 #[test]
-fn frame_zero_save_refuses_any_divergent_setup_projection() {
+fn mutable_leader_rows_and_post_setup_clocks_are_owned_by_v11() {
     let mut sim = Sim::new(5, 8);
     sim.start_manual_player_setup(request(0x03, &[(0, 0), (1, 1)], 1, 0))
         .unwrap();
     sim.vic_leaders.slots[0].init_diplomacy.treaties[1] ^= 1;
-    assert_eq!(
-        save_sim(&sim),
-        Err(SaveError::Invalid("divergent player setup projection"))
-    );
+    let bytes = save_sim(&sim).expect("runtime diplomacy is no longer setup receipt state");
+    let loaded = load_sim(&bytes).unwrap();
+    assert_eq!(loaded.vic_leaders.slots[0].init_diplomacy.treaties[1], 1);
+    assert_eq!(save_sim(&loaded).unwrap(), bytes);
 
     let mut advanced = Sim::new(6, 8);
     advanced
@@ -264,10 +264,6 @@ fn frame_zero_save_refuses_any_divergent_setup_projection() {
         .unwrap();
     advanced.world.frame = 1;
     advanced.vic_match.frame = 1;
-    assert_eq!(
-        save_sim(&advanced),
-        Err(SaveError::Unsupported(
-            "player setup after the frame-zero boundary"
-        ))
-    );
+    let bytes = save_sim(&advanced).expect("mutable match state crosses frame zero");
+    assert_eq!(load_sim(&bytes).unwrap().world.frame, 1);
 }

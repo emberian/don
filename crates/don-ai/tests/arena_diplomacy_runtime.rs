@@ -21,7 +21,7 @@ use don_sim::systems::leader_init_diplomacy_loop::{
 };
 use don_sim::systems::leader_set_diplo::{SetDiploMutation, SetDiploStep};
 use don_sim::systems::setup_diplomacy::{PlayerSetup, SetupDiplomacy, PLAYER_PRESENT};
-use don_sim::systems::victory_score::{Diplo, NUM_LEADERS};
+use don_sim::systems::victory_score::{leader_flag, Diplo, NUM_LEADERS};
 
 // ---------------------------------------------------------------------------
 // A pure two/three-leader fixture.
@@ -291,8 +291,14 @@ fn a_defeated_third_leader_does_not_keep_the_alliance_hostable() {
 fn an_alliance_without_ally_los_grants_no_shared_vision() {
     let mut f = Fixture::new(3);
     f.declare(0, 1, Diplo::Ally).expect("alliance commits");
-    assert_eq!(f.rows[0].ally_mask, 0b001, "leader 0 still sees only itself");
-    assert_eq!(f.rows[1].ally_mask, 0b010, "leader 1 still sees only itself");
+    assert_eq!(
+        f.rows[0].ally_mask, 0b001,
+        "leader 0 still sees only itself"
+    );
+    assert_eq!(
+        f.rows[1].ally_mask, 0b010,
+        "leader 1 still sees only itself"
+    );
 }
 
 #[test]
@@ -412,7 +418,7 @@ fn world(players: usize) -> Option<World> {
 }
 
 #[test]
-fn a_live_two_player_arena_refuses_an_alliance_and_accepts_peace() {
+fn a_live_two_player_arena_hosts_the_shared_victory_and_retains_it() {
     let Some(mut w) = world(2) else { return };
     assert_eq!(
         w.submit_player(
@@ -422,11 +428,17 @@ fn a_live_two_player_arena_refuses_an_alliance_and_accepts_peace() {
                 state: Diplo::Ally,
             }
         ),
-        OrderResult::Refused,
-        "an alliance is a shared victory here and the Arena hosts no Leader::victory"
+        OrderResult::Ok(1),
+        "the live Arena owns the same Leaders/Match transaction as Sim"
     );
-    assert_eq!(w.players[0].orders_refused, 1);
-    assert_eq!(w.diplomacy.relation(0, 1).expect("valid pair"), Diplo::War);
+    assert_eq!(w.players[0].orders_refused, 0);
+    assert_eq!(w.diplomacy.relation(0, 1).expect("valid pair"), Diplo::Ally);
+    let host = w.arena_diplomacy.leader_match();
+    assert!(host.leaders().slots[0].flag(leader_flag::WON));
+    assert!(host.leaders().slots[1].flag(leader_flag::WON));
+    assert!(host
+        .game()
+        .sem(don_sim::systems::victory_score::game_sem::VICTORY_RESOLVED));
 
     assert_eq!(
         w.submit_player(
@@ -436,9 +448,13 @@ fn a_live_two_player_arena_refuses_an_alliance_and_accepts_peace() {
                 state: Diplo::Peace,
             }
         ),
-        OrderResult::Ok(1)
+        OrderResult::Ok(1),
+        "a later declaration still runs against the retained terminal owner"
     );
-    assert_eq!(w.diplomacy.relation(0, 1).expect("valid pair"), Diplo::Peace);
+    assert_eq!(
+        w.diplomacy.relation(0, 1).expect("valid pair"),
+        Diplo::Peace
+    );
     assert_eq!(w.arena_diplomacy.log().len(), 2);
 }
 

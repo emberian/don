@@ -29,23 +29,29 @@
 //! | `Presentation(..)` | recorded, never simulated |
 //! | `Authority(ComeOut / KillContainedUnit / AddAirStrafeOrder)` | refused — `eject_my_shit_from_his_ass` `0x006D0220` |
 //! | `Authority(ForceArmyProcess)` | refused — `Leader::force_army_process` `0x006F30F0` |
-//! | `Authority(Victory)` | refused — `Leader::victory` `0x006EC9B0` |
-//! | `SetVictoryBit22` | unreachable: retail only reaches it after `Leader::victory` |
+//! | `Authority(Victory)` | live Arena executes the canonical `Leaders`/`Match` transaction |
+//! | `SetVictoryBit22` | executed against the same retained Match |
 //!
 //! The first two authority rows are refusals the Arena never actually reaches, and it does
 //! not reach them *for a derived reason rather than a convenient one*: the Arena
 //! materializes no contained objects, so `ObjectData::get_inside` is `None` for every one
 //! of its objects, and it materializes no `Army`, so every `valid_armies` bit is clear.
-//! `Leader::victory` is different — see [`ArenaDeclarationRefusal::UnhostedVictory`]. It is
-//! genuinely reached, and this lane does not close it.
+//! `Leader::victory` is genuinely reached. The pure planner retains
+//! [`ArenaDeclarationRefusal::UnhostedVictory`] when no authority is supplied; live Arena
+//! supplies [`ArenaLeaderMatch`] and commits it atomically.
 
 use don_sim::systems::leader_set_diplo::{
-    plan_set_diplo, EjectionUnitFact, Relation, SetDiploAuthority, SetDiploImage,
-    SetDiploMutation, SetDiploPlan, SetDiploPlanError, SetDiploPresentation, SetDiploReceipt,
-    SetDiploRequest, SetDiploStep, SetDiploTransactionRequest, SetDiploTransactionStatus,
-    ARMY_SLOTS, DIPLO_SLOTS,
+    plan_set_diplo, EjectionUnitFact, Relation, SetDiploAuthority, SetDiploImage, SetDiploMutation,
+    SetDiploPlan, SetDiploPlanError, SetDiploPresentation, SetDiploReceipt, SetDiploRequest,
+    SetDiploStep, SetDiploTransactionRequest, SetDiploTransactionStatus, ARMY_SLOTS, DIPLO_SLOTS,
 };
 use don_sim::systems::victory_score::{leader_flag, Diplo, NUM_LEADERS};
+use don_sim::systems::victory_score::{
+    Leaders as VictoryLeaders, Match as VictoryMatch, ScoreConstants, TypeTable, VictoryType,
+};
+use don_sim::tick::leader_match_host::{
+    apply_leader_match, LeaderMatchError, LeaderMatchReceipt, LeaderMatchRequest,
+};
 
 use super::retail_systems::DiplomacyState;
 
@@ -118,6 +124,14 @@ impl ArenaLeaderDiplomacyRow {
             ally_los: false,
         }
     }
+
+    fn into_init_row(self) -> don_sim::systems::leader_init_diplomacy_loop::LeaderInitDiplomacyRow {
+        don_sim::systems::leader_init_diplomacy_loop::LeaderInitDiplomacyRow {
+            treaties: self.treaties,
+            ally_mask: self.ally_mask,
+            ..Default::default()
+        }
+    }
 }
 
 /// The per-frame Arena facts a declaration reads that are not diplomacy state.
@@ -179,6 +193,11 @@ pub enum ArenaDeclarationRefusal {
     /// part completely, but it needs a `Leaders`/`Match` owner and the Arena has neither;
     /// its `check_defeat` is a separate elimination model.
     UnhostedVictory { winner: usize },
+    /// The live declaration image and the persistent `Leaders`/`Match` owner disagree on
+    /// a field `Leader::set_diplo` reads. Publishing either copy would choose an authority.
+    IncoherentLeaderMatch,
+    /// The canonical terminal transaction rejected the receiver before mutation.
+    LeaderMatch(LeaderMatchError),
     /// `eject_my_shit_from_his_ass` `0x006D0220`. Only reachable once the Arena
     /// materializes contained objects.
     UnhostedEjection { owner: usize, object_o: i32 },
@@ -195,10 +214,13 @@ impl ArenaDeclarationRefusal {
     pub fn retail_va(self) -> Option<u32> {
         match self {
             Self::UnhostedVictory { .. } => Some(LEADER_VICTORY_VA),
+            Self::LeaderMatch(_) => Some(LEADER_VICTORY_VA),
             Self::UnhostedEjection { .. } => Some(EJECT_MY_SHIT_VA),
             Self::UnhostedArmyProcess { .. } => Some(FORCE_ARMY_PROCESS_VA),
             Self::Plan(_) | Self::ReceiptRejected => Some(LEADER_SET_DIPLO_VA),
-            Self::UnknownLeader { .. } | Self::IncoherentLeaderTables { .. } => None,
+            Self::UnknownLeader { .. }
+            | Self::IncoherentLeaderTables { .. }
+            | Self::IncoherentLeaderMatch => None,
         }
     }
 }
@@ -222,6 +244,83 @@ impl From<SetDiploPlanError> for ArenaDeclarationRefusal {
             },
             other => Self::Plan(other),
         }
+    }
+}
+
+/// Persistent Arena owner for the recovered terminal leader/game state.
+///
+/// This is not an Arena-shaped victory approximation: it is the same
+/// [`VictoryLeaders`]/[`VictoryMatch`] pair the executable Sim owns, and every terminal
+/// call goes through the same staged transaction. `PlayerState::alive` remains the Arena's
+/// observation projection; it is not a second implementation of victory.
+#[derive(Clone, Debug)]
+pub struct ArenaLeaderMatch {
+    leaders: VictoryLeaders,
+    game: VictoryMatch,
+}
+
+impl ArenaLeaderMatch {
+    pub fn opening(players: usize) -> Self {
+        let types = TypeTable::with_default_kinds(ScoreConstants::default());
+        let mut leaders = VictoryLeaders::new(types);
+        for who in 0..players.min(NUM_LEADERS) {
+            leaders.slots[who].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+            leaders.slots[who].init_diplomacy =
+                ArenaLeaderDiplomacyRow::opening(who).into_init_row();
+        }
+        let mut game = VictoryMatch::default();
+        game.num_nations = players.min(NUM_LEADERS) as i32;
+        game.num_sides = game.num_nations;
+        Self { leaders, game }
+    }
+
+    pub fn leaders(&self) -> &VictoryLeaders {
+        &self.leaders
+    }
+
+    pub fn game(&self) -> &VictoryMatch {
+        &self.game
+    }
+
+    pub fn set_frame(&mut self, frame: i64) {
+        self.game.frame = i32::try_from(frame).unwrap_or(i32::MAX);
+        self.game.tick = self.game.frame / 15;
+    }
+
+    fn admits(&self, before: &SetDiploImage) -> bool {
+        if before.victory_mask != self.game.semaphore {
+            return false;
+        }
+        for who in 0..DIPLO_SLOTS {
+            let facts = &before.leaders[who];
+            let live = &self.leaders.slots[who];
+            // These are exactly the flag bits `Leader::set_diplo` reads. WON/SURVIVED
+            // are terminal output but not inputs to this body.
+            if facts
+                .leader_flags
+                .is_some_and(|flags| flags & 0x0f != (live.leader_flags as u32) & 0x0f)
+                || facts
+                    .leader_flags2
+                    .is_some_and(|flags| flags & 0x0a != (live.leader_flags2 as u32) & 0x0a)
+                || facts.diplos.iter().enumerate().any(|(target, value)| {
+                    value.is_some_and(|value| map_back(value) as i32 != live.diplos[target])
+                })
+                || facts
+                    .shared_vision
+                    .is_some_and(|mask| mask != live.init_diplomacy.ally_mask)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn apply(
+        &mut self,
+        request: LeaderMatchRequest,
+    ) -> Result<LeaderMatchReceipt, ArenaDeclarationRefusal> {
+        apply_leader_match(&mut self.leaders, &mut self.game, request)
+            .map_err(ArenaDeclarationRefusal::LeaderMatch)
     }
 }
 
@@ -403,11 +502,12 @@ impl ArenaDeclarationPlan {
 /// This is the fail-closed order the charter asks for: the refusal happens at plan time, so
 /// a declaration that reaches `Leader::victory` leaves the world byte-identical rather than
 /// half-applied.
-pub fn plan_declaration(
+fn plan_declaration_with_victory_host(
     inputs: &ArenaDeclarationInputs<'_>,
     actor: usize,
     target: usize,
     state: Diplo,
+    victory_host: Option<&ArenaLeaderMatch>,
 ) -> Result<ArenaDeclarationPlan, ArenaDeclarationRefusal> {
     let present = inputs.rows.len();
     if actor >= present {
@@ -423,6 +523,9 @@ pub fn plan_declaration(
         state: map_relation(state),
     };
     let plan = plan_set_diplo(&before, request)?;
+    if victory_host.is_some_and(|host| !host.admits(&before)) {
+        return Err(ArenaDeclarationRefusal::IncoherentLeaderMatch);
+    }
 
     for step in &plan.steps {
         let SetDiploStep::Authority(call) = step else {
@@ -430,7 +533,9 @@ pub fn plan_declaration(
         };
         match *call {
             SetDiploAuthority::Victory { winner, .. } => {
-                return Err(ArenaDeclarationRefusal::UnhostedVictory { winner })
+                if victory_host.is_none() {
+                    return Err(ArenaDeclarationRefusal::UnhostedVictory { winner });
+                }
             }
             SetDiploAuthority::ComeOut { owner, object_id }
             | SetDiploAuthority::KillContainedUnit {
@@ -446,9 +551,7 @@ pub fn plan_declaration(
             }
             SetDiploAuthority::ForceArmyProcess {
                 owner, army_slot, ..
-            } => {
-                return Err(ArenaDeclarationRefusal::UnhostedArmyProcess { owner, army_slot })
-            }
+            } => return Err(ArenaDeclarationRefusal::UnhostedArmyProcess { owner, army_slot }),
         }
     }
 
@@ -457,6 +560,28 @@ pub fn plan_declaration(
         request,
         plan,
     })
+}
+
+pub fn plan_declaration(
+    inputs: &ArenaDeclarationInputs<'_>,
+    actor: usize,
+    target: usize,
+    state: Diplo,
+) -> Result<ArenaDeclarationPlan, ArenaDeclarationRefusal> {
+    plan_declaration_with_victory_host(inputs, actor, target, state, None)
+}
+
+/// Plan a declaration against a persistent retail `Leaders`/`Match` owner. Only the
+/// victory authority changes status; ejection and Army processing retain their named
+/// fail-closed boundaries.
+pub fn plan_hosted_declaration(
+    inputs: &ArenaDeclarationInputs<'_>,
+    host: &ArenaLeaderMatch,
+    actor: usize,
+    target: usize,
+    state: Diplo,
+) -> Result<ArenaDeclarationPlan, ArenaDeclarationRefusal> {
+    plan_declaration_with_victory_host(inputs, actor, target, state, Some(host))
 }
 
 /// What a committed declaration changed, in retail's own order.
@@ -470,6 +595,11 @@ pub struct ArenaDeclarationOutcome {
     /// `IFaceData+0x22A` was set. Presentation; recorded, not simulated.
     pub interface_dirty: bool,
     pub presentation: Vec<SetDiploPresentation>,
+    /// `Leader::victory` owners whose concrete production queues must be emptied.
+    pub terminal_queue_cleanup: u8,
+    /// Defeated-owner Unit-band requests. The alliance-victory path has none; a nonzero
+    /// mask is retained so a future caller cannot silently omit that object transaction.
+    pub defeat_unit_cleanup: u8,
 }
 
 /// Execute a planned declaration.
@@ -482,6 +612,15 @@ pub fn apply_declaration(
     diplomacy: &mut DiplomacyState,
     rows: &mut [ArenaLeaderDiplomacyRow],
     planned: &ArenaDeclarationPlan,
+) -> Result<ArenaDeclarationOutcome, ArenaDeclarationRefusal> {
+    apply_declaration_inner(diplomacy, rows, planned, None)
+}
+
+fn apply_declaration_inner(
+    diplomacy: &mut DiplomacyState,
+    rows: &mut [ArenaLeaderDiplomacyRow],
+    planned: &ArenaDeclarationPlan,
+    mut host: Option<&mut ArenaLeaderMatch>,
 ) -> Result<ArenaDeclarationOutcome, ArenaDeclarationRefusal> {
     let mut outcome = ArenaDeclarationOutcome {
         receipt: SetDiploReceipt {
@@ -497,6 +636,8 @@ pub fn apply_declaration(
         shared_vision: Vec::new(),
         interface_dirty: false,
         presentation: Vec::new(),
+        terminal_queue_cleanup: 0,
+        defeat_unit_cleanup: 0,
     };
 
     for step in &planned.plan.steps {
@@ -507,12 +648,18 @@ pub fn apply_declaration(
                     .write_declaration_state_only(*from, *to, state)
                     .map_err(|slot| ArenaDeclarationRefusal::UnknownLeader { slot: slot.0 })?;
                 outcome.declarations.push((*from, *to, state));
+                if let Some(host) = host.as_deref_mut() {
+                    host.leaders.slots[*from].diplos[*to] = state as i32;
+                }
             }
             SetDiploStep::Mutation(SetDiploMutation::ClearSharedVision { viewer, source }) => {
                 let row = rows
                     .get_mut(*viewer)
                     .ok_or(ArenaDeclarationRefusal::UnknownLeader { slot: *viewer })?;
                 row.ally_mask &= !(1u8 << *source);
+                if let Some(host) = host.as_deref_mut() {
+                    host.leaders.slots[*viewer].init_diplomacy.ally_mask &= !(1u8 << *source);
+                }
                 outcome.shared_vision.push((*viewer, *source, false));
             }
             SetDiploStep::Mutation(SetDiploMutation::GrantSharedVision { viewer, source }) => {
@@ -520,6 +667,9 @@ pub fn apply_declaration(
                     .get_mut(*viewer)
                     .ok_or(ArenaDeclarationRefusal::UnknownLeader { slot: *viewer })?;
                 row.ally_mask |= 1u8 << *source;
+                if let Some(host) = host.as_deref_mut() {
+                    host.leaders.slots[*viewer].init_diplomacy.ally_mask |= 1u8 << *source;
+                }
                 outcome.shared_vision.push((*viewer, *source, true));
             }
             SetDiploStep::Mutation(SetDiploMutation::MarkInterfaceDirty) => {
@@ -529,12 +679,42 @@ pub fn apply_declaration(
             // refuses before anything is applied. Reaching it here would mean the plan was
             // built by something other than `plan_declaration`.
             SetDiploStep::Mutation(SetDiploMutation::SetVictoryBit22) => {
-                return Err(ArenaDeclarationRefusal::UnhostedVictory {
-                    winner: planned.request.actor,
-                })
+                let Some(host) = host.as_deref_mut() else {
+                    return Err(ArenaDeclarationRefusal::UnhostedVictory {
+                        winner: planned.request.actor,
+                    });
+                };
+                host.game
+                    .set_sem(don_sim::systems::victory_score::game_sem::VICTORY_RESOLVED);
             }
-            SetDiploStep::Authority(SetDiploAuthority::Victory { winner, .. }) => {
-                return Err(ArenaDeclarationRefusal::UnhostedVictory { winner: *winner })
+            SetDiploStep::Authority(
+                call @ SetDiploAuthority::Victory {
+                    winner,
+                    victory_type,
+                    instant,
+                },
+            ) => {
+                let Some(host) = host.as_deref_mut() else {
+                    return Err(ArenaDeclarationRefusal::UnhostedVictory { winner: *winner });
+                };
+                let victory_type = match *victory_type {
+                    0 => VictoryType::Generic,
+                    1 => VictoryType::ByWonder,
+                    2 => VictoryType::ByTerritory,
+                    3 => VictoryType::ByTechRace,
+                    4 => VictoryType::ByScore,
+                    5 => VictoryType::ByEconomy,
+                    6 => VictoryType::ByTimeLimit,
+                    _ => return Err(ArenaDeclarationRefusal::ReceiptRejected),
+                };
+                let receipt = host.apply(LeaderMatchRequest::Victory {
+                    who: *winner,
+                    victory_type,
+                    instant: *instant,
+                })?;
+                outcome.terminal_queue_cleanup |= receipt.terminal_queue_cleanup;
+                outcome.defeat_unit_cleanup |= receipt.defeat_unit_cleanup;
+                outcome.receipt.authority.push(*call);
             }
             SetDiploStep::Authority(SetDiploAuthority::ComeOut { owner, object_id })
             | SetDiploStep::Authority(SetDiploAuthority::KillContainedUnit {
@@ -579,14 +759,48 @@ pub fn apply_declaration(
     Ok(outcome)
 }
 
+/// Execute a hosted declaration as one staged transaction across diplomacy rows and the
+/// persistent terminal owner. Nothing publishes if receipt validation or the pair host
+/// rejects.
+pub fn apply_hosted_declaration(
+    diplomacy: &mut DiplomacyState,
+    rows: &mut [ArenaLeaderDiplomacyRow],
+    host: &mut ArenaLeaderMatch,
+    planned: &ArenaDeclarationPlan,
+) -> Result<ArenaDeclarationOutcome, ArenaDeclarationRefusal> {
+    let mut staged_diplomacy = diplomacy.clone();
+    let mut staged_rows = rows.to_vec();
+    let mut staged_host = host.clone();
+    let outcome = apply_declaration_inner(
+        &mut staged_diplomacy,
+        &mut staged_rows,
+        planned,
+        Some(&mut staged_host),
+    )?;
+    if outcome.defeat_unit_cleanup != 0 {
+        return Err(ArenaDeclarationRefusal::IncoherentLeaderMatch);
+    }
+    // The concrete Arena queue adapter consumes this mask; clear the pair's request so
+    // its persistent state cannot later apply the same sweep twice.
+    let drained = staged_host.leaders.take_terminal_queue_cleanup();
+    let defeated = staged_host.leaders.take_defeat_unit_cleanup();
+    if drained != outcome.terminal_queue_cleanup || defeated != outcome.defeat_unit_cleanup {
+        return Err(ArenaDeclarationRefusal::ReceiptRejected);
+    }
+    diplomacy.clone_from(&staged_diplomacy);
+    rows.clone_from_slice(&staged_rows);
+    *host = staged_host;
+    Ok(outcome)
+}
+
 /// The Arena's diplomacy runtime: `LeaderData`'s non-`diplos` cells plus the two match
 /// scalars `Leader::set_diplo` reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ArenaDiplomacy {
     rows: Vec<ArenaLeaderDiplomacyRow>,
     console_who: usize,
     reveal_map: u8,
-    victory_mask: u32,
+    leader_match: ArenaLeaderMatch,
     /// Every declaration the match attempted, committed or refused, in submission order.
     /// A refused declaration is not a silent no-op: `arena-diplomacy-model` exists because
     /// relation state was invisible, and an invisible refusal would be the same mistake.
@@ -613,7 +827,7 @@ impl ArenaDiplomacy {
             // `Fog::option` defaults to `FogOption(0)` in `World::visibility_policy`, so
             // the Arena's declared `Game+0x30` is 0 and shared vision has no fallback.
             reveal_map: 0,
-            victory_mask: 0,
+            leader_match: ArenaLeaderMatch::opening(players),
             log: Vec::new(),
         }
     }
@@ -639,6 +853,22 @@ impl ArenaDiplomacy {
         &self.log
     }
 
+    pub fn leader_match(&self) -> &ArenaLeaderMatch {
+        &self.leader_match
+    }
+
+    pub fn set_frame(&mut self, frame: i64) {
+        self.leader_match.set_frame(frame);
+    }
+
+    /// Split out the canonical host for a staged declaration while retaining the
+    /// diplomacy-row owner beside it.
+    pub fn split_rows_and_match(
+        &mut self,
+    ) -> (&mut [ArenaLeaderDiplomacyRow], &mut ArenaLeaderMatch) {
+        (&mut self.rows, &mut self.leader_match)
+    }
+
     /// Split borrow helper for the caller that owns both halves of the state.
     pub fn rows_mut(&mut self) -> &mut [ArenaLeaderDiplomacyRow] {
         &mut self.rows
@@ -661,7 +891,7 @@ impl ArenaDiplomacy {
             objects,
             console_who: self.console_who,
             reveal_map: self.reveal_map,
-            victory_mask: self.victory_mask,
+            victory_mask: self.leader_match.game.semaphore,
         }
     }
 }

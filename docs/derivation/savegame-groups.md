@@ -220,25 +220,15 @@ the whole-sim channel digest agree after every frame. 70 exceeds the 64-slot
 on the restored pool; the test also asserts the pool actually changed over those frames, so
 a no-op resume cannot pass it.
 
-**What still blocks a mid-match save is no longer the group pool. It is the PlayerSetup
-owner's frame-zero boundary.** `canonical_player_setup_snapshot` in `save_load.rs` returns
-`Unsupported("player setup after the frame-zero boundary")` whenever
-`sim.vic_leaders.setup_owner.applied().is_some()` and `world.frame != 0`, because the
-`PLAYER_SETUP` section is *reconstructive*: it stores the `ManualPlayerSetup` request and
-replays `Sim::start_manual_player_setup` on load. Replay is only correct while none of the
-rows that transaction writes has evolved. And a `Sim` **without** that owner cannot have an
-active leader at all, because `leader_is_supported` requires
-`leaders[who].active == setup_owner.configured_mask() & (1 << who)`, which is `0` with no
-owner.
+**The PlayerSetup frame-zero persistence boundary is closed by DoNSave v11.** The
+`PLAYER_SETUP` section remains a reconstructive owner for the immutable setup receipt;
+chunk `0x000A` now restores the complete mutable `victory_score::Leaders`/`Match` pair and
+the lifecycle Player table over it. A configured match can therefore cross frame zero and
+resave byte-identically. See `docs/mechanics/leader-match-host.md`.
 
-Together those two facts mean DoNSave can currently save exactly two shapes: a player-less
-sim at any frame, or a fully set-up sim at frame 0 — never a set-up sim mid-match.
-`a_set_up_match_still_cannot_be_saved_past_frame_zero` pins that as a fact rather than
-prose. Closing it means giving the derived rows real save owners instead of replaying the
-transaction: `vic_leaders.slots[*].diplos` / `init_diplomacy` / `has_preq_2b0`,
-`vic_match.options` / `on_team` / `num_sides` / `semaphore` / `frame`. Those are
-`victory_score::LeaderState`, which `save_load/step8_views.rs` already names repeatedly as
-having no DoNSave chunk, and which the `victory-endgame` lane holds.
+This does not erase independent save boundaries. In particular, running a frame that
+activates an unsupported dynamic step-8 AI host still produces the named step-8 refusal;
+visibility, projectile, Wonder, wall/herd, and installed-rule owners remain separate too.
 
 The other named refusals in `reject_unsupported`, unchanged by this lane and each still
 blocking a real match: step-12 visibility authority, cannon-time state, walls, herds,
@@ -257,4 +247,4 @@ crash hosts, the Wonder lifecycle, and installed rule overrides.
 | `Groups+0x3C` is `const_last_group`, a pointer to `Groups+0x1C` | `0x00937530` | **C** [measured] | `check_groups` loads `[0xE85F4C]` and indexes it; `Groups::walk_data` walks `0x00E85F2C` directly |
 | `Array<Group>`'s length/size/increment/flags are **save**-critical but **not** checksum-critical | `0x00937530` vs `0x0047EA30` | **C** [measured] | `check_groups` addresses only `[0xE85F14]` and `[0xE85F20]`; it never reads `+0x08/+0x0C/+0x14` |
 | member slots at or past `num` are not simulation state | `0x00714350`, `0x00711540`, `Group::update_positions` | **C** [measured] | `add` zeroes the slot before publishing it; the only read past `num` writes only past `num`; driven in `save_load_groups.rs` |
-| DoNSave saves a set-up match only at frame 0 | `save_load.rs` `canonical_player_setup_snapshot` | implementation boundary | `a_set_up_match_still_cannot_be_saved_past_frame_zero` |
+| DoNSave v11 restores mutable Leaders/Match over the frame-zero setup receipt | `save_load/leader_match.rs`, chunk `0x000A` | implementation owner | `save_load_leader_match`, `a_set_up_match_and_live_group_pool_save_past_frame_zero` |

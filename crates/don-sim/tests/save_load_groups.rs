@@ -23,7 +23,7 @@ fn groups_channel(sim: &Sim) -> u32 {
 
 /// The `DoNSave` container, re-walked here rather than borrowed from the writer, so the
 /// section-size assertions below are an independent measurement.
-fn section(bytes: &[u8], want: u16) -> &[u8] {
+fn section_range(bytes: &[u8], want: u16) -> std::ops::Range<usize> {
     const MAGIC: usize = 8;
     let root = &bytes[MAGIC..];
     assert_eq!(
@@ -36,11 +36,15 @@ fn section(bytes: &[u8], want: u16) -> &[u8] {
         let size = u32::from_le_bytes(root[at..at + 4].try_into().unwrap()) as usize;
         let id = u16::from_le_bytes(root[at + 4..at + 6].try_into().unwrap());
         if id == want {
-            return &root[at + 8..at + size];
+            return MAGIC + at + 8..MAGIC + at + size;
         }
         at += size;
     }
     panic!("section {want:#06x} absent");
+}
+
+fn section(bytes: &[u8], want: u16) -> &[u8] {
+    &bytes[section_range(bytes, want)]
 }
 
 /// The `GROUPS` chunk id.
@@ -323,7 +327,8 @@ fn structurally_impossible_pools_fail_closed_on_both_sides() {
 #[test]
 fn a_corrupt_groups_section_is_rejected_rather_than_absorbed() {
     let bytes = save_sim(&commanded_sim()).unwrap();
-    let start = bytes.len() - section(&bytes, GROUPS_SECTION).len();
+    let range = section_range(&bytes, GROUPS_SECTION);
+    let start = range.start;
 
     // `num` of slot 0, at header word 2 of the first group, past the length word.
     let mut bad_num = bytes.clone();
@@ -349,7 +354,7 @@ fn a_corrupt_groups_section_is_rejected_rather_than_absorbed() {
 
     // `last_group`, the 32 bytes `check_groups` reaches through `Groups+0x3C`.
     let mut bad_last = bytes.clone();
-    let last_at = bytes.len() - 32;
+    let last_at = range.end - 32;
     bad_last[last_at..last_at + 4].copy_from_slice(&0x0bad_f00du32.to_le_bytes());
     let loaded = load_sim(&bad_last).unwrap();
     assert_eq!(loaded.groups.last_group[0], 0x0bad_f00du32 as i32);
@@ -361,18 +366,19 @@ fn a_corrupt_groups_section_is_rejected_rather_than_absorbed() {
 }
 
 #[test]
-fn a_set_up_match_still_cannot_be_saved_past_frame_zero() {
-    // The named blocker that keeps `closure/stage: save_load` from being a mid-match save.
-    // It is not the group pool: the same pool saves fine before the frame advances.
+fn a_set_up_match_and_live_group_pool_save_past_frame_zero() {
+    // LEADER_MATCH owns the mutable rows over the immutable setup receipt, so advancing
+    // the match no longer turns PlayerSetup into an unreconstructible approximation.
     let mut sim = commanded_sim();
     save_sim(&sim).unwrap();
-    sim.do_frame();
-    assert_eq!(
-        save_sim(&sim),
-        Err(SaveError::Unsupported(
-            "player setup after the frame-zero boundary"
-        ))
-    );
+    // Advance the authoritative clocks without running unrelated step-8 AI hosts, whose
+    // dynamic save owner is a separate named boundary.
+    sim.world.frame = 1;
+    sim.vic_match.frame = 1;
+    let bytes = save_sim(&sim).expect("set-up mid-match state is now owned");
+    let loaded = load_sim(&bytes).expect("mid-match state reloads");
+    assert_eq!(loaded.channel_digest(), sim.channel_digest());
+    assert_eq!(save_sim(&loaded).unwrap(), bytes);
     assert!(!sim.groups.list[Groups::index(0, 5)].list[..4]
         .iter()
         .any(|&o| o < 0));

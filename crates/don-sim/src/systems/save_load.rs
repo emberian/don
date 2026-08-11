@@ -38,10 +38,13 @@ use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldObjectIdentity, WorldSaveError, WorldSaveState, MAX_UNITS};
 
 mod groups;
+mod leader_match;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 10;
+const FORMAT_VERSION: u32 = 11;
+/// The last version whose root ended at [`GROUPS`], before [`LEADER_MATCH`] was added.
+const GROUPS_FORMAT_VERSION: u32 = 10;
 /// The last version whose root ended at [`PLAYER_SETUP`], before [`GROUPS`] was added.
 const PLAYER_SETUP_FORMAT_VERSION: u32 = 9;
 const SPARSE_OBJECTS_FORMAT_VERSION: u32 = 8;
@@ -65,8 +68,9 @@ const ITEMS: u16 = 0x0006;
 const BUILDS: u16 = 0x0007;
 const PLAYER_SETUP: u16 = 0x0008;
 const GROUPS: u16 = 0x0009;
+const LEADER_MATCH: u16 = 0x000a;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 9] = [
+const REQUIRED: [u16; 10] = [
     CORE,
     MAP,
     OBJECTS,
@@ -76,11 +80,13 @@ const REQUIRED: [u16; 9] = [
     BUILDS,
     PLAYER_SETUP,
     GROUPS,
+    LEADER_MATCH,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
         FORMAT_VERSION => &REQUIRED,
+        GROUPS_FORMAT_VERSION => &REQUIRED[..9],
         PLAYER_SETUP_FORMAT_VERSION => &REQUIRED[..8],
         _ => &LEGACY_REQUIRED,
     }
@@ -643,7 +649,7 @@ fn write_world_state_for_version(
         }
     }
     match format_version {
-        SPARSE_OBJECTS_FORMAT_VERSION | FORMAT_VERSION => {
+        SPARSE_OBJECTS_FORMAT_VERSION..=FORMAT_VERSION => {
             let object_bands = state
                 .object_bands
                 .as_ref()
@@ -761,7 +767,7 @@ fn read_world_state(
         }
     }
     let object_bands = match format_version {
-        SPARSE_OBJECTS_FORMAT_VERSION | FORMAT_VERSION => Some(read_sparse_object_bands(&mut r)?),
+        SPARSE_OBJECTS_FORMAT_VERSION..=FORMAT_VERSION => Some(read_sparse_object_bands(&mut r)?),
         LEGACY_DENSE_OBJECTS_FORMAT_VERSION => None,
         _ => return Err(SaveError::Invalid("unsupported save format version")),
     };
@@ -2016,16 +2022,30 @@ fn canonical_player_setup_snapshot(sim: &Sim) -> Result<Option<PlayerSetupSaveSt
     let Some(applied) = sim.vic_leaders.setup_owner.applied() else {
         return Ok(None);
     };
-    if sim.world.frame != 0 || sim.vic_match.frame != 0 {
-        return Err(SaveError::Unsupported(
-            "player setup after the frame-zero boundary",
-        ));
+
+    // Reconstruct only the setup-time semaphore facts the transaction actually read.
+    // Runtime bits (game over, victory resolved, quit/drop state) belong to LEADER_MATCH;
+    // feeding them back into frame zero would turn current state into invented setup input.
+    let mut setup_semaphore = 0u32;
+    if applied.state.setup.semaphore_820 & 0x04 != 0 {
+        setup_semaphore |= 1u32 << crate::systems::victory_score::game_sem::NET_OR_RECORDING;
+    }
+    if applied.diplomacy.facts[0].scenario_rules {
+        setup_semaphore |= 1u32 << crate::systems::victory_score::game_sem::SCENARIO_RULES;
+    }
+    if applied.diplomacy.facts[0].check_victory_mode {
+        setup_semaphore |= 1u32 << crate::systems::victory_score::game_sem::CHECK_VICTORY_MODE;
     }
 
+    // `Player::resign` may change MatchOptions::team_style after setup.  The setup
+    // recipe must retain the input that produced its immutable receipt; LEADER_MATCH
+    // separately owns the current runtime option byte.
+    let mut setup_options = sim.vic_match.options;
+    setup_options.team_style = applied.request.team_style;
     let snapshot = PlayerSetupSaveState {
         request: applied.request,
-        options: sim.vic_match.options,
-        semaphore: sim.vic_match.semaphore,
+        options: setup_options,
+        semaphore: setup_semaphore,
     };
     let mut expected = Sim::new(0, 1);
     expected.vic_match.options = snapshot.options;
@@ -2035,27 +2055,19 @@ fn canonical_player_setup_snapshot(sim: &Sim) -> Result<Option<PlayerSetupSaveSt
         .map_err(|_| SaveError::Invalid("player setup reconstruction"))?;
 
     let expected_applied = expected.vic_leaders.setup_owner.applied().unwrap();
-    if applied != expected_applied
-        || sim.vic_match.options != expected.vic_match.options
-        || sim.vic_match.on_team != expected.vic_match.on_team
-        || sim.vic_match.num_sides != expected.vic_match.num_sides
-        || sim.vic_match.semaphore != expected.vic_match.semaphore
-    {
+    if applied != expected_applied {
         return Err(SaveError::Invalid("divergent player setup owner"));
     }
 
     for who in 0..SETUP_SLOTS {
         let active = snapshot.request.active_mask & (1u8 << who) != 0;
         let actual = &sim.vic_leaders.slots[who];
-        let wanted = &expected.vic_leaders.slots[who];
-        if actual.leader_flags != wanted.leader_flags
-            || actual.diplos != wanted.diplos
-            || actual.init_diplomacy != wanted.init_diplomacy
-            || actual.has_preq_2b0 != wanted.has_preq_2b0
+        if (actual.leader_flags & crate::systems::victory_score::leader_flag::VALID != 0) != active
             || sim.leaders[who].active != active
             || sim.leaders[who].border.active != active
             || sim.world.objects.is_active(who) != active
-            || sim.map.fog.leaders[who].player_mask != if active { 1u8 << who } else { 0 }
+            || (active && sim.map.fog.leaders[who].player_mask & (1u8 << who) == 0)
+            || (!active && sim.map.fog.leaders[who].player_mask != 0)
         {
             return Err(SaveError::Invalid("divergent player setup projection"));
         }
@@ -2194,10 +2206,7 @@ fn write_core(sim: &Sim) -> Vec<u8> {
 fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
     let mut r = Reader::new(data);
     let format_version = r.u32()?;
-    if !matches!(
-        format_version,
-        LEGACY_DENSE_OBJECTS_FORMAT_VERSION | SPARSE_OBJECTS_FORMAT_VERSION | FORMAT_VERSION
-    ) {
+    if !(LEGACY_DENSE_OBJECTS_FORMAT_VERSION..=FORMAT_VERSION).contains(&format_version) {
         return Err(SaveError::Invalid("unsupported save format version"));
     }
     let seed = r.i32()?;
@@ -2329,6 +2338,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(BUILDS, builds),
             Chunk::leaf(PLAYER_SETUP, write_player_setup(sim)?),
             Chunk::leaf(GROUPS, groups::write(&sim.groups)?),
+            Chunk::leaf(LEADER_MATCH, leader_match::write(sim)?),
         ],
     )
     .encode()?;
@@ -2432,8 +2442,12 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             ..groups_guys::Groups::default()
         },
     };
+    let leader_match = match sections[9] {
+        Some(data) => Some(leader_match::read(data)?),
+        None => None,
+    };
     if let Some(setup) = player_setup {
-        if core.frame != 0 {
+        if leader_match.is_none() && core.frame != 0 {
             return Err(SaveError::Invalid("player setup outside frame zero"));
         }
         for who in 0..SETUP_SLOTS {
@@ -2443,7 +2457,8 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
                     .object_bands
                     .as_ref()
                     .is_none_or(|bands| bands.active[who] != active)
-                || map.fog.leaders[who].player_mask != if active { 1u8 << who } else { 0 }
+                || (active && map.fog.leaders[who].player_mask & (1u8 << who) == 0)
+                || (!active && map.fog.leaders[who].player_mask != 0)
             {
                 return Err(SaveError::Invalid(
                     "player setup activation projection mismatch",
@@ -2453,11 +2468,42 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     }
 
     let mut sim = Sim::new(core.seed as u32 as u64, map.world.xs as u16);
+    if let Some(setup) = player_setup {
+        // Rebuild the immutable setup receipt at its real frame-zero boundary. Saved
+        // world/map owners are installed afterwards, then LEADER_MATCH restores the
+        // mutable runtime rows and clocks over this one canonical setup owner.
+        sim.vic_match.options = setup.options;
+        sim.vic_match.semaphore = setup.semaphore;
+        sim.start_manual_player_setup(setup.request)
+            .map_err(|_| SaveError::Invalid("player setup reconstruction"))?;
+        let setup_sem_mask = (1u32 << crate::systems::victory_score::game_sem::NET_OR_RECORDING)
+            | (1u32 << crate::systems::victory_score::game_sem::SCENARIO_RULES)
+            | (1u32 << crate::systems::victory_score::game_sem::CHECK_VICTORY_MODE);
+        let setup_mismatch = if leader_match.is_some() {
+            setup.semaphore & !setup_sem_mask != 0
+                || sim.vic_match.options != setup.options
+                || sim.vic_match.semaphore & setup_sem_mask != setup.semaphore
+        } else {
+            sim.vic_match.options != setup.options || sim.vic_match.semaphore != setup.semaphore
+        };
+        if setup_mismatch {
+            return Err(SaveError::Invalid(
+                "player setup derived options/semaphore mismatch",
+            ));
+        }
+    }
     sim.map = map;
     sim.world.import_save_state(world_state)?;
     sim.world.item_runtime = item_runtime;
     sim.builds = builds;
     sim.leaders = leaders;
+    if let Some(setup) = player_setup {
+        for who in 0..SETUP_SLOTS {
+            let active = setup.request.active_mask & (1u8 << who) != 0;
+            sim.leaders[who].active = active;
+            sim.leaders[who].border.active = active;
+        }
+    }
     sim.market = market;
     sim.unit_type = unit_type;
     sim.paths = paths;
@@ -2469,16 +2515,14 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             core.game_daemon.empty_colls,
         );
     sim.groups = group_pool;
-    if let Some(setup) = player_setup {
-        sim.vic_match.options = setup.options;
-        sim.vic_match.semaphore = setup.semaphore;
-        sim.start_manual_player_setup(setup.request)
-            .map_err(|_| SaveError::Invalid("player setup reconstruction"))?;
-        if sim.vic_match.options != setup.options || sim.vic_match.semaphore != setup.semaphore {
-            return Err(SaveError::Invalid(
-                "player setup derived options/semaphore mismatch",
-            ));
-        }
+    if let Some(state) = leader_match {
+        leader_match::restore(&mut sim, state)?;
+    } else {
+        // Formats 7-10 did not carry the Match owner.  The CORE clock is nevertheless
+        // authoritative, so install its exact projection when upgrading the stream rather
+        // than manufacturing a frame-zero Match beside a later World.
+        sim.vic_match.frame = sim.world.frame;
+        sim.vic_match.tick = sim.world.seconds;
     }
     // A loaded state must itself be saveable. This catches accidental constructor state
     // that would otherwise make the first post-load save fail or silently differ.
@@ -2497,6 +2541,8 @@ mod tests {
         sim.map.world.seed = 0x1234_5678;
         sim.world.frame = 7;
         sim.world.seconds = 2;
+        sim.vic_match.frame = 7;
+        sim.vic_match.tick = 2;
         sim.world.random.reseed(0x7654_3210);
 
         let a = sim.spawn_unit(2, 17, 768, 1536, 4).unwrap();
@@ -2825,7 +2871,7 @@ mod tests {
         let children = parsed
             .children
             .iter()
-            .filter(|child| !matches!(child.header.id, PLAYER_SETUP | GROUPS))
+            .filter(|child| !matches!(child.header.id, PLAYER_SETUP | GROUPS | LEADER_MATCH))
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
@@ -2846,6 +2892,48 @@ mod tests {
             read_core(&parse_chunk(&upgraded[MAGIC.len()..]).unwrap().children[0].data)
                 .unwrap()
                 .format_version,
+            FORMAT_VERSION
+        );
+    }
+
+    #[test]
+    fn format_ten_groups_stream_remains_loadable_without_leader_match_chunk() {
+        let mut original = supported_sim();
+        // v10 did not own Match clocks; its representable shape reconstructs defaults.
+        original.world.frame = 0;
+        original.world.seconds = 0;
+        original.vic_match.frame = 0;
+        original.vic_match.tick = 0;
+        let bytes = save_sim(&original).unwrap();
+        let parsed = parse_chunk(&bytes[MAGIC.len()..]).unwrap();
+        let children = parsed
+            .children
+            .iter()
+            .filter(|child| child.header.id != LEADER_MATCH)
+            .map(|child| {
+                let mut data = child.data.to_vec();
+                if child.header.id == CORE {
+                    data[..4].copy_from_slice(&GROUPS_FORMAT_VERSION.to_le_bytes());
+                }
+                Chunk::leaf(child.header.id, data)
+            })
+            .collect();
+        let root = Chunk::branch(ROOT, children).encode().unwrap();
+        let mut legacy = MAGIC.to_vec();
+        legacy.extend_from_slice(&root);
+
+        let loaded = load_sim(&legacy).unwrap();
+        assert!(loaded.vic_leaders.setup_owner.applied().is_none());
+        assert_eq!(loaded.world.frame, 0);
+        assert_eq!(
+            read_core(
+                &parse_chunk(&save_sim(&loaded).unwrap()[MAGIC.len()..])
+                    .unwrap()
+                    .children[0]
+                    .data
+            )
+            .unwrap()
+            .format_version,
             FORMAT_VERSION
         );
     }

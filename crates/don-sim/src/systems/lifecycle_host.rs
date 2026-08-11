@@ -46,6 +46,7 @@
 //!   [`Sim::tail_command_facts`] hands them [`tail::TailCommandFacts::NoExternalFacts`]
 //!   and the row planner refuses them with `FactsMismatch`.
 
+use super::leader_match_host::{apply_leader_match, LeaderMatchRequest};
 use super::Sim;
 use crate::command::tail_command_transactions as tail;
 use crate::systems::victory_score::{DefeatType, Leaders, Match, NUM_LEADERS};
@@ -321,7 +322,17 @@ fn commit(
                     unreachable!("unexecutable call reached commit");
                 };
                 let dt = DefeatType::from_i32(defeat_type).expect("preflighted defeat type");
-                ls.defeat(m, usize::from(who), dt, arg, instant);
+                apply_leader_match(
+                    ls,
+                    m,
+                    LeaderMatchRequest::Defeat {
+                        who: usize::from(who),
+                        defeat_type: dt,
+                        by: arg,
+                        instant,
+                    },
+                )
+                .expect("preflighted leader slot");
                 executed_calls.push(call);
             }
         }

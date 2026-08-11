@@ -77,6 +77,8 @@ use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE
 /// Aliased because this file also names [`crate::world::World`], which is the unit SoA.
 pub use crate::systems::map_terrain::World as TerrainWorld;
 
+#[path = "systems/leader_match_host.rs"]
+pub mod leader_match_host;
 /// The `Sim`-side host for the recovered player-lifecycle command tails — the link between
 /// the command wire and `Leader::defeat` `0x006ECB00` / `Game::check_victory` `0x005926B0`.
 ///

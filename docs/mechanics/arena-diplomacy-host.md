@@ -94,16 +94,13 @@ Two values are *settings*, not derivations, and are named as such:
 
 ## What still stops it
 
-The blocker stays open on six residuals. None is a missing number; each is a missing host.
+The victory host is closed; five independent residuals remain.
 
-1. **`Leader::victory` `0x006EC9B0` has no Arena host.** In a two-player match an alliance
-   leaves no independent active leader, so retail calls `Leader::victory(0, 0)` — meaning
-   **every alliance in a 1v1 is an immediate shared victory**, not a diplomatic state.
-   `don_sim::systems::victory_score::Leaders::victory` implements the state part completely,
-   but it needs a `Leaders`/`Match` owner and the Arena has neither; `World::check_defeat` is
-   a separate elimination model. The Arena refuses at plan time, so the world is left
-   byte-identical. With a third independent active leader the same alliance commits — that
-   asymmetry is tested both ways.
+1. **Closed: `Leader::victory` `0x006EC9B0` has one shared host.** A live Arena persists
+   the same `victory_score::Leaders`/`Match` pair as Sim and executes the authority through
+   `tick::leader_match_host`. A two-player alliance commits both declarations, wins both
+   allied leaders, sets semaphore bit 22, and drains the winner queue mask. The pure planner
+   still refuses if its caller supplies no host.
 2. **`Leader::diplomacy` `0x006BC950` (20,348 B) is not ported** and is recorded in
    `tick.rs` as deliberately replaced by a self-play agent. No Arena bot issues a
    declaration, so the channel exists with no policy above it.
