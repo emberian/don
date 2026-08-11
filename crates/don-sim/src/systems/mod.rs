@@ -158,6 +158,9 @@ pub mod leader_production_ai;
 /// no `mod` declaration anywhere in the library, so it compiled only from its own test file
 /// and no consumer could reach the one authority the diplomacy blockers name.
 pub mod leader_set_diplo;
+/// Atomic publication of production-owned current tech and ages into the victory and
+/// step-8 duplicate views. Production completion preflights this before mutation.
+pub mod leader_tech_sync;
 /// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
 /// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
 /// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp

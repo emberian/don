@@ -71,6 +71,7 @@ pub mod leaders_dynamic_children_frontier;
 pub mod leaders_generated_fixed_frontier;
 pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
+pub mod leaders_sim_tech_frontier;
 pub mod map_make_resource_caller_gap_frontier;
 pub mod map_make_resource_schedule_integration;
 pub mod map_style;

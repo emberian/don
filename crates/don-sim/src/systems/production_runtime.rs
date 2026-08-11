@@ -579,6 +579,7 @@ pub enum LiveProductionError {
     InvalidCarrierPayloadCapacity(i32),
     UnexpectedCarrierQueueState(i16),
     UnsupportedCallback(&'static str),
+    TechViewSync(crate::systems::leader_tech_sync::LeaderTechSyncError),
     Queue(QueueTransactionError),
     Finished(FinishedEffectError),
 }
@@ -2791,6 +2792,32 @@ impl QueueCompletionHost for SimQueueHost<'_> {
             return false;
         }
         let owner = self.producer_snapshot.who as usize;
+        let gains_tech = self.runtime.facts(type_index).is_some_and(|facts| {
+            match facts.class {
+                LiveTypeClass::Unit => {
+                    !(facts.can_make
+                        && facts.prerequisites.iter().all(|&preq| {
+                            prerequisite_held(&self.runtime.leaders[owner].tech, preq)
+                        }))
+                }
+                LiveTypeClass::Building => {
+                    facts.building_completion == LiveBuildingCompletion::GainTech
+                }
+                LiveTypeClass::Research => true,
+                // The live preflight rejects every Spell before a queue can reach here.
+                LiveTypeClass::Spell => false,
+            }
+        });
+        if gains_tech {
+            if let Err(error) = crate::systems::leader_tech_sync::preflight_production_tech_views(
+                self.sim,
+                self.runtime,
+                owner,
+            ) {
+                self.error = Some(LiveProductionError::TechViewSync(error));
+                return false;
+            }
+        }
         let mut tech = std::mem::take(&mut self.runtime.leaders[owner].tech);
         let mut host = SimFinishedHost {
             sim: self.sim,
@@ -2819,6 +2846,14 @@ impl QueueCompletionHost for SimQueueHost<'_> {
         let terminal_cleanup_owners = host.terminal_cleanup_owners;
         self.producer_snapshot.gather_down = host.producer_gather_down;
         host.runtime.leaders[owner].tech = tech;
+        if gains_tech {
+            crate::systems::leader_tech_sync::synchronize_production_tech_views(
+                host.sim,
+                host.runtime,
+                owner,
+            )
+            .expect("the preflighted duplicate-owner shapes cannot change during completion");
+        }
         if let Some(error) = nested_error {
             self.error = Some(error);
             return false;
@@ -2981,6 +3016,7 @@ mod tests {
         ));
         assert!(runtime.leaders[0].tech.tech.get(research_type));
         assert_eq!(runtime.leaders[0].tech.counters.discovered, 1);
+        assert!(sim.vic_leaders.slots[0].has_tech[research_type as usize]);
         assert!(runtime.game_tech_dirty);
         assert!(runtime.leaders[0].queue_dirty);
         assert_eq!(runtime.leaders[0].queued_counts[research_type as usize], 0);
@@ -3000,7 +3036,58 @@ mod tests {
         assert!(runtime.leaders[0].tech.tech.get(age));
         assert_eq!(runtime.leaders[0].tech.counters.ages, 1);
         assert_eq!(runtime.leaders[0].tech.counters.discovered, 0);
+        assert_eq!(sim.step8.leaders[0].econ.age_alt, 1);
+        assert_eq!(sim.leaders[0].econ.age_alt, 1);
         assert_eq!(runtime.leaders[0].age_stamp[0], 321);
+    }
+
+    #[test]
+    fn malformed_duplicate_tech_view_refuses_before_queue_or_tech_mutation() {
+        let research_type = 600;
+        let (mut sim, mut runtime, row) = harness(&[research_type]);
+        runtime.install_type(LiveProductionType::research(research_type, 1));
+        sim.vic_leaders.slots[0].has_tech.pop();
+        let build_before = sim.builds[row].clone();
+        let tech_before = runtime.leaders[0].tech.clone();
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::TechViewSync(
+                crate::systems::leader_tech_sync::LeaderTechSyncError::VictoryTechLength {
+                    slot: 0,
+                    expected: crate::systems::leader_tech_sync::RETAIL_TECH_BITS,
+                    actual: crate::systems::leader_tech_sync::RETAIL_TECH_BITS - 1,
+                }
+            ))
+        );
+        assert_eq!(runtime.leaders[0].tech.tech, tech_before.tech);
+        assert_eq!(runtime.leaders[0].tech.counters, tech_before.counters);
+        assert_eq!(runtime.leaders[0].tech.dirty_flags, tech_before.dirty_flags);
+        assert_eq!(sim.builds[row].image(), build_before.image());
+        assert_eq!(sim.builds[row].queue.entries, build_before.queue.entries);
+        assert_eq!(
+            sim.builds[row].gather_from.tiles,
+            build_before.gather_from.tiles
+        );
+        assert_eq!(sim.builds[row].gather, build_before.gather);
+        assert!(!sim.vic_leaders.slots[0].has_tech[research_type as usize]);
+    }
+
+    #[test]
+    fn malformed_duplicate_tech_view_does_not_gate_non_tech_completion() {
+        let unit_type = 60;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 2));
+        sim.vic_leaders.slots[0].has_tech.pop();
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(sim.world.live_count(), 1);
+        assert_eq!(sim.builds[row].queue.queued, 0);
+        assert_eq!(
+            sim.vic_leaders.slots[0].has_tech.len(),
+            crate::systems::leader_tech_sync::RETAIL_TECH_BITS - 1
+        );
     }
 
     #[test]

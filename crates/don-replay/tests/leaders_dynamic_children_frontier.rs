@@ -20,6 +20,10 @@ use don_replay::leaders_runtime_frontier::{
     LEADER_DIPLOMACY_BYTES, LEADER_FIXED_BODY_BEGIN, LEADER_FIXED_BODY_END,
 };
 use don_replay::leaders_runtime_tribe_frontier::{bind_live_tribes, LEADER_TRIBE_OFFSET};
+use don_replay::leaders_sim_tech_frontier::{
+    bind_sim_tech_frontier, SimTechFrontierError, ECON_DISCOVERED_INDEX,
+    SIM_TECH_EXISTING_DUPLICATE_BYTES, SIM_TECH_NEWLY_CANONICAL_BYTES, SIM_TECH_SOURCE_BYTES,
+};
 use don_replay::replay::{corpus, Replay};
 use don_sim::generated::state::{leader, FieldDesc, LeaderCols, Pool};
 use don_sim::systems::bhs_type_table::{
@@ -27,6 +31,7 @@ use don_sim::systems::bhs_type_table::{
     BUILD_END, NUM_LEADERS, NUM_TRIBES, NUM_TYPES, REGULAR_UNIT_BEGIN, REGULAR_UNIT_END,
 };
 use don_sim::systems::{leaders, victory_score};
+use don_sim::tick::Sim;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -593,4 +598,128 @@ fn transcript_program_order_is_not_layout_address_order() {
         ]
     );
     assert!(LEADER_DIPLOMACY_BEGIN < 0x6dd4);
+}
+
+fn same_frame_sim(fixture: &Fixture) -> Sim {
+    let mut sim = Sim::new(0x1234_5678, 4);
+    sim.step8 = fixture.step8.clone();
+    sim.vic_leaders = fixture.victory.clone();
+    for slot in 0..NUM_LEADERS {
+        let tech = &mut sim.production_runtime.leaders[slot].tech;
+        tech.tech.bytes = fixture.authority.rows[slot].tech.payload;
+        tech.counters
+            .epoch
+            .copy_from_slice(&fixture.authority.rows[slot].economy_plaintext[55..59]);
+        tech.counters.ages = fixture.authority.rows[slot].economy_plaintext[59];
+        tech.counters.epochs = fixture.authority.rows[slot].economy_plaintext[60];
+        tech.counters.discovered = fixture.authority.rows[slot].economy_plaintext[61];
+    }
+    sim
+}
+
+#[test]
+fn same_frame_sim_tech_cohort_promotes_only_six_counter_dwords() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+    let sim = same_frame_sim(&fixture);
+    let joined = bind_sim_tech_frontier(fixture.previous, &fixture.authority, &sim).unwrap();
+    let walk = joined.walk_frontier();
+
+    assert_eq!(walk.boundary, LeadersWalkBoundary::Complete);
+    assert_eq!(joined.claims().len(), fixture.active_count);
+    assert_eq!(
+        joined.source_produced_walked_bytes(),
+        fixture.active_count * SIM_TECH_SOURCE_BYTES
+    );
+    assert_eq!(
+        joined.sim_duplicate_checked_walked_bytes(),
+        fixture.active_count * SIM_TECH_EXISTING_DUPLICATE_BYTES
+    );
+    assert_eq!(
+        joined.newly_canonicalized_walked_bytes(),
+        fixture.active_count * SIM_TECH_NEWLY_CANONICAL_BYTES
+    );
+    assert_eq!(
+        joined.remaining_dynamic_conditionally_admitted_walked_bytes(),
+        fixture.active_count * (350 - SIM_TECH_NEWLY_CANONICAL_BYTES)
+    );
+    assert_eq!(joined.checksum(), Err(walk));
+    assert!(!joined.installed_in_scoreboard());
+}
+
+#[test]
+fn canonical_gain_tech_mutation_changes_the_complete_walk_and_stale_views_refuse() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+    let baseline_sim = same_frame_sim(&fixture);
+    let baseline =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &baseline_sim)
+            .unwrap()
+            .walk_frontier();
+
+    let type_index = 100i32;
+    let mut changed_sim = same_frame_sim(&fixture);
+    changed_sim.production_runtime.leaders[fixture.active]
+        .tech
+        .gain(type_index);
+
+    assert!(matches!(
+        bind_sim_tech_frontier(
+            fixture.previous.clone(),
+            &fixture.authority,
+            &changed_sim,
+        ),
+        Err(SimTechFrontierError::TechPayloadDisagreement { slot, .. })
+            if slot == fixture.active
+    ));
+
+    let mut changed_authority = fixture.authority.clone();
+    changed_authority.rows[fixture.active].tech.payload = changed_sim.production_runtime.leaders
+        [fixture.active]
+        .tech
+        .tech
+        .bytes;
+    changed_authority.rows[fixture.active].economy_plaintext[ECON_DISCOVERED_INDEX] = 1;
+    changed_sim.vic_leaders.slots[fixture.active].has_tech[type_index as usize] = true;
+    let changed_previous = deferred_frontier(
+        &fixture.prefix,
+        &changed_sim.vic_leaders,
+        &changed_sim.step8,
+        &fixture.types,
+        &fixture.columns,
+    );
+    let changed = bind_sim_tech_frontier(changed_previous, &changed_authority, &changed_sim)
+        .unwrap()
+        .walk_frontier();
+    assert_eq!(changed.bytes_walked, baseline.bytes_walked);
+    assert_ne!(changed.checksum, baseline.checksum);
+
+    let mut stale_authority = fixture.authority.clone();
+    stale_authority.rows[fixture.active].economy_plaintext[ECON_DISCOVERED_INDEX] = 1;
+    assert!(matches!(
+        bind_sim_tech_frontier(fixture.previous.clone(), &stale_authority, &baseline_sim),
+        Err(SimTechFrontierError::CounterDisagreement {
+            slot,
+            field: "discovered",
+            ..
+        }) if slot == fixture.active
+    ));
+
+    let mut age_split = same_frame_sim(&fixture);
+    age_split.production_runtime.leaders[fixture.active]
+        .tech
+        .counters
+        .ages = 1;
+    assert_eq!(
+        bind_sim_tech_frontier(fixture.previous, &fixture.authority, &age_split),
+        Err(SimTechFrontierError::AgeOwnerDisagreement {
+            slot: fixture.active,
+            production: 1,
+            step8: 0,
+        })
+    );
 }
