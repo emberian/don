@@ -58,10 +58,24 @@ honest unlanded view; `cv task inbox <who>` is what a lane should check first.
 Because claiming is first-writer-wins, **collisions resolve themselves**. The orchestrator
 stops arbitrating ownership.
 
-### 3. Assign by inventory row, not by crate
+### 3. Assign by inventory row, not by crate — and let lanes share a crate
 
-A lane claims a row and declares its file set at claim time in a `cv task note`. Two lanes
-in the same crate are fine when their rows touch different modules; the note is the record.
+A lane claims a **row** and declares its **file set**, not a directory. One-lane-per-crate
+was an early over-correction: it caps the swarm at about six lanes when the backlog has 36
+red opcodes, 33 red group actions and 18 blockers that are mostly independent of each other.
+
+Same-crate concurrency is safe because of an idiom the codebase already follows everywhere:
+**one module per recovered mechanic** (`*_frontier.rs`, `*_integration.rs`) plus a single
+export line in `systems/mod.rs`. Two lanes each adding a module are not in conflict. The
+genuinely hot files are few — `tick.rs`, `command.rs`, `command_tables.rs`,
+`order_dispatch.rs`, `systems/mod.rs`, `don-env/src/action.rs` — and those get claimed
+explicitly and edited in minimal hunks.
+
+Coordination runs through **`docs/tracks/megaswarm-board.md`**, an append-only noticeboard:
+lanes post their file claims, post an **API CHANGE** note the moment they alter a shared type
+so siblings braid forward instead of hitting a mystery compile error, and post **FINDINGS**
+so nobody re-derives what a sibling already established. A red build may be a sibling
+mid-migration — check the board and work something else rather than "fixing" their file.
 
 ### 4. Kill re-derivation
 
