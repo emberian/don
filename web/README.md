@@ -133,6 +133,15 @@ increments the non-hostile gap without installing an order. The inactive 600-fra
 `61e14d1ab48d964f`. These replace the prior pair because sparse Object-band owner activity and
 marks are now deliberately inside the canonical World digest.
 
+The supported-active-save and opcode-48 source closure was rebuilt from exact archived HEAD on
+2026-08-11. The canonical optimized module is 869,993 bytes at SHA-256
+`f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181`; its 76 required exports
+remain present and both raw setup setters remain absent. The full Chrome/WebGPU smoke read back
+42,496 non-black pixels and exercised an active alternating 2v2 save at frame 2, advancement to
+frame 3, and exact load restoration of frame, digest, RNG, roster, leaders, and diplomacy. The
+current 600-frame inactive and active-roster digests are respectively `ccbb1d1c6a39cd14` and
+`3ddcc500b43780fe`, matching the native `playcheck` projections.
+
 `web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
 checks the fresh Wasm export table both before and after optional optimization. The same three
 source/artefact preflights run before `play-smoke.mjs` opens Chrome. The export contract requires

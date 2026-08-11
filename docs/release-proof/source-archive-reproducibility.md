@@ -5,10 +5,10 @@ source projection and the checked-in browser Wasm candidate. Capture extracts a 
 `git archive HEAD`, runs the repository's canonical `web/build.sh`, and refuses unless the final
 post-optimization bytes exactly equal `web/public/wasm/don_web.wasm` from that archive.
 
-The current exact result is a 975,828-byte raw rustc module at SHA-256
-`0ddd4285f313911962199dc671f2677b8952ae9aa328fe93771f2961c99b6327`, transformed by
-Binaryen 130 into the 771,141-byte checked-in candidate at SHA-256
-`b7c71e5db4b6ceaa94c3f32bcc91a1004cea667e6367c0326f8ba6e5e8b679c5`.
+The current exact result is a 1,092,753-byte raw rustc module at SHA-256
+`ac6c4100a23e760ffae81bc518adbd4119545f10b1957c2218b0e7ff5ce1f388`, transformed by
+Binaryen 130 into the 869,993-byte checked-in candidate at SHA-256
+`f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181`.
 
 The artifact binds:
 
@@ -16,12 +16,12 @@ The artifact binds:
   inputs, generated contracts, ABI checker inputs, Rust/Cargo/Node/Binaryen toolchain, and both the
   raw rustc and final optimized Wasm identities;
 - every repository source file named by rustc's build-produced `don_web.d`, with an aggregate
-  source-closure digest (141 files in the current build);
+  source-closure digest (174 files in the current build);
 - the absence of `schema/live/live-tables-unit.tsv` from both `git archive` and the depfile, plus
   the removal of its former compile-time `include_str!` consumer;
 - an isolated `cargo test --locked -p don-sim --lib` result from that same clean source archive.
 
-The exact product Wasm and 1,579 passing `don-sim` library tests (2 ignored) therefore build without live or owned
+The exact product Wasm and 1,736 passing `don-sim` library tests (2 ignored) therefore build without live or owned
 retail inputs. This is not a whole-workspace/all-targets archive test, and the artifact forces
 that broader claim false. It supplies no legal review, third-party obligation decision, independent
 presentation-content clearance, installer proof, or whole-product payload claim.

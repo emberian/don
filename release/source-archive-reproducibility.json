@@ -3,13 +3,13 @@
   "scope": {
     "candidate": {
       "path": "web/public/wasm/don_web.wasm",
-      "size": 771141,
-      "sha256": "b7c71e5db4b6ceaa94c3f32bcc91a1004cea667e6367c0326f8ba6e5e8b679c5"
+      "size": 869993,
+      "sha256": "f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181"
     },
     "component_provenance": {
       "path": "release/web-wasm-component-provenance.json",
       "size": 7165,
-      "sha256": "0aced376915311e530aa15a72d66545edcc6fbd5195df99c8aca93582feea8fa"
+      "sha256": "23fd23c1fb3134c7c0823d432616ee9d158389e5a98b5ca18a0b642ed4c69b4d"
     },
     "manifest": {
       "path": "web/wasm/Cargo.toml",
@@ -32,8 +32,8 @@
       },
       {
         "path": "schema/replay-validation.json",
-        "size": 405035,
-        "sha256": "47c6b2f4dfefff795cdecf8f75f580bcc8c70031774e494f2538f5a0611aa1e3"
+        "size": 5009399,
+        "sha256": "cf7217c2f04626c44a38d65e13aeb5a4026063f71620030b2e362ee376a45b44"
       },
       {
         "path": "web/build.sh",
@@ -42,13 +42,13 @@
       },
       {
         "path": "web/public/js/play/client.js",
-        "size": 143485,
-        "sha256": "e4415d2fa2b03809dc386050406fde3faa4a949a401124a10b5cff70fc70e489"
+        "size": 144840,
+        "sha256": "53c9488394150705414c6e245f40b80d452f7f053183f5e7cf0625b89859e915"
       },
       {
         "path": "web/public/js/play/readiness.gen.js",
         "size": 787,
-        "sha256": "c9bb3c146f71f51155cd0e8659016c2ffea600a168cbddcea1bebba9caa788cd"
+        "sha256": "1a117238e99517427b1de01e184694d4071d9b9a0ab229242b877b2c0f8c468c"
       },
       {
         "path": "web/public/js/play/wasm-contract.mjs",
@@ -57,8 +57,8 @@
       },
       {
         "path": "web/public/js/play/wasmgame.js",
-        "size": 18604,
-        "sha256": "0ef8c3ac172a1359c058022608fcd33442383a5286658722766767da9d73c5cc"
+        "size": 18445,
+        "sha256": "443b4f0d7ba823797ca73232a0c5a4285e6853d6d149665f29b2a9a7ca0f3270"
       },
       {
         "path": "web/public/js/wire.gen.js",
@@ -100,8 +100,8 @@
     },
     "former_consumer": {
       "path": "crates/don-sim/src/systems/leaders.rs",
-      "size": 207309,
-      "sha256": "88aafcfaf7ea0212b1dd5acbe06048212e032613a99cabc350681a443647c6be",
+      "size": 246882,
+      "sha256": "c0a5976a6ed1a8df6a7b1e0f32ba75b1a05fcf135906a0c556f4cd283afaea82",
       "compile_time_literal_absent": true
     }
   },
@@ -110,13 +110,13 @@
     "exit_code": 0,
     "raw_output": {
       "path": "web/wasm/target/wasm32-unknown-unknown/release/don_web.wasm",
-      "size": 975828,
-      "sha256": "0ddd4285f313911962199dc671f2677b8952ae9aa328fe93771f2961c99b6327"
+      "size": 1092753,
+      "sha256": "ac6c4100a23e760ffae81bc518adbd4119545f10b1957c2218b0e7ff5ce1f388"
     },
     "output": {
       "path": "web/public/wasm/don_web.wasm",
-      "size": 771141,
-      "sha256": "b7c71e5db4b6ceaa94c3f32bcc91a1004cea667e6367c0326f8ba6e5e8b679c5"
+      "size": 869993,
+      "sha256": "f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181"
     },
     "source_inputs": [
       {
@@ -146,13 +146,13 @@
       },
       {
         "path": "crates/don-bhs/src/host.rs",
-        "size": 7314,
-        "sha256": "67c70bddc1df0735183880fc22a9f193135253edc5538863f088b69ad767fcb3"
+        "size": 13093,
+        "sha256": "64a01446cb4163e09d65d560d7f51d7686940dd14054f7c0d563bdcb0b38c06d"
       },
       {
         "path": "crates/don-bhs/src/lib.rs",
-        "size": 5019,
-        "sha256": "70721c0046d54ea6c8d6d44e1646971750ffc5dfeaa250401f1299169e48d41a"
+        "size": 5175,
+        "sha256": "c8a33e901a0bec616ab65f1db5b4ef9e43be00b331768e53df4d5fca75e4d371"
       },
       {
         "path": "crates/don-bhs/src/opcode.rs",
@@ -166,8 +166,13 @@
       },
       {
         "path": "crates/don-bhs/src/program.rs",
-        "size": 17866,
-        "sha256": "6d28f2694bfa2a71029e0a76193e2c6a788704ef9d9f799bdc874cfbbdcc331d"
+        "size": 24571,
+        "sha256": "8ec4417c49a8b26e17dbbcc1d850335727ba74aad7726a11388f62bb5662be97"
+      },
+      {
+        "path": "crates/don-bhs/src/scenario.rs",
+        "size": 45234,
+        "sha256": "0dd4c0a617a8ba6adc3d2281972bf2b78ac3c1a769a77d60bf48c2e894238e53"
       },
       {
         "path": "crates/don-bhs/src/value.rs",
@@ -206,13 +211,13 @@
       },
       {
         "path": "crates/don-sim/src/command.rs",
-        "size": 236965,
-        "sha256": "6214f849f2bbbd26a9325b12a3bf2e2729f0a85024b989a998c084097fecc180"
+        "size": 295131,
+        "sha256": "500c3aa3565666f4b6a8f181fccdcfcafa88f38551c0fe10afa25ac1c76c816d"
       },
       {
         "path": "crates/don-sim/src/command_tables.rs",
-        "size": 33303,
-        "sha256": "9c6c81b0e79417a7b0d309031ee9316c8124e8a015824bd21744f523ef775603"
+        "size": 34904,
+        "sha256": "07053a7e6a1adfab27d72f7c7d790f78eae9bda3641d46511e68748d3ea0b323"
       },
       {
         "path": "crates/don-sim/src/container.rs",
@@ -221,8 +226,8 @@
       },
       {
         "path": "crates/don-sim/src/deviations.rs",
-        "size": 98161,
-        "sha256": "b9d893cdc43ac4405ca519d7511b3998833497b5d5bc419e815ee71db5773b14"
+        "size": 99340,
+        "sha256": "5cb131ed15d67c12d25ff605c063f350fd8346cb5d917e7e4f0e622030c9b9e5"
       },
       {
         "path": "crates/don-sim/src/generated/mod.rs",
@@ -261,8 +266,8 @@
       },
       {
         "path": "crates/don-sim/src/order.rs",
-        "size": 28092,
-        "sha256": "6656dd8d0134958db6be0c955727e9685fdd13ccdb6e2899bf77c4b729937f99"
+        "size": 28443,
+        "sha256": "898ee2ac2180c77e6538b49aa59170a1e8a1d7825798e4f27965c05d2301bf49"
       },
       {
         "path": "crates/don-sim/src/rng.rs",
@@ -271,13 +276,13 @@
       },
       {
         "path": "crates/don-sim/src/schedule.rs",
-        "size": 11737,
-        "sha256": "a1dacc8a472abc11c1ec5aa2f601ccbf16ca903ce40f3f69990b3f06b1f7b464"
+        "size": 13720,
+        "sha256": "adc8dd04e3b9a92cbc72593e73ff4e68915ded074ac3fa46a0589dd58f0c252c"
       },
       {
         "path": "crates/don-sim/src/script_runtime.rs",
-        "size": 95127,
-        "sha256": "99a1c925f2dc8154f1077c21c9082a8f74e1a18198966d1af23e929550b85115"
+        "size": 92159,
+        "sha256": "872c4eaf99df06ccb23c0db546c1d1df174900c87a7390d1e3e10b2d51e2a602"
       },
       {
         "path": "crates/don-sim/src/simd.rs",
@@ -293,6 +298,16 @@
         "path": "crates/don-sim/src/systems/air.rs",
         "size": 86196,
         "sha256": "fbf923d4f9bc647546420057e8cf6a944eb3bc43098d4b02cb19ce82cdb2087e"
+      },
+      {
+        "path": "crates/don-sim/src/systems/air_containment_host.rs",
+        "size": 39800,
+        "sha256": "aef2df29d3d71530f2c8d8e3fab3ece177ab34b9b6447d315274c27960cd0a96"
+      },
+      {
+        "path": "crates/don-sim/src/systems/air_launch_receivers.rs",
+        "size": 36994,
+        "sha256": "a8099e0c1c0582c6bdd2c4cbc291a90e6ee8ef56ced009d49957f1280ba3b1b4"
       },
       {
         "path": "crates/don-sim/src/systems/air_patrol_building_search_frontier.rs",
@@ -316,8 +331,8 @@
       },
       {
         "path": "crates/don-sim/src/systems/armies.rs",
-        "size": 132764,
-        "sha256": "315d419f077e32ee0c22f7b9d36b850a6d30c69b5acf3973c87a538d83ff96bf"
+        "size": 138769,
+        "sha256": "149fb6734f0f5357cd4685907c0868355e9d079847ccae73cc97103b31202254"
       },
       {
         "path": "crates/don-sim/src/systems/attack_position.rs",
@@ -361,8 +376,13 @@
       },
       {
         "path": "crates/don-sim/src/systems/borders_fog.rs",
-        "size": 96888,
-        "sha256": "3377a4acdbb134d67e7b0ca6ac4a9a3dc9b486fce512919f75f19a556ab23c02"
+        "size": 115459,
+        "sha256": "2c044f3e4e69a48a13a57d006032f963d0ae14cf62db54eb493b30f60a83459d"
+      },
+      {
+        "path": "crates/don-sim/src/systems/build_action_unqueue.rs",
+        "size": 26458,
+        "sha256": "d502ab2fa64579ac448cae3f14464031ba5583b31eb2696725d534c437efb7dd"
       },
       {
         "path": "crates/don-sim/src/systems/building_gather.rs",
@@ -446,13 +466,13 @@
       },
       {
         "path": "crates/don-sim/src/systems/diplomacy_command_plans.rs",
-        "size": 27006,
-        "sha256": "707f6cc010150fd7a04236612e9c2569c6f76b92a440c839ba35a907c1d7374e"
+        "size": 30593,
+        "sha256": "7fe9230309b40186874933cb92624f7cbe3fd6a35e6b861892153ce065028595"
       },
       {
         "path": "crates/don-sim/src/systems/direct_entity_command_integration.rs",
-        "size": 32974,
-        "sha256": "6bc1b62430e2c0dff01805f37466efef6c244d75c3a9b733eab612571e4a98cc"
+        "size": 35744,
+        "sha256": "0da4daf4825a54cd4e4579ea7563734c93af82ae71c79de3b96e9dcbac3d64e8"
       },
       {
         "path": "crates/don-sim/src/systems/direct_entity_command_plans.rs",
@@ -463,6 +483,11 @@
         "path": "crates/don-sim/src/systems/economy.rs",
         "size": 190973,
         "sha256": "048987f928d773b3d71e93b96feac1682fa477d7ae6a70163538114c0bf2d653"
+      },
+      {
+        "path": "crates/don-sim/src/systems/economy_group_actions.rs",
+        "size": 36401,
+        "sha256": "f3959c923b1c125bd988c77352ef3c46d7774e184656ad2876233f26291e14e0"
       },
       {
         "path": "crates/don-sim/src/systems/external_entity_visibility_frontier.rs",
@@ -485,9 +510,24 @@
         "sha256": "e0b5771b88ebe3ce9638fa71c6637f57bc0a53abe3fa861e32d33eb983ae52d3"
       },
       {
+        "path": "crates/don-sim/src/systems/game_daemon_calc_danger.rs",
+        "size": 45239,
+        "sha256": "83cf9b068de7c9d753816dca622bcca532d05f6feff08783e812a7084a1960b0"
+      },
+      {
         "path": "crates/don-sim/src/systems/game_daemon_step12.rs",
         "size": 14915,
         "sha256": "399e40bb0d2549e4b84fad1a3324abe09f871d408ca0e61e96ad07630a762520"
+      },
+      {
+        "path": "crates/don-sim/src/systems/garrison_dispatch.rs",
+        "size": 14637,
+        "sha256": "8429f49710051877dc85c26727674e74a218fc773c9be7c8a14625efa1da6609"
+      },
+      {
+        "path": "crates/don-sim/src/systems/garrison_order.rs",
+        "size": 33241,
+        "sha256": "cb8d0a2ae88b8251ae4ce5b1ca37c99f3c0fb7fb88a8e72c75689f8c91eb48c2"
       },
       {
         "path": "crates/don-sim/src/systems/gather_lifecycle.rs",
@@ -510,19 +550,44 @@
         "sha256": "8d6544505dc3cf961f8af022331e3635b4bc5163a385a0a8eefa89dc16b989f4"
       },
       {
+        "path": "crates/don-sim/src/systems/group_action_entry.rs",
+        "size": 23992,
+        "sha256": "cb4d55d784dfac2e0ab31d928589075777265c7fd13a324c30fd979b08cd1b0a"
+      },
+      {
         "path": "crates/don-sim/src/systems/group_action_frontier.rs",
         "size": 8363,
         "sha256": "da7a4a777875b7905d8efc8a0eafbd903dbd914a89d105c049fa25c55be18140"
       },
       {
+        "path": "crates/don-sim/src/systems/group_move_near_split.rs",
+        "size": 23723,
+        "sha256": "53755f7fd0f62c160d01b4e1615e582cd819b725a684164c9b6661b8c8ae6132"
+      },
+      {
         "path": "crates/don-sim/src/systems/groups_guys.rs",
-        "size": 191008,
-        "sha256": "f36554d1fb5166865d85dc158ad76617f782e1bedc3ee1303b0b779f92c11234"
+        "size": 192401,
+        "sha256": "087e0da2950aa28a7c36bc856b56ca46aa9a1f8a20b886607c31483d4803af36"
+      },
+      {
+        "path": "crates/don-sim/src/systems/guard_dispatch.rs",
+        "size": 24312,
+        "sha256": "c63812f25529a466f0a38f92299d8c0384315f21e6c07387be19e960d98c11fc"
+      },
+      {
+        "path": "crates/don-sim/src/systems/guard_order.rs",
+        "size": 28406,
+        "sha256": "4fbed56588ff2c21b03579d5ff766e72461da03794ce57fbe42f31d6780cd531"
       },
       {
         "path": "crates/don-sim/src/systems/held_target.rs",
         "size": 25697,
         "sha256": "999ce8c48397c44312fe5e82418ef52e3f7c97cb2e66c43e4d6babd3fd9490a9"
+      },
+      {
+        "path": "crates/don-sim/src/systems/hotkey_group_action.rs",
+        "size": 6736,
+        "sha256": "6963422183c7d37374dded92d9398c8fcf2c6de31ef649fbcd49775641327cce"
       },
       {
         "path": "crates/don-sim/src/systems/items.rs",
@@ -541,13 +606,38 @@
       },
       {
         "path": "crates/don-sim/src/systems/leader_init_diplomacy_loop.rs",
-        "size": 14649,
-        "sha256": "24e88e53baf73fb52a7fec50448f10c88cfaee3688bb33e1a460bc439a40877f"
+        "size": 15965,
+        "sha256": "a4d832c73a9fee263fec728270ce0978b80a9ef7d11bd81eef6242c0c355d0d7"
+      },
+      {
+        "path": "crates/don-sim/src/systems/leader_match_host.rs",
+        "size": 5625,
+        "sha256": "0170e7f735277a90d328a70718348926620db1c1ff77429e056c192d2fdc71c4"
+      },
+      {
+        "path": "crates/don-sim/src/systems/leader_process_taunt.rs",
+        "size": 60937,
+        "sha256": "bf457a3400a07434386e93abe19b9decd20c24fd74944ef49bb010bffbfe5e06"
+      },
+      {
+        "path": "crates/don-sim/src/systems/leader_production_ai.rs",
+        "size": 47782,
+        "sha256": "350ddbc7794ef09308741daee8a01a066de325ba3c341562b02c60ffb66c21a1"
+      },
+      {
+        "path": "crates/don-sim/src/systems/leader_set_diplo.rs",
+        "size": 29786,
+        "sha256": "8f588ae7d7c4162c47c5d05365ba0aa16b79d0ee1982df1e6dea2f2d0c28cd4c"
       },
       {
         "path": "crates/don-sim/src/systems/leaders.rs",
-        "size": 207309,
-        "sha256": "88aafcfaf7ea0212b1dd5acbe06048212e032613a99cabc350681a443647c6be"
+        "size": 246882,
+        "sha256": "c0a5976a6ed1a8df6a7b1e0f32ba75b1a05fcf135906a0c556f4cd283afaea82"
+      },
+      {
+        "path": "crates/don-sim/src/systems/leaders_diplomacy_opening_frontier.rs",
+        "size": 14156,
+        "sha256": "ba0ad30a2415f24eef2d93bdd15827729338e424d8189a93c3e21485843e09b3"
       },
       {
         "path": "crates/don-sim/src/systems/leaders_process_event_frame_step19.rs",
@@ -555,14 +645,29 @@
         "sha256": "cc85f3554b683b136c079aa095358ca28de7daa4bb26c64672cee442ac1d258e"
       },
       {
+        "path": "crates/don-sim/src/systems/lifecycle_host.rs",
+        "size": 32638,
+        "sha256": "ed550358028236b4c8efe4af6bc62e91eb30cbb27c45b322ac47ebf7a287a11a"
+      },
+      {
         "path": "crates/don-sim/src/systems/map_terrain.rs",
-        "size": 124665,
-        "sha256": "27f4c6ecfd6fe18bbf241709c415ea2cfa73d1a0e3e6892fb19afd60ecde55fb"
+        "size": 131035,
+        "sha256": "0976e267d122d295a680d5a0efd7452a36b66605bb4e171b71e6c1c462a48fcd"
       },
       {
         "path": "crates/don-sim/src/systems/mod.rs",
-        "size": 15229,
-        "sha256": "ce829dc1f84fc52442ac8fb03d669d0f653953027eb30e494b7df5e27fb6d385"
+        "size": 21324,
+        "sha256": "f6aa93656f1c3dfcde19d1cd66c7c797a69fb60feff035561d1ca97f4671156b"
+      },
+      {
+        "path": "crates/don-sim/src/systems/mountain_add_runtime.rs",
+        "size": 27724,
+        "sha256": "bbf50b2d61d1e1e14f7b422e929b935ebe22dcfb431d292de6afe070dae3791b"
+      },
+      {
+        "path": "crates/don-sim/src/systems/mountain_template_producer.rs",
+        "size": 22194,
+        "sha256": "b474c023b6109959c6724be8a6349aa9819fb733a4e9155c76f7148885f7956a"
       },
       {
         "path": "crates/don-sim/src/systems/mountains.rs",
@@ -596,8 +701,8 @@
       },
       {
         "path": "crates/don-sim/src/systems/order_dispatch.rs",
-        "size": 306284,
-        "sha256": "72f3b5d19f4c2ced2abaa3263d4db406c43368294efec92544a2c055d29f7c2d"
+        "size": 309975,
+        "sha256": "677dbd9dbea951672547fa40eaac494f44ff73c2cdf5b5fad14c1d96510f0a0a"
       },
       {
         "path": "crates/don-sim/src/systems/patrol.rs",
@@ -605,9 +710,14 @@
         "sha256": "cedb3af6e47881f6b47f2a8b2c33b43f3b7f2943b2c87cbe41033a5846d8ea33"
       },
       {
+        "path": "crates/don-sim/src/systems/player_lifecycle_tails.rs",
+        "size": 36771,
+        "sha256": "e84e9a664df24bad0e8c78e4e489dc0af880cee0957711b8943a9f468c352089"
+      },
+      {
         "path": "crates/don-sim/src/systems/player_setup.rs",
-        "size": 8804,
-        "sha256": "bb8ff5c0b793043ba4261c78ff827c37cc4f8a20f48ac2bd5bd6c7281f071284"
+        "size": 12121,
+        "sha256": "0600ad6982a3f5140832ac0a91c2fc4d1528b8806805c37fc2596f919d2e2fd0"
       },
       {
         "path": "crates/don-sim/src/systems/production.rs",
@@ -616,8 +726,8 @@
       },
       {
         "path": "crates/don-sim/src/systems/production_runtime.rs",
-        "size": 133679,
-        "sha256": "959b028e2895fd2104d05327e0412e26e23dd1e552de1593cab717475c8b3bf6"
+        "size": 141510,
+        "sha256": "11234c3ddb6d6e15bfc24a2229f1c25ffd088fae6eb9cad40016b7dd2719df05"
       },
       {
         "path": "crates/don-sim/src/systems/recall_action_frontier.rs",
@@ -646,13 +756,23 @@
       },
       {
         "path": "crates/don-sim/src/systems/save_load.rs",
-        "size": 106297,
-        "sha256": "f5c8d3eacb1636729ac2d70d512cd5a512049bd001b273f26085573b29fd4690"
+        "size": 123146,
+        "sha256": "d9f9ff219f5d8e1aab43a7888bbf39f1ac1183585c2909488118ec35e5c92c21"
+      },
+      {
+        "path": "crates/don-sim/src/systems/save_load/groups.rs",
+        "size": 9421,
+        "sha256": "40efa9cc2aa5a4684ea3aff87acb566bba1e4783308462a1988cb28aba139866"
+      },
+      {
+        "path": "crates/don-sim/src/systems/save_load/leader_match.rs",
+        "size": 19924,
+        "sha256": "8b3f954df060e98d9670b49de69bc69ae16ce2cf196ae75dddf05748e51ea6e5"
       },
       {
         "path": "crates/don-sim/src/systems/save_load/step8_views.rs",
-        "size": 7406,
-        "sha256": "ea78f4e4971c0abb3a84fdbb69b8ffbe6d7380aee610b3cc6ab44931cb1db6a4"
+        "size": 9865,
+        "sha256": "5bf00a8bb597a13db5332f635b8a4d7ba8e609173edab15796dc512344f3be70"
       },
       {
         "path": "crates/don-sim/src/systems/setup_diplomacy.rs",
@@ -661,8 +781,8 @@
       },
       {
         "path": "crates/don-sim/src/systems/sparse_object_bands_authority_frontier.rs",
-        "size": 32893,
-        "sha256": "8db3d3c6a4e8bc76f827758a47fb5cc69b34e547d9e3f466c9fdf0c68395d89d"
+        "size": 33121,
+        "sha256": "e53bd20cafb925bbf5206aa3612f786e1c37b8711f1828334cddbf3ec4f3cd0b"
       },
       {
         "path": "crates/don-sim/src/systems/special_anim_executor.rs",
@@ -670,9 +790,24 @@
         "sha256": "e9ebf53cfc3e2cd7c78b14d1466028a8bcf8638a01689b1ebbfacbf72a6aa373"
       },
       {
+        "path": "crates/don-sim/src/systems/step12_visibility_producer_frontier.rs",
+        "size": 41209,
+        "sha256": "f72899f82fb917f5e122f86d0f4c4edaadabe806c3623f886348f6f73b5f1700"
+      },
+      {
+        "path": "crates/don-sim/src/systems/step12_visibility_runtime.rs",
+        "size": 44438,
+        "sha256": "263909dc3fc98ce4a1acddf5cd8930e1b505fe4c917dab830a7600fe435f8e5a"
+      },
+      {
+        "path": "crates/don-sim/src/systems/step8_eject_contents.rs",
+        "size": 19911,
+        "sha256": "b30f82abe12921b4c782bc834687f9d4050ba2d3f63e4c6f8e82cb0054ba9a5f"
+      },
+      {
         "path": "crates/don-sim/src/systems/tail_command_transactions.rs",
-        "size": 12324,
-        "sha256": "8c5c1449562315fcd23211f3d21222995dcec08469b053ef19ba2198ad2299f8"
+        "size": 20714,
+        "sha256": "18653f951e6c51d5f3d8bf7b5f49c40579cdf3806e8b63f082f2092b373ea162"
       },
       {
         "path": "crates/don-sim/src/systems/target.rs",
@@ -716,8 +851,8 @@
       },
       {
         "path": "crates/don-sim/src/systems/terrain_groups.rs",
-        "size": 96299,
-        "sha256": "e49d38c13035010957c63f8beed168065dfa2e55c2f0df1555595ba97742caa0"
+        "size": 105765,
+        "sha256": "cb249a3498c31925108c3286e04280c25e5cd44babcf2c1cd48eb5386fddf457"
       },
       {
         "path": "crates/don-sim/src/systems/terrain_player_group.rs",
@@ -736,13 +871,13 @@
       },
       {
         "path": "crates/don-sim/src/systems/terrain_region_continuation.rs",
-        "size": 26487,
-        "sha256": "29c28023a5335f5960a2aeb04fb69e42db70e2c3b621224dad68ed1d527e2f18"
+        "size": 44835,
+        "sha256": "ad4a8c534f692ce3d959109a41c31768795a28ff4284d851f89f897964962677"
       },
       {
         "path": "crates/don-sim/src/systems/terrain_region_patterns.rs",
-        "size": 21107,
-        "sha256": "1afbe06a8ac5a88e8334fdf419c6511b92722adc02b82333efde47ffe544fef6"
+        "size": 26204,
+        "sha256": "4937adab9f39833091cff8a740a51963a83f625f2eed22bcf670e2e62e74472d"
       },
       {
         "path": "crates/don-sim/src/systems/terrain_region_placement.rs",
@@ -760,14 +895,39 @@
         "sha256": "298bd50614c9f06df89ad661eabd46450e0a798a2c6319cac5537299b2c61dc3"
       },
       {
+        "path": "crates/don-sim/src/systems/unit_come_out_body_map.rs",
+        "size": 19492,
+        "sha256": "c80d7ad5992440c8a32659ebc823d7b86e747bd7ad3f1d764873d1e299c797cf"
+      },
+      {
+        "path": "crates/don-sim/src/systems/unit_come_out_common_release_frontier.rs",
+        "size": 24369,
+        "sha256": "58074430db02ec2a45f51264bfd26ec85f0f0497c3ca0ed2e06b80c69dd1d048"
+      },
+      {
+        "path": "crates/don-sim/src/systems/unit_come_out_full_frontier.rs",
+        "size": 34359,
+        "sha256": "72a79813d7493f6229e547cbbe9b8c6df438ba7b214500d3bdfc4c4ff21d68f6"
+      },
+      {
+        "path": "crates/don-sim/src/systems/unit_come_out_gather_selection_frontier.rs",
+        "size": 28660,
+        "sha256": "a234d0b701cd62796e82f699edb0abf1f30d9c85b6d1953a77542baa0f1a5f6d"
+      },
+      {
+        "path": "crates/don-sim/src/systems/unit_come_out_release_tail_frontier.rs",
+        "size": 69984,
+        "sha256": "f062556553ff9d3343cadfff23ebffb729237a03d1ed9dcedd1fd663e12de635"
+      },
+      {
         "path": "crates/don-sim/src/systems/unit_inctime.rs",
-        "size": 151094,
-        "sha256": "1580e5d31df5a388d2692f6c3a46b05bfec0d7f50c878598d76328ff07dc943a"
+        "size": 161983,
+        "sha256": "25875d4c69d78768f60aa19fd3e14775956698f3263e35d206c7429dac9a9746"
       },
       {
         "path": "crates/don-sim/src/systems/victory_score.rs",
-        "size": 101272,
-        "sha256": "855b4caf837113e274842981822d2e87c487c8b71b63bb45db4d11a6e5f41daa"
+        "size": 104150,
+        "sha256": "98693077b342accd67da6fa65761caedf09e22a5d84fcfc23e94f17b6f30b8e9"
       },
       {
         "path": "crates/don-sim/src/systems/walls.rs",
@@ -780,9 +940,14 @@
         "sha256": "7d5444165a18b3b48f74571d960b8fd75b87ac46726b141bea39c91fd02b47e2"
       },
       {
+        "path": "crates/don-sim/src/systems/world_oil_goods.rs",
+        "size": 22913,
+        "sha256": "eb9f94da88e13da01d7ce721d9f9752f08f765f31b3baa75296a15e7812ee46f"
+      },
+      {
         "path": "crates/don-sim/src/tick.rs",
-        "size": 191938,
-        "sha256": "347297a717f613837487c699716ddb83c55be13f5a4a7b6cd538b4e811cd24ed"
+        "size": 222133,
+        "sha256": "ef53040d03bf15f8c2ca1f9d243601e3a0c625c621e07334c1eec51edf6d744f"
       },
       {
         "path": "crates/don-sim/src/trig.rs",
@@ -791,8 +956,8 @@
       },
       {
         "path": "crates/don-sim/src/world.rs",
-        "size": 89234,
-        "sha256": "dc573923cd3c5e238496c03c66e5ecdf361a036a9513f0e26e86e83ced2e363b"
+        "size": 92190,
+        "sha256": "9d081a581601b010575dcc39f545033abe22cce271722ab9be9f581e24849e73"
       },
       {
         "path": "web/wasm/src/game.rs",
@@ -801,8 +966,8 @@
       },
       {
         "path": "web/wasm/src/game_abi.rs",
-        "size": 90040,
-        "sha256": "d6d5406d628098fd702469ef0b3d2996bbcf3dbf28761100bada5198dd3a29fe"
+        "size": 91151,
+        "sha256": "41eca14963de76b5dc5e655e67b01b734dfac27e6b233b3d6ea16eb4ed9bc6fb"
       },
       {
         "path": "web/wasm/src/gamedata.rs",
@@ -825,7 +990,7 @@
         "sha256": "e703b99891d7a6bda8e6c4f62964842ef036727e094c635f201c8eef34e45cbc"
       }
     ],
-    "source_inputs_sha256": "3615c37505d8211cbadbf85b1d461bd1c0cf199bf8e91b9c6f28035a20cddb2c"
+    "source_inputs_sha256": "39d9b3076fe934cb84ad8ecadcf53877426f7b8a7b6b1309d9f0b9a786ecbc60"
   },
   "test_projection": {
     "command": [
@@ -838,7 +1003,7 @@
     ],
     "outcome": "passed",
     "exit_code": 0,
-    "passed": 1579,
+    "passed": 1736,
     "failed": 0,
     "ignored": 2
   },

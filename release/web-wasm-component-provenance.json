@@ -6,8 +6,8 @@
   },
   "payload": {
     "path": "web/public/wasm/don_web.wasm",
-    "size": 771141,
-    "sha256": "b7c71e5db4b6ceaa94c3f32bcc91a1004cea667e6367c0326f8ba6e5e8b679c5"
+    "size": 869993,
+    "sha256": "f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181"
   },
   "lock": {
     "path": "web/wasm/Cargo.lock",
@@ -37,8 +37,8 @@
             },
             {
               "path": "Cargo.toml",
-              "size": 827,
-              "sha256": "4ec85f2ac0273bfe147b37eba61149bae0b4ad4dd73d90372bf5097010c03470"
+              "size": 968,
+              "sha256": "daf7d5e83617855d045959a24e0415b8a37437a00c031771f78e732955e88353"
             },
             {
               "path": "LICENSE",
@@ -75,8 +75,8 @@
             },
             {
               "path": "Cargo.toml",
-              "size": 827,
-              "sha256": "4ec85f2ac0273bfe147b37eba61149bae0b4ad4dd73d90372bf5097010c03470"
+              "size": 968,
+              "sha256": "daf7d5e83617855d045959a24e0415b8a37437a00c031771f78e732955e88353"
             },
             {
               "path": "LICENSE",

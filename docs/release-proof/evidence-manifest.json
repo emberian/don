@@ -160,12 +160,12 @@
     },
     {
       "path": "docs/release-proof/web-wasm-component-provenance.md",
-      "sha256": "baab1949c360742ebad63ecda6eb3e5ca7da220abdf8eac8023b12dc70ff0132",
+      "sha256": "a24d94abb9bdc35350e6d02df0b10af31a05d42971105a5469740ed9778adc44",
       "role": "scope and explicit non-claims for the browser Wasm dependency precursor"
     },
     {
       "path": "release/web-wasm-component-provenance.json",
-      "sha256": "0aced376915311e530aa15a72d66545edcc6fbd5195df99c8aca93582feea8fa",
+      "sha256": "23fd23c1fb3134c7c0823d432616ee9d158389e5a98b5ca18a0b642ed4c69b4d",
       "role": "exact browser Wasm component, lock graph, and pending-review package provenance"
     },
     {
@@ -185,12 +185,12 @@
     },
     {
       "path": "docs/release-proof/source-archive-reproducibility.md",
-      "sha256": "530a684116ac720b0b650d157a525f47333e4696ef01d9e27a4c27e7105ebd80",
+      "sha256": "e0e97fc4c855dc2bd6e7b099a15be555a33d328b049a3bf354b03dac7cde2448",
       "role": "source-archive product-Wasm linkage, depfile closure, and scope contract"
     },
     {
       "path": "release/source-archive-reproducibility.json",
-      "sha256": "c244603190ea7b0fb0851a09090ab83e5d94834c7c311e00c0b7724ca2d2c9ec",
+      "sha256": "b9938a00a3ca52d084a32a9333785577c1deaaf8d53c2d1fbdf2928033521dc6",
       "role": "exact clean-archive Wasm build closure, byte identity, exclusion, and test result"
     },
     {
