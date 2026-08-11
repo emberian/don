@@ -15,4 +15,14 @@ description = "Checked ABI for CrossplayProxy.dll: the shipped ICrossPlayService
 name = "don_crossplay"
 path = "src/lib.rs"
 
+[features]
+# The DoN-owned backend behind the ABI: `local`, `msvc` and `service`. On by
+# default; `--no-default-features` leaves the crate as the pure interface
+# description it started as, which is what a consumer that only wants the vtable
+# layout should use.
+default = ["local"]
+local = []
+
+# No dependencies, deliberately. The backend needs an allocator and nothing
+# else, so a future replacement DLL keeps every option about when it can run.
 [dependencies]

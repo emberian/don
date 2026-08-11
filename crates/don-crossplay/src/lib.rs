@@ -21,19 +21,55 @@
 //! and `docs/tracks/crossplay-abi.md` for the evidence and the game-critical
 //! assessment.
 //!
+//! # The local backend
+//!
+//! [`abi`] describes the interface. [`local`], [`msvc`] and [`service`]
+//! *implement* it, DoN-side: a lobby directory with no PlayFab, no account
+//! system, no WinHTTP and no Party network anywhere in the path.
+//!
+//! * [`local`] — the semantics. Sessions, lobbies, attributes, P2P routing.
+//!   Pure data, no `unsafe`, and the honest home of every DoN policy decision.
+//! * [`msvc`] — the object boundary. Reading a `wstring` or an
+//!   `unordered_map<wstring, wstring>` retail handed us, and building the DTOs
+//!   it reads back. Offsets measured from `CrossplayProxy.pdb` and confirmed
+//!   against the shipped `_Find_last`.
+//! * [`service`] — the 58-slot vtable, bound to the two above.
+//!
+//! **None of it has been executed by `riseofnations.exe`.** See
+//! [`service`]'s module documentation for exactly what the tests do and do not
+//! establish.
+//!
 //! # What this crate deliberately does not know
 //!
-//! * *Behaviour.* A slot's signature says how to call it, not what it does.
-//! * *Which slots retail actually calls.* No call-site trace has been taken.
-//!   The assessment in `docs/tracks/crossplay-abi.md` is evidence-weighted, not
-//!   measured dispatch.
+//! * *Retail's behaviour.* A slot's signature says how to call it, not what the
+//!   shipped implementation did. Where a shipped behaviour *was* measured — the
+//!   session state machine, the inert slots, `IsConnectedToHub` — it is
+//!   reproduced and cited; everything else in [`local`] is DoN's own policy and
+//!   is marked as such.
 //! * *Anything about PlayFab authentication*, the title id, or the Party
-//!   session configuration.
+//!   session configuration. The local backend exists so none of it is needed.
 
-#![no_std]
+// The whole crate is `no_std`: the backend needs an allocator and nothing else,
+// so a future DLL that has to run before the CRT is fully up keeps its options.
+// Under `cfg(test)` std comes back, because libtest needs it.
+#![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+extern crate alloc;
+
 pub mod abi;
+
+#[cfg(feature = "local")]
+pub mod local;
+#[cfg(feature = "local")]
+pub mod msvc;
+#[cfg(feature = "local")]
+pub mod service;
+
+#[cfg(feature = "local")]
+pub use local::{Attributes, Backend, Directory, Emission, Lobby, Member, Notice, Outcome};
+#[cfg(feature = "local")]
+pub use service::{LocalCrossPlayService, LocalPlayer};
 
 pub use abi::{
     ICrossPlayService, ICrossPlayServiceVtable, ICrossplayLogger, ICrossplayLoggerVtable,
