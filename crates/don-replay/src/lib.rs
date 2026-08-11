@@ -44,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod armies_runtime;
+pub mod build_spawn_runtime;
 pub mod check_all;
 pub mod check_player_forest;
 pub mod builds_runtime;
@@ -78,6 +80,7 @@ pub mod pools;
 pub mod post_continent;
 pub mod post_nubify_transition_frontier;
 pub mod replay;
+pub mod replay_bhs_live_bindings;
 pub mod replay_bhs_runtime;
 pub mod replay_goods_initial;
 pub mod replay_goods_resource_schedule;
@@ -88,6 +91,7 @@ pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
 pub mod state;
+pub mod setup_units_producer;
 pub mod units_runtime;
 pub mod walk;
 pub mod wire;
