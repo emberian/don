@@ -27,7 +27,7 @@ use don_bhs::{
     VarRef, VmError,
 };
 use don_replay::replay::Replay;
-use don_sim::script_runtime::ScriptRuntime;
+use don_sim::script_runtime::{ExternalGameSeconds, ScriptRuntime};
 use replay_bhs_live_bindings::{
     bind_production_call, bind_production_map_style, bind_production_population,
     bind_production_type_counts, run_production_call, ProductionBuiltinImage,
@@ -86,6 +86,10 @@ fn skip(reason: &str) {
 
 fn digest(byte: u8) -> Sha256Digest {
     Sha256Digest([byte; 32])
+}
+
+fn game_seconds(seconds: i32) -> ExternalGameSeconds {
+    ExternalGameSeconds::admit(Some(seconds), Some(seconds)).unwrap()
 }
 
 fn type_witness(role: TypeSourceRole, component: u8) -> TypeSourceWitness {
@@ -373,8 +377,8 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
         [
-            78, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712,
-            713,
+            78, 79, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383,
+            712, 713,
         ]
     );
 }
@@ -403,7 +407,7 @@ fn stop_timer_coerces_the_script_integer_name_and_mutates_the_canonical_containe
     let image = ProductionBuiltinImage::default();
     let mut host = ReplayProductionBuiltinHost::new(&image);
     let committed = runtime
-        .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+        .run_external_timer_transaction(0, 0, &[], game_seconds(0), &mut host, |outcome, _| {
             Ok::<Value, ()>(outcome.returned.clone().unwrap())
         })
         .unwrap();
@@ -421,7 +425,7 @@ fn stop_timer_coerces_the_script_integer_name_and_mutates_the_canonical_containe
 
     let mut host = ReplayProductionBuiltinHost::new(&image);
     let committed = runtime
-        .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+        .run_external_timer_transaction(0, 0, &[], game_seconds(0), &mut host, |outcome, _| {
             Ok::<Value, ()>(outcome.returned.clone().unwrap())
         })
         .unwrap();
@@ -736,6 +740,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
         &binding,
         &mut call,
         &ProductionBuiltinImage::default(),
+        game_seconds(0),
     )
     .unwrap();
     assert_eq!(receipt.returned, 1_111);
@@ -749,7 +754,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_reaches_timer_expired_and_rolls_back() {
+fn strict_economic_prefix_reaches_research_tech_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -822,12 +827,13 @@ fn strict_economic_prefix_reaches_timer_expired_and_rolls_back() {
         .expect("install the one canonical production timer");
     let before_timers = timers.clone();
     let mut runtime = ScriptRuntime::new_with_timers(loaded.program, None, None, timers).unwrap();
-    let error = run_production_call(&mut runtime, &binding, &mut call, &image).unwrap_err();
+    let error = run_production_call(&mut runtime, &binding, &mut call, &image, game_seconds(0))
+        .unwrap_err();
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 79,
-            name: "timer_expired"
+            index: 357,
+            name: "research_tech_with_cost"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -873,6 +879,9 @@ fn strict_economic_prefix_reaches_timer_expired_and_rolls_back() {
             "num_type",
             "find_nation",
             "stop_timer",
+            "timer_expired",
+            "age",
+            "have_tech",
         ]
     );
     assert_eq!(

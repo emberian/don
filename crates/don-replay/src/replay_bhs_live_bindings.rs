@@ -11,7 +11,9 @@ use crate::leaders_runtime_frontier::{RuntimeCoveredRange, RuntimeLeadersFrontie
 use crate::map_style::{MapStyleStaticData, StaticFileEvidence, SHIPPED_MAP_STYLE_CATALOG};
 use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 use don_bhs::{BuiltinDecl, Host, HostError, HostResult, RuntimeError, Value, VmError};
-use don_sim::script_runtime::{ExternalScriptFailure, ExternalStopTimerHost, ScriptRuntime};
+use don_sim::script_runtime::{
+    ExternalGameSeconds, ExternalScriptFailure, ExternalTimerHost, ScriptRuntime,
+};
 use don_sim::systems::bhs_create_unit_runtime::BhsCreateUnitRuntime;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
 use don_sim::systems::victory_score::{
@@ -478,8 +480,8 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 19] = [
-    78, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712, 713,
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 20] = [
+    78, 79, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712, 713,
 ];
 
 /// A strict host for the first stock-economic prefix.
@@ -890,8 +892,8 @@ impl Host for ReplayProductionBuiltinHost<'_> {
     }
 }
 
-impl ExternalStopTimerHost for ReplayProductionBuiltinHost<'_> {
-    fn stop_timer_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
+impl ExternalTimerHost for ReplayProductionBuiltinHost<'_> {
+    fn timer_builtin_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
         self.trace.push(ProductionBuiltinCall {
             index: decl.index,
             name: decl.name,
@@ -940,6 +942,7 @@ pub fn run_production_call(
     binding: &ReplayBhsBinding,
     call: &mut ReplayProductionCall,
     image: &ProductionBuiltinImage,
+    game_seconds: ExternalGameSeconds,
 ) -> Result<ProductionRunReceipt, ProductionRunError> {
     let Some(file) = runtime.program().files.get(binding.file) else {
         return Err(ProductionRunError {
@@ -975,10 +978,11 @@ pub fn run_production_call(
         Value::Int(call.num_loops),
     ];
     let mut host = ReplayProductionBuiltinHost::new(image);
-    let result = runtime.run_external_stop_timer_transaction(
+    let result = runtime.run_external_timer_transaction(
         binding.file,
         script,
         &args,
+        game_seconds,
         &mut host,
         |outcome, candidate_args| {
             if let Some(failure) = outcome.error.clone() {

@@ -3,13 +3,13 @@
 ## Result
 
 The stock `economic.bhs` Program image can now be entered through the exact
-four-argument `Leader::production_ai` boundary. The replay adapter owns nineteen
+four-argument `Leader::production_ai` boundary. The replay adapter owns twenty
 ScenarioFuncSet handlers on the smallest reached subdomain. Installed `rules.xml`
 owns `get_mapstyle`; replay setup owns the reached conquest and starting-option gates.
 Execution now owns dynamic builtin 377, `find_city_id`, plus the exact joined
 type-counter cohort 259--261, the canonical population reads 245--246, and the reached
-Tech/Other branch of 362, `have_tech`, and canonical builtin 78, `stop_timer`. It stops
-strictly at builtin 79, `timer_expired`.
+Tech/Other branch of 362, `have_tech`, and the canonical timer pair 78--79. It stops
+strictly at builtin 357, `research_tech_with_cost`.
 
 No replay checksum match is claimed. The adapter is not registered in the default
 harness, and a failed prefix atomically rolls back BHS static-variable writes, the
@@ -94,7 +94,10 @@ script next calls builtin 259, `num_type(who, "Market")`, and reaches builtin 24
 5. `259 num_type(who, "Tower")`
 6. `323 find_nation(who)`
 7. `78 stop_timer(who)`
-8. `79 timer_expired(who)` — the next honest unsupported boundary
+8. `79 timer_expired(who)`
+9. `248 age(who)`
+10. `362 have_tech(who, "Written Word")`
+11. `357 research_tech_with_cost(who, "Written Word")` — the next honest unsupported boundary
 
 The BHS source supplies integer `who` to both timer calls even though their native
 declarations take a String. Retail inserts `OP_CAST String`; `ScriptInt::get_string`
@@ -106,7 +109,7 @@ That path uses replay settings `starting_resources=1`, `starting_town=2`, no con
 or scenario semaphore bit, one live city, and a sea map. It changes `step` from 1 to 6,
 then enters `train_unit_with_need`. The failed run proves the external ref cell and the
 candidate Program, and the removed `"1"` timer plus its cursor all roll back after the
-later missing `timer_expired` call.
+later missing `research_tech_with_cost` call.
 
 ## Installed and replay setup bindings
 
@@ -236,30 +239,45 @@ nodes, absolute expiry values, overflow count, and the persistent current-node c
 Its canonical execution owner is the private `ScriptRuntime::timers` used by step-4 game
 and general-powers scripts. The replay call no longer accepts a detached `ScriptTimers`
 or a mutable Program. Instead a narrow `ScriptRuntime` bridge clones its private Program
-and timers together, intercepts only builtin 78 through the shared ScenarioFuncSet
+and timers together, intercepts only builtins 78--79 through the shared ScenarioFuncSet
 implementation, validates the VM outcome and ref-argument cells, and commits both owners
 only after every check succeeds. Callers can observe a read-only timer receipt but receive
 no timer or Program mutation handle.
 
-The strict fixture deliberately admits one timer named `"1"`. Builtin 78 removes it in
-the candidate and reports 1; builtin 79 then remains unsupported. The rejected transaction
-restores the timer node, its cursor, initialized Program statics, and external ref step.
-This is stronger than exercising the natural empty-container result of -1, which would
-not prove timer rollback.
+Builtin 79 is the 37-byte `ScenarioFuncSet::timer_expired(String const&)` at
+`0x009e4c80`. Its wrapper copies the input to the process scratch String, then
+unconditionally reads signed `Game+0x560` before calling `ScriptTimers::check`; even an
+empty list or missing name cannot bypass the clock owner. The bridge therefore accepts
+only an opaque per-call clock receipt joining `Sim.world.seconds` to its
+`vic_match.tick` mirror. Missing owners, disagreement, and negative/pre-epoch values are
+typed refusals; the negative restriction is a conservative admitted-domain policy because
+retail itself performs a raw signed comparison. Frame number and a default zero are not
+substitutes.
 
-Builtin 79 requires more than the timer container: its wrapper unconditionally reads
-`Game+0x560` before calling `ScriptTimers::check`. The canonical live scalar is
-`Sim.world.seconds`, mirrored by `vic_match.tick`; frame number is not a substitute. That
-clock join remains red, so the next measured unsupported call is exactly
-`79 timer_expired(Int(1))`. Unit/Build `have_tech` and full support count also remain red.
+`check` has three observable results and two mutation shapes:
+
+- missing returns -1 and leaves the existing cursor unchanged;
+- pending (`now < expiry`, signed) returns 0, retains the node, and moves the cursor to it;
+- due (`now >= expiry`) returns 1, consumes the node, and advances the cursor to its successor.
+
+Focused owner tests pin all three results, pending cursor movement, and due consumption.
+The strict fixture deliberately admits one timer named `"1"`. Builtin 78 removes it in
+the candidate and reports 1; builtin 79 still reads the admitted `(0, 0)` clock, then
+misses and reports -1. `age(1)` is zero, and the synthetic type table name-misses
+`"Written Word"`, so its exact #362 result is -1 and unary `!` enters the research arm.
+Builtin 357 is the next unsupported boundary. That rejected downstream call restores the
+timer node and cursor, initialized Program statics, and external ref step. Unit/Build
+`have_tech` and full support count remain red.
 
 ## Validation
 
 The eleven focused replay tests pass over the local installed content, including the
-`economic.bhs` trace, ordered map-style catalog, and 21-recording census. The two focused
-canonical-owner transaction tests pass in Persvati job
-`replay-bhs-stop-timer-sim-20260811T192330Z-4034-1869-f80e3692fcd3`. Persvati replay
-overlay job `replay-bhs-stop-timer-v1-20260811T192330Z-4035-29802-f80e3692fcd3`
+`economic.bhs` trace, ordered map-style catalog, and 21-recording census. All five focused
+canonical timer tests pass in Persvati job
+`replay-bhs-timer79-sim-full-20260811T194100Z-37465-30999-9abe48a50e9a`, covering clock
+refusal, missing/pending/due, cursor movement, successful owner persistence, and downstream
+rollback. Persvati replay overlay job
+`replay-bhs-timer79-v1-20260811T193955Z-33776-10114-b1251b875d71`
 establishes the seven content-independent tests; the installed map-style, installed BHS,
 replay-corpus census, and replay-derived population-owner tests print explicit
 **SKIPPED — NOT A PASS** notices because those content assets are absent. The required

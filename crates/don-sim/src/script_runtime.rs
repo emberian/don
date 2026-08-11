@@ -192,11 +192,53 @@ pub struct ScriptRuntime {
 
 /// The only extra host surface exposed by the production-call bridge.
 ///
-/// `ScriptRuntime` executes builtin 78 against its private timer container, then
+/// `ScriptRuntime` executes builtins 78--79 against its private timer container, then
 /// reports the completed call so the caller can retain its ordinary builtin trace.
 /// No timer reference or mutation API crosses this boundary.
-pub trait ExternalStopTimerHost: Host {
-    fn stop_timer_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value);
+pub trait ExternalTimerHost: Host {
+    fn timer_builtin_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value);
+}
+
+/// Equality-admitted `Game+0x560` for one external timer transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalGameSeconds(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalGameSecondsError {
+    MissingWorldSeconds,
+    MissingVictoryTick,
+    OwnerDisagreement {
+        world_seconds: i32,
+        victory_tick: i32,
+    },
+    Negative {
+        seconds: i32,
+    },
+}
+
+impl ExternalGameSeconds {
+    /// Join the canonical `Sim.world.seconds` owner to its `vic_match.tick`
+    /// mirror. A missing, contradictory, or pre-epoch value is not silently
+    /// replaced with frame number or zero.
+    pub fn admit(
+        world_seconds: Option<i32>,
+        victory_tick: Option<i32>,
+    ) -> Result<Self, ExternalGameSecondsError> {
+        let world_seconds = world_seconds.ok_or(ExternalGameSecondsError::MissingWorldSeconds)?;
+        let victory_tick = victory_tick.ok_or(ExternalGameSecondsError::MissingVictoryTick)?;
+        if world_seconds != victory_tick {
+            return Err(ExternalGameSecondsError::OwnerDisagreement {
+                world_seconds,
+                victory_tick,
+            });
+        }
+        if world_seconds < 0 {
+            return Err(ExternalGameSecondsError::Negative {
+                seconds: world_seconds,
+            });
+        }
+        Ok(Self(world_seconds))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,20 +259,25 @@ pub struct ExternalScriptError<E> {
     pub bytecodes_executed: u64,
 }
 
-struct StopTimerTransactionHost<'a, H> {
+struct TimerTransactionHost<'a, H> {
     timers: &'a mut ScriptTimers,
+    game_seconds: ExternalGameSeconds,
     external: &'a mut H,
 }
 
-impl<H: ExternalStopTimerHost> Host for StopTimerTransactionHost<'_, H> {
+impl<H: ExternalTimerHost> Host for TimerTransactionHost<'_, H> {
     fn call(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
-        if decl.index != 78 {
+        if !matches!(decl.index, 78 | 79) {
             return self.external.call(decl, args);
         }
         let returned = don_bhs::scenario::call_scenario(self, decl, args)
-            .expect("builtin 78 belongs to the canonical ScenarioFuncSet timer cohort")?;
-        self.external.stop_timer_returned(decl, args, &returned);
+            .expect("builtins 78--79 belong to the canonical ScenarioFuncSet timer cohort")?;
+        self.external.timer_builtin_returned(decl, args, &returned);
         Ok(returned)
+    }
+
+    fn game_seconds(&mut self) -> Result<i32, HostError> {
+        Ok(self.game_seconds.0)
     }
 
     fn script_timers(&mut self) -> Result<&mut ScriptTimers, HostError> {
@@ -285,29 +332,31 @@ impl ScriptRuntime {
         &self.timers
     }
 
-    /// Execute one externally bound script while builtin 78 borrows this
-    /// runtime's unique timer owner.
+    /// Execute one externally bound script while builtins 78--79 borrow this
+    /// runtime's unique timer owner and an admitted current-seconds scalar.
     ///
     /// Program statics and `ScriptTimers` (including its private cursor) are
     /// cloned together. The validator sees the completed outcome and ref-argument
     /// cells; both candidates commit only when it accepts. VM or validation
     /// failure leaves the runtime byte-for-byte on its entry owners.
-    pub fn run_external_stop_timer_transaction<H, T, E>(
+    pub fn run_external_timer_transaction<H, T, E>(
         &mut self,
         file: usize,
         script: usize,
         args: &[Value],
+        game_seconds: ExternalGameSeconds,
         external: &mut H,
         validate: impl FnOnce(&RunOutcome, &[Value]) -> Result<T, E>,
     ) -> Result<ExternalScriptCommit<T>, ExternalScriptError<E>>
     where
-        H: ExternalStopTimerHost,
+        H: ExternalTimerHost,
     {
         let mut candidate_program = self.program.clone();
         let mut candidate_timers = self.timers.clone();
         let mut candidate_args = args.to_vec();
-        let mut host = StopTimerTransactionHost {
+        let mut host = TimerTransactionHost {
             timers: &mut candidate_timers,
+            game_seconds,
             external,
         };
         let (result, bytecodes_executed) = {
@@ -2310,7 +2359,10 @@ impl ScenarioHost for Sim {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExternalScriptFailure, ExternalStopTimerHost, ScriptRuntime, ScriptTimers};
+    use super::{
+        ExternalGameSeconds, ExternalGameSecondsError, ExternalScriptFailure, ExternalTimerHost,
+        ScriptRuntime, ScriptTimers,
+    };
     use don_bhs::disasm::asm;
     use don_bhs::{
         find_builtin, BuiltinDecl, Host, HostError, HostResult, Program, Script, ScriptFile,
@@ -2319,7 +2371,7 @@ mod tests {
 
     #[derive(Default)]
     struct ExternalHost {
-        stop_timer_returns: Vec<i32>,
+        timer_returns: Vec<(u32, i32)>,
     }
 
     impl Host for ExternalHost {
@@ -2328,13 +2380,22 @@ mod tests {
         }
     }
 
-    impl ExternalStopTimerHost for ExternalHost {
-        fn stop_timer_returned(&mut self, _decl: &BuiltinDecl, _args: &[Value], returned: &Value) {
-            self.stop_timer_returns.push(returned.as_int());
+    impl ExternalTimerHost for ExternalHost {
+        fn timer_builtin_returned(
+            &mut self,
+            decl: &BuiltinDecl,
+            _args: &[Value],
+            returned: &Value,
+        ) {
+            self.timer_returns.push((decl.index, returned.as_int()));
         }
     }
 
-    fn stop_timer_program(fail_after_remove: bool) -> Program {
+    fn clock(now: i32) -> ExternalGameSeconds {
+        ExternalGameSeconds::admit(Some(now), Some(now)).unwrap()
+    }
+
+    fn timer_sequence_program(fail_downstream: bool) -> Program {
         let mut ops = vec![
             (0x47, vec![0]),
             (0x26, vec![VarRef::Const(1).encode()]),
@@ -2342,12 +2403,19 @@ mod tests {
             (0x26, vec![VarRef::Const(0).encode()]),
             (0x38, vec![find_builtin("stop_timer").unwrap().index]),
             (0x27, Vec::new()),
+            (0x26, vec![VarRef::Const(0).encode()]),
+            (0x38, vec![find_builtin("timer_expired").unwrap().index]),
+            (0x27, Vec::new()),
         ];
-        if fail_after_remove {
+        if fail_downstream {
             ops.extend([
+                // research_tech_with_cost(1, "Written Word"), emitted right-to-left.
+                (0x26, vec![VarRef::Const(2).encode()]),
                 (0x26, vec![VarRef::Const(0).encode()]),
-                (0x38, vec![find_builtin("timer_expired").unwrap().index]),
-                (0x27, Vec::new()),
+                (
+                    0x38,
+                    vec![find_builtin("research_tech_with_cost").unwrap().index],
+                ),
             ]);
         }
         ops.push((0x3e, Vec::new()));
@@ -2357,7 +2425,7 @@ mod tests {
             .collect::<Vec<_>>();
         Program::single(ScriptFile {
             code: asm(&borrowed),
-            const_pool: vec![Value::Int(1), Value::Int(9)],
+            const_pool: vec![Value::Int(1), Value::Int(9), Value::str("Written Word")],
             scripts: vec![Script {
                 name: "external".into(),
                 return_type: ScriptTy::Void.tag(),
@@ -2374,12 +2442,95 @@ mod tests {
         ScriptRuntime::new_with_timers(program, None, None, timers).unwrap()
     }
 
-    #[test]
-    fn external_stop_timer_transaction_commits_the_unique_program_and_timer_owner() {
-        let mut runtime = runtime_with_timer(stop_timer_program(false));
+    fn timer_expired_program(name: &str) -> Program {
+        Program::single(ScriptFile {
+            code: asm(&[
+                (0x47, &[0]),
+                (0x26, &[VarRef::Const(0).encode()]),
+                (0x38, &[find_builtin("timer_expired").unwrap().index]),
+                (0x3e, &[]),
+            ]),
+            const_pool: vec![Value::str(name)],
+            scripts: vec![Script {
+                name: "check".into(),
+                return_type: ScriptTy::Int.tag(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+    }
+
+    fn run_timer_expired(runtime: &mut ScriptRuntime, now: i32) -> i32 {
         let mut host = ExternalHost::default();
         runtime
-            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+            .run_external_timer_transaction(0, 0, &[], clock(now), &mut host, |outcome, _| {
+                Ok::<i32, ()>(outcome.returned.as_ref().unwrap().as_int())
+            })
+            .unwrap()
+            .validated
+    }
+
+    #[test]
+    fn external_game_seconds_requires_both_equal_nonnegative_owners() {
+        assert_eq!(
+            ExternalGameSeconds::admit(None, Some(7)),
+            Err(ExternalGameSecondsError::MissingWorldSeconds)
+        );
+        assert_eq!(
+            ExternalGameSeconds::admit(Some(7), None),
+            Err(ExternalGameSecondsError::MissingVictoryTick)
+        );
+        assert_eq!(
+            ExternalGameSeconds::admit(Some(7), Some(8)),
+            Err(ExternalGameSecondsError::OwnerDisagreement {
+                world_seconds: 7,
+                victory_tick: 8,
+            })
+        );
+        assert_eq!(
+            ExternalGameSeconds::admit(Some(-1), Some(-1)),
+            Err(ExternalGameSecondsError::Negative { seconds: -1 })
+        );
+        assert_eq!(ExternalGameSeconds::admit(Some(0), Some(0)), Ok(clock(0)));
+    }
+
+    #[test]
+    fn timer_expired_preserves_missing_cursor_moves_pending_cursor_and_consumes_due() {
+        let mut missing = ScriptTimers::default();
+        missing.add_timer("anchor", 100).unwrap();
+        let mut runtime =
+            ScriptRuntime::new_with_timers(timer_expired_program("missing"), None, None, missing)
+                .unwrap();
+        assert_eq!(run_timer_expired(&mut runtime, 50), -1);
+        assert_eq!(runtime.script_timers().current().unwrap().name, "anchor");
+
+        let mut pending = ScriptTimers::default();
+        pending.add_timer("pending", 100).unwrap();
+        pending.add_timer("other", 200).unwrap();
+        assert_eq!(pending.current().unwrap().name, "other");
+        let mut runtime =
+            ScriptRuntime::new_with_timers(timer_expired_program("pending"), None, None, pending)
+                .unwrap();
+        assert_eq!(run_timer_expired(&mut runtime, 50), 0);
+        assert_eq!(runtime.script_timers().len(), 2);
+        assert_eq!(runtime.script_timers().current().unwrap().name, "pending");
+
+        let mut due = ScriptTimers::default();
+        due.add_timer("due", 10).unwrap();
+        due.add_timer("other", 20).unwrap();
+        let mut runtime =
+            ScriptRuntime::new_with_timers(timer_expired_program("due"), None, None, due).unwrap();
+        assert_eq!(run_timer_expired(&mut runtime, 10), 1);
+        assert_eq!(runtime.script_timers().len(), 1);
+        assert_eq!(runtime.script_timers().current().unwrap().name, "other");
+    }
+
+    #[test]
+    fn external_timer_transaction_commits_the_unique_program_clock_and_timer_owner() {
+        let mut runtime = runtime_with_timer(timer_sequence_program(false));
+        let mut host = ExternalHost::default();
+        runtime
+            .run_external_timer_transaction(0, 0, &[], clock(50), &mut host, |outcome, _| {
                 assert!(outcome.ok());
                 Ok::<(), ()>(())
             })
@@ -2389,32 +2540,42 @@ mod tests {
             runtime.program().files[0].scripts[0].statics[0],
             Some(Value::Int(9))
         );
-        assert_eq!(host.stop_timer_returns, [1]);
+        assert_eq!(host.timer_returns, [(78, 1), (79, -1)]);
 
         runtime
-            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |_, _| Ok::<(), ()>(()))
+            .run_external_timer_transaction(
+                0,
+                0,
+                &[],
+                clock(50),
+                &mut host,
+                |_, _| Ok::<(), ()>(()),
+            )
             .unwrap();
-        assert_eq!(host.stop_timer_returns, [1, -1]);
+        assert_eq!(host.timer_returns, [(78, 1), (79, -1), (78, -1), (79, -1)]);
     }
 
     #[test]
-    fn external_stop_timer_transaction_rolls_program_and_timer_cursor_back_together() {
-        let mut runtime = runtime_with_timer(stop_timer_program(true));
+    fn external_timer_transaction_rolls_program_and_timer_cursor_back_downstream() {
+        let mut runtime = runtime_with_timer(timer_sequence_program(true));
         let before_timers = runtime.script_timers().clone();
         let mut host = ExternalHost::default();
-        let error = runtime
-            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |_, _| Ok::<(), ()>(()))
-            .unwrap_err();
+        let error =
+            runtime
+                .run_external_timer_transaction(0, 0, &[], clock(50), &mut host, |_, _| {
+                    Ok::<(), ()>(())
+                })
+                .unwrap_err();
         assert!(matches!(
             error.failure,
             ExternalScriptFailure::Vm(VmError::UnimplementedBuiltin {
-                index: 79,
-                name: "timer_expired"
+                index: 357,
+                name: "research_tech_with_cost"
             })
         ));
         assert_eq!(runtime.program().files[0].scripts[0].statics[0], None);
         assert_eq!(runtime.script_timers(), &before_timers);
-        assert_eq!(host.stop_timer_returns, [1]);
+        assert_eq!(host.timer_returns, [(78, 1), (79, -1)]);
     }
 
     #[test]
