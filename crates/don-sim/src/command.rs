@@ -121,9 +121,7 @@ use crate::systems::groups_guys::{
     SetTransportMemberFacts, SetTransportStep, StanceMemberFacts, StanceStep, UnitMaskMemberFacts,
     UnitMaskStep, GROUP_MAX_MEMBERS,
 };
-use crate::systems::hotkey_group_action::{
-    plan_action_hotkey, HotKeyActionPlan, HotKeyActionStep,
-};
+use crate::systems::hotkey_group_action::{plan_action_hotkey, HotKeyActionPlan, HotKeyActionStep};
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
 };
@@ -207,6 +205,10 @@ use self::unimplemented_group_command_plans::{
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
+
+/// Owner bands in the `Groups` singleton. Unlike the ten-band object table, retail's
+/// group pool is exactly the eight Leader bands walked by `CheckSums::check_groups`.
+pub const GROUP_OWNER_SLOTS: usize = crate::systems::groups_guys::NUM_LEADERS;
 
 /// Cap on one `ObjectData::inside_down` chain walk.
 ///
@@ -1822,7 +1824,12 @@ impl Fleet for ObjectTable {
         self.get(who, o)?.build_active_known
     }
     fn can_carry(&self, ship: (u8, i16), passenger: (u8, i16)) -> Option<bool> {
-        Some(self.get(ship.0, ship.1)?.carries.as_ref()?.contains(&passenger))
+        Some(
+            self.get(ship.0, ship.1)?
+                .carries
+                .as_ref()?
+                .contains(&passenger),
+        )
     }
     fn group_type_count(&self, _members: &[(u8, i16)], index: i32, arg: i32) -> Option<i32> {
         self.group_counts
@@ -2702,7 +2709,7 @@ pub struct Groups {
     slots: Vec<GroupData>,
     /// `groups.cur[who]` at `0x00E85F2C + who*4`: the slot `push_group` last used for
     /// this owner, and the one `get_open_slot` refuses to recycle [measured].
-    cur: [i32; NUM_OWNER_SLOTS],
+    cur: [i32; GROUP_OWNER_SLOTS],
 }
 
 impl Default for Groups {
@@ -2717,14 +2724,32 @@ impl Groups {
             // `Group::clear(slot)` preserves/writes this identity at `GroupData+0x04`;
             // `Groups::copy_group` deliberately does not copy it from the transient
             // selection. GROUP_MOVE embeds it in the order id.
-            slots: (0..NUM_OWNER_SLOTS * GROUP_SLOTS_STRIDE)
+            slots: (0..GROUP_OWNER_SLOTS * GROUP_SLOTS_STRIDE)
                 .map(|id| GroupData {
                     id: id as i32,
+                    // `Groups::clear` `0x00713F20` reaches `Group::clear(id)`
+                    // `0x00713E80` for every slot. Those stores are checksum-visible;
+                    // `GroupData::default()`'s zero values are not the retail image.
+                    army: -1,
+                    form: -1,
                     ..GroupData::default()
                 })
                 .collect(),
-            cur: [-1; NUM_OWNER_SLOTS],
+            // This is the same `Groups+0x1C` block that `check_groups` names
+            // `last_group`. `Groups::clear` writes `who * 0x40`, and
+            // `get_open_slot` excludes the corresponding slot on its first scan.
+            cur: std::array::from_fn(|who| (who * GROUP_SLOTS_STRIDE) as i32),
         }
+    }
+
+    /// The complete player-major pool in `check_groups` traversal order.
+    ///
+    /// Read-only on purpose: command processing remains the sole mutation path, while
+    /// replay/save/checksum adapters can image the exact state without creating a third
+    /// group implementation.
+    #[inline]
+    pub fn slots(&self) -> &[GroupData] {
+        &self.slots
     }
 
     #[inline]
@@ -2741,7 +2766,7 @@ impl Groups {
 
     #[inline]
     pub fn cur(&self, who: u8) -> i32 {
-        self.cur[who as usize % NUM_OWNER_SLOTS]
+        self.cur.get(who as usize).copied().unwrap_or(-1)
     }
 
     /// `Groups::get_open_slot` `0x006FA460`.
@@ -2752,7 +2777,10 @@ impl Groups {
     /// `buildings`; those predicates need the object side, so this port takes the
     /// `stamp` rule only and says so.
     pub fn get_open_slot(&self, who: u8) -> i32 {
-        let base = who as usize % NUM_OWNER_SLOTS * GROUP_SLOTS_STRIDE;
+        if who as usize >= GROUP_OWNER_SLOTS {
+            return -1;
+        }
+        let base = who as usize * GROUP_SLOTS_STRIDE;
         let mut best = base as i32;
         let mut best_stamp = i32::MAX;
         for i in base..base + GROUP_SLOTS_SCANNED {
@@ -2785,6 +2813,9 @@ impl Groups {
         frame: i32,
         f: &mut dyn Fleet,
     ) -> i32 {
+        if who as usize >= GROUP_OWNER_SLOTS {
+            return -1;
+        }
         let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
         if !singular && g.num < 2 {
             for &o in &g.list[..n] {
@@ -2805,7 +2836,7 @@ impl Groups {
             self.slots[dst] = g.clone();
             self.slots[dst].id = id;
             self.slots[dst].stamp = frame;
-            self.cur[who as usize % NUM_OWNER_SLOTS] = slot;
+            self.cur[who as usize] = slot;
         }
         for &o in &g.list[..n] {
             if !f.alive(who, o) {
@@ -4490,7 +4521,7 @@ impl Bridge {
         let (Some(&num), Some(who)) = (cmd.get(1), i8_at(cmd, 2)) else {
             return;
         };
-        if who < 0 || who as usize >= NUM_OWNER_SLOTS {
+        if who < 0 || who as usize >= GROUP_OWNER_SLOTS {
             pkg.group = -1;
             return;
         }
@@ -4807,7 +4838,7 @@ impl Action<'_> {
                 let width = i8_at(cmd, 20).unwrap_or(-1) as i32;
                 let disembark = i8_at(cmd, 21).unwrap_or(0) != 0;
                 self.action_move_near(
-                    x, y, 0, q, set_angle, angle, orders, form, width, disembark, f,
+                    x, y, 0, q, set_angle, angle, orders, 1, form, width, disembark, f,
                 );
             }
             "move_near" => {
@@ -4827,7 +4858,7 @@ impl Action<'_> {
                 let width = i8_at(cmd, 24).unwrap_or(-1) as i32;
                 let disembark = i8_at(cmd, 25).unwrap_or(0) != 0;
                 self.action_move_near(
-                    x, y, tol, q, set_angle, angle, orders, form, width, disembark, f,
+                    x, y, tol, q, set_angle, angle, orders, 1, form, width, disembark, f,
                 );
             }
             "attack" => {
@@ -5213,6 +5244,7 @@ impl Action<'_> {
         set_angle: bool,
         angle: i32,
         orders: i64,
+        group_flag: i32,
         form: i32,
         width: i32,
         disembark: bool,
@@ -5258,7 +5290,7 @@ impl Action<'_> {
                 economy_receipts: self.economy_receipts,
             };
             sub.action_move_near(
-                x, y, tolerance, q, set_angle, angle, orders, form, width, disembark, f,
+                x, y, tolerance, q, set_angle, angle, orders, group_flag, form, width, disembark, f,
             );
         }
         if let Some(group) = self.groups.get_mut(self.slot) {
@@ -5481,6 +5513,7 @@ impl Action<'_> {
                     rotate != 0,
                     angle,
                     1,
+                    1,
                     -1,
                     -1,
                     false,
@@ -5516,6 +5549,7 @@ impl Action<'_> {
                 QueuePos::Last,
                 rotate != 0,
                 angle,
+                1,
                 1,
                 -1,
                 -1,
@@ -5553,6 +5587,7 @@ impl Action<'_> {
         set_angle: bool,
         angle: i32,
         orders: i64,
+        group_flag: i32,
         form: i32,
         width: i32,
         disembark: bool,
@@ -5563,7 +5598,7 @@ impl Action<'_> {
         // no `Group::normalize` anywhere in this body — see the module docs of
         // `group_move_near_split` and `docs/mechanics/group-action-move-near.md` §5.
         if self.move_near_split(
-            x, y, tolerance, q, set_angle, angle, orders, form, width, disembark, f,
+            x, y, tolerance, q, set_angle, angle, orders, group_flag, form, width, disembark, f,
         ) {
             return;
         }
@@ -5775,9 +5810,9 @@ impl Action<'_> {
                     };
                     let mut ord = OrderRec::from(ord);
                     ord.angle = member_angle;
-                    // `action_move_near` pushes literal 1 as
-                    // `Unit::add_move_facing_order`'s fifth argument at 0x00705F98.
-                    ord.facing = 1;
+                    // `action_move_near` forwards the distinct `group` stack word as
+                    // the move-order constructor's ORDER_GROUP flag. It is not `form`.
+                    ord.facing = group_flag;
                     ord
                 };
                 ord.angle = member_angle;
@@ -5885,11 +5920,7 @@ impl Action<'_> {
 
     /// The group's live member prefix with every retail read the three economy bodies
     /// perform, asked of `target` where a read is relative to the addressed object.
-    fn economy_members(
-        &self,
-        target: Option<(u8, i16)>,
-        f: &dyn Fleet,
-    ) -> Vec<EconomyMemberFacts> {
+    fn economy_members(&self, target: Option<(u8, i16)>, f: &dyn Fleet) -> Vec<EconomyMemberFacts> {
         let (who, list) = self.members();
         list.into_iter()
             .map(|o| {
@@ -6021,7 +6052,11 @@ impl Action<'_> {
                     }
                     let (tw, to) = (target_who as u8, target_o as i16);
                     let masks = f.unit_masks(tw, to);
-                    f.set_unit_masks(tw, to, masks & !economy_group_actions::CAST_SPELL_ACTIVE_MASK);
+                    f.set_unit_masks(
+                        tw,
+                        to,
+                        masks & !economy_group_actions::CAST_SPELL_ACTIVE_MASK,
+                    );
                     // `Unit::close_orders(0)` 0x005E37F0. The adjacent `[+0xC0] = 0`,
                     // `Unit::clear_partial_path` and `Unit::update_action` write unit state
                     // this bridge does not hold; they stay named in the plan step.
@@ -6938,6 +6973,45 @@ mod tests {
     }
 
     #[test]
+    fn groups_new_is_the_retail_clear_image_and_the_first_scan_excludes_last_group() {
+        let b = Bridge::new();
+        assert_eq!(
+            b.groups.slots().len(),
+            GROUP_OWNER_SLOTS * GROUP_SLOTS_STRIDE
+        );
+        for (id, group) in b.groups.slots().iter().enumerate() {
+            assert_eq!(group.id, id as i32);
+            assert_eq!(group.army, -1, "slot {id}");
+            assert_eq!(group.form, -1, "slot {id}");
+            assert_eq!(group.num, 0, "slot {id}");
+        }
+        for who in 0..GROUP_OWNER_SLOTS as u8 {
+            let base = who as i32 * GROUP_SLOTS_STRIDE as i32;
+            assert_eq!(b.groups.cur(who), base);
+            assert_eq!(b.groups.get_open_slot(who), base + 1);
+        }
+        assert_eq!(b.groups.cur(GROUP_OWNER_SLOTS as u8), -1);
+        assert_eq!(b.groups.get_open_slot(GROUP_OWNER_SLOTS as u8), -1);
+    }
+
+    #[test]
+    fn object_owners_eight_and_nine_exist_but_cannot_address_group_bands() {
+        assert_eq!(NUM_OWNER_SLOTS, 10);
+        assert_eq!(GROUP_OWNER_SLOTS, 8);
+        let mut bridge = Bridge::new();
+        let before = bridge.groups.slots().to_vec();
+        let mut objects = ObjectTable::new(1);
+        objects.put(8, 0, Slot::unit(80, 0, 0));
+        objects.put(9, 0, Slot::unit(90, 0, 0));
+        for who in [8, 9] {
+            let mut package = Package::new(who, 0);
+            bridge.process_one(&mut package, &build::group(who as i8, &[0]), &mut objects);
+            assert_eq!(package.group, -1, "owner {who}");
+        }
+        assert_eq!(bridge.groups.slots(), before.as_slice());
+    }
+
+    #[test]
     fn an_empty_group_command_reselects_by_object_and_uid() {
         let mut b = Bridge::new();
         let mut f = fleet(8);
@@ -6998,6 +7072,40 @@ mod tests {
         let ord = f.orders(1, 0).unwrap().current().unwrap().clone();
         assert_eq!(ord.kind, OrderIndex::AttackTo);
         assert_eq!(ord.tolerance, 0);
+    }
+
+    #[test]
+    fn move_near_keeps_the_group_flag_distinct_from_form_width_and_disembark() {
+        let mut b = Bridge::new();
+        let mut f = fleet(4);
+        let mut p = Package::new(1, 0);
+        select(&mut b, &mut p, &mut f, &[0]);
+        {
+            let mut action = Action {
+                groups: &mut b.groups,
+                slot: p.group,
+                stats: &mut b.stats,
+                frame: b.frame,
+                economy_receipts: &mut b.economy_action_receipts,
+            };
+            action.action_move_near(
+                10,
+                20,
+                48,
+                QueuePos::New,
+                false,
+                0,
+                0,
+                0,
+                7,
+                33,
+                true,
+                &mut f,
+            );
+        }
+        let order = f.orders(1, 0).unwrap().current().unwrap();
+        assert_eq!(order.facing, 0, "form must not be reused as ORDER_GROUP");
+        assert_eq!(order.tolerance, 48);
     }
 
     #[test]
