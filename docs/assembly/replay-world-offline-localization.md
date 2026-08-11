@@ -2,10 +2,12 @@
 
 ## Result
 
-`don-world-localize` turns the current channel-12 mismatch into a repeatable section-local
-report without treating Adler-32 as a byte oracle. On the tracked `b406017` replay/sim
-baseline plus the analyzer (replay/sim byte-identical through `b906fb6`), the local corpus
-establishes:
+`don-world-localize` now sees a coherent byte-owner ledger after the reconstructed
+continent, common post-continent and fertility stages. The owner transition is a model
+provenance result, not a retail checksum match: every transition compares exact before/after
+walk images and admits only changed bytes in the stage's allowed sections.
+
+On the local corpus at 2026-08-11:
 
 | fact | result |
 |---|---:|
@@ -16,17 +18,15 @@ establishes:
 | all-turn same-group World peer comparisons | 265,619/265,619 identical |
 | first-turn retail/model matches | 0/21 |
 | distinct first-turn values | 21 retail, 21 model |
-| current model images with a coherent, transitioned owner ledger | 0/21 |
+| current model images with a coherent, transitioned owner ledger | **21/21** |
 
-The lawful offline localization is therefore an exclusion boundary, not an observed retail
-byte difference: section 1 is fully replay-bound, and the earliest byte not covered by the
-existing owner ledger is **global walk offset 8, section 2 (`StartArrays`) offset 0**, in
-21/21 recordings. An actual first differing byte remains unavailable without a captured
-retail walk image whose Adler-32 equals the peer-agreed recorded value.
+No recorded Adler-32 value was used as state input. An actual first differing retail byte
+remains unavailable without a captured retail walk image whose Adler-32 equals the
+peer-agreed recorded value.
 
-## Exact owner ranges
+## Exact ownership after transitions
 
-Every checksum-bearing recording has the same section-local ledger geometry:
+The replay/static prefix still owns the same 76 bytes per recording:
 
 | section | exact range | bytes | source |
 |---:|---:|---:|---|
@@ -35,99 +35,98 @@ Every checksum-bearing recording has the same section-local ledger geometry:
 | 4 `Scalars` | `48..72` | 24 | independently projected replay Rules territory limits |
 | 4 `Scalars` | `116..120` | 4 | replay `GameInfo::seed` |
 
-That is 76 bytes per recording, 1,596 across the 21-file experiment. Those bytes remain
-value-equal at the same section-local offsets in every current model image. This is weaker
-than a transitioned owner map: procedural generation changed the walk shape or image, while
-the ledger snapshot stayed at the prefix checksum. `InitialWorld::ownership_is_coherent()`
-is false in all 21 cases. The analyzer deliberately calls the current 76 bytes
-`value-bound`, not “last-writer owned.”
+The executed generator then adds receipt-bound last-writer ownership:
 
-For the lexically first recording, the distinction is concrete:
+| stage | admitted walked sections | rule |
+|---|---|---|
+| map-style continent virtual | 2 `StartArrays`, 5 `WData` | changed or newly walked bytes only |
+| common regions/diagonal/coastline chain | 5 `WData` | changed bytes only |
+| `TerrainGroups::fill_fertile` | 5 `WData` | changed bytes only |
 
-```text
-ledger snapshot  0x1389cbbb / 780168 bytes / 76 owned
-current model    0x4e2a1e45 / 780276 bytes / owner ledger incoherent
-retail turn 2    0xd63a3a53 / two same-group peers agree
-```
+Across the 21 recordings this transitions 344,051 generator bytes: 3,886 in section 2 and
+340,165 in section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is
+345,647 bytes. Unchanged zeroes and unchanged neighbours remain unknown even when an exact
+routine visited them.
 
-No value was chosen from the retail checksum, and none of these three checksums reveals a
-byte value or mismatch offset.
+The section-2 growth rule is deliberately strict. A proved continent receipt may grow an
+unowned section and the ledger rebases later owners by section-local offset. Growth in a
+forbidden section, shrinkage, or reshaping a section which already has any owned byte is
+rejected transactionally.
 
 ## Section/range census
 
-Across the 21 current model images, the analyzer walks 13,119,100 bytes. Only 1,596 are
-value-bound; 13,117,504 remain outside the exact ledger. `model delta` means a model byte is
-different from the prefix snapshot at the same section-local offset (or was appended by a
-walk-shape change). It is model-to-model evidence, not proof that retail differs there.
+The current model walks 13,119,100 bytes over the 21 checksum-bearing recordings. The owner
+snapshot now equals each current model image, so `model delta` is zero by construction; that
+column no longer stands in for missing provenance.
 
-| rank | section | walked | value-bound | unknown | share of unknown | model delta | files with delta |
-|---:|---|---:|---:|---:|---:|---:|---:|
-| 1 | 6 `TDataAndFog` | 7,396,400 | 0 | 7,396,400 | 56.39% | 0 | 0/21 |
-| 2 | 5 `WData` | 3,530,100 | 0 | 3,530,100 | 26.91% | 328,135 | 21/21 |
-| 3 | 8 `Danger` | 1,344,800 | 0 | 1,344,800 | 10.25% | 0 | 0/21 |
-| 4 | 9 `CollBlocks` | 672,400 | 0 | 672,400 | 5.13% | 0 | 0/21 |
-| 5 | 7 `WCoordSeen` | 168,100 | 0 | 168,100 | 1.28% | 0 | 0/21 |
-| 6 | 2 `StartArrays` | 4,108 | 0 | 4,108 | 0.03% | 3,886 | 19/21 |
-| 7 | 4 `Scalars` | 2,520 | 1,428 | 1,092 | 0.01% | 0 | 0/21 |
-| 8 | 3 `OilArrays` | 168 | 0 | 168 | <0.01% | 0 | 0/21 |
-| 9–12 | Terrain sections 10–13 | 336 | 0 | 336 | <0.01% | 0 | 0/21 |
+| section | walked | exact owner | unknown |
+|---:|---:|---:|---:|
+| 1 `Dims` | 168 | 168 | 0 |
+| 2 `StartArrays` | 4,108 | 3,886 | 222 |
+| 3 `OilArrays` | 168 | 0 | 168 |
+| 4 `Scalars` | 2,520 | 1,428 | 1,092 |
+| 5 `WData` | 3,530,100 | 340,165 | 3,189,935 |
+| 6 `TDataAndFog` | 7,396,400 | 0 | 7,396,400 |
+| 7 `WCoordSeen` | 168,100 | 0 | 168,100 |
+| 8 `Danger` | 1,344,800 | 0 | 1,344,800 |
+| 9 `CollBlocks` | 672,400 | 0 | 672,400 |
+| 10–13 terrain arrays | 336 | 0 | 336 |
+| **total** | **13,119,100** | **345,647** | **12,773,453** |
 
-Section 2 is the earliest candidate because the walker visits it immediately after the
-fully owned dimensions. Section 6 is the largest missing producer by byte volume. Section 5
-is the only large plane the current procedural prefix actually changes, but all 328,135
-changed bytes remain unowned because the completed generator stages do not yet advance the
-ledger. None of those facts identifies the actual retail mismatch section.
+The earliest lawful unknown is section 2 offset 0 in the two team-continent-centroid stops,
+which have not generated start arrays, and section 2 offset 1 in the other 19 recordings.
+Those offsets are exclusion boundaries only, not observed retail/model differences.
 
 ## Source-stage correlation
 
-The analyzer derives each endpoint by executing the existing replay reconstruction, not by
-reading `schema/replay-validation.json`:
+The analyzer derives each endpoint by executing the reconstruction; it does not read model
+bytes from `schema/replay-validation.json`:
 
 | current exact stop | recordings |
 |---|---:|
 | `place_all_mountains_add_mountain` | 12 |
 | `place_all_world_set_oil_at` | 6 |
-| `map_team_continent_partition` | 2 |
+| `map_team_continent_centroid` | 2 |
 | `map_east_indies_nonplayer_islands` | 1 |
 
-The two team-partition recordings have no generated start-array delta; the other 19,
-including the East Indies stop, do. All 21 have a `WData` delta. This is correlation with
-the reached source boundary, not per-byte causal attribution. Exact causal ownership
-requires a before/after receipt for each completed continent, post-continent and fertility
-stage.
+Every recording crosses and receipts its executed continent prefix. The 18 recordings whose
+style virtual completes also receipt the common post-continent and fertility stages. This
+establishes model last-writer provenance only; it does not establish retail equality for any
+transitioned byte.
+
+## Transaction contract
+
+`InitialItemReconstruction` stages World, generation regions, cached checksum and the owner
+ledger together. It commits only after every reached stage's receipt and allowed-section
+diff validate. A late owner error exposes none of the generated state. Tests poison a real
+Mediterranean replay with prior StartArrays ownership and prove that the later shape refusal
+rolls back World, regions, checksum, ledger and reconstruction plan.
+
+The ledger transition itself also rejects stale input/output checksums, forbidden section
+mutations, forbidden shape changes and already-owned section reshaping without changing its
+snapshot or owners.
 
 ## Ranked blockers
 
-1. **Transition the owner ledger through already-executed stages.** The current checksum and
-   walk image have moved, but the ledger has not. Add exact allowed-section receipts for the
-   continent virtual, post-continent chain and fertility pass before claiming any newly
-   sourced bytes.
-2. **Complete the four measured generator stops.** `Mountains::add_mountain` covers 12 files,
-   `World::set_oil_at` 6, team partition 2 and East Indies islands 1. These are the concrete
-   completion frontier, not a checksum-derived guess.
-3. **Populate and receipt section 6.** It is 56.39% of the current unknown walk and remains
-   byte-identical to the zero prefix in every model image. Binary/source-stage evidence must
-   decide its correct setup; the checksum cannot.
-4. **Receipt section-5 mutations.** The current ports change 328,135 `WData` bytes across all
-   21 recordings, but successful execution alone does not prove unchanged neighbours or
-   final correctness.
+1. **Complete the four measured generator stops.** `Mountains::add_mountain` covers 12 files,
+   `World::set_oil_at` 6, team-continent centroid 2 and East Indies islands 1.
+2. **Populate and receipt section 6.** It is the largest unknown plane at 7,396,400 bytes.
+3. **Prove unchanged WData values independently.** The exact transitions own changed bytes;
+   they intentionally do not promote the 3,189,935 unchanged bytes.
+4. **Resolve the remaining StartArrays bytes only from real producers.** Zero header bytes
+   which happened not to change are still unknown.
 5. **Acquire a checksum-bound retail byte image only when live work resumes.** Offline work
-   can shrink the candidate set and complete reconstruction, but it cannot name the actual
-   first retail/model byte. The existing capture contract remains the required evidence.
+   can shrink the candidate set, but the checksum alone cannot name a retail byte.
 
-## Command and claims not made
+## Commands and claims not made
 
 ```sh
+cargo test -p don-replay --test world_owner_frontier
+cargo test -p don-replay --test replay_world_owner_transitions
 cargo run -p don-replay --bin don-world-localize -- --corpus
 cargo run -p don-replay --bin don-world-localize -- --ranges path/to/recording.rcx
 ```
 
-The optional range view prints all exact owned and unknown section-local ranges and a bounded
-preview of potentially numerous model-delta ranges. The analyzer opens the original replay
-bytes, joins peers on `CommandPackage::group`, reconstructs the model through
-`WorldSim::from_replay`, and captures the canonical thirteen-section walk directly.
-
 This work does not claim a channel-12 match, an actual first-difference offset, correctness
-of a zero-filled unknown section, ownership from a successful function call, or any byte
-inferred from Adler-32. It changes no reconstruction, runtime, schedule, live tooling or
-scoreboard artifact.
+of an unknown zero byte, ownership from a successful function call alone, or any byte inferred
+from Adler-32.

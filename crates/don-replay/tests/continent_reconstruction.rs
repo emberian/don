@@ -2,14 +2,17 @@
 //! Mutation-sensitive executable tests for the six replay-corpus continent dispatches.
 
 use don_replay::continent::{
-    execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError, ContinentStop,
-    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, REGIONS_CLEAR_ALL_VA,
+    execute_continent_prefix, execute_continent_prefix_with_regions,
+    execute_team_continent_partition, ContinentError, ContinentStop,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_EQUAL_SIZE_RNG_VA, MAP_FIND_REGION_CENTROID_VA,
+    REGIONS_CLEAR_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
 use don_replay::map_style::{
     MapStyleStaticData, StaticFileEvidence, StaticXmlEntry, SHIPPED_MAP_STYLE_CATALOG,
 };
-use don_sim::systems::map_terrain::{land, World};
+use don_sim::rng::Random;
+use don_sim::systems::map_terrain::{land, World, WorldSection};
 use don_sim::systems::regions::Regions;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -66,6 +69,18 @@ fn style(ordinal: u8) -> MapStyleStaticData {
             "scalevalue",
             if ordinal == 14 { "8" } else { "4" },
         ));
+    }
+    if ordinal == 19 {
+        selected_map_entries.push(entry("AVOID_CONTINENT", "scalevalue", "16 SCALE"));
+        selected_map_entries.push(entry("AVOID_CENTER", "scalevalue", "6"));
+        for tag in [
+            "AVOID_EDGE_0",
+            "AVOID_EDGE_1",
+            "AVOID_EDGE_2",
+            "AVOID_EDGE_3",
+        ] {
+            selected_map_entries.push(entry(tag, "scalevalue", "0"));
+        }
     }
     if ordinal == 14 || ordinal == 18 {
         // Both shipped files override AVOID_CENTER with a plain 3 and all four
@@ -375,23 +390,168 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     assert_eq!(indies_regions.land, 6);
 
     let mut eastwest_world = seeded_world(100, seed);
-    let eastwest = execute_continent_prefix(
+    let eastwest_before = eastwest_world.checksum_sections();
+    let mut eastwest_regions = Regions::default();
+    let eastwest = execute_continent_prefix_with_regions(
         &inputs(19, 4, seed, 100, 5),
         &style(19),
         &mut eastwest_world,
+        &mut eastwest_regions,
     )
     .unwrap();
-    assert_eq!(eastwest.direct_rng_sites.len(), 1); // orientation only; fill_cont precedes hook RNG
-    assert_eq!(eastwest.rng_final, lcg_after(seed as i32, 1));
+    assert_eq!(
+        &eastwest.direct_rng_sites[..5],
+        &[
+            don_replay::map_style::MAP_MAKE_ORIENTATION_RNG_VA,
+            MAP_FILL_CONT_EQUAL_SIZE_RNG_VA,
+            MAP_FILL_CONT_EQUAL_SIZE_RNG_VA,
+            don_replay::map_style::EAST_MEETS_WEST_DIRECT_RNG_SITES[0],
+            don_replay::map_style::EAST_MEETS_WEST_DIRECT_RNG_SITES[1],
+        ]
+    );
+    let partition = eastwest
+        .team_partition
+        .as_ref()
+        .expect("East Meets West executes fill_cont");
+    assert_eq!(partition.active_slots, [0, 1, 2, 3]);
+    assert_eq!(partition.unused_teams, [2, 3, 4, 5, 6, 7]);
+    assert_eq!(partition.continent_counts, [2, 2, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(partition.team_to_continent, [1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(partition.continent_count, 2);
+    assert_eq!(partition.random_state_before as u32, 0x7543_2777);
+    assert_eq!(partition.random_state_after as u32, 0x25db_fac1);
+    assert_eq!(partition.random_draws.len(), 2);
+    assert_eq!(partition.random_draws[0].raw, 24_169);
+    assert!(partition.random_draws[0].exchanged);
+    assert_eq!(partition.random_draws[1].raw, 64_192);
+    assert!(!partition.random_draws[1].exchanged);
+    assert_eq!(partition.world_walked_bytes_changed, 0);
+    assert_eq!(eastwest.region_seeds.len(), 2);
+    assert_eq!(eastwest.region_growths.len(), 4);
+    assert_eq!(
+        eastwest
+            .region_seeds
+            .iter()
+            .map(|seed| (seed.call.region, seed.call.area))
+            .collect::<Vec<_>>(),
+        [(1, 1_388), (2, 1_388)]
+    );
+    assert_eq!(
+        eastwest
+            .region_growths
+            .iter()
+            .map(|growth| (
+                growth.call.region,
+                growth.call.target_area,
+                growth.call.max_distance,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (1, 1_388, 27),
+            (2, 1_388, 27),
+            (1, 2_776, 27),
+            (2, 2_776, 27)
+        ]
+    );
+    assert!(eastwest
+        .region_growths
+        .iter()
+        .all(|growth| growth.completed));
+    assert_eq!(
+        eastwest.rng_final,
+        eastwest.region_growths.last().unwrap().rng_final
+    );
+    assert_eq!(eastwest.starts_added, 0);
     match eastwest.stop {
-        ContinentStop::FillCont {
+        ContinentStop::FindRegionCentroid {
             primitive_va,
-            active_teams,
+            region,
         } => {
-            assert_eq!(primitive_va, MAP_FILL_CONT_VA);
-            assert_eq!(active_teams, vec![0, 1, 0, 1]);
+            assert_eq!(primitive_va, MAP_FIND_REGION_CENTROID_VA);
+            assert_eq!(region, 1);
         }
         other => panic!("East Meets West stopped at {other:?}"),
+    }
+    assert_eq!(
+        eastwest_before.differing_sections(&eastwest_world.checksum_sections()),
+        [WorldSection::WData]
+    );
+    assert_eq!(
+        (
+            eastwest_before.full,
+            eastwest_world.checksum_sections().full,
+            eastwest_before.section(WorldSection::WData).adler,
+            eastwest_world
+                .checksum_sections()
+                .section(WorldSection::WData)
+                .adler,
+        ),
+        (0xd293_cb35, 0x59de_fbc7, 0x4f28_bf8c, 0x34f0_f01e)
+    );
+    assert_eq!(eastwest_regions.land, 2);
+}
+
+#[test]
+fn fill_cont_replays_both_checksum_bearing_east_meets_west_headers() {
+    // These are the independently reconstructed states at the old fill_cont
+    // boundary, not values derived from the recorded World checksum.
+    let headers = [
+        (
+            "Playback___2018.12.01_18_33_16__Sat_.rcx",
+            [Some(0), Some(0), Some(1), Some(1), None, None, None, None],
+            0x13df_fc27u32,
+            [(19_289, true), (41_712, false)],
+            0x8e53_a2f1u32,
+        ),
+        (
+            "Playback___2019.03.24_11_56_19__Sun_.rcx",
+            [Some(0), Some(1), Some(1), Some(0), None, None, None, None],
+            0xdcb6_8147u32,
+            [(52_729, true), (1_296, false)],
+            0x3ac9_0511u32,
+        ),
+    ];
+    for (name, leaders, initial, expected_draws, final_state) in headers {
+        let mut rng = Random::new(initial as i32);
+        let receipt = execute_team_continent_partition(&leaders, &mut rng).unwrap();
+
+        assert_eq!(receipt.active_slots, [0, 1, 2, 3], "{name}");
+        assert_eq!(receipt.unused_teams, [2, 3, 4, 5, 6, 7], "{name}");
+        assert_eq!(receipt.continent_counts, [2, 2, 0, 0, 0, 0, 0, 0], "{name}");
+        assert_eq!(
+            receipt.team_to_continent,
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            "{name}"
+        );
+        assert_eq!(receipt.random_state_before as u32, initial, "{name}");
+        assert_eq!(receipt.random_state_after as u32, final_state, "{name}");
+        assert_eq!(rng.state(), receipt.random_state_after, "{name}");
+        assert_eq!(
+            receipt
+                .random_draws
+                .iter()
+                .map(|draw| (draw.raw, draw.exchanged))
+                .collect::<Vec<_>>(),
+            expected_draws,
+            "{name}"
+        );
+        assert_eq!(
+            receipt
+                .random_draws
+                .iter()
+                .map(|draw| (draw.left_continent, draw.right_continent))
+                .collect::<Vec<_>>(),
+            [(0, 1), (1, 0)],
+            "{name}"
+        );
+        assert!(
+            receipt
+                .random_draws
+                .iter()
+                .all(|draw| draw.call_va == MAP_FILL_CONT_EQUAL_SIZE_RNG_VA),
+            "{name}"
+        );
+        assert_eq!(receipt.world_walked_bytes_changed, 0, "{name}");
     }
 }
 

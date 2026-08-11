@@ -1,6 +1,6 @@
 use don_replay::world_owner_frontier;
 use don_sim::checksum::adler32;
-use don_sim::systems::map_terrain::{wflag, World, WorldSection};
+use don_sim::systems::map_terrain::{wflag, WCoord, World, WorldSection};
 use world_owner_frontier::{
     sha256, ExactPortTransitionProof, InitialWorldPrefixEvidence, ReplaySpan,
     RetailDifferenceLocation, RetailWorldCheckpoint, RetailWorldWalkCapture, RulesWorldEvidence,
@@ -199,6 +199,86 @@ fn transition_rejects_stale_checksums_and_out_of_scope_sections_transactionally(
         Err(WorldOwnerError::TransitionInputMismatch { .. })
     ));
     assert_eq!(ledger, baseline);
+}
+
+#[test]
+fn exact_port_transition_rebases_an_allowed_unowned_section_growth() {
+    let mut after = world(70, 17);
+    let mut ledger = WorldOwnerLedger::from_initial_prefix(&after, evidence(3, 17)).unwrap();
+    let input = after.checksum_sections().full;
+    let before_walked = ledger.coverage().walked_bytes;
+    after.add_starting_location(WCoord(8), WCoord(9));
+    let output = after.checksum_sections().full;
+
+    let receipt = ledger
+        .advance_exact_port(
+            &after,
+            transition(
+                input,
+                output,
+                WorldSectionMask::only(WorldSection::StartArrays),
+            ),
+        )
+        .unwrap();
+
+    assert!(receipt.changed_bytes > 0);
+    assert!(receipt
+        .changed_ranges
+        .iter()
+        .all(|range| range.section == WorldSection::StartArrays));
+    assert!(ledger.coverage().walked_bytes > before_walked);
+    assert_eq!(ledger.snapshot().checksum, after.checksum_sections());
+    assert_eq!(ledger.coverage().owned_bytes, 76 + receipt.changed_bytes);
+}
+
+#[test]
+fn section_growth_rejects_forbidden_or_previously_owned_shapes_transactionally() {
+    let mut after = world(70, 17);
+    let mut ledger = WorldOwnerLedger::from_initial_prefix(&after, evidence(3, 17)).unwrap();
+    let input = after.checksum_sections().full;
+    after.add_starting_location(WCoord(8), WCoord(9));
+    let output = after.checksum_sections().full;
+    let baseline = ledger.clone();
+    assert!(matches!(
+        ledger.advance_exact_port(
+            &after,
+            transition(input, output, WorldSectionMask::only(WorldSection::WData)),
+        ),
+        Err(WorldOwnerError::ForbiddenSectionShapeMutation {
+            section: WorldSection::StartArrays,
+            ..
+        })
+    ));
+    assert_eq!(ledger, baseline);
+
+    ledger
+        .advance_exact_port(
+            &after,
+            transition(
+                input,
+                output,
+                WorldSectionMask::only(WorldSection::StartArrays),
+            ),
+        )
+        .unwrap();
+    let owned_shape = ledger.clone();
+    let second_input = after.checksum_sections().full;
+    after.add_starting_location(WCoord(10), WCoord(11));
+    let second_output = after.checksum_sections().full;
+    assert!(matches!(
+        ledger.advance_exact_port(
+            &after,
+            transition(
+                second_input,
+                second_output,
+                WorldSectionMask::only(WorldSection::StartArrays),
+            ),
+        ),
+        Err(WorldOwnerError::OwnedSectionShapeMutation {
+            section: WorldSection::StartArrays,
+        })
+    ));
+    assert_eq!(ledger, owned_shape);
 }
 
 #[test]

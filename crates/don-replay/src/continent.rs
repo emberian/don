@@ -8,6 +8,15 @@
 //! It stops at the first unported geometry/region primitive and returns that
 //! call as data; it never skips the primitive and consumes later RNG draws.
 
+#[path = "team_continent_partition.rs"]
+mod team_continent_partition;
+
+pub use team_continent_partition::{
+    execute_team_continent_partition, TeamContinentPartitionError, TeamContinentPartitionReceipt,
+    TeamContinentRandomDraw, MAP_FILL_CONT_END_VA, MAP_FILL_CONT_EQUAL_SIZE_RNG_VA,
+    MAP_FILL_CONT_RET_VA, MAP_FILL_CONT_VA,
+};
+
 use crate::growth::{
     execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowRegionReceipt,
     GrowValidCall, GrowValidReceipt, MapGrowthConfig,
@@ -28,11 +37,11 @@ use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
 use don_sim::systems::regions::Regions;
 use don_sim::trig::{cosx, sinx};
 
-pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
 pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
+pub const MAP_FIND_REGION_CENTROID_VA: u32 = 0x0068_ae50;
 
 /// `MapGreatLakes::make_continents` `0x00699e40` derives the
 /// `Map::check_player_land` radius from a shipped unit type rather than from map
@@ -102,11 +111,16 @@ pub enum ContinentStop {
         failed_region: i32,
         retail_return: i32,
     },
-    /// East Meets West first partitions players by team into continent shares.
+    /// Compatibility boundary emitted by older reconstructions before the
+    /// exact `Map::fill_cont` runtime was admitted.
     FillCont {
         primitive_va: u32,
         active_teams: Vec<u8>,
     },
+    /// East Meets West completed the team partition, both direct angle draws,
+    /// every region seed, and both region-growth passes. Start placement first
+    /// asks for the centroid of region 1.
+    FindRegionCentroid { primitive_va: u32, region: i32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +148,8 @@ pub struct ContinentReceipt {
     pub lake_candidates: Vec<LakeCandidateReceipt>,
     pub pool_eliminations: Vec<EliminatePoolsReceipt>,
     pub player_land: Option<CheckPlayerLandReceipt>,
+    /// Present only for East Meets West after executing `Map::fill_cont`.
+    pub team_partition: Option<TeamContinentPartitionReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -188,6 +204,13 @@ pub enum ContinentError {
     RegionRebuild(don_sim::systems::regions::RegionsError),
     PoolElimination(EliminatePoolsError),
     PlayerLand(CheckPlayerLandError),
+    TeamPartition(TeamContinentPartitionError),
+    InvalidActiveSlot {
+        slot: u8,
+    },
+    DuplicateActiveSlot {
+        slot: u8,
+    },
     StartPlacementUnavailable {
         player: usize,
         attempts: usize,
@@ -309,7 +332,7 @@ pub fn execute_continent_prefix_with_regions_from_rng(
 
     // `Map::make_region` reads these installed Map fields. Resolve them before
     // any wipe or RNG draw so missing static data remains transactional.
-    let region_defaults = if matches!(inputs.map_style, 12 | 14 | 18) {
+    let region_defaults = if matches!(inputs.map_style, 12 | 14 | 18 | 19) {
         RegionSeedDefaults {
             common_factor: map_int(style, "COMMON_RESOURCES", "value")?,
             goody_factor: map_int(style, "GOODY_BOXES", "value")?,
@@ -386,7 +409,16 @@ pub fn execute_continent_prefix_with_regions_from_rng(
             style,
             region_defaults,
         )?,
-        19 => east_meets_west(inputs, &mut next_world, &mut next_regions, &mut sites),
+        19 => east_meets_west(
+            inputs,
+            orientation,
+            &mut next_world,
+            &mut next_regions,
+            &mut rng,
+            &mut sites,
+            style,
+            region_defaults,
+        )?,
         _ => unreachable!("admitted above"),
     };
 
@@ -410,6 +442,7 @@ pub fn execute_continent_prefix_with_regions_from_rng(
         lake_candidates: partial.lake_candidates,
         pool_eliminations: partial.pool_eliminations,
         player_land: partial.player_land,
+        team_partition: partial.team_partition,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -425,6 +458,7 @@ struct PartialReceipt {
     lake_candidates: Vec<LakeCandidateReceipt>,
     pool_eliminations: Vec<EliminatePoolsReceipt>,
     player_land: Option<CheckPlayerLandReceipt>,
+    team_partition: Option<TeamContinentPartitionReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
@@ -480,6 +514,7 @@ fn old_world_or_himalayas(
         lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
+        team_partition: None,
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
@@ -543,6 +578,7 @@ fn mediterranean(
             lake_candidates: Vec::new(),
             pool_eliminations: Vec::new(),
             player_land: None,
+            team_partition: None,
             starts_added: 0,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -688,6 +724,7 @@ fn mediterranean(
             lake_candidates: Vec::new(),
             pool_eliminations: vec![first_pools, second_pools],
             player_land: Some(player_land),
+            team_partition: None,
             starts_added: players,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -707,6 +744,7 @@ fn mediterranean(
         lake_candidates: Vec::new(),
         pool_eliminations: vec![first_pools, second_pools, final_pools],
         player_land: Some(player_land),
+        team_partition: None,
         starts_added: players,
         start_min: None,
         stop: ContinentStop::HookComplete {
@@ -971,6 +1009,7 @@ fn great_lakes(
         lake_candidates,
         pool_eliminations: vec![pools],
         player_land: Some(player_land),
+        team_partition: None,
         starts_added: players,
         start_min: None,
         stop: ContinentStop::HookComplete {
@@ -1107,6 +1146,7 @@ fn east_indies(
                     lake_candidates: Vec::new(),
                     pool_eliminations: Vec::new(),
                     player_land: None,
+                    team_partition: None,
                     starts_added: players as usize,
                     start_min: None,
                     stop: ContinentStop::RetryGeneration {
@@ -1126,6 +1166,7 @@ fn east_indies(
         lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
+        team_partition: None,
         starts_added: players as usize,
         start_min: None,
         stop: ContinentStop::EastIndiesNonplayerIslands {
@@ -1134,30 +1175,142 @@ fn east_indies(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn east_meets_west(
     inputs: &InitialWorldgenInputs,
+    orientation: i32,
     world: &mut World,
     regions: &mut Regions,
-    _sites: &mut Vec<u32>,
-) -> PartialReceipt {
+    rng: &mut Random,
+    sites: &mut Vec<u32>,
+    style: &MapStyleStaticData,
+    defaults: RegionSeedDefaults,
+) -> Result<PartialReceipt, ContinentError> {
+    let players = inputs.active_slots.len() as u8;
+    let mut growth_config = map_growth_config(style, world, players, inputs.map_size, orientation)?;
+    // `Map+0x30` enters as the XML-resolved AVOID_CONTINENT value. The style
+    // rescales, floors at four, caps at sixteen, and every following
+    // `grow_valid` reads that stored value.
+    let avoid_continent = scale_land_area(
+        map_scaled_int(style, "AVOID_CONTINENT", "scalevalue", world)?,
+        players,
+        inputs.map_size,
+    )
+    .max(4)
+    .min(16);
+    growth_config.avoid_continent = avoid_continent;
+
     world.wipe();
     regions.clear_all(world);
-    PartialReceipt {
+
+    let mut leaders = [None; 8];
+    for (&slot, &team) in inputs.active_slots.iter().zip(&inputs.active_teams) {
+        let Some(entry) = leaders.get_mut(slot as usize) else {
+            return Err(ContinentError::InvalidActiveSlot { slot });
+        };
+        if entry.is_some() {
+            return Err(ContinentError::DuplicateActiveSlot { slot });
+        }
+        *entry = Some(team);
+    }
+    let partition =
+        execute_team_continent_partition(&leaders, rng).map_err(ContinentError::TeamPartition)?;
+    sites.extend(partition.random_draws.iter().map(|draw| draw.call_va));
+
+    let sides = usize::from(partition.continent_count);
+    debug_assert!(sides > 0 && sides <= 8);
+    let style_sites = &crate::map_style::EAST_MEETS_WEST_DIRECT_RNG_SITES;
+    let min_dim = world.xs.min(world.ys);
+    let radius = (min_dim / 2).wrapping_mul(3) / 4;
+    let first = draw(rng, sites, style_sites[0]) % 0xffff;
+    let second = draw(rng, sites, style_sites[1]) % 0xffff;
+    let mut angle = first.wrapping_shl(16).wrapping_add(second);
+    let per_player_area = world.size / i32::from(players);
+    let region_area = scale_land_area(
+        per_player_area.wrapping_mul(5) / 9,
+        players,
+        inputs.map_size,
+    );
+    let increment = (u32::MAX / u32::from(players)) as i32;
+    let center_x = world.xs / 2;
+    let center_y = world.ys / 2;
+    let mut region_seeds = Vec::with_capacity(sides);
+    for continent in 0..sides {
+        let (x, y) = project(center_x, center_y, angle, radius);
+        let call = RegionSeedCall {
+            region: continent as i32 + 1,
+            x,
+            y,
+            area: region_area,
+        };
+        region_seeds.push(apply_make_region(world, regions, &call, defaults)?);
+
+        // Native uses logical `shr 1` on both wrapped signed products before
+        // adding the two half-arcs to the current angle.
+        let next = (continent + 1) % sides;
+        let left = (partition.continent_counts[continent].wrapping_mul(increment) as u32) >> 1;
+        let right = (partition.continent_counts[next].wrapping_mul(increment) as u32) >> 1;
+        angle = angle.wrapping_add(left as i32).wrapping_add(right as i32);
+    }
+
+    let max_distance = radius.wrapping_mul(3) / 4;
+    let mut region_growths = Vec::with_capacity(sides * 2);
+    for base_area in [region_area / 2, region_area] {
+        for continent in 0..sides {
+            let region = continent as i32 + 1;
+            let call = GrowRegionCall {
+                region,
+                target_area: base_area.wrapping_mul(partition.continent_counts[continent]),
+                max_distance,
+                anchor_x: -1,
+                anchor_y: -1,
+                return_partial_size: 0,
+            };
+            let growth = execute_grow_region(world, regions, rng, &mut growth_config, &call)
+                .map_err(ContinentError::RegionGrowth)?;
+            sites.extend_from_slice(&growth.rng_sites);
+            let failed = growth.retail_return != 0;
+            let retail_return = growth.retail_return;
+            region_growths.push(growth);
+            if failed {
+                return Ok(PartialReceipt {
+                    world_inverted: false,
+                    regions_cleared: 1,
+                    region_seeds,
+                    region_growths,
+                    grow_valid_calls: Vec::new(),
+                    lake_candidates: Vec::new(),
+                    pool_eliminations: Vec::new(),
+                    player_land: None,
+                    team_partition: Some(partition),
+                    starts_added: 0,
+                    start_min: None,
+                    stop: ContinentStop::RetryGeneration {
+                        failed_region: region,
+                        retail_return,
+                    },
+                });
+            }
+        }
+    }
+
+    Ok(PartialReceipt {
         world_inverted: false,
         regions_cleared: 1,
-        region_seeds: Vec::new(),
-        region_growths: Vec::new(),
+        region_seeds,
+        region_growths,
         grow_valid_calls: Vec::new(),
         lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
+        team_partition: Some(partition),
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::FillCont {
-            primitive_va: MAP_FILL_CONT_VA,
-            active_teams: inputs.active_teams.clone(),
+        stop: ContinentStop::FindRegionCentroid {
+            primitive_va: MAP_FIND_REGION_CENTROID_VA,
+            region: 1,
         },
-    }
+    })
 }
 
 fn draw(rng: &mut Random, sites: &mut Vec<u32>, site: u32) -> i32 {

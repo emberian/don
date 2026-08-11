@@ -518,6 +518,7 @@ pub enum InitialItemReconstructionError {
         actual_seed: i32,
     },
     ContinentPrefix(crate::continent::ContinentError),
+    WorldOwnership(crate::replay_world_owner_transitions::ReplayWorldOwnerTransitionError),
     TileSelection(crate::fractal_boundary::FractalBoundaryError),
     PostContinent(crate::post_continent::PostContinentError),
     FillFertile(don_sim::systems::terrain_groups::FillFertileError),
@@ -809,28 +810,38 @@ impl InitialItemReconstruction {
         // transaction from the replay reconstructor's perspective.  Stage both
         // authoritative stores so a late region-shape failure cannot expose a
         // partially generated world while leaving this plan at its old boundary.
-        let mut next_world = map.world.clone();
-        let mut next_regions = map.generation_regions.clone();
+        let mut staged_map = map.clone();
         let receipt = crate::continent::execute_continent_prefix_with_regions_from_rng(
             &self.inputs,
             style,
             tile_selection.main_random_state_after,
-            &mut next_world,
-            &mut next_regions,
+            &mut staged_map.world,
+            &mut staged_map.generation_regions,
         )
         .map_err(InitialItemReconstructionError::ContinentPrefix)?;
+        crate::replay_world_owner_transitions::advance_continent_world_ownership(
+            &mut staged_map,
+            &receipt,
+        )
+        .map_err(InitialItemReconstructionError::WorldOwnership)?;
         let mut post_continent = None;
         let mut fill_fertile = None;
         let boundary = match &receipt.stop {
             crate::continent::ContinentStop::HookComplete { next_va } => {
                 debug_assert_eq!(*next_va, crate::post_continent::REGIONS_CLEAR_ALL_VA);
-                let limits = crate::post_continent::TerritoryLimits::from_world_prefix(&next_world);
+                let limits =
+                    crate::post_continent::TerritoryLimits::from_world_prefix(&staged_map.world);
                 let post = crate::post_continent::execute_post_continent(
-                    &mut next_world,
-                    &mut next_regions,
+                    &mut staged_map.world,
+                    &mut staged_map.generation_regions,
                     limits,
                 )
                 .map_err(InitialItemReconstructionError::PostContinent)?;
+                crate::replay_world_owner_transitions::advance_post_continent_world_ownership(
+                    &mut staged_map,
+                    &post,
+                )
+                .map_err(InitialItemReconstructionError::WorldOwnership)?;
                 debug_assert_eq!(
                     post.next_va,
                     crate::fractal_boundary::TERRAIN_GROUPS_FILL_FERTILE_VA
@@ -838,11 +849,15 @@ impl InitialItemReconstruction {
                 post_continent = Some(post);
                 if let Some(fertility) = &fertility {
                     let terrain_groups = fertility.terrain_groups_input();
-                    fill_fertile = Some(
-                        terrain_groups
-                            .fill_fertile(&mut next_world)
-                            .map_err(InitialItemReconstructionError::FillFertile)?,
-                    );
+                    let fill = terrain_groups
+                        .fill_fertile(&mut staged_map.world)
+                        .map_err(InitialItemReconstructionError::FillFertile)?;
+                    crate::replay_world_owner_transitions::advance_fill_fertile_world_ownership(
+                        &mut staged_map,
+                        &fill,
+                    )
+                    .map_err(InitialItemReconstructionError::WorldOwnership)?;
+                    fill_fertile = Some(fill);
                     InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable {
                         next_va: crate::fractal_boundary::TERRAIN_GROUPS_PLACE_ALL_VA,
                     }
@@ -892,9 +907,16 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
+            crate::continent::ContinentStop::FindRegionCentroid { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_team_continent_centroid",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
         };
-        map.world = next_world;
-        map.generation_regions = next_regions;
+        *map = staged_map;
         self.post_continent = post_continent;
         self.tile_selection = Some(tile_selection);
         self.fertility = fertility;
@@ -905,9 +927,9 @@ impl InitialItemReconstruction {
         // address with the exact primitive inside it that cannot be executed.
         // The call is fail-closed in don-sim, so this reads state and commits
         // none: `map.world` is byte-identical afterwards either way.
-        let mountain_source = tilesets_xml.and_then(Path::parent).map(|data_dir| {
-            data_dir.join(crate::place_all_advance::MOUNTAIN_RANGE_SOURCE_FILE)
-        });
+        let mountain_source = tilesets_xml
+            .and_then(Path::parent)
+            .map(|data_dir| data_dir.join(crate::place_all_advance::MOUNTAIN_RANGE_SOURCE_FILE));
         let mut mountain_error = None;
         if matches!(
             self.boundary,
@@ -941,7 +963,8 @@ impl InitialItemReconstruction {
                 progress: crate::place_all_advance::RETAIL_GAME_START_PROGRESS,
                 oil_good_policy: crate::place_all_advance::OilGoodPolicy::Stop,
             };
-            match crate::place_all_advance::advance_place_all_boundary(self, map, &receipt, &facts) {
+            match crate::place_all_advance::advance_place_all_boundary(self, map, &receipt, &facts)
+            {
                 Ok(advance) => {
                     self.boundary =
                         InitialItemBoundary::MapTerrainGroupsPlaceAllPrimitiveUnavailable {
