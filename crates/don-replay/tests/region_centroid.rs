@@ -8,8 +8,8 @@ use don_replay::replay::Replay;
 use don_sim::systems::regions::Regions;
 use region_centroid::{
     execute_east_meets_west_centroids, execute_find_region_centroid, RegionCentroidError,
-    EAST_MEETS_WEST_AFTER_CENTROID_LOOP_VA, MAP_ELIMINATE_EDGE_CANALS_VA,
-    MAP_FIND_REGION_CENTROID_RETURN_VA, MAP_FIND_REGION_CENTROID_VA,
+    EAST_MEETS_WEST_AFTER_CENTROID_LOOP_VA, MAP_FIND_REGION_CENTROID_RETURN_VA,
+    MAP_FIND_REGION_CENTROID_VA,
 };
 use std::path::{Path, PathBuf};
 
@@ -74,9 +74,10 @@ fn generated_style19_centroids(name: &str) -> Option<GeneratedCentroidFacts> {
             .expect("style 19 has a team partition")
             .continent_count,
     );
-    let ContinentStop::EliminateEdgeCanals {
+    let ContinentStop::PlaceStartInRegion {
         primitive_va,
         centroids,
+        ..
     } = &receipt.stop
     else {
         panic!("style 19 stopped at {:?}", receipt.stop);
@@ -180,7 +181,11 @@ fn both_checksum_bearing_style19_headers_execute_the_complete_centroid_loop() {
             return;
         };
         assert_eq!(got.sides, 2, "{name}");
-        assert_eq!(got.stop_va, MAP_ELIMINATE_EDGE_CANALS_VA, "{name}");
+        assert_eq!(
+            got.stop_va,
+            don_replay::edge_canals::MAP_PLACE_START_IN_REGION_VA,
+            "{name}"
+        );
         assert_eq!(got.pool_eliminations, 1, "{name}");
         assert_eq!(got.sizes, expected_sizes, "{name}");
         assert_eq!(got.sums, expected_sums, "{name}");

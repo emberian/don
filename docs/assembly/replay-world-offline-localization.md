@@ -76,7 +76,7 @@ column no longer stands in for missing provenance.
 | 10–13 terrain arrays | 336 | 0 | 336 |
 | **total** | **13,119,100** | **7,916,220** | **5,202,880** |
 
-The earliest lawful unknown is section 2 offset 0 in the two team-continent-edge-canal stops,
+The earliest lawful unknown is section 2 offset 0 in the two team-continent-place-start stops,
 which have not generated start arrays, and section 2 offset 1 in the other 19 recordings.
 Those offsets are exclusion boundaries only, not observed retail/model differences.
 
@@ -89,7 +89,7 @@ bytes from `schema/replay-validation.json`:
 |---|---:|
 | `place_all_mountains_add_mountain` | 13 |
 | `place_all_world_set_oil_at` | 6 |
-| `map_team_continent_edge_canals` | 2 |
+| `map_team_continent_place_start` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
 style virtual completes also receipt the common post-continent and fertility stages. This

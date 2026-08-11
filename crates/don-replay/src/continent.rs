@@ -28,6 +28,14 @@ pub use team_continent_partition::{
     MAP_FILL_CONT_RET_VA, MAP_FILL_CONT_VA,
 };
 
+use crate::east_meets_west_start_boundary::{
+    execute_first_place_start_boundary, EastMeetsWestPlaceStartBoundary,
+    EastMeetsWestStartBoundaryError, EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
+    MAP_PLACE_START_IN_REGION_VA,
+};
+use crate::edge_canals::{
+    execute_eliminate_edge_canals, EliminateEdgeCanalsError, EliminateEdgeCanalsReceipt,
+};
 use crate::growth::{
     execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowRegionReceipt,
     GrowValidCall, GrowValidReceipt, MapGrowthConfig,
@@ -134,12 +142,21 @@ pub enum ContinentStop {
     /// Compatibility boundary emitted by older reconstructions before the
     /// exact centroid loop was admitted.
     FindRegionCentroid { primitive_va: u32, region: i32 },
-    /// East Meets West completed its two centroid arrays and the existing exact
-    /// `eliminate_pools(EntireWorld, dead)` transaction. The next mutator is
-    /// the still-unported `Map::eliminate_edge_canals` body.
+    /// Compatibility boundary emitted before the exact edge-canal body was
+    /// admitted.
     EliminateEdgeCanals {
         primitive_va: u32,
         centroids: EastMeetsWestCentroidReceipt,
+    },
+    /// East Meets West completed its centroid loop, pool cleanup, all four
+    /// edge-canal passes and the mandatory region rebuild. Caller execution is
+    /// now parked at its first concrete start-selection call.
+    PlaceStartInRegion {
+        primitive_va: u32,
+        first_call_va: u32,
+        centroids: EastMeetsWestCentroidReceipt,
+        edge_canals: EliminateEdgeCanalsReceipt,
+        call: EastMeetsWestPlaceStartBoundary,
     },
 }
 
@@ -228,6 +245,8 @@ pub enum ContinentError {
     RegionRebuild(don_sim::systems::regions::RegionsError),
     PoolElimination(EliminatePoolsError),
     RegionCentroid(RegionCentroidError),
+    EdgeCanals(EliminateEdgeCanalsError),
+    StartBoundary(EastMeetsWestStartBoundaryError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1379,10 +1398,26 @@ fn east_meets_west(
     debug_assert_eq!(centroids.after_pools_va, MAP_ELIMINATE_EDGE_CANALS_VA);
     let pools = execute_eliminate_pools(world, regions, ElimPoolParam::EntireWorld)
         .map_err(ContinentError::PoolElimination)?;
+    let edge_canals =
+        execute_eliminate_edge_canals(world, regions).map_err(ContinentError::EdgeCanals)?;
+    debug_assert_eq!(edge_canals.next_external_va, MAP_PLACE_START_IN_REGION_VA);
+    debug_assert_eq!(
+        edge_canals.next_caller_va,
+        crate::edge_canals::EAST_MEETS_WEST_AFTER_EDGE_CANALS_VA
+    );
+    let place_start =
+        execute_first_place_start_boundary(inputs, world, &partition, &centroids, rng)
+            .map_err(ContinentError::StartBoundary)?;
+    sites.extend_from_slice(&place_start.direct_rng_sites);
+    debug_assert_eq!(place_start.primitive_va, MAP_PLACE_START_IN_REGION_VA);
+    debug_assert_eq!(
+        place_start.caller_va,
+        EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA
+    );
 
     Ok(PartialReceipt {
         world_inverted: false,
-        regions_cleared: 2,
+        regions_cleared: 3,
         region_seeds,
         region_growths,
         grow_valid_calls: Vec::new(),
@@ -1393,9 +1428,12 @@ fn east_meets_west(
         east_indies_tail: None,
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::EliminateEdgeCanals {
-            primitive_va: MAP_ELIMINATE_EDGE_CANALS_VA,
+        stop: ContinentStop::PlaceStartInRegion {
+            primitive_va: MAP_PLACE_START_IN_REGION_VA,
+            first_call_va: EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA,
             centroids,
+            edge_canals,
+            call: place_start,
         },
     })
 }

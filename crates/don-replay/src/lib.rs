@@ -54,6 +54,8 @@ pub mod cities_runtime;
 pub mod city_build_constructor_runtime;
 pub mod checksum;
 pub mod continent;
+pub mod east_meets_west_start_boundary;
+pub mod edge_canals;
 pub mod fractal_boundary;
 pub mod groups_channel;
 pub mod growth;

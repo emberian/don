@@ -508,17 +508,54 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     );
     assert_eq!(eastwest.starts_added, 0);
     match &eastwest.stop {
-        ContinentStop::EliminateEdgeCanals {
+        ContinentStop::PlaceStartInRegion {
             primitive_va,
+            first_call_va,
             centroids,
+            edge_canals,
+            call,
         } => {
             assert_eq!(
                 *primitive_va,
-                don_replay::region_centroid::MAP_ELIMINATE_EDGE_CANALS_VA
+                don_replay::edge_canals::MAP_PLACE_START_IN_REGION_VA
+            );
+            assert_eq!(
+                *first_call_va,
+                don_replay::edge_canals::EAST_MEETS_WEST_FIRST_PLACE_START_CALL_VA
             );
             assert_eq!(centroids.centroids.len(), 2);
             assert_eq!(centroids.centroid_x.len(), 2);
             assert_eq!(centroids.centroid_y.len(), 2);
+            assert!(edge_canals.direct_rng_sites.is_empty());
+            assert_eq!(edge_canals.canal_writes(), 2);
+            assert_eq!(call.player_slot, 0);
+            assert_eq!(call.continent_players, 2);
+            assert_eq!(call.min_start_distance, 24);
+            assert_eq!(call.random_draw, None);
+            assert_eq!(
+                edge_canals
+                    .passes
+                    .iter()
+                    .flat_map(|pass| pass.writes.iter())
+                    .map(|write| (write.side, write.middle, write.depth, write.x, write.y))
+                    .collect::<Vec<_>>(),
+                [
+                    (
+                        don_replay::edge_canals::EdgeCanalSide::Bottom,
+                        61,
+                        1,
+                        61,
+                        98
+                    ),
+                    (
+                        don_replay::edge_canals::EdgeCanalSide::Bottom,
+                        62,
+                        2,
+                        62,
+                        97
+                    ),
+                ]
+            );
         }
         other => panic!("East Meets West stopped at {other:?}"),
     }
@@ -541,7 +578,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x193d_611d, 0x4f28_bf8c, 0xa996_5574)
+        (0xd293_cb35, 0xe958_619f, 0x4f28_bf8c, 0x823b_55f6)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

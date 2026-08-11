@@ -108,19 +108,26 @@ The caller schedule transcribed from `0x00696743..0x00696c82` is:
 | second growth pass | `0x00696b60..0x00696c5f` | target `region_area * count`, same max distance |
 | centroid continuation | `0x00696c82` | exact one-based `find_region_centroid` loop |
 | pool cleanup | `0x00696d0a` | exact `eliminate_pools(EntireWorld, dead)` |
-| next external body | `0x00696d0f` | `eliminate_edge_canals()` |
+| edge-canal body | `0x00696d0f` | exact `eliminate_edge_canals()` plus region rebuild |
+| next start selector | `0x00696fe3` | first `place_start_in_region` call, coherent stop |
 
 Each growth's dynamic RNG sites are appended in execution order by the existing
 `execute_grow_region` receipt. A nonzero retail growth return is exposed as
 `RetryGeneration`; this bounded call does not pretend it executed the caller's
 whole-pass retry loop. On success it reports
-`EliminateEdgeCanals { primitive_va: 0x0068b360, ... }` with the complete
-centroid receipt retained inside the stop.
+`PlaceStartInRegion { primitive_va: 0x0068ac00, first_call_va: 0x00696fe3,
+... }` with the complete centroid, pool and edge-canal receipts retained before
+the stop. The edge body has no RNG site. Caller setup through the first call is
+also exact: it resolves the post-rebuild region, computes the centroid angle,
+population spacing, radius/search distance and both integer arguments. When
+the selected continent population is one, it executes and receipts the direct
+style draw at `0x00696f82`; the two real four-player headers have population
+two and execute no draw there.
 
 For the 100×100, four-player fixture the frozen prefix has two regions of area
 1,388, growth targets `(1,1388)`, `(2,1388)`, `(1,2776)`, `(2,2776)`, and max
 distance 27. Before/after World channel values are `0xd293cb35` and
-`0x193d611d`; the isolated WData values are `0x4f28bf8c` and `0xa9965574`.
+`0xe958619f`; the isolated WData values are `0x4f28bf8c` and `0x823b55f6`.
 WData is the only changed checksum section. These are regression outputs of the
 binary-derived schedule, not values fitted to any recording.
 
@@ -132,18 +139,20 @@ binary-derived schedule, not values fitted to any recording.
   output arrays, final RNG words, and zero World mutation;
 - full style-19 caller ordering (orientation, two partition calls, two angle
   calls, then growth-internal calls), exact seed/growth parameters, centroid
-  arrays, the pool transaction, and the edge-canal stop;
+  arrays, the pool transaction, all edge passes and the place-start stop;
 - an exact full-World and isolated-WData checksum mutation with every other
   World section unchanged;
 - transactional validation through the existing continent entry point.
 
-The centroid source is a public replay module because its full typed receipt is
-retained by `ContinentStop::EliminateEdgeCanals`. The surgical `initial.rs`
-mapping names the new `map_team_continent_edge_canals` boundary.
+The centroid and edge-canal sources are public replay modules because their
+full typed receipts are retained by `ContinentStop::PlaceStartInRegion`. The
+surgical `initial.rs` mapping names the new `map_team_continent_place_start`
+boundary.
 
-The remaining tail starts with the 1,318-byte edge-canal mutator, then
-balances/builds regions, selects per-leader starts, and eventually reaches the
-third direct style draw at `0x00696f82`. None of those residual mutations or
-draws is represented here, and this work makes no retail World checksum-match
-claim. The exact centroid body and replay fixtures are documented in
-`docs/assembly/map-find-region-centroid.md`.
+The remaining tail begins with caller-owned per-leader start arguments and the
+588-byte `Map::place_start_in_region` selector. Later paths may reach the third
+direct style draw at `0x00696f82`; none of those residual mutations or draws is
+represented here, and this work makes no retail World checksum-match claim.
+The exact centroid and edge bodies are documented in
+`docs/assembly/map-find-region-centroid.md` and
+`docs/assembly/map-eliminate-edge-canals.md`.

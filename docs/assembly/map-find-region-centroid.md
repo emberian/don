@@ -59,9 +59,9 @@ PDB exposes `eliminate_pools(Map::ElimPoolParam, int)`.  Direct inspection of
 the complete 1,021-byte callee shows that it reads `[ebp+8]` (the enum) but
 never `[ebp+0xc]`; the second integer is dead.  The enum pushed at the style-19
 call site is literal `2`, `EntireWorld`.  `eliminate_pools` already has an exact
-transactional port.  `eliminate_edge_canals` is the next unported mutator and
-is therefore the coherent residual boundary after the centroid loop and pool
-rebuild are integrated.
+transactional port. `eliminate_edge_canals` is now an exact transactional body;
+its four passes and mandatory region rebuild move the coherent residual
+boundary to the first `Map::place_start_in_region` call at `0x00696fe3`.
 
 ## Replay evidence and residual
 
@@ -77,8 +77,8 @@ target.  The test binds those arrays, the body schedule, literal pool mode,
 dead-argument fact, and next external address without consulting the recorded
 World checksum.
 
-The remaining style-19 tail starts at the 1,318-byte
-`Map::eliminate_edge_canals` body (`0x0068b360`).  After that, retail selects a
-start region for each active leader, draws start angles/positions, calls
-`Map::place_start_in_region`, and eventually reaches the later direct RNG site
-at `0x00696f82`.  No part of that residual is synthesized here.
+The remaining style-19 tail starts at the first
+`Map::place_start_in_region` call (`0x00696fe3`, callee `0x0068ac00`). Retail
+then selects concrete starts and may eventually reach the later direct RNG site
+at `0x00696f82`. No part of that residual is synthesized here. The admitted
+edge body is documented in `docs/assembly/map-eliminate-edge-canals.md`.

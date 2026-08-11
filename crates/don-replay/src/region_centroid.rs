@@ -128,8 +128,8 @@ pub fn execute_find_region_centroid(
 /// Execute the caller-owned centroid loop at `0x00696c65..0x00696d07`.
 ///
 /// The loop is one-based and appends X and Y to separate `SimpleArray<int>`
-/// instances.  Its next mutator is `eliminate_pools(EntireWorld, dead)` and the
-/// following still-unported body is `eliminate_edge_canals`.
+/// instances. Its next mutator is `eliminate_pools(EntireWorld, dead)`,
+/// followed by the separately ported `eliminate_edge_canals` body.
 pub fn execute_east_meets_west_centroids(
     regions: &Regions,
     continent_count: i32,
