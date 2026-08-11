@@ -183,6 +183,9 @@ pub mod leaders_diplomacy_opening_frontier;
 /// presentation/achievement call without fabricating wall-clock audio behavior.
 pub mod leaders_process_event_frame_step19;
 pub mod map_terrain;
+/// Exact mode-4 `Mountains::add_mountain` mutation runtime. The sixteen shipped
+/// displacement-template producer remains an explicit external evidence boundary.
+pub mod mountain_add_runtime;
 /// Exact `Mountains::randomize_mountains` three-list RNG/cursor transaction and
 /// the return-then-advance `get_range` primitive used by terrain placement.
 pub mod mountains;
@@ -320,3 +323,5 @@ pub mod walls;
 /// timers, close/trim behavior, and the mandatory object/type/game-store bridge that
 /// supplies `victory_score` with live Wonder value/net inputs.
 pub mod wonders;
+/// Exact `World::set_oil_at` plus retail Goods-slot allocation/retirement owner.
+pub mod world_oil_goods;

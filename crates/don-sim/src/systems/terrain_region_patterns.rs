@@ -51,7 +51,7 @@ pub struct RegionPatternReceipt {
     pub rng_state_after: i32,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegionPatternError {
     UnsupportedPattern {
         pattern: i32,

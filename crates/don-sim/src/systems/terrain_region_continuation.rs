@@ -2,11 +2,18 @@
 //!
 //! PDB/disassembly provenance: `place_region_group` `0x006a2f60`,
 //! `randomize_orthogs` `0x006a2320`, `clear_group` `0x006a28e0`, and
-//! `place_oil_deposits` `0x006a2d90`.  Good-object mutations remain explicit
-//! host receipts; all world/list/RNG effects around them execute locally.
+//! `place_oil_deposits` `0x006a2d90`. The owned audited entry executes the
+//! exact Mountains and oil/Good owners locally; recorded resolutions and the
+//! remaining Cliff request stay explicit host-evidence boundaries.
 
 use super::ammo::vector_dist;
-use super::map_terrain::{tflag, wflag, World, NEIGHBOUR_DX, NEIGHBOUR_DY};
+use super::map_terrain::{
+    tflag, wflag, WCoord, World, WorldChecksum, WorldSection, NEIGHBOUR_DX, NEIGHBOUR_DY,
+};
+use super::mountain_add_runtime::{
+    AddMountainCall, MountainAddReceipt, MountainAddRuntime, MountainAddRuntimeError,
+    MountainWorld, MountainWorldCell,
+};
 use super::regions::Regions;
 use super::terrain_drop_tile::{
     has_mountain_tcoords, DropTileError, DropTileExternalRequest, DropTileExternalResolution,
@@ -18,12 +25,74 @@ use super::terrain_region_placement::{
     PlaceRegionGroupPrefixError, PlaceRegionGroupPrefixOutcome, PlaceRegionGroupPrefixReceipt,
     RegionCandidateAttempt, RegionDropTileInvocation, RegionHelpingState,
 };
+use super::world_oil_goods::{
+    apply_world_set_oil_at, OilGoodMutation, OilGoodMutationError, OilGoodMutationReceipt,
+    OilGoodRuntime,
+};
 use crate::rng::Random;
 
 const CARDINAL: [(i32, i32); 4] = [(-1, 0), (0, 1), (1, 0), (0, -1)];
 const TYPE_FOUR_DX: [i32; 9] = [0, -1, 0, 1, 1, 1, 0, -1, -1];
 const TYPE_FOUR_DY: [i32; 9] = [0, -1, -1, -1, 0, 1, 1, 1, 0];
 const OIL_GOOD_TYPE: i32 = 5;
+
+impl MountainWorld for World {
+    fn world_xs(&self) -> i32 {
+        self.xs
+    }
+
+    fn world_ys(&self) -> i32 {
+        self.ys
+    }
+
+    fn tile_xs(&self) -> i32 {
+        self.tile_xs
+    }
+
+    fn tile_ys(&self) -> i32 {
+        self.tile_ys
+    }
+
+    fn world_cell(&self, wx: i32, wy: i32) -> MountainWorldCell {
+        let cell = self.wdata(wx, wy);
+        MountainWorldCell {
+            flags: cell.flags,
+            land: cell.land,
+        }
+    }
+
+    fn write_world_flags(&mut self, wx: i32, wy: i32, flags: u16) {
+        self.wdata_mut(wx, wy).flags = flags;
+    }
+
+    fn tile_mask(&self, tx: i32, ty: i32) -> u16 {
+        self.tmask(tx, ty)
+    }
+
+    fn set_mountain_tile(&mut self, tx: i32, ty: i32) {
+        self.set_mountain_at(tx, ty, true);
+    }
+
+    fn set_behind_b(&mut self, tx: i32, ty: i32) {
+        self.set_behind(tx, ty, true, true);
+    }
+
+    fn start_x_count(&self) -> usize {
+        self.start_x.items.len()
+    }
+
+    fn start_y_count(&self) -> usize {
+        self.start_y.items.len()
+    }
+
+    fn start_at(&self, index: usize) -> (i32, i32) {
+        (self.start_x.items[index], self.start_y.items[index])
+    }
+
+    fn start_city_reserved(&self, wx: i32, wy: i32) -> bool {
+        self.start_city_wcoord(WCoord(wx), WCoord(wy))
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RandomizeOrthogsReceipt {
@@ -59,6 +128,10 @@ pub struct RegionGrowthAttempt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionGrowthPassReceipt {
     pub selected_index: usize,
+    /// `0x006a3cee`: one draw when the tile list held more than one base,
+    /// including when the first visited base succeeds and `base_order` is a
+    /// strict prefix of that list.
+    pub base_index_draws: u32,
     pub base_order: Vec<usize>,
     pub orthogs: Vec<RandomizeOrthogsReceipt>,
     pub attempts: Vec<RegionGrowthAttempt>,
@@ -86,6 +159,34 @@ pub enum PlaceRegionGroupOutcome {
     ExternalResolutionRequired { request: DropTileExternalRequest },
 }
 
+/// One exact byte mutation in the stream walked by
+/// `World::walk_data(CheckSum *, -1)` (`0x006b5cf0`).
+///
+/// `offset` is in channel-12 walk order, not a Rust-struct byte offset.  That
+/// distinction matters because the walk omits WData padding and interleaves
+/// container metadata with elements.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RegionWorldByteMutation {
+    pub offset: usize,
+    pub before: u8,
+    pub after: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceRegionGroupWorldReceipt {
+    /// Channel 12 before and after this preview transaction.
+    pub checksum_before: WorldChecksum,
+    pub checksum_after: WorldChecksum,
+    /// Isolated retail walk sections whose digest or byte count changed.
+    pub changed_sections: Vec<WorldSection>,
+    /// Every changed channel-12 byte in exact walk order.
+    pub byte_mutations: Vec<RegionWorldByteMutation>,
+    /// Physical plane indices changed by the whole transaction.  These are a
+    /// useful bridge back from walk offsets to map coordinates.
+    pub changed_wdata_indices: Vec<usize>,
+    pub changed_tdata_indices: Vec<usize>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlaceRegionGroupReceipt {
     pub prefix: PlaceRegionGroupPrefixReceipt,
@@ -96,10 +197,71 @@ pub struct PlaceRegionGroupReceipt {
     pub oil_deposits: Option<PlaceOilDepositsReceipt>,
     pub external_resolutions_consumed: usize,
     pub outcome: PlaceRegionGroupOutcome,
+    /// Main-stream state at function entry, before the optional region-cursor
+    /// draw at `0x006a2fe1`.
+    pub rng_state_before: i32,
+    /// Exact number of main-stream words consumed by the prefix, growth loop,
+    /// orthogonal randomization, and resolved cliff calls.
+    pub rng_draws: u32,
     pub rng_state_after: i32,
+    /// Present only for the explicit audited entry point. Ordinary map
+    /// generation avoids cloning and walking the whole World per clump.
+    pub world: Option<PlaceRegionGroupWorldReceipt>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// External simulation owners that can execute typed `drop_tile` requests
+/// rather than accepting asserted result rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlaceRegionGroupOwners {
+    /// `None` keeps the displacement-template producer as an explicit red
+    /// boundary. Production must never substitute synthetic geometry.
+    pub mountains: Option<MountainAddRuntime>,
+    /// Base-Good object pool plus `ObjectsData::good_mark`.
+    pub oil_goods: Option<OilGoodRuntime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountainOwnerExecutionReceipt {
+    pub execution: MountainAddReceipt,
+    /// Exact channel-12 delta of this leaf alone.
+    pub world: PlaceRegionGroupWorldReceipt,
+    /// Adler over `Mountains::walk_data`'s retained-array byte stream. This is
+    /// a walk receipt, not a claim that Mountains is a separate check_all
+    /// channel.
+    pub mountain_walk_adler_before: u32,
+    pub mountain_walk_adler_after: u32,
+    pub mountain_walk_bytes_before: usize,
+    pub mountain_walk_bytes_after: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaceRegionGroupOwnerReceipt {
+    Mountain(MountainOwnerExecutionReceipt),
+    OilGood(OilGoodMutationReceipt),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceRegionGroupOwnedReceipt {
+    pub placement: PlaceRegionGroupReceipt,
+    pub owners: Vec<PlaceRegionGroupOwnerReceipt>,
+    /// False means the receipt describes a staged preview stopped at the next
+    /// typed owner. Group, World, RNG, and owner state were all rolled back.
+    pub committed: bool,
+}
+
+impl PlaceRegionGroupReceipt {
+    /// Recompute the final main-stream word from the receipt's entry word and
+    /// draw count.  This is an invariant check, not a second source of RNG.
+    pub fn rng_receipt_is_coherent(&self) -> bool {
+        let mut random = Random::new(self.rng_state_before);
+        for _ in 0..self.rng_draws {
+            random.advance();
+        }
+        random.state() == self.rng_state_after
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaceRegionGroupError {
     InvalidPrefix(PlaceRegionGroupPrefixError),
     InvalidDropTile(DropTileError),
@@ -121,6 +283,14 @@ pub enum PlaceRegionGroupError {
         world_x: i32,
         world_y: i32,
     },
+    MissingMountainRuntime {
+        request: DropTileExternalRequest,
+    },
+    InvalidMountainRuntime(MountainAddRuntimeError),
+    MissingOilGoodRuntime {
+        request: DropTileExternalRequest,
+    },
+    InvalidOilGoodRuntime(OilGoodMutationError),
 }
 
 impl TerrainGroup {
@@ -137,12 +307,125 @@ impl TerrainGroup {
         helping: Option<RegionHelpingState>,
         externals: &[DropTileExternalResolution],
     ) -> Result<PlaceRegionGroupReceipt, PlaceRegionGroupError> {
+        self.apply_place_region_group_recorded(
+            world, regions, random, call, helping, externals, false,
+        )
+    }
+
+    /// The same retail transaction with an exact channel-12 before/after walk
+    /// and byte delta. Replay localization should use this entry point; ordinary
+    /// map generation should use [`Self::apply_place_region_group`] so it does
+    /// not clone and hash the whole World for every clump.
+    pub fn apply_place_region_group_audited(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        call: PlaceRegionGroupCall,
+        helping: Option<RegionHelpingState>,
+        externals: &[DropTileExternalResolution],
+    ) -> Result<PlaceRegionGroupReceipt, PlaceRegionGroupError> {
+        self.apply_place_region_group_recorded(
+            world, regions, random, call, helping, externals, true,
+        )
+    }
+
+    /// Execute the region transaction against exact local subsystem owners.
+    ///
+    /// The whole call is staged. A native return (including `Liberr == 0` from
+    /// an exhausted placement) commits Group, World, RNG, and owner state
+    /// together. A typed external boundary or any owner error commits none of
+    /// them. The returned placement and each executed owner carry exact World
+    /// walk receipts.
+    pub fn apply_place_region_group_owned_audited(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        call: PlaceRegionGroupCall,
+        helping: Option<RegionHelpingState>,
+        owners: &mut PlaceRegionGroupOwners,
+    ) -> Result<PlaceRegionGroupOwnedReceipt, PlaceRegionGroupError> {
+        let mut staged_group = self.clone();
+        let mut staged_world = world.clone();
+        let mut staged_random = *random;
+        let mut staged_owners = owners.clone();
+        let mut resolver = OwnedRegionExternalResolver {
+            owners: &mut staged_owners,
+            receipts: Vec::new(),
+        };
+        let mut placement = staged_group.apply_place_region_group_with_resolver(
+            &mut staged_world,
+            regions,
+            &mut staged_random,
+            call,
+            helping,
+            &mut resolver,
+            true,
+        )?;
+        placement.external_resolutions_consumed = resolver.receipts.len();
+        let owner_receipts = std::mem::take(&mut resolver.receipts);
+        drop(resolver);
+        let committed = matches!(placement.outcome, PlaceRegionGroupOutcome::Returned(_));
+        if committed {
+            *self = staged_group;
+            *world = staged_world;
+            *random = staged_random;
+            *owners = staged_owners;
+        }
+        Ok(PlaceRegionGroupOwnedReceipt {
+            placement,
+            owners: owner_receipts,
+            committed,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_place_region_group_recorded(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        call: PlaceRegionGroupCall,
+        helping: Option<RegionHelpingState>,
+        externals: &[DropTileExternalResolution],
+        audit_world: bool,
+    ) -> Result<PlaceRegionGroupReceipt, PlaceRegionGroupError> {
+        let mut resolver = RecordedRegionExternalResolver {
+            externals,
+            consumed: 0,
+        };
+        let mut receipt = self.apply_place_region_group_with_resolver(
+            world,
+            regions,
+            random,
+            call,
+            helping,
+            &mut resolver,
+            audit_world,
+        )?;
+        receipt.external_resolutions_consumed = resolver.consumed;
+        Ok(receipt)
+    }
+
+    fn apply_place_region_group_with_resolver(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        call: PlaceRegionGroupCall,
+        helping: Option<RegionHelpingState>,
+        resolver: &mut dyn RegionExternalResolver,
+        audit_world: bool,
+    ) -> Result<PlaceRegionGroupReceipt, PlaceRegionGroupError> {
         validate_inputs(self, world, regions, call, helping)
             .map_err(PlaceRegionGroupError::InvalidPrefix)?;
         if matches!(self.group_type, 4 | 6) && call.target_tiles > 1 {
             validate_growth_probes(world, regions, call)?;
         }
 
+        let world_before = audit_world.then(|| world.clone());
+        let rng_state_before = random.state();
         let mut prefix = self
             .plan_place_region_group_prefix(world, regions, random, call, helping)
             .map_err(PlaceRegionGroupError::InvalidPrefix)?;
@@ -159,13 +442,23 @@ impl TerrainGroup {
             oil_deposits: None,
             external_resolutions_consumed: 0,
             outcome: PlaceRegionGroupOutcome::Returned(0),
+            rng_state_before,
+            rng_draws: 0,
             rng_state_after: random.state(),
+            world: None,
         };
 
         let coords = &regions.list[call.region_id].coords.items;
         let initial_cursor = prefix.initial_cursor;
         let mut cursor = match prefix.outcome {
-            PlaceRegionGroupPrefixOutcome::Exhausted => return Ok(receipt),
+            PlaceRegionGroupPrefixOutcome::Exhausted => {
+                return Ok(finalize_place_region_group_receipt(
+                    receipt,
+                    world_before.as_ref(),
+                    world,
+                    random,
+                ));
+            }
             PlaceRegionGroupPrefixOutcome::DropTile(_) => prefix.attempts.last().unwrap().cursor,
         };
         let mut pending = match prefix.outcome {
@@ -194,8 +487,12 @@ impl TerrainGroup {
                     None => {
                         receipt.outcome = PlaceRegionGroupOutcome::Returned(last_drop_result);
                         receipt.prefix = prefix;
-                        receipt.rng_state_after = random.state();
-                        return Ok(receipt);
+                        return Ok(finalize_place_region_group_receipt(
+                            receipt,
+                            world_before.as_ref(),
+                            world,
+                            random,
+                        ));
                     }
                 }
             };
@@ -205,14 +502,17 @@ impl TerrainGroup {
                 world,
                 random,
                 invocation,
-                externals,
-                &mut receipt.external_resolutions_consumed,
+                resolver,
                 &mut receipt.outcome,
             )?
             else {
                 receipt.prefix = prefix;
-                receipt.rng_state_after = random.state();
-                return Ok(receipt);
+                return Ok(finalize_place_region_group_receipt(
+                    receipt,
+                    world_before.as_ref(),
+                    world,
+                    random,
+                ));
             };
             let placed = drop.placed;
             last_drop_result = i32::from(placed);
@@ -234,8 +534,12 @@ impl TerrainGroup {
             if matches!(self.group_type, 5 | 7 | 8) {
                 receipt.outcome = PlaceRegionGroupOutcome::Returned(1);
                 receipt.prefix = prefix;
-                receipt.rng_state_after = random.state();
-                return Ok(receipt);
+                return Ok(finalize_place_region_group_receipt(
+                    receipt,
+                    world_before.as_ref(),
+                    world,
+                    random,
+                ));
             }
 
             loop {
@@ -245,21 +549,28 @@ impl TerrainGroup {
                             self,
                             world,
                             call.oil_deposits,
-                            externals,
-                            &mut receipt.external_resolutions_consumed,
+                            resolver,
                             &mut receipt.outcome,
                         )?
                         else {
                             receipt.prefix = prefix;
-                            receipt.rng_state_after = random.state();
-                            return Ok(receipt);
+                            return Ok(finalize_place_region_group_receipt(
+                                receipt,
+                                world_before.as_ref(),
+                                world,
+                                random,
+                            ));
                         };
                         receipt.oil_deposits = Some(oil);
                     }
                     receipt.outcome = PlaceRegionGroupOutcome::Returned(1);
                     receipt.prefix = prefix;
-                    receipt.rng_state_after = random.state();
-                    return Ok(receipt);
+                    return Ok(finalize_place_region_group_receipt(
+                        receipt,
+                        world_before.as_ref(),
+                        world,
+                        random,
+                    ));
                 }
 
                 let pass = grow_once(
@@ -269,8 +580,7 @@ impl TerrainGroup {
                     call,
                     initial_x,
                     initial_y,
-                    externals,
-                    &mut receipt.external_resolutions_consumed,
+                    resolver,
                     &mut receipt.outcome,
                 )?;
                 let placed = pass
@@ -283,28 +593,240 @@ impl TerrainGroup {
                     PlaceRegionGroupOutcome::ExternalResolutionRequired { .. }
                 ) {
                     receipt.prefix = prefix;
-                    receipt.rng_state_after = random.state();
-                    return Ok(receipt);
+                    return Ok(finalize_place_region_group_receipt(
+                        receipt,
+                        world_before.as_ref(),
+                        world,
+                        random,
+                    ));
                 }
                 if placed {
                     continue;
                 }
 
-                let Some(clear) = clear_group(
-                    self,
-                    world,
-                    externals,
-                    &mut receipt.external_resolutions_consumed,
-                    &mut receipt.outcome,
-                )?
-                else {
+                let Some(clear) = clear_group(self, world, resolver, &mut receipt.outcome)? else {
                     receipt.prefix = prefix;
-                    receipt.rng_state_after = random.state();
-                    return Ok(receipt);
+                    return Ok(finalize_place_region_group_receipt(
+                        receipt,
+                        world_before.as_ref(),
+                        world,
+                        random,
+                    ));
                 };
                 receipt.clear_passes.push(clear);
                 break;
             }
+        }
+    }
+}
+
+fn finalize_place_region_group_receipt(
+    mut receipt: PlaceRegionGroupReceipt,
+    world_before: Option<&World>,
+    world_after: &World,
+    random: &Random,
+) -> PlaceRegionGroupReceipt {
+    receipt.rng_draws = place_region_group_rng_draws(&receipt);
+    receipt.rng_state_after = random.state();
+    let Some(world_before) = world_before else {
+        return receipt;
+    };
+    receipt.world = Some(build_world_receipt(world_before, world_after));
+    receipt
+}
+
+fn build_world_receipt(world_before: &World, world_after: &World) -> PlaceRegionGroupWorldReceipt {
+    let checksum_before = world_before.checksum_sections();
+    let checksum_after = world_after.checksum_sections();
+    let changed_sections = checksum_before.differing_sections(&checksum_after);
+    let before_image = world_before.checksum_image();
+    let after_image = world_after.checksum_image();
+    let byte_mutations = before_image
+        .0
+        .iter()
+        .zip(&after_image.0)
+        .enumerate()
+        .filter_map(|(offset, (&before, &after))| {
+            (before != after).then_some(RegionWorldByteMutation {
+                offset,
+                before,
+                after,
+            })
+        })
+        .collect();
+    let changed_wdata_indices = world_before
+        .wdata
+        .iter()
+        .zip(&world_after.wdata)
+        .enumerate()
+        .filter_map(|(index, (before, after))| (before != after).then_some(index))
+        .collect();
+    let changed_tdata_indices = world_before
+        .tdata
+        .iter()
+        .zip(&world_after.tdata)
+        .enumerate()
+        .filter_map(|(index, (before, after))| (before != after).then_some(index))
+        .collect();
+    PlaceRegionGroupWorldReceipt {
+        checksum_before,
+        checksum_after,
+        changed_sections,
+        byte_mutations,
+        changed_wdata_indices,
+        changed_tdata_indices,
+    }
+}
+
+fn place_region_group_rng_draws(receipt: &PlaceRegionGroupReceipt) -> u32 {
+    let entry_drops = receipt.drops.iter().map(|drop| drop.rng_draws).sum::<u32>();
+    let growth_draws = receipt
+        .growth_passes
+        .iter()
+        .map(|pass| {
+            pass.base_index_draws
+                + pass.orthogs.len() as u32 * 2
+                + pass
+                    .attempts
+                    .iter()
+                    .filter_map(|attempt| attempt.drop.as_ref())
+                    .map(|drop| drop.rng_draws)
+                    .sum::<u32>()
+        })
+        .sum::<u32>();
+    receipt
+        .prefix
+        .region_cursor_draws
+        .wrapping_add(entry_drops)
+        .wrapping_add(growth_draws)
+}
+
+trait RegionExternalResolver {
+    fn resolve(
+        &mut self,
+        request: DropTileExternalRequest,
+        world: &mut World,
+    ) -> Result<Option<DropTileExternalResolution>, PlaceRegionGroupError>;
+}
+
+struct RecordedRegionExternalResolver<'a> {
+    externals: &'a [DropTileExternalResolution],
+    consumed: usize,
+}
+
+impl RegionExternalResolver for RecordedRegionExternalResolver<'_> {
+    fn resolve(
+        &mut self,
+        request: DropTileExternalRequest,
+        _world: &mut World,
+    ) -> Result<Option<DropTileExternalResolution>, PlaceRegionGroupError> {
+        let Some(actual) = self.externals.get(self.consumed).copied() else {
+            return Ok(None);
+        };
+        ensure_external_request(request, actual)?;
+        self.consumed += 1;
+        Ok(Some(actual))
+    }
+}
+
+struct OwnedRegionExternalResolver<'a> {
+    owners: &'a mut PlaceRegionGroupOwners,
+    receipts: Vec<PlaceRegionGroupOwnerReceipt>,
+}
+
+impl RegionExternalResolver for OwnedRegionExternalResolver<'_> {
+    fn resolve(
+        &mut self,
+        request: DropTileExternalRequest,
+        world: &mut World,
+    ) -> Result<Option<DropTileExternalResolution>, PlaceRegionGroupError> {
+        match request {
+            DropTileExternalRequest::MountainsAddMountain {
+                template,
+                world_x,
+                world_y,
+                pattern,
+                mountain_space,
+                forest_space,
+                rock_space,
+                coast_space,
+                start_min,
+            } => {
+                let runtime = self
+                    .owners
+                    .mountains
+                    .as_mut()
+                    .ok_or(PlaceRegionGroupError::MissingMountainRuntime { request })?;
+                let world_before = world.clone();
+                let walked_before = runtime.walked_bytes();
+                let execution = runtime
+                    .apply_add_mountain(
+                        world,
+                        AddMountainCall {
+                            template,
+                            world_x,
+                            world_y,
+                            verification_mode: pattern,
+                            mountain_space,
+                            forest_space,
+                            rock_space,
+                            coast_space,
+                            start_min,
+                        },
+                    )
+                    .map_err(PlaceRegionGroupError::InvalidMountainRuntime)?;
+                let walked_after = runtime.walked_bytes();
+                let liberr = execution.liberr;
+                self.receipts.push(PlaceRegionGroupOwnerReceipt::Mountain(
+                    MountainOwnerExecutionReceipt {
+                        execution,
+                        world: build_world_receipt(&world_before, world),
+                        mountain_walk_adler_before: crate::checksum::adler32(1, &walked_before),
+                        mountain_walk_adler_after: crate::checksum::adler32(1, &walked_after),
+                        mountain_walk_bytes_before: walked_before.len(),
+                        mountain_walk_bytes_after: walked_after.len(),
+                    },
+                ));
+                Ok(Some(DropTileExternalResolution::Mountains {
+                    request,
+                    liberr,
+                }))
+            }
+            DropTileExternalRequest::OilGoodMutation {
+                world_x,
+                world_y,
+                enabled,
+                good_type,
+                coord_x,
+                coord_y,
+            } => {
+                let goods = self
+                    .owners
+                    .oil_goods
+                    .as_mut()
+                    .ok_or(PlaceRegionGroupError::MissingOilGoodRuntime { request })?;
+                let execution = apply_world_set_oil_at(
+                    world,
+                    goods,
+                    OilGoodMutation {
+                        world_x,
+                        world_y,
+                        enabled,
+                        good_type,
+                        coord_x,
+                        coord_y,
+                    },
+                )
+                .map_err(PlaceRegionGroupError::InvalidOilGoodRuntime)?;
+                self.receipts
+                    .push(PlaceRegionGroupOwnerReceipt::OilGood(execution));
+                Ok(Some(DropTileExternalResolution::OilGoodsApplied {
+                    request,
+                }))
+            }
+            // Cliff eligibility owns an optional main-stream draw and remains
+            // an explicit typed boundary.
+            DropTileExternalRequest::CliffsPositionCliff { .. } => Ok(None),
         }
     }
 }
@@ -391,17 +913,14 @@ fn apply_drop_with_ordered_external(
     world: &mut World,
     random: &mut Random,
     invocation: RegionDropTileInvocation,
-    externals: &[DropTileExternalResolution],
-    consumed: &mut usize,
+    resolver: &mut dyn RegionExternalResolver,
     outcome: &mut PlaceRegionGroupOutcome,
 ) -> Result<Option<DropTileReceipt>, PlaceRegionGroupError> {
     let external = if let Some(request) = group.drop_tile_external_request(invocation) {
-        let Some(actual) = externals.get(*consumed).copied() else {
+        let Some(actual) = resolver.resolve(request, world)? else {
             *outcome = PlaceRegionGroupOutcome::ExternalResolutionRequired { request };
             return Ok(None);
         };
-        ensure_external_request(request, actual)?;
-        *consumed += 1;
         Some(actual)
     } else {
         None
@@ -447,8 +966,7 @@ fn grow_once(
     call: PlaceRegionGroupCall,
     initial_x: i32,
     initial_y: i32,
-    externals: &[DropTileExternalResolution],
-    consumed: &mut usize,
+    resolver: &mut dyn RegionExternalResolver,
     outcome: &mut PlaceRegionGroupOutcome,
 ) -> Result<RegionGrowthPassReceipt, PlaceRegionGroupError> {
     let len = group.tiles.items.len();
@@ -457,6 +975,7 @@ fn grow_once(
     } else {
         0
     };
+    let base_index_draws = u32::from(len > 1);
     let mut base_order = Vec::with_capacity(len);
     let mut orthogs = Vec::with_capacity(len);
     let mut attempts = Vec::new();
@@ -493,12 +1012,13 @@ fn grow_once(
                     group_index: call.group_index,
                 };
                 let Some(drop) = apply_drop_with_ordered_external(
-                    group, world, random, invocation, externals, consumed, outcome,
+                    group, world, random, invocation, resolver, outcome,
                 )?
                 else {
                     attempts.push(attempt);
                     return Ok(RegionGrowthPassReceipt {
                         selected_index,
+                        base_index_draws,
                         base_order,
                         orthogs,
                         attempts,
@@ -510,6 +1030,7 @@ fn grow_once(
                 if placed {
                     return Ok(RegionGrowthPassReceipt {
                         selected_index,
+                        base_index_draws,
                         base_order,
                         orthogs,
                         attempts,
@@ -522,6 +1043,7 @@ fn grow_once(
     }
     Ok(RegionGrowthPassReceipt {
         selected_index,
+        base_index_draws,
         base_order,
         orthogs,
         attempts,
@@ -604,8 +1126,7 @@ fn reject_growth_candidate(
 fn clear_group(
     group: &mut TerrainGroup,
     world: &mut World,
-    externals: &[DropTileExternalResolution],
-    consumed: &mut usize,
+    resolver: &mut dyn RegionExternalResolver,
     outcome: &mut PlaceRegionGroupOutcome,
 ) -> Result<Option<ClearRegionGroupReceipt>, PlaceRegionGroupError> {
     let mut receipt = ClearRegionGroupReceipt::default();
@@ -619,7 +1140,7 @@ fn clear_group(
         }
         world.wdata_mut(x, y).flags &= !(wflag::ROCKS | wflag::FOREST);
         let request = oil_request(x, y, false);
-        let Some(()) = consume_oil_external(request, externals, consumed, outcome)? else {
+        let Some(()) = consume_oil_external(request, world, resolver, outcome)? else {
             return Ok(None);
         };
         receipt.external_requests.push(request);
@@ -642,8 +1163,7 @@ fn place_oil_deposits(
     group: &TerrainGroup,
     world: &mut World,
     requested: i32,
-    externals: &[DropTileExternalResolution],
-    consumed: &mut usize,
+    resolver: &mut dyn RegionExternalResolver,
     outcome: &mut PlaceRegionGroupOutcome,
 ) -> Result<Option<PlaceOilDepositsReceipt>, PlaceRegionGroupError> {
     let mut receipt = PlaceOilDepositsReceipt {
@@ -672,7 +1192,7 @@ fn place_oil_deposits(
         }
         if qualifies {
             let request = oil_request(x, y, true);
-            let Some(()) = consume_oil_external(request, externals, consumed, outcome)? else {
+            let Some(()) = consume_oil_external(request, world, resolver, outcome)? else {
                 return Ok(None);
             };
             receipt.external_requests.push(request);
@@ -700,16 +1220,17 @@ fn oil_request(x: i32, y: i32, enabled: bool) -> DropTileExternalRequest {
 
 fn consume_oil_external(
     request: DropTileExternalRequest,
-    externals: &[DropTileExternalResolution],
-    consumed: &mut usize,
+    world: &mut World,
+    resolver: &mut dyn RegionExternalResolver,
     outcome: &mut PlaceRegionGroupOutcome,
 ) -> Result<Option<()>, PlaceRegionGroupError> {
-    let Some(actual) = externals.get(*consumed).copied() else {
+    // The resolver has no RNG handle: `World::set_oil_at` consumes no main
+    // stream word, and the type boundary makes an accidental draw impossible.
+    let Some(actual) = resolver.resolve(request, world)? else {
         *outcome = PlaceRegionGroupOutcome::ExternalResolutionRequired { request };
         return Ok(None);
     };
     ensure_external_request(request, actual)?;
-    *consumed += 1;
     Ok(Some(()))
 }
 
