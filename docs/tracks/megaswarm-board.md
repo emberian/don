@@ -1746,3 +1746,353 @@ move-near lane used: `re/decomp-all/` is capped at 8,192 body bytes by
 re/scripts -postScript DecompileOne.java 00617c10 900 <out>` — ~40 s, 1,228 lines. Result
 dropped at `re/decomp-all/00617c10.c` (gitignored; local corpus repair, not a commit).
 `00617c10` was one of the 39 `skipped_large` rows in `re/decomp-all/MANIFEST.jsonl`.
+
+### lane: air-launch (`closure/group: scramble` + `closure/group: launch_patrol`)
+
+Claimed `cv task` rows: `019fef1a-24db` `closure/group: scramble`, `019fef1a-237c`
+`closure/group: launch_patrol`.
+
+**Selection criterion (delegates graph, not theme).** These are the only two unclaimed red
+rows that are simultaneously (a) `delegates: &[]` — closed with no outbound edge at all,
+(b) on the wire (`Port::Orders`, so a live opcode dispatches them), and (c) not downstream of
+`Unit::come_out` or `Group::action_move_near`. Every other `delegates: &[]` red row is either
+`NotOnTheWire` (`alarm_peasant`, `air_attack_ground`) — which cannot reach `Port::Complete`
+by construction, the same reason `hotkey` sits red — or blocked on `Unit::come_out`
+(`transport`, `eject_all`). The two also share one body: `Group::action_scramble`
+`0x007111C0` and `Group::action_launch_patrol` `0x00703580` run the *same* contained-object
+walk and the *same* two install branches, so they are one derivation, not two.
+
+Files I will write:
+
+- `crates/don-sim/src/systems/air_launch_receivers.rs` — **new module.** The recovered
+  containment walk, member predicates, launch-cost selection and the two install branches
+  shared by `action_scramble` and `action_launch_patrol`.
+- `crates/don-sim/tests/air_launch_receivers.rs` — **new test file.**
+- `crates/don-sim/src/command.rs` — **minimal hunks only**: the `"scramble"` and
+  `"launch_patrol"` arms of `Action::run_entered`, a `#[path]` module declaration next to
+  `group_action_entry` / `group_move_near_split`, and new **defaulted, fail-closed** `Fleet`
+  reads. **`systems/mod.rs` is NOT touched.**
+- `crates/don-sim/src/command_tables.rs` — the `port`/comment of those two rows only.
+- `docs/mechanics/group-air-launch-receivers.md` — **new doc.**
+
+NOT touching: `tick.rs`, `order_dispatch.rs`, `leaders.rs`, `groups_guys.rs`,
+`systems/patrol.rs`, `systems/air_containment_host.rs`, `systems/group_action_entry.rs`,
+`systems/mod.rs`, `crates/don-env/**`, any crate other than `don-sim`.
+
+### lane: decomp-backfill (`re/decomp-all/` corpus repair + generated-artifact cap audit)
+
+Files I will write:
+
+- `re/scripts/DecompileList.java` — **new script** (tracked). Backfill companion to
+  `BulkDecomp.java`: decompiles an explicit list of entry points with a real per-function
+  budget and emits a BulkDecomp-shaped JSONL manifest.
+- `re/decomp-all/*.c` and `re/decomp-all/MANIFEST.jsonl` — **gitignored** (`.gitignore:36`).
+  Local corpus repair; nothing here is committable.
+- `docs/derivation/decomp-corpus-backfill.md` — **new doc.**
+
+NOT touching: every crate, `schema/**`, `tools/**`, any other doc.
+
+**No Ghidra lock contention:** I copied `re/ghidra` to three lane-private paths under the
+session scratchpad and ran `analyzeHeadless … -readOnly` against those. The shared
+`re/ghidra` was never opened.
+
+### lane: audit-tick — ADVERSARIAL AUDIT of the 22 "complete" tick steps
+
+Not an implementation lane. Target: every row of `schema/simulation-closure.json`
+`domains.tick` with `complete: true` (ids 0,1,2,3,5,6,7,9,10,14,16,17,18,19,20,21,23,24,25,26,
+27,28), re-derived from `Game::do_frame` `0x00591EF0` (1,879 B) rather than from the tree.
+
+Files I wrote: `crates/don-sim/src/schedule.rs` — **two `note:` strings only** (rows 10 and 24),
+plus the audit comments above them. No `status`, no `name`, no `va` changed; the ledger counts
+are untouched deliberately. Nothing else edited anywhere.
+
+Two `cv task` rows opened: `019fefaa-35fa…` (tick 10) and `019fefaa-56ea…` (tick 24).
+
+#### FINDING 1 — step 10 is not "AI diplomacy chat". It is the rush-rules mass war declaration.
+
+`schedule.rs:84` names row 10 `"AI diplomacy chat"`, `va: None`, `StepStatus::OutOfScope`,
+note `"Leader::set_diplo -> chat_to_local"`. `tools/simulation-closure.py:83` counts
+`out_of_scope` as `complete`, so this row is one of the 22.
+
+The block is `0x0059225E..0x0059241C`, between NetDaemon call 1 and call 2. Measured:
+
+- Gate: `Game+0x32` (= `GameInfo::rush_rules`, `GameInfo` is `Game+0x0C`, `rush_rules` at
+  `GameInfo+38`) `!= 0` **and** `>= 9` unsigned. Then `imul ecx, eax, 0x58` /
+  `[0xE80088 + ecx + 0x3C]` `* 0x384` compared against `Game::frame`. `0x00E80088` is
+  `rush_rules` `0x00E80078` `+0x10`, i.e. the `Array<…>` element pointer — stride `0x58`,
+  minutes at `+0x3C`, and `0x384 = 900 = 60 * 15` frames. **This is the No-Rush timer.**
+- Announcement: `MessageWin::add_message` `0x007E9FB0` with `loc_str_array_orig+0x5F50`, then
+  `SoundGlobal::play(0x74)` `0x0097F770`.
+- Then gated on `GameInfo::team_style` (`Game+0x24`) not in `{0, 8, 0xB}`, outer loop over the
+  eight `leaders` (`0x00E3A390`, stride `0x6EEC`) with `flags & 1`:
+  - **`mov dword [ebx+0x1F4], 0` at `0x0059232B` — `LeaderData::attrition_stamp = 0`**, and it
+    runs *before* the `LeaderData::is_neutral` `0x006EBAE0` test, so every present leader gets it.
+  - If not neutral, inner loop over all eight leaders: skip self, skip `LeaderData::is_ally`
+    `0x006EDB50`, skip `LeaderData::is_enemy` `0x006EBAA0`, and otherwise
+    **`Leader::set_diplo(other, 0)` `0x006EC6A0` at `0x005923A8`** — `0` is
+    `leader_set_diplo::Relation::War`. `chat_to_local` `0x006EC520` is the *announcement after*
+    the state change, exactly the `Leader::process_taunt` error again.
+  - Under `team_style == 7` there is an extra skip on the inner leader's
+    `LeaderData::get_player` `0x006EC0F0` → `player.flags & 1 && player+0x78 == 8`.
+
+Blast radius: at frame `rush_minutes * 900` retail flips every neutral ordered leader pair to
+WAR and resets eight attrition stamps. A port that does nothing there has different diplomacy,
+different attrition timing, and therefore different combat legality for the rest of the match —
+and the closure ledger currently calls that "complete". **Row 10 must become `Stub`.** I did not
+flip it: that moves `tick 22/29 -> 21/29` and `don-closure`'s count assertions, which needs a
+claimed row.
+
+#### FINDING 2 — step 24 `TurnControl::check_cannon_time` is a *child of step 23*, and the port runs it every frame.
+
+`schedule.rs` idx 24 is `Implemented`, note "75-frame cannon-time expiry and pending speed
+transition", listed as a sibling of step 23. Measured at `0x005924CF`:
+
+```
+005924cf  mov  eax, [ebx+0x550]      ; Game::frame, post-increment
+005924d5  mov  ecx, 0xf
+005924da  cdq ; idiv ecx ; test edx, edx
+005924df  jne  0x5924ec
+005924e1  inc  dword [ebx+0x560]     ; step 23, Game::tick++
+005924e7  call 0x9579e0              ; step 24 -- INSIDE the branch
+```
+
+`crates/don-sim/src/tick.rs` step 24 calls `self.cannon_time.check(self.world.frame)`
+unconditionally. The *predicate* is right (`TurnControl+0x24 >= 0` and
+`frame - TurnControl+0x28 > 0x4A`, verified in `0x009579E0`), but retail can only observe it on
+multiples of 15, so the port expires the timer — and applies the pending speed transition from
+`TurnControl::end_cannon_time` `0x00956470` — **up to 14 frames early**. `tick.rs` is a live
+lane's file; reported, not fixed. The test
+`tick.rs::cannon_time_expires_on_the_exact_post_increment_frame` freezes the wrong cadence.
+
+#### FINDING 3 — steps 11, 13 and 18 have a gate the schedule records nowhere.
+
+`0x0059243F`, `0x00592457`, `0x00592492`: all three are `test byte [eax+0x821], 8` /
+`jne` — i.e. `Leaders::strategy_all`, `Armies::process_all` and `Achieve::capture_data` run
+**only when semaphore bit 11 is clear**. Bit 11 is unnamed in
+`victory_score::game_sem`. 11 and 13 are stubs (not my target) but whoever takes them needs the
+gate; 18 is `out_of_scope` and unaffected.
+
+Related: the step 4 second call, step 5 and step 6 sit under one shared
+`bit 12 (PLAYBACK) || bit 17 (SCENARIO_RULES)` gate at `0x005920BE`, and step 5's own gate is
+bit 17 alone — so the note "Conquer-the-World only" describes the callee, not the gate.
+
+#### FINDING 4 — one call in the tick has no row at all.
+
+`0x00591F11..0x00591F28`: `mov ecx, [0xE335C8]` (`NetSys *netsys`), `test ecx, ecx`,
+`push [ebx+0x550]`, `call [eax+0xB0]`. Slot `0xB0` of the 65-slot `NetSys` vtable is
+`log_set_frame` (`crates/netsys-shim/src/abi.rs`). It is the **first** thing `Game::do_frame`
+does and it is not in `DO_FRAME`. Diagnostic, correctly out of scope in substance — but
+`schedule.rs`'s header claim "this list is the whole tick" is true only of *direct* calls.
+
+#### CLEARED — audited and sound
+
+| row | what I checked | verdict |
+|---|---|---|
+| 0 `AutoSave::restore` | gate `Game+0x821 & 0x20` (bit 13) at `0x00591FA1`; symbol at `0x005A20C0` | sound (it also calls `GameLog::end_frame` in the same gate, unrecorded, harmless) |
+| 1 `GameLog::begin_frame` | unconditional at `0x00591FC0`; RNG reachability depth 4 → only `GameLog::say_checksum` (reads the stream, does not draw) | sound |
+| 2 `Random::get` artificial lag | **`mov ecx, [0xEB697C]` at `0x00592028` — `internal_random`, NOT `GameAccess::game_random 0x00C06184`.** Args are `Game+0x9DC/+0x9E0` = `test_delay_min/max`. | **"NOT a sim draw" is verified true** |
+| 3 `issue_player_speed` | `(Game::frame & 7) == Console::play` (`Console+0x2A0`, PDB-confirmed) at `0x0059206E`; no RNG within depth 4 | sound |
+| 5 `place_reinforcements` | gate semaphore bit 17; no RNG within depth 4 | sound (see finding 3 on the note wording) |
+| 6 `TutorialPromptWin::exec` | gate `player_prompted == 0 && bit 19 && Game::tick >= 0x12D` + a prefs read; writes `Game::playing = 0` / `auto_game_type` on dismissal | sound, session control |
+| 7 `SteamLeaderboards::UploadScore` | gate `Game+0x4A4 && !Game+0x4A5 && Game::tick > 0x3B` | sound |
+| 9 `NetDaemon::process_all` | **exactly five direct call sites** — `0x00592259`, `0x0059242B`, `0x00592435`, `0x0059246A`, `0x00592483`, all `ecx = netdaemon 0x00C120D0` | "5x inside one tick" verified |
+| 14 `Objects::process_all` | rotation is `(Game::frame + i) % 10` over ten owner slots gated on `leaders[i].flags & 1`; build/wall bands are eight slots, builds before walls. `leaders` is 283,980 B = **ten** `Leader` slots + 148, so slots 8/9 are real, not overruns. `sparse_object_bands_authority_frontier::traversal_into` matches exactly | traversal sound; see caveats below |
+| 16 `GraphicEvents::process` | no direct callees at all (fully virtual) — RNG sweep is *not* informative here | accepted, unverified |
+| 17 `Leaders::end_process_all` | outer gate is `leader_flags & 2` at `0x006ED08x` and the inner arm is `LeaderData+0x7E8 == 0`; port uses `flag::PROCESS` and `pop_issues == 0` | sound |
+| 18 `Achieve::capture_data` | gate bit 11 clear; 66 nodes, no RNG | sound |
+| 19 `Leader::process_event_frame` | do_frame's loop gate is `leader_flags & 1`; port uses `flag::IN_GAME` and has an explicit test that it is IN_GAME and not PROCESS | sound |
+| 20 `Game::frame++` | `inc dword [ebx+0x550]` at **`0x005924BF`** exactly, after the step-19 loop and before `OrdersMemManager::cycle` | VA and ordering both exact |
+| 21 `OrdersMemManager::cycle` | loop `0x00EB4394 → 0x00EB4714` stride `0x20` = **28** pools; it drains each pending-free list into its free array (grow + `memcpy`), it does not "flip" | count verified; wording loose |
+| 23 `frame % 15` | `0x005924CF`, signed `idiv 15` on the **post**-increment frame, then `inc [ebx+0x560]` (`Game::tick`) | exact |
+| 25 `SaveGame::save_game` | `Game::auto_save_load != 0 && frame != 0 && frame % auto_save_load == 0` (**unsigned** `div`), then `SaveGame::save_game(name,1)` **and** `LoadGame::load_game(name)` — the save/reload determinism harness | sound |
+| 26 `GameLog::end_frame` | `call 0x9329D0` at `0x00592581`, unconditional | sound |
+| 27 `Game::process_end_game` | gate `Game+0x822 & 0x40` = semaphore bit 22 = `VICTORY_RESOLVED`; and the callee **clears it** (`PTR+0x822 &= 0xBF`, `re/decomp-all/00591ce0.c:83`) plus `if (Game+0x81C == 0) Game+0x81C = 2` | "consumes semaphore bit 22" verified exactly |
+| 28 `Scene::process_capture_sequence` | called unconditionally at the tail; gate is internal; 34 nodes, no RNG | sound |
+
+Also verified: every one of the 27 VA-carrying tick rows resolves to the symbol its row names
+(`tools/pdb/lookup.py`, all 27), and **none** of them is `skipped_large` in
+`re/decomp-all/MANIFEST.jsonl` — all `status: ok`. `Game::do_frame` has exactly one caller
+(`Game::loop`), as `schedule.rs` claims.
+
+#### Two caveats inside step 14, which is `Implemented`/complete
+
+Neither is a false claim — both are already written down in the port — but they are inside a row
+the ledger counts as complete, so they should be visible here:
+
+1. **The wildlife spawn draws `game_random` and we skip it.** `0x0065DFAD` and `0x0065DFD9` are
+   both `mov ecx, [0xC06184]` + `call Random::get(0, 0xFFFF)` — the **main sim stream**. Every
+   32 frames, `min(10, (map_x*map_y)/100) - (live owner-9 objects of type 0x192)` iterations,
+   two draws each (one per axis, skipped if that map dimension `<= 1`), then
+   `Objects::init_unit(9, 0x192, …)` `0x0065E0C0` and `Unit::add_air_patrol_order` `0x005E4350`.
+   `tick.rs` counts these frames as `Gap::ObjectsWildlifeSpawn` / `rng_draws_missing` and draws
+   nothing. Honest, and still a per-32-frame RNG-stream divergence living inside a "complete" row.
+2. **The `frame & 0x3F` herd scheduler is ported exactly** — `(frame/64) % max(herd_count, 5)`,
+   bounded by `count`, then `herd->[0x1A] & 1`, then `Herd::process` `0x00741760`.
+   `casters_animals::scheduled_herd_index` matches instruction for instruction, including the
+   five-slot floor. Cleared. (In retail this block is nested inside the `& 0x1F` one; that is a
+   compiler artefact, `frame & 0x3F == 0` implies `frame & 0x1F == 0`, so the port's two
+   independent `if`s are equivalent.)
+3. **The Build/Wall bands' dead-object arm has no port and no `Gap` row.** Retail: `flags & 1`
+   set → `Object::process` (vt `+0x9C`); **clear** and `hold_frames (+0x32) != 0` → query the
+   type (vt `+0xAC`), and if `type+0x60 & 0x4000` call `Build::process_ejection` `0x006201E0`,
+   then decrement `hold_frames`. The unit band's equivalent arm *is* ported (tombstone hold
+   decrement); the Build/Wall one is not, and `enum Gap` has no entry for it. The code comment in
+   `world.rs` says Build/Wall tombstones "remain unadmitted", so this is disclosed — just not in
+   the gap ledger.
+
+#### Not checked, and why
+
+- Step 16 `GraphicEvents::process` and the `Object::process` virtual bodies: my RNG-reachability
+  sweep follows **direct** `E8` calls only, so a fully-virtual body reports "no RNG" vacuously.
+  Read that column as "no direct path", not "no path".
+- The `Game+0xC5/+0xC6` inline block at the tick tail (no row, correctly): it increments
+  `Player::accum_frames_zoomed_in` / `accum_frames_zoomed_out` per frame off `Camera::zoom_level
+  == 6 or 5`. Worth recording as *evidence* rather than a defect — a camera-dependent write into
+  `GameInfo::player[]` that retail tolerates proves the checksum walk cannot cover
+  `Player::accum_*`.
+- Steps 4, 8, 11, 12, 13, 15, 22 are `Stub` and outside this audit's target.
+
+**Tooling note for the next auditor:** `capstone`/`pefile` are not in the system `python3`; run
+`uv run --quiet --with capstone --with pefile python tools/pdb/callers.py …`. Do not name a local
+disassembly helper `dis.py` — it shadows the stdlib module capstone imports and fails with a
+bogus circular-import error.
+
+### lane: audit-op — adversarial audit of the 47 `Port::Complete` opcodes + `command_tables.rs`
+
+`cv task` row: `019fefab-63ae-7013-b907-63a2856b9596` (audit lane, opened by me).
+**Report-only.** I edited no crate file. Everything below is binary/PDB ground truth.
+
+#### CLEARED — the whole mechanical layer of `command_tables.rs` is correct
+
+- **All 82 `OpDef.method_va`** resolve to the exact `CommandPackage::process_*` the row names.
+- **All 42 `ActionDef.va`** resolve to the exact `*::action_*` the row names, and every
+  `ActionDef.size` equals the PDB `S_GPROC32` size. No fabricated symbol, no folded-COMDAT
+  mixup.
+- **All 80 fixed `WireLen` values** equal (a) the retail handler's `return` value and
+  (b) `sizeof()` of the matching `*Command` struct in `schema/types.json`. The three
+  `Variable` rows match their formulas too (0 → `3+2n`, 51 → `8n+6`, 68 → `2n+0x13`).
+- **Opcode 74's `action: Some("cheat_view_all")` is real**, not a stray label:
+  `process_turn_data` calls `Game::action_cheat_view_all` `0x00592CD0` at **`0x00943E2E`**.
+- **Opcodes 46/47 (`buy`/`sell`) are honestly modelled**, including the asymmetry a lane could
+  easily have flattened: `process_buy` calls `Leader::action_buy` `0x006CFA20`, but
+  `process_sell` `0x009468A0` does **not** call `Leader::action_sell` — it inlines a *different*
+  gate (`has_tribe_bonus(4) || has_preq(0x2AD BUY_SELL)`, then `has_market` `0x006D5410`, where
+  `action_buy` uses `can_buy_sell` `0x006D53E0`), and only BUY has the `flags & 4` x10/x100 arm.
+  `direct_entity_command_plans.rs` already encodes all of it. Cleared.
+- **Opcode 42 (`reject`) `Complete` vs opcode 41 (`accept`) `StateWired` is defensible**, even
+  though both terminate in the same 3,988-byte `Leader::action_respond` `0x006D03C0`:
+  `diplomacy_command_plans.rs` plans modes 0/2 and leaves mode 1 as an open boundary. Its mode
+  selector matches retail exactly (`process_reject` reads `leaders[who].proposals[whom]+0x00`,
+  not `get_diplo`). Cleared.
+- **Opcode 72 `CameraCommand` (1,296,016 in corpus) really is presentation.** Every effect in
+  `process_camera` `0x00943B00` is behind `[[0xC06210]+0x2A0] == pkg->play` and lands in
+  `Camera` `0x00C06200` (`zoom_to_level` / `pan_to`). Cleared.
+- **`action_unitmask`/`action_buildmask` "the second wire dword is unread" is verified**, and
+  stronger than the comment says: `Group::action_unitmask` `0x006FCB90` is `ret 8` (two stack
+  args), reads `[ebp+8]` (`mask`) once at `0x006FCBA5`, and then **overwrites that same stack
+  slot with the loop-carried set/clear boolean** at `0x006FCBB8`. `[ebp+0xC]` (`set`) is never
+  referenced. Same shape in `action_buildmask` `0x006FC9A0`.
+
+#### FINDING 1 — `plan_ignore_order_kills` has **no production caller**, and 7 `Port::Complete` rows silently skip the prelude
+
+Binary ground truth: `ScenarioData::ignore_orders` `0x00CC02F8` is referenced from **34 of the
+42** `Group::action_*` bodies (full list by `imm32` xref over `.text`; the eight without it are
+`begin`, `buildmask`, `form`, `gather_point`, `hotkey`, `move_to`, `stance`, `unitmask` — so
+op-move's "nine more actions than the port knew" undercounts by a lot).
+
+`crates/don-sim/src/systems/groups_guys.rs:2414` `plan_ignore_order_kills` is called from
+**nothing but its own three unit tests** (`groups_guys.rs:4567/4627/4670`). `group_action_entry`
+has 9 entry programs, 8 of which carry `EntryGate::IgnoreOrdersPrune` (`move_near`, `move_to`
+via `dispatch_program`, `attack`, `siege_attack`, `swarm_around`, `patrol`, `launch_patrol`,
+`attack_ground`; `form` correctly has none) — and that gate only *refuses*
+(`group_action_entry.rs:358` `if facts.ignore_orders && !facts.ignore_orders_prune_committed`).
+It never runs the prelude. The other **26** of the 34 have neither the prelude nor a gate.
+
+Seven of the ungated ones are `Port::Complete`: **`disband`, `follow`, `halt`, `recall`,
+`return`, `set_transport`, `stop_spell`** (prelude at `0x0070E28E`, `0x006FD557`, `0x0070D0C8`,
+`0x006FA7FD`, `0x006FAD67`, `0x007024B6`, `0x006FD7A8` respectively). With a scenario that arms
+`ignore_orders`, retail runs a `Group::kill(o, who, 0, 0)` sweep over
+`0x00ED6574 + who*0x1C` / `0x00ED6580 + who*0x1C` **before** the action body; the port does not,
+and reports nothing. `ObjectTable::apply_stop_spell_transaction` / `apply_follow_transaction` /
+`apply_group_set_transport_transaction` each begin
+`let group_after_ignore_orders = request.group.clone();` — the variable is *named* for a prelude
+that never ran (`command.rs:1966`, `:2024`, `:2447`).
+
+Blast radius: scenario play only, but it is silent, and it sits inside rows the ledger counts
+as complete. The honest minimum is a fail-closed gate on all 34, matching what op-move did for 9.
+
+#### FINDING 2 — opcode 68 `ChatCommand` is `Complete` + `Presentation`, and it reaches the console executor
+
+`crates/don-replay/src/wire.rs:118` classifies `0x44` as `CommandClass::Presentation`
+("local view / UI, no walked state") and `command_tables.rs:466` ports it `InlinePort::Complete`.
+
+`CommandPackage::process_chat` `0x009454F0`, on the addressed (`bits != 0xFFFFFFFF`) branch with
+`Game::semaphore` byte `+0x820 & 4 == 0`, compares the chat text against `get_cheat_string`
+`0x00497C00`, and on a match does `Player::accum_cheated++` (`Game + play*0x8C + 0xCB`) and then
+calls **`ConsoleWin::parse_cmd` `0x007D6470` at `0x00945810`** — the *same* executor
+`process_console_cmd` calls at `0x0094405E`, which is exactly why opcode 78 is `StateWired`.
+The non-cheat branch runs a per-leader broadcast loop over `0x00E3A390` (stride `0x6EEC`) with a
+`diplos == 2` filter, calling `Leader::receive_chat` `0x006B8AB0` / `Leader::receive_taunt`
+`0x006B8BF0` / `Taunts::play` `0x00980CF0`.
+
+`Bridge::process_chat` (`command.rs:3963`) decodes the wire and pushes **one
+`CommandSideEffectReceipt::Chat`**. None of the above is modelled. This is the FORM pattern:
+an observation mirror counted as `Complete`, plus a `Presentation` class that is false whenever
+cheats are enabled. Corpus frequency is low, but the class claim is what other lanes budget off.
+
+#### FINDING 3 — `0x4A` / `0x4F` settled: both are `Presentation` on this repo's own definition
+
+`wire.rs:98` defines `Sim` as "mutates simulation state **the checksum walks**". The 15 walkers
+(`check_all.rs:96..209`) are units/builds/walls/ammo/deaths/groups/guys/leaders/cities/items/
+goods/world/rules/scenario_data/script_run_time. **There is no `Game`, `GameInfo` or
+`TurnControl` channel at all.**
+
+- **`0x4F PlayerSpeedCommand` (1,011,134)** — `process_player_speed` `0x00943730` is, at
+  instruction level, exactly eight `add dword ptr [Game + play*0x8C + N]` at
+  `0x00943834/45/56/67/78/89/9A/AE` for `N ∈ {0x48,0x4C,0x50,0x54,0x58,0x5C,0x64,0x68}`,
+  then `ret 4`. Through `GameInfo` @ `Game+0x0C` and `GameInfo::player[8]` @ `+0x38`
+  (`schema/types.json`), those are `Player::synced_frames_zoomed_in` … `synced_control_groups_
+  activated` — the exact eight `PlayerSpeedCommand` wire fields, **skipping `0x60`
+  (`synced_cheated`)**, which is also the one accum field not on the wire. Nothing else in the
+  whole 46,689-file decomp corpus touches those offsets. Not walked → Presentation.
+- **`0x4A TurnDataCommand` (1,285,782)** — writes `TurnControl` (`[0x00C06180]`, per
+  `docs/derivation/architecture.md:173`) `+0x168` bitmask and five `who*4` arrays at
+  `+0x74/+0x94/+0xB4/+0xD4/+0x114`; plus, when `ping_time & 0x80` and the sender is not the local
+  display player and `Game+0x820 & 2 == 0`, `Game::action_cheat_view_all` `0x00592CD0`. That
+  callee's only non-UI writes are `Game::semaphore` bit 1 / `Game+0x81C` and
+  `Player::accum_cheated++` (via `Game::action_cheat_warning` `0x00593200`). **Nothing there is
+  in a walked channel**, and semaphore bit 1 has no sim-side reader: the only `.text` readers are
+  `StatWin::setup_normal_entries`, `ReplayWin::on_button_redraw` and `process_turn_data`'s own
+  guard (`Game::solo_checks` only *writes* it). Not walked → Presentation.
+
+Together that is **2,296,916 corpus commands**, a bigger move than the brief's "a million".
+This corroborates the tick-audit lane's independent note that retail's own per-frame
+`Player::accum_frames_zoomed_*` write proves the checksum cannot cover `Player::accum_*`.
+
+**Do not read this as "droppable".** `docs/derivation/savegame.md:340` puts
+`[0x00C06180] +0x14..0x169` in the save chunk, so both opcodes still matter for save/load
+byte-fidelity. "Presentation for the checksum" is not "inert".
+
+#### CORPUS WARNING — `re/decomp-all/` drops call arguments, and it cost me a wrong conclusion
+
+`re/decomp-all/006ee2d0.c` (`Player::walk_data`) renders its second `DataWalk` call as
+`(**(code **)*param_1)();` — **no arguments at all**. The instructions at `0x006EE303..0x006EE30C`
+push `Player+0x39` and `Player+0x00`, i.e. it walks the entire `+0x00..+0x39` range, which
+*includes* every `synced_*` field. I concluded "synced fields unwalked" from the C, and it was
+wrong; the real reason they are unwalked is that no checksum channel visits `Game` at all
+(and `Player::walk_data` `0x006EE2D0` turns out to be **dead code** — zero references anywhere
+in the image, `.text` or vtables). Do not settle a "walked / not walked" question from the
+decompiled C alone.
+
+Second instance in the same lane: `Group::action_unitmask` is decompiled as
+`FUN_006fcb90(uint param_1)`, one argument, while the emitted body is `ret 8`.
+
+#### What I could NOT check, and why
+
+- Whether `Group::action_stance`'s (928 B) / `action_halt`'s (685 B) / `action_disband`'s
+  (693 B) host planners reproduce their bodies *step for step*. They all route through an
+  `ObjectTable` transaction that does plan, so they are not shells — but a full body-vs-planner
+  diff for those three is a lane's worth of work, not an audit spot-check.
+- `Group::action_recall` / `action_return` behaviour (group-act's rows, landed this wave) beyond
+  the ignore-orders gap above.
+- Opcode 0 `GroupCommand` (78,197) — `selection_partial`, outside the complete-47 target.

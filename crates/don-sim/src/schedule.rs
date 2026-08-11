@@ -81,8 +81,24 @@ pub const DO_FRAME: [SubsystemStep; 29] = [
         note: "per-player economy: gather, calc_wall_stats, calc_unit_stats, process_elimination, process_taunt" },
     SubsystemStep { idx: 9, name: "NetDaemon::process_all", va: Some("0x00951300"), source: "netdaemon.cpp:34",
         status: StepStatus::OutOfScope, note: "socket pump; retail calls it 5x inside one tick" },
-    SubsystemStep { idx: 10, name: "AI diplomacy chat", va: None, source: "leaders.cpp",
-        status: StepStatus::OutOfScope, note: "Leader::set_diplo -> chat_to_local" },
+    SubsystemStep { idx: 10, name: "rush-rules timer expiry", va: None, source: "leaders.cpp",
+        // Was `OutOfScope` under the name "AI diplomacy chat". `simulation-closure.py` counts
+        // `out_of_scope` as complete, so a game-defining mechanic sat inside the 22/29. It is
+        // unported: nothing in don-sim runs the timer, and `set_diplo` appears only on the
+        // wire DOW path. Flipping this moves tick 22/29 -> 21/29 on purpose.
+        status: StepStatus::Stub,
+        // AUDIT 2026-08-11: this note was wrong and the status is wrong with it. The inline
+        // block at `0x0059225E..0x0059241C` is the **rush-rules (No Rush) timer expiry**, not
+        // chat. `GameInfo::rush_rules` (`Game+0x32`) >= 9 indexes `rush_rules` (`0x00E80078`,
+        // stride 0x58, minutes at +0x3C); when `Game::frame == minutes * 900` retail zeroes
+        // every present leader's `LeaderData::attrition_stamp` (+0x1F4) and calls
+        // `Leader::set_diplo(other, 0)` -- Relation::War -- for every ordered leader pair that
+        // is neither ally nor enemy. `chat_to_local` is only the announcement afterwards.
+        // Simulation state; this row must become Stub and grow a body. Reported, not flipped:
+        // changing the status moves the closure ledger and needs its own claimed row.
+        note: "MISLABELLED [audit]: rush-rules expiry at frame == rush_rules[i].minutes*900 -- \
+               zeroes LeaderData::attrition_stamp and Leader::set_diplo(pair, WAR) for every \
+               neutral ordered pair; chat_to_local is the trailing announcement" },
     SubsystemStep { idx: 11, name: "Leaders::strategy_all", va: Some("0x006ED430"), source: "leaders.cpp:28747",
         status: StepStatus::Stub,
         note: "check_explore, plan_strategy, compute_score, diplomacy (20,348 B), check_victory" },
@@ -117,7 +133,14 @@ pub const DO_FRAME: [SubsystemStep; 29] = [
     SubsystemStep { idx: 23, name: "frame % 15 -> Game::seconds++", va: Some("0x005924CF"), source: "game.cpp",
         status: StepStatus::Implemented, note: "15 sim frames is one game second, exactly" },
     SubsystemStep { idx: 24, name: "TurnControl::check_cannon_time", va: Some("0x009579E0"), source: "turncontrol.cpp:116",
-        status: StepStatus::Implemented, note: "75-frame cannon-time expiry and pending speed transition" },
+        status: StepStatus::Implemented,
+        // AUDIT 2026-08-11: retail does NOT call this every frame. `call 0x9579E0` at
+        // `0x005924E7` sits inside step 23's `frame % 15 == 0` branch (`0x005924CF` idiv 15,
+        // `test edx,edx`, `jne 0x5924EC`), so it is a child of step 23, not a sibling.
+        // `Sim::do_frame` (`tick.rs`, step 24) runs `CannonTimeState::check` unconditionally
+        // and therefore expires up to 14 frames early. Behaviour change; reported, not fixed.
+        note: "75-frame cannon-time expiry and pending speed transition; retail calls it ONLY \
+               on the frame % 15 == 0 branch [0x005924E7], not every frame" },
     SubsystemStep { idx: 25, name: "SaveGame::save_game / LoadGame::load_game", va: Some("0x005A8220"), source: "save.cpp:1081",
         status: StepStatus::OutOfScope, note: "autosave, conditional" },
     SubsystemStep { idx: 26, name: "GameLog::end_frame", va: Some("0x009329D0"), source: "gamelog.cpp:354",
