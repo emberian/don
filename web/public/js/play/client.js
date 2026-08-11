@@ -116,7 +116,8 @@ const state = {
   localMatch: {
     available: false, code: '', token: '', seat: null, phase: 'offline',
     members: [], error: null, handoff: null, applied: false, polling: null,
-    pauseLocked: false,
+    pauseLocked: false, turn: null, lastConfirmed: null, lastAppliedStamp: -1,
+    applyingTurn: false, pendingAck: null,
   },
 };
 
@@ -1299,6 +1300,8 @@ function initializeSessionPanel() {
 }
 
 const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
+const LOCAL_MATCH_TURN_RELAY = 'empty-turn-barrier';
+const EMPTY_BROWSER_TURN_HEX = '444f4e420100';
 
 async function localMatchRequest(path, method = 'GET', body = null) {
   const init = { method, headers: {} };
@@ -1330,7 +1333,17 @@ function localMatchPublicSnapshot() {
     handoff: local.handoff ? Object.freeze({ ...local.handoff }) : null,
     applied: local.applied,
     pausedAtHandoff: local.pauseLocked && state.paused,
-    turnRelay: 'unavailable',
+    turnRelay: LOCAL_MATCH_TURN_RELAY,
+    turn: local.turn ? Object.freeze({
+      ...local.turn,
+      submitted: Object.freeze(local.turn.submitted.slice()),
+      agreement: local.turn.agreement ? Object.freeze({
+        ...local.turn.agreement,
+        packages: Object.freeze(local.turn.agreement.packages.map((package_) =>
+          Object.freeze({ ...package_ }))),
+      }) : null,
+    }) : null,
+    lastConfirmed: local.lastConfirmed ? Object.freeze({ ...local.lastConfirmed }) : null,
   });
 }
 
@@ -1344,8 +1357,14 @@ function renderLocalMatchPanel() {
   $('local-match-name').disabled = joined;
   $('local-match-ready').disabled = !joined || local.phase !== 'lobby' ||
     local.members.find((member) => member.seat === local.seat)?.ready;
+  const turnOpen = local.phase === 'started' && local.applied && local.turn?.phase === 'waiting' &&
+    local.turn.stamp === state.mod.frame && !local.turn.submitted[local.seat];
+  $('local-match-turn').disabled = !turnOpen;
+  $('local-match-turn').textContent = local.turn
+    ? `ready turn ${local.turn.stamp}` : 'ready next empty turn';
   $('local-match-leave').disabled = !joined || local.phase === 'starting';
   $('session-new').disabled = local.pauseLocked;
+  $('session-activate').disabled = local.pauseLocked;
   if (local.code) $('local-match-code').value = local.code;
   $('local-match-roster').textContent = local.members.length
     ? local.members.map((member) =>
@@ -1362,8 +1381,13 @@ function renderLocalMatchPanel() {
   } else if (local.phase === 'starting') {
     status = 'both ready · native directory StartGame and transport MatchStart are converging…';
   } else if (local.phase === 'started' && local.handoff) {
+    const turnStatus = local.turn?.phase === 'waiting'
+      ? `turn ${local.turn.stamp} waiting for both seats`
+      : local.turn?.phase === 'agreeing'
+        ? `turn ${local.turn.stamp} converging through native TurnPackage relay…`
+        : `turn ${local.turn?.stamp ?? '?'} agreed · applying and checking browser state…`;
     status = `MatchStart confirmed · epoch ${local.handoff.epoch} · ` +
-      `${formatSeed(local.handoff.seed)} · paused frame 0 · browser turn relay unavailable`;
+      `${formatSeed(local.handoff.seed)} · paused frame ${state.mod.frame} · ${turnStatus}`;
   } else if (local.phase === 'failed') {
     status = `local MatchStart refused: ${local.error || 'native lifecycle failed'}`;
   } else {
@@ -1382,6 +1406,11 @@ function adoptLocalLobby(result) {
   local.members = lobby.members.slice();
   local.error = lobby.error;
   local.handoff = lobby.handoff;
+  local.turn = lobby.turn;
+  local.lastConfirmed = lobby.lastConfirmed;
+  if (local.pendingAck && local.lastConfirmed?.stamp === local.pendingAck.stamp) {
+    local.pendingAck = null;
+  }
   renderLocalMatchPanel();
   return localMatchPublicSnapshot();
 }
@@ -1414,6 +1443,77 @@ async function readyLocalMatch() {
   return localMatchPublicSnapshot();
 }
 
+async function readyLocalTurn() {
+  const local = state.localMatch;
+  if (!local.code || !local.token || local.phase !== 'started' || !local.applied) {
+    throw new Error('no applied local MatchStart is ready for a turn');
+  }
+  if (!local.turn || local.turn.phase !== 'waiting' || local.turn.stamp !== state.mod.frame) {
+    throw new Error('the next empty-input turn barrier is not open at this frame');
+  }
+  const result = await localMatchRequest(
+    `/api/local-match/lobbies/${local.code}/turn`, 'POST', {
+      token: local.token, stamp: local.turn.stamp,
+    });
+  adoptLocalLobby(result);
+  await maybeApplyLocalTurn();
+  scheduleLocalMatchPoll();
+  return localMatchPublicSnapshot();
+}
+
+function validateAgreedLocalTurn(turn) {
+  if (!turn || turn.phase !== 'agreed' || !Number.isInteger(turn.stamp) ||
+      !turn.agreement || turn.agreement.stamp !== turn.stamp ||
+      !/^[a-f0-9]{16}$/.test(turn.agreement.hash ?? '') ||
+      !Array.isArray(turn.agreement.packages) || turn.agreement.packages.length !== 2) {
+    throw new Error('native turn relay exposed a malformed package agreement');
+  }
+  for (let play = 0; play < 2; play++) {
+    const package_ = turn.agreement.packages[play];
+    if (package_?.stamp !== turn.stamp || package_?.play !== play ||
+        package_?.payload !== EMPTY_BROWSER_TURN_HEX) {
+      throw new Error('native turn relay exposed nonempty or misordered browser input');
+    }
+  }
+}
+
+async function maybeApplyLocalTurn() {
+  const local = state.localMatch;
+  if (local.phase !== 'started' || !local.applied || !local.pauseLocked ||
+      local.applyingTurn || local.turn?.phase !== 'agreed') return;
+  local.applyingTurn = true;
+  try {
+    const turn = local.turn;
+    validateAgreedLocalTurn(turn);
+    if (local.lastAppliedStamp < turn.stamp) {
+      if (state.mod.frame !== turn.stamp) {
+        throw new Error(`paused Sim frame ${state.mod.frame} does not match agreed turn ${turn.stamp}`);
+      }
+      advanceSimulationFrame();
+      local.lastAppliedStamp = turn.stamp;
+      local.pendingAck = {
+        stamp: turn.stamp,
+        frame: state.mod.frame,
+        digest: state.mod.digest(),
+        rngState: state.mod.rngState >>> 0,
+      };
+      renderHud();
+      renderObjectivesPanel();
+      renderReplayPanel();
+    }
+    if (!local.pendingAck || local.pendingAck.stamp !== turn.stamp) {
+      throw new Error(`turn ${turn.stamp} has no exact browser state acknowledgement`);
+    }
+    const result = await localMatchRequest(
+      `/api/local-match/lobbies/${local.code}/turn-ack`, 'POST', {
+        token: local.token, ...local.pendingAck,
+      });
+    adoptLocalLobby(result);
+  } finally {
+    local.applyingTurn = false;
+  }
+}
+
 async function pollLocalMatch() {
   const local = state.localMatch;
   if (!local.code || !local.token) return localMatchPublicSnapshot();
@@ -1423,13 +1523,14 @@ async function pollLocalMatch() {
   if (local.phase === 'started' && local.handoff && !local.applied) {
     applyLocalMatchHandoff(local.handoff);
   }
-  if (['lobby', 'starting'].includes(local.phase)) scheduleLocalMatchPoll();
+  await maybeApplyLocalTurn();
+  if (['lobby', 'starting', 'started'].includes(local.phase)) scheduleLocalMatchPoll();
   return localMatchPublicSnapshot();
 }
 
 function scheduleLocalMatchPoll() {
   const local = state.localMatch;
-  if (local.polling !== null || !['lobby', 'starting'].includes(local.phase)) return;
+  if (local.polling !== null || !['lobby', 'starting', 'started'].includes(local.phase)) return;
   local.polling = setTimeout(async () => {
     local.polling = null;
     try { await pollLocalMatch(); }
@@ -1456,6 +1557,8 @@ async function leaveLocalMatch() {
   Object.assign(local, {
     code: '', token: '', seat: null, phase: 'offline', members: [], error: null,
     handoff: null, applied: false, pauseLocked: false,
+    turn: null, lastConfirmed: null, lastAppliedStamp: -1,
+    applyingTurn: false, pendingAck: null,
   });
   if (resetWorld) {
     if (!state.mod.restart(seed)) throw new Error('could not leave the local MatchStart world');
@@ -1476,7 +1579,7 @@ function applyLocalMatchHandoff(handoff) {
       ![0, 1].includes(handoff.player) || handoff.teamStyle !== 0 ||
       JSON.stringify(handoff.activePlayers) !== JSON.stringify([0, 1]) ||
       JSON.stringify(handoff.teams) !== JSON.stringify([0, 1, 8, 8]) ||
-      handoff.turnRelay !== 'unavailable') {
+      handoff.turnRelay !== LOCAL_MATCH_TURN_RELAY) {
     throw new Error('local MatchStart handoff is malformed or overstates browser turn support');
   }
   local.pauseLocked = false;
@@ -1494,11 +1597,13 @@ function applyLocalMatchHandoff(handoff) {
   }
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
-    'core save/load ready — local MatchStart roster is authoritative; browser turn relay unavailable';
+    'core save/load ready — local MatchStart roster is authoritative; empty turns use native lockstep';
   $('core-save-status').textContent = state.coreSaveStatus;
   startReplayJournal();
   local.applied = true;
   local.pauseLocked = true;
+  local.lastAppliedStamp = -1;
+  local.pendingAck = null;
   setPaused(true, false);
   syncSessionUrl();
   renderSessionStatus();
@@ -1506,7 +1611,7 @@ function applyLocalMatchHandoff(handoff) {
   renderObjectivesPanel();
   renderLocalMatchPanel();
   say(`local MatchStart confirmed at epoch ${handoff.epoch}; both browser clients are paused ` +
-    'at frame 0 until a real browser turn relay is attached', 'ok');
+    'at frame 0 and may advance only through equal native empty-turn barriers', 'ok');
   return localMatchPublicSnapshot();
 }
 
@@ -1523,13 +1628,18 @@ async function initializeLocalMatchPanel() {
     try { await readyLocalMatch(); }
     catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
   });
+  $('local-match-turn').addEventListener('click', async () => {
+    try { await readyLocalTurn(); }
+    catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
+  });
   $('local-match-leave').addEventListener('click', async () => {
     try { await leaveLocalMatch(); }
     catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
   });
   try {
     const status = await localMatchRequest('/api/local-match');
-    state.localMatch.available = status.available === true && status.turnRelay === 'unavailable';
+    state.localMatch.available = status.available === true &&
+      status.turnRelay === LOCAL_MATCH_TURN_RELAY;
     if (!state.localMatch.available) {
       state.localMatch.error = 'local match service unavailable — configured peer binary not found';
     }
@@ -1602,6 +1712,10 @@ function detachLocalMatchHandoff() {
   local.applied = false;
   local.pauseLocked = false;
   local.handoff = null;
+  local.turn = null;
+  local.lastConfirmed = null;
+  local.lastAppliedStamp = -1;
+  local.pendingAck = null;
   local.phase = local.code ? 'detached' : 'offline';
   renderLocalMatchPanel();
 }
@@ -2813,7 +2927,7 @@ function setPaused(paused, announce = true) {
   if (state.localMatch?.pauseLocked && !paused) {
     paused = true;
     if (announce) {
-      say('resume refused — this local MatchStart is paused until browser turn relay exists', 'warn');
+      say('resume refused — this local match advances only through the synchronized turn button', 'warn');
     }
   }
   state.paused = paused;
@@ -3661,6 +3775,7 @@ window.don = {
     create: (name) => createLocalMatch(name),
     join: (code, name) => joinLocalMatch(code, name),
     ready: () => readyLocalMatch(),
+    turn: () => readyLocalTurn(),
     poll: () => pollLocalMatch(),
     leave: () => leaveLocalMatch(),
   },

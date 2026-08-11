@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Two-process fixture for Crossplay StartGame → don-net MatchStart → turn.
 
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
 use std::process;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,9 @@ const HOST_ID: i32 = 101;
 const CLIENT_ID: i32 = 202;
 const DEFAULT_GAME_SEED: u32 = 3_134_984_190;
 const MATCH_TIMEOUT: Duration = Duration::from_secs(15);
+const RELAY_LIFETIME: Duration = Duration::from_secs(10 * 60);
+const MAX_RELAY_LINE_BYTES: usize = 128;
+const EMPTY_BROWSER_TURN: &[u8] = b"DONB\x01\x00";
 
 fn main() {
     if let Err(error) = run() {
@@ -30,10 +34,21 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("host") if args.len() == 2 => host(DEFAULT_GAME_SEED),
-        Some("host") if args.len() == 4 && args[2] == "--seed" => host(parse_seed(&args[3])?),
-        Some("join") if args.len() == 4 => join(&args[2], &args[3]),
-        _ => Err("usage: service-match-peer host [--seed U32] | join DIRECTORY LOBBY_ID".into()),
+        Some("host") if args.len() == 2 => host(DEFAULT_GAME_SEED, false),
+        Some("host") if args.len() == 3 && args[2] == "--relay" => {
+            host(DEFAULT_GAME_SEED, true)
+        }
+        Some("host") if args.len() == 4 && args[2] == "--seed" => {
+            host(parse_seed(&args[3])?, false)
+        }
+        Some("host") if args.len() == 5 && args[2] == "--seed" && args[4] == "--relay" => {
+            host(parse_seed(&args[3])?, true)
+        }
+        Some("join") if args.len() == 4 => join(&args[2], &args[3], false),
+        Some("join") if args.len() == 5 && args[4] == "--relay" => {
+            join(&args[2], &args[3], true)
+        }
+        _ => Err("usage: service-match-peer host [--seed U32] [--relay] | join DIRECTORY LOBBY_ID [--relay]".into()),
     }
 }
 
@@ -46,7 +61,7 @@ fn parse_seed(text: &str) -> Result<u32, String> {
     Ok(parsed)
 }
 
-fn host(game_seed: u32) -> Result<(), String> {
+fn host(game_seed: u32, relay: bool) -> Result<(), String> {
     let mut directory = DirectoryRpcClient::listen("127.0.0.1:0")
         .map_err(|error| format!("listen for directory: {error}"))?;
     let directory_address = directory
@@ -135,6 +150,9 @@ fn host(game_seed: u32) -> Result<(), String> {
             report_start("directory_started", &start);
             report_start("match_confirmed", &start);
             published = true;
+            if relay {
+                return run_relay(&mut match_, HOST_ID, clock);
+            }
         }
 
         if published && !sent_turn {
@@ -142,14 +160,15 @@ fn host(game_seed: u32) -> Result<(), String> {
             sent_turn = true;
         }
         if sent_turn && match_.turn_ready(0) {
-            report_turn(&mut match_, HOST_ID)?;
+            let hash = report_turn(&mut match_, 0)?;
+            println!(r#"{{"event":"done","id":{HOST_ID},"hash":"{hash:016x}"}}"#);
             return Ok(());
         }
         thread::sleep(Duration::from_millis(1));
     }
 }
 
-fn join(directory_address: &str, lobby_id: &str) -> Result<(), String> {
+fn join(directory_address: &str, lobby_id: &str, relay: bool) -> Result<(), String> {
     let directory_address: SocketAddr = directory_address
         .parse()
         .map_err(|error| format!("invalid directory address: {error}"))?;
@@ -230,6 +249,9 @@ fn join(directory_address: &str, lobby_id: &str) -> Result<(), String> {
             if let Some(start) = match_.confirmed_start() {
                 report_start("match_confirmed", start);
                 reported_match = true;
+                if relay {
+                    return run_relay(&mut match_, CLIENT_ID, clock);
+                }
             }
         }
         if reported_match && !sent_turn {
@@ -237,7 +259,8 @@ fn join(directory_address: &str, lobby_id: &str) -> Result<(), String> {
             sent_turn = true;
         }
         if sent_turn && match_.turn_ready(0) {
-            report_turn(&mut match_, CLIENT_ID)?;
+            let hash = report_turn(&mut match_, 0)?;
+            println!(r#"{{"event":"done","id":{CLIENT_ID},"hash":"{hash:016x}"}}"#);
             return Ok(());
         }
         thread::sleep(Duration::from_millis(1));
@@ -314,6 +337,113 @@ fn send_fixture_turn(match_: &mut ServiceMatch<TcpTransport>) -> Result<(), Stri
         .map_err(|error| format!("submit turn: {error}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayCommand {
+    Turn(u32),
+    Quit,
+}
+
+fn relay_input() -> Receiver<Result<RelayCommand, String>> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let result = line
+                .map_err(|error| format!("read relay input: {error}"))
+                .and_then(|line| parse_relay_command(&line));
+            let stop = result
+                .as_ref()
+                .is_ok_and(|command| *command == RelayCommand::Quit)
+                || result.is_err();
+            if send.send(result).is_err() || stop {
+                return;
+            }
+        }
+        let _ = send.send(Ok(RelayCommand::Quit));
+    });
+    receive
+}
+
+fn parse_relay_command(line: &str) -> Result<RelayCommand, String> {
+    if line.len() > MAX_RELAY_LINE_BYTES {
+        return Err(format!("relay input exceeded {MAX_RELAY_LINE_BYTES} bytes"));
+    }
+    if line == "QUIT" {
+        return Ok(RelayCommand::Quit);
+    }
+    let stamp = line
+        .strip_prefix("TURN ")
+        .ok_or_else(|| "relay input must be TURN U32 or QUIT".to_string())?
+        .parse::<u32>()
+        .map_err(|_| "relay TURN stamp must be a u32".to_string())?;
+    Ok(RelayCommand::Turn(stamp))
+}
+
+fn run_relay(
+    match_: &mut ServiceMatch<TcpTransport>,
+    id: i32,
+    poll_clock: Instant,
+) -> Result<(), String> {
+    let input = relay_input();
+    let relay_clock = Instant::now();
+    let mut expected_stamp = 0u32;
+    let mut submitted = false;
+    println!(r#"{{"event":"relay_ready","id":{id},"nextStamp":0}}"#);
+    io::stdout().flush().map_err(|error| error.to_string())?;
+
+    loop {
+        if relay_clock.elapsed() > RELAY_LIFETIME {
+            return Err(format!(
+                "relay exceeded bounded lifetime of {} seconds",
+                RELAY_LIFETIME.as_secs()
+            ));
+        }
+        match_
+            .poll(elapsed_ms(poll_clock), Duration::from_millis(2))
+            .map_err(|error| format!("poll don-net relay: {error}"))?;
+
+        match input.try_recv() {
+            Ok(Ok(RelayCommand::Quit)) => return Ok(()),
+            Ok(Ok(RelayCommand::Turn(stamp))) => {
+                if submitted || stamp != expected_stamp {
+                    return Err(format!(
+                        "relay refused TURN {stamp}; expected {expected_stamp} with no pending turn"
+                    ));
+                }
+                send_browser_turn(match_, stamp)?;
+                submitted = true;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(TryRecvError::Disconnected) => return Ok(()),
+            Err(TryRecvError::Empty) => {}
+        }
+
+        if submitted && match_.turn_ready(expected_stamp) {
+            let hash = report_turn(match_, expected_stamp)?;
+            println!(
+                r#"{{"event":"turn_complete","stamp":{expected_stamp},"id":{id},"hash":"{hash:016x}"}}"#
+            );
+            io::stdout().flush().map_err(|error| error.to_string())?;
+            expected_stamp = expected_stamp
+                .checked_add(1)
+                .ok_or_else(|| "relay turn stamp overflow".to_string())?;
+            submitted = false;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn send_browser_turn(match_: &mut ServiceMatch<TcpTransport>, stamp: u32) -> Result<(), String> {
+    let slot = match_
+        .players()
+        .iter()
+        .position(|player| player.unique_id == match_.local_id())
+        .ok_or_else(|| "local player is absent from don-net roster".to_string())?
+        as i8;
+    match_
+        .send_turn(stamp, slot, EMPTY_BROWSER_TURN)
+        .map_err(|error| format!("submit empty browser turn {stamp}: {error}"))
+}
+
 fn report_start(event: &str, start: &don_crossplay::match_bridge::ServiceStart) {
     println!(
         r#"{{"event":"{event}","lobby":"{}","reference":"{}","epoch":{},"seed":{}}}"#,
@@ -321,8 +451,8 @@ fn report_start(event: &str, start: &don_crossplay::match_bridge::ServiceStart) 
     );
 }
 
-fn report_turn(match_: &mut ServiceMatch<TcpTransport>, id: i32) -> Result<(), String> {
-    let packages = match_.take_turn(0);
+fn report_turn(match_: &mut ServiceMatch<TcpTransport>, stamp: u32) -> Result<u64, String> {
+    let packages = match_.take_turn(stamp);
     if packages.len() != 2 {
         return Err(format!("turn contained {} packages", packages.len()));
     }
@@ -338,12 +468,34 @@ fn report_turn(match_: &mut ServiceMatch<TcpTransport>, id: i32) -> Result<(), S
             hash = hash.wrapping_mul(1_000_003).wrapping_add(u64::from(*byte));
         }
     }
+    let ordered = packages
+        .iter()
+        .map(|package| {
+            format!(
+                r#"{{"stamp":{},"play":{},"payload":"{}"}}"#,
+                package.stamp,
+                package.play,
+                hex(&package.payload)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     println!(
-        r#"{{"event":"turn","stamp":0,"packages":{},"hash":"{hash:016x}"}}"#,
+        r#"{{"event":"turn","stamp":{stamp},"packages":{},"ordered":[{ordered}],"hash":"{hash:016x}"}}"#,
         packages.len()
     );
-    println!(r#"{{"event":"done","id":{id},"hash":"{hash:016x}"}}"#);
-    Ok(())
+    io::stdout().flush().map_err(|error| error.to_string())?;
+    Ok(hash)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(DIGITS[usize::from(byte >> 4)] as char);
+        text.push(DIGITS[usize::from(byte & 0xf)] as char);
+    }
+    text
 }
 
 fn elapsed_ms(start: Instant) -> u64 {

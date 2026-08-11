@@ -148,7 +148,7 @@ same hash over two independently submitted turn packages. Process-local
 Crossplay storage, a hard-coded MatchStart, a mismatched start reference, or an
 early turn all make the test fail.
 
-## Browser frame-zero handoff
+## Browser frame-zero handoff and empty-input turn barrier
 
 The playable Web client now consumes this real seam through a loopback-only owner in
 `web/serve.mjs`. Two browser seats create/join one bounded in-memory lobby and publish readiness.
@@ -160,10 +160,18 @@ that `ServiceMatch` validates rather than a second frontend value.
 Each tab installs `[0, 1]` through the existing authoritative frame-zero
 `GameModule.startManualTeams` transaction. The full Chrome/WebGPU gate opens two real tabs and
 requires identical frame-zero digest, RNG, roster, teams, Leaders, and Match state while the local
-perspective is respectively P0 and P1. Both clients are locked paused and visibly report browser
-turn relay `unavailable`; a resume attempt is refused. The native subprocesses prove a two-package
-turn internally, but those fixture packages are evidence for the handoff and are not presented as
-browser commands or browser multiplayer synchronization.
+perspective is respectively P0 and P1. Both clients remain locked paused and a resume attempt is
+refused. In opt-in `--relay` mode the subprocesses stay alive and accept only `TURN U32`; each
+submits a native-owned fixed empty browser payload through `ServiceMatch::send_turn`. The server
+exposes a stamp only after both `take_turn` results have the same hash and identical ordered
+`TurnPackage { stamp, play, payload }` set. Each browser then steps once and acknowledges its exact
+frame, digest, and RNG state. Only equal acknowledgements open the following stamp. Package,
+acknowledgement, or timeout disagreement closes the relay and leaves both tabs paused.
+
+The full Chrome/WebGPU proof crossed stamp 0 from the shared frame-zero digest
+`d2d4c69e33d6fca0` through native package hash `54761efe293fed4d` and observed both paused tabs at
+frame 1 with digest `85b325c89034b4b0` and RNG `309747810`. This is an empty-input deterministic
+barrier, not a gameplay command relay and not a claim of general browser multiplayer sync.
 
 The API binds only `127.0.0.1`, caps lobby count, request bytes, child output and process lifetime,
 uses per-seat random tokens, and fails closed when its configured peer binary is absent. Its Node
@@ -174,7 +182,8 @@ peer. No Wasm ABI or Sim/save owner changed in this tranche.
 
 The authoritative lifecycle remains a headless executable path over the DoN semantic `Backend`,
 its real loopback RPC worker/authority, and real `TcpTransport`; the browser now consumes its
-confirmed frame-zero handoff but does not yet carry its turn stream. It does not claim that
+confirmed frame-zero handoff and the narrow empty-input turn barrier, but no browser gameplay
+command package is admitted yet. It does not claim that
 `riseofnations.exe` has driven the replacement DLL, that the DLL constructs a
 `don-net` transport, or that retail's PlayFab/Party wire behaves this way. The
 `local-match` feature is deliberately absent from the DLL build: stitching an

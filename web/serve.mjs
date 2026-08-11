@@ -24,14 +24,16 @@
 // A bounded same-origin JSON API also owns the browser side of the local MatchStart handoff.
 // It invokes the configured native service-match-peer, and exposes seed/epoch/roster only after
 // both of that program's independent processes agree on StartGame and MatchStart. The API never
-// binds beyond 127.0.0.1 and does not claim a browser turn relay.
+// binds beyond 127.0.0.1. Its turn endpoint admits only the fixed empty-input barrier;
+// gameplay commands remain paused until a later tranche gives their wire an owner.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  LOCAL_MATCH_PROTOCOL, LocalMatchGateway, MAX_LOCAL_MATCH_BODY_BYTES,
+  LOCAL_MATCH_PROTOCOL, LOCAL_MATCH_TURN_RELAY, LocalMatchGateway, MAX_LOCAL_MATCH_BODY_BYTES,
+  validateEmptyTurnRequest,
 } from './local-match.mjs';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
@@ -95,7 +97,7 @@ async function serveLocalMatch(req, res, url) {
         protocol: LOCAL_MATCH_PROTOCOL,
         available: await localMatches.available(),
         players: 2,
-        turnRelay: 'unavailable',
+        turnRelay: LOCAL_MATCH_TURN_RELAY,
       });
       return true;
     }
@@ -112,7 +114,7 @@ async function serveLocalMatch(req, res, url) {
       return true;
     }
     const route = url.pathname.match(
-      /^\/api\/local-match\/lobbies\/([a-f0-9]{8})(?:\/(join|ready))?$/);
+      /^\/api\/local-match\/lobbies\/([a-f0-9]{8})(?:\/(join|ready|turn|turn-ack))?$/);
     if (!route) {
       sendJson(res, 404, { protocol: LOCAL_MATCH_PROTOCOL, error: 'unknown local match endpoint' });
       return true;
@@ -135,6 +137,22 @@ async function serveLocalMatch(req, res, url) {
     if (action === 'ready' && req.method === 'POST') {
       const body = await readJson(req);
       sendJson(res, 200, localMatches.ready(code, body.token, body.ready ?? true));
+      return true;
+    }
+    if (action === 'turn' && req.method === 'POST') {
+      // No command/body field is accepted: this tranche is intentionally an empty-input gate.
+      const body = validateEmptyTurnRequest(await readJson(req));
+      sendJson(res, 200, localMatches.submitTurn(code, body.token, body.stamp));
+      return true;
+    }
+    if (action === 'turn-ack' && req.method === 'POST') {
+      const body = await readJson(req);
+      if (Object.keys(body).some((key) =>
+        !['token', 'stamp', 'frame', 'digest', 'rngState'].includes(key))) {
+        throw new Error('turn acknowledgement contains unsupported fields');
+      }
+      sendJson(res, 200, localMatches.acknowledgeTurn(
+        code, body.token, body.stamp, body.frame, body.digest, body.rngState));
       return true;
     }
     sendJson(res, 405, { protocol: LOCAL_MATCH_PROTOCOL, error: 'method not allowed' });

@@ -186,9 +186,12 @@ The new-game panel also has a loopback-only, two-seat lobby handoff. `web/serve.
 bounded same-origin JSON API and invokes the configured native `service-match-peer`; it never
 returns seed, epoch, or roster until the independent host and joining processes agree on
 Crossplay StartGame and the `don-net` MatchStart. Each browser then reconstructs the exact
-two-player Sim setup from that handoff. Both clients remain locked paused at frame zero because a
-browser turn relay is not attached yet; the UI and automation surface report that boundary as
-`unavailable` instead of claiming multiplayer synchronization.
+two-player Sim setup from that handoff. The opt-in native `--relay` mode keeps both `ServiceMatch`
+owners alive. A browser may ready only the fixed empty-input package for the next stamp; the
+server exposes it only when both peers return the identical ordered `TurnPackage` set. Both tabs
+then step exactly once and acknowledge frame/digest/RNG, and the next stamp opens only when those
+acknowledgements are equal. The tabs remain pause-locked throughout. Browser gameplay commands
+and free-running multiplayer are still refused rather than being presented as synchronized.
 
 Build the native seam and run the Web server with its explicit path:
 
@@ -201,10 +204,11 @@ node web/tools/play-smoke.mjs --local-match
 ```
 
 The server binds only `127.0.0.1`, admits at most 16 in-memory lobbies, caps JSON bodies and child
-output, kills over-time processes, uses unguessable per-seat tokens, and fails closed when the
-configured executable is absent. `node --test web/tools/local-match.test.mjs` mutation-tests those
-admission rules with a parser fixture; the `--local-match` Chrome smoke uses the real compiled Rust
-peer and two actual browser tabs.
+output, bounds relay lifetime and barrier timeouts, uses unguessable per-seat tokens, and fails
+closed when the configured executable is absent, native package sets disagree, or browser state
+acknowledgements differ. `node --test web/tools/local-match.test.mjs` mutation-tests those admission
+rules with a parser fixture; the `--local-match` Chrome smoke uses the real compiled Rust peer and
+two actual browser tabs.
 
 ## Playing
 

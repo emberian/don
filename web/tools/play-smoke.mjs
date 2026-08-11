@@ -268,7 +268,8 @@ try {
       localMatchTurnRelay: window.don.localMatch.snapshot().turnRelay,
       localMatchControls: [
         'local-match-name', 'local-match-code', 'local-match-create', 'local-match-join',
-        'local-match-ready', 'local-match-leave', 'local-match-status', 'local-match-roster',
+        'local-match-ready', 'local-match-turn', 'local-match-leave',
+        'local-match-status', 'local-match-roster',
       ].every(id => !!document.getElementById(id)),
       localMatchBoundary: document.getElementById('session')?.textContent ?? '',
       coreMatch: m.match(),
@@ -364,10 +365,12 @@ try {
     ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
     ['team layout is frame-zero mutable while victory remains read-only',
       out.ui.sessionTeamEnabled && out.ui.sessionVictoryReadOnly],
-    ['the local lobby surface exposes a bounded MatchStart handoff without a turn-relay claim',
+    ['the local lobby surface exposes the bounded empty-input native turn barrier',
       out.ui.localMatchProtocol === 'don.local-match-handoff.v1' && out.ui.localMatchControls &&
-      out.ui.localMatchTurnRelay === 'unavailable' &&
-      out.ui.localMatchBoundary.includes('Browser turn relay is not attached')],
+      out.ui.localMatchTurnRelay === 'empty-turn-barrier' &&
+      out.ui.localMatchBoundary.includes('same ordered TurnPackage') &&
+      out.ui.localMatchBoundary.includes('Gameplay commands') &&
+      out.ui.localMatchBoundary.includes('free-running multiplayer remains unavailable')],
     ['the configured local MatchStart service is available for this smoke',
       !LOCAL_MATCH || out.ui.localMatchAvailable],
     ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
@@ -1755,11 +1758,11 @@ try {
     }
   }
 
-  // ---- 4c. two browser seats consume one native StartGame -> MatchStart ----------------
+  // ---- 4c. two browser seats consume MatchStart and one native empty-input turn --------
   //
   // The local gateway invokes the existing Rust two-process lifecycle. It exposes no seed,
-  // epoch, or roster until both native peers agree. The browser turn relay is deliberately
-  // absent, so both tabs must remain paused at the identical frame-zero Sim setup.
+  // epoch, or roster until both native peers agree. They then submit one empty turn each;
+  // neither paused Sim advances until both native peers expose an identical package set.
   if (LOCAL_MATCH) {
     const cleanSecondUrl = `http://127.0.0.1:${PORT}/play.html?seed=0x2468ace0&player=1`;
     const created = await c.send('Target.createTarget', { url: cleanSecondUrl });
@@ -1816,6 +1819,31 @@ try {
       await sleep(100);
     }
 
+    const frameZero = await Promise.all([c, c2].map((client) => client.eval(`(() => {
+      const m = window.don.state.mod;
+      return JSON.stringify({ frame: m.frame, digest: m.digest(), rngState: m.rngState });
+    })()`).then(JSON.parse)));
+    await Promise.all([
+      c.eval('window.don.localMatch.turn().then(JSON.stringify)'),
+      c2.eval('window.don.localMatch.turn().then(JSON.stringify)'),
+    ]);
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const facts = await Promise.all([c, c2].map((client) => client.eval(`(() => {
+        const d = window.don, local = d.localMatch.snapshot();
+        return JSON.stringify({
+          phase: local.phase, error: local.error, frame: d.state.mod.frame,
+          confirmed: local.lastConfirmed?.stamp ?? -1, next: local.turn?.stamp ?? -1,
+        });
+      })()`).then(JSON.parse)));
+      if (facts.every((fact) =>
+        fact.phase === 'started' && fact.frame === 1 && fact.confirmed === 0 && fact.next === 1)) break;
+      if (facts.some((fact) => fact.phase === 'failed')) {
+        throw new Error(`local turn barrier failed: ${facts.map((fact) => fact.error).join(' | ')}`);
+      }
+      if (attempt === 149) throw new Error(`local turn barrier did not confirm in both tabs`);
+      await sleep(100);
+    }
+
     const clientEvidence = async (client) => client.eval(`(() => {
       const d = window.don, local = d.localMatch.snapshot(), mod = d.state.mod;
       const beforeResume = { frame: mod.frame, digest: mod.digest(), paused: d.state.paused };
@@ -1837,17 +1865,17 @@ try {
     const [hostBrowser, peerBrowser] = await Promise.all([
       clientEvidence(c), clientEvidence(c2),
     ]);
-    out.localMatch = { host: hostBrowser, peer: peerBrowser };
+    out.localMatch = { frameZero, host: hostBrowser, peer: peerBrowser };
     for (const [name, ok] of [
       ['native StartGame and MatchStart produce one exact seed/epoch/reference in both tabs',
         hostBrowser.local.handoff.seed === 0x2468ace0 &&
         hostBrowser.local.handoff.seed === peerBrowser.local.handoff.seed &&
         hostBrowser.local.handoff.epoch === peerBrowser.local.handoff.epoch &&
-        hostBrowser.local.handoff.sessionReference === peerBrowser.local.handoff.sessionReference &&
-        hostBrowser.local.handoff.nativeTurnHash === peerBrowser.local.handoff.nativeTurnHash],
+        hostBrowser.local.handoff.sessionReference === peerBrowser.local.handoff.sessionReference],
       ['both browser clients reconstruct the same authoritative two-player frame-zero setup',
-        hostBrowser.frame === 0 && peerBrowser.frame === 0 &&
-        hostBrowser.digest === peerBrowser.digest && hostBrowser.rngState === peerBrowser.rngState &&
+        frameZero[0].frame === 0 && frameZero[1].frame === 0 &&
+        frameZero[0].digest === frameZero[1].digest &&
+        frameZero[0].rngState === frameZero[1].rngState &&
         JSON.stringify(hostBrowser.activePlayers) === JSON.stringify([0, 1]) &&
         JSON.stringify(peerBrowser.activePlayers) === JSON.stringify([0, 1]) &&
         JSON.stringify(hostBrowser.setup.teams) === JSON.stringify(peerBrowser.setup.teams) &&
@@ -1856,12 +1884,19 @@ try {
       ['browser perspective is seat-specific without becoming a second roster authority',
         hostBrowser.setup.player === 0 && peerBrowser.setup.player === 1 &&
         hostBrowser.setup.slots === 2 && peerBrowser.setup.slots === 2],
-      ['both clients remain paused and refuse resume while browser turn relay is unavailable',
+      ['one strict native package barrier advances both paused Sims to identical frame-one state',
+        hostBrowser.frame === 1 && peerBrowser.frame === 1 &&
+        hostBrowser.digest === peerBrowser.digest && hostBrowser.rngState === peerBrowser.rngState &&
+        hostBrowser.local.lastConfirmed.stamp === 0 && peerBrowser.local.lastConfirmed.stamp === 0 &&
+        hostBrowser.local.lastConfirmed.hash === peerBrowser.local.lastConfirmed.hash &&
+        hostBrowser.local.turn.stamp === 1 && peerBrowser.local.turn.stamp === 1 &&
+        hostBrowser.local.turnRelay === 'empty-turn-barrier' &&
+        peerBrowser.local.turnRelay === 'empty-turn-barrier'],
+      ['both clients remain paused and refuse free-running resume after the agreed turn',
         hostBrowser.paused && peerBrowser.paused &&
         hostBrowser.beforeResume.paused && peerBrowser.beforeResume.paused &&
-        hostBrowser.local.turnRelay === 'unavailable' && peerBrowser.local.turnRelay === 'unavailable' &&
-        hostBrowser.status.includes('browser turn relay unavailable') &&
-        peerBrowser.status.includes('browser turn relay unavailable')],
+        hostBrowser.status.includes('turn 1 waiting for both seats') &&
+        peerBrowser.status.includes('turn 1 waiting for both seats')],
     ]) {
       if (!ok) { console.error(`FAIL: ${name}`); bad++; }
     }

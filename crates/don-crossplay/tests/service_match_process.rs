@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -93,6 +93,87 @@ fn service_start_authorizes_match_start_and_turns_across_processes() {
         "peers disagreed on the authoritative turn stream"
     );
     assert!(done_hash(&host_output).is_some());
+}
+
+#[test]
+fn relay_mode_keeps_native_turn_ownership_and_orders_empty_packages() {
+    let peer = env!("CARGO_BIN_EXE_service-match-peer");
+    let mut host = Command::new(peer)
+        .args(["host", "--seed", "0x89abcdef", "--relay"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("launch relay host");
+    let mut host_stdout = BufReader::new(host.stdout.take().expect("host stdout"));
+    let mut service_line = String::new();
+    host_stdout
+        .read_line(&mut service_line)
+        .expect("read SERVICE");
+    let fields: Vec<&str> = service_line.split_whitespace().collect();
+    assert_eq!(fields.len(), 3, "unexpected host line: {service_line:?}");
+
+    let mut client = Command::new(peer)
+        .args(["join", fields[1], fields[2], "--relay"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("launch relay client");
+    let mut client_stdout = BufReader::new(client.stdout.take().expect("client stdout"));
+    read_until(
+        &mut host_stdout,
+        r#""event":"relay_ready""#,
+        "host relay ready",
+    );
+    read_until(
+        &mut client_stdout,
+        r#""event":"relay_ready""#,
+        "client relay ready",
+    );
+
+    host.stdin
+        .as_mut()
+        .expect("host stdin")
+        .write_all(b"TURN 0\n")
+        .expect("submit host turn");
+    client
+        .stdin
+        .as_mut()
+        .expect("client stdin")
+        .write_all(b"TURN 0\n")
+        .expect("submit client turn");
+    let host_turn = read_until(&mut host_stdout, r#""event":"turn""#, "host turn");
+    let client_turn = read_until(&mut client_stdout, r#""event":"turn""#, "client turn");
+    for output in [&host_turn, &client_turn] {
+        assert!(output.contains(r#""stamp":0,"packages":2"#), "{output}");
+        assert!(output.contains(
+            r#""ordered":[{"stamp":0,"play":0,"payload":"444f4e420100"},{"stamp":0,"play":1,"payload":"444f4e420100"}]"#
+        ), "{output}");
+    }
+    assert_eq!(turn_hash(&host_turn), turn_hash(&client_turn));
+
+    host.stdin.as_mut().unwrap().write_all(b"QUIT\n").unwrap();
+    client.stdin.as_mut().unwrap().write_all(b"QUIT\n").unwrap();
+    wait_both(&mut host, &mut client, Duration::from_secs(5));
+    assert!(host.wait().expect("reap host").success());
+    assert!(client.wait().expect("reap client").success());
+}
+
+fn read_until(reader: &mut impl BufRead, needle: &str, stage: &str) -> String {
+    loop {
+        let mut line = String::new();
+        let count = reader.read_line(&mut line).expect(stage);
+        assert_ne!(count, 0, "peer exited before {stage}");
+        if line.contains(needle) {
+            return line;
+        }
+    }
+}
+
+fn turn_hash(output: &str) -> Option<&str> {
+    let tail = output.split_once(r#""hash":""#)?.1;
+    tail.split_once('"').map(|(hash, _)| hash)
 }
 
 fn event_offset(output: &str, event: &str, side: &str) -> usize {
