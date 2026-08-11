@@ -1,3 +1,4 @@
+use don_sim::command::group_action_entry::formation_order_destination;
 use don_sim::command::{build, Bridge, ObjectTable, Package, QueuePos, Slot};
 use don_sim::order::OrderIndex;
 use don_sim::systems::groups_guys::{formation_order_coord, Formation, FormationMember, GroupData};
@@ -169,7 +170,10 @@ fn form_command_installs_distinct_retail_captain_destinations() {
         )
         .unwrap();
 
-    let expected = [(100, 200), (101, 203), (100, 206)];
+    // `Form::to_x/to_y` reach `Unit::add_group_move_order` `0x005E4710` as the UCoord cells
+    // 100/200, 101/203 and 100/206, and that constructor stores `cell * 0x30 + 0x18` — the
+    // centred Coord — into both `x`/`y` and `dest_x`/`dest_y` [measured, `005e4710.c`].
+    let expected = [(4_824, 9_624), (4_872, 9_768), (4_824, 9_912)];
     for (o, destination) in expected.into_iter().enumerate() {
         let orders: Vec<_> = fleet.get(1, o as i16).unwrap().orders.iter().collect();
         assert_eq!(orders.len(), 1);
@@ -190,6 +194,11 @@ fn form_command_installs_distinct_retail_captain_destinations() {
         formation_order_coord(-1),
         -1,
         "the retail table floors negatives"
+    );
+    assert_eq!(
+        formation_order_destination(4_800),
+        4_824,
+        "the stored destination is the centre of the cell, not the cell index"
     );
 
     let group = bridge.groups.get(package.group).unwrap();

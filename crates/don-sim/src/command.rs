@@ -110,14 +110,17 @@
 
 use crate::order::{FollowOrderPayload, Order, OrderIndex, ORDER_GROUP};
 use crate::systems::groups_guys::{
-    formation_order_coord, plan_action_buildmask, plan_action_disband, plan_action_halt,
-    plan_action_set_transport, plan_action_stance, plan_action_unitmask, resolve_form, vector_dist,
-    BuildMaskMemberFacts, BuildMaskStep, DisbandMemberFacts, DisbandPlan, DisbandStep, Formation,
-    FormationMember, GroupBuildMaskReceipt, GroupBuildMaskRequest, GroupData,
-    GroupSetTransportReceipt, GroupSetTransportRequest, GroupStanceReceipt, GroupStanceRequest,
-    GroupStateTransactionStatus, GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts,
-    HaltPlan, HaltStep, MemberState, SetTransportMemberFacts, SetTransportStep, StanceMemberFacts,
-    StanceStep, UnitMaskMemberFacts, UnitMaskStep, GROUP_MAX_MEMBERS,
+    plan_action_buildmask, plan_action_disband, plan_action_halt, plan_action_set_transport,
+    plan_action_stance, plan_action_unitmask, resolve_form, vector_dist, BuildMaskMemberFacts,
+    BuildMaskStep, DisbandMemberFacts, DisbandPlan, DisbandStep, Formation, FormationMember,
+    GroupBuildMaskReceipt, GroupBuildMaskRequest, GroupData, GroupSetTransportReceipt,
+    GroupSetTransportRequest, GroupStanceReceipt, GroupStanceRequest, GroupStateTransactionStatus,
+    GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts, HaltPlan, HaltStep, MemberState,
+    SetTransportMemberFacts, SetTransportStep, StanceMemberFacts, StanceStep, UnitMaskMemberFacts,
+    UnitMaskStep, GROUP_MAX_MEMBERS,
+};
+use crate::systems::hotkey_group_action::{
+    plan_action_hotkey, HotKeyActionPlan, HotKeyActionStep,
 };
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
@@ -127,12 +130,18 @@ use crate::systems::order_dispatch::{
 // tests could not be mistaken for dispatcher integration.  The command bridge is now their
 // sole executable owner; keeping the path declarations here avoids exposing them as tick or
 // world systems.
+#[path = "systems/air_containment_host.rs"]
+pub mod air_containment_host;
 #[path = "systems/diplomacy_command_plans.rs"]
 pub mod diplomacy_command_plans;
 #[path = "systems/direct_entity_command_integration.rs"]
 pub mod direct_entity_command_integration;
+#[path = "systems/economy_group_actions.rs"]
+pub mod economy_group_actions;
 #[path = "systems/follow_action.rs"]
 pub mod follow_action;
+#[path = "systems/group_action_entry.rs"]
+pub mod group_action_entry;
 #[path = "systems/group_action_frontier.rs"]
 pub mod group_action_frontier;
 #[path = "systems/late_command_plans.rs"]
@@ -155,9 +164,17 @@ use self::diplomacy_command_plans::{
     DiplomacyCommandState, DiplomacyPlanDecision, DiplomacyTransactionStatus,
 };
 use self::direct_entity_command_integration::{DirectEntityFleetReceipt, DirectEntityFleetRequest};
+use self::economy_group_actions::{
+    plan_board_ship, plan_repair, plan_trade, EconomyPlan, EconomyStep, Fact as EconomyFact,
+    MemberFacts as EconomyMemberFacts, TradeTargetFacts,
+};
 use self::follow_action::{
     decode_follow, plan_follow, FollowEffect, FollowMemberFacts, FollowReceipt, FollowRequest,
     FollowTargetFacts, FollowTransactionStatus,
+};
+use self::group_action_entry::{
+    dispatch_program, evaluate as evaluate_group_action_entry, formation_order_destination,
+    EntryDecision, EntryEffects, EntryFacts,
 };
 use self::group_action_frontier::{
     plan_stop_spell, GroupActionTransactionStatus, OpenGroupActionCommand, StopSpellMemberFacts,
@@ -1058,6 +1075,61 @@ pub trait Fleet {
     fn can_ever_transport(&self, who: u8, o: i16) -> bool {
         self.is_unit(who, o) && self.domain(who, o) == 0
     }
+
+    // -----------------------------------------------------------------------
+    // Economy group-action facts (REPAIR 16, TRADE 17, BOARD_SHIP 15)
+    //
+    // Every one of these is a conditional read the retail body performs on state this
+    // bridge does not hold.  `None` means "this host did not answer", which is *not*
+    // "false": `systems/economy_group_actions.rs` records the unanswered read by name and
+    // resolves the gate to whatever keeps the installed order set identical to the
+    // pre-recovery bridge.  Answering them is how a host earns retail-exact installation.
+    // -----------------------------------------------------------------------
+
+    /// `ObjectTypeData +0x04`, the type class word `Group::action_repair` `0x007020C0`
+    /// compares against `0x32`/`0x33` `[measured, 0x007022C3]`.
+    fn object_type_class(&self, _who: u8, _o: i16) -> Option<i32> {
+        None
+    }
+    /// `UnitData::is_busy` `0x0060A370`.
+    fn is_busy(&self, _who: u8, _o: i16) -> Option<bool> {
+        None
+    }
+    /// `regions[WorldData::get_tregion(a)].is_coast(WorldData::get_tregion(b))` —
+    /// `0x006B52E0` then `0x00680F90`, the reachability pair all three economy actions
+    /// evaluate between a member and the addressed object.
+    fn object_regions_touch(&self, _a: (u8, i16), _b: (u8, i16)) -> Option<bool> {
+        None
+    }
+    /// `SpellTypeData::is_castable(o, who, 0)` `0x00675BC0` on `spelltypes[spell]`.
+    fn spell_castable(&self, _who: u8, _o: i16, _spell: i32) -> Option<bool> {
+        None
+    }
+    /// `UnitData::is_caravan`, object vslot `+0xD0`, whose body tail-jumps to the type's
+    /// vslot `+0x130`.
+    fn is_caravan(&self, _who: u8, _o: i16) -> Option<bool> {
+        None
+    }
+    /// `ObjectData::is(type_index, 0)` `0x00653790`.
+    fn object_type_is(&self, _who: u8, _o: i16, _type_index: i32) -> Option<bool> {
+        None
+    }
+    /// `WallData::is_active`, object vslot `+0x4C` — the flag byte `+0x08` bit 2.
+    fn build_is_active(&self, _who: u8, _o: i16) -> Option<bool> {
+        None
+    }
+    /// `ObjectData::can_carry(passenger_o, passenger_who)` `0x006483C0`, asked of the ship.
+    fn can_carry(&self, _ship: (u8, i16), _passenger: (u8, i16)) -> Option<bool> {
+        None
+    }
+    /// `GroupData::count(index, arg, 0)` `0x00711720` over the addressed selection.
+    ///
+    /// `CountIndex`'s enumerators are not recovered, so the members are handed over
+    /// verbatim and the host answers or declines; nothing here models what index `0x11`
+    /// counts.
+    fn group_type_count(&self, _members: &[(u8, i16)], _index: i32, _arg: i32) -> Option<i32> {
+        None
+    }
     /// `BuildData::build_masks`, the `u16` at `+0x60`. `None` makes BUILD_MASK
     /// fail closed for a host which has not connected that state column.
     fn build_masks(&self, _who: u8, _o: i16) -> Option<u16> {
@@ -1100,6 +1172,27 @@ pub trait Fleet {
     /// destination falls back to the unit's current position.
     fn valid_pos(&self, _x: i32, _y: i32) -> bool {
         true
+    }
+    /// `World::x_size` / `y_size` in **tiles** (`[[0x00C06188]]` and `+4`), which the
+    /// movement/attack group actions turn into the Coord bound `tiles * 0x300` before
+    /// clamping a commanded destination. `None` means the host has not connected map
+    /// bounds; the clamp is then skipped rather than invented, and the row stays partial.
+    fn map_tiles(&self) -> Option<(i32, i32)> {
+        None
+    }
+    /// The scalar `ScenarioData::ignore_orders` at `0x00CC02F8`. `ScenarioFuncSet::init`
+    /// zeroes it at `0x00A04084` and only a scenario trigger sets it, so an ordinary match
+    /// leaves the whole prelude a measured no-op.
+    fn scenario_ignore_orders(&self) -> bool {
+        false
+    }
+    /// Whether the host has already committed
+    /// [`crate::systems::groups_guys::plan_ignore_order_kills`] for the addressed receiver,
+    /// so the group this bridge holds is the post-prune one. While
+    /// [`Fleet::scenario_ignore_orders`] is set and this is false, every movement/attack
+    /// group action whose entry program contains the prune fails closed.
+    fn scenario_ignore_orders_prune_committed(&self) -> bool {
+        false
     }
     /// `UnitData::get_final_loc` `0x00608040`: the first move destination or live target
     /// location in queue order, falling back to the unit's current location.
@@ -1370,6 +1463,25 @@ pub struct Slot {
     pub build_mask_capabilities: u16,
     /// Object flag byte at `+0x08`; state-action planners currently read/set bits 0/0x10.
     pub object_flags: u8,
+    // -- economy group-action columns (REPAIR 16 / TRADE 17 / BOARD_SHIP 15) ------------
+    // Each is `None` until a caller sets it, so a host that connects nothing answers
+    // "unavailable" rather than a manufactured negative.
+    /// `ObjectTypeData +0x04`, the type class word `Group::action_repair` gates on.
+    pub economy_type_class: Option<i32>,
+    /// `UnitData::is_busy` `0x0060A370`.
+    pub busy: Option<bool>,
+    /// `WorldData::get_tregion` `0x006B52E0` for this object's tile.
+    pub region: Option<i32>,
+    /// Spell type indices `SpellTypeData::is_castable(o, who, 0)` answers non-zero for.
+    pub castable_spells: Option<Vec<i32>>,
+    /// `UnitData::is_caravan`, object vslot `+0xD0`.
+    pub is_caravan: Option<bool>,
+    /// Type indices `ObjectData::is(t, 0)` `0x00653790` answers non-zero for.
+    pub type_is: Option<Vec<i32>>,
+    /// `WallData::is_active`, object vslot `+0x4C`.
+    pub build_active_known: Option<bool>,
+    /// Passengers this object's `ObjectData::can_carry` `0x006483C0` accepts.
+    pub carries: Option<Vec<(u8, i16)>>,
     /// Effective ObjectData virtual `get_stance_type` result.
     pub stance_type: i32,
     pub stance_update_order_present: bool,
@@ -1446,6 +1558,23 @@ pub struct ObjectTable {
     diplomacy_receipts: Vec<DiplomacyCommandReceipt>,
     pause_steps: Vec<PauseStep>,
     stop_spell_gpiece_update: bool,
+    /// `World::x_size` / `y_size` in tiles; see [`Fleet::map_tiles`].
+    map_tiles: Option<(i32, i32)>,
+    /// `ScenarioData::ignore_orders` `0x00CC02F8`, and whether the host has committed the
+    /// resulting `Group::kill` prelude for the addressed receiver.
+    scenario_ignore_orders: (bool, bool),
+    /// Aircraft/containment columns read by `Group::action_recall` and
+    /// `Group::action_return`: see [`air_containment_host`].
+    air: air_containment_host::AirWorld,
+    /// The owner unit-array bound `Group::action_recall` scans.
+    per_owner: usize,
+    /// Unordered land/water region pairs whose `Region::is_coast` `0x00680F90` bitmap bit
+    /// is set. `Slot::region` supplies each object's id; the rest of `is_coast` (identity,
+    /// and the "same side of `0x40`" rejection) is computed exactly, not tabulated.
+    region_touches: Vec<(i32, i32)>,
+    /// Answers this host will give for `GroupData::count(index, arg, 0)`, keyed
+    /// `(index, arg)`. Empty means "this host does not answer that read".
+    group_counts: Vec<((i32, i32), i32)>,
 }
 
 impl ObjectTable {
@@ -1460,7 +1589,66 @@ impl ObjectTable {
             diplomacy_receipts: Vec::new(),
             pause_steps: Vec::new(),
             stop_spell_gpiece_update: false,
+            map_tiles: None,
+            scenario_ignore_orders: (false, false),
+            air: air_containment_host::AirWorld::default(),
+            per_owner,
+            region_touches: Vec::new(),
+            group_counts: Vec::new(),
         }
+    }
+
+    /// Record that these two `Region` ids have each other's `+0x64` adjacency bit set.
+    pub fn set_regions_touch(&mut self, a: i32, b: i32) {
+        self.region_touches.push((a, b));
+    }
+
+    /// Answer `GroupData::count(index, arg, 0)` with `count`.
+    pub fn set_group_count(&mut self, index: i32, arg: i32, count: i32) {
+        self.group_counts.push(((index, arg), count));
+    }
+
+    /// `Region::is_coast` `0x00680F90`, exactly: identity first, then the both-sides-of
+    /// `0x40` rejection, then the recorded adjacency bit.
+    fn region_is_coast(&self, a: i32, b: i32) -> bool {
+        if a == b {
+            return true;
+        }
+        if (a >= 0x40) == (b >= 0x40) {
+            return false;
+        }
+        self.region_touches
+            .iter()
+            .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a))
+    }
+
+    /// Install the aircraft/containment columns for one object: `ObjectData::get_inside`,
+    /// `ObjectData::launching`, the live `AirOrder`, `UnitData::path.length`, the `Build`
+    /// gather list, `UnitData::home_base`, and the two type words RECALL reads.
+    pub fn set_air_object(&mut self, who: u8, o: i16, object: air_containment_host::AirObject) {
+        self.air.put(who, o, object);
+    }
+
+    pub fn air_object(&self, who: u8, o: i16) -> Option<&air_containment_host::AirObject> {
+        self.air.get(who, o)
+    }
+
+    /// Ordered evidence of the child receivers RECALL/RETURN reached whose state column
+    /// this reference table does not hold (`Unit::clear_partial_path`, `Unit::update_action`).
+    pub fn take_air_unmodelled_children(&mut self) -> Vec<air_containment_host::UnmodelledChild> {
+        self.air.take_unmodelled()
+    }
+
+    /// Connect `World::x_size`/`y_size` (tiles) so the movement/attack entry prefix can run
+    /// its measured destination clamp.
+    pub fn set_map_tiles(&mut self, tiles: Option<(i32, i32)>) {
+        self.map_tiles = tiles;
+    }
+
+    /// Arm `ScenarioData::ignore_orders` and declare whether the recovered
+    /// `plan_ignore_order_kills` prelude has been committed for the addressed receiver.
+    pub fn set_scenario_ignore_orders(&mut self, armed: bool, prune_committed: bool) {
+        self.scenario_ignore_orders = (armed, prune_committed);
     }
 
     pub fn set_leader_flags(&mut self, who: u8, flags: u32) {
@@ -1517,6 +1705,15 @@ impl ObjectTable {
 }
 
 impl Fleet for ObjectTable {
+    fn map_tiles(&self) -> Option<(i32, i32)> {
+        self.map_tiles
+    }
+    fn scenario_ignore_orders(&self) -> bool {
+        self.scenario_ignore_orders.0
+    }
+    fn scenario_ignore_orders_prune_committed(&self) -> bool {
+        self.scenario_ignore_orders.1
+    }
     fn alive(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.alive)
     }
@@ -1525,6 +1722,38 @@ impl Fleet for ObjectTable {
     }
     fn is_building(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.is_building)
+    }
+    fn object_type_class(&self, who: u8, o: i16) -> Option<i32> {
+        self.get(who, o)?.economy_type_class
+    }
+    fn is_busy(&self, who: u8, o: i16) -> Option<bool> {
+        self.get(who, o)?.busy
+    }
+    fn object_regions_touch(&self, a: (u8, i16), b: (u8, i16)) -> Option<bool> {
+        let ra = self.get(a.0, a.1)?.region?;
+        let rb = self.get(b.0, b.1)?.region?;
+        Some(self.region_is_coast(ra, rb))
+    }
+    fn spell_castable(&self, who: u8, o: i16, spell: i32) -> Option<bool> {
+        Some(self.get(who, o)?.castable_spells.as_ref()?.contains(&spell))
+    }
+    fn is_caravan(&self, who: u8, o: i16) -> Option<bool> {
+        self.get(who, o)?.is_caravan
+    }
+    fn object_type_is(&self, who: u8, o: i16, type_index: i32) -> Option<bool> {
+        Some(self.get(who, o)?.type_is.as_ref()?.contains(&type_index))
+    }
+    fn build_is_active(&self, who: u8, o: i16) -> Option<bool> {
+        self.get(who, o)?.build_active_known
+    }
+    fn can_carry(&self, ship: (u8, i16), passenger: (u8, i16)) -> Option<bool> {
+        Some(self.get(ship.0, ship.1)?.carries.as_ref()?.contains(&passenger))
+    }
+    fn group_type_count(&self, _members: &[(u8, i16)], index: i32, arg: i32) -> Option<i32> {
+        self.group_counts
+            .iter()
+            .find(|&&(key, _)| key == (index, arg))
+            .map(|&(_, n)| n)
     }
     fn is_on_map(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.is_on_map)
@@ -1660,6 +1889,17 @@ impl Fleet for ObjectTable {
             addressed_object_flag_1,
         };
         planned_group_command_prefix_receipt(request, facts)
+    }
+
+    /// `Group::action_recall` `0x006FA7E0` and its conditional `Group::action_return`
+    /// `0x006FAD40` delegate, executed as one atomic transaction over this table's
+    /// aircraft/containment columns. See [`air_containment_host`].
+    fn apply_recall_action_transaction(
+        &mut self,
+        request: RecallActionRequest,
+    ) -> RecallActionReceipt {
+        let per_owner = self.per_owner;
+        air_containment_host::apply_recall_action(self, request, per_owner)
     }
 
     fn apply_stop_spell_transaction(&mut self, request: StopSpellRequest) -> StopSpellReceipt {
@@ -3168,8 +3408,21 @@ pub struct Bridge {
     pub stats: BridgeStats,
     pub inline: InlineCommandState,
     group_command_prefix_receipts: Vec<GroupCommandPrefixReceiptRecord>,
+    economy_action_receipts: Vec<EconomyActionReceipt>,
     /// `Game::frame`, stamped into interned groups.
     pub frame: i32,
+}
+
+/// What one recovered economy `Group::action_*` did, and which retail reads the host did
+/// not answer. `plan.is_exact()` is false whenever any gate fell back to the legacy
+/// resolution, so a caller that needs retail-exact installation can refuse on this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EconomyActionReceipt {
+    /// `GROUP_ACTIONS` name: `"repair"`, `"trade"` or `"board_ship"`.
+    pub action: &'static str,
+    /// `None` when an entry gate rejected the whole command, exactly as retail returns
+    /// from `action_trade` without touching `GroupData::form`.
+    pub plan: Option<EconomyPlan>,
 }
 
 impl Default for Bridge {
@@ -3186,6 +3439,7 @@ impl Bridge {
             stats: BridgeStats::default(),
             inline: InlineCommandState::default(),
             group_command_prefix_receipts: Vec::new(),
+            economy_action_receipts: Vec::new(),
             frame: 0,
         }
     }
@@ -3219,6 +3473,12 @@ impl Bridge {
     /// 5/6/23/24/25/28/35.
     pub fn take_group_command_prefix_receipts(&mut self) -> Vec<GroupCommandPrefixReceiptRecord> {
         std::mem::take(&mut self.group_command_prefix_receipts)
+    }
+
+    /// Drain the recovered REPAIR/TRADE/BOARD_SHIP plans, including the retail reads this
+    /// host could not answer.
+    pub fn take_economy_action_receipts(&mut self) -> Vec<EconomyActionReceipt> {
+        std::mem::take(&mut self.economy_action_receipts)
     }
 
     /// `CommandPackage::process_all` `0x0094C500`: walk a payload, dispatching each
@@ -3897,6 +4157,36 @@ impl Bridge {
         });
     }
 
+    /// `Group::action_hotkey(int)` `0x006FA7A0`, the receiver-shaped entry point.
+    ///
+    /// Retail reaches this from `Console::on_key_down` (`0x007CC80B` / `0x007CC8BA`), its
+    /// only two call sites, so it never crosses a `CommandPackage`. Opcode 34's `clear == 0`
+    /// arm *inlines* the identical body at `0x009475B8..0x009475F2`, which is why this
+    /// shares [`copy_hotkey_group`] with [`Bridge::process_hotkey`] rather than restating it.
+    ///
+    /// `group` addresses `groups.list[group]`, exactly as the wire receiver does. Returns
+    /// the executed plan, or `None` when the slot is out of range — retail bound-checks
+    /// neither, and a port must refuse rather than reproduce the out-of-bounds write.
+    pub fn action_hotkey(&mut self, group: i32, slot: i32) -> Option<HotKeyActionPlan> {
+        let plan = plan_action_hotkey(slot, self.frame, self.inline.hotkeys.len()).ok()?;
+        let source = self.groups.get(group).cloned()?;
+        for step in &plan.steps {
+            match *step {
+                HotKeyActionStep::CopyGroup { slot, stamp } => {
+                    copy_hotkey_group(&mut self.inline.hotkeys[slot].group, &source, stamp);
+                }
+                // `HotKeyGroupOut::update_name` writes only the display String at `+0x9E0`
+                // and the icon selector at `+0x9F4`, and returns early for any owner other
+                // than the local display player. Presentation, not shared state.
+                HotKeyActionStep::UpdateName { .. } => {}
+                HotKeyActionStep::ClearCamera { slot } => {
+                    self.inline.hotkeys[slot].camera = None;
+                }
+            }
+        }
+        Some(plan)
+    }
+
     #[inline]
     fn speed_change_allowed(&self) -> bool {
         !self.inline.network || !self.inline.speed_locked
@@ -4133,6 +4423,7 @@ impl Bridge {
             slot,
             stats: &mut self.stats,
             frame: self.frame,
+            economy_receipts: &mut self.economy_action_receipts,
         };
         act.run(name, cmd, f);
     }
@@ -4143,6 +4434,7 @@ impl Bridge {
             slot,
             stats: &mut self.stats,
             frame: self.frame,
+            economy_receipts: &mut self.economy_action_receipts,
         };
         act.action_recall(f)
     }
@@ -4158,6 +4450,30 @@ struct Action<'a> {
     slot: i32,
     stats: &'a mut BridgeStats,
     frame: i32,
+    economy_receipts: &'a mut Vec<EconomyActionReceipt>,
+}
+
+/// `QueuePos` as the raw `queued` dword the recovered economy bodies compare against.
+fn retail_queue(q: QueuePos) -> i32 {
+    match q {
+        QueuePos::First => economy_group_actions::QUEUE_FIRST,
+        QueuePos::Last => economy_group_actions::QUEUE_LAST,
+        QueuePos::New => economy_group_actions::QUEUE_NEW,
+    }
+}
+
+/// The inverse, for the `QueuePos` a plan step hands to `Unit::add_*_order`.
+fn economy_queue(v: i32) -> QueuePos {
+    QueuePos::from_i64(i64::from(v))
+}
+
+/// `objects[whom][ox]` as an addressable pair, or `None` for a negative sentinel.
+fn economy_target(whom: i32, ox: i32) -> Option<(u8, i16)> {
+    if whom < 0 || ox < 0 || whom >= NUM_OWNER_SLOTS as i32 || ox > i32::from(i16::MAX) {
+        None
+    } else {
+        Some((whom as u8, ox as i16))
+    }
 }
 
 impl Action<'_> {
@@ -4224,6 +4540,7 @@ impl Action<'_> {
                 slot: self.slot,
                 stats: self.stats,
                 frame: self.frame,
+                economy_receipts: self.economy_receipts,
             };
             body(&mut inner, QueuePos::New, f);
         }
@@ -4241,7 +4558,89 @@ impl Action<'_> {
         true
     }
 
+    /// The measured entry prefix every movement/attack `Group::action_*` runs before it
+    /// touches an order queue; see [`group_action_entry`].
+    ///
+    /// Returns the effects to carry into the body, or `None` when a gate refused the
+    /// command or the armed scenario prune has no committed host. Effects applied by gates
+    /// that ran *before* the refusing one still stand, exactly as retail's
+    /// `action_begin`-then-`buildings` order requires.
+    fn group_action_entry(
+        &mut self,
+        name: &str,
+        target: Option<i32>,
+        destination: Option<(i32, i32)>,
+        f: &dyn Fleet,
+    ) -> Option<EntryEffects> {
+        let program = dispatch_program(name)?;
+        let (num, buildings) = self
+            .groups
+            .get(self.slot)
+            .map_or((0, false), |g| (g.num, g.buildings != 0));
+        let facts = EntryFacts {
+            on_map: self.group_is_on_map(f),
+            num,
+            buildings,
+            target,
+            destination,
+            map_tiles: f.map_tiles(),
+            ignore_orders: f.scenario_ignore_orders(),
+            ignore_orders_prune_committed: f.scenario_ignore_orders_prune_committed(),
+        };
+        let (effects, proceed) = match evaluate_group_action_entry(program, facts) {
+            EntryDecision::Unavailable => {
+                self.stats.unported += 1;
+                return None;
+            }
+            EntryDecision::Refuse(effects) => (effects, false),
+            EntryDecision::Proceed(effects) => (effects, true),
+        };
+        if effects.action_begin || effects.clear_form {
+            if let Some(group) = self.groups.get_mut(self.slot) {
+                if effects.action_begin {
+                    group.disband = 0;
+                }
+                if effects.clear_form {
+                    group.form = -1;
+                }
+            }
+        }
+        proceed.then_some(effects)
+    }
+
+    /// The `(addressed object, destination)` pair each entry program reads off the wire.
+    /// Offsets are the same ones the matching arm of [`Self::run`] decodes.
+    fn entry_wire_fields(name: &str, cmd: &[u8]) -> (Option<i32>, Option<(i32, i32)>) {
+        let coords = || i32_at(cmd, 1).zip(i32_at(cmd, 5));
+        match name {
+            "move_to" | "move_near" | "patrol" | "launch_patrol" | "attack_ground" => {
+                (None, coords())
+            }
+            "attack" | "siege_attack" | "swarm_around" => (i32_at(cmd, 1), None),
+            _ => (None, None),
+        }
+    }
+
     fn run(&mut self, name: &str, cmd: &[u8], f: &mut dyn Fleet) {
+        if dispatch_program(name).is_some() {
+            let (target, destination) = Self::entry_wire_fields(name, cmd);
+            let Some(effects) = self.group_action_entry(name, target, destination, f) else {
+                return;
+            };
+            // The clamped destination replaces the raw wire pair for the arms that carry
+            // one; `clamp_unbounded` means the host has no map bounds, so the pair is the
+            // wire value and the row keeps its stated gap.
+            if let Some((x, y)) = effects.destination {
+                return self.run_entered(name, cmd, x, y, f);
+            }
+        }
+        self.run_entered(name, cmd, 0, 0, f);
+    }
+
+    /// `ex`/`ey` are the destination after the entry program's clamp; the arms below use
+    /// them in place of the raw wire pair wherever their action carries one.
+    #[allow(clippy::too_many_lines)]
+    fn run_entered(&mut self, name: &str, cmd: &[u8], ex: i32, ey: i32, f: &mut dyn Fleet) {
         match name {
             "begin" => self.action_begin(),
             "move_to" => {
@@ -4249,9 +4648,10 @@ impl Action<'_> {
                 // form@19 width@20 disembark@21. process_move_to passes them to
                 // action_move_to(to_x, to_y, queued, set_angle, angle, orders, 1, form,
                 // width, disembark) [structure, 0x009497C0].
-                let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+                let (Some(_), Some(_)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
+                let (x, y) = (ex, ey);
                 let set_angle = i32_at(cmd, 9).unwrap_or(0) != 0;
                 let angle = i32_at(cmd, 13).unwrap_or(0);
                 let orders = i8_at(cmd, 17).unwrap_or(0) as i64;
@@ -4266,11 +4666,12 @@ impl Action<'_> {
             "move_near" => {
                 // MoveNearCommand adds tolerance@9 and shifts the tail by four
                 // [structure, 0x009495C0].
-                let (Some(x), Some(y), Some(tol)) =
+                let (Some(_), Some(_), Some(tol)) =
                     (i32_at(cmd, 1), i32_at(cmd, 5), i32_at(cmd, 9))
                 else {
                     return;
                 };
+                let (x, y) = (ex, ey);
                 let set_angle = i32_at(cmd, 13).unwrap_or(0) != 0;
                 let angle = i32_at(cmd, 17).unwrap_or(0);
                 let orders = i8_at(cmd, 21).unwrap_or(0) as i64;
@@ -4292,11 +4693,11 @@ impl Action<'_> {
                 self.action_attack(ox, whom, q, f);
             }
             "attack_ground" => {
-                let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+                let (Some(_), Some(_)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i8_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_ground(OrderIndex::AttackGround, x, y, q, f);
+                self.action_ground(OrderIndex::AttackGround, ex, ey, q, f);
             }
             "halt" => {
                 let _ = self.action_halt(0, f);
@@ -4351,11 +4752,14 @@ impl Action<'_> {
                 self.action_target(OrderIndex::Garrison, ox, whom, q, f);
             }
             "repair" => {
+                // RepairCommand (13 B): ox@1 whom@5 queued@9. `process_repair` `0x00948CB0`
+                // resolves `objects[whom][ox]` and requires its flag byte `+0x08` bit 0
+                // before calling `action_repair(ox, whom, queued)` [measured, 0x00948DE1].
                 let (Some(ox), Some(whom)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i32_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_target(OrderIndex::Repair, ox, whom, q, f);
+                self.action_repair(ox, whom, q, f);
             }
             "gather" => {
                 // GatherCommand: ox@1 queued@5. The gatherable belongs to the gaia owner,
@@ -4365,32 +4769,42 @@ impl Action<'_> {
                 self.action_target(OrderIndex::Gather, ox, -1, q, f);
             }
             "board_ship" => {
+                // BoardShipCommand (9 B): ox@1 queued@5. The ship is `objects[group.who][ox]`
+                // — `action_board_ship` takes no owner argument [measured, 0x00700184].
                 let Some(ox) = i32_at(cmd, 1) else { return };
                 let q = QueuePos::from_i64(i32_at(cmd, 5).unwrap_or(0) as i64);
-                self.action_target(OrderIndex::BoardShip, ox, -1, q, f);
+                self.action_board_ship(ox, q, f);
             }
             "trade" => {
-                let (Some(ox), Some(whom)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+                // TradeCommand (21 B): ox@1 whom@5 oxx@9 whose@13 queued@17.
+                // `process_trade` `0x00948B20` validates *both* endpoints and passes all
+                // four through to `action_trade` [measured, 0x00948C9D].
+                let (Some(ox), Some(whom), Some(oxx), Some(whose)) = (
+                    i32_at(cmd, 1),
+                    i32_at(cmd, 5),
+                    i32_at(cmd, 9),
+                    i32_at(cmd, 13),
+                ) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i32_at(cmd, 17).unwrap_or(0) as i64);
-                self.action_target(OrderIndex::TradeRoute, ox, whom, q, f);
+                self.action_trade(ox, whom, oxx, whose, q, f);
             }
             "patrol" => {
                 // PatrolCommand: to_x@1 to_y@5 queued@9. `Unit::add_patrol_order`
                 // allocates GROUP_PATROL, never PATROL [measured].
-                let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+                let (Some(_), Some(_)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i8_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_patrol(x, y, q, false, f);
+                self.action_patrol(ex, ey, q, false, f);
             }
             "launch_patrol" => {
-                let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+                let (Some(_), Some(_)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
                 let q = QueuePos::from_i64(i32_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_patrol(x, y, q, true, f);
+                self.action_patrol(ex, ey, q, true, f);
             }
             "scramble" => {
                 let (who, list) = self.members();
@@ -5096,9 +5510,15 @@ impl Action<'_> {
                     let angle_offset = a.groups.get(a.slot).map_or(0, |group| {
                         (group.angles[i] as i32).wrapping_mul(0x0100_0000)
                     });
+                    // Both order constructors reached from here take a UCoord cell index
+                    // and store `cell * 0x30 + 0x18` — the centred Coord — into `x`/`y`
+                    // and `dest_x`/`dest_y` [measured, `Unit::add_move_facing_order`
+                    // `0x005E55C0` and `Unit::add_group_move_order` `0x005E4710`; the call
+                    // sites are `0x00705FC7` and `0x00705F57`]. Storing the bare cell index
+                    // put every formation destination at 1/48 of its intended Coord.
                     (
-                        formation_order_coord(layout.to_x[i]),
-                        formation_order_coord(layout.to_y[i]),
+                        formation_order_destination(layout.to_x[i]),
+                        formation_order_destination(layout.to_y[i]),
                         actual_angle.wrapping_add(angle_offset),
                     )
                 } else {
@@ -5233,6 +5653,309 @@ impl Action<'_> {
                 };
                 a.install(who, o, ord, q, f);
             }
+        };
+        if self.with_queue_first(q, f, &mut body) {
+            return;
+        }
+        body(self, q, f);
+    }
+
+    // -----------------------------------------------------------------------
+    // The three recovered economy order installers.
+    //
+    // See `systems/economy_group_actions.rs` for the instruction-level derivation and
+    // `docs/assembly/economy-group-actions.md` for the write-up. These rows no longer share
+    // `action_target`'s "one order on every live member" shape, which is wrong for all
+    // three: they reset `GroupData::form`, they gate members on facts the host owns, and
+    // two of them install a second order kind.
+    // -----------------------------------------------------------------------
+
+    fn economy_fact<T: Copy>(v: Option<T>, name: &'static str) -> EconomyFact<T> {
+        match v {
+            Some(v) => EconomyFact::Known(v),
+            None => EconomyFact::Unknown(name),
+        }
+    }
+
+    /// The group's live member prefix with every retail read the three economy bodies
+    /// perform, asked of `target` where a read is relative to the addressed object.
+    fn economy_members(
+        &self,
+        target: Option<(u8, i16)>,
+        f: &dyn Fleet,
+    ) -> Vec<EconomyMemberFacts> {
+        let (who, list) = self.members();
+        list.into_iter()
+            .map(|o| {
+                let (x, y) = f.pos(who, o);
+                let mut facts = EconomyMemberFacts::opaque(
+                    o,
+                    f.is_unit(who, o) && f.alive(who, o),
+                    f.is_on_map(who, o),
+                    x,
+                    y,
+                );
+                facts.type_class =
+                    Self::economy_fact(f.object_type_class(who, o), "ObjectTypeData+0x04");
+                facts.domain = EconomyFact::Known(f.domain(who, o));
+                facts.busy = Self::economy_fact(f.is_busy(who, o), "UnitData::is_busy 0x0060A370");
+                facts.regions_touch = Self::economy_fact(
+                    target.and_then(|t| f.object_regions_touch((who, o), t)),
+                    "Region::is_coast 0x00680F90",
+                );
+                facts.repair_spell_castable = Self::economy_fact(
+                    f.spell_castable(who, o, economy_group_actions::REPAIR_CAST_SPELL_TYPE),
+                    "SpellTypeData::is_castable 0x00675BC0",
+                );
+                facts.is_caravan =
+                    Self::economy_fact(f.is_caravan(who, o), "UnitData::is_caravan vslot+0xD0");
+                facts.is_sea_trade_member = Self::economy_fact(
+                    f.object_type_is(who, o, economy_group_actions::TRADE_SEA_MEMBER_TYPE),
+                    "ObjectData::is(0x13E)",
+                );
+                facts.ship_can_carry = Self::economy_fact(
+                    target.and_then(|t| f.can_carry(t, (who, o))),
+                    "ObjectData::can_carry 0x006483C0",
+                );
+                facts
+            })
+            .collect()
+    }
+
+    /// Commit one recovered plan. Steps are applied in emission order because the
+    /// `QueuePos::New` arms retire a list that the following step writes into.
+    fn apply_economy_plan(&mut self, plan: &EconomyPlan, f: &mut dyn Fleet) {
+        let (who, _) = self.members();
+        for step in &plan.steps {
+            match *step {
+                EconomyStep::SetGroupForm(v) => {
+                    if let Some(g) = self.groups.get_mut(self.slot) {
+                        g.form = v;
+                    }
+                }
+                EconomyStep::AddCastOrder { o, x, y, queue, .. } => {
+                    // `Order` carries no spell-type field; the recovered `CastOrder`
+                    // payload (`SPELL` at +0x20) lives in `systems/cast_order_frontier.rs`
+                    // and is not reachable from this struct, so the installed order records
+                    // the position only. The plan step keeps the exact spell index.
+                    let ord = Order {
+                        kind: OrderIndex::CastSpell,
+                        x,
+                        y,
+                        ..Order::default()
+                    };
+                    self.install(who, o, ord, economy_queue(queue), f);
+                }
+                EconomyStep::AddRepairOrder {
+                    o,
+                    target_o,
+                    target_who,
+                    queue,
+                } => {
+                    let ord = Order {
+                        kind: OrderIndex::Repair,
+                        target_who: target_who as i8,
+                        target_o: target_o as i16,
+                        ..Order::default()
+                    };
+                    self.install(who, o, ord, economy_queue(queue), f);
+                }
+                EconomyStep::AddTradeOrder {
+                    o, ox, whom, queue, ..
+                } => {
+                    // Only the first endpoint survives installation: `Order` has no
+                    // `TradeOrder` payload for `(oxx, whose, uid2)` at +0x14..+0x26. The
+                    // recovered shape is `systems/trade_order_frontier.rs`; the plan step
+                    // carries both endpoints so a receiver that grows the field can use it.
+                    let ord = Order {
+                        kind: OrderIndex::TradeRoute,
+                        target_who: whom as i8,
+                        target_o: ox as i16,
+                        ..Order::default()
+                    };
+                    self.install(who, o, ord, economy_queue(queue), f);
+                }
+                EconomyStep::AddBoardOrder { o, ship_o, queue } => {
+                    let ord = Order {
+                        kind: OrderIndex::BoardShip,
+                        target_who: who as i8,
+                        target_o: ship_o as i16,
+                        ..Order::default()
+                    };
+                    self.install(who, o, ord, economy_queue(queue), f);
+                }
+                EconomyStep::ClearShipOrders { ship_o } => {
+                    if let Some(list) = f.orders_mut(who, ship_o as i16) {
+                        if !list.is_empty() {
+                            list.clear();
+                            self.stats.orders_cleared += 1;
+                        }
+                    }
+                }
+                EconomyStep::AddAwaitBoardOrder {
+                    ship_o,
+                    passenger_o,
+                } => {
+                    // `Unit::add_await_board_order` 0x005E4C80 never reads its QueuePos
+                    // argument and has no QUEUE_NEW arm: it always appends.
+                    let ord = Order {
+                        kind: OrderIndex::AwaitBoard,
+                        target_who: who as i8,
+                        target_o: passenger_o,
+                        ..Order::default()
+                    };
+                    self.install(who, ship_o as i16, ord, QueuePos::Last, f);
+                }
+                EconomyStep::RetireRepairTarget {
+                    target_o,
+                    target_who,
+                } => {
+                    if target_o < 0 || target_who < 0 || target_who >= NUM_OWNER_SLOTS as i32 {
+                        continue;
+                    }
+                    let (tw, to) = (target_who as u8, target_o as i16);
+                    let masks = f.unit_masks(tw, to);
+                    f.set_unit_masks(tw, to, masks & !economy_group_actions::CAST_SPELL_ACTIVE_MASK);
+                    // `Unit::close_orders(0)` 0x005E37F0. The adjacent `[+0xC0] = 0`,
+                    // `Unit::clear_partial_path` and `Unit::update_action` write unit state
+                    // this bridge does not hold; they stay named in the plan step.
+                    if let Some(list) = f.orders_mut(tw, to) {
+                        if !list.is_empty() {
+                            list.clear();
+                            self.stats.orders_cleared += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `Group::action_repair` `0x007020C0`.
+    fn action_repair(&mut self, ox: i32, whom: i32, q: QueuePos, f: &mut dyn Fleet) {
+        let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
+            let target = economy_target(whom, ox);
+            let members = a.economy_members(target, f);
+            let Some(group) = a.groups.get(a.slot).cloned() else {
+                return;
+            };
+            let Ok(plan) = plan_repair(&group, ox, whom, retail_queue(q), &members) else {
+                a.stats.unported += 1;
+                return;
+            };
+            a.apply_economy_plan(&plan, f);
+            a.economy_receipts.push(EconomyActionReceipt {
+                action: "repair",
+                plan: Some(plan),
+            });
+        };
+        if self.with_queue_first(q, f, &mut body) {
+            return;
+        }
+        body(self, q, f);
+    }
+
+    /// `Group::action_trade` `0x00701CC0`.
+    fn action_trade(
+        &mut self,
+        ox: i32,
+        whom: i32,
+        oxx: i32,
+        whose: i32,
+        q: QueuePos,
+        f: &mut dyn Fleet,
+    ) {
+        let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
+            let target = economy_target(whom, ox);
+            let mut facts = TradeTargetFacts::opaque();
+            if let Some((tw, to)) = target {
+                facts.live_building = EconomyFact::Known(f.is_building(tw, to));
+                facts.active = Action::economy_fact(
+                    f.build_is_active(tw, to),
+                    "WallData::is_active vslot+0x4C",
+                );
+                facts.is_trade = Action::economy_fact(
+                    f.object_type_is(tw, to, economy_group_actions::TRADE_MARKET_TYPE),
+                    "WallData::is_trade vslot+0x24",
+                );
+                facts.is_sea_trade = Action::economy_fact(
+                    f.object_type_is(tw, to, economy_group_actions::TRADE_SEA_DESTINATION_TYPE),
+                    "WallData::is_sea_trade vslot+0x28",
+                );
+            }
+            let (gwho, glist) = a.members();
+            let pairs: Vec<(u8, i16)> = glist.into_iter().map(|o| (gwho, o)).collect();
+            facts.group_has_trader = Action::economy_fact(
+                economy_group_actions::TRADE_GROUP_COUNT_TYPES
+                    .iter()
+                    .try_fold(false, |acc, &t| {
+                        f.group_type_count(
+                            &pairs,
+                            economy_group_actions::TRADE_GROUP_COUNT_INDEX,
+                            t,
+                        )
+                        .map(|n| acc || n != 0)
+                    }),
+                "GroupData::count 0x00711720",
+            );
+            let members = a.economy_members(target, f);
+            let Some(group) = a.groups.get(a.slot).cloned() else {
+                return;
+            };
+            let plan = match plan_trade(
+                &group,
+                ox,
+                whom,
+                oxx,
+                whose,
+                retail_queue(q),
+                facts,
+                &members,
+            ) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    a.stats.unported += 1;
+                    return;
+                }
+            };
+            if let Some(plan) = plan.as_ref() {
+                a.apply_economy_plan(plan, f);
+            }
+            a.economy_receipts.push(EconomyActionReceipt {
+                action: "trade",
+                plan,
+            });
+        };
+        if self.with_queue_first(q, f, &mut body) {
+            return;
+        }
+        body(self, q, f);
+    }
+
+    /// `Group::action_board_ship` `0x00700010`.
+    ///
+    /// The `QUEUE_FIRST` arm is *not* the generic stash/halt/re-issue dance: retail builds
+    /// a temporary stack `Group` holding only the ship (`Group::clear(-1)`, `Group::add(ox,
+    /// group.who, 0, 0)` at `0x00700111..0x0070014E`) and hands *that* group to
+    /// `Group::finish_insert` `0x0070E620`. This bridge still replays the stash to its own
+    /// owners, which is the pre-existing behaviour and a named divergence, because the
+    /// replay semantics of `finish_insert` were not recovered by this lane.
+    fn action_board_ship(&mut self, ox: i32, q: QueuePos, f: &mut dyn Fleet) {
+        let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
+            let (who, _) = a.members();
+            let target = economy_target(i32::from(who), ox);
+            let members = a.economy_members(target, f);
+            let Some(group) = a.groups.get(a.slot).cloned() else {
+                return;
+            };
+            let Ok(plan) = plan_board_ship(&group, ox, retail_queue(q), &members) else {
+                a.stats.unported += 1;
+                return;
+            };
+            a.apply_economy_plan(&plan, f);
+            a.economy_receipts.push(EconomyActionReceipt {
+                action: "board_ship",
+                plan: Some(plan),
+            });
         };
         if self.with_queue_first(q, f, &mut body) {
             return;

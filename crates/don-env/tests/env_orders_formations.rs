@@ -51,7 +51,11 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
 
     // Citizen is runtime category 10. Unlike category 0's alternating half-column,
     // the recovered category rule keeps these three captains on the same lateral axis.
-    let expected_destinations = [(100, 200), (100, 203), (100, 206)];
+    // Centred Coords, not UCoord cell indices. `Unit::add_move_facing_order` `0x005E55C0`
+    // stores `param * 0x30 + 0x18` into x/y AND dest_x/dest_y, so a cell index `c` lands as
+    // `c * 48 + 24`. This fixture previously froze the un-centred cells, which is how the
+    // missing scale-back in `action_move_near` stayed invisible.
+    let expected_destinations = [(4_824, 9_624), (4_824, 9_768), (4_824, 9_912)];
     for ((&row, &object), destination) in rows.iter().zip(objects.iter()).zip(expected_destinations)
     {
         assert_eq!(world.sim.units.form()[row], Formation::Line as i8);
