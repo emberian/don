@@ -3,16 +3,17 @@
 ## Result
 
 The stock `economic.bhs` Program image can now be entered through the exact
-four-argument `Leader::production_ai` boundary. The replay adapter owns eighteen
+four-argument `Leader::production_ai` boundary. The replay adapter owns nineteen
 ScenarioFuncSet handlers on the smallest reached subdomain. Installed `rules.xml`
 owns `get_mapstyle`; replay setup owns the reached conquest and starting-option gates.
 Execution now owns dynamic builtin 377, `find_city_id`, plus the exact joined
 type-counter cohort 259--261, the canonical population reads 245--246, and the reached
-Tech/Other branch of 362, `have_tech`. It stops strictly at builtin 78, `stop_timer`.
+Tech/Other branch of 362, `have_tech`, and canonical builtin 78, `stop_timer`. It stops
+strictly at builtin 79, `timer_expired`.
 
 No replay checksum match is claimed. The adapter is not registered in the default
-harness, and a failed prefix atomically rolls back both BHS static-variable writes and
-the external `ref step` cell.
+harness, and a failed prefix atomically rolls back BHS static-variable writes, the
+external `ref step` cell, and the unique script timer owner including its private cursor.
 
 ## The four live arguments
 
@@ -92,16 +93,20 @@ script next calls builtin 259, `num_type(who, "Market")`, and reaches builtin 24
 4. `362 have_tech(who, "The Art of War")`
 5. `259 num_type(who, "Tower")`
 6. `323 find_nation(who)`
-7. `78 stop_timer(who)` — the next honest unsupported boundary
+7. `78 stop_timer(who)`
+8. `79 timer_expired(who)` — the next honest unsupported boundary
 
-The BHS source supplies integer `who` to `stop_timer` even though the native declaration
-takes a String. Retail's `ScriptInt::get_string` conversion therefore presents `"1"` on
-this fixture. Timer mutation is not admitted by the immutable read-only image.
+The BHS source supplies integer `who` to both timer calls even though their native
+declarations take a String. Retail inserts `OP_CAST String`; `ScriptInt::get_string`
+formats signed base-10 text, so the reached value is `"1"`. DoN's compiler does not yet
+insert builtin-argument casts, so the canonical timer handler performs the equivalent
+`Value::as_string` conversion at its boundary while the trace honestly retains `Int(1)`.
 
 That path uses replay settings `starting_resources=1`, `starting_town=2`, no conquest
 or scenario semaphore bit, one live city, and a sea map. It changes `step` from 1 to 6,
 then enters `train_unit_with_need`. The failed run proves the external ref cell and the
-candidate Program both roll back after the later missing `stop_timer` call.
+candidate Program, and the removed `"1"` timer plus its cursor all roll back after the
+later missing `timer_expired` call.
 
 ## Installed and replay setup bindings
 
@@ -217,21 +222,49 @@ replay host can safely own it. Likewise no full support-count builtin is claimed
 runtime frontier owns decoded expense/support cells, but the active/queued family join
 does not yet have one complete current-owner provenance.
 
-The next measured unsupported call is builtin 78, `stop_timer`. The Program must
-ultimately share one owner with the step-4 game/general-powers runtime; duplicating the
-Program would split its checksummed static state.
+## Canonical timer transaction
+
+The shipped PDB identifies builtin 78 at `0x009e4c10` as the 104-byte
+`ScenarioFuncSet::stop_timer(String const&)`. The handler copies the input into the
+process scratch String, calls the timer list's case-insensitive remove operation, and
+returns 1 on removal or -1 on a miss. There is no empty-name or player-range gate. The
+reached `Int(1)` is therefore the timer key `"1"`, not player slot zero or an invented
+integer-keyed timer.
+
+The complete timer container already lives in `don_bhs::scenario::ScriptTimers`: ordered
+nodes, absolute expiry values, overflow count, and the persistent current-node cursor.
+Its canonical execution owner is the private `ScriptRuntime::timers` used by step-4 game
+and general-powers scripts. The replay call no longer accepts a detached `ScriptTimers`
+or a mutable Program. Instead a narrow `ScriptRuntime` bridge clones its private Program
+and timers together, intercepts only builtin 78 through the shared ScenarioFuncSet
+implementation, validates the VM outcome and ref-argument cells, and commits both owners
+only after every check succeeds. Callers can observe a read-only timer receipt but receive
+no timer or Program mutation handle.
+
+The strict fixture deliberately admits one timer named `"1"`. Builtin 78 removes it in
+the candidate and reports 1; builtin 79 then remains unsupported. The rejected transaction
+restores the timer node, its cursor, initialized Program statics, and external ref step.
+This is stronger than exercising the natural empty-container result of -1, which would
+not prove timer rollback.
+
+Builtin 79 requires more than the timer container: its wrapper unconditionally reads
+`Game+0x560` before calling `ScriptTimers::check`. The canonical live scalar is
+`Sim.world.seconds`, mirrored by `vic_match.tick`; frame number is not a substitute. That
+clock join remains red, so the next measured unsupported call is exactly
+`79 timer_expired(Int(1))`. Unit/Build `have_tech` and full support count also remain red.
 
 ## Validation
 
-All ten focused tests pass locally, including the installed `economic.bhs` trace, ordered
-map-style catalog, and 21-recording census. Persvati validation is recorded against the
-same source in overlay job
-`replay-bhs-population-v5-20260811T183018Z-18780-21147-27c48c816a79`: the six
-content-independent tests establish their assertions, while the installed map-style,
-installed BHS, replay-corpus census, and replay-derived population-owner tests print
-explicit **SKIPPED — NOT A PASS** notices because those content assets are absent. The
-required ignored `final-balance-runtime.bin` compile-time asset was supplied through the
-SHA-pinned remote asset allowlist.
+The eleven focused replay tests pass over the local installed content, including the
+`economic.bhs` trace, ordered map-style catalog, and 21-recording census. The two focused
+canonical-owner transaction tests pass in Persvati job
+`replay-bhs-stop-timer-sim-20260811T192330Z-4034-1869-f80e3692fcd3`. Persvati replay
+overlay job `replay-bhs-stop-timer-v1-20260811T192330Z-4035-29802-f80e3692fcd3`
+establishes the seven content-independent tests; the installed map-style, installed BHS,
+replay-corpus census, and replay-derived population-owner tests print explicit
+**SKIPPED — NOT A PASS** notices because those content assets are absent. The required
+ignored `final-balance-runtime.bin` compile-time asset was supplied through the SHA-pinned
+remote asset allowlist.
 
 Fidelity remains Tier C: instruction-level static recovery plus corpus shape. No live
 retail execution or VM attachment was used in this tranche.

@@ -16,7 +16,8 @@ use std::fmt;
 
 use don_bhs::scenario::ScriptTimers;
 use don_bhs::{
-    call_util, BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
+    call_util, BuiltinDecl, Host, HostError, HostResult, Program, RunOutcome, RuntimeError, Value,
+    Vm, VmError,
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
@@ -189,11 +190,70 @@ pub struct ScriptRuntime {
     bytecodes: u64,
 }
 
+/// The only extra host surface exposed by the production-call bridge.
+///
+/// `ScriptRuntime` executes builtin 78 against its private timer container, then
+/// reports the completed call so the caller can retain its ordinary builtin trace.
+/// No timer reference or mutation API crosses this boundary.
+pub trait ExternalStopTimerHost: Host {
+    fn stop_timer_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalScriptCommit<T> {
+    pub validated: T,
+    pub bytecodes_executed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalScriptFailure<E> {
+    Vm(VmError),
+    Rejected(E),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalScriptError<E> {
+    pub failure: ExternalScriptFailure<E>,
+    pub bytecodes_executed: u64,
+}
+
+struct StopTimerTransactionHost<'a, H> {
+    timers: &'a mut ScriptTimers,
+    external: &'a mut H,
+}
+
+impl<H: ExternalStopTimerHost> Host for StopTimerTransactionHost<'_, H> {
+    fn call(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
+        if decl.index != 78 {
+            return self.external.call(decl, args);
+        }
+        let returned = don_bhs::scenario::call_scenario(self, decl, args)
+            .expect("builtin 78 belongs to the canonical ScenarioFuncSet timer cohort")?;
+        self.external.stop_timer_returned(decl, args, &returned);
+        Ok(returned)
+    }
+
+    fn script_timers(&mut self) -> Result<&mut ScriptTimers, HostError> {
+        Ok(self.timers)
+    }
+}
+
 impl ScriptRuntime {
     pub fn new(
         program: Program,
         game: Option<ScriptBinding>,
         general_powers: Option<ScriptBinding>,
+    ) -> Result<Self, ScriptBindError> {
+        Self::new_with_timers(program, game, general_powers, ScriptTimers::default())
+    }
+
+    /// Admit a pre-existing timer container while constructing its unique
+    /// `ScriptRuntime` owner. This is an ownership transfer, not a mirror install.
+    pub fn new_with_timers(
+        program: Program,
+        game: Option<ScriptBinding>,
+        general_powers: Option<ScriptBinding>,
+        timers: ScriptTimers,
     ) -> Result<Self, ScriptBindError> {
         if let Some(binding) = &game {
             validate_binding(&program, binding)?;
@@ -209,7 +269,7 @@ impl ScriptRuntime {
             create_units: None,
             started: false,
             output: Vec::new(),
-            timers: ScriptTimers::default(),
+            timers,
             calls: 0,
             bytecodes: 0,
         })
@@ -217,6 +277,60 @@ impl ScriptRuntime {
 
     pub fn program(&self) -> &Program {
         &self.program
+    }
+
+    /// Read-only visibility for checksum projection and rollback receipts. Timer
+    /// mutation remains private to the canonical ScenarioFuncSet paths.
+    pub fn script_timers(&self) -> &ScriptTimers {
+        &self.timers
+    }
+
+    /// Execute one externally bound script while builtin 78 borrows this
+    /// runtime's unique timer owner.
+    ///
+    /// Program statics and `ScriptTimers` (including its private cursor) are
+    /// cloned together. The validator sees the completed outcome and ref-argument
+    /// cells; both candidates commit only when it accepts. VM or validation
+    /// failure leaves the runtime byte-for-byte on its entry owners.
+    pub fn run_external_stop_timer_transaction<H, T, E>(
+        &mut self,
+        file: usize,
+        script: usize,
+        args: &[Value],
+        external: &mut H,
+        validate: impl FnOnce(&RunOutcome, &[Value]) -> Result<T, E>,
+    ) -> Result<ExternalScriptCommit<T>, ExternalScriptError<E>>
+    where
+        H: ExternalStopTimerHost,
+    {
+        let mut candidate_program = self.program.clone();
+        let mut candidate_timers = self.timers.clone();
+        let mut candidate_args = args.to_vec();
+        let mut host = StopTimerTransactionHost {
+            timers: &mut candidate_timers,
+            external,
+        };
+        let (result, bytecodes_executed) = {
+            let mut vm = Vm::new(&mut candidate_program, &mut host);
+            let result = vm.run_script_index_mut(file, script, &mut candidate_args);
+            (result, vm.bytecodes_executed)
+        };
+        let outcome = result.map_err(|failure| ExternalScriptError {
+            failure: ExternalScriptFailure::Vm(failure),
+            bytecodes_executed,
+        })?;
+        let validated =
+            validate(&outcome, &candidate_args).map_err(|failure| ExternalScriptError {
+                failure: ExternalScriptFailure::Rejected(failure),
+                bytecodes_executed,
+            })?;
+
+        self.program = candidate_program;
+        self.timers = candidate_timers;
+        Ok(ExternalScriptCommit {
+            validated,
+            bytecodes_executed,
+        })
     }
 
     pub fn output(&self) -> &[ScriptOutput] {
@@ -2196,7 +2310,112 @@ impl ScenarioHost for Sim {
 
 #[cfg(test)]
 mod tests {
-    use super::ScriptTimers;
+    use super::{ExternalScriptFailure, ExternalStopTimerHost, ScriptRuntime, ScriptTimers};
+    use don_bhs::disasm::asm;
+    use don_bhs::{
+        find_builtin, BuiltinDecl, Host, HostError, HostResult, Program, Script, ScriptFile,
+        ScriptTy, Value, VarRef, VmError,
+    };
+
+    #[derive(Default)]
+    struct ExternalHost {
+        stop_timer_returns: Vec<i32>,
+    }
+
+    impl Host for ExternalHost {
+        fn call(&mut self, _decl: &BuiltinDecl, _args: &[Value]) -> HostResult {
+            Err(HostError::Unimplemented)
+        }
+    }
+
+    impl ExternalStopTimerHost for ExternalHost {
+        fn stop_timer_returned(&mut self, _decl: &BuiltinDecl, _args: &[Value], returned: &Value) {
+            self.stop_timer_returns.push(returned.as_int());
+        }
+    }
+
+    fn stop_timer_program(fail_after_remove: bool) -> Program {
+        let mut ops = vec![
+            (0x47, vec![0]),
+            (0x26, vec![VarRef::Const(1).encode()]),
+            (0x33, vec![VarRef::Static(0).encode()]),
+            (0x26, vec![VarRef::Const(0).encode()]),
+            (0x38, vec![find_builtin("stop_timer").unwrap().index]),
+            (0x27, Vec::new()),
+        ];
+        if fail_after_remove {
+            ops.extend([
+                (0x26, vec![VarRef::Const(0).encode()]),
+                (0x38, vec![find_builtin("timer_expired").unwrap().index]),
+                (0x27, Vec::new()),
+            ]);
+        }
+        ops.push((0x3e, Vec::new()));
+        let borrowed = ops
+            .iter()
+            .map(|(op, operands)| (*op, operands.as_slice()))
+            .collect::<Vec<_>>();
+        Program::single(ScriptFile {
+            code: asm(&borrowed),
+            const_pool: vec![Value::Int(1), Value::Int(9)],
+            scripts: vec![Script {
+                name: "external".into(),
+                return_type: ScriptTy::Void.tag(),
+                statics: vec![None],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+    }
+
+    fn runtime_with_timer(program: Program) -> ScriptRuntime {
+        let mut timers = ScriptTimers::default();
+        assert_eq!(timers.add_timer("1", 300), Ok(1));
+        ScriptRuntime::new_with_timers(program, None, None, timers).unwrap()
+    }
+
+    #[test]
+    fn external_stop_timer_transaction_commits_the_unique_program_and_timer_owner() {
+        let mut runtime = runtime_with_timer(stop_timer_program(false));
+        let mut host = ExternalHost::default();
+        runtime
+            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+                assert!(outcome.ok());
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        assert!(runtime.script_timers().is_empty());
+        assert_eq!(
+            runtime.program().files[0].scripts[0].statics[0],
+            Some(Value::Int(9))
+        );
+        assert_eq!(host.stop_timer_returns, [1]);
+
+        runtime
+            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |_, _| Ok::<(), ()>(()))
+            .unwrap();
+        assert_eq!(host.stop_timer_returns, [1, -1]);
+    }
+
+    #[test]
+    fn external_stop_timer_transaction_rolls_program_and_timer_cursor_back_together() {
+        let mut runtime = runtime_with_timer(stop_timer_program(true));
+        let before_timers = runtime.script_timers().clone();
+        let mut host = ExternalHost::default();
+        let error = runtime
+            .run_external_stop_timer_transaction(0, 0, &[], &mut host, |_, _| Ok::<(), ()>(()))
+            .unwrap_err();
+        assert!(matches!(
+            error.failure,
+            ExternalScriptFailure::Vm(VmError::UnimplementedBuiltin {
+                index: 79,
+                name: "timer_expired"
+            })
+        ));
+        assert_eq!(runtime.program().files[0].scripts[0].statics[0], None);
+        assert_eq!(runtime.script_timers(), &before_timers);
+        assert_eq!(host.stop_timer_returns, [1]);
+    }
 
     #[test]
     fn timer_capacity_gate_precedes_replacement_and_expiry_consumes() {

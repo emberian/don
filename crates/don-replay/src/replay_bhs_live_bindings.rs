@@ -10,9 +10,8 @@ use crate::initial::{InitialPlayer, InitialState};
 use crate::leaders_runtime_frontier::{RuntimeCoveredRange, RuntimeLeadersFrontier};
 use crate::map_style::{MapStyleStaticData, StaticFileEvidence, SHIPPED_MAP_STYLE_CATALOG};
 use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
-use don_bhs::{
-    BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
-};
+use don_bhs::{BuiltinDecl, Host, HostError, HostResult, RuntimeError, Value, VmError};
+use don_sim::script_runtime::{ExternalScriptFailure, ExternalStopTimerHost, ScriptRuntime};
 use don_sim::systems::bhs_create_unit_runtime::BhsCreateUnitRuntime;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
 use don_sim::systems::victory_score::{
@@ -479,8 +478,8 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 18] = [
-    81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712, 713,
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 19] = [
+    78, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712, 713,
 ];
 
 /// A strict host for the first stock-economic prefix.
@@ -651,7 +650,7 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
         Ok(Value::Int(value))
     }
 
-    fn dispatch(&self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
+    fn dispatch(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match decl.index {
             // get_mapstyle(), `0x009e4cc0`: `Rules::map_styles[GameInfo::map_style]`
             // at 0x58-byte stride, returning its String at +0x14.
@@ -891,6 +890,17 @@ impl Host for ReplayProductionBuiltinHost<'_> {
     }
 }
 
+impl ExternalStopTimerHost for ReplayProductionBuiltinHost<'_> {
+    fn stop_timer_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
+        self.trace.push(ProductionBuiltinCall {
+            index: decl.index,
+            name: decl.name,
+            args: args.iter().map(ProductionBuiltinValue::from).collect(),
+            returned: ProductionBuiltinValue::from(returned),
+        });
+    }
+}
+
 #[derive(Debug)]
 pub enum ProductionRunFailure {
     BadFile(usize),
@@ -919,18 +929,19 @@ pub struct ProductionRunReceipt {
     pub trace: Vec<ProductionBuiltinCall>,
 }
 
-/// Execute one production call atomically over the Program and the `ref step` cell.
+/// Execute one production call atomically over the Program, the `ref step` cell,
+/// and the canonical script-engine timer container.
 ///
 /// A missing DoN builtin is an implementation gap, not a retail script result. The
 /// candidate Program is therefore discarded on every failure so partial static-variable
 /// initializers cannot leak into channel 15.
 pub fn run_production_call(
-    program: &mut Program,
+    runtime: &mut ScriptRuntime,
     binding: &ReplayBhsBinding,
     call: &mut ReplayProductionCall,
     image: &ProductionBuiltinImage,
 ) -> Result<ProductionRunReceipt, ProductionRunError> {
-    let Some(file) = program.files.get(binding.file) else {
+    let Some(file) = runtime.program().files.get(binding.file) else {
         return Err(ProductionRunError {
             failure: ProductionRunFailure::BadFile(binding.file),
             bytecodes_executed: 0,
@@ -957,60 +968,54 @@ pub fn run_production_call(
     }
 
     let before = *call;
-    let mut args = [
+    let args = [
         Value::Int(call.who),
         Value::Int(call.step),
         Value::Int(call.boom_vs_rush),
         Value::Int(call.num_loops),
     ];
-    let mut candidate = program.clone();
     let mut host = ReplayProductionBuiltinHost::new(image);
-    let (result, failed_bytecodes) = {
-        let mut vm = Vm::new(&mut candidate, &mut host);
-        let result = vm.run_script_index_mut(binding.file, script, &mut args);
-        (result, vm.bytecodes_executed)
-    };
+    let result = runtime.run_external_stop_timer_transaction(
+        binding.file,
+        script,
+        &args,
+        &mut host,
+        |outcome, candidate_args| {
+            if let Some(failure) = outcome.error.clone() {
+                return Err(ProductionRunFailure::Runtime(failure));
+            }
+            let Some(Value::Int(after_step)) = candidate_args.get(1) else {
+                return Err(ProductionRunFailure::StepWasNotInt);
+            };
+            let Some(Value::Int(returned)) = outcome.returned.as_ref() else {
+                return Err(ProductionRunFailure::ReturnWasNotInt);
+            };
+            Ok((*after_step, *returned))
+        },
+    );
     let trace = host.trace;
-    let outcome = match result {
-        Ok(outcome) => outcome,
-        Err(failure) => {
+    let committed = match result {
+        Ok(committed) => committed,
+        Err(error) => {
+            let failure = match error.failure {
+                ExternalScriptFailure::Vm(failure) => ProductionRunFailure::Vm(failure),
+                ExternalScriptFailure::Rejected(failure) => failure,
+            };
             return Err(ProductionRunError {
-                failure: ProductionRunFailure::Vm(failure),
-                bytecodes_executed: failed_bytecodes,
+                failure,
+                bytecodes_executed: error.bytecodes_executed,
                 trace,
-            })
+            });
         }
     };
-    if let Some(failure) = outcome.error {
-        return Err(ProductionRunError {
-            failure: ProductionRunFailure::Runtime(failure),
-            bytecodes_executed: outcome.bytecodes_executed,
-            trace,
-        });
-    }
-    let Value::Int(after_step) = args[1] else {
-        return Err(ProductionRunError {
-            failure: ProductionRunFailure::StepWasNotInt,
-            bytecodes_executed: outcome.bytecodes_executed,
-            trace,
-        });
-    };
-    let Some(Value::Int(returned)) = outcome.returned else {
-        return Err(ProductionRunError {
-            failure: ProductionRunFailure::ReturnWasNotInt,
-            bytecodes_executed: outcome.bytecodes_executed,
-            trace,
-        });
-    };
-
-    *program = candidate;
+    let (after_step, returned) = committed.validated;
     call.step = after_step;
     Ok(ProductionRunReceipt {
         before,
         after_step,
         returned,
         disposition: returned.into(),
-        bytecodes_executed: outcome.bytecodes_executed,
+        bytecodes_executed: committed.bytecodes_executed,
         trace,
     })
 }

@@ -21,8 +21,13 @@ mod replay_bhs_live_bindings;
 #[path = "../src/replay_bhs_runtime.rs"]
 mod replay_bhs_runtime;
 
-use don_bhs::{find_builtin, Host, HostError, Value, VmError};
+use don_bhs::disasm::asm;
+use don_bhs::{
+    find_builtin, Host, HostError, Program, Script, ScriptFile, ScriptTimers, ScriptTy, Value,
+    VarRef, VmError,
+};
 use don_replay::replay::Replay;
+use don_sim::script_runtime::ScriptRuntime;
 use replay_bhs_live_bindings::{
     bind_production_call, bind_production_map_style, bind_production_population,
     bind_production_type_counts, run_production_call, ProductionBuiltinImage,
@@ -368,9 +373,62 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
         [
-            81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712,
+            78, 81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712,
             713,
         ]
+    );
+}
+
+#[test]
+fn stop_timer_coerces_the_script_integer_name_and_mutates_the_canonical_container() {
+    let mut timers = ScriptTimers::default();
+    assert_eq!(timers.add_timer("1", 300), Ok(1));
+    let stop_timer = find_builtin("stop_timer").unwrap();
+    let program = Program::single(ScriptFile {
+        code: asm(&[
+            (0x47, &[0]),
+            (0x26, &[VarRef::Const(0).encode()]),
+            (0x38, &[stop_timer.index]),
+            (0x3e, &[]),
+        ]),
+        const_pool: vec![Value::Int(1)],
+        scripts: vec![Script {
+            name: "stop_one".into(),
+            return_type: ScriptTy::Int.tag(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mut runtime = ScriptRuntime::new_with_timers(program, None, None, timers).unwrap();
+    let image = ProductionBuiltinImage::default();
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    let committed = runtime
+        .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+            Ok::<Value, ()>(outcome.returned.clone().unwrap())
+        })
+        .unwrap();
+    assert_eq!(
+        committed.validated,
+        Value::Int(1),
+        "ScriptInt::get_string turns the integer timer id into decimal text"
+    );
+    assert_eq!(
+        host.trace()[0].args,
+        vec![replay_bhs_live_bindings::ProductionBuiltinValue::Int(1)],
+        "the trace retains the source ScriptInt while the native path coerces a copy"
+    );
+    assert!(runtime.script_timers().is_empty());
+
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    let committed = runtime
+        .run_external_stop_timer_transaction(0, 0, &[], &mut host, |outcome, _| {
+            Ok::<Value, ()>(outcome.returned.clone().unwrap())
+        })
+        .unwrap();
+    assert_eq!(
+        committed.validated,
+        Value::Int(-1),
+        "a missing timer returns -1"
     );
 }
 
@@ -662,7 +720,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
     let fixture = root.join("crates/don-bhs/tests/fixtures/mixed_params.bhs");
     let inc = don_bhs_cc::load::install_include_path(root);
     let loaded = don_bhs_cc::load::load_script_file(&inc, &fixture).unwrap();
-    let mut program = loaded.program;
+    let mut runtime = ScriptRuntime::new(loaded.program, None, None).unwrap();
     let binding = ReplayBhsBinding {
         file: 0,
         name: "accumulate".into(),
@@ -674,7 +732,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
         num_loops: 1_000,
     };
     let receipt = run_production_call(
-        &mut program,
+        &mut runtime,
         &binding,
         &mut call,
         &ProductionBuiltinImage::default(),
@@ -691,7 +749,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
+fn strict_economic_prefix_reaches_timer_expired_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -704,8 +762,7 @@ fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
         file: 0,
         name: loaded.entry,
     };
-    let mut program = loaded.program;
-    let pristine = don_replay::script_channel::checksum_program(&program).unwrap();
+    let pristine = don_replay::script_channel::checksum_program(&loaded.program).unwrap();
     let mut call = replay_bhs_live_bindings::ReplayProductionCall {
         who: 1,
         step: 1,
@@ -759,12 +816,18 @@ fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
         ..Default::default()
     };
 
-    let error = run_production_call(&mut program, &binding, &mut call, &image).unwrap_err();
+    let mut timers = ScriptTimers::default();
+    timers
+        .add_timer("1", 300)
+        .expect("install the one canonical production timer");
+    let before_timers = timers.clone();
+    let mut runtime = ScriptRuntime::new_with_timers(loaded.program, None, None, timers).unwrap();
+    let error = run_production_call(&mut runtime, &binding, &mut call, &image).unwrap_err();
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 78,
-            name: "stop_timer"
+            index: 79,
+            name: "timer_expired"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -809,6 +872,7 @@ fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
             "have_tech",
             "num_type",
             "find_nation",
+            "stop_timer",
         ]
     );
     assert_eq!(
@@ -816,9 +880,14 @@ fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
         "failed prefix must not commit ref-step writes"
     );
     assert_eq!(
-        don_replay::script_channel::checksum_program(&program).unwrap(),
+        don_replay::script_channel::checksum_program(runtime.program()).unwrap(),
         pristine,
         "failed prefix must not commit initialized BHS statics"
+    );
+    assert_eq!(
+        runtime.script_timers(),
+        &before_timers,
+        "failed prefix must restore the removed canonical script timer and its cursor"
     );
 }
 
