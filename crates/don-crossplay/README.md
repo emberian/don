@@ -65,6 +65,15 @@ The four exports, copied verbatim from the shipped export directory:
 | 3 | `AmdPowerXpressRequestHighPerformance` | **data**, `.data`, `= 1` |
 | 4 | `NvOptimusEnablement` | **data**, `.data`, `= 1` |
 
+The image also exposes one explicitly DoN-only extra,
+`don_crossplay_shutdown` (ordinal 5). An explicit loader must quiesce every
+interface caller, invoke it, and only then call `FreeLibrary`; it drops Service
+first so the directory client closes its socket and joins its worker, then
+stops and joins an owned authority and all accepted connections, before Logger
+is dropped. The Wine smoke exercises exactly that configured-RPC unload path.
+The statically imported game retains the image for process lifetime and never
+resolves this diagnostic export.
+
 Ordinals 3 and 4 are the hybrid-GPU hints a vendor driver finds by walking
 export tables; they are `DWORD`s, not functions, and `build.rs` marks them
 `,DATA`. `#[export_name]` does not reach a cdylib's export set on this target,
@@ -73,10 +82,28 @@ the target spelled without the leading underscore — the trick
 [`../netsys-shim/build.rs`](../netsys-shim/build.rs) measured.
 
 Configuration, since there is no UI to hang it off: `DON_CROSSPLAY_USER_ID`,
-`DON_CROSSPLAY_USER_NAME`, and `DON_CROSSPLAY_TRACE` (a path; setting it enables
-a synchronously flushed diagnostic log). There is deliberately **no load-only
-mode**: `netsys-shim` needs one because it owns a socket, and this service has
-no socket, no file, no account and no remote host to fail closed against.
+`DON_CROSSPLAY_USER_NAME`, `DON_CROSSPLAY_TRACE` (a path; setting it enables a
+synchronously flushed diagnostic log), and the optional DoN local-directory
+endpoint:
+
+```text
+DON_CROSSPLAY_DIRECTORY=listen:127.0.0.1:PORT
+DON_CROSSPLAY_DIRECTORY=connect:127.0.0.1:PORT
+```
+
+The first process owns the directory authority and the others connect to it.
+Only numeric loopback addresses are accepted. When the variable is unset, the
+original process-private `Directory` remains the default. A configured endpoint
+failure answers requests asynchronously with an error rather than silently
+falling back to private storage. `src/directory_rpc.rs` is a bounded, versioned
+DoN protocol; it makes no PlayFab, Party, or retail-wire claim. One connection
+is bound to the exact `Member` from its successful `StartSession`, duplicate
+active ids and mismatched later frames are rejected, and stop/disconnect
+releases the claim. Responses atomically select at most 1,024 mailbox notices
+under the directory lock, return `more_notices`, and leave all later notices
+queued. Detached send/stop results are still delivered to Tick because their
+mailbox notices remain observable even though their outcome has no ABI
+callback.
 
 ### The bug the runtime gate caught
 
@@ -226,7 +253,12 @@ images, and a test guards that decision.
 
 ```sh
 cd crates/don-crossplay && cargo test --lib
-# 57 passed; 0 failed
+# 59 passed; 0 failed
+
+cd crates/don-crossplay && cargo test --lib --features std-rpc
+# 66 passed; 0 failed (includes detached delivery, paging, and identity gates)
+cd crates/don-crossplay && cargo test --features std-rpc --test directory_rpc_process
+# the second gate launches two OS processes and proves Create -> Find -> Join
 
 cd crates/don-crossplay && cargo check --lib --target i686-pc-windows-msvc
 cd crates/don-crossplay && cargo check --lib --no-default-features --target i686-pc-windows-msvc
@@ -234,9 +266,9 @@ cd crates/don-crossplay && cargo check --lib --no-default-features --target i686
 # the same suite compiled for the retail target and executed under Wine
 cd crates/don-crossplay
 XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 XWIN_ARCH=x86 \
-  cargo xwin test --release --lib --no-run --target i686-pc-windows-msvc
+  cargo xwin test --release --lib --features std-rpc --no-run --target i686-pc-windows-msvc
 wine target/i686-pc-windows-msvc/release/deps/don_crossplay-*.exe
-# 57 passed; 0 failed
+# 66 passed; 0 failed
 ```
 
 All pass. The crate is excluded from the root workspace (see `../../Cargo.toml`)

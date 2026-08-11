@@ -98,6 +98,11 @@ pub mod error {
     pub const NOT_AVAILABLE: i32 = -9;
     /// A caller-supplied argument could not be read at the MSVC boundary.
     pub const BAD_ARGUMENT: i32 = -10;
+    /// Another live directory connection already owns this user identity.
+    pub const IDENTITY_IN_USE: i32 = -11;
+    /// An RPC connection tried to operate as a user other than the identity it
+    /// established with `StartSession`.
+    pub const IDENTITY_MISMATCH: i32 = -12;
 }
 
 /// One lobby member. Mirrors `Crossplay::Lobby::DTO::LobbyMemberDTO`, which is
@@ -224,6 +229,82 @@ pub enum Notice {
 pub enum Emission {
     Completion(ReqId, Outcome),
     Notice(Notice),
+}
+
+/// One DoN-owned directory transaction. This is the semantic boundary used by
+/// the optional loopback RPC adapter; it is not a shipped PlayFab or Party
+/// packet shape. **[DoN policy]**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryCall {
+    /// The service making the request. The complete member is carried because
+    /// `CreateLobby` and `JoinLobby` publish its display identity.
+    pub user: Member,
+    pub operation: DirectoryOperation,
+}
+
+/// Operations available through the DoN-owned directory boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectoryOperation {
+    StartSession,
+    StopSession { lobby_id: Option<String> },
+    GetLobby(String),
+    FindLobbies { max_results: i32, min_slots: i32 },
+    CreateLobby {
+        max_members: i32,
+        visibility: i32,
+        attributes: Attributes,
+    },
+    JoinLobby(String),
+    LeaveLobby(String),
+    UpdateLobby {
+        lobby_id: String,
+        max_members: i32,
+        bot_count: i32,
+        attributes: Attributes,
+    },
+    StartGame {
+        lobby_id: String,
+        session_reference: String,
+    },
+    CancelGameStart(String),
+    SendToAll(Vec<u8>),
+    SendTo { peer: String, bytes: Vec<u8> },
+    Poll,
+}
+
+/// One answer from a directory transaction. Notices are drained atomically
+/// with the operation so an RPC client cannot lose a peer event between two
+/// polls. **[DoN policy]**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryAnswer {
+    pub outcome: Outcome,
+    pub notices: Vec<Notice>,
+    /// More notices remain in the authority mailbox and require another Poll.
+    pub more_notices: bool,
+}
+
+/// Which worker job produced one asynchronous directory result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AsyncDirectoryEvent {
+    /// The one operation owned by a queued ABI request or idle mailbox poll.
+    Requested(Result<DirectoryAnswer, String>),
+    /// A fire-and-forget ABI operation. Its notices still belong to the service
+    /// and must be observed even though its outcome has no request callback.
+    Detached(Result<DirectoryAnswer, String>),
+}
+
+/// Non-blocking directory transport consumed by [`Backend::tick_remote`].
+///
+/// `submit` starts one answered transaction, `poll` observes its eventual
+/// answer, and `notify` queues a transaction whose outcome has no request
+/// callback (P2P sends and synchronous local teardown). `poll` must still
+/// surface that tagged result because it can carry inbound mailbox notices.
+/// Implementations keep submission order. This trait describes DoN's adapter,
+/// not retail behavior.
+pub trait AsyncDirectory {
+    fn submit(&mut self, call: DirectoryCall) -> Result<(), String>;
+    fn poll(&mut self) -> Option<AsyncDirectoryEvent>;
+    fn notify(&mut self, call: DirectoryCall) -> Result<(), String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +545,7 @@ impl Directory {
 
     /// Queue a notice for a peer. Unknown peers are dropped, not created — a
     /// mailbox exists only for a service instance that attached itself.
-    fn post(&mut self, user_id: &str, notice: Notice) {
+    pub(crate) fn post(&mut self, user_id: &str, notice: Notice) {
         if let Some(box_) = self.mailboxes.get_mut(user_id) {
             box_.push_back(notice);
         }
@@ -518,6 +599,140 @@ impl Directory {
             Some(box_) => box_.drain(..).collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Pop one encoded-size-bounded mailbox page, leaving every notice that
+    /// does not fit queued for a later Poll. Selection and removal happen
+    /// under the caller's directory lock, so a page boundary cannot race a
+    /// concurrent post. **[DoN policy]**
+    pub fn drain_mailbox_page(
+        &mut self,
+        user_id: &str,
+        max_items: usize,
+        max_bytes: usize,
+        encoded_size: impl Fn(&Notice) -> usize,
+    ) -> (Vec<Notice>, bool) {
+        let Some(mailbox) = self.mailboxes.get_mut(user_id) else {
+            return (Vec::new(), false);
+        };
+        let mut notices = Vec::new();
+        let mut bytes = 0usize;
+        while notices.len() < max_items {
+            let Some(notice) = mailbox.front() else { break };
+            let size = encoded_size(notice);
+            if bytes.checked_add(size).map_or(true, |total| total > max_bytes) {
+                break;
+            }
+            bytes += size;
+            notices.push(mailbox.pop_front().expect("front existed"));
+        }
+        (notices, !mailbox.is_empty())
+    }
+
+    #[cfg(feature = "std-rpc")]
+    pub(crate) fn has_pending_notices(&self, user_id: &str) -> bool {
+        self.mailboxes
+            .get(user_id)
+            .is_some_and(|mailbox| !mailbox.is_empty())
+    }
+
+    /// Apply one DoN directory transaction. The loopback RPC server calls this
+    /// and selects a bounded mailbox page while retaining the same directory
+    /// lock; its byte encoding lives elsewhere and makes no retail-wire claim.
+    pub fn execute(&mut self, call: DirectoryCall) -> Outcome {
+        let user_id = call.user.user_id.clone();
+        let outcome = match call.operation {
+            DirectoryOperation::StartSession => {
+                self.attach_peer(&user_id);
+                Outcome::SessionStarted(user_id.clone())
+            }
+            DirectoryOperation::StopSession { lobby_id } => {
+                let lobby_id = lobby_id.or_else(|| self.lobby_of(&user_id).map(|l| l.id.clone()));
+                if let Some(id) = lobby_id {
+                    let _ = self.leave(&user_id, &id);
+                }
+                Outcome::Done
+            }
+            DirectoryOperation::GetLobby(id) => match self.get(&id) {
+                Some(lobby) => Outcome::Lobby(lobby.clone()),
+                None => failed(error::NOT_FOUND, "no such lobby"),
+            },
+            DirectoryOperation::FindLobbies {
+                max_results,
+                min_slots,
+            } => Outcome::Lobbies(self.find(max_results, min_slots)),
+            DirectoryOperation::CreateLobby {
+                max_members,
+                visibility,
+                attributes,
+            } => match self.create(&call.user, max_members, visibility, attributes) {
+                Ok(lobby) => Outcome::Lobby(lobby),
+                Err((code, message)) => Outcome::Failed { code, message },
+            },
+            DirectoryOperation::JoinLobby(id) => match self.join(&call.user, &id) {
+                Ok(lobby) => Outcome::Lobby(lobby),
+                Err((code, message)) => Outcome::Failed { code, message },
+            },
+            DirectoryOperation::LeaveLobby(id) => match self.leave(&user_id, &id) {
+                Ok(()) => Outcome::Done,
+                Err((code, message)) => Outcome::Failed { code, message },
+            },
+            DirectoryOperation::UpdateLobby {
+                lobby_id,
+                max_members,
+                bot_count,
+                attributes,
+            } => match self.update(
+                &user_id,
+                &lobby_id,
+                max_members,
+                bot_count,
+                &attributes,
+            ) {
+                Ok(lobby) => Outcome::Updated(UpdateResult {
+                    success: true,
+                    timestamp: lobby.attribute_version as i64,
+                    lobby,
+                }),
+                Err((code, message)) => Outcome::Failed { code, message },
+            },
+            DirectoryOperation::StartGame {
+                lobby_id,
+                session_reference,
+            } => match self.start_game(&user_id, &lobby_id, &session_reference) {
+                Ok(reference) => Outcome::SessionReference(reference),
+                Err((code, message)) => Outcome::Failed { code, message },
+            },
+            DirectoryOperation::CancelGameStart(id) => {
+                match self.cancel_game_start(&user_id, &id) {
+                    Ok(reference) => Outcome::SessionReference(reference),
+                    Err((code, message)) => Outcome::Failed { code, message },
+                }
+            }
+            DirectoryOperation::SendToAll(bytes) => {
+                self.send_to_all(&user_id, &bytes);
+                Outcome::Done
+            }
+            DirectoryOperation::SendTo { peer, bytes } => {
+                if self.send_to(&user_id, &peer, &bytes) {
+                    Outcome::Done
+                } else {
+                    failed(error::NOT_A_MEMBER, "peer is not in the same lobby")
+                }
+            }
+            DirectoryOperation::Poll => Outcome::Done,
+        };
+        outcome
+    }
+
+    /// Remove a disconnected/stopped peer from membership and mailbox state.
+    /// Idempotent, so connection teardown and explicit StopSession can race to
+    /// the same cleanup without inventing a second leave transition.
+    pub fn cleanup_peer(&mut self, user_id: &str) {
+        if let Some(id) = self.lobby_of(user_id).map(|l| l.id.clone()) {
+            let _ = self.leave(user_id, &id);
+        }
+        self.detach_peer(user_id);
     }
 }
 
@@ -608,6 +823,18 @@ pub struct Backend {
     reliable: bool,
     /// Errors reported through `SetServiceErrorCallback`, oldest first.
     service_errors: VecDeque<String>,
+    /// The one answered operation currently owned by a remote directory
+    /// worker. Keeping this in the backend pins completion order to request
+    /// order even if the transport implementation changes later.
+    remote_inflight: Option<(ReqId, Request)>,
+    /// An idle mailbox poll is in flight. It never has a request callback.
+    remote_polling: bool,
+    /// `StopSession` canceled the logical owner of the answered transaction
+    /// still crossing the worker. Its response must be drained, not applied.
+    remote_discarding: bool,
+    /// The last response ended on a mailbox page boundary. Continuation Polls
+    /// take priority over new lobby work until the authority reports empty.
+    remote_more_notices: bool,
 }
 
 impl Backend {
@@ -628,6 +855,10 @@ impl Backend {
             username: user_name.to_string(),
             reliable: true,
             service_errors: VecDeque::new(),
+            remote_inflight: None,
+            remote_polling: false,
+            remote_discarding: false,
+            remote_more_notices: false,
         }
     }
 
@@ -744,6 +975,33 @@ impl Backend {
         closed
     }
 
+    /// Remote-directory twin of [`stop_session`](Self::stop_session). The
+    /// shipped synchronous status transition remains synchronous; directory
+    /// cleanup is queued behind any already-submitted RPC operation.
+    pub fn stop_session_remote(&mut self, remote: &mut dyn AsyncDirectory) -> Vec<String> {
+        if self.status == SESSION_STATUS_STOPPED || self.status == SESSION_STATUS_STOPPING {
+            return Vec::new();
+        }
+        self.status = SESSION_STATUS_STOPPING;
+        let closed: Vec<String> = self.open_peers.iter().cloned().collect();
+        self.open_peers.clear();
+        let call = DirectoryCall {
+            user: self.user.clone(),
+            operation: DirectoryOperation::StopSession {
+                lobby_id: self.joined_lobby.take(),
+            },
+        };
+        if let Err(message) = remote.notify(call) {
+            self.report_service_error(&message);
+        }
+        self.queue.clear();
+        self.ready.clear();
+        self.remote_discarding = self.remote_inflight.is_some() || self.remote_polling;
+        self.player_guid.clear();
+        self.status = SESSION_STATUS_STOPPED;
+        closed
+    }
+
     /// `GetLobby` (slot 12).
     pub fn get_lobby(&mut self, lobby_id: &str) -> ReqId {
         self.submit(Request::GetLobby(lobby_id.to_string()))
@@ -833,6 +1091,22 @@ impl Backend {
         true
     }
 
+    pub fn p2p_send_to_all_remote(
+        &mut self,
+        remote: &mut dyn AsyncDirectory,
+        bytes: &[u8],
+    ) -> bool {
+        if !self.can_transport() {
+            return false;
+        }
+        remote
+            .notify(DirectoryCall {
+                user: self.user.clone(),
+                operation: DirectoryOperation::SendToAll(bytes.to_vec()),
+            })
+            .is_ok()
+    }
+
     /// `P2PSend` (slot 50), the unicast twin.
     pub fn p2p_send(&mut self, directory: &mut Directory, peer: &str, bytes: &[u8]) -> bool {
         if !self.can_transport() {
@@ -841,10 +1115,36 @@ impl Backend {
         directory.send_to(&self.user.user_id, peer, bytes)
     }
 
+    pub fn p2p_send_remote(
+        &mut self,
+        remote: &mut dyn AsyncDirectory,
+        peer: &str,
+        bytes: &[u8],
+    ) -> bool {
+        if !self.can_transport() {
+            return false;
+        }
+        remote
+            .notify(DirectoryCall {
+                user: self.user.clone(),
+                operation: DirectoryOperation::SendTo {
+                    peer: peer.to_string(),
+                    bytes: bytes.to_vec(),
+                },
+            })
+            .is_ok()
+    }
+
     /// `P2PCloseAll` (slot 51). Returns the peers that were open so the caller
     /// can run the closed callbacks; the connections themselves are just our
     /// bookkeeping, since a local directory has no sockets.
     pub fn p2p_close_all(&mut self, _directory: &mut Directory) -> Vec<String> {
+        let closed: Vec<String> = self.open_peers.iter().cloned().collect();
+        self.open_peers.clear();
+        closed
+    }
+
+    pub fn p2p_close_all_remote(&mut self) -> Vec<String> {
         let closed: Vec<String> = self.open_peers.iter().cloned().collect();
         self.open_peers.clear();
         closed
@@ -912,6 +1212,257 @@ impl Backend {
         }
         out.extend(self.ready.drain(..));
         out
+    }
+
+    /// Non-blocking `Tick` adapter for a cross-process directory.
+    ///
+    /// Slot calls still only queue work. One tick submits at most one answered
+    /// operation to the worker and a later tick observes the answer, so an RPC
+    /// response cannot invoke a game callback from the worker thread or inside
+    /// the original slot call. Only one request is in flight, preserving the
+    /// existing submission/completion chronology. **[DoN policy]**
+    pub fn tick_remote(&mut self, remote: &mut dyn AsyncDirectory) -> Vec<Emission> {
+        let mut out = Vec::new();
+
+        if let Some(event) = remote.poll() {
+            match event {
+                AsyncDirectoryEvent::Detached(answer) => {
+                    self.accept_detached_answer(answer, &mut out)
+                }
+                AsyncDirectoryEvent::Requested(answer) => {
+                    self.accept_requested_answer(answer, &mut out)
+                }
+            }
+        }
+
+        if self.remote_inflight.is_none() && !self.remote_polling {
+            if self.remote_more_notices {
+                let call = DirectoryCall {
+                    user: self.user.clone(),
+                    operation: DirectoryOperation::Poll,
+                };
+                match remote.submit(call) {
+                    Ok(()) => self.remote_polling = true,
+                    Err(message) => self.report_service_error(&message),
+                }
+            } else if let Some((id, request)) = self.queue.pop_front() {
+                if let Some(outcome) = self.remote_preflight(&request) {
+                    out.push(Emission::Completion(id, outcome));
+                } else {
+                    let call = self.remote_call(&request);
+                    match remote.submit(call) {
+                        Ok(()) => self.remote_inflight = Some((id, request)),
+                        Err(message) => {
+                            if matches!(request, Request::StartSession { .. }) {
+                                self.status = SESSION_STATUS_STOPPED;
+                                self.player_guid.clear();
+                            }
+                            self.report_service_error(&message);
+                            out.push(Emission::Completion(
+                                id,
+                                Outcome::Failed {
+                                    code: error::NOT_AVAILABLE,
+                                    message,
+                                },
+                            ));
+                        }
+                    }
+                }
+            } else if self.status == SESSION_STATUS_STARTED {
+                let call = DirectoryCall {
+                    user: self.user.clone(),
+                    operation: DirectoryOperation::Poll,
+                };
+                match remote.submit(call) {
+                    Ok(()) => self.remote_polling = true,
+                    Err(message) => self.report_service_error(&message),
+                }
+            }
+        }
+
+        out.extend(self.ready.drain(..));
+        out
+    }
+
+    fn accept_detached_answer(
+        &mut self,
+        answer: Result<DirectoryAnswer, String>,
+        out: &mut Vec<Emission>,
+    ) {
+        match answer {
+            Ok(answer) => {
+                self.remote_more_notices = answer.more_notices;
+                self.accept_notices(answer.notices, out);
+                if let Outcome::Failed { message, .. } = answer.outcome {
+                    self.report_service_error(&message);
+                }
+            }
+            Err(message) => self.report_service_error(&message),
+        }
+    }
+
+    fn accept_requested_answer(
+        &mut self,
+        answer: Result<DirectoryAnswer, String>,
+        out: &mut Vec<Emission>,
+    ) {
+        let request = self.remote_inflight.take();
+        let was_poll = core::mem::take(&mut self.remote_polling);
+        let discarded = core::mem::take(&mut self.remote_discarding);
+
+        match answer {
+            Ok(answer) => {
+                self.remote_more_notices = answer.more_notices;
+                if !discarded {
+                    if let Some((id, request)) = request {
+                        let outcome = self.accept_remote_outcome(&request, answer.outcome);
+                        out.push(Emission::Completion(id, outcome));
+                    } else if !was_poll {
+                        self.report_service_error("directory returned an unowned response");
+                    }
+                }
+                // Match process-local Tick chronology: the request completion
+                // precedes notices selected by the same transaction. A
+                // discarded request or detached job discards only its outcome;
+                // mailbox notices still belong to this service instance.
+                self.accept_notices(answer.notices, out);
+            }
+            Err(message) => {
+                if !discarded {
+                    if let Some((id, request)) = request {
+                        if matches!(request, Request::StartSession { .. }) {
+                            self.status = SESSION_STATUS_STOPPED;
+                            self.player_guid.clear();
+                        }
+                        out.push(Emission::Completion(
+                            id,
+                            Outcome::Failed {
+                                code: error::NOT_AVAILABLE,
+                                message: message.clone(),
+                            },
+                        ));
+                    }
+                }
+                self.report_service_error(&message);
+            }
+        }
+    }
+
+    fn remote_preflight(&self, request: &Request) -> Option<Outcome> {
+        if !self.initialized {
+            return Some(failed(error::NOT_INITIALIZED, "Init has not been called"));
+        }
+        if matches!(request, Request::StartSession { .. }) {
+            return None;
+        }
+        if self.status != SESSION_STATUS_STARTED {
+            return Some(failed(error::NO_SESSION, "no session is started"));
+        }
+        match request {
+            Request::FailClosed(slot) => Some(Outcome::Failed {
+                code: error::NOT_AVAILABLE,
+                message: {
+                    let mut message = String::from("not available in the DoN local backend: ");
+                    message.push_str(slot);
+                    message
+                },
+            }),
+            _ => None,
+        }
+    }
+
+    fn remote_call(&self, request: &Request) -> DirectoryCall {
+        let mut user = self.user.clone();
+        let operation = match request {
+            Request::StartSession { user_id } => {
+                user.user_id = user_id.clone();
+                user.platform_account_id = user_id.clone();
+                DirectoryOperation::StartSession
+            }
+            Request::GetLobby(id) => DirectoryOperation::GetLobby(id.clone()),
+            Request::FindLobbies {
+                max_results,
+                min_slots,
+            } => DirectoryOperation::FindLobbies {
+                max_results: *max_results,
+                min_slots: *min_slots,
+            },
+            Request::CreateLobby {
+                max_members,
+                visibility,
+                attributes,
+            } => DirectoryOperation::CreateLobby {
+                max_members: *max_members,
+                visibility: *visibility,
+                attributes: attributes.clone(),
+            },
+            Request::JoinLobby(id) => DirectoryOperation::JoinLobby(id.clone()),
+            Request::LeaveLobby(id) => DirectoryOperation::LeaveLobby(id.clone()),
+            Request::UpdateLobby {
+                lobby_id,
+                max_members,
+                bot_count,
+                attributes,
+            } => DirectoryOperation::UpdateLobby {
+                lobby_id: lobby_id.clone(),
+                max_members: *max_members,
+                bot_count: *bot_count,
+                attributes: attributes.clone(),
+            },
+            Request::StartGame {
+                lobby_id,
+                session_reference,
+            } => DirectoryOperation::StartGame {
+                lobby_id: lobby_id.clone(),
+                session_reference: session_reference.clone(),
+            },
+            Request::CancelGameStart(id) => DirectoryOperation::CancelGameStart(id.clone()),
+            Request::FailClosed(_) => unreachable!("preflight resolves fail-closed requests"),
+        };
+        DirectoryCall { user, operation }
+    }
+
+    fn accept_remote_outcome(&mut self, request: &Request, outcome: Outcome) -> Outcome {
+        if outcome.is_error() {
+            if matches!(request, Request::StartSession { .. }) {
+                self.status = SESSION_STATUS_STOPPED;
+                self.player_guid.clear();
+            }
+            return outcome;
+        }
+        match (request, &outcome) {
+            (Request::StartSession { user_id }, Outcome::SessionStarted(_)) => {
+                self.user.user_id = user_id.clone();
+                self.user.platform_account_id = user_id.clone();
+                self.player_guid = user_id.clone();
+                self.status = SESSION_STATUS_STARTED;
+            }
+            (Request::CreateLobby { .. } | Request::JoinLobby(_), Outcome::Lobby(lobby)) => {
+                self.joined_lobby = Some(lobby.id.clone());
+            }
+            (Request::LeaveLobby(id), Outcome::Done)
+                if self.joined_lobby.as_deref() == Some(id.as_str()) =>
+            {
+                self.joined_lobby = None;
+            }
+            _ => {}
+        }
+        outcome
+    }
+
+    fn accept_notices(&mut self, notices: Vec<Notice>, out: &mut Vec<Emission>) {
+        for notice in notices {
+            match &notice {
+                Notice::PeerOpened(peer) => {
+                    self.open_peers.insert(peer.clone());
+                }
+                Notice::PeerClosed(peer) => {
+                    self.open_peers.remove(peer);
+                }
+                _ => {}
+            }
+            out.push(Emission::Notice(notice));
+        }
     }
 
     fn resolve(&mut self, directory: &mut Directory, request: Request) -> Outcome {
@@ -1022,6 +1573,29 @@ mod tests {
     use super::*;
     use crate::abi::VISIBILITY_PRIVATE;
 
+    #[derive(Default)]
+    struct EventRemote {
+        events: VecDeque<AsyncDirectoryEvent>,
+        submitted: Vec<DirectoryCall>,
+        detached: Vec<DirectoryCall>,
+    }
+
+    impl AsyncDirectory for EventRemote {
+        fn submit(&mut self, call: DirectoryCall) -> Result<(), String> {
+            self.submitted.push(call);
+            Ok(())
+        }
+
+        fn poll(&mut self) -> Option<AsyncDirectoryEvent> {
+            self.events.pop_front()
+        }
+
+        fn notify(&mut self, call: DirectoryCall) -> Result<(), String> {
+            self.detached.push(call);
+            Ok(())
+        }
+    }
+
     fn started(directory: &mut Directory, id: &str) -> Backend {
         let mut b = Backend::new(id, id);
         b.init();
@@ -1043,6 +1617,75 @@ mod tests {
             }
         }
         panic!("request {req:?} never completed");
+    }
+
+    #[test]
+    fn remote_tick_delivers_notices_from_detached_answers() {
+        let mut backend = Backend::new("host", "Host");
+        let mut remote = EventRemote::default();
+        remote
+            .events
+            .push_back(AsyncDirectoryEvent::Detached(Ok(DirectoryAnswer {
+                outcome: Outcome::Done,
+                notices: alloc::vec![
+                    Notice::PeerOpened("peer".to_string()),
+                    Notice::Data {
+                        from: "peer".to_string(),
+                        bytes: alloc::vec![1, 2, 3],
+                    },
+                ],
+                more_notices: false,
+            })));
+
+        let emissions = backend.tick_remote(&mut remote);
+        assert_eq!(
+            emissions,
+            alloc::vec![
+                Emission::Notice(Notice::PeerOpened("peer".to_string())),
+                Emission::Notice(Notice::Data {
+                    from: "peer".to_string(),
+                    bytes: alloc::vec![1, 2, 3],
+                }),
+            ]
+        );
+        assert!(backend.open_peers().any(|peer| peer == "peer"));
+    }
+
+    #[test]
+    fn remote_stop_discards_an_old_outcome_but_not_its_notices() {
+        let mut backend = Backend::new("host", "Host");
+        backend.init();
+        let start = backend.start_session("host");
+        let mut remote = EventRemote::default();
+        assert!(backend.tick_remote(&mut remote).is_empty());
+        assert_eq!(remote.submitted.len(), 1);
+
+        backend.stop_session_remote(&mut remote);
+        assert_eq!(remote.detached.len(), 1);
+        remote
+            .events
+            .push_back(AsyncDirectoryEvent::Requested(Ok(DirectoryAnswer {
+                outcome: Outcome::SessionStarted("host".to_string()),
+                notices: alloc::vec![Notice::Data {
+                    from: "peer".to_string(),
+                    bytes: alloc::vec![9],
+                }],
+                more_notices: false,
+            })));
+        let emissions = backend.tick_remote(&mut remote);
+        assert_eq!(
+            emissions,
+            alloc::vec![Emission::Notice(Notice::Data {
+                from: "peer".to_string(),
+                bytes: alloc::vec![9],
+            })]
+        );
+        assert!(
+            !emissions
+                .iter()
+                .any(|emission| matches!(emission, Emission::Completion(id, _) if *id == start)),
+            "the canceled StartSession outcome must stay discarded"
+        );
     }
 
     #[test]

@@ -22,6 +22,15 @@ path = "src/lib.rs"
 # layout should use.
 default = ["local"]
 local = []
+# A DoN-owned loopback directory protocol. Kept opt-in so the checked ABI and
+# allocator-only backend remain `no_std` for consumers that do not need local
+# cross-process discovery.
+std-rpc = ["local"]
+
+[[bin]]
+name = "directory-rpc-peer"
+path = "src/bin/directory-rpc-peer.rs"
+required-features = ["std-rpc"]
 
 # No dependencies, deliberately. The backend needs an allocator and nothing
 # else, so a future replacement DLL keeps every option about when it can run.

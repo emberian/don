@@ -164,12 +164,21 @@ grep -Fq '"schema":"don.crossplay-load-smoke.v1"' "$stdout_jsonl" || \
 grep -Fq '"status":"pass"' "$stdout_jsonl" || fail "smoke status is not pass"
 grep -Fq '"null_slots":0' "$stdout_jsonl" || fail "an interface slot was null"
 grep -Fq '"service_vtable_slots":58' "$stdout_jsonl" || fail "the service vtable is not 58 slots"
+grep -Fq '"func_targets_outstanding":0' "$stdout_jsonl" || \
+    fail "shutdown retained a callback target"
+grep -Fq '"configured_rpc":true' "$stdout_jsonl" || \
+    fail "smoke did not exercise configured directory RPC"
+grep -Fq '"shutdown_before_free_library":true' "$stdout_jsonl" || \
+    fail "smoke did not call the shutdown hook before unload"
+grep -Fq '"free_library":true' "$stdout_jsonl" || fail "FreeLibrary was not successful"
 grep -Fq '"retail_process_modified":false' "$stdout_jsonl" || \
     fail "smoke did not retain the offline boundary"
 grep -Fq '"game_directory_modified":false' "$stdout_jsonl" || \
     fail "smoke did not retain the offline boundary"
 grep -Fq 'logger=constructed' "$trace_log" || fail "trace missed the ordinal 1 factory"
 grep -Fq 'service=constructed' "$trace_log" || fail "trace missed the ordinal 2 factory"
+grep -Fq 'service=shutdown' "$trace_log" || fail "trace missed service shutdown"
+grep -Fq 'logger=shutdown' "$trace_log" || fail "trace missed logger shutdown"
 grep -Fq 'seq=7 ' "$trace_log" || fail "trace is incomplete"
 
 stdout_sha256="$(sha256_file "$stdout_jsonl")"

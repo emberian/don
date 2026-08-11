@@ -64,8 +64,13 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
+#[cfg(feature = "std-rpc")]
+extern crate std;
 
 pub mod abi;
+
+#[cfg(feature = "std-rpc")]
+pub mod directory_rpc;
 
 #[cfg(feature = "local")]
 pub mod func;
@@ -79,7 +84,10 @@ pub mod msvc;
 pub mod service;
 
 #[cfg(feature = "local")]
-pub use local::{Attributes, Backend, Directory, Emission, Lobby, Member, Notice, Outcome};
+pub use local::{
+    AsyncDirectory, AsyncDirectoryEvent, Attributes, Backend, Directory, DirectoryAnswer,
+    DirectoryCall, DirectoryOperation, Emission, Lobby, Member, Notice, Outcome, ReqId,
+};
 #[cfg(feature = "local")]
 pub use logger::LocalLogger;
 #[cfg(feature = "local")]

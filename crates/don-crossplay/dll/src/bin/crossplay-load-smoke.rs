@@ -54,6 +54,7 @@ const LOGGER_EXPORT: &[u8] = b"?Logger@Logging@Crossplay@@YAPAVICrossplayLogger@
 const SERVICE_EXPORT: &[u8] = b"?Service@Crossplay@@YAPAUICrossPlayService@1@XZ\0";
 const AMD_EXPORT: &[u8] = b"AmdPowerXpressRequestHighPerformance\0";
 const NV_EXPORT: &[u8] = b"NvOptimusEnablement\0";
+const SHUTDOWN_EXPORT: &[u8] = b"don_crossplay_shutdown\0";
 
 /// **[measured — `ron-bin/dll/CrossplayProxy.dll`, `.rdata` RVA `0x9adc4`]**
 const SERVICE_SLOTS: usize = 58;
@@ -344,6 +345,7 @@ fn counters() -> Counters {
 extern "system" {
     fn LoadLibraryW(name: *const u16) -> *mut c_void;
     fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn FreeLibrary(module: *mut c_void) -> i32;
     fn GetLastError() -> u32;
 }
 
@@ -435,6 +437,7 @@ fn main() {
     }
     env::set_var("DON_CROSSPLAY_USER_ID", "smoke-local");
     env::set_var("DON_CROSSPLAY_USER_NAME", "smoke");
+    env::set_var("DON_CROSSPLAY_DIRECTORY", "listen:127.0.0.1:0");
 
     let mut checks = 0usize;
     let mut findings: Vec<String> = Vec::new();
@@ -460,13 +463,21 @@ fn main() {
     let service_export = resolve(SERVICE_EXPORT);
     let amd_export = resolve(AMD_EXPORT);
     let nv_export = resolve(NV_EXPORT);
-    require(!logger_export.is_null(), "ordinal 1 did not resolve by name");
+    let shutdown_export = resolve(SHUTDOWN_EXPORT);
+    require(
+        !logger_export.is_null(),
+        "ordinal 1 did not resolve by name",
+    );
     require(
         !service_export.is_null(),
         "ordinal 2 did not resolve by name",
     );
     require(!amd_export.is_null(), "ordinal 3 did not resolve by name");
     require(!nv_export.is_null(), "ordinal 4 did not resolve by name");
+    require(
+        !shutdown_export.is_null(),
+        "DoN shutdown export did not resolve by name",
+    );
 
     // -- the two data exports ----------------------------------------------
     // SAFETY: both resolve to a `DWORD` in the image's writable data.
@@ -482,7 +493,9 @@ fn main() {
     let logger_factory = slot!(logger_slot, 0, unsafe extern "C" fn() -> *mut c_void);
     let logger = checked_call("Logger()", &mut checks, || unsafe { logger_factory() });
     require(!logger.is_null(), "Logger() returned null");
-    let again = checked_call("Logger() again", &mut checks, || unsafe { logger_factory() });
+    let again = checked_call("Logger() again", &mut checks, || unsafe {
+        logger_factory()
+    });
     require(again == logger, "Logger() is not a stable singleton");
 
     // SAFETY: `logger` is an `ICrossplayLogger`.
@@ -502,7 +515,15 @@ fn main() {
     checked_call(
         "ICrossplayLogger[3] Log (inline wstring)",
         &mut checks,
-        || unsafe { log(logger, LOG_LEVEL_INFO, sso_wstring("short"), file.as_ptr(), 1) },
+        || unsafe {
+            log(
+                logger,
+                LOG_LEVEL_INFO,
+                sso_wstring("short"),
+                file.as_ptr(),
+                1,
+            )
+        },
     );
 
     // The heap case: the DLL must release the buffer on the shared CRT heap.
@@ -641,9 +662,11 @@ fn main() {
     // `ret 4` in the shipped build. **[measured — RVA 0x145b0]**
     let set_service_url = slot!(vt, 1, WstringArg);
     let url = sso_wstring("don");
-    checked_call("ICrossPlayService[1] SetServiceUrl", &mut checks, || unsafe {
-        set_service_url(service, &url)
-    });
+    checked_call(
+        "ICrossPlayService[1] SetServiceUrl",
+        &mut checks,
+        || unsafe { set_service_url(service, &url) },
+    );
 
     // slot 2 `SetServiceErrorCallback(const std::function&)` — by reference, so
     // the DLL must `_Copy` and must not destroy the caller's object.
@@ -669,9 +692,11 @@ fn main() {
     unsafe { release_function(&mut error_callback) };
 
     let set_reliability = slot!(vt, 3, unsafe extern "thiscall" fn(*mut c_void, bool));
-    checked_call("ICrossPlayService[3] SetReliability", &mut checks, || unsafe {
-        set_reliability(service, true)
-    });
+    checked_call(
+        "ICrossPlayService[3] SetReliability",
+        &mut checks,
+        || unsafe { set_reliability(service, true) },
+    );
 
     let get_session_status = slot!(vt, 7, unsafe extern "thiscall" fn(*mut c_void) -> i32);
     let before_session = checked_call(
@@ -694,15 +719,25 @@ fn main() {
     let token = sso_wstring("tok");
     let mut ok_callback = make_function(&HEAP_VTABLE, 4);
     let mut err_callback = make_function(&HEAP_VTABLE, 5);
-    checked_call("ICrossPlayService[4] StartSession", &mut checks, || unsafe {
-        start_session(service, &token, &ok_callback, &err_callback)
-    });
+    checked_call(
+        "ICrossPlayService[4] StartSession",
+        &mut checks,
+        || unsafe { start_session(service, &token, &ok_callback, &err_callback) },
+    );
 
     let tick = slot!(vt, 57, Void1);
     let do_calls_before = DO_CALLS.load(Ordering::SeqCst);
-    checked_call("ICrossPlayService[57] Tick", &mut checks, || unsafe {
-        tick(service)
-    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while DO_CALLS.load(Ordering::SeqCst) == do_calls_before {
+        checked_call("ICrossPlayService[57] Tick", &mut checks, || unsafe {
+            tick(service)
+        });
+        require(
+            std::time::Instant::now() < deadline,
+            "configured RPC StartSession did not complete",
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     require(
         DO_CALLS.load(Ordering::SeqCst) > do_calls_before,
         "Tick did not reach a retained std::function through _Do_call",
@@ -745,12 +780,16 @@ fn main() {
     checked_call("ICrossPlayService[9] BlockUser", &mut checks, || unsafe {
         block_user(service, &who)
     });
-    checked_call("ICrossPlayService[10] UnblockUser", &mut checks, || unsafe {
-        unblock_user(service, &who)
-    });
-    let blocked = checked_call("ICrossPlayService[11] IsUserBlocked", &mut checks, || unsafe {
-        is_user_blocked(service, &who)
-    });
+    checked_call(
+        "ICrossPlayService[10] UnblockUser",
+        &mut checks,
+        || unsafe { unblock_user(service, &who) },
+    );
+    let blocked = checked_call(
+        "ICrossPlayService[11] IsUserBlocked",
+        &mut checks,
+        || unsafe { is_user_blocked(service, &who) },
+    );
     require(
         !blocked,
         "IsUserBlocked is a measured constant false in the shipped build",
@@ -784,11 +823,19 @@ fn main() {
     );
 
     let before_answer = counters();
-    checked_call(
-        "ICrossPlayService[57] Tick (answer StartGame)",
-        &mut checks,
-        || unsafe { tick(service) },
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while counters().live != before_answer.live - 2 {
+        checked_call(
+            "ICrossPlayService[57] Tick (answer StartGame)",
+            &mut checks,
+            || unsafe { tick(service) },
+        );
+        require(
+            std::time::Instant::now() < deadline,
+            "configured RPC StartGame refusal did not complete",
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     require(
         counters().live == before_answer.live - 2,
         "answering a request did not release its two retained callbacks",
@@ -811,11 +858,19 @@ fn main() {
         "a refused slot leaked its by-value callbacks",
     );
     let refusals_before = DO_CALLS.load(Ordering::SeqCst);
-    checked_call(
-        "ICrossPlayService[57] Tick (answer JoinChat)",
-        &mut checks,
-        || unsafe { tick(service) },
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while DO_CALLS.load(Ordering::SeqCst) == refusals_before {
+        checked_call(
+            "ICrossPlayService[57] Tick (answer JoinChat)",
+            &mut checks,
+            || unsafe { tick(service) },
+        );
+        require(
+            std::time::Instant::now() < deadline,
+            "JoinChat refusal did not complete",
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     require(
         DO_CALLS.load(Ordering::SeqCst) > refusals_before,
         "a refused slot did not answer on the caller's error callback",
@@ -823,18 +878,22 @@ fn main() {
 
     let set_username = slot!(vt, 55, WstringArg);
     let name = sso_wstring("smoke");
-    checked_call("ICrossPlayService[55] SetUsername", &mut checks, || unsafe {
-        set_username(service, &name)
-    });
+    checked_call(
+        "ICrossPlayService[55] SetUsername",
+        &mut checks,
+        || unsafe { set_username(service, &name) },
+    );
 
     let get_player_guid = slot!(
         vt,
         56,
         unsafe extern "thiscall" fn(*mut c_void) -> *const MsvcWstring
     );
-    let guid = checked_call("ICrossPlayService[56] GetPlayerGuid", &mut checks, || unsafe {
-        get_player_guid(service)
-    });
+    let guid = checked_call(
+        "ICrossPlayService[56] GetPlayerGuid",
+        &mut checks,
+        || unsafe { get_player_guid(service) },
+    );
     require(!guid.is_null(), "GetPlayerGuid returned null");
     // SAFETY: a 24-byte `wstring` the service keeps alive for its own lifetime.
     let guid_size = unsafe {
@@ -896,11 +955,26 @@ fn main() {
         &mut checks,
         || unsafe { stop_session(service) },
     );
-    checked_call("ICrossPlayService[57] Tick (drain)", &mut checks, || unsafe {
-        tick(service)
-    });
+    checked_call(
+        "ICrossPlayService[57] Tick (drain)",
+        &mut checks,
+        || unsafe { tick(service) },
+    );
 
+    let shutdown =
+        unsafe { core::mem::transmute::<*mut c_void, unsafe extern "C" fn()>(shutdown_export) };
+    checked_call("don_crossplay_shutdown", &mut checks, || unsafe {
+        shutdown()
+    });
     let final_counters = counters();
+    require(
+        final_counters.live == 0,
+        "shutdown retained one or more callback targets",
+    );
+    let unloaded = checked_call("FreeLibrary", &mut checks, || unsafe {
+        FreeLibrary(module)
+    });
+    require(unloaded != 0, "FreeLibrary failed after directory shutdown");
     println!(
         "{{\"schema\":\"don.crossplay-load-smoke.v1\",\"status\":\"pass\",\
 \"pe\":\"PE32-i386\",\"dll\":{dll:?},\
@@ -910,6 +984,7 @@ fn main() {
 \"func_delete_this_calls\":{deletes},\"func_delete_this_deallocating\":{deallocating},\
 \"func_delete_this_in_place\":{in_place},\"func_targets_outstanding\":{live},\
 \"func_do_call_invocations\":{do_calls},\"findings\":{findings:?},\
+\"configured_rpc\":true,\"shutdown_before_free_library\":true,\"free_library\":true,\
 \"retail_process_modified\":false,\"game_directory_modified\":false}}",
         dll = dll.display().to_string(),
         service_slots = SERVICE_SLOTS,

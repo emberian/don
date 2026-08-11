@@ -27,7 +27,7 @@ name = "crossplay-load-smoke"
 path = "src/bin/crossplay-load-smoke.rs"
 
 [dependencies]
-don-crossplay = { path = ".." }
+don-crossplay = { path = "..", features = ["std-rpc"] }
 
 [profile.release]
 opt-level = 2

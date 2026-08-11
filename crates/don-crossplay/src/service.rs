@@ -63,7 +63,9 @@ use crate::abi::{
     MsvcWstring, SessionStatus, Visibility, CROSSPLAY_STATUS_ENABLED,
 };
 use crate::func::{self, OwnedFunction};
-use crate::local::{Attributes, Backend, Directory, Emission, Notice, Outcome, ReqId};
+use crate::local::{
+    AsyncDirectory, Attributes, Backend, Directory, Emission, Notice, Outcome, ReqId,
+};
 use crate::msvc::{self, Gp, GuestMem, Scratch};
 
 /// How many dispatch records the service keeps. Bounded, so a long session
@@ -433,16 +435,9 @@ pub enum DirectoryRef {
     /// The pointee must outlive this service and must not be mutated through
     /// another path while a slot call is in progress.
     Borrowed(*mut Directory),
-}
-
-impl DirectoryRef {
-    fn get(&mut self) -> &mut Directory {
-        match self {
-            DirectoryRef::Owned(d) => d,
-            // SAFETY: the invariant documented on the variant.
-            DirectoryRef::Borrowed(p) => unsafe { &mut **p },
-        }
-    }
+    /// A DoN-owned asynchronous directory transport. It is pumped only from
+    /// slot 57 and does not alter the published 58-slot ABI.
+    Remote(Box<dyn AsyncDirectory>),
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +566,18 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
         Self::with_directory(mem, user_id, user_name, DirectoryRef::Borrowed(directory))
     }
 
+    /// A service instance using a non-blocking DoN-owned directory transport.
+    /// Slot calls still queue requests; the transport is submitted and polled
+    /// only by `Tick`, preserving the callback boundary of the local service.
+    pub fn remote(
+        mem: M,
+        user_id: &str,
+        user_name: &str,
+        directory: Box<dyn AsyncDirectory>,
+    ) -> Box<Self> {
+        Self::with_directory(mem, user_id, user_name, DirectoryRef::Remote(directory))
+    }
+
     fn with_directory(mem: M, user_id: &str, user_name: &str, directory: DirectoryRef) -> Box<Self> {
         Box::new(Self {
             vftable: Self::vtable(),
@@ -697,9 +704,14 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
 
     /// Drain one `Tick` worth of backend work and run the callbacks it implies.
     fn pump(&mut self) {
-        let emissions = {
-            let directory = self.directory.get();
-            self.backend.tick(directory)
+        let emissions = match &mut self.directory {
+            DirectoryRef::Owned(directory) => self.backend.tick(directory),
+            DirectoryRef::Borrowed(pointer) => {
+                // SAFETY: the invariant documented on `DirectoryRef::Borrowed`.
+                let directory = unsafe { &mut **pointer };
+                self.backend.tick(directory)
+            }
+            DirectoryRef::Remote(directory) => self.backend.tick_remote(&mut **directory),
         };
         self.sync_guid();
         for emission in emissions {
@@ -938,9 +950,16 @@ macro_rules! service_impl {
             this: *mut ICrossPlayService,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
-            let closed = {
-                let directory = s.directory.get();
-                s.backend.stop_session(directory)
+            let closed = match &mut s.directory {
+                DirectoryRef::Owned(directory) => s.backend.stop_session(directory),
+                DirectoryRef::Borrowed(pointer) => {
+                    // SAFETY: the invariant documented on `DirectoryRef::Borrowed`.
+                    let directory = unsafe { &mut **pointer };
+                    s.backend.stop_session(directory)
+                }
+                DirectoryRef::Remote(directory) => {
+                    s.backend.stop_session_remote(&mut **directory)
+                }
             };
             for user_id in closed {
                 s.notify(Notice::PeerClosed(user_id));
@@ -1388,8 +1407,19 @@ macro_rules! service_impl {
         ) -> bool {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return false };
             let Some(bytes) = s.read_packet(data, len) else { return false };
-            let directory = s.directory.get();
-            s.backend.p2p_send_to_all(directory, &bytes)
+            match &mut s.directory {
+                DirectoryRef::Owned(directory) => {
+                    s.backend.p2p_send_to_all(directory, &bytes)
+                }
+                DirectoryRef::Borrowed(pointer) => {
+                    // SAFETY: the invariant documented on `DirectoryRef::Borrowed`.
+                    let directory = unsafe { &mut **pointer };
+                    s.backend.p2p_send_to_all(directory, &bytes)
+                }
+                DirectoryRef::Remote(directory) => {
+                    s.backend.p2p_send_to_all_remote(&mut **directory, &bytes)
+                }
+            }
         }
 
         pub(super) unsafe extern $abi fn p2p_send<M: GuestMem + 'static>(
@@ -1404,17 +1434,33 @@ macro_rules! service_impl {
                 None => return false,
             };
             let Some(bytes) = s.read_packet(data, len) else { return false };
-            let directory = s.directory.get();
-            s.backend.p2p_send(directory, &peer, &bytes)
+            match &mut s.directory {
+                DirectoryRef::Owned(directory) => {
+                    s.backend.p2p_send(directory, &peer, &bytes)
+                }
+                DirectoryRef::Borrowed(pointer) => {
+                    // SAFETY: the invariant documented on `DirectoryRef::Borrowed`.
+                    let directory = unsafe { &mut **pointer };
+                    s.backend.p2p_send(directory, &peer, &bytes)
+                }
+                DirectoryRef::Remote(directory) => {
+                    s.backend.p2p_send_remote(&mut **directory, &peer, &bytes)
+                }
+            }
         }
 
         pub(super) unsafe extern $abi fn p2p_close_all<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
-            let closed = {
-                let directory = s.directory.get();
-                s.backend.p2p_close_all(directory)
+            let closed = match &mut s.directory {
+                DirectoryRef::Owned(directory) => s.backend.p2p_close_all(directory),
+                DirectoryRef::Borrowed(pointer) => {
+                    // SAFETY: the invariant documented on `DirectoryRef::Borrowed`.
+                    let directory = unsafe { &mut **pointer };
+                    s.backend.p2p_close_all(directory)
+                }
+                DirectoryRef::Remote(_) => s.backend.p2p_close_all_remote(),
             };
             for user_id in closed {
                 s.notify(Notice::PeerClosed(user_id));
@@ -2406,5 +2452,35 @@ mod tests {
         let message = read_wstring(&svc.mem, d.argument).unwrap();
         assert_eq!(message, "no such lobby");
         assert_eq!(error::NOT_FOUND, -3);
+    }
+
+    #[cfg(feature = "std-rpc")]
+    #[test]
+    fn remote_service_completion_still_crosses_a_later_vtable_tick() {
+        use crate::directory_rpc::DirectoryRpcClient;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let directory = DirectoryRpcClient::listen("127.0.0.1:0").unwrap();
+        let svc = Svc::remote(ArenaMem::new(), "host", "Host", Box::new(directory));
+        let empty = empty_function();
+        unsafe {
+            (vt().Init)(svc.as_service());
+            (vt().StartSession)(svc.as_service(), core::ptr::null(), &empty, &empty);
+        }
+        assert_eq!(svc.backend().session_status(), SESSION_STATUS_STARTING);
+
+        // The first vtable Tick submits to the worker and cannot complete the
+        // callback/journal entry inline on the game thread.
+        unsafe { (vt().Tick)(svc.as_service()) };
+        assert!(last(&svc, "StartSession").is_none());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && last(&svc, "StartSession").is_none() {
+            thread::sleep(Duration::from_millis(1));
+            unsafe { (vt().Tick)(svc.as_service()) };
+        }
+        assert!(last(&svc, "StartSession").is_some());
+        assert_eq!(svc.backend().session_status(), SESSION_STATUS_STARTED);
     }
 }

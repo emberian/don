@@ -52,6 +52,9 @@ const EXPORTS: &[(&str, &str, u16, bool)] = &[
         4,
         true,
     ),
+    // DoN-only lifecycle hook. The game does not import it; PE32 smoke callers
+    // use it after quiescing every interface caller and before `FreeLibrary`.
+    ("don_crossplay_shutdown", "proxy_shutdown", 5, false),
 ];
 
 fn main() {
