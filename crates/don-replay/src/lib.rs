@@ -63,6 +63,7 @@ pub mod image;
 pub mod initial;
 pub mod leader_initial_prefix;
 pub mod leader_prefix_ledger;
+pub mod leaders_generated_fixed_frontier;
 pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
 pub mod map_make_resource_caller_gap_frontier;
