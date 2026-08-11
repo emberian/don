@@ -221,67 +221,222 @@ impl Unit {
     }
 }
 
-/// Where to look for an `include`d file.
+/// Retail's default `Lexer::include_paths` entry.
+///
+/// `Lexer::init_once` `0x009c0f90` reads
+/// `prefs_get(int_str[7181], int_str[7182], 1, 0)` — `0x009c106a..0x009c1088`, with
+/// `int_str_array` at `0x00c06378` and the 20-byte stride giving ordinals
+/// `0x23104/0x14 = 7181` and `0x23118/0x14 = 7182`. Those ordinals in the shipped
+/// `internal_strings.xml` are the preference key `ScriptIncludePath` and this default
+/// value. The result is tokenised on the separator set `",;"` (wide literal at
+/// `0xb04b1c`) by `TokenString::next` `0x00a44000` and each token is appended to
+/// `Lexer::include_paths` (`Lexer+0xd0`, PDB member name) at `0x009c1160..0x009c11ae`.
+/// [measured]
+pub const DEFAULT_SCRIPT_INCLUDE_PATH: &str = ".\\scenario\\scriptlibrary\\";
+
+/// The separator set `Lexer::init_once` splits `ScriptIncludePath` on. [measured,
+/// wide literal `0xb04b1c`]
+pub const SCRIPT_INCLUDE_PATH_SEPARATORS: &[char] = &[',', ';'];
+
+/// `Lexer::start_include_file` `0x009c1960` refuses at `Lexer::file_stack` depth 16
+/// (`cmp dword ptr [esi + 0x124], 0x10` at `0x009c19a6`; `file_stack` is PDB offset 284
+/// and `+0x124` is its count word). Retail reports the nesting error and does not open
+/// the file. [measured]
+pub const MAX_INCLUDE_DEPTH: usize = 16;
+
+/// The `String::prepend_content_dir` `0x00A1D690` boundary, as seen by the lexer.
+///
+/// Retail turns every candidate path into a real file by prepending the content
+/// directory and running it through `ModManager::calcFilePath` `0x00A22910`, then
+/// calling `_wfsopen(path, L"rb", _SH_DENYNO)`. This trait is that one step: given a
+/// game-relative, `\`- or `/`-separated path, produce the file that would actually be
+/// opened, or `None` when nothing opens.
+///
+/// `don-content`'s `ContentStack` is the derived implementation of the mod-stack half;
+/// [`InstallRoot`] is the no-mods case.
+pub trait ContentProbe: std::fmt::Debug + Send + Sync {
+    fn probe(&self, game_relative: &str) -> Option<PathBuf>;
+}
+
+/// A plain install tree with no mods installed: the shipped-data branch of
+/// `calcFilePath`, where `out_index` is 0 and the returned path is the request itself.
+///
+/// The segment walk is case-insensitive because the shipped tree genuinely mixes case
+/// (`Cliffs.xml`, `IME.xml`, `scenario/Chess Exercise/`) and retail opens through the
+/// Win32 case-insensitive filesystem; a case-sensitive host must fold explicitly rather
+/// than lower-casing the path, which would not exist on disk.
+#[derive(Debug, Clone)]
+pub struct InstallRoot(pub PathBuf);
+
+impl ContentProbe for InstallRoot {
+    fn probe(&self, game_relative: &str) -> Option<PathBuf> {
+        probe_under(&self.0, game_relative)
+    }
+}
+
+/// Several install roots tried in order. Retail has exactly one content directory; this
+/// is the harness/testing generalisation and is *not* a retail behaviour.
 #[derive(Debug, Clone, Default)]
+pub struct InstallRoots(pub Vec<PathBuf>);
+
+impl ContentProbe for InstallRoots {
+    fn probe(&self, game_relative: &str) -> Option<PathBuf> {
+        self.0.iter().find_map(|r| probe_under(r, game_relative))
+    }
+}
+
+/// Split a retail game-relative path into segments, dropping `.` and empty segments.
+/// Both separators are accepted because the shipped preference value uses `\` while
+/// every other path in this crate uses `/`.
+fn path_segments(game_relative: &str) -> Vec<&str> {
+    game_relative
+        .split(['\\', '/'])
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect()
+}
+
+/// Walk `root` segment by segment, matching each segment case-insensitively. Returns the
+/// concrete file only when the whole path lands on a regular file.
+fn probe_under(root: &Path, game_relative: &str) -> Option<PathBuf> {
+    let segs = path_segments(game_relative);
+    if segs.is_empty() {
+        return None;
+    }
+    let mut at = root.to_path_buf();
+    for (i, seg) in segs.iter().enumerate() {
+        let last = i + 1 == segs.len();
+        let direct = at.join(seg);
+        let exists = if last {
+            direct.is_file()
+        } else {
+            direct.is_dir()
+        };
+        if exists {
+            at = direct;
+            continue;
+        }
+        // Case-insensitive fallback for hosts whose filesystem is case-sensitive.
+        let mut found = None;
+        let entries = std::fs::read_dir(&at).ok()?;
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.eq_ignore_ascii_case(seg) {
+                continue;
+            }
+            let p = e.path();
+            let ok = if last { p.is_file() } else { p.is_dir() };
+            if ok {
+                found = Some(p);
+                break;
+            }
+        }
+        at = found?;
+    }
+    Some(at)
+}
+
+/// Where to look for a root script and for an `include`d file.
+///
+/// This is `Lexer::open_file` `0x009bff30`, read at the instruction level. Given the
+/// requested name it tries, in this order, and takes the first that opens:
+///
+/// 1. **the including file's own directory** — only when there *is* a current file
+///    (`Lexer+0x14`, the `yyFlexLexer` current `LexerFileEntry`), i.e. for `include`
+///    and not for the root: `current_entry->path.get_directory()`
+///    (`String::get_directory` `0x00a1dcd0`) `+= name`, then `prepend_content_dir`
+///    (`0x009bffcf..0x009c0079`);
+/// 2. **the bare name against the content directory** (`0x009c0090..0x009c00f7`);
+/// 3. **each `Lexer::include_paths` entry** `+ name`, in array order
+///    (`0x009c010a..0x009c01d3`).
+///
+/// Nothing else is searched. In particular retail does **not** scan the install tree for
+/// a matching basename; a name that none of the three candidates resolves is a compile
+/// error (`Lexer::open_file` returns 1, `Lexer::start_include_file` `0x009c1960` reports
+/// it through `Compiler::comp_error`). An earlier version of this crate did scan by
+/// basename, which accepts programs retail rejects and can pick a different file than
+/// retail when two trees hold the same name.
+#[derive(Debug, Clone)]
 pub struct IncludePath {
-    pub dirs: Vec<PathBuf>,
-    /// If set, any `.bhs` anywhere under these roots may satisfy an include by basename.
-    /// The shipped tree needs this: `conquest/Alexander/*.bhs` includes `ctw_lib.bhs`,
-    /// which lives in `scenario/scriptlibrary/`.
-    pub roots: Vec<PathBuf>,
+    /// The `prepend_content_dir` boundary.
+    pub content: std::sync::Arc<dyn ContentProbe>,
+    /// `Lexer::include_paths`, in array order, game-relative.
+    pub include_paths: Vec<String>,
+    /// `Lexer::file_stack` depth cap.
+    pub max_depth: usize,
+}
+
+impl Default for IncludePath {
+    fn default() -> Self {
+        IncludePath {
+            content: std::sync::Arc::new(InstallRoots::default()),
+            include_paths: vec![DEFAULT_SCRIPT_INCLUDE_PATH.to_string()],
+            max_depth: MAX_INCLUDE_DEPTH,
+        }
+    }
 }
 
 impl IncludePath {
+    /// One or more install roots with retail's default `ScriptIncludePath`.
     pub fn with_roots<I: IntoIterator<Item = PathBuf>>(roots: I) -> Self {
         IncludePath {
-            dirs: Vec::new(),
-            roots: roots.into_iter().collect(),
+            content: std::sync::Arc::new(InstallRoots(roots.into_iter().collect())),
+            ..IncludePath::default()
         }
     }
 
-    fn resolve(&self, from: &Path, name: &str) -> Option<PathBuf> {
-        if let Some(dir) = from.parent() {
-            let p = dir.join(name);
-            if p.is_file() {
+    /// Resolve against an arbitrary content probe — the `don-content` mod stack, for
+    /// instance.
+    pub fn with_content(content: std::sync::Arc<dyn ContentProbe>) -> Self {
+        IncludePath {
+            content,
+            ..IncludePath::default()
+        }
+    }
+
+    /// Replace `Lexer::include_paths`, e.g. from a `ScriptIncludePath` preference value.
+    /// The value is tokenised exactly as `Lexer::init_once` tokenises it.
+    pub fn with_include_path_pref(mut self, pref: &str) -> Self {
+        self.include_paths = pref
+            .split(SCRIPT_INCLUDE_PATH_SEPARATORS)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        self
+    }
+
+    /// Candidate 2 and 3 only: the root-file case, where `Lexer+0x14` is null because
+    /// `Compiler::compile` `0x009bf160` calls `open_file` before any file is current.
+    pub fn resolve_root(&self, name: &str) -> Option<PathBuf> {
+        self.resolve_from(None, name)
+    }
+
+    /// The full three-candidate search. `from` is the *resolved* path of the including
+    /// file, which is what retail stores in the `LexerFileEntry` and what
+    /// `String::get_directory` is applied to.
+    pub fn resolve_from(&self, from: Option<&Path>, name: &str) -> Option<PathBuf> {
+        // 1. the including file's directory. Retail builds this candidate as a plain
+        //    string join and *then* prepends the content dir; because the entry's stored
+        //    path is already content-resolved, the join is done here on the real path.
+        if let Some(dir) = from.and_then(Path::parent) {
+            if let Some(p) = probe_under(dir, name) {
                 return Some(p);
             }
         }
-        for d in &self.dirs {
-            let p = d.join(name);
-            if p.is_file() {
-                return Some(p);
-            }
+        // 2. the bare name against the content directory.
+        if let Some(p) = self.content.probe(name) {
+            return Some(p);
         }
-        for r in &self.roots {
-            if let Some(p) = find_by_basename(r, name) {
+        // 3. each include path entry, in array order.
+        for d in &self.include_paths {
+            let joined = format!("{}/{}", d.trim_end_matches(['\\', '/']), name);
+            if let Some(p) = self.content.probe(&joined) {
                 return Some(p);
             }
         }
         None
     }
-}
-
-fn find_by_basename(root: &Path, name: &str) -> Option<PathBuf> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
-        entries.sort();
-        for e in entries {
-            if e.is_dir() {
-                stack.push(e);
-            } else if e
-                .file_name()
-                .map(|f| f.eq_ignore_ascii_case(name))
-                .unwrap_or(false)
-            {
-                return Some(e);
-            }
-        }
-    }
-    None
 }
 
 /// Build a compilation unit from a root file.
@@ -294,7 +449,7 @@ pub fn analyze(root: &Path, inc: &IncludePath) -> Result<Unit, crate::CompileErr
         diags: Vec::new(),
     };
     let mut seen: HashMap<PathBuf, usize> = HashMap::new();
-    load(root, inc, &mut u, &mut seen)?;
+    load(root, inc, 0, &mut u, &mut seen)?;
 
     collect_structs(&mut u);
     collect_labels(&mut u);
@@ -309,6 +464,7 @@ fn canon(p: &Path) -> PathBuf {
 fn load(
     path: &Path,
     inc: &IncludePath,
+    depth: usize,
     u: &mut Unit,
     seen: &mut HashMap<PathBuf, usize>,
 ) -> Result<usize, crate::CompileError> {
@@ -338,16 +494,63 @@ fn load(
         .collect();
 
     for (name, pos) in includes {
-        match inc.resolve(path, &name) {
+        // `Lexer::start_include_file` `0x009c1960` checks `Lexer::file_stack`'s count
+        // *before* calling `open_file`, so an over-deep include is never opened.
+        //
+        // The count is the number of *suspended* files, not including the current one:
+        // `Lexer::set_curr_buffer` `0x009bfeb0` pushes the outgoing `Lexer+0x14` and only
+        // then installs the new entry, and it pushes nothing when there is no outgoing
+        // file — so the root sits at count 0. `file_stack` is `{data +0x11c, cap +0x120,
+        // count +0x124, grow +0x128}`, read off the `cmp eax, [edi+0x120]` / `inc dword
+        // [esi+8]` pair at `0x009bfec2..0x009bfee8`. `depth` here is that same count.
+        if depth >= inc.max_depth {
+            u.diags.push(Diag {
+                severity: Severity::Error,
+                file: path.display().to_string(),
+                pos,
+                msg: format!(
+                    "`include \"{name}\"` exceeds the retail nesting limit of {}",
+                    inc.max_depth
+                ),
+            });
+            continue;
+        }
+        match inc.resolve_from(Some(path), &name) {
             Some(p) => {
-                let child = load(&p, inc, u, seen)?;
+                // Retail's re-inclusion behaviour is an open question, recorded rather
+                // than assumed. `Lexer::open_file`'s `included_files` guard
+                // (`0x009bffa0..0x009bffb4`) compares each already-open entry's path
+                // against a *freshly zero-initialised* local `String`, so as emitted it
+                // can only fire for an entry whose stored path is empty — which cannot
+                // happen, since the entry's path is assigned from the resolved candidate
+                // at `0x009c020f`. Retail therefore appears to lex a diamond-included
+                // file twice. This compiler processes it once; the divergence is real for
+                // five shipped roots (all of them reaching `game_structs.bhs` twice
+                // through `ctw_lib.bhs`) and is settled by one reference image from the
+                // retail compiler, not by choosing here.
+                let already = seen.contains_key(&canon(&p));
+                let child = load(&p, inc, depth + 1, u, seen)?;
+                if already {
+                    u.diags.push(Diag {
+                        severity: Severity::Note,
+                        file: path.display().to_string(),
+                        pos,
+                        msg: format!(
+                            "`include \"{name}\"` is already in this unit; retail's \
+                             `included_files` guard cannot fire, so retail may lex it again"
+                        ),
+                    });
+                }
                 u.files[idx].includes.push(child);
             }
             None => u.diags.push(Diag {
                 severity: Severity::Error,
                 file: path.display().to_string(),
                 pos,
-                msg: format!("cannot resolve `include \"{name}\"`"),
+                msg: format!(
+                    "cannot resolve `include \"{name}\"`: no candidate of \
+                     `Lexer::open_file` 0x009bff30 opens"
+                ),
             }),
         }
     }

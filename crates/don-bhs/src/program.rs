@@ -277,6 +277,33 @@ pub struct Program {
     walk_meta: Option<ProgramWalkMeta>,
 }
 
+/// Why two compiled units could not be merged into one global script-file set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramMergeError {
+    /// A checksum sidecar is attached. Its `linked_file_indices` are global, so appending
+    /// would silently repoint them; re-derive the sidecar after merging instead.
+    WalkMetaPresent,
+    /// One side carries tag-9 registered type names. Their cached `String` hash words are
+    /// not recoverable from the name text (`ScriptFile::load_struct_types` leaves them
+    /// zero), so a merged registry would not be the one retail built.
+    GlobalTypeNames,
+}
+
+impl std::fmt::Display for ProgramMergeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProgramMergeError::WalkMetaPresent => {
+                write!(f, "a checksum sidecar is attached; merge before attaching one")
+            }
+            ProgramMergeError::GlobalTypeNames => {
+                write!(f, "tag-9 global type names cannot be merged")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProgramMergeError {}
+
 impl Default for Program {
     fn default() -> Self {
         let global_type_names = ["int", "float", "string", "void", "bool"]
@@ -308,6 +335,73 @@ impl Program {
         program.files.push(file);
         program.linked_files.push(Vec::new());
         program
+    }
+
+    /// Append another program's files, as `ScriptFile::init` appends to the engine's
+    /// global `ScriptFile::script_files` vector (count `0x00c8cba4`, data `0x00c8cbb0`).
+    ///
+    /// Retail keeps **one** global set of loaded script files, not one per compilation
+    /// unit. `Game::do_frame` step 4 runs two scripts — the selected game script and
+    /// `general_powers` — that come from two separate `Compiler::compile` calls and live
+    /// as two entries in that vector, and `RunTimeEnv::run_script` `0x009c4460` looks the
+    /// script up across the whole vector. A runtime that could hold only one compiled unit
+    /// therefore cannot express retail's step 4 at all.
+    ///
+    /// Returns the index the first appended file landed at.
+    ///
+    /// Refused, rather than half-merged, when either side carries a checksum sidecar
+    /// (`walk_meta`'s linked-file indices are global and would silently mis-resolve) or a
+    /// non-default global type-name registry (tag-9 names carry cached hash words that
+    /// cannot be reconstructed from the name text — see [`Self::type_name`]).
+    pub fn append(&mut self, other: Program) -> Result<usize, ProgramMergeError> {
+        if self.walk_meta.is_some() || other.walk_meta.is_some() {
+            return Err(ProgramMergeError::WalkMetaPresent);
+        }
+        let defaults = Program::default();
+        if self.global_type_names != defaults.global_type_names
+            || other.global_type_names != defaults.global_type_names
+        {
+            return Err(ProgramMergeError::GlobalTypeNames);
+        }
+        let base = self.files.len();
+        self.files.extend(other.files);
+        for links in other.linked_files {
+            self.linked_files.push(
+                links
+                    .into_iter()
+                    .map(|i| if i == usize::MAX { i } else { i + base })
+                    .collect(),
+            );
+        }
+        Ok(base)
+    }
+
+    /// `ScriptFile::find_script` `0x009c6c80` — the lookup `RunTimeEnv::run_script`
+    /// performs at tick step 4.
+    ///
+    /// Read from the decompiled body and its `String::operator==` `0x00a1f140` calls:
+    ///
+    /// * the file loop runs **backwards**, `script_files.count - 1` down to 0, so when two
+    ///   loaded files define the same script name the **later-loaded file wins**;
+    /// * null file slots are skipped;
+    /// * a non-empty `file_name` argument additionally filters by file; the step-4 caller
+    ///   passes the empty string, so every loaded file is eligible;
+    /// * the per-file scan is forward over `scripts` (count `+0x20`, data `+0x2c`) and
+    ///   compares `Script::name` at `+0xac` with `String::operator==`, which ends in
+    ///   `_wcsicmp` — **case-insensitive**.
+    ///
+    /// Returns `(file index, index within that file)`.
+    pub fn find_script(&self, name: &str) -> Option<(usize, usize)> {
+        for file in (0..self.files.len()).rev() {
+            if let Some(i) = self.files[file]
+                .scripts
+                .iter()
+                .position(|s| s.name.eq_ignore_ascii_case(name))
+            {
+                return Some((file, i));
+            }
+        }
+        None
     }
 
     /// Attach an independently recovered retail checksum sidecar.
@@ -403,6 +497,63 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merged_files_are_one_global_set_and_the_later_file_wins_a_name() {
+        // `ScriptFile::find_script` 0x009c6c80 scans the global vector backwards. A
+        // forward scan would bind the *first* loaded definition, which is the opposite of
+        // what retail does when a scenario and the general-powers library share a name.
+        let mk = |name: &str| {
+            Program::single(ScriptFile {
+                scripts: vec![
+                    Script {
+                        name: "shared".into(),
+                        ..Default::default()
+                    },
+                    Script {
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+        };
+        let mut a = mk("only_in_a");
+        let b = mk("only_in_b");
+        assert_eq!(a.append(b), Ok(1));
+        assert_eq!(a.files.len(), 2);
+        assert_eq!(a.find_script("only_in_a"), Some((0, 1)));
+        assert_eq!(a.find_script("only_in_b"), Some((1, 1)));
+        assert_eq!(a.find_script("SHARED"), Some((1, 0)), "later file wins");
+        assert_eq!(a.find_script("absent"), None);
+    }
+
+    #[test]
+    fn merging_is_refused_rather_than_silently_repointing_a_sidecar() {
+        let mut a = Program::single(ScriptFile::default());
+        a.set_walk_meta(ProgramWalkMeta::default());
+        assert_eq!(
+            a.append(Program::single(ScriptFile::default())),
+            Err(ProgramMergeError::WalkMetaPresent)
+        );
+        let mut c = Program::single(ScriptFile::default());
+        let mut d = Program::single(ScriptFile::default());
+        d.register_global_type_name("Pair".into());
+        assert_eq!(c.append(d), Err(ProgramMergeError::GlobalTypeNames));
+    }
+
+    #[test]
+    fn linked_file_slots_are_rebased_by_the_append_offset() {
+        let mut a = Program::single(ScriptFile::default());
+        a.files.push(ScriptFile::default());
+        a.linked_files.push(Vec::new());
+        let mut b = Program::single(ScriptFile::default());
+        b.files.push(ScriptFile::default());
+        b.linked_files.push(vec![0]);
+        assert_eq!(a.append(b), Ok(2));
+        // b's file 1 linked to b's file 0, which is now global index 2.
+        assert_eq!(a.resolved_links(3), Some(&[2usize][..]));
+    }
 
     #[test]
     fn global_type_registry_has_retail_order_dedup_and_hash_lookup() {

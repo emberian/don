@@ -39,11 +39,17 @@
 pub mod ast;
 pub mod codegen;
 pub mod lex;
+pub mod load;
 pub mod parse;
 pub mod sema;
 
 pub use lex::{lex, LexError, Pos};
+pub use load::{
+    install_include_path, load_script, load_script_file, LoadError, LoadedScript,
+    GENERAL_POWERS_SCRIPT_FILE,
+};
 pub use parse::{parse_file, ParseError};
+pub use sema::{ContentProbe, IncludePath, InstallRoot, InstallRoots};
 
 /// Read a `.bhs` file from disk and parse it.
 ///

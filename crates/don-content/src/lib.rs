@@ -58,6 +58,7 @@ pub mod overlay;
 pub mod overlay_file;
 pub mod runtime;
 pub mod scan;
+pub mod script;
 pub mod status;
 pub mod string_table;
 pub mod unitrules;
@@ -71,6 +72,7 @@ pub use manifest::{generate as generate_manifest, ManifestError, RetailManifest}
 pub use overlay::{Layer, Mode, OverlayError, Patch, RuleStack};
 pub use overlay_file::{read_overlay, OverlayFile, OverlayFileError};
 pub use runtime::{PreparedReload, RuleRegistry, RuntimeSnapshot};
+pub use script::ContentScriptSource;
 pub use string_table::{
     PreparedStringTables, RetailLanguage, RetailStringTable, StringCommitError, StringPrepareError,
     StringTableRegistry, StringTablesSnapshot,

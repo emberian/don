@@ -6,5 +6,6 @@ license.workspace = true
 description = "Retail-compatible content/mod resolution plus the Descent of Nations overlay layer"
 
 [dependencies]
+don-bhs-cc = { path = "../don-bhs-cc" }
 don-rules = { path = "../don-rules" }
 quick-xml = "0.38"
