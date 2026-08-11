@@ -52,6 +52,14 @@ pub struct TypeRow {
     pub tribe_mask: u32,
     /// Already multiplied by the matching `*_COST_FACTOR` from `rules.xml`.
     pub cost: [i32; NRES],
+    /// `ObjectTypeData::support[2]`: resource ids used by the recovered production-cost
+    /// ramp. `-1` is an unused arm.
+    pub support: [i32; 2],
+    /// `ObjectTypeData::support_cost[2]`, paired with [`Self::support`]. These values are
+    /// already live runtime integers; unlike base cost, no `*_COST_FACTOR` applies.
+    pub support_cost: [i32; 2],
+    /// `UnitTypeData::progression`, the recovered production-ramp mode selector.
+    pub progression: i32,
     /// `JOB_TIME`, frames of citizen-work.
     pub job_time: i32,
     /// `PREQ0..2` as `TypeIndex`, `-1` dropped.
@@ -183,10 +191,12 @@ impl TypeRow {
 pub struct Types {
     pub rows: BTreeMap<i32, TypeRow>,
     pub constants: Constants,
-    /// Per-unit `SUPPORT` upkeep, by `TypeIndex`.
+    /// Legacy Arena per-unit recurring expense, by `TypeIndex`.
     ///
-    /// The live TSV's four `support*` columns are an id/amount encoding this lane did not
-    /// settle, so upkeep comes from `unitrules.xml`'s `<SUPPORT>` string, which
+    /// This predates the exact live [`TypeRow::support`] / [`TypeRow::support_cost`]
+    /// projection above. Those four fields are production-ramp inputs, not this recurring
+    /// expense map. Legacy expense still comes from `unitrules.xml`'s `<SUPPORT>` string,
+    /// which
     /// [`crate::rules::parse_cost`] already reads (`"1f support"` -> one food) and which
     /// is covered by that module's tests. Matched by display name; a unit with no XML
     /// record carries zero upkeep, and that is a *gap*, not a claim.
@@ -311,6 +321,11 @@ impl Types {
             "base_form",
             "push_size",
             "push_circles",
+            "support0",
+            "support1",
+            "support_cost0",
+            "support_cost1",
+            "progression",
         ] {
             if col(&unit.hdr, want).is_none() {
                 return Err(format!("live-tables-unit.tsv has no `{want}` column"));
@@ -330,6 +345,12 @@ impl Types {
                     cat: num(h, r, "cat") as i32,
                     tribe_mask: num(h, r, "tribe_mask") as u32,
                     cost: costs(h, r, factor),
+                    support: [num(h, r, "support0") as i32, num(h, r, "support1") as i32],
+                    support_cost: [
+                        num(h, r, "support_cost0") as i32,
+                        num(h, r, "support_cost1") as i32,
+                    ],
+                    progression: num(h, r, "progression") as i32,
                     job_time: num(h, r, "job_time") as i32,
                     preq: preqs(h, r),
                     where_: num(h, r, "where") as i32,

@@ -40,6 +40,7 @@ pub mod cmd;
 pub mod diplomacy_runtime;
 pub mod eval;
 mod gather_runtime;
+mod knowledge_economy;
 pub mod map;
 pub mod match_run;
 pub mod obs;

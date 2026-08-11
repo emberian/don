@@ -54,10 +54,13 @@ records only accepted `Queue` and `Build` issue times. Unaffordable retries, mov
 combat commands, and completion events do not enter the trace.
 
 The JSON report keeps candidate first-issue traces beside the human bounds; it never
-substitutes one for the other. It also prints all declared confounds:
+substitutes one for the other. It also prints the recovered base-University runtime audit
+and all declared confounds:
 
-- Arena travel, placement, terrain-derived gather capacity, gross income, construction,
-  combat, and map generation are physics under test.
+- Arena travel, ordinary gather capacity/income, construction, combat, and map generation
+  retain declared MODEL paths. Base University capacity, contained Scholar placement,
+  production-cost ramp, literacy, and Scholar gross now call recovered exact owners inside
+  that larger non-retail Arena.
 - The replay setup is not stratified.
 - The shipped opening trace is not the compiled retail AI.
 - Accepted issue time is comparable to a replay production command; completion time is not.
@@ -65,27 +68,37 @@ substitutes one for the other. It also prints all declared confounds:
 Consequently, bot-vs-bot outcomes are deliberately absent. A win would jointly measure the
 two policies and these incomplete Arena physics.
 
-The bounded three-seed/two-seat run used to validate the artifact produced six traces per
-policy. `Ai` had 131 accepted production decisions: 72 basic-labour, five city-expansion,
-and **zero knowledge, wealth, or gather-upgrade decisions**. `ShippedOpening` had 160:
+The post-correction bounded three-seed/two-seat run produced six traces per policy. `Ai`
+had 141 accepted production decisions: 89 basic-labour, three city-expansion, **six
+Universities and ten Scholars**, and zero wealth or gather-upgrade decisions. University
+appeared in 6/6 runs; Scholar appeared in 5/6. Candidate first issue was University
+frames 3,976..9,061 (p50 5,100) and Scholar 5,086..9,106 (p50 5,190). These are Arena issue
+measurements, not timing targets; notably, one accepted University did not complete in the
+horizon through the still-modelled construction path. `ShippedOpening` remained 160:
 126 basic-labour, six city-expansion, six Markets, and zero knowledge or gather upgrades.
-Those counts describe these policy implementations inside Arena; they are not retail-AI
-measurements.
 
-## Highest-value correction
+## Correction outcome and next boundary
 
-The decision-weighted diagnostic priority is the **knowledge economy**: add University
-placement, Scholar production, and the associated knowledge-income accounting to the
-independent AI/Arena evaluation path. The current `Ai` action surface has no University or
-Scholar production, while those types account for 4,665 human production decisions in the
-bounded envelope—more than the wealth and gather-upgrade families combined.
+The previous diagnostic priority, **knowledge economy**, is no longer a zero-coverage
+family. The independent policy now places a University from public placement facts, queues
+the tribe-roster Scholar through exact ramped affordability, and the Arena retains completed
+Scholars off-map inside the University. One completed city University with seven base
+Scholars credits exactly 45 knowledge per 450 frames: ten flat literacy plus seven times
+five Scholar income. The deterministic test also proves contained Scholars do not act or
+reveal fog and Citizens cannot enter the University's income term.
 
-This is a model-coverage correction, not a claim that humans always build Scholars, that
-retail AI follows the human distribution, or that adding Scholars increases skill. It is
-the next correction because the current evaluator cannot represent a heavily exercised
-human economic feedback loop at all. After it exists, timing calibration must be stratified
-by replay setup or differentially tested against retail before any p50 comparison can be a
+With both University and Scholar present, the same zero-coverage ranking advances to
+**gather upgrades**: Granary, Lumber Mill, and Smelter account for 973 / 42,543 human
+production decisions (2.29%). That is the next missing family, not an assertion that it is
+the best strategic purchase. Knowledge timing calibration still needs setup stratification
+or retail differential evidence before any candidate/human p50 comparison can become a
 fidelity claim.
+
+The knowledge lifecycle's authority boundary is explicit in
+`docs/mechanics/arena-knowledge-economy.md`: University construction remains Arena
+`ResearchModel`; University levels 2..6 require an unhosted BonusType/property resolver;
+dynamic retail train-time modifiers and contained-object destruction/ejection teardown are
+not claimed.
 
 ## Reproduction
 
@@ -104,5 +117,6 @@ schema is versioned (`don.ai.accepted-production-trace.v1`), malformed or unlabe
 fails closed, and its minutes/seeds/FPS metadata prevents a 12-minute trace from being
 silently scored against a different human horizon. The analyzer also requires both seats
 for every configured seed and both fixed policies, so a vanished/empty run cannot improve
-coverage by disappearing. The tests pin the zero-AI-command corpus fact and the
-decision-weighted knowledge-economy diagnosis.
+coverage by disappearing. The tests pin the zero-AI-command corpus fact, the original
+knowledge-economy diagnosis for a trace missing that family, and the advance to gather
+upgrades once University and Scholar rows are present.

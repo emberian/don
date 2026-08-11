@@ -57,7 +57,7 @@ CONFOUNDS = [
     },
     {
         "id": "arena_physics_under_test",
-        "effect": "Arena travel, placement, gather capacity, gross income, construction, combat, and map generation contain declared MODEL paths; policy-vs-policy results would measure those physics too.",
+        "effect": "Arena travel, ordinary gather capacity/income, construction, combat, and map generation retain declared MODEL paths. Base University capacity, contained Scholar placement, cost ramp, literacy, and Scholar gross are recovered exact owners inside that larger non-retail Arena.",
     },
     {
         "id": "shipped_opening_is_not_full_retail_ai",
@@ -85,6 +85,22 @@ PRODUCTION_AI_AUDIT = {
         "Leader::make_stuff",
     ],
     "interpretation": "Reachability now proves when retail would enter each boundary; it does not yet produce the compiled retail AI's decisions.",
+}
+
+KNOWLEDGE_ECONOMY_AUDIT = {
+    "scope": "base-level city University -> contained Scholar -> knowledge credit",
+    "type_source": "schema/live live UnitType/BuildType rows",
+    "exact_owners": [
+        "don_sim::systems::production::ramp_cost",
+        "don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS",
+        "don_sim::systems::gathering::site_gross",
+        "don_sim::systems::economy::scholar_rate_for_level",
+        "don_sim::systems::tech_cities::city_literacy",
+        "don_sim::mechanics::resource_tick / credit_resource",
+    ],
+    "pinned_result": "one city University with seven base Scholars credits 45 knowledge per 450 frames",
+    "authority_boundary": "University construction still uses Arena ResearchModel; levels 2..6 need the unhosted BonusType/property resolver; contained-object destruction/come-out teardown is not claimed.",
+    "interpretation": "Accepted University/Scholar rows now measure a represented economic feedback loop, not retail-AI imitation or whole-Arena fidelity.",
 }
 
 
@@ -365,6 +381,7 @@ def build_report(derived: dict, corpus: dict, trace: Trace) -> dict:
         },
         "corpus_audit": audit,
         "shipped_production_ai_audit": PRODUCTION_AI_AUDIT,
+        "knowledge_economy_runtime_audit": KNOWLEDGE_ECONOMY_AUDIT,
         "human_envelope": envelope,
         "policy_traces": policies,
         "physics_and_model_confounds": CONFOUNDS,

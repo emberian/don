@@ -138,17 +138,17 @@ use super::gather_runtime::{
     AuthoritativeGatherSitePlacement, AuthoritativeGatherSiteType, GatherCapacityAuthority,
     GatherObjectKey, GatherPerWorkerEvaluationRequest, GatherPrerequisiteRefusal,
 };
+use super::knowledge_economy::{self, KnowledgeEconomy, KnowledgeObject, ScholarContainmentPlan};
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
     self, ArenaAttritionRecomputeHost, ArenaAttritionSelectionHost, ArenaConstructionReceipt,
     ArenaHeroAuraHealingHost, ArenaIroquoisHealingHost, ArenaPatriotHealingHost,
-    ArenaPlacementReceipt, ArenaPlacementTerritory, ArenaPlacementTileClaim,
-    ArenaReloadSupplyHost, ArenaSupplyAttritionHost, ArenaSupplyHealingHost,
-    ArenaWorkerHealingHost, AttritionFreePoint, AttritionGameFacts, AttritionMeetReceipt,
-    AttritionRecomputeTransaction, AttritionUnitFacts, DiplomacyState, GatherOrderState,
-    HealingRepairMutation, HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord,
-    IroquoisHealingTransaction, LeaderAttritionFlags, LeaderAttritionRate,
-    PatriotHealingTransaction, ReloadSupplyState, SupplyAttritionTransaction,
+    ArenaPlacementReceipt, ArenaPlacementTerritory, ArenaPlacementTileClaim, ArenaReloadSupplyHost,
+    ArenaSupplyAttritionHost, ArenaSupplyHealingHost, ArenaWorkerHealingHost, AttritionFreePoint,
+    AttritionGameFacts, AttritionMeetReceipt, AttritionRecomputeTransaction, AttritionUnitFacts,
+    DiplomacyState, GatherOrderState, HealingRepairMutation, HeroAuraHealingTransaction,
+    HeroRadiusFacts, HeroRegistryRecord, IroquoisHealingTransaction, LeaderAttritionFlags,
+    LeaderAttritionRate, PatriotHealingTransaction, ReloadSupplyState, SupplyAttritionTransaction,
     SupplyAttritionUnitState, SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord,
     SupplySearchObject, WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
 };
@@ -186,6 +186,7 @@ pub struct Ids {
     pub temple: i32,
     pub tower: i32,
     pub university: i32,
+    pub scholar: i32,
     pub classical_age: i32,
     pub city_state: i32,
     pub barter: i32,
@@ -220,6 +221,7 @@ impl Ids {
             temple: find("Temple", true)?,
             tower: find("Tower", true)?,
             university: find("University", true)?,
+            scholar: find("Scholar", false)?,
             classical_age: find("Classical Age", false)?,
             city_state: find("City State", false)?,
             barter: find("Barter", false)?,
@@ -245,6 +247,16 @@ fn gather_key(e: &Ent) -> GatherObjectKey {
     GatherObjectKey {
         owner: e.who,
         o: e.object_o,
+    }
+}
+
+fn knowledge_object(e: &Ent) -> KnowledgeObject {
+    KnowledgeObject {
+        inside: don_sim::systems::gathering::GatherInsideObject {
+            owner: e.who as i8,
+            object: e.object_o,
+        },
+        uid: e.object_uid,
     }
 }
 
@@ -625,6 +637,9 @@ pub struct World {
     /// fails its retail prerequisite preflight and continues only through the separately
     /// labelled MODEL 3 gameplay path below.
     gather_runtime: ArenaGatherRuntime,
+    /// Exact off-map University/Scholar identity, containment and knowledge-gross state.
+    /// This is separate from ordinary on-map Citizen gathering by construction.
+    knowledge_economy: KnowledgeEconomy,
     /// Per-site external facts admitted only after the retained terrain plane and the
     /// shared completed-Farm evaluator have succeeded transactionally.
     authoritative_farm_sites: BTreeMap<GatherObjectKey, AuthoritativeFarmSiteFacts>,
@@ -741,18 +756,48 @@ fn type_chain_has_build_flag(types: &Types, mut type_id: i32, flag: u32) -> bool
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ArenaSupplyHostError {
     InvalidOwner(i32),
-    MissingObject { who: i32, o: i32 },
-    MissingMotion { who: i32, o: i32 },
+    MissingObject {
+        who: i32,
+        o: i32,
+    },
+    MissingMotion {
+        who: i32,
+        o: i32,
+    },
     MissingType(i32),
-    StaleUnitMasks2 { expected: u32, found: u32 },
-    StaleDamage { expected: i32, found: i32 },
-    StaleHealing { expected: i16, found: i16 },
-    StaleUnitMasks { expected: u32, found: u32 },
-    StaleAttritionPeriod { expected: i16, found: i16 },
-    UnsupportedUberDamage { type_id: i32, uber_size: i32 },
-    UnsupportedUberHealing { type_id: i32, uber_size: i32 },
+    StaleUnitMasks2 {
+        expected: u32,
+        found: u32,
+    },
+    StaleDamage {
+        expected: i32,
+        found: i32,
+    },
+    StaleHealing {
+        expected: i16,
+        found: i16,
+    },
+    StaleUnitMasks {
+        expected: u32,
+        found: u32,
+    },
+    StaleAttritionPeriod {
+        expected: i16,
+        found: i16,
+    },
+    UnsupportedUberDamage {
+        type_id: i32,
+        uber_size: i32,
+    },
+    UnsupportedUberHealing {
+        type_id: i32,
+        uber_size: i32,
+    },
     InvalidHealingRate(i32),
-    PositionOutsideWorld { x: i32, y: i32 },
+    PositionOutsideWorld {
+        x: i32,
+        y: i32,
+    },
     /// A retail fact the recovered transaction asked for that this arena does not
     /// materialize. Reaching it is a programming error in the caller's branch order, not a
     /// gameplay outcome: every branch Arena can actually reach answers without it.
@@ -2893,6 +2938,7 @@ impl World {
             collision_check: CollCheck::new(),
             collision_units: CollisionUnits::default(),
             gather_runtime: ArenaGatherRuntime::default(),
+            knowledge_economy: KnowledgeEconomy::default(),
             authoritative_farm_sites: BTreeMap::new(),
             target_world,
             target_circle: circle_table(),
@@ -3239,6 +3285,9 @@ impl World {
                 city: city_o,
                 ..BuildData::default()
             };
+            if type_id == self.ids.university {
+                b.gather_max = worker_cap as i8;
+            }
             if complete {
                 // `Build::activate` 0x00623E20 sets this measured active-building mask.
                 b.build_masks |= 0x1000;
@@ -3425,7 +3474,98 @@ impl World {
                 .register_site(key, object_uid, kind, capacity)
                 .expect("Arena entity slots never recycle within a World");
         }
+        if type_id == self.ids.university {
+            let university = self.ents.last().expect("University was just pushed");
+            self.knowledge_economy
+                .register_university(knowledge_object(university), !university.city.is_none())
+                .expect("Arena University identities never recycle within a World");
+        }
         id
+    }
+
+    /// Commit the off-map half of retail's University Scholar placement after the normal
+    /// owner-local Unit allocation has produced its stable `(who,o,uid)` identity.
+    fn contain_completed_scholar(
+        &mut self,
+        university: EntId,
+        scholar: EntId,
+        plan: ScholarContainmentPlan,
+    ) {
+        let university_key = self
+            .ent(university)
+            .map(knowledge_object)
+            .expect("Scholar producer remains live through queue completion");
+        let scholar_ent = self
+            .ent(scholar)
+            .cloned()
+            .expect("completed Scholar allocation remains live");
+        assert_eq!(plan.university, university_key);
+        assert_eq!(plan.scholar, knowledge_object(&scholar_ent));
+
+        // `Object::insert_inside` removes the child from World before installing its
+        // containment identity. Clear every Guy stamp, unlink the Unit anchor, and remove
+        // the target-acquisition row while retaining the live owner-local object itself.
+        let collision_index = self
+            .collision_units
+            .find(i32::from(scholar_ent.who), i32::from(scholar_ent.object_o))
+            .expect("a freshly allocated Scholar has a collision row");
+        let stamps: Vec<((i32, i32), i32)> = self
+            .collision_units
+            .guys
+            .iter()
+            .filter(|guy| {
+                guy.who == i32::from(scholar_ent.who) && guy.o == i32::from(scholar_ent.object_o)
+            })
+            .map(|guy| {
+                (
+                    (
+                        don_sim::systems::movement::ucell_of(guy.body.x),
+                        don_sim::systems::movement::ucell_of(guy.body.y),
+                    ),
+                    guy.body.block_radius,
+                )
+            })
+            .collect();
+        for (from, radius) in stamps {
+            // Inverse of `collision::place`'s initial dense Guy stamp. The shared
+            // `move_unit` assumes its destination is a valid region and therefore cannot
+            // represent `Object::insert_inside`'s off-map destination.
+            let n = collision::ring_count(radius);
+            for stamp in 0..n as usize {
+                let cx = collision::RING_X[stamp] + from.0;
+                let cy = collision::RING_Y[stamp] + from.1;
+                if cx < 0
+                    || cy < 0
+                    || cx >= self.collision_world.xs * collision::BLOCK_UCELLS
+                    || cy >= self.collision_world.ys * collision::BLOCK_UCELLS
+                {
+                    continue;
+                }
+                let block_index = self
+                    .collision_world
+                    .w_index(cx / collision::BLOCK_UCELLS, cy / collision::BLOCK_UCELLS);
+                if let Some(block) = self.collision_world.wdata[block_index].block.as_deref_mut() {
+                    collision::block_set(block, cx, cy, false);
+                }
+            }
+        }
+        assert!(collision::relocate_unit_anchor(
+            &mut self.collision_world,
+            &mut self.collision_units,
+            i32::from(scholar_ent.who),
+            i32::from(scholar_ent.object_o),
+            -1,
+            -1,
+        ));
+        self.collision_units.rows[collision_index].on_map = false;
+        self.collision_units.rows[collision_index].moving = false;
+        assert!(
+            self.target_world.remove(target_ref(&scholar_ent)),
+            "a freshly allocated Scholar has a target-world row"
+        );
+        self.knowledge_economy
+            .apply_containment(plan)
+            .expect("prevalidated Scholar containment remains current");
     }
 
     /// Install the exact selected-gpiece state for one Arena unit.
@@ -3619,6 +3759,11 @@ impl World {
                 self.map.count_within(tx, ty, 2, Terrain::Mountain).min(4),
                 4,
             )
+        } else if t.id == self.ids.university {
+            (
+                don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS,
+                don_sim::systems::economy::RES_KNOWLEDGE,
+            )
         } else {
             (0, 0)
         }
@@ -3687,6 +3832,37 @@ impl World {
             0
         };
         built + queued
+    }
+
+    /// Command-time production cost from the same exact owner [`World::queue_up`] uses.
+    pub fn production_cost(&self, pi: usize, type_id: i32) -> Option<[i32; NRES]> {
+        let t = self.types.get(type_id)?;
+        if knowledge_economy::is_scholar_type(type_id) {
+            let owned_and_queued = self.count_type(pi, type_id, true);
+            Some(knowledge_economy::scholar_cost(
+                t.cost,
+                t.support,
+                t.support_cost,
+                t.progression,
+                owned_and_queued,
+                &self.prod_rules,
+            ))
+        } else {
+            Some(t.cost)
+        }
+    }
+
+    /// Number of Scholars retained off-map inside this University.
+    pub fn contained_scholars(&self, university: EntId) -> usize {
+        self.ent(university)
+            .map(knowledge_object)
+            .map_or(0, |key| self.knowledge_economy.contained_count(key))
+    }
+
+    pub fn is_contained_scholar(&self, scholar: EntId) -> bool {
+        self.ent(scholar)
+            .map(knowledge_object)
+            .is_some_and(|key| self.knowledge_economy.is_inside(key))
     }
 
     fn nearest_own_city(&self, who: u8, tx: i32, ty: i32) -> Option<EntId> {
@@ -4373,10 +4549,27 @@ impl World {
             if !is_tech && self.pop(pi) + t.pop.max(1) > self.pop_cap(pi) {
                 break;
             }
-            if !self.can_pay(pi, &t.cost) {
+            if knowledge_economy::is_scholar_type(type_id) {
+                let assigned_and_queued = self.contained_scholars(producer)
+                    + self
+                        .ent(producer)
+                        .expect("queue producer remains live")
+                        .queue
+                        .iter()
+                        .filter(|item| knowledge_economy::is_scholar_type(item.type_id))
+                        .count();
+                if assigned_and_queued
+                    >= don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS as usize
+                {
+                    break;
+                }
+            }
+            let cost = self
+                .production_cost(pi, type_id)
+                .expect("queue type remains in the live table");
+            if !self.can_pay(pi, &cost) {
                 break;
             }
-            let cost = t.cost;
             self.pay(pi, &cost);
             self.ent_mut(producer).unwrap().queue.push(QueueItem {
                 type_id,
@@ -4490,6 +4683,16 @@ impl World {
         for (r, slot) in gross.iter_mut().enumerate() {
             *slot = self.types.constants.city_gather[r] * cities;
         }
+        let active_universities: BTreeSet<KnowledgeObject> = self
+            .own_ents(pi)
+            .filter(|ent| ent.complete && ent.type_id == self.ids.university)
+            .map(knowledge_object)
+            .collect();
+        let knowledge_gross = self.knowledge_economy.gross(pi as i8, &active_universities);
+        for (slot, value) in gross.iter_mut().zip(knowledge_gross) {
+            *slot = slot.wrapping_add(value);
+        }
+        let exact_knowledge_active = !active_universities.is_empty();
         for e in self.own_ents(pi) {
             if e.building {
                 if e.complete && ordinary_gather_kind(&self.ids, e.type_id).is_some() {
@@ -4512,7 +4715,10 @@ impl World {
                 } else {
                     e.workers
                 };
-                if e.complete && active_workers > 0 {
+                if e.complete
+                    && ordinary_gather_kind(&self.ids, e.type_id).is_some()
+                    && active_workers > 0
+                {
                     gross[e.gather_res] += self.types.constants.peasant_rate * active_workers;
                 }
             } else if let Some(u) = self.types.upkeep.get(&e.type_id) {
@@ -4521,7 +4727,7 @@ impl World {
                 }
             }
         }
-        let period = if self.params.gather_period_shift == 4 {
+        let model_period = if self.params.gather_period_shift == 4 {
             resource_period(self.econ.gather_rate)
         } else {
             self.econ
@@ -4529,6 +4735,15 @@ impl World {
                 .wrapping_shl(self.params.gather_period_shift)
         };
         for res in 0..NRES {
+            // Base University literacy and Scholar gross are already in retail's
+            // sixteenths scale. Keep their 7200-point accumulator separate from Arena's
+            // ordinary MODEL-3 gather scale.
+            let period =
+                if res == don_sim::systems::economy::RES_KNOWLEDGE && exact_knowledge_active {
+                    resource_period(self.econ.gather_rate)
+                } else {
+                    model_period
+                };
             let cap = commerce_cap(age, res, &self.econ, &CommerceCapGates::default(), 0);
             let input = ResourceTickInput {
                 res,
@@ -4570,6 +4785,13 @@ impl World {
         idxs.sort_unstable_by_key(|&i| self.ents[i].object_o);
         for i in idxs {
             if !self.ents[i].alive {
+                continue;
+            }
+            if !buildings
+                && self
+                    .knowledge_economy
+                    .is_inside(knowledge_object(&self.ents[i]))
+            {
                 continue;
             }
             self.last_object_process_order.push(self.ents[i].id);
@@ -4907,6 +5129,26 @@ impl World {
             return;
         };
         if t.kind_unit {
+            if type_id == self.ids.scholar || knowledge_economy::is_scholar_type(type_id) {
+                let producer = self.ents[i].id;
+                let scholar = self.spawn(who, type_id, tx, ty, true);
+                let plan = self
+                    .knowledge_economy
+                    .plan_contain_scholar(
+                        knowledge_object(
+                            self.ent(producer)
+                                .expect("completed University remains live during training"),
+                        ),
+                        knowledge_object(
+                            self.ent(scholar)
+                                .expect("completed Scholar allocation remains live"),
+                        ),
+                    )
+                    .expect("Scholar queue capacity was checked before payment");
+                self.contain_completed_scholar(producer, scholar, plan);
+                self.note(who, format!("trained {} inside University", t.name));
+                return;
+            }
             // Spawn on the first free tile around the producer.
             let mut placed = false;
             'outer: for r in 1..6 {
@@ -4984,7 +5226,7 @@ impl World {
                     self.detach_without_construction_interrupt(self.ents[i].id);
                     // Finished and undamaged: a gatherer keeps its builder, everything
                     // else releases them.
-                    self.ents[i].job = if b.worker_cap > 0 {
+                    self.ents[i].job = if b.worker_cap > 0 && b.type_id != self.ids.university {
                         Job::Gather { target }
                     } else {
                         Job::Idle
@@ -6090,7 +6332,11 @@ impl World {
         let fog = self.visibility_policy();
         fog.begin_frame(&mut self.collision_world);
         let mut newly_explored = Vec::new();
-        for e in self.ents.iter().filter(|e| e.alive) {
+        for e in self
+            .ents
+            .iter()
+            .filter(|e| e.alive && !self.knowledge_economy.is_inside(knowledge_object(e)))
+        {
             let Some(t) = self.types.get(e.type_id) else {
                 continue;
             };
@@ -6130,7 +6376,11 @@ impl World {
         // Sightings: record what is visible, forget what provably is not there.
         for pi in 0..self.players.len() {
             let mut seen: Vec<Sighting> = Vec::new();
-            for e in self.ents.iter().filter(|e| e.alive) {
+            for e in self
+                .ents
+                .iter()
+                .filter(|e| e.alive && !self.knowledge_economy.is_inside(knowledge_object(e)))
+            {
                 if e.who as usize == pi {
                     continue;
                 }
@@ -7198,7 +7448,10 @@ mod supply_attrition_integration {
                 );
                 assert_eq!(world.ents[i].hp.damage, 1);
             } else {
-                assert_eq!(transaction, WorkerHealingTransaction::NotCivilian { rate: 45 });
+                assert_eq!(
+                    transaction,
+                    WorkerHealingTransaction::NotCivilian { rate: 45 }
+                );
                 assert_eq!(world.ents[i].hp.damage, 2);
             }
         }

@@ -27,6 +27,15 @@ ShippedOpening\t0x5eed0001\t0\t75\tunit\tCitizen\t1
 ShippedOpening\t0x5eed0001\t1\t1\tbuilding\tWoodcutter's Camp\t1
 """
 
+TRACE_WITH_KNOWLEDGE = TRACE.replace(
+    "ShippedOpening\t0x5eed0001\t0\t0",
+    "Ai\t0x5eed0001\t0\t360\tbuilding\tUniversity\t1\n"
+    "Ai\t0x5eed0001\t0\t450\tunit\tScholar\t2\n"
+    "Ai\t0x5eed0001\t1\t361\tbuilding\tUniversity\t1\n"
+    "Ai\t0x5eed0001\t1\t451\tunit\tScholar\t2\n"
+    "ShippedOpening\t0x5eed0001\t0\t0",
+)
+
 
 class OpeningEnvelopeTests(unittest.TestCase):
     @classmethod
@@ -77,6 +86,18 @@ class OpeningEnvelopeTests(unittest.TestCase):
         self.assertEqual(farm["candidate_p50"], 15)
         self.assertIn("p50", farm["human_first_issue"])
         self.assertNotEqual(farm["candidate_p50"], farm["human_first_issue"]["p50"])
+
+    def test_represented_knowledge_surface_advances_zero_coverage_priority(self):
+        report = opening_envelope.build_report(
+            self.derived,
+            self.corpus,
+            opening_envelope.parse_trace(TRACE_WITH_KNOWLEDGE),
+        )
+        knowledge = report["policy_traces"]["Ai"]["economic_families"]["knowledge_economy"]
+        self.assertEqual(knowledge["accepted_decisions"], 6)
+        self.assertEqual(knowledge["human_types_missing"], [])
+        self.assertEqual(report["next_model_correction"]["family"], "gather_upgrades")
+        self.assertIn("45 knowledge", report["knowledge_economy_runtime_audit"]["pinned_result"])
 
 
 if __name__ == "__main__":
