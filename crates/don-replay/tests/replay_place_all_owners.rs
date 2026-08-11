@@ -9,7 +9,7 @@ use don_replay::replay_goods_initial::{
 };
 
 #[test]
-fn automatic_entry_owns_cold_goods_but_not_proprietary_mountain_templates() {
+fn automatic_entry_owns_cold_goods_but_requires_explicit_installed_mountain_templates() {
     let initialization = ReplayPlaceAllOwnerInitialization::cold_process();
     let goods = initialization.goods_initialization();
 
@@ -23,13 +23,13 @@ fn automatic_entry_owns_cold_goods_but_not_proprietary_mountain_templates() {
     assert_eq!(goods.state.goods_checksum, 1);
     assert_eq!(
         initialization.mountain_boundary(),
-        ReplayPlaceAllMountainOwnerBoundary::MissingProprietaryDisplacementTemplates {
+        ReplayPlaceAllMountainOwnerBoundary::MissingInstalledDisplacementTemplates {
             producer_va: MOUNTAIN_TEMPLATE_PRODUCER_VA,
-            required_source: "shipped effects_graphics.xml .tga displacement art",
+            required_source: "user-owned effects_graphics.xml and referenced displacement TGAs",
         }
     );
 
-    let mut entry = initialization.entry_owners();
+    let mut entry = initialization.entry_owners(0);
     assert!(entry.mountains.is_none());
     let entry_goods = entry.oil_goods.as_mut().expect("exact Goods owner");
     entry_goods.capacity = 32;

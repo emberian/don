@@ -7,6 +7,10 @@ mod systems {
     }
 }
 
+mod checksum {
+    pub use don_sim::checksum::*;
+}
+
 #[path = "../src/systems/mountain_template_producer.rs"]
 mod mountain_template_producer;
 
@@ -299,7 +303,7 @@ fn installed_catalog_reads_only_source_named_tgas_and_preserves_index_order() {
         ("med", ".\\art\\second.tga", "main-b", "ring-b"),
     ]);
     let xml_path = root.join("effects_graphics.xml");
-    fs::write(&xml_path, xml).unwrap();
+    fs::write(&xml_path, &xml).unwrap();
     fs::write(
         root.join("art/first.tga"),
         encode_tga(36, 36, &dense_alpha(36, 36), 2, 0x20),
@@ -312,8 +316,20 @@ fn installed_catalog_reads_only_source_named_tgas_and_preserves_index_order() {
     .unwrap();
 
     let catalog = load_mountain_template_catalog(&xml_path, &root).unwrap();
+    assert_eq!(catalog.effects_graphics_xml.path, xml_path);
+    assert_eq!(catalog.effects_graphics_xml.byte_length, xml.len());
+    assert_ne!(catalog.effects_graphics_xml.adler32, 1);
     assert_eq!(catalog.sources[0].index, 0);
     assert_eq!(catalog.sources[1].index, 1);
+    assert_eq!(catalog.displacement_tgas.len(), 2);
+    assert_eq!(
+        catalog.displacement_tgas[0].path,
+        root.join("art/first.tga")
+    );
+    assert_ne!(
+        catalog.displacement_tgas[0].adler32,
+        catalog.displacement_tgas[1].adler32
+    );
     assert_eq!(catalog.templates[0].mount_tiles.len(), 64);
     assert!(catalog.templates[1].mount_tiles.is_empty());
     fs::remove_dir_all(root).unwrap();

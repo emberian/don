@@ -22,17 +22,26 @@ explicit content root, decodes the supported TGA surface, and derives the three 
 It contains no shipped pixel data and no precomputed geometry rows. Proprietary art remains
 in the user's installation and is read only at runtime.
 
-This is a **Tier-C, instruction-derived producer**, not a replay-boundary promotion by itself.
-The implementation has not yet run against the sixteen proprietary displacement images or
-against a retail `MountainRange::init` oracle. The checked-in shipped XML does establish the
-sixteen ordered source bindings (7 `lg`, 8 `med`, 1 `sm`); synthetic TGA tests establish the
-decoded algorithm and fail-closed boundary. Integration must retain the typed missing-file or
-unsupported-TGA error until an installed catalog has been produced successfully.
+This remains a **Tier-C, instruction-derived producer**. The implementation has not yet run
+against the sixteen proprietary displacement images or against a retail
+`MountainRange::init` oracle. The checked-in shipped XML establishes the sixteen ordered
+source bindings (7 `lg`, 8 `med`, 1 `sm`); synthetic TGA tests establish the decoded algorithm
+and fail-closed boundary. No release or full replay-compatibility claim follows until a user
+supplies the actual installed art and its outputs are compared with retail.
 
-The source file is deliberately not added to the shared `systems/mod.rs` in this tranche.
-Its integration owner must register it together with the real content-root owner and convert
-its `MountainTemplateCatalog::templates` directly into the already-landed
-`MountainAddRuntime` catalog. No synthetic/default geometry is an allowed fallback.
+The producer is registered in `systems/mod.rs` and is joined to the canonical replay
+place-all owner by `crates/don-replay/src/replay_place_all_owners.rs`. The caller supplies a
+`ReplayMountainContentProvider`; `from_installed_content` admits no owner unless the provider
+produces exactly sixteen source rows and exactly sixteen derived templates. The resulting
+`ReplayInstalledMountainOwnerReceipt` retains the provider, all source strings, XML and TGA
+path/byte-length/Adler evidence, and all derived geometry atomically. Each file receipt and
+its geometry are computed from the same read buffer; proprietary bytes are not retained.
+`entry_owners(world_cells)` then constructs a fresh
+`MountainAddRuntime` whose verification bitset is sized to the caller's actual World.
+
+The automatic reconstruction still calls `cold_process`, because the replay does not own or
+name a user's installation. It therefore keeps `mountains: None` in the absence of an explicit
+provider. No synthetic/default geometry is a production fallback.
 
 ## XML-to-template identity
 
@@ -172,17 +181,52 @@ Both jobs exited 101, and the source was restored before the final green gate. T
 also order-sensitive: sorting `mount_w` instead of retaining first occurrence changes the
 dense 36×36 assertion.
 
+`crates/don-replay/tests/place_all_installed_mountain_owners.rs` adds five integration tests
+using generated 32-bit TGA fixtures only:
+
+- a complete 16-row provider retains all sources, exact file evidence, and derived templates in
+  one receipt and produces 16 non-null runtime slots with a World-sized verification bitset;
+- a 15-row provider is rejected before an owner can be obtained;
+- changing one TGA's alpha footprint changes both its retained Adler evidence and the derived
+  runtime while leaving the XML/source binding unchanged;
+- the real Mediterranean replay consumes the installed mode-4 region owner, records a
+  `PlaceAllOwnerSource::Region` mountain receipt, grows `Mountains::walk_data`, and crosses its
+  former group-zero stop; and
+- the real Great Lakes replay retains its group-two player-mode-5 stop even with a complete
+  installed catalog. Mode 5 is not routed through or asserted by the mode-4 runtime.
+
+Local gate (actual replays present, synthetic displacement art):
+
+```text
+cargo test -p don-replay --test place_all_installed_mountain_owners -- --nocapture
+5 passed; 0 failed
+```
+
+Two reversible local mutations were also killed by the focused integration assertions.
+Weakening the complete-catalog gate from `len() != 16` to `len() > 16` admitted a 15-row
+provider and failed the incomplete-catalog test. Dropping the first template while constructing
+`MountainAddRuntime` produced 15 runtime slots and failed the atomic-retention test. Both
+mutations were restored before the final green gate.
+
 ## Integration contract
 
-The caller must do all of the following as one coherent hook:
+The installed replay owner now enforces the following coherent hook:
 
 1. supply the installed `effects_graphics.xml` path and its matching content root;
-2. call `load_mountain_template_catalog` and stop atomically on every typed error;
+2. call `load_mountain_template_catalog` and stop atomically on every typed error or on any
+   source-row/file-evidence/template count other than 16;
 3. require its source order to be the same order used by the already-landed mountain range
    list producer;
-4. install `catalog.templates` directly as the `MountainAddRuntime` template vector; and
+4. retain the provider, source rows, exact file evidence, and derived templates in one immutable
+   initialization receipt, then install `catalog.templates` directly as the
+   `MountainAddRuntime` vector; and
 5. only then release `DropTileExternalRequest::MountainsAddMountain` to the recovered mode-4
    transaction.
 
 No empty vector, all-transparent placeholder, hand-authored shape, checksum-fitted table, or
 retail-derived precomputed geometry file is an acceptable fallback.
+
+The supported call remains verification mode 4 (`excluding_verify`), reached by the
+Mediterranean region arm. Great Lakes' player arm passes mode 5; it deliberately remains an
+explicit boundary pending its own instruction-derived runtime. Installed templates establish
+geometry provenance, not permission to substitute one verification algorithm for another.

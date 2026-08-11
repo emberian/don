@@ -7,9 +7,10 @@
 //! `Mountains::add_mountain`.  This module reproduces that source-to-runtime boundary; it
 //! deliberately contains no shipped displacement pixels or precomputed footprint rows.
 //!
-//! The module is source-frozen until its caller owns the installed content root.  Tests mount
-//! it directly, so a green test is evidence about the producer rather than replay integration.
+//! The replay owner installs this producer only from an explicit user-owned content provider.
+//! Missing or incomplete art remains a typed boundary; no default geometry is synthesized.
 
+use crate::checksum::adler32;
 use crate::systems::mountain_add_runtime::{GridOffset, MountainTemplateRuntime};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -34,10 +35,24 @@ pub struct MountainTemplateSource {
     pub ring_alpha_path: String,
 }
 
+/// Evidence for one installed file read by this producer.
+///
+/// The digest and geometry are computed from the same in-memory byte buffer,
+/// so the receipt cannot name one file version while deriving another. The
+/// installed bytes themselves remain user-owned and are not retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountainTemplateFileEvidence {
+    pub path: PathBuf,
+    pub byte_length: usize,
+    pub adler32: u32,
+}
+
 /// Geometry products and their installed-source bindings in one atomic catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MountainTemplateCatalog {
+    pub effects_graphics_xml: MountainTemplateFileEvidence,
     pub sources: Vec<MountainTemplateSource>,
+    pub displacement_tgas: Vec<MountainTemplateFileEvidence>,
     pub templates: Vec<MountainTemplateRuntime>,
 }
 
@@ -179,6 +194,8 @@ pub fn load_mountain_template_catalog(
             message: error.to_string(),
         })?;
     let sources = parse_mountain_template_sources(&xml)?;
+    let effects_graphics_xml = file_evidence(effects_graphics_xml, &xml);
+    let mut displacement_tgas = Vec::with_capacity(sources.len());
     let mut templates = Vec::with_capacity(sources.len());
     for source in &sources {
         let path = confined_asset_path(content_root, source.index, &source.displacement_path)?;
@@ -186,9 +203,23 @@ pub fn load_mountain_template_catalog(
             path: path.display().to_string(),
             message: error.to_string(),
         })?;
+        displacement_tgas.push(file_evidence(&path, &bytes));
         templates.push(derive_mountain_template_from_tga(&bytes)?);
     }
-    Ok(MountainTemplateCatalog { sources, templates })
+    Ok(MountainTemplateCatalog {
+        effects_graphics_xml,
+        sources,
+        displacement_tgas,
+        templates,
+    })
+}
+
+fn file_evidence(path: &Path, bytes: &[u8]) -> MountainTemplateFileEvidence {
+    MountainTemplateFileEvidence {
+        path: path.to_path_buf(),
+        byte_length: bytes.len(),
+        adler32: adler32(1, bytes),
+    }
 }
 
 /// Parse the `MOUNTAINS` catalog without opening its proprietary image inputs.

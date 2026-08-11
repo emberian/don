@@ -981,7 +981,7 @@ impl InitialItemReconstruction {
             // must retain its owner runtime across subsequent Good producers.
             let owner_initialization =
                 replay_place_all_owners::ReplayPlaceAllOwnerInitialization::cold_process();
-            let entry_owners = owner_initialization.entry_owners();
+            let entry_owners = owner_initialization.entry_owners(map.world.wdata.len());
             match crate::place_all_advance::advance_place_all_boundary_owned(
                 self,
                 map,
