@@ -36,10 +36,13 @@ the same chronology as all preceding style/growth draws.
 | 2018-12-01 | `1 / 3164` | `0xd4d996b4 → 21122 / 2138 → 0x751b5283` | `1 / (26,56)` | `0xb2eeff92 / 0x2eaaf2e7`, unchanged |
 | 2019-03-24 | `2 / 2793` | `0x986535d1 → 62715 / 1269 → 0x8e6cf4fc` | `1 / (87,78)` | `0xeb4960c6 / 0x69f054b2`, unchanged |
 
-Both selectors return through `0x0068ae16`, so the coherent replay boundary is
-`World::add_starting_location` at caller `0x00697461`, callee `0x006b2de0`.
-Synthetic pins separately exercise a singleton pass-2 success, the zero return
-into `0x00697003`, and malformed Region refusal before RNG.
+Both selectors return through `0x0068ae16`. The exact first
+`World::add_starting_location` call at caller `0x00697461`, callee
+`0x006b2de0`, is now executed and documented in
+`docs/assembly/world-add-starting-location-replay.md`; success freezes at its
+caller return `0x00697466`. Synthetic pins separately exercise a singleton
+pass-2 success, the zero return into `0x00697003`, and malformed Region refusal
+before RNG.
 
 ## Validation
 

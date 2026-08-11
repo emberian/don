@@ -77,9 +77,10 @@ target.  The test binds those arrays, the body schedule, literal pool mode,
 dead-argument fact, and next external address without consulting the recorded
 World checksum.
 
-The first selector is now executed exactly; both real fixtures return success.
-The remaining style-19 tail starts at `World::add_starting_location`
-(`0x00697461`, callee `0x006b2de0`). No part of that residual is synthesized
-here. The admitted edge and selector bodies are documented in
+The first selector and first World append are now executed exactly; both real
+fixtures return success. The remaining style-19 tail starts at caller return
+`0x00697466`, before its stack bookkeeping. No part of that residual is
+synthesized here. The admitted edge, selector and append bodies are documented in
 `docs/assembly/map-eliminate-edge-canals.md` and
-`docs/assembly/map-place-start-in-region-replay.md`.
+`docs/assembly/map-place-start-in-region-replay.md` and
+`docs/assembly/world-add-starting-location-replay.md`.

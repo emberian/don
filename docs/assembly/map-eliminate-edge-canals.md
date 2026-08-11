@@ -64,11 +64,11 @@ conditional direct draw at `0x00696f82`. A population-1 mutation pin proves
 that branch consumes exactly one draw before the boundary and records its RNG
 before/raw/after words.
 
-The selector itself is now executed and documented in
-`docs/assembly/map-place-start-in-region-replay.md`. Both real fixtures return
-success, moving the coherent residual to `World::add_starting_location`
-`0x006b2de0`; this edge-canal receipt remains nested unchanged inside that
-later stop.
+The selector and its first World append are now executed and documented in
+`docs/assembly/map-place-start-in-region-replay.md` and
+`docs/assembly/world-add-starting-location-replay.md`. Both real fixtures
+return success, append one start, and freeze at caller return `0x00697466`;
+this edge-canal receipt remains nested unchanged inside that later stop.
 
 ## Validation
 

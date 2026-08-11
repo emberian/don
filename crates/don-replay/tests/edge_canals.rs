@@ -209,10 +209,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         let ContinentStop::AddStartingLocation {
             primitive_va,
             caller_va,
+            next_va,
             centroids,
             edge_canals: got,
             call,
             selector,
+            mutation,
         } = &prefix.stop
         else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
@@ -318,5 +320,8 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             "edge and first-call setup must not advance the main RNG: {name}"
         );
         assert_eq!(prefix.rng_final, selector.random_state_after, "{name}");
+        assert_eq!(*next_va, mutation.caller_return_va, "{name}");
+        assert_eq!(mutation.returned_start_index, 0, "{name}");
+        assert_eq!(mutation.input, selector.output.unwrap(), "{name}");
     }
 }

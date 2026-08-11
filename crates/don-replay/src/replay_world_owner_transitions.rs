@@ -62,7 +62,8 @@ fn continent_implementation_digest() -> [u8; 32] {
             + include_bytes!("region_centroid.rs").len()
             + include_bytes!("edge_canals.rs").len()
             + include_bytes!("east_meets_west_start_boundary.rs").len()
-            + include_bytes!("east_meets_west_place_start.rs").len(),
+            + include_bytes!("east_meets_west_place_start.rs").len()
+            + include_bytes!("east_meets_west_add_start.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
@@ -71,6 +72,7 @@ fn continent_implementation_digest() -> [u8; 32] {
     source.extend_from_slice(include_bytes!("edge_canals.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_start_boundary.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_place_start.rs"));
+    source.extend_from_slice(include_bytes!("east_meets_west_add_start.rs"));
     sha256(&source)
 }
 
@@ -82,8 +84,8 @@ fn continent_resume_va(receipt: &ContinentReceipt) -> u32 {
         | ContinentStop::FindRegionCentroid { primitive_va, .. }
         | ContinentStop::EliminateEdgeCanals { primitive_va, .. }
         | ContinentStop::PlaceStartInRegion { primitive_va, .. }
-        | ContinentStop::AddStartingLocation { primitive_va, .. }
         | ContinentStop::FillCont { primitive_va, .. } => *primitive_va,
+        ContinentStop::AddStartingLocation { next_va, .. } => *next_va,
         ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => *next_rng_va,
         ContinentStop::EastMeetsWestStartFallback { next_va, .. } => *next_va,
         ContinentStop::RetryGeneration { .. } => receipt.make_continents_va,

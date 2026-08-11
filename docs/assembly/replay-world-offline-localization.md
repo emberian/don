@@ -46,8 +46,8 @@ The executed wipe and generator then add receipt-bound last-writer ownership:
 | owned `place_all` prefix | 5 `WData`, 6 `TDataAndFog` | receipt-proven region/oil/mountain writes only |
 
 Across the 21 recordings the wipe contributes 7,564,500 written bytes, while the later
-transitions contribute 350,124 changed generator bytes: 3,886 in section 2 and 346,238 in
-section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,916,220
+transitions contribute 350,688 changed generator bytes: 4,034 in section 2 and 346,654 in
+section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,916,784
 bytes. Outside explicitly receipted writes, unchanged zeroes and unchanged neighbours remain
 unknown even when an exact routine visited them.
 
@@ -58,27 +58,28 @@ rejected transactionally.
 
 ## Section/range census
 
-The current model walks 13,119,100 bytes over the 21 checksum-bearing recordings. The owner
+The current model walks 13,119,236 bytes over the 21 checksum-bearing recordings. The owner
 snapshot now equals each current model image, so `model delta` is zero by construction; that
 column no longer stands in for missing provenance.
 
 | section | walked | exact owner | unknown |
 |---:|---:|---:|---:|
 | 1 `Dims` | 168 | 168 | 0 |
-| 2 `StartArrays` | 4,108 | 3,886 | 222 |
+| 2 `StartArrays` | 4,244 | 4,034 | 210 |
 | 3 `OilArrays` | 168 | 0 | 168 |
 | 4 `Scalars` | 2,520 | 1,428 | 1,092 |
-| 5 `WData` | 3,530,100 | 346,238 | 3,183,862 |
+| 5 `WData` | 3,530,100 | 346,654 | 3,183,446 |
 | 6 `TDataAndFog` | 7,396,400 | 7,396,400 | 0 |
 | 7 `WCoordSeen` | 168,100 | 168,100 | 0 |
 | 8 `Danger` | 1,344,800 | 0 | 1,344,800 |
 | 9 `CollBlocks` | 672,400 | 0 | 672,400 |
 | 10–13 terrain arrays | 336 | 0 | 336 |
-| **total** | **13,119,100** | **7,916,220** | **5,202,880** |
+| **total** | **13,119,236** | **7,916,784** | **5,202,452** |
 
-The earliest lawful unknown is section 2 offset 0 in the two team-continent-add-start stops,
-which have not generated start arrays, and section 2 offset 1 in the other 19 recordings.
-Those offsets are exclusion boundaries only, not observed retail/model differences.
+The earliest lawful unknown is section 2 offset 1 in all 21 recordings. The two
+team-continent-add-start stops now contain and own the changed bytes from their first exact
+start append. Those offsets are exclusion boundaries only, not observed retail/model
+differences.
 
 ## Source-stage correlation
 

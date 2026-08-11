@@ -110,13 +110,15 @@ The caller schedule transcribed from `0x00696743..0x00696c82` is:
 | pool cleanup | `0x00696d0a` | exact `eliminate_pools(EntireWorld, dead)` |
 | edge-canal body | `0x00696d0f` | exact `eliminate_edge_canals()` plus region rebuild |
 | first start selector | `0x00696fe3` | exact `place_start_in_region` call and return edge |
-| next World mutator | `0x00697461` | `World::add_starting_location`, coherent success stop |
+| first World append | `0x00697461` | exact `World::add_starting_location` call |
+| caller return | `0x00697466` | coherent success stop before stack bookkeeping |
 
 Each growth's dynamic RNG sites are appended in execution order by the existing
 `execute_grow_region` receipt. A nonzero retail growth return is exposed as
 `RetryGeneration`; this bounded call does not pretend it executed the caller's
-whole-pass retry loop. The exact selector success path reports
-`AddStartingLocation { primitive_va: 0x006b2de0, caller_va: 0x00697461, ... }`
+whole-pass retry loop. The exact selector success path executes and receipts
+`AddStartingLocation { primitive_va: 0x006b2de0, caller_va: 0x00697461,
+next_va: 0x00697466, ... }`
 with the complete centroid, pool, edge-canal, call-argument and selector
 receipts retained before the stop. The edge body has no RNG site. Caller setup through the first call is
 also exact: it resolves the post-rebuild region, computes the centroid angle,
@@ -128,9 +130,9 @@ two and execute no draw there.
 For the 100×100, four-player fixture the frozen prefix has two regions of area
 1,388, growth targets `(1,1388)`, `(2,1388)`, `(1,2776)`, `(2,2776)`, and max
 distance 27. Before/after World channel values are `0xd293cb35` and
-`0xe958619f`; the isolated WData values are `0x4f28bf8c` and `0x823b55f6`.
-WData is the only changed checksum section. These are regression outputs of the
-binary-derived schedule, not values fitted to any recording.
+`0x91446b10`; the isolated WData values are `0x4f28bf8c` and `0x823b55f6`.
+StartArrays and WData are the changed checksum sections. These are regression
+outputs of the binary-derived schedule, not values fitted to any recording.
 
 ## Tests and integration
 
@@ -152,11 +154,13 @@ The surgical `initial.rs` mapping names the new
 `map_team_continent_add_start` boundary. A selector zero return instead names
 `map_team_continent_start_fallback` at `0x00697003`.
 
-The first 588-byte `Map::place_start_in_region` selector is now represented and
-both real headers succeed on pass 1. The remaining tail begins at
-`World::add_starting_location` `0x006b2de0`; no later start mutation is inferred,
-and this work makes no retail World checksum-match claim. The exact centroid,
-edge and selector bodies are documented in
+The first selector and first 570-byte World append are now represented; both
+real headers succeed on pass 1 and append one start. The remaining tail begins
+at caller return `0x00697466`, before stack bookkeeping or another player
+iteration. No later start mutation is inferred, and this work makes no retail
+World checksum-match claim. The exact centroid, edge, selector and append
+bodies are documented in
 `docs/assembly/map-find-region-centroid.md` and
-`docs/assembly/map-eliminate-edge-canals.md` and
-`docs/assembly/map-place-start-in-region-replay.md`.
+`docs/assembly/map-eliminate-edge-canals.md`,
+`docs/assembly/map-place-start-in-region-replay.md`, and
+`docs/assembly/world-add-starting-location-replay.md`.

@@ -502,15 +502,17 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         .region_growths
         .iter()
         .all(|growth| growth.completed));
-    assert_eq!(eastwest.starts_added, 0);
+    assert_eq!(eastwest.starts_added, 1);
     match &eastwest.stop {
         ContinentStop::AddStartingLocation {
             primitive_va,
             caller_va,
+            next_va,
             centroids,
             edge_canals,
             call,
             selector,
+            mutation,
         } => {
             assert_eq!(
                 *primitive_va,
@@ -536,6 +538,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.random_state_after, eastwest.rng_final);
             assert_eq!(selector.draws.len(), 1);
             assert_eq!(selector.accepted_pass, Some(1));
+            assert_eq!(*next_va, mutation.caller_return_va);
+            assert_eq!(mutation.returned_start_index, 0);
+            assert_eq!(mutation.input, selector.output.unwrap());
+            assert_eq!(mutation.arrays_after.start_x.length, 1);
+            assert_eq!(mutation.arrays_after.start_city_x.length, 4);
             assert_eq!(
                 edge_canals
                     .passes
@@ -570,7 +577,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     );
     assert_eq!(
         eastwest_before.differing_sections(&eastwest_world.checksum_sections()),
-        [WorldSection::WData]
+        [WorldSection::StartArrays, WorldSection::WData]
     );
     assert_eq!(
         (
@@ -582,7 +589,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0xe958_619f, 0x4f28_bf8c, 0x823b_55f6)
+        (0xd293_cb35, 0x9144_6b10, 0x4f28_bf8c, 0x823b_55f6)
     );
     assert_eq!(eastwest_regions.land, 0);
 }
