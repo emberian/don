@@ -137,6 +137,11 @@ fn main() {
             // internal_strings.xml ordinals it installs, and frozen there: no don-sim
             // path writes units_killed / builds_destroyed / city_lost_to.
             "scenario_init_frozen"
+        } else if CHANNEL_NAMES[i] == "groups" {
+            // Derived from Groups::clear 0x00713f20 + Group::clear 0x00713e80 — the 512
+            // slots and the last_group tail Game::init leaves — and frozen there: no
+            // don-sim path drives Groups::push_group or any Group::action_*.
+            "groups_init_frozen"
         } else {
             "absent"
         };
@@ -273,15 +278,27 @@ mod tests {
                 }] += 1;
                 counts
             });
-        assert_eq!(counts, [12, 14, 0, 11, 0, 5]);
+        // One fewer Complete and one more NotOnTheWire than the recall/hotkey lane recorded:
+        // `hotkey`'s body is complete but the action is never dispatched from the wire, so
+        // its `Port` stays `NotOnTheWire`. See the air-receiver test below.
+        assert_eq!(counts, [11, 14, 0, 11, 0, 6]);
     }
 
     #[test]
     fn the_self_contained_air_receivers_are_complete_and_eject_all_is_not() {
         // Reference host: `ObjectTable` owns the aircraft/containment columns and commits
-        // `Group::action_recall` + `Group::action_return`; `Group::action_hotkey` is the
-        // receiver form of the state transition opcode 34 already writes.
-        for name in ["hotkey", "recall", "return"] {
+        // `Group::action_recall` + `Group::action_return`.
+        //
+        // `hotkey` is deliberately NOT here. Its body is complete — it is the receiver form
+        // of the state transition opcode 34 inlines — but `Port` records wire dispatch, and
+        // `process_hotkey` calls `HotKeyGroups::copy_group` directly, never dispatching the
+        // action; its only caller is `Console::on_key_down`. Body-present and wire-dispatched
+        // are different claims. `command_bridge_agreement` pins the same boundary.
+        assert_eq!(
+            don_sim::command::ActionDef::find("hotkey").unwrap().port,
+            Port::NotOnTheWire
+        );
+        for name in ["recall", "return"] {
             assert_eq!(
                 don_sim::command::ActionDef::find(name).unwrap().port,
                 Port::Complete,

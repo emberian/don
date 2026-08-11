@@ -49,6 +49,7 @@ pub mod check_player_forest;
 pub mod checksum;
 pub mod continent;
 pub mod fractal_boundary;
+pub mod groups_channel;
 pub mod growth;
 pub mod harness;
 pub mod image;
@@ -99,6 +100,11 @@ pub use fractal_boundary::{
     resolve_fertility_boundary, resolve_tile_selection, FertilityBoundary, FractalBoundaryError,
     FractalBoundarySources, FractalReplayInputs, RetailFractalPlane, TileSelectionBoundary,
     TileSelectionPass, TileSelectionSource, TERRAIN_GROUPS_PLACE_ALL_VA,
+};
+pub use groups_channel::{
+    groups_checksum, GroupMembers, GroupRecord, GroupWindow, GroupsChannelError, GroupsChecksum,
+    InitialGroupsChannel, RetailInitialGroups, CHECK_GROUPS_VA, CORPUS_INITIAL_GROUPS_CHANNEL,
+    GROUPS_CLEAR_VA, GROUP_CLEAR_VA, GROUP_SLOTS, GROUP_WALK_DATA_VA,
 };
 pub use growth::{
     execute_grow_region, execute_grow_valid, GrowRegionCall, GrowRegionError, GrowRegionReceipt,

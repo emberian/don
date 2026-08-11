@@ -8,8 +8,12 @@
 //! `CheckSums::check_units` `0x009371d0` uses. The `world` channel has a second,
 //! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
 //! from the authoritative `.rcx` initial setup. Everything else the fifteen
-//! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
-//! goods and scenario — has no producer in `don-sim` at all. Items are projected from
+//! channels walk — builds, walls, ammo, deaths, guys, leaders, cities and
+//! goods — has no producer in `don-sim` at all. `groups` and `scenario_data` are the two
+//! channels whose *initial* state is derived from a retail initializer rather than from a
+//! `don_sim::World`, installed by `populate_groups_initial` /
+//! `populate_scenario_initial`; both are frozen at `Game::init` and both expire.
+//! Items are projected from
 //! the optional authoritative `World::item_runtime`; unavailable and initialized-empty
 //! are distinct bridge states. Channel 15 has two producers: every `populate` installs
 //! the exact traversal `RunTimeEnv::walk_data` `0x009c41a0` performs over an empty
@@ -375,7 +379,7 @@ impl SimBridge {
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
         "AmmoData flat list (ammo)",
         "DeathObjData ring, stride 0xa4 (deaths)",
-        "Group records + the 32-byte global tail at 0x00e85f4c (groups)",
+        "Group mutation (groups) — the 512 slots Groups::clear 0x00713f20 leaves at Game::init are produced, together with the 32-byte last_group tail check_groups hashes through 0x00e85f4c, but nothing drives Groups::push_group / Group::action_*, so the channel is frozen at Game::init and expires at the recording's first group command; see docs/assembly/groups-initial-state.md",
         "GuyData columns (guys)",
         "LeaderData records, 27,182 walked bytes each (leaders)",
         "City records (cities)",
@@ -600,6 +604,34 @@ impl SimBridge {
             scenario.checksum,
             scenario.bytes_walked,
             0,
+        );
+    }
+
+    /// Install channel 5 with the state a retail `Game::init` leaves in `Groups`.
+    ///
+    /// Outside [`SimBridge::PRODUCES`] for the same reason as
+    /// [`SimBridge::populate_scenario_initial`]: `don-sim` owns no `Groups`, so the bytes
+    /// come from the initializer rather than from a `don_sim::World`. Every one of the
+    /// 36,896 bytes is sourced — 512 slots as `Groups::clear` `0x00713f20` and
+    /// `Group::clear` `0x00713e80` leave them, plus the eight `last_group` literals
+    /// `check_groups` `0x00937530` hashes through `GroupsData::const_last_group`. The
+    /// recorded wire value is never copied in.
+    ///
+    /// **This is a frozen producer and it is guaranteed to expire.** Nothing in `don-sim`
+    /// drives `Groups::get_open_slot` `0x006fa460`, `Groups::push_group` `0x0070f9e0` or
+    /// any `Group::action_*`, so the claim it makes is "no group slot has been touched
+    /// since `Game::init`". That is true at the start of every game and false from the
+    /// first group command onward. The turn it stops matching is the measurement.
+    pub fn populate_groups_initial(
+        groups: &crate::groups_channel::InitialGroupsChannel,
+        state: &mut SimState,
+    ) {
+        state.set_direct_channel_elements(
+            Channel::Groups,
+            groups.checksum,
+            groups.bytes_walked,
+            0,
+            groups.slots,
         );
     }
 

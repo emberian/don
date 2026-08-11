@@ -143,6 +143,12 @@ pub struct RunResult {
     pub initial_scenario_checksum: Option<u32>,
     pub initial_scenario_walked_bytes: u64,
     pub initial_scenario_error: Option<String>,
+    /// `check_groups` over the derived `Groups::clear` state. Independent of the
+    /// recording, so it is the same value on every file; recorded per file anyway so the
+    /// report carries the number the scoreboard was produced with.
+    pub initial_groups_checksum: u32,
+    pub initial_groups_walked_bytes: u64,
+    pub initial_groups_slots: u32,
     pub phase: Phase,
     pub latency: u32,
     pub turns_total: usize,
@@ -317,6 +323,12 @@ pub struct WorldSim {
     /// channel 14 stays uninstalled rather than falling back to empty strings.
     pub initial_scenario: Option<crate::scenario_channel::InitialScenarioChannel>,
     pub initial_scenario_error: Option<String>,
+    /// The `Groups` state a retail `Game::init` leaves behind, derived from
+    /// `Groups::clear` `0x00713f20` and `Group::clear` `0x00713e80`. Unlike the scenario
+    /// channel this needs no shipped data file, so it is always present — and unlike the
+    /// world channel it has no replay input at all, which is exactly why the seven zero-AI
+    /// recordings all carry the same first-turn value.
+    pub initial_groups: crate::groups_channel::InitialGroupsChannel,
 }
 
 impl Default for WorldSim {
@@ -341,6 +353,7 @@ impl WorldSim {
             initial_rules: None,
             initial_scenario: None,
             initial_scenario_error: None,
+            initial_groups: crate::groups_channel::InitialGroupsChannel::derive(),
         }
     }
 
@@ -387,6 +400,7 @@ impl WorldSim {
         if let Some(scenario) = &self.initial_scenario {
             crate::state::SimBridge::populate_scenario_initial(scenario, &mut self.state);
         }
+        crate::state::SimBridge::populate_groups_initial(&self.initial_groups, &mut self.state);
     }
 
     /// A world pre-populated with `per_owner` units in each of `owners` owner
@@ -437,6 +451,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_items_for_replay(rep, report_world.as_mut());
     let style = initial_items.style.as_ref();
     let initial_scenario = initial_scenario_for_replay(rep);
+    let initial_groups = crate::groups_channel::InitialGroupsChannel::derive();
     let mut res = RunResult {
         file: rep
             .path
@@ -493,6 +508,9 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
             .as_ref()
             .map_or(0, |s| s.bytes_walked),
         initial_scenario_error: initial_scenario.as_ref().err().cloned(),
+        initial_groups_checksum: initial_groups.checksum,
+        initial_groups_walked_bytes: initial_groups.bytes_walked,
+        initial_groups_slots: initial_groups.slots,
         phase,
         latency,
         turns_total: rep.turns.len(),

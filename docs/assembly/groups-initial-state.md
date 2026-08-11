@@ -217,8 +217,8 @@ producer makes is *"no group slot has been touched since `Game::init`"*.
 
 The corpus splits on exactly the same seven recordings as channels 14 and 15, and the
 deadline is short — groups are the most-commanded object in the game
-(`GroupCommand` `0x00` is 78,197 of the corpus's commands, the largest player-order
-opcode by a factor of three):
+(`GroupCommand` `0x00` is 78,197 of the corpus's commands, against 28,993 for the next
+player-order opcode, `QueueUpCommand`):
 
 | recording | AI | `groups` survived | first divergence | `scenario_data` survived |
 |---|---:|---:|---:|---:|
