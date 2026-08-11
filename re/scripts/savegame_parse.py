@@ -51,7 +51,8 @@ SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # member starting at offset 0 -- except CTW *map* backups, which are raw.
 
 def load(path: str) -> bytes:
-    raw = open(path, "rb").read()
+    with open(path, "rb") as source:
+        raw = source.read()
     if raw[:2] == b"\x1f\x8b":
         return zlib.decompress(raw, 16 + zlib.MAX_WBITS)
     return raw
@@ -83,6 +84,9 @@ class R:
 
     def u16(self):
         v = struct.unpack_from("<H", self.b, self.p)[0]; self.p += 2; return v
+
+    def i16(self):
+        v = struct.unpack_from("<h", self.b, self.p)[0]; self.p += 2; return v
 
     def u32(self):
         v = struct.unpack_from("<I", self.b, self.p)[0]; self.p += 4; return v
@@ -206,6 +210,8 @@ PLAYER_57 = [
 TAG_GAME = 0x16          # walk_test byte seen for Game::walk_data
 TAG_GAMEINFO = 0x42      # ... GameInfo::walk_data
 TAG_PLAYER = 0x50        # ... the per-player slot inside GameInfo
+TAG_TRIBES = 0xec        # WalkDataGame tag immediately before ObjectArray<Tribe>
+TAG_TRIBE_ROW = 0x1d     # ObjectArray<Tribe>'s per-element walk_test tag
 
 
 def parse_gameinfo(r: R, save_version: int, t_parent: Tree) -> Tree:
@@ -381,6 +387,90 @@ def _parse_game(r: R, save_version: int, root: Tree) -> Tree:
 
 
 # ---------------------------------------------------------------------------
+# Tribes / ObjectArray<Tribe>
+# ---------------------------------------------------------------------------
+# WalkDataGame::walk_data emits the 0xec section tag immediately before calling
+# ObjectArray<Tribe>::walk_data (0x0047e230).  The non-empty ObjectArray image is:
+#
+#   length:i32, capacity:i32, increment:i16, flags:u8,
+#   then `length` Tribe rows.
+#
+# Each row is tagged 0x1d and walks the exact Tribe ranges selected by the
+# generic ObjectArray body: +0x54..+0x70 (seven i32 scalars), +0x70..+0x5f0
+# (352 TypeIndex words), followed by the four String fields at +0x04..+0x54.
+# The apparent non-program-order field layout is therefore intentional.  These
+# ranges and calls are pinned by PE 0x0047e230..0x0047e450 plus the PDB's Tribe
+# layout; no bytes are inferred from the specimen.
+
+TRIBE_SCALARS = (
+    "tribe", "barbarian", "people", "backup_build_continent",
+    "build_continent", "unit_continent", "text_substitute",
+)
+TRIBE_STRINGS = ("file", "name", "eng_name", "old_name")
+
+
+def parse_tribes(r: R, parent: Tree) -> Tree:
+    t = Tree("Tribes / ObjectArray<Tribe>", r.p,
+             "WalkDataGame tag; ObjectArray<Tribe>::walk_data 0x0047e230")
+    parent.kid(t)
+
+    o = r.p
+    tag = r.u8()
+    t.f("<walk_test tag>", "0x%02x" % tag, o, 1, "u8")
+    if tag != TAG_TRIBES:
+        raise ValueError("Tribes tag 0x%02x != 0xec at %#x" % (tag, o))
+
+    o = r.p
+    length = r.i32()
+    t.f("length", length, o, 4, "int")
+    if length < 0 or length > 4096:
+        raise ValueError("invalid Tribe length %d at %#x" % (length, o))
+    if length == 0:
+        t.end = r.p
+        return t
+
+    o = r.p
+    capacity = r.i32()
+    t.f("capacity", capacity, o, 4, "int")
+    o = r.p
+    increment = r.i16()
+    t.f("increment", increment, o, 2, "short")
+    o = r.p
+    flags = r.u8()
+    t.f("flags", "0x%02x" % flags, o, 1, "unsigned char")
+    if capacity < length or capacity > 4096:
+        raise ValueError("invalid Tribe capacity %d for length %d at %#x"
+                         % (capacity, length, o - 6))
+
+    for i in range(length):
+        row = Tree("Tribe[%d]" % i, r.p,
+                   "row tag + exact +0x54/+0x70 ranges + four Strings")
+        t.kid(row)
+        o = r.p
+        row_tag = r.u8()
+        row.f("<walk_test tag>", "0x%02x" % row_tag, o, 1, "u8")
+        if row_tag != TAG_TRIBE_ROW:
+            raise ValueError("Tribe[%d] tag 0x%02x != 0x1d at %#x"
+                             % (i, row_tag, o))
+
+        for name in TRIBE_SCALARS:
+            o = r.p
+            row.f(name, r.i32(), o, 4, "int")
+
+        o = r.p
+        graft = struct.unpack("<352I", r.raw(352 * 4))
+        row.f("graft", list(graft), o, 352 * 4, "TypeIndex[352]")
+
+        for name in TRIBE_STRINGS:
+            o = r.p
+            row.f(name, r.wstr(), o, r.p - o, "String")
+        row.end = r.p
+
+    t.end = r.p
+    return t
+
+
+# ---------------------------------------------------------------------------
 # top-level format dispatch
 # ---------------------------------------------------------------------------
 # SaveGame::save_game (0x005a8220):
@@ -447,9 +537,10 @@ def parse(buf: bytes) -> Tree:
         bands.end = r.p
 
         parse_game(r, ver, wdg)
+        parse_tribes(r, wdg)
         wdg.end = r.p
-        wdg.note = ("decoded through nested Game::walk_data at 0x005a2945; next is "
-                    "Tribes::walk_data at stream offset %#x" % r.p)
+        wdg.note = ("decoded through ObjectArray<Tribe>::walk_data; next is "
+                    "Leaders::walk_data at stream offset %#x" % r.p)
     else:
         root.note = "recorded game (.rcx): no magic, no version word"
         parse_game(r, None, root)
@@ -517,7 +608,8 @@ def verify(paths):
         try:
             t = parse(buf)
         except Exception as e:
-            rows.append((os.path.basename(path), "PARSE FAILED: %s" % e, []))
+            rows.append((os.path.basename(path), "PARSE FAILED: %s" % e,
+                         [("stream parses through its claimed prefix", False)]))
             continue
 
         def find(node, name):
@@ -568,6 +660,23 @@ def verify(paths):
                     for name in ("unit", "build", "wall")]
             checks.append(("Objects bands are [0,2000), [2000,3000), [3000,3000)",
                            bases == [0, 2000, 3000] and ends == [2000, 3000, 3000]))
+        tribes = find(t, "Tribes / ObjectArray<Tribe>")
+        if tribes:
+            tribe_rows = [k for k in tribes.kids if k.name.startswith("Tribe[")]
+            checks.append(("Tribes tag/header is exact 25/25/-1/0",
+                           fld(tribes, "<walk_test tag>") == "0xec"
+                           and fld(tribes, "length") == 25
+                           and fld(tribes, "capacity") == 25
+                           and fld(tribes, "increment") == -1
+                           and fld(tribes, "flags") == "0x00"))
+            checks.append(("25 Tribe rows, every walk_test byte == 0x1d",
+                           len(tribe_rows) == 25
+                           and all(fld(row, "<walk_test tag>") == "0x1d"
+                                   for row in tribe_rows)))
+            checks.append(("Tribe rows are concrete 0..23 plus Random sentinel",
+                           [fld(row, "tribe") for row in tribe_rows]
+                           == list(range(24)) + [0]
+                           and fld(tribe_rows[-1], "name") == "Random"))
         byver.setdefault(vs, set()).add(fld(gi, "version"))
         rows.append((os.path.basename(path),
                      "%s  players=%d used  prefix=0x%x"

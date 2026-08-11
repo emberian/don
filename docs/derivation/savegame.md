@@ -345,7 +345,35 @@ The globals are named by the PDB: `?world@GameAccess@@`, `?objects@GameAccess@@`
 `?game@GameAccess@@`, `?constants@GameAccess@@`, `?console@MiscAccess@@`,
 `?obj_base@GameAccess@@`, `?obj_end@GameAccess@@`. [measured]
 
-### 5.4 Object classes — the sim-state schema proper
+### 5.4 `ObjectArray<Tribe>` — `FUN_0047e230`
+
+The v16 fresh save advances deterministically from the nested Game end at plain offset
+`0x693` through the complete installed Tribe catalog and stops at `Leaders::walk_data`
+at `0x9a5a`. The format is instruction-derived rather than fitted to that specimen:
+
+```
+walk_test("Tribes") = 0xec
+ObjectArray header  = length:i32, capacity:i32, increment:i16, flags:u8
+for each row:
+    walk_test("Tribe") = 0x1d
+    Tribe +0x54..+0x70     7 i32 values
+    Tribe +0x70..+0x5f0    TypeIndex graft[352]
+    String::walk_data      file, name, eng_name, old_name
+```
+
+The two byte ranges are literal operands at `0x0047e3dd..0x0047e3fb`; the four String
+receivers are `Tribe+0x04,+0x18,+0x2c,+0x40` at `0x0047e3fd..0x0047e41c`. The fresh
+save has header `(25,25,-1,0)`, 25 row tags, concrete rows `0..23`, and the final
+`Random` sentinel carrying `tribe=0`. Parser mutation tests kill either tag, an invalid
+capacity, an absurd String length, and truncation.
+
+The fixture is user-owned and remains outside git. Its compressed SHA-256 is
+`161af6242fe17f4780beac488097aa383d743bb93eb94594c53ceb4fb325f3d7`.
+The finished replay supplied at the same time is deliberately **not** joined to it:
+their independently parsed `GameInfo::seed` values are `0x014810ac` and `0x007f93e0`.
+Matching settings and player slots therefore are not identity evidence.
+
+### 5.5 Object classes — the sim-state schema proper
 
 `schema/state-schema.json` carries all 278. Examples (`--schema CLASS`):
 
@@ -522,9 +550,10 @@ Honest limits [measured that they exist]:
 - The parser decodes the *prefix* of a save: magic, version, the outer `GameInfo`, `Console`,
   `obj_base[3]`/`obj_end[3]`, and the complete nested `Game::walk_data`. The Console virtual
   call at `0x005a2473` receives no `DataWalk` and consumes no bytes; the parser now stops at
-  the following `ObjectArray<Tribe>` boundary instead of falsely attributing the remainder
-  to Console. Recordings still begin directly with the same complete `Game::walk_data`.
-  The remaining ~1 MB body needs the container element walks and virtual dispatches resolved.
+  `Leaders::walk_data` after decoding the following complete `ObjectArray<Tribe>` rather than
+  falsely attributing the remainder to Console. Recordings still begin directly with the same
+  complete `Game::walk_data`. The remaining body needs the later container element walks and
+  virtual dispatches resolved.
 
 Nothing here is Tier A or Tier B. There is no SMT proof and no differential test against the
 retail reader. Getting to Tier B means calling `LoadGame::walk_function` on hbox against a
