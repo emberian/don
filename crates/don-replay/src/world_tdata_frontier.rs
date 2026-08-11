@@ -1,12 +1,12 @@
-//! Exact section-6 producer frontier at `World::wipe`.
+//! Exact section-6/7 visibility producer at `World::wipe`.
 //!
 //! `World::walk_data` section 6 is `TData[tile_size]`, followed by the three
 //! `fog_size` byte planes `seen`, `seen2`, and `seen3`.  The first producer at
 //! procedural-map entry is not a terrain-group heuristic: `World::wipe`
 //! `0x006b2c00` writes every TData word to zero and clears all three fog planes.
-//! This adapter executes that already-ported call transactionally and receipts
-//! only its section-6 slice.  It deliberately makes no whole-`World::wipe`
-//! completeness claim.
+//! Its `World::clear_seen` call also clears section-7 `wcoord_seen`. This adapter
+//! executes those five checksum-visible writes transactionally. It deliberately
+//! makes no whole-`World::wipe` completeness claim.
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +20,7 @@ pub const WORLD_WIPE_RETURN_VA: u32 = 0x006b_2dd7;
 pub const WORLD_WIPE_BODY_BYTES: usize = 471;
 pub const WORLD_WIPE_BODY_SHA256: &str =
     "12f0886dfc5bff4dafb834a8e9d0f3743c4ba0ec8ba6024003712d81b01138f2";
+pub const PROOF_DOCUMENT: &str = "docs/assembly/replay-world-tdata-frontier.md";
 pub const TDATA_ZERO_LOOP_WRITE_VA: u32 = 0x006b_2d43;
 pub const CLEAR_SEEN_CALL_VA: u32 = 0x006b_2d5f;
 pub const WORLD_CLEAR_SEEN_VA: u32 = 0x006b_2250;
@@ -61,6 +62,16 @@ pub enum TDataFogPlane {
     Seen,
     Seen2,
     Seen3,
+    WCoordSeen,
+}
+
+impl TDataFogPlane {
+    pub const fn section(self) -> WorldSection {
+        match self {
+            Self::TData | Self::Seen | Self::Seen2 | Self::Seen3 => WorldSection::TDataAndFog,
+            Self::WCoordSeen => WorldSection::WCoordSeen,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,16 +79,6 @@ pub struct TDataFogWrittenRange {
     pub plane: TDataFogPlane,
     pub range: ByteRange,
     /// The shipped store or call proving that this complete range is written.
-    pub producer_va: u32,
-}
-
-/// Output of the same retail `World::wipe` call which this section-6 receipt
-/// deliberately does not admit. Integration must remain red until the shared
-/// World owner executes and receipts this section-7 write atomically too.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AdjacentRequiredWrite {
-    pub section: WorldSection,
-    pub bytes: usize,
     pub producer_va: u32,
 }
 
@@ -107,7 +108,8 @@ pub enum TDataFogWipeError {
     },
 }
 
-/// Receipt for the exact section-6 slice of one executed `World::wipe`.
+/// Receipt for the exact section-6 and section-7 slices of one executed
+/// `World::wipe`.
 ///
 /// `section_bytes_written` counts stores, including stores which rewrite zero.
 /// `section_bytes_changed` counts only byte values which differ across the
@@ -118,23 +120,31 @@ pub struct TDataFogWipeReceipt {
     pub entry_va: u32,
     pub resume_va: u32,
     pub layout: TDataFogLayout,
-    pub written_ranges: [TDataFogWrittenRange; 4],
+    pub written_ranges: [TDataFogWrittenRange; 5],
     /// Coalesced byte-value differences. These are diagnostic only and are
     /// never the source of producer ownership.
     pub changed_ranges: Vec<ByteRange>,
+    /// Coalesced section-7 differences, also diagnostic only.
+    pub wcoord_seen_changed_ranges: Vec<ByteRange>,
     pub tdata_cells_written: usize,
     pub fog_cells_written_per_plane: usize,
     pub section_bytes_written: usize,
+    pub wcoord_seen_bytes_written: usize,
+    pub total_bytes_written: usize,
     pub section_bytes_changed: usize,
+    pub wcoord_seen_bytes_changed: usize,
+    pub total_bytes_changed: usize,
     pub rewritten_zero_bytes: usize,
     pub nonzero_tdata_words_before: usize,
     pub nonzero_seen_bytes_before: usize,
     pub nonzero_seen2_bytes_before: usize,
     pub nonzero_seen3_bytes_before: usize,
+    pub nonzero_wcoord_seen_bytes_before: usize,
     pub section_adler_before: u32,
     pub section_adler_after: u32,
+    pub wcoord_seen_adler_before: u32,
+    pub wcoord_seen_adler_after: u32,
     pub rng_draws: u32,
-    pub unreceipted_adjacent_write: AdjacentRequiredWrite,
 }
 
 fn checked_shape(world: &World) -> Result<TDataFogLayout, TDataFogWipeError> {
@@ -144,6 +154,13 @@ fn checked_shape(world: &World) -> Result<TDataFogLayout, TDataFogWipeError> {
             ys: world.ys,
         });
     }
+    let size = world
+        .xs
+        .checked_mul(world.ys)
+        .ok_or(TDataFogWipeError::InvalidDimensions {
+            xs: world.xs,
+            ys: world.ys,
+        })?;
     let tile_xs = world
         .xs
         .checked_mul(4)
@@ -186,6 +203,7 @@ fn checked_shape(world: &World) -> Result<TDataFogLayout, TDataFogWipeError> {
         })?;
 
     for (field, expected, actual) in [
+        ("size", size, world.size),
         ("tile_xs", tile_xs, world.tile_xs),
         ("tile_ys", tile_ys, world.tile_ys),
         ("tile_size", tile_size, world.tile_size),
@@ -209,6 +227,11 @@ fn checked_shape(world: &World) -> Result<TDataFogLayout, TDataFogWipeError> {
         (TDataFogPlane::Seen, fog_cells, world.seen.len()),
         (TDataFogPlane::Seen2, fog_cells, world.seen2.len()),
         (TDataFogPlane::Seen3, fog_cells, world.seen3.len()),
+        (
+            TDataFogPlane::WCoordSeen,
+            usize::try_from(size).expect("positive checked world size"),
+            world.wcoord_seen.len(),
+        ),
     ] {
         if expected != actual {
             return Err(TDataFogWipeError::PlaneLengthMismatch {
@@ -251,6 +274,12 @@ pub fn tdata_and_fog_image(world: &World) -> Vec<u8> {
     sink.0
 }
 
+pub fn wcoord_seen_image(world: &World) -> Vec<u8> {
+    let mut sink = ByteSink::new();
+    world.walk_section(&mut sink, WorldSection::WCoordSeen as i32);
+    sink.0
+}
+
 fn changed_ranges(before: &[u8], after: &[u8]) -> Vec<ByteRange> {
     let mut ranges = Vec::new();
     let mut offset = 0usize;
@@ -279,6 +308,7 @@ pub fn execute_tdata_and_fog_wipe(
 ) -> Result<TDataFogWipeReceipt, TDataFogWipeError> {
     let layout = checked_shape(world)?;
     let before = tdata_and_fog_image(world);
+    let wcoord_seen_before = wcoord_seen_image(world);
     if before.len() != layout.bytes() {
         return Err(TDataFogWipeError::SectionWalkLengthMismatch {
             expected: layout.bytes(),
@@ -290,10 +320,13 @@ pub fn execute_tdata_and_fog_wipe(
     let nonzero_seen_bytes_before = world.seen.iter().filter(|&&byte| byte != 0).count();
     let nonzero_seen2_bytes_before = world.seen2.iter().filter(|&&byte| byte != 0).count();
     let nonzero_seen3_bytes_before = world.seen3.iter().filter(|&&byte| byte != 0).count();
+    let nonzero_wcoord_seen_bytes_before =
+        world.wcoord_seen.iter().filter(|&&byte| byte != 0).count();
 
     let mut staged = world.clone();
     staged.wipe();
     let after = tdata_and_fog_image(&staged);
+    let wcoord_seen_after = wcoord_seen_image(&staged);
     if after.len() != layout.bytes() {
         return Err(TDataFogWipeError::SectionWalkLengthMismatch {
             expected: layout.bytes(),
@@ -303,10 +336,28 @@ pub fn execute_tdata_and_fog_wipe(
     if let Some((offset, &value)) = after.iter().enumerate().find(|(_, value)| **value != 0) {
         return Err(TDataFogWipeError::NonzeroPostcondition { offset, value });
     }
+    if let Some((offset, &value)) = wcoord_seen_after
+        .iter()
+        .enumerate()
+        .find(|(_, value)| **value != 0)
+    {
+        return Err(TDataFogWipeError::NonzeroPostcondition {
+            offset: layout.bytes() + offset,
+            value,
+        });
+    }
 
-    let changed_ranges = changed_ranges(&before, &after);
-    let section_bytes_changed = changed_ranges.iter().map(|range| range.len()).sum();
+    let tdata_changed_ranges = changed_ranges(&before, &after);
+    let wcoord_seen_changed_ranges = changed_ranges(&wcoord_seen_before, &wcoord_seen_after);
+    let section_bytes_changed = tdata_changed_ranges.iter().map(|range| range.len()).sum();
+    let wcoord_seen_bytes_changed = wcoord_seen_changed_ranges
+        .iter()
+        .map(|range| range.len())
+        .sum();
     let section_bytes_written = layout.bytes();
+    let wcoord_seen_bytes_written = world.wcoord_seen.len();
+    let total_bytes_written = section_bytes_written + wcoord_seen_bytes_written;
+    let total_bytes_changed = section_bytes_changed + wcoord_seen_bytes_changed;
     let receipt = TDataFogWipeReceipt {
         entry_va: WORLD_WIPE_VA,
         resume_va: WORLD_WIPE_RETURN_VA,
@@ -332,25 +383,36 @@ pub fn execute_tdata_and_fog_wipe(
                 range: layout.seen3,
                 producer_va: CLEAR_SEEN3_MEMSET_VA,
             },
+            TDataFogWrittenRange {
+                plane: TDataFogPlane::WCoordSeen,
+                range: ByteRange {
+                    start: 0,
+                    end: wcoord_seen_bytes_written,
+                },
+                producer_va: WORLD_CLEAR_WCOORD_SEEN_MEMSET_CALL_VA,
+            },
         ],
-        changed_ranges,
+        changed_ranges: tdata_changed_ranges,
+        wcoord_seen_changed_ranges,
         tdata_cells_written: world.tdata.len(),
         fog_cells_written_per_plane: world.seen.len(),
         section_bytes_written,
+        wcoord_seen_bytes_written,
+        total_bytes_written,
         section_bytes_changed,
-        rewritten_zero_bytes: section_bytes_written - section_bytes_changed,
+        wcoord_seen_bytes_changed,
+        total_bytes_changed,
+        rewritten_zero_bytes: total_bytes_written - total_bytes_changed,
         nonzero_tdata_words_before,
         nonzero_seen_bytes_before,
         nonzero_seen2_bytes_before,
         nonzero_seen3_bytes_before,
+        nonzero_wcoord_seen_bytes_before,
         section_adler_before: adler32(1, &before),
         section_adler_after: adler32(1, &after),
+        wcoord_seen_adler_before: adler32(1, &wcoord_seen_before),
+        wcoord_seen_adler_after: adler32(1, &wcoord_seen_after),
         rng_draws: 0,
-        unreceipted_adjacent_write: AdjacentRequiredWrite {
-            section: WorldSection::WCoordSeen,
-            bytes: world.wcoord_seen.len(),
-            producer_va: WORLD_CLEAR_WCOORD_SEEN_MEMSET_CALL_VA,
-        },
     };
     *world = staged;
     Ok(receipt)

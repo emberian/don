@@ -17,9 +17,10 @@ use crate::rules_channel::{
     SHIPPED_RULES_CHANNEL, TRIBE_COUNT, TRIBE_SIZE, TYPE_SLOTS,
 };
 use crate::world_owner_frontier::{
-    sha256, InitialWorldPrefixEvidence, ReplaySpan, RulesWorldEvidence, WorldOwnerLedger,
+    sha256, ExactPortTransitionProof, ExactPortWrittenRange, InitialWorldPrefixEvidence,
+    ReplaySpan, RulesWorldEvidence, WorldOwnerLedger, WorldSectionMask,
 };
-use don_sim::systems::map_terrain::{World, WorldChecksum};
+use don_sim::systems::map_terrain::{World, WorldChecksum, WorldSection};
 use don_sim::systems::regions::Regions;
 use std::path::Path;
 
@@ -1150,7 +1151,7 @@ impl InitialState {
         // `GameInfo::seed` is unsigned, but Map::make's argument is signed and
         // its exact prefix preserves prior state for negative values.
         world.seed_map_generation(self.info.seed as i32)?;
-        let checksum = world.checksum_sections();
+        let checksum_before_wipe = world.checksum_sections();
         let rules = self.rules.map(|rules| RulesWorldEvidence {
             serialized_span: ReplaySpan::new(rules.serialized_offset, rules.serialized_bytes),
             serialized_sha256: rules.serialized_sha256,
@@ -1160,7 +1161,7 @@ impl InitialState {
             player_civic: 4,
             player_city: 4,
         });
-        let ownership = WorldOwnerLedger::from_initial_prefix(
+        let mut ownership = WorldOwnerLedger::from_initial_prefix(
             &world,
             InitialWorldPrefixEvidence {
                 replay_sha256: self.payload_sha256,
@@ -1178,11 +1179,40 @@ impl InitialState {
             },
         )
         .ok()?;
+        let wipe = crate::world_tdata_frontier::execute_tdata_and_fog_wipe(&mut world).ok()?;
+        let written_ranges: Vec<_> = wipe
+            .written_ranges
+            .iter()
+            .map(|written| ExactPortWrittenRange {
+                section: written.plane.section(),
+                offset: written.range.start,
+                bytes: written.range.len(),
+                producer_va: written.producer_va,
+            })
+            .collect();
+        let checksum_after_wipe = world.checksum_sections();
+        ownership
+            .advance_exact_written_port(
+                &world,
+                ExactPortTransitionProof {
+                    entry_va: wipe.entry_va,
+                    resume_va: wipe.resume_va,
+                    implementation_sha256: sha256(include_bytes!("world_tdata_frontier.rs")),
+                    receipt_sha256: receipt_digest("World::wipe", &wipe),
+                    proof_document: crate::world_tdata_frontier::PROOF_DOCUMENT,
+                    input_checksum: checksum_before_wipe.full,
+                    output_checksum: checksum_after_wipe.full,
+                    allowed_sections: WorldSectionMask::only(WorldSection::TDataAndFog)
+                        .with(WorldSection::WCoordSeen),
+                },
+                &written_ranges,
+            )
+            .ok()?;
         let sourced_walked_bytes = ownership.coverage().owned_bytes as u64;
         Some(InitialWorld {
             world,
             generation_regions: Regions::default(),
-            checksum,
+            checksum: ownership.snapshot().checksum.clone(),
             ownership: Some(ownership),
             sourced_walked_bytes,
         })
@@ -1800,8 +1830,8 @@ mod tests {
         let w = s.reconstruct_world().unwrap();
         assert_eq!((w.world.xs, w.world.ys), (70, 70));
         assert_eq!(w.world.seed, 0x1234_5678);
-        assert_eq!(w.sourced_walked_bytes, 52);
-        assert_eq!(w.exact_sourced_walked_bytes(), 52);
+        assert_eq!(w.sourced_walked_bytes, 52 + 45 * 70 * 70);
+        assert_eq!(w.exact_sourced_walked_bytes(), 52 + 45 * 70 * 70);
         assert!(w.ownership.is_some());
         assert!(w.ownership_is_coherent());
         assert!(w.checksum.bytes > w.sourced_walked_bytes);
@@ -1866,7 +1896,7 @@ mod tests {
             .all(|input| input.replay_bytes == 0));
 
         let mut initial = s.reconstruct_world().unwrap();
-        assert_eq!(initial.sourced_walked_bytes, 76);
+        assert_eq!(initial.sourced_walked_bytes, 76 + 45 * 70 * 70);
         assert!(initial.ownership_is_coherent());
         let mut sim = don_sim::World::with_capacity(16, 1);
         assert_eq!(

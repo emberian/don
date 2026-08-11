@@ -185,6 +185,18 @@ pub enum WorldByteSource {
         input_checksum: u32,
         output_checksum: u32,
     },
+    /// Bytes explicitly written by a receipt-bound exact port, including
+    /// same-value rewrites which a before/after diff cannot observe.
+    ExactPortWrite {
+        entry_va: u32,
+        resume_va: u32,
+        producer_va: u32,
+        implementation_sha256: [u8; 32],
+        receipt_sha256: [u8; 32],
+        proof_document: &'static str,
+        input_checksum: u32,
+        output_checksum: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,6 +328,19 @@ pub struct ChangedRange {
     pub bytes: usize,
 }
 
+/// One section-local span which an exact typed receipt proves was written.
+///
+/// Unlike [`ChangedRange`], this is producer evidence: it may lawfully own an
+/// already-equal zero byte. Admission validates the producer VA, section,
+/// bounds, and overlap before mutating the ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExactPortWrittenRange {
+    pub section: WorldSection,
+    pub offset: usize,
+    pub bytes: usize,
+    pub producer_va: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransitionReceipt {
     pub entry_va: u32,
@@ -324,6 +349,8 @@ pub struct TransitionReceipt {
     pub output_checksum: u32,
     pub changed_bytes: usize,
     pub changed_ranges: Vec<ChangedRange>,
+    pub written_bytes: usize,
+    pub written_ranges: Vec<ExactPortWrittenRange>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -546,6 +573,34 @@ impl WorldOwnerLedger {
         world_after: &World,
         proof: ExactPortTransitionProof,
     ) -> Result<TransitionReceipt, WorldOwnerError> {
+        self.advance_exact_port_inner(world_after, proof, &[])
+    }
+
+    /// Advance through an exact port and additionally admit receipt-proven
+    /// writes, including stores whose output equals the prior byte image.
+    ///
+    /// This is deliberately separate from [`Self::advance_exact_port`]: a
+    /// before/after transition receipt remains changed-only unless its caller
+    /// presents explicit, validated write spans. All validation completes
+    /// before the ledger is committed.
+    pub fn advance_exact_written_port(
+        &mut self,
+        world_after: &World,
+        proof: ExactPortTransitionProof,
+        written_ranges: &[ExactPortWrittenRange],
+    ) -> Result<TransitionReceipt, WorldOwnerError> {
+        if written_ranges.is_empty() {
+            return Err(WorldOwnerError::MissingExplicitWrittenRanges);
+        }
+        self.advance_exact_port_inner(world_after, proof, written_ranges)
+    }
+
+    fn advance_exact_port_inner(
+        &mut self,
+        world_after: &World,
+        proof: ExactPortTransitionProof,
+        written_ranges: &[ExactPortWrittenRange],
+    ) -> Result<TransitionReceipt, WorldOwnerError> {
         validate_transition_proof(&proof)?;
         if self.snapshot.checksum.full != proof.input_checksum {
             return Err(WorldOwnerError::TransitionInputMismatch {
@@ -560,6 +615,7 @@ impl WorldOwnerLedger {
                 actual: after.checksum.full,
             });
         }
+        validate_written_ranges(&after, &proof, written_ranges)?;
         // A generator can lawfully make an empty walked array non-empty.  That
         // grows one section and shifts every later section's global offset even
         // though those later section-local byte streams are unchanged. Rebase
@@ -642,6 +698,23 @@ impl WorldOwnerLedger {
                 *owner = Some(source);
             }
         }
+        for written in written_ranges {
+            let source = self.sources.len();
+            self.sources.push(WorldByteSource::ExactPortWrite {
+                entry_va: proof.entry_va,
+                resume_va: proof.resume_va,
+                producer_va: written.producer_va,
+                implementation_sha256: proof.implementation_sha256,
+                receipt_sha256: proof.receipt_sha256,
+                proof_document: proof.proof_document,
+                input_checksum: proof.input_checksum,
+                output_checksum: proof.output_checksum,
+            });
+            let window = after.section(written.section);
+            rebased_owners
+                [window.start + written.offset..window.start + written.offset + written.bytes]
+                .fill(Some(source));
+        }
         self.owners = rebased_owners;
         self.snapshot = after;
         Ok(TransitionReceipt {
@@ -651,6 +724,8 @@ impl WorldOwnerLedger {
             output_checksum: proof.output_checksum,
             changed_bytes: changed.iter().map(|range| range.bytes).sum(),
             changed_ranges: changed,
+            written_bytes: written_ranges.iter().map(|range| range.bytes).sum(),
+            written_ranges: written_ranges.to_vec(),
         })
     }
 
@@ -864,6 +939,21 @@ pub enum WorldOwnerError {
         section: WorldSection,
         offset: usize,
     },
+    MissingExplicitWrittenRanges,
+    InvalidWrittenRange {
+        section: WorldSection,
+        offset: usize,
+        bytes: usize,
+        producer_va: u32,
+    },
+    ForbiddenWrittenRange {
+        section: WorldSection,
+        offset: usize,
+    },
+    OverlappingWrittenRanges {
+        section: WorldSection,
+        offset: usize,
+    },
     InvalidRetailTurn(i32),
     MissingPeerChecksums,
     RetailPeersDisagree,
@@ -896,6 +986,51 @@ fn validate_transition_proof(proof: &ExactPortTransitionProof) -> Result<(), Wor
         || validate_digest(proof.receipt_sha256, "receipt_sha256").is_err()
     {
         return Err(WorldOwnerError::InvalidTransitionProof);
+    }
+    Ok(())
+}
+
+fn validate_written_ranges(
+    after: &WorldOwnerSnapshot,
+    proof: &ExactPortTransitionProof,
+    ranges: &[ExactPortWrittenRange],
+) -> Result<(), WorldOwnerError> {
+    for (index, range) in ranges.iter().enumerate() {
+        let window = after.section(range.section);
+        let Some(end) = range.offset.checked_add(range.bytes) else {
+            return Err(WorldOwnerError::InvalidWrittenRange {
+                section: range.section,
+                offset: range.offset,
+                bytes: range.bytes,
+                producer_va: range.producer_va,
+            });
+        };
+        if range.bytes == 0 || range.producer_va == 0 || end > window.len() {
+            return Err(WorldOwnerError::InvalidWrittenRange {
+                section: range.section,
+                offset: range.offset,
+                bytes: range.bytes,
+                producer_va: range.producer_va,
+            });
+        }
+        if !proof.allowed_sections.contains(range.section) {
+            return Err(WorldOwnerError::ForbiddenWrittenRange {
+                section: range.section,
+                offset: range.offset,
+            });
+        }
+        for prior in &ranges[..index] {
+            if prior.section != range.section {
+                continue;
+            }
+            let prior_end = prior.offset + prior.bytes;
+            if prior.offset < end && range.offset < prior_end {
+                return Err(WorldOwnerError::OverlappingWrittenRanges {
+                    section: range.section,
+                    offset: range.offset.max(prior.offset),
+                });
+            }
+        }
     }
     Ok(())
 }

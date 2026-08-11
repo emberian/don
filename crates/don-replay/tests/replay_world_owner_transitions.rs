@@ -8,6 +8,7 @@ use don_replay::replay_world_owner_transitions::PROOF_DOCUMENT;
 use don_replay::world_owner_frontier::{
     ExactPortTransitionProof, WorldByteSource, WorldOwnerError, WorldSectionMask,
 };
+use don_replay::world_tdata_frontier::{PROOF_DOCUMENT as WIPE_PROOF_DOCUMENT, WORLD_WIPE_VA};
 use don_sim::systems::map_terrain::{WCoord, WorldSection};
 use std::path::{Path, PathBuf};
 
@@ -65,6 +66,24 @@ fn checksum_bearing_corpus_commits_a_coherent_transitioned_ledger() {
             "{}: changed generator bytes must advance exact coverage",
             path.display()
         );
+
+        for section in [WorldSection::TDataAndFog, WorldSection::WCoordSeen] {
+            let bytes = ledger.snapshot().section(section).len();
+            for offset in 0..bytes {
+                assert!(
+                    matches!(
+                        ledger.owner_at(section, offset),
+                        Some(WorldByteSource::ExactPortWrite {
+                            entry_va,
+                            proof_document,
+                            ..
+                        }) if *entry_va == WORLD_WIPE_VA && *proof_document == WIPE_PROOF_DOCUMENT
+                    ),
+                    "{}: wipe-owned {section:?}+{offset} lost its explicit producer",
+                    path.display()
+                );
+            }
+        }
 
         for section in WorldSection::all() {
             let bytes = ledger.snapshot().section(section).len();

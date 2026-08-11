@@ -2,10 +2,10 @@ use don_replay::world_owner_frontier;
 use don_sim::checksum::adler32;
 use don_sim::systems::map_terrain::{wflag, WCoord, World, WorldSection};
 use world_owner_frontier::{
-    sha256, ExactPortTransitionProof, InitialWorldPrefixEvidence, ReplaySpan,
-    RetailDifferenceLocation, RetailWorldCheckpoint, RetailWorldWalkCapture, RulesWorldEvidence,
-    WorldByteSource, WorldOwnerError, WorldOwnerLedger, WorldSectionMask, RETAIL_AFTER_CONSTANTS,
-    SHIPPED_RULES_CHANNEL, SHIPPED_RULES_SERIALIZED_BYTES,
+    sha256, ExactPortTransitionProof, ExactPortWrittenRange, InitialWorldPrefixEvidence,
+    ReplaySpan, RetailDifferenceLocation, RetailWorldCheckpoint, RetailWorldWalkCapture,
+    RulesWorldEvidence, WorldByteSource, WorldOwnerError, WorldOwnerLedger, WorldSectionMask,
+    RETAIL_AFTER_CONSTANTS, SHIPPED_RULES_CHANNEL, SHIPPED_RULES_SERIALIZED_BYTES,
 };
 
 #[test]
@@ -18,6 +18,111 @@ fn dependency_free_sha256_matches_the_standard_vector() {
             0xf2, 0x00, 0x15, 0xad,
         ]
     );
+}
+
+#[test]
+fn exact_written_port_owns_rewritten_zeroes_without_changing_changed_only_semantics() {
+    let after = world(70, 17);
+    let mut ledger = WorldOwnerLedger::from_initial_prefix(&after, evidence(3, 17)).unwrap();
+    let checksum = after.checksum_sections().full;
+    let written = [
+        ExactPortWrittenRange {
+            section: WorldSection::TDataAndFog,
+            offset: 0,
+            bytes: 32,
+            producer_va: 0x006b_2d43,
+        },
+        ExactPortWrittenRange {
+            section: WorldSection::WCoordSeen,
+            offset: 0,
+            bytes: 16,
+            producer_va: 0x006b_22be,
+        },
+    ];
+    let receipt = ledger
+        .advance_exact_written_port(
+            &after,
+            transition(
+                checksum,
+                checksum,
+                WorldSectionMask::only(WorldSection::TDataAndFog).with(WorldSection::WCoordSeen),
+            ),
+            &written,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.changed_bytes, 0);
+    assert!(receipt.changed_ranges.is_empty());
+    assert_eq!(receipt.written_bytes, 48);
+    assert_eq!(receipt.written_ranges, written);
+    assert!(matches!(
+        ledger.owner_at(WorldSection::TDataAndFog, 0),
+        Some(WorldByteSource::ExactPortWrite {
+            producer_va: 0x006b_2d43,
+            ..
+        })
+    ));
+    assert!(matches!(
+        ledger.owner_at(WorldSection::WCoordSeen, 15),
+        Some(WorldByteSource::ExactPortWrite {
+            producer_va: 0x006b_22be,
+            ..
+        })
+    ));
+    assert_eq!(ledger.owner_at(WorldSection::TDataAndFog, 32), None);
+    assert_eq!(ledger.coverage().owned_bytes, 76 + 48);
+}
+
+#[test]
+fn exact_written_port_validates_source_ranges_before_mutating_the_ledger() {
+    let after = world(70, 17);
+    let mut ledger = WorldOwnerLedger::from_initial_prefix(&after, evidence(3, 17)).unwrap();
+    let baseline = ledger.clone();
+    let checksum = after.checksum_sections().full;
+    let proof = transition(
+        checksum,
+        checksum,
+        WorldSectionMask::only(WorldSection::TDataAndFog),
+    );
+
+    for ranges in [
+        vec![ExactPortWrittenRange {
+            section: WorldSection::TDataAndFog,
+            offset: 0,
+            bytes: 1,
+            producer_va: 0,
+        }],
+        vec![ExactPortWrittenRange {
+            section: WorldSection::WCoordSeen,
+            offset: 0,
+            bytes: 1,
+            producer_va: 0x006b_22be,
+        }],
+        vec![
+            ExactPortWrittenRange {
+                section: WorldSection::TDataAndFog,
+                offset: 0,
+                bytes: 2,
+                producer_va: 0x006b_2d43,
+            },
+            ExactPortWrittenRange {
+                section: WorldSection::TDataAndFog,
+                offset: 1,
+                bytes: 2,
+                producer_va: 0x006b_2d43,
+            },
+        ],
+    ] {
+        assert!(ledger
+            .advance_exact_written_port(&after, proof.clone(), &ranges)
+            .is_err());
+        assert_eq!(ledger, baseline);
+    }
+    assert_eq!(
+        ledger.advance_exact_written_port(&after, proof, &[]),
+        Err(WorldOwnerError::MissingExplicitWrittenRanges)
+    );
+    assert_eq!(ledger, baseline);
 }
 
 fn digest(byte: u8) -> [u8; 32] {

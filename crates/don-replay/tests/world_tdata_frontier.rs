@@ -4,9 +4,9 @@ mod world_tdata_frontier;
 use don_sim::checksum::adler32;
 use don_sim::systems::map_terrain::{World, WorldSection};
 use world_tdata_frontier::{
-    execute_tdata_and_fog_wipe, tdata_and_fog_image, ByteRange, TDataFogPlane, TDataFogWipeError,
-    CLEAR_SEEN2_CALL_VA, CLEAR_SEEN3_MEMSET_VA, CLEAR_SEEN_CALL_VA, SHIPPED_EXE_SHA256,
-    TDATA_ZERO_LOOP_WRITE_VA, WORLD_CLEAR_SEEN2_VA, WORLD_CLEAR_SEEN_VA,
+    execute_tdata_and_fog_wipe, tdata_and_fog_image, wcoord_seen_image, ByteRange, TDataFogPlane,
+    TDataFogWipeError, CLEAR_SEEN2_CALL_VA, CLEAR_SEEN3_MEMSET_VA, CLEAR_SEEN_CALL_VA,
+    SHIPPED_EXE_SHA256, TDATA_ZERO_LOOP_WRITE_VA, WORLD_CLEAR_SEEN2_VA, WORLD_CLEAR_SEEN_VA,
     WORLD_CLEAR_WCOORD_SEEN_MEMSET_CALL_VA, WORLD_WIPE_BODY_BYTES, WORLD_WIPE_BODY_SHA256,
     WORLD_WIPE_RETURN_VA, WORLD_WIPE_VA,
 };
@@ -34,7 +34,11 @@ fn wipe_receipts_every_section_six_store_not_only_changed_bytes() {
     assert_eq!(receipt.layout.seen.start, 51_200);
     assert_eq!(receipt.layout.seen3.end, 70_400);
     assert_eq!(receipt.section_bytes_written, 70_400);
+    assert_eq!(receipt.wcoord_seen_bytes_written, 1_600);
+    assert_eq!(receipt.total_bytes_written, 72_000);
     assert_eq!(receipt.section_bytes_changed, 70_400);
+    assert_eq!(receipt.wcoord_seen_bytes_changed, 1_600);
+    assert_eq!(receipt.total_bytes_changed, 72_000);
     assert_eq!(
         receipt.changed_ranges,
         vec![ByteRange {
@@ -54,27 +58,29 @@ fn wipe_receipts_every_section_six_store_not_only_changed_bytes() {
     assert_eq!(receipt.written_ranges[2].producer_va, CLEAR_SEEN2_CALL_VA);
     assert_eq!(receipt.written_ranges[3].range, receipt.layout.seen3);
     assert_eq!(receipt.written_ranges[3].producer_va, CLEAR_SEEN3_MEMSET_VA);
+    assert_eq!(receipt.written_ranges[4].plane, TDataFogPlane::WCoordSeen);
+    assert_eq!(
+        receipt.written_ranges[4].range,
+        ByteRange {
+            start: 0,
+            end: 1_600
+        }
+    );
+    assert_eq!(
+        receipt.written_ranges[4].producer_va,
+        WORLD_CLEAR_WCOORD_SEEN_MEMSET_CALL_VA
+    );
     assert_eq!(receipt.rewritten_zero_bytes, 0);
     assert_eq!(receipt.nonzero_tdata_words_before, 25_600);
     assert_eq!(receipt.nonzero_seen_bytes_before, 6_400);
     assert_eq!(receipt.nonzero_seen2_bytes_before, 6_400);
     assert_eq!(receipt.nonzero_seen3_bytes_before, 6_400);
+    assert_eq!(receipt.nonzero_wcoord_seen_bytes_before, 1_600);
     assert_eq!(receipt.rng_draws, 0);
-    assert_eq!(
-        receipt.unreceipted_adjacent_write.section,
-        WorldSection::WCoordSeen
-    );
-    assert_eq!(receipt.unreceipted_adjacent_write.bytes, 1_600);
-    assert_eq!(
-        receipt.unreceipted_adjacent_write.producer_va,
-        WORLD_CLEAR_WCOORD_SEEN_MEMSET_CALL_VA
-    );
     assert_eq!(receipt.section_adler_after, adler32(1, &vec![0; 70_400]));
+    assert_eq!(receipt.wcoord_seen_adler_after, adler32(1, &vec![0; 1_600]));
     assert!(tdata_and_fog_image(&world).iter().all(|&byte| byte == 0));
-    assert!(
-        world.wcoord_seen.iter().all(|&byte| byte == 0x80),
-        "shared World::wipe still omits retail's adjacent section-7 clear"
-    );
+    assert!(wcoord_seen_image(&world).iter().all(|&byte| byte == 0));
 }
 
 #[test]
@@ -85,17 +91,21 @@ fn already_zero_plane_is_still_fully_produced() {
 
     let receipt = execute_tdata_and_fog_wipe(&mut world).expect("valid zero rewrite");
     assert_eq!(receipt.section_bytes_written, 215_600);
+    assert_eq!(receipt.wcoord_seen_bytes_written, 4_900);
+    assert_eq!(receipt.total_bytes_written, 220_500);
     assert_eq!(receipt.section_bytes_changed, 0);
+    assert_eq!(receipt.wcoord_seen_bytes_changed, 0);
     assert!(receipt.changed_ranges.is_empty());
+    assert!(receipt.wcoord_seen_changed_ranges.is_empty());
     assert_eq!(
         receipt
             .written_ranges
             .iter()
             .map(|written| written.range.len())
             .sum::<usize>(),
-        215_600
+        220_500
     );
-    assert_eq!(receipt.rewritten_zero_bytes, 215_600);
+    assert_eq!(receipt.rewritten_zero_bytes, 220_500);
     assert_eq!(receipt.section_adler_before, receipt.section_adler_after);
 }
 
@@ -119,6 +129,27 @@ fn malformed_plane_shape_refuses_without_mutation() {
     assert_eq!(world.seen, before.seen);
     assert_eq!(world.seen2, before.seen2);
     assert_eq!(world.seen3, before.seen3);
+    assert_eq!(world.wcoord_seen, before.wcoord_seen);
+}
+
+#[test]
+fn malformed_wcoord_seen_shape_refuses_the_whole_wipe() {
+    let mut world = World::init_default_rules(50, 50);
+    world.tdata[9] = 0xabcd;
+    world.wcoord_seen.pop();
+    let before = world.clone();
+
+    assert_eq!(
+        execute_tdata_and_fog_wipe(&mut world),
+        Err(TDataFogWipeError::PlaneLengthMismatch {
+            plane: TDataFogPlane::WCoordSeen,
+            expected: 2_500,
+            actual: 2_499,
+        })
+    );
+    assert_eq!(world.tdata, before.tdata);
+    assert_eq!(world.seen, before.seen);
+    assert_eq!(world.wcoord_seen, before.wcoord_seen);
 }
 
 #[test]
@@ -140,6 +171,10 @@ fn derived_dimensions_are_part_of_the_admission_gate() {
 #[test]
 fn binary_anchor_chain_is_frozen() {
     assert_eq!(
+        world_tdata_frontier::PROOF_DOCUMENT,
+        "docs/assembly/replay-world-tdata-frontier.md"
+    );
+    assert_eq!(
         SHIPPED_EXE_SHA256,
         "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
     );
@@ -156,6 +191,11 @@ fn binary_anchor_chain_is_frozen() {
     assert_eq!(WORLD_CLEAR_SEEN2_VA, 0x006b_2160);
     assert_eq!(CLEAR_SEEN3_MEMSET_VA, 0x006b_2d75);
     assert_eq!(WORLD_WIPE_RETURN_VA, 0x006b_2dd7);
+    assert_eq!(TDataFogPlane::TData.section(), WorldSection::TDataAndFog);
+    assert_eq!(
+        TDataFogPlane::WCoordSeen.section(),
+        WorldSection::WCoordSeen
+    );
 }
 
 #[test]
@@ -168,5 +208,7 @@ fn shipped_map_edges_have_the_exact_section_six_formula() {
         assert_eq!(receipt.layout.seen.len(), (4 * edge * edge) as usize);
         assert_eq!(receipt.layout.seen2.len(), (4 * edge * edge) as usize);
         assert_eq!(receipt.layout.seen3.len(), (4 * edge * edge) as usize);
+        assert_eq!(receipt.wcoord_seen_bytes_written, (edge * edge) as usize);
+        assert_eq!(receipt.total_bytes_written, (45 * edge * edge) as usize);
     }
 }

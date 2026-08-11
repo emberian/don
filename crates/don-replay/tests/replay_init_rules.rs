@@ -66,7 +66,16 @@ fn replay_rules_are_independently_projected_and_survive_the_whole_recording() {
         .initial
         .reconstruct_world()
         .expect("ordinary recording has procedural world prefix");
-    assert_eq!(initial_world.exact_sourced_walked_bytes(), 76);
+    let edge = rep
+        .initial
+        .info
+        .settings
+        .map_edge_world_cells()
+        .expect("supported procedural map size");
+    assert_eq!(
+        initial_world.exact_sourced_walked_bytes(),
+        76 + (45 * edge * edge) as u64
+    );
     assert!(initial_world.ownership_is_coherent());
 
     let mut sim = WorldSim::from_replay(&rep);

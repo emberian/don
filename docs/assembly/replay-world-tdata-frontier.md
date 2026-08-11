@@ -1,19 +1,21 @@
-# Replay World section-6 producer frontier
+# Replay World wipe producer integration
 
 ## Result
 
-The earliest real producer of checksum-channel-12 section 6 is now isolated as an
-executable replay source. `World::wipe` `0x006b2c00` writes **every** TData word to zero,
-then clears `seen`, `seen2`, and `seen3`. It consumes no RNG. The new
-`world_tdata_frontier.rs` adapter executes the existing `don-sim` port on a staged World,
-checks the derived dimensions and all four plane lengths before mutation, checks the exact
-section-6 walk image afterward, and returns a receipt with four explicit `written_ranges`
-bound to the shipped producer VAs plus separate coalesced `changed_ranges`.
+The earliest real producer of checksum-channel-12 sections 6 and 7 is now executable and
+registered in the canonical replay World owner. `World::wipe` `0x006b2c00` writes **every**
+TData word to zero, clears `seen`, `seen2`, and `seen3`, and clears `wcoord_seen` through its
+`World::clear_seen` call. It consumes no RNG. The `world_tdata_frontier.rs` adapter executes
+the existing `don-sim` port on a staged World, checks the derived dimensions and all five
+plane lengths before mutation, checks both section images afterward, and returns five
+explicit `written_ranges` bound to the shipped producer VAs plus separate coalesced
+`changed_ranges` for sections 6 and 7.
 
 That distinction closes the source question. A zero which `World::wipe` explicitly rewrites
 is sourced by the producer even though a before/after-difference ledger sees no change. No
-recorded checksum is accepted as input, and this tranche does not register the source in the
-shared owner ledger or initial replay schedule.
+recorded checksum is accepted as input. The canonical procedural initial reconstruction now
+advances the owner ledger with those explicit write ranges in the same transaction. The
+ordinary changed-only transition API remains unchanged and cannot promote equal zeroes.
 
 ## Binary source chain
 
@@ -40,6 +42,7 @@ Capstone fixes the section-6 writes:
 | `seen` | call `0x006b2d5f` → `World::clear_seen` `0x006b2250` | zero `fog_size` bytes |
 | `seen2` | call `0x006b2d66` → `World::clear_seen2` `0x006b2160` | zero `fog_size` bytes |
 | `seen3` | inline `memset` setup at `0x006b2d75..0x006b2d80` | zero `fog_size` bytes |
+| `wcoord_seen` | call `0x006b2d5f` → `World::clear_seen` → memset call `0x006b22be` | zero `size` bytes |
 | RNG | no call or access to `game_random` | zero draws |
 
 A `.text` rel32 scan finds `World::wipe` called from 20 map-continent implementation
@@ -56,14 +59,17 @@ tile_size = (4*edge)^2 = 16*edge^2 cells
 TData     = 2*tile_size = 32*edge^2 bytes
 fog_size  = (2*edge)^2 = 4*edge^2 bytes per plane
 section 6 = TData + 3*fog_size = 44*edge^2 bytes
+section 7 = wcoord_seen = edge^2 bytes
+total written = 45*edge^2 bytes
 ```
 
-The receipt freezes four contiguous write ranges in the actual section walker order:
-`TData`, `seen`, `seen2`, `seen3`. Each range carries the shipped store/call VA proving the
-write. `section_bytes_written` is always the complete `44*edge^2`; `changed_ranges` may be
-empty when the input was already blank. Ownership must come from the former, never from
-equal zero values or the latter. Focused tests exercise both cases, malformed plane refusal,
-derived-dimension refusal, the binary anchors, and all seven shipped map edges.
+The receipt freezes five write ranges in section-local walker order: `TData`, `seen`,
+`seen2`, `seen3`, and `wcoord_seen`. Each carries the shipped store/call VA proving the
+write. `total_bytes_written` is always the complete `45*edge^2`; either section's
+`changed_ranges` may be empty when the input was already blank. Ownership comes from the
+validated written ranges, never from equal zero values or the changed ranges. Focused tests
+exercise both cases, malformed section-6 and section-7 refusal, derived-dimension refusal,
+the binary anchors, and all seven shipped map edges.
 
 The current checksum-bearing corpus has 21 files distributed as two edge-60, five edge-70,
 one edge-80, and thirteen edge-100 Worlds. The source contribution is therefore:
@@ -75,6 +81,8 @@ one edge-80, and thirteen edge-100 Worlds. The source contribution is therefore:
 | `seen2` | 672,400 |
 | `seen3` | 672,400 |
 | **section 6** | **7,396,400** |
+| `wcoord_seen` / **section 7** | **168,100** |
+| **sections 6 + 7** | **7,564,500** |
 
 The distribution and total are independently reproducible from
 `schema/replay-validation.json`:
@@ -83,14 +91,13 @@ The distribution and total are independently reproducible from
 jq -r '.files[] | select(.channels.world.compares > 0) |
   .initial.map_edge_world_cells' schema/replay-validation.json | sort -n | uniq -c
 jq '[.files[] | select(.channels.world.compares > 0) |
-  .initial.map_edge_world_cells as $e | 44*$e*$e] | add' schema/replay-validation.json
+  .initial.map_edge_world_cells as $e | 45*$e*$e] | add' schema/replay-validation.json
 ```
 
-Against the 2026-08-11 localizer census, future ledger registration at the wipe boundary
-would move exact World coverage from 345,647 to 7,742,047 bytes and reduce the current
-model-boundary unknown count from 12,773,453 to 5,377,053. Those are source-coverage
-quantities, not replay agreements. The retail checkpoint is later and contains subsequent
-TData and fog writes.
+Against the converged 2026-08-11 localizer census, the integrated wipe advances exact World
+coverage from 351,720 to 7,916,220 bytes and reduces the current model-boundary unknown count
+from 12,767,380 to 5,202,880. Those are source-coverage quantities, not replay agreements. The
+retail checkpoint is later and contains subsequent TData and fog writes.
 
 ## Remaining producer boundary
 
@@ -110,27 +117,13 @@ The wipe image is a baseline, not the completed initial World.
   checkpoint therefore still needs exact starting objects, LOS/detector facts, player masks,
   and scheduled fog execution.
 
-The eventual shared hook is narrow but must be owned by convergence: register this new
-module, replace the direct `world.wipe()` inside the continent transaction with an atomic
-wipe adapter, and admit all bytes of `WorldSection::TDataAndFog` under a new producer-source
-variant bound to the receipt and implementation identity. Existing changed-byte transitions
-are insufficient because they intentionally ignore zero rewrites.
-
-That integration remains deliberately red: the same retail call also clears section 7, but
-the shared model does not yet do so. The adapter receipt exposes this as
-`unreceipted_adjacent_write`, naming `WorldSection::WCoordSeen`, its exact byte count, and the
-retail memset call. Convergence must either correct the shared `World::wipe` first or stage
-and receipt sections 6 and 7 together in one atomic adapter; section 6 must not be attached
-alone while the modeled call is missing an adjacent synchronized write.
-
-## Adjacent finding: section 7 remains a separate gap
-
-Retail `World::wipe` calls `World::clear_seen` at `0x006b2d5f`, and that callee also zeroes
-`wcoord_seen` (`World +0x168`, checksum section 7) through the memset call at `0x006b22be`.
-The current Rust `World::wipe` zeros the three section-6 fog planes but does not clear
-`wcoord_seen`. This tranche does not edit the shared `map_terrain.rs` owner and makes no
-whole-wipe claim; the section-7 correction needs its own focused test and must converge
-atomically with section-6 owner registration.
+The shared hook is intentionally split from changed-only transitions. The initial
+reconstructor first installs its 76 replay/static bytes, executes the five-plane wipe on a
+staged World, and calls `advance_exact_written_port` with the receipt's five disjoint
+section-local ranges. That API validates input/output checksums, implementation and receipt
+digests, allowed sections, nonzero producer VAs, bounds, and overlaps before committing.
+Failure exposes neither the wiped World nor partial ownership. Later continent transitions
+preserve these owners while they advance their independent changed ranges.
 
 ## Claims not made
 

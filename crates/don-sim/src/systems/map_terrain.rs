@@ -1000,9 +1000,9 @@ impl World {
         for t in self.tdata.iter_mut() {
             *t = 0;
         }
-        for b in self.seen.iter_mut() {
-            *b = 0;
-        }
+        // Exact call at `0x006b2d5f`: the callee's `0x006b22be` memset
+        // clears section-7 `wcoord_seen` before it clears section-6 `seen`.
+        self.clear_seen();
         for b in self.seen2.iter_mut() {
             *b = 0;
         }
@@ -2832,6 +2832,19 @@ mod tests {
     /// `World::wipe` leaves every cell in the state the disassembly writes.
     #[test]
     fn wipe_defaults_match_the_disassembly() {
+        let mut world = World::init_default_rules(8, 8);
+        world.tdata.fill(0xffff);
+        world.seen.fill(0x11);
+        world.seen2.fill(0x22);
+        world.seen3.fill(0x44);
+        world.wcoord_seen.fill(0x88);
+        world.wipe();
+        assert!(world.tdata.iter().all(|&word| word == 0));
+        assert!(world.seen.iter().all(|&byte| byte == 0));
+        assert!(world.seen2.iter().all(|&byte| byte == 0));
+        assert!(world.seen3.iter().all(|&byte| byte == 0));
+        assert!(world.wcoord_seen.iter().all(|&byte| byte == 0));
+
         let d = WData::default();
         assert_eq!(d.flags, 0);
         assert_eq!(d.land, 2);

@@ -100,6 +100,12 @@ fn source_name(source: &WorldByteSource) -> String {
             resume_va,
             ..
         } => format!("exact-port:0x{entry_va:08x}->0x{resume_va:08x}"),
+        WorldByteSource::ExactPortWrite {
+            entry_va,
+            resume_va,
+            producer_va,
+            ..
+        } => format!("exact-write:0x{entry_va:08x}->0x{resume_va:08x}@0x{producer_va:08x}"),
     }
 }
 
@@ -566,5 +572,38 @@ mod tests {
             CHECKSUM_LIMIT,
             "checksum-only evidence cannot identify a differing byte"
         );
+    }
+
+    #[test]
+    fn real_replay_initial_wipe_is_visible_as_full_section_six_and_seven_support() {
+        let files = corpus(&repo_root());
+        let replay = files.into_iter().find_map(|path| {
+            let replay = Replay::open(&path).ok()?;
+            (replay.checksum_packets > 0).then_some(replay)
+        });
+        let Some(replay) = replay else {
+            eprintln!("SKIPPED — no checksum-bearing replay corpus is installed");
+            return;
+        };
+        let sim = WorldSim::from_replay(&replay);
+        let map = sim
+            .initial_world
+            .as_ref()
+            .expect("procedural checksum replay reconstructs its World");
+        let ledger = map
+            .ownership
+            .as_ref()
+            .expect("real initial reconstruction installs the owner ledger");
+        let current = WorldOwnerSnapshot::capture(&map.world).unwrap();
+
+        for section in [WorldSection::TDataAndFog, WorldSection::WCoordSeen] {
+            let analysis = section_analysis(ledger, &current, section);
+            assert_eq!(analysis.supported_bytes, analysis.current_bytes);
+            assert_eq!(analysis.unknown_bytes, 0);
+            assert!(analysis
+                .owned_ranges
+                .iter()
+                .all(|range| range.source.starts_with("exact-write:0x006b2c00")));
+        }
     }
 }
