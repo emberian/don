@@ -15,7 +15,7 @@
 //! shipped internal range — so they are never surfaced to the game layer and a
 //! `riseofnations.exe` on the far end of our DLL never sees them.
 //!
-//! # The one extension that exists: the match key
+//! # The extensions that exist
 //!
 //! `CommandPackage::send` `0x0094c1e0` computes the multiplayer payload key
 //! inline, six instructions before it calls the `NetSys` send slot:
@@ -51,8 +51,21 @@ pub const DON_EXT_BASE: u8 = 0xF0;
 /// `DonExtension::GameKey`.
 pub const DON_EXT_GAMEKEY: u8 = 0xF0;
 
+/// `DonExtension::MatchStart`.
+///
+/// This is a DoN-owned control transaction, not a recovered retail packet.
+/// `CrossplayProxy::ICrossPlayService::StartGame` is an asynchronous service
+/// call, while [`crate::session::Session`] previously jumped directly from
+/// all-ready to turn zero.  A local match needs an explicit, host-authoritative
+/// handoff between those states, so this id carries it without pretending one
+/// of retail's nine internal packet ids had room for it.
+pub const DON_EXT_MATCH_START: u8 = 0xF1;
+
 /// Exact wire length of a `GameKey` extension: type + `u32` + source.
 pub const DON_EXT_GAMEKEY_LEN: usize = 6;
+
+/// Exact wire length of a `MatchStart` extension: type + epoch + seed.
+pub const DON_EXT_MATCH_START_LEN: usize = 9;
 
 /// Where the announcing side got the key. This is provenance on the wire: the
 /// receiver records which one it acted on instead of treating every key as
@@ -99,6 +112,13 @@ pub enum DonExtension {
     /// inter-command pad generator is seeded with the full word (only its low 16
     /// bits can change a pad). See [`crate::obfuscate`].
     GameKey { seed: u32, source: GameKeySource },
+    /// Begin one DoN-owned match after the complete roster is ready.
+    ///
+    /// `epoch` is a caller-owned, non-zero attempt identity. `seed` is carried
+    /// in full because it is both simulation setup and the multiplayer command
+    /// transform input.  The shape and authorization rules are **[DoN
+    /// policy]**; no shipped service packet is claimed here.
+    MatchStart { epoch: u32, seed: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,12 +161,14 @@ impl DonExtension {
     pub fn id(&self) -> u8 {
         match self {
             DonExtension::GameKey { .. } => DON_EXT_GAMEKEY,
+            DonExtension::MatchStart { .. } => DON_EXT_MATCH_START,
         }
     }
 
     pub fn wire_len(&self) -> usize {
         match self {
             DonExtension::GameKey { .. } => DON_EXT_GAMEKEY_LEN,
+            DonExtension::MatchStart { .. } => DON_EXT_MATCH_START_LEN,
         }
     }
 
@@ -157,6 +179,7 @@ impl DonExtension {
         }
         let need = match id {
             DON_EXT_GAMEKEY => DON_EXT_GAMEKEY_LEN,
+            DON_EXT_MATCH_START => DON_EXT_MATCH_START_LEN,
             other => return Err(ExtensionError::UnknownType(other)),
         };
         if buf.len() < need {
@@ -179,6 +202,10 @@ impl DonExtension {
                 source: GameKeySource::from_wire(buf[5])
                     .ok_or(ExtensionError::UnknownGameKeySource(buf[5]))?,
             }),
+            DON_EXT_MATCH_START => Ok(DonExtension::MatchStart {
+                epoch: u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]),
+                seed: u32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]),
+            }),
             other => Err(ExtensionError::UnknownType(other)),
         }
     }
@@ -189,6 +216,10 @@ impl DonExtension {
             DonExtension::GameKey { seed, source } => {
                 out.extend_from_slice(&seed.to_le_bytes());
                 out.push(source.to_wire());
+            }
+            DonExtension::MatchStart { epoch, seed } => {
+                out.extend_from_slice(&epoch.to_le_bytes());
+                out.extend_from_slice(&seed.to_le_bytes());
             }
         }
     }
@@ -271,12 +302,45 @@ mod tests {
             );
         }
         assert_eq!(
-            DonExtension::decode(&[0xF1, 0, 0, 0, 0, 0]),
-            Err(ExtensionError::UnknownType(0xF1))
+            DonExtension::decode(&[0xF2, 0, 0, 0, 0, 0]),
+            Err(ExtensionError::UnknownType(0xF2))
         );
         assert_eq!(
             DonExtension::decode(&[0x39; 6]),
             Err(ExtensionError::NotExtension(0x39))
+        );
+    }
+
+    #[test]
+    fn match_start_round_trips_at_exactly_nine_bytes_and_fails_closed() {
+        let packet = DonExtension::MatchStart {
+            epoch: 7,
+            seed: 0x0d0a_11ce,
+        };
+        let mut wire = Vec::new();
+        packet.encode(&mut wire);
+        assert_eq!(wire.len(), DON_EXT_MATCH_START_LEN);
+        assert_eq!(wire.len(), packet.wire_len());
+        assert_eq!(wire[0], DON_EXT_MATCH_START);
+        assert_eq!(DonExtension::decode(&wire), Ok(packet));
+
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert_eq!(
+            DonExtension::decode(&trailing),
+            Err(ExtensionError::Trailing {
+                id: DON_EXT_MATCH_START,
+                need: DON_EXT_MATCH_START_LEN,
+                have: DON_EXT_MATCH_START_LEN + 1,
+            })
+        );
+        assert_eq!(
+            DonExtension::decode(&wire[..8]),
+            Err(ExtensionError::Short {
+                id: DON_EXT_MATCH_START,
+                need: DON_EXT_MATCH_START_LEN,
+                have: DON_EXT_MATCH_START_LEN - 1,
+            })
         );
     }
 

@@ -96,6 +96,9 @@ pub enum Event {
         seed: u32,
         source: GameKeySource,
     },
+    /// The authoritative host crossed the explicit DoN-owned match-start
+    /// boundary after every roster member was ready.
+    MatchStarted(AnnouncedMatchStart),
     /// A game-layer message arrived. `from` is the sender's unique id.
     Game {
         from: i32,
@@ -112,15 +115,36 @@ pub enum SetupRefusal {
     GameKeyFromNonHost {
         expected_host: Option<i32>,
     },
-    SenderIdMismatch { announced: i32 },
+    MatchStartFromNonHost {
+        expected_host: Option<i32>,
+    },
+    MatchStartBeforeAllReady,
+    MatchStartInvalidEpoch {
+        epoch: u32,
+    },
+    MatchStartConflict {
+        current_epoch: u32,
+        current_seed: u32,
+        announced_epoch: u32,
+        announced_seed: u32,
+    },
+    SenderIdMismatch {
+        announced: i32,
+    },
     UnexpectedHostClaim,
-    DuplicateAddConflict { unique_id: i32 },
+    DuplicateAddConflict {
+        unique_id: i32,
+    },
     PlayerListFromNonHost,
-    PlayerListHostMismatch { expected: i32 },
+    PlayerListHostMismatch {
+        expected: i32,
+    },
     HostMissingFromSlotZero,
     LocalMissingFromRoster,
     ReadyBeforeAdd,
-    DestroySenderMismatch { announced: i32 },
+    DestroySenderMismatch {
+        announced: i32,
+    },
 }
 
 /// An owned copy of a decoded game message, so events can outlive the buffer.
@@ -151,6 +175,57 @@ pub enum Role {
     Client,
 }
 
+/// One accepted DoN-owned match-start announcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnouncedMatchStart {
+    pub from: i32,
+    pub epoch: u32,
+    pub seed: u32,
+}
+
+/// Why the local side could not originate a match-start transaction.
+#[derive(Debug)]
+pub enum MatchStartError {
+    NotHost,
+    NotAllReady,
+    ZeroEpoch,
+    AlreadyStarted {
+        current: AnnouncedMatchStart,
+        requested_epoch: u32,
+        requested_seed: u32,
+    },
+    Transport(io::Error),
+}
+
+impl core::fmt::Display for MatchStartError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MatchStartError::NotHost => write!(f, "only the authoritative host may start a match"),
+            MatchStartError::NotAllReady => write!(f, "the complete roster is not ready"),
+            MatchStartError::ZeroEpoch => write!(f, "match epoch zero is reserved"),
+            MatchStartError::AlreadyStarted {
+                current,
+                requested_epoch,
+                requested_seed,
+            } => write!(
+                f,
+                "match already started at epoch {} seed {:#010x}; refused epoch {} seed {:#010x}",
+                current.epoch, current.seed, requested_epoch, requested_seed
+            ),
+            MatchStartError::Transport(error) => write!(f, "send match start: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MatchStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MatchStartError::Transport(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 /// The session. Generic over the transport so the same state machine drives
 /// loopback in a test, TCP over the internet, and (in `netsys-shim`) the real
 /// game's `NetSys` vtable.
@@ -174,6 +249,11 @@ pub struct Session<T: Transport> {
     /// the DoN transport extension, not retail traffic — see
     /// [`crate::extension`].
     announced_game_key: Option<AnnouncedGameKey>,
+    /// The accepted host-authoritative DoN match-start transaction. This is
+    /// deliberately separate from `announced_game_key`: retail interop may
+    /// announce a transform key after retail starts, while a DoN-owned match
+    /// uses this explicit pre-turn boundary.
+    announced_match_start: Option<AnnouncedMatchStart>,
 }
 
 /// A host-announced `GameInfo::seed` and its provenance.
@@ -202,6 +282,7 @@ impl<T: Transport> Session<T> {
             pulse_interval_ms: 1000,
             timeout_ms: 30_000,
             announced_game_key: None,
+            announced_match_start: None,
         };
         s.players.push(Player {
             unique_id: id,
@@ -256,6 +337,7 @@ impl<T: Transport> Session<T> {
         // carrying the previous match's seed into it would be the exact silent
         // substitution this whole path exists to avoid.
         self.announced_game_key = None;
+        self.announced_match_start = None;
     }
 
     pub fn local_id(&self) -> i32 {
@@ -298,6 +380,58 @@ impl<T: Transport> Session<T> {
     /// The match key this session was told about, if any.
     pub fn announced_game_key(&self) -> Option<AnnouncedGameKey> {
         self.announced_game_key
+    }
+
+    /// The accepted explicit DoN match-start transaction, if one exists.
+    pub fn announced_match_start(&self) -> Option<AnnouncedMatchStart> {
+        self.announced_match_start
+    }
+
+    /// Publish the host-authoritative transition from all-ready to match play.
+    ///
+    /// This packet is **[DoN policy]**, not a retail wire claim. It closes the
+    /// gap that previously let the headless local path jump straight from
+    /// readiness into turn zero without any observable start transaction.
+    /// Sending happens before local state changes, so an I/O failure cannot
+    /// leave the host believing a start was published when no peer saw it.
+    pub fn start_match(
+        &mut self,
+        epoch: u32,
+        seed: u32,
+    ) -> Result<AnnouncedMatchStart, MatchStartError> {
+        if self.role != Role::Host {
+            return Err(MatchStartError::NotHost);
+        }
+        if epoch == 0 {
+            return Err(MatchStartError::ZeroEpoch);
+        }
+        if !self.all_ready() {
+            return Err(MatchStartError::NotAllReady);
+        }
+        if let Some(current) = self.announced_match_start {
+            if current.epoch == epoch && current.seed == seed {
+                return Ok(current);
+            }
+            return Err(MatchStartError::AlreadyStarted {
+                current,
+                requested_epoch: epoch,
+                requested_seed: seed,
+            });
+        }
+
+        let mut bytes = Vec::new();
+        DonExtension::MatchStart { epoch, seed }.encode(&mut bytes);
+        self.transport
+            .send(Dest::All, &bytes)
+            .map_err(MatchStartError::Transport)?;
+        let started = AnnouncedMatchStart {
+            from: self.local_id(),
+            epoch,
+            seed,
+        };
+        self.announced_match_start = Some(started);
+        self.events.push(Event::MatchStarted(started));
+        Ok(started)
     }
 
     /// Announce the match key to one peer over the DoN transport extension.
@@ -553,7 +687,56 @@ impl<T: Transport> Session<T> {
                 // consumer decides whether a second key is legitimate.
                 if self.announced_game_key != Some(announcement) {
                     self.announced_game_key = Some(announcement);
-                    self.events.push(Event::GameKeyAnnounced { from, seed, source });
+                    self.events
+                        .push(Event::GameKeyAnnounced { from, seed, source });
+                }
+                Ok(())
+            }
+            DonExtension::MatchStart { epoch, seed } => {
+                let host = self
+                    .players
+                    .iter()
+                    .find(|player| player.is_host)
+                    .map(|player| player.unique_id);
+                if host != Some(from) {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::MatchStartFromNonHost {
+                            expected_host: host,
+                        },
+                    });
+                    return Ok(());
+                }
+                if !self.all_ready() {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::MatchStartBeforeAllReady,
+                    });
+                    return Ok(());
+                }
+                if epoch == 0 {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::MatchStartInvalidEpoch { epoch },
+                    });
+                    return Ok(());
+                }
+                let announced = AnnouncedMatchStart { from, epoch, seed };
+                match self.announced_match_start {
+                    None => {
+                        self.announced_match_start = Some(announced);
+                        self.events.push(Event::MatchStarted(announced));
+                    }
+                    Some(current) if current == announced => {}
+                    Some(current) => self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::MatchStartConflict {
+                            current_epoch: current.epoch,
+                            current_seed: current.seed,
+                            announced_epoch: epoch,
+                            announced_seed: seed,
+                        },
+                    }),
                 }
                 Ok(())
             }
@@ -1110,6 +1293,72 @@ mod tests {
             from: 101,
             seed: 0x005a_c33e,
             source: GameKeySource::RetailGameInfoSeed,
+        }));
+    }
+
+    #[test]
+    fn explicit_match_start_requires_the_host_and_the_complete_ready_roster() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+
+        assert!(matches!(
+            host.start_match(1, 0x0d0a_11ce),
+            Err(MatchStartError::NotAllReady)
+        ));
+        assert!(matches!(
+            client.start_match(1, 0x0d0a_11ce),
+            Err(MatchStartError::NotHost)
+        ));
+
+        host.send_ready_flag(true).unwrap();
+        client.send_ready_flag(true).unwrap();
+        settle(&mut host, &mut client, &mut now, 4);
+        host.drain_events();
+        client.drain_events();
+
+        let started = host.start_match(7, 0x0d0a_11ce).unwrap();
+        assert_eq!(host.announced_match_start(), Some(started));
+        settle(&mut host, &mut client, &mut now, 3);
+        assert_eq!(client.announced_match_start(), Some(started));
+        assert!(client
+            .drain_events()
+            .contains(&Event::MatchStarted(started)));
+
+        // Repeating the exact transaction is idempotent; changing its
+        // identity after start is a local refusal rather than a second match.
+        assert_eq!(host.start_match(7, 0x0d0a_11ce).unwrap(), started);
+        assert!(matches!(
+            host.start_match(8, 0x0d0a_11ce),
+            Err(MatchStartError::AlreadyStarted { .. })
+        ));
+    }
+
+    #[test]
+    fn a_non_host_match_start_is_consumed_and_refused() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+        host.send_ready_flag(true).unwrap();
+        client.send_ready_flag(true).unwrap();
+        settle(&mut host, &mut client, &mut now, 4);
+        host.drain_events();
+
+        let mut bytes = Vec::new();
+        DonExtension::MatchStart {
+            epoch: 9,
+            seed: 0xdead_beef,
+        }
+        .encode(&mut bytes);
+        client.transport.send(Dest::All, &bytes).unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+
+        assert_eq!(host.announced_match_start(), None);
+        assert!(host.drain_events().contains(&Event::SetupRefused {
+            from: 202,
+            reason: SetupRefusal::MatchStartFromNonHost {
+                expected_host: Some(101),
+            },
         }));
     }
 

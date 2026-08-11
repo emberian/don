@@ -16,7 +16,12 @@
 
 use don_net::session::{Event, Role, Session};
 use don_net::transport::TcpTransport;
+use don_net::{LocalMatch, LocalMatchPhase};
 use std::time::{Duration, Instant};
+
+fn local_error(error: don_net::LocalMatchError) -> std::io::Error {
+    std::io::Error::other(error)
+}
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -57,14 +62,16 @@ fn main() -> std::io::Result<()> {
     let addr = transport.local_addr()?;
     println!(r#"{{"event":"listening","id":{id},"addr":"{addr}"}}"#);
 
-    let mut s = Session::new(transport, role, name);
+    let mut match_ = LocalMatch::new(Session::new(transport, role, name));
     let start = Instant::now();
     let now = |start: Instant| start.elapsed().as_millis() as u64;
 
     // 1. wait for the roster to fill
-    while s.players().len() < expect_peers + 1 {
-        s.poll(now(start), Duration::from_millis(10))?;
-        for e in s.drain_events() {
+    while match_.session().players().len() < expect_peers + 1 {
+        match_
+            .poll(now(start), Duration::from_millis(10))
+            .map_err(local_error)?;
+        for e in match_.session_mut().drain_events() {
             if let Event::PlayerJoined(p) = e {
                 println!(r#"{{"event":"joined","peer":{p}}}"#);
             }
@@ -74,13 +81,18 @@ fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     }
-    println!(r#"{{"event":"roster","players":{}}}"#, s.players().len());
+    println!(
+        r#"{{"event":"roster","players":{}}}"#,
+        match_.session().players().len()
+    );
 
     // 2. readiness handshake
-    s.send_ready_flag(true)?;
-    while !s.all_ready() {
-        s.poll(now(start), Duration::from_millis(10))?;
-        s.drain_events();
+    match_.set_ready(true).map_err(local_error)?;
+    while !match_.session().all_ready() {
+        match_
+            .poll(now(start), Duration::from_millis(10))
+            .map_err(local_error)?;
+        match_.session_mut().drain_events();
         if start.elapsed() > Duration::from_secs(30) {
             eprintln!("timed out waiting for ready");
             std::process::exit(1);
@@ -91,28 +103,66 @@ fn main() -> std::io::Result<()> {
         start.elapsed().as_millis()
     );
 
-    // 3. lockstep turn loop. The payload is a real CheckSumsCommand (opcode
+    // 3. explicit match start. This is DoN's own local-service transaction,
+    // not a recovered retail packet. The host publishes one non-zero attempt
+    // epoch and the simulation seed; clients refuse turn submission until
+    // they have accepted it through `LocalMatch`.
+    const MATCH_EPOCH: u32 = 1;
+    const MATCH_SEED: u32 = 0x0d0a_11ce;
+    let started = if role == Role::Host {
+        match_.start(MATCH_EPOCH, MATCH_SEED).map_err(local_error)?
+    } else {
+        while !matches!(match_.phase(), LocalMatchPhase::Started(_)) {
+            match_
+                .poll(now(start), Duration::from_millis(10))
+                .map_err(local_error)?;
+            match_.session_mut().drain_events();
+            if start.elapsed() > Duration::from_secs(30) {
+                eprintln!("timed out waiting for match start");
+                std::process::exit(1);
+            }
+        }
+        let LocalMatchPhase::Started(started) = match_.phase() else {
+            unreachable!()
+        };
+        started
+    };
+    println!(
+        r#"{{"event":"match_started","from":{},"epoch":{},"seed":{}}}"#,
+        started.from, started.epoch, started.seed
+    );
+
+    // 4. lockstep turn loop. The payload is a real CheckSumsCommand (opcode
     //    0x39, 65 bytes) so the bytes on the wire are a shape the engine's own
     //    decoder accepts; the values are ours.
-    let slot = s.players().iter().position(|p| p.is_local).unwrap_or(0) as i8;
+    let slot = match_
+        .session()
+        .players()
+        .iter()
+        .position(|p| p.is_local)
+        .unwrap_or(0) as i8;
     let mut hash: u64 = 0;
     for stamp in 0..turns {
         let mut payload = vec![0x39u8];
         for ch in 0..16u32 {
             payload.extend_from_slice(&(stamp.wrapping_mul(31).wrapping_add(ch)).to_le_bytes());
         }
-        s.send_command_package(stamp, slot, &payload)?;
+        match_
+            .send_turn(stamp, slot, &payload)
+            .map_err(local_error)?;
 
         let t0 = Instant::now();
-        while !s.turn_ready(stamp) {
-            s.poll(now(start), Duration::from_millis(5))?;
-            s.drain_events();
+        while !match_.turn_ready(stamp) {
+            match_
+                .poll(now(start), Duration::from_millis(5))
+                .map_err(local_error)?;
+            match_.session_mut().drain_events();
             if t0.elapsed() > Duration::from_secs(20) {
                 eprintln!("turn {stamp}: timed out waiting for packages");
                 std::process::exit(1);
             }
         }
-        let pkgs = s.take_turn(stamp);
+        let pkgs = match_.take_turn(stamp);
         // Fold every package into a running hash. Two peers that agree on the
         // turn stream end on the same number; that is the whole assertion.
         for p in &pkgs {

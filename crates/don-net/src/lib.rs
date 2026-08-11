@@ -34,6 +34,7 @@ pub mod evidence;
 pub mod extension;
 pub mod internal;
 pub mod lobby;
+pub mod local_match;
 pub mod lockstep;
 pub mod msg;
 pub mod obfuscate;
@@ -51,9 +52,10 @@ pub use evidence::{
 };
 pub use extension::{
     game_keys_are_wire_equivalent, DonExtension, ExtensionError, GameKeySource, DON_EXT_BASE,
-    DON_EXT_GAMEKEY, GAME_KEY_WIRE_MASK,
+    DON_EXT_GAMEKEY, DON_EXT_MATCH_START, GAME_KEY_WIRE_MASK,
 };
 pub use internal::{InternalError, InternalPacket};
+pub use local_match::{LocalMatch, LocalMatchError, LocalMatchPhase};
 pub use lockstep::{
     ChecksumDifference, EpochCause, LockstepError, LockstepEvidence, LockstepRunner,
     LockstepStatus, PackageEvidence, SubmitOutcome, TurnEvidence, TurnTimeoutEvidence,
@@ -63,7 +65,8 @@ pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
 pub use retail::{decode_retail_checksum_package, DecodedRetailChecksum, RetailChecksumError};
 pub use session::{
-    AnnouncedGameKey, Event, Player, Role, Session, SetupRefusal, TurnPackage,
+    AnnouncedGameKey, AnnouncedMatchStart, Event, MatchStartError, Player, Role, Session,
+    SetupRefusal, TurnPackage,
 };
 pub use setup::{
     GameConnectionData, GameConnectionDataFull, PlayerConnectionData, PlayerSlotPod,
