@@ -35,6 +35,154 @@ use crate::systems::unit_come_out_full_frontier as full;
 use crate::systems::unit_come_out_gather_selection_frontier as gather_selection;
 use crate::systems::unit_come_out_release_tail_frontier as release_tail;
 
+/// Canonical identity carried across the four independently recovered planner dialects.
+///
+/// The retail body keeps one `(who, o)` pair alive across every tranche.  Keeping the
+/// conversions here makes an adapter prove that it did not narrow, re-owner, or otherwise
+/// reinterpret that pair at a source-file boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CanonicalObjectIdentity {
+    pub owner: i8,
+    pub object: i16,
+}
+
+impl CanonicalObjectIdentity {
+    pub const fn new(owner: i8, object: i16) -> Self {
+        Self { owner, object }
+    }
+
+    pub const fn valid(self) -> bool {
+        self.owner >= 0 && self.object >= 0
+    }
+}
+
+/// Canonical world coordinate carried across the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// Canonical game-random image carried across the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalRngStamp {
+    pub seed: u32,
+    pub draws: u64,
+}
+
+macro_rules! identity_dialect {
+    ($module:ident) => {
+        impl From<$module::ObjectIdentity> for CanonicalObjectIdentity {
+            fn from(value: $module::ObjectIdentity) -> Self {
+                Self::new(value.owner, value.object)
+            }
+        }
+
+        impl From<CanonicalObjectIdentity> for $module::ObjectIdentity {
+            fn from(value: CanonicalObjectIdentity) -> Self {
+                Self::new(value.owner, value.object)
+            }
+        }
+    };
+}
+
+macro_rules! point_dialect {
+    ($module:ident) => {
+        impl From<$module::Point> for CanonicalPoint {
+            fn from(value: $module::Point) -> Self {
+                Self {
+                    x: value.x,
+                    y: value.y,
+                }
+            }
+        }
+
+        impl From<CanonicalPoint> for $module::Point {
+            fn from(value: CanonicalPoint) -> Self {
+                Self {
+                    x: value.x,
+                    y: value.y,
+                }
+            }
+        }
+    };
+}
+
+macro_rules! rng_dialect {
+    ($module:ident) => {
+        impl From<$module::RngStamp> for CanonicalRngStamp {
+            fn from(value: $module::RngStamp) -> Self {
+                Self {
+                    seed: value.seed,
+                    draws: value.draws,
+                }
+            }
+        }
+
+        impl From<CanonicalRngStamp> for $module::RngStamp {
+            fn from(value: CanonicalRngStamp) -> Self {
+                Self {
+                    seed: value.seed,
+                    draws: value.draws,
+                }
+            }
+        }
+    };
+}
+
+identity_dialect!(full);
+identity_dialect!(common_release);
+identity_dialect!(gather_selection);
+identity_dialect!(release_tail);
+point_dialect!(full);
+point_dialect!(common_release);
+point_dialect!(gather_selection);
+point_dialect!(release_tail);
+rng_dialect!(full);
+rng_dialect!(common_release);
+rng_dialect!(gather_selection);
+rng_dialect!(release_tail);
+
+/// Lossless first-to-second-tranche join.
+pub fn common_continuation(
+    value: full::UnitComeOutContinuation,
+) -> common_release::PrefixContinuation {
+    common_release::PrefixContinuation {
+        resume_va: value.resume_va,
+        actor: CanonicalObjectIdentity::from(value.actor).into(),
+        point: CanonicalPoint::from(value.point).into(),
+        z: value.z,
+        direct_container: value
+            .direct_container
+            .map(CanonicalObjectIdentity::from)
+            .map(Into::into),
+        placement_container: value
+            .placement_container
+            .map(CanonicalObjectIdentity::from)
+            .map(Into::into),
+        container_gpiece: value.container_gpiece,
+        rng: CanonicalRngStamp::from(value.rng).into(),
+    }
+}
+
+/// A common-release GatherList continuation converted without changing its actor, container,
+/// scratch Group, point, or RNG image.  A missing direct container cannot enter the retail
+/// gather loop and therefore fails closed.
+pub fn gather_input(
+    value: common_release::CommonReleaseContinuation,
+) -> Option<gather_selection::GatherSelectionInput> {
+    let container = value.prefix.direct_container?;
+    Some(gather_selection::GatherSelectionInput {
+        resume_va: value.resume_va,
+        actor: CanonicalObjectIdentity::from(value.prefix.actor).into(),
+        actor_point: CanonicalPoint::from(value.prefix.point).into(),
+        direct_container: CanonicalObjectIdentity::from(container).into(),
+        container_gpiece: value.prefix.container_gpiece,
+        scratch_group: value.scratch_group,
+        rng: CanonicalRngStamp::from(value.rng).into(),
+    })
+}
+
 /// `Unit::come_out` `0x00617C10` [PDB `S_GPROC32`].
 pub const UNIT_COME_OUT_VA: u32 = 0x0061_7c10;
 /// `int Unit::come_out(int)` — 9,925 bytes [PDB `S_GPROC32` size].

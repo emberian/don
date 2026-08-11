@@ -1,25 +1,11 @@
 //! Atomic adapter pins for command rows 46 through 49.
 //!
-//! The integration module remains path-imported so this lane does not touch the shared
-//! systems module map or dispatcher.
+//! The subject is now registered under the production command owner; these pins exercise that
+//! exact module so receipt types cannot diverge across a historical path-imported duplicate.
 
-// The path-imported subject uses its eventual library paths.  Mirror only those two roots
-// here so the shared module map can remain untouched in this lane.
-mod objects {
-    pub use don_sim::objects::*;
+mod subject {
+    pub use don_sim::command::direct_entity_command_integration::*;
 }
-
-mod systems {
-    pub mod economy {
-        pub use don_sim::systems::economy::*;
-    }
-    pub mod production {
-        pub use don_sim::systems::production::*;
-    }
-}
-
-#[path = "../src/systems/direct_entity_command_integration.rs"]
-mod subject;
 
 use don_sim::systems::economy::{
     EconRules, LeaderEcon, MarketPriceGates, MarketState, RES_FOOD, RES_TIMBER, RES_WEALTH,

@@ -5,10 +5,10 @@
 //! after every required fact is preflighted, this module calls the existing
 //! [`economy::do_buy`] / [`economy::do_sell`] primitives and returns a recomputable
 //! before/after receipt. Opcode 48's Unit receiver can compose the complete Carrier
-//! implicit-queue transaction into the same receipt. Opcode 49 can additionally bind the
-//! complete `Unit::action_come_out` wrapper preflight into the receipt without publishing its
-//! state-writing prefix; the mandatory general `Unit::come_out` transaction remains an explicit
-//! open-tail handoff.
+//! implicit-queue transaction into the same receipt. Opcode 49 can bind the complete
+//! `Unit::action_come_out` wrapper preflight and, for the admitted canonical cohort, close its
+//! mandatory general `Unit::come_out` transaction. Every other general-release branch remains an
+//! explicit open-tail handoff.
 
 #[path = "build_action_unqueue.rs"]
 pub mod build_action_unqueue;
@@ -34,6 +34,7 @@ use self::unit_action_come_out::{
     preflight_still_valid, preflight_unit_action_come_out, ObjectIdentity,
     UnitActionComeOutPreflight,
 };
+use crate::command::unit_come_out_runtime::UnitComeOutTransactionReceipt;
 use crate::objects::{BANDED_SLOTS, OWNER_SLOTS};
 use crate::systems::economy::{
     self, EconRules, LeaderEcon, MarketPriceGates, MarketState, TradeResult, NUM_RESOURCES,
@@ -508,6 +509,12 @@ pub enum DirectEntityDisposition {
         target: DirectEntityIdentity,
         selector: i32,
     },
+    /// The action wrapper and all four general `Unit::come_out` tranches were bound to a
+    /// recomputable canonical-host proof. The caller owns the corresponding atomic commit.
+    CompleteUnitActionComeOut {
+        target: DirectEntityIdentity,
+        argument: i32,
+    },
     OpenTail(DirectEntityOpenTail),
 }
 
@@ -539,6 +546,9 @@ pub struct DirectEntityCommandTransactionReceipt {
     /// recomputed and bound to the addressed Unit identity. This is a preflight receipt, not
     /// permission to publish its writes before the general `Unit::come_out` tail succeeds.
     pub unit_action_come_out: Option<UnitActionComeOutPreflight>,
+    /// Present only after the wrapper and complete four-tranche general release have been bound
+    /// to the registered canonical host's recomputable before/after proof.
+    pub unit_come_out: Option<UnitComeOutTransactionReceipt>,
 }
 
 impl DirectEntityCommandTransactionReceipt {
@@ -555,6 +565,7 @@ impl DirectEntityCommandTransactionReceipt {
             unit_unqueue: None,
             build_unqueue: None,
             unit_action_come_out: None,
+            unit_come_out: None,
         }
     }
 
@@ -573,6 +584,7 @@ impl DirectEntityCommandTransactionReceipt {
                     && self.unit_unqueue.is_none()
                     && self.build_unqueue.is_none()
                     && self.unit_action_come_out.is_none()
+                    && self.unit_come_out.is_none()
             }
             DirectEntityTransactionStatus::Complete | DirectEntityTransactionStatus::OpenTail => {
                 let (Some(frame), Some(target)) = (self.frame, self.target) else {
@@ -582,22 +594,23 @@ impl DirectEntityCommandTransactionReceipt {
                     self.unit_unqueue.as_ref(),
                     self.build_unqueue.as_ref(),
                     self.unit_action_come_out.as_ref(),
+                    self.unit_come_out.as_ref(),
                 ) {
-                    (Some(receiver), None, None) => complete_carrier_unit_unqueue_command(
+                    (Some(receiver), None, None, None) => complete_carrier_unit_unqueue_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                         receiver.clone(),
                     ),
-                    (None, Some(receiver), None) => complete_build_action_unqueue_command(
+                    (None, Some(receiver), None, None) => complete_build_action_unqueue_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                         receiver.clone(),
                     ),
-                    (None, None, Some(preflight)) => {
+                    (None, None, Some(preflight), None) => {
                         preflight_opcode49_unit_action_come_out_command(
                             expected,
                             frame,
@@ -606,7 +619,14 @@ impl DirectEntityCommandTransactionReceipt {
                             preflight.clone(),
                         )
                     }
-                    (None, None, None) => classify_direct_entity_command(
+                    (None, None, None, Some(receiver)) => complete_unit_action_come_out_command(
+                        expected,
+                        frame,
+                        Some(target),
+                        self.type_facts,
+                        receiver.clone(),
+                    ),
+                    (None, None, None, None) => classify_direct_entity_command(
                         expected,
                         frame,
                         Some(target),
@@ -675,6 +695,7 @@ pub fn classify_direct_entity_command(
             unit_unqueue: None,
             build_unqueue: None,
             unit_action_come_out: None,
+            unit_come_out: None,
         };
     }
 
@@ -727,6 +748,7 @@ pub fn classify_direct_entity_command(
         unit_unqueue: None,
         build_unqueue: None,
         unit_action_come_out: None,
+        unit_come_out: None,
     }
 }
 
@@ -866,6 +888,49 @@ pub fn preflight_opcode49_unit_action_come_out_command(
             },
         )),
         unit_action_come_out: Some(preflight),
+        unit_come_out: None,
+        ..prefix
+    }
+}
+
+/// Bind opcode 49 to the canonical host's wrapper plus four-tranche before/after proof.
+///
+/// As with the opcode-48 binders above, the caller still owns the live atomic commit. A malformed
+/// proof cannot manufacture a complete command receipt.
+pub fn complete_unit_action_come_out_command(
+    request: DirectEntityCommandRequest,
+    frame: i32,
+    target: Option<DirectEntityTargetFacts>,
+    type_facts: Option<DirectEntityTypeFacts>,
+    receiver: UnitComeOutTransactionReceipt,
+) -> DirectEntityCommandTransactionReceipt {
+    let prefix = preflight_opcode49_unit_action_come_out_command(
+        request,
+        frame,
+        target,
+        type_facts,
+        receiver.wrapper.clone(),
+    );
+    let Some(DirectEntityDisposition::OpenTail(
+        DirectEntityOpenTail::GeneralUnitComeOutTransaction { target, argument },
+    )) = prefix.disposition
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if argument != 0
+        || receiver.payload.actor.owner != target.who as i8
+        || receiver.payload.actor.object != target.object_index
+        || receiver.payload.uid != target.uid
+        || receiver.payload.type_index != target.type_index
+        || !receiver.validates()
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    DirectEntityCommandTransactionReceipt {
+        status: DirectEntityTransactionStatus::Complete,
+        disposition: Some(DirectEntityDisposition::CompleteUnitActionComeOut { target, argument }),
+        unit_action_come_out: None,
+        unit_come_out: Some(receiver),
         ..prefix
     }
 }

@@ -164,6 +164,8 @@ pub mod setup_diplomacy;
 pub mod tail_command_transactions;
 #[path = "systems/unimplemented_group_command_plans.rs"]
 pub mod unimplemented_group_command_plans;
+#[path = "systems/unit_come_out_runtime.rs"]
+pub mod unit_come_out_runtime;
 
 use self::diplomacy_command_plans::{
     plan_diplomacy_command, DiplomacyCommandReceipt, DiplomacyCommandRequest,
@@ -1341,8 +1343,8 @@ pub trait Fleet {
     ///
     /// Buy and sell hosts may return a validated complete economy transaction. The canonical
     /// production host can complete either active Unit/Carrier or Build unqueue receiver.
-    /// Come-out hosts may bind the complete action-wrapper preflight, but its mandatory general
-    /// release deliberately remains open.
+    /// Come-out hosts may complete the admitted canonical one-Guy/Build release cohort; every
+    /// receiver outside that proven body path retains the fail-closed default.
     fn apply_direct_entity_command_transaction(
         &mut self,
         request: DirectEntityFleetRequest,
@@ -4469,9 +4471,9 @@ impl Bridge {
     /// Rows 46 through 49 through the frozen direct market/entity transaction boundary.
     ///
     /// Market rows carry a complete deterministic economy tail. Addressed unqueue and come-out
-    /// rows use the same exact decoder and callback. Inactive/stale arms and both active unqueue
-    /// receivers can report completion. Opcode 49 may carry a validating complete action-wrapper
-    /// preflight, but its general release remains an open tail, so that static row stays red.
+    /// rows use the same exact decoder and callback. Inactive/stale arms, both active unqueue
+    /// receivers, and the admitted canonical opcode-49 cohort can report completion. Other
+    /// come-out branches remain open and keep the static row red.
     fn process_direct_entity_command(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
         let expected = match cmd.first().copied() {
             Some(46 | 47) => {

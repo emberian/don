@@ -111,6 +111,24 @@ pub struct MovementSourceStateReceipt {
     pub after: MovementSourceState,
 }
 
+/// Canonical before/after image of the spatial part of one contained `Unit::come_out`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComeOutRelocationState {
+    pub source: MovementSourceState,
+    pub point: (i32, i32),
+    pub angle: i32,
+    pub inside: (i8, i16),
+    pub guy: LiveCollisionGuy,
+    pub linked: bool,
+}
+
+/// Complete result of publishing the collision/World/Guy half of a contained release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComeOutRelocationReceipt {
+    pub before: ComeOutRelocationState,
+    pub after: ComeOutRelocationState,
+}
+
 /// Per-current-order collision fields not represented by the compact generic `Order` union.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CollisionOrderState {
@@ -321,6 +339,177 @@ impl LiveCollisionRuntime {
             linked: true,
         });
         Ok(row)
+    }
+
+    /// Attach an exact collision/Guy source for a Unit which is currently inside an object.
+    ///
+    /// Contained Units own neither a WData anchor nor collision footprints, so this variant
+    /// records the same source facts as [`Self::install`] without publishing either spatial
+    /// structure.  [`Self::release_contained_for_come_out`] is the only transition which turns
+    /// such an installation into a linked, stamped on-map source.
+    pub fn install_contained(
+        &mut self,
+        world: &World,
+        terrain: &TerrainWorld,
+        handle: Handle,
+        source: LiveCollisionSource,
+    ) -> Result<usize, LiveCollisionFault> {
+        let row = world
+            .row_of(handle)
+            .ok_or(LiveCollisionFault::RowOutOfRange(handle.id as usize))?;
+        self.ensure_rows(world.live_count() as usize);
+        if self.sources[row].is_some() {
+            return Err(LiveCollisionFault::SourceAlreadyInstalled(row));
+        }
+        if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            return Err(LiveCollisionFault::InactiveActor(row));
+        }
+        if world.units.inside_up()[row] < 0 {
+            return Err(LiveCollisionFault::OffMapActor(row));
+        }
+        if !(0..=DOMAIN_AIR).contains(&source.domain) {
+            return Err(LiveCollisionFault::InvalidDomain(source.domain));
+        }
+        if !(0..=10).contains(&source.block_radius) {
+            return Err(LiveCollisionFault::InvalidBlockRadius(source.block_radius));
+        }
+        let mark = world.units.guy_mark()[row] as i32;
+        if mark < 0 || mark as usize != source.guys.len() {
+            return Err(LiveCollisionFault::InvalidGuyCount {
+                column: mark,
+                supplied: source.guys.len(),
+            });
+        }
+        for (index, guy) in source.guys.iter().enumerate() {
+            if !(0..=10).contains(&guy.block_radius) || !terrain.valid_coord(guy.x, guy.y) {
+                return Err(LiveCollisionFault::InvalidGuyLocation(index));
+            }
+        }
+        self.sources[row] = Some(InstalledSource {
+            actor: handle,
+            state_revision: 0,
+            facts: source,
+            linked: false,
+        });
+        Ok(row)
+    }
+
+    /// Atomically publish the canonical World anchor and one-Guy collision footprint for a
+    /// contained release.
+    ///
+    /// Every fallible identity, revision, containment, formation, and destination check runs
+    /// before the first write.  The successful commit clears `inside_up`, links the actor at
+    /// the WData head, stamps its Guy, installs the new point/facing, clears movement/action,
+    /// and advances the source revision as one receipt-bearing transition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn release_contained_for_come_out(
+        &mut self,
+        world: &mut World,
+        terrain: &mut TerrainWorld,
+        actor: Handle,
+        expected_revision: u64,
+        expected_container: (i8, i16),
+        point: (i32, i32),
+        angle: i32,
+    ) -> Result<ComeOutRelocationReceipt, LiveCollisionFault> {
+        let row = world
+            .row_of(actor)
+            .ok_or(LiveCollisionFault::StaleActor(actor))?;
+        if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            return Err(LiveCollisionFault::InactiveActor(row));
+        }
+        let installed = self
+            .sources
+            .get(row)
+            .and_then(Option::as_ref)
+            .ok_or(LiveCollisionFault::MissingSource(row))?;
+        if installed.actor != actor {
+            return Err(LiveCollisionFault::ForeignSource {
+                row,
+                requested: actor,
+                installed: installed.actor,
+            });
+        }
+        if installed.state_revision != expected_revision {
+            return Err(LiveCollisionFault::StaleSourceRevision {
+                row,
+                expected: expected_revision,
+                observed: installed.state_revision,
+            });
+        }
+        let observed_container = (
+            world.units.inside_up_who()[row],
+            world.units.inside_up()[row],
+        );
+        if installed.linked
+            || observed_container != expected_container
+            || anchor_is_linked(world, terrain, row)
+        {
+            return Err(LiveCollisionFault::UnlinkedAnchor(row));
+        }
+        if installed.facts.guys.len() != 1 {
+            return Err(LiveCollisionFault::UnsupportedMovingFormation {
+                row,
+                guys: installed.facts.guys.len(),
+            });
+        }
+        if !terrain.valid_coord(point.0, point.1)
+            || installed
+                .facts
+                .invalid_tiles
+                .contains(&(movement::tile_of(point.0), movement::tile_of(point.1)))
+        {
+            return Err(LiveCollisionFault::InvalidActorLocation);
+        }
+
+        let before = ComeOutRelocationState {
+            source: installed.state(row),
+            point: (world.units.x_internal()[row], world.units.y_internal()[row]),
+            angle: world.units.angle()[row],
+            inside: observed_container,
+            guy: installed.facts.guys[0],
+            linked: false,
+        };
+
+        world.units.x_internal_mut()[row] = point.0;
+        world.units.y_internal_mut()[row] = point.1;
+        world.units.angle_mut()[row] = angle;
+        world.units.inside_up_mut()[row] = -1;
+        world.units.inside_up_who_mut()[row] = -1;
+        link_anchor(world, terrain, row)?;
+
+        let installed = self.sources[row]
+            .as_mut()
+            .expect("contained source was preflighted");
+        let guy = &mut installed.facts.guys[0];
+        collision::guy_set_new_location(
+            terrain,
+            (-1, -1),
+            point,
+            installed.facts.domain,
+            0,
+            1,
+            guy.block_radius,
+        );
+        guy.x = point.0;
+        guy.y = point.1;
+        guy.angle = angle;
+        installed.facts.moving = false;
+        installed.facts.action = OrderIndex::None as i32;
+        installed.linked = true;
+        installed.state_revision = installed.state_revision.wrapping_add(1);
+        let guy_after = *guy;
+        let source_after = installed.state(row);
+
+        let after = ComeOutRelocationState {
+            source: source_after,
+            point,
+            angle,
+            inside: (-1, -1),
+            guy: guy_after,
+            linked: true,
+        };
+        Ok(ComeOutRelocationReceipt { before, after })
     }
 
     /// Prove the object store is complete before a collision callback may run.
