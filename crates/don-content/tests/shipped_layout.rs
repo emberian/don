@@ -153,9 +153,13 @@ fn the_shipped_data_tree_round_trips() {
         let (cat, file) = classify(&path);
         assert_eq!(cat, ModCategory::Data, "{path}");
         assert_eq!(&file, n, "{path}");
-        // and the shipped path is reconstructible from (category, filename)
+        // and the shipped path is reconstructible from (category, filename).
+        // Compared case-insensitively on both sides: the shipped tree genuinely contains
+        // mixed-case names (`Cliffs.xml`, `IME.xml`, `_SBLchangelog.xml`), and retail
+        // resolves them on a case-insensitive filesystem. Lowercasing only the expectation
+        // passed while every extracted name happened to be lowercase.
         assert_eq!(
-            format!("{}{}", cat.relative_dir(), file),
+            format!("{}{}", cat.relative_dir(), file).to_ascii_lowercase(),
             path.to_ascii_lowercase()
         );
         m.declare_path(&path);
@@ -171,9 +175,11 @@ fn the_shipped_data_tree_round_trips() {
     for n in &names {
         let r = stack.resolve(&format!("data/{n}"));
         assert_eq!(r.mod_index, 1, "data/{n}");
+        // `resolve` lower-cases the whole path, which is what a case-insensitive retail
+        // filesystem does. Compare both sides lower-cased rather than only the filename.
         assert_eq!(
-            r.path,
-            format!("mods/Everything/data/{}", n.to_ascii_lowercase())
+            r.path.to_ascii_lowercase(),
+            format!("mods/Everything/data/{n}").to_ascii_lowercase()
         );
     }
     // and a file it does not declare still falls through to shipped

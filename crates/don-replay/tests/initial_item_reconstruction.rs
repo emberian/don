@@ -137,7 +137,10 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     assert_eq!(executed.style, plan.style);
     assert_eq!(
         executed.boundary.name(),
-        "terrain_groups_fill_fertile",
+        // `ron-data/tilesets.xml` is now extracted, so the tileset stage no longer aborts on
+        // a missing file and the generator runs a whole stage further: `fill_fertile`
+        // 0x006a6f90 -> `place_all` 0x006a70d0, on all 21 checksum-bearing recordings.
+        "terrain_groups_place_all",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -156,13 +159,17 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
         tile_selection.main_random_state_after
     );
     assert_ne!(continent.rng_initial, executed.inputs.seed as i32);
-    assert!(matches!(
-        executed.fertility_error.as_ref(),
-        Some(don_replay::FractalBoundaryError::Read { path, .. })
-            if path.ends_with("tilesets.xml")
-    ));
-    assert!(executed.fertility.is_none());
-    assert!(executed.fill_fertile.is_none());
+    // This used to pin a missing `ron-data/tilesets.xml`. The file is extracted now, so the
+    // fertility stage reads it and runs instead of aborting, and the generator proceeds to
+    // `TerrainGroups::place_all`. Asserting the absence of the read error is what keeps the
+    // extraction from silently regressing back into a masked boundary.
+    assert!(
+        executed.fertility_error.is_none(),
+        "tilesets.xml is extracted; fertility must not fail: {:?}",
+        executed.fertility_error
+    );
+    assert!(executed.fertility.is_some());
+    assert!(executed.fill_fertile.is_some());
     assert_eq!(continent.region_seeds.len(), 2);
     assert_eq!(continent.region_growths.len(), 2);
     assert_eq!(continent.pool_eliminations.len(), 3);
@@ -276,7 +283,10 @@ fn checksum_bearing_great_lakes_replay_runs_its_whole_style_virtual() {
     let executed = sim.initial_items.as_ref().unwrap();
     assert_eq!(
         executed.boundary.name(),
-        "terrain_groups_fill_fertile",
+        // `ron-data/tilesets.xml` is now extracted, so the tileset stage no longer aborts on
+        // a missing file and the generator runs a whole stage further: `fill_fertile`
+        // 0x006a6f90 -> `place_all` 0x006a70d0, on all 21 checksum-bearing recordings.
+        "terrain_groups_place_all",
         "continent execution error: {:?}",
         sim.initial_item_error
     );

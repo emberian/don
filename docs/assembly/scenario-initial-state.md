@@ -205,12 +205,26 @@ contains `.\conquest\temp\ctw_replay_temp_save.SVX` at ordinal 2839, a better-lo
 `CORPUS_INITIAL_SCENARIO_CHANNEL = 0x09922b90` has not been run, so nothing here claims the
 channel agrees — only that its last missing input is now local.
 
-### `tilesets.xml` was necessary but not sufficient for `world`
+### `tilesets.xml` moved the generator a stage, and moved no channel
 
-Installing it removes `ron-data/tilesets.xml: No such file or directory` from all 61 files
-of the corpus scoreboard, and **no channel moved**: `world` stays at 0 matches over 222,938
-non-trivial compares. The per-file boundary simply advances to the next unported function —
-61 files at `TerrainGroups::fill_fertile`, 6 at `Map::team_continent_partition`, 1 at
-`Map::east_indies_nonplayer_islands`. The missing file was masking that boundary, not
-gating the channel. Read any "blocked on extracting one XML" claim about `world` as
-"blocked on `fill_fertile`, which a missing file was hiding".
+Two separate things, and an earlier revision of this section conflated them.
+
+It **did** advance the generator. Counting the per-file `initial.items.boundary` across the
+corpus, before and after installing the file:
+
+```text
+before   21 terrain_groups_fill_fertile   6 map_team_continent_partition   1 east_indies …
+after    21 terrain_groups_place_all      6 map_team_continent_partition   1 east_indies …
+```
+
+All 21 checksum-bearing recordings advance a whole stage, `TerrainGroups::fill_fertile`
+`0x006a6f90` → `TerrainGroups::place_all` `0x006a70d0`, and the 28 `No such file` reads
+disappear. The fertility stage now actually runs rather than aborting.
+
+It moved **no channel**: `world` stays at 0 matches over 222,938 non-trivial compares,
+because `place_all` is itself unported. So the file was a real prerequisite, not merely a
+mask — but a channel needs the next function, not the next file.
+
+(Counting boundary *substrings* in the record rather than the `boundary` field says nothing
+moved, because the name of the reached stage and the name of the next one both appear. Read the
+field.)
