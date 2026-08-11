@@ -502,7 +502,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         .region_growths
         .iter()
         .all(|growth| growth.completed));
-    assert_eq!(eastwest.starts_added, 1);
+    assert_eq!(eastwest.starts_added, 4);
     match &eastwest.stop {
         ContinentStop::AddStartingLocation {
             primitive_va,
@@ -513,6 +513,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             call,
             selector,
             mutation,
+            remaining,
         } => {
             assert_eq!(
                 *primitive_va,
@@ -535,10 +536,17 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 selector.random_state_before,
                 eastwest.region_growths.last().unwrap().rng_final
             );
-            assert_eq!(selector.random_state_after, eastwest.rng_final);
+            assert_eq!(selector.random_state_after, remaining.random_state_before);
+            assert_eq!(remaining.random_state_after, eastwest.rng_final);
             assert_eq!(selector.draws.len(), 1);
             assert_eq!(selector.accepted_pass, Some(1));
-            assert_eq!(*next_va, mutation.caller_return_va);
+            assert_eq!(*next_va, don_replay::continent::MAP_CHECK_PLAYER_LAND_VA);
+            assert_eq!(remaining.entry_va, mutation.caller_return_va);
+            assert_eq!(remaining.iterations.len(), 3);
+            assert!(remaining
+                .iterations
+                .iter()
+                .all(|iteration| iteration.mutation.is_some()));
             assert_eq!(mutation.returned_start_index, 0);
             assert_eq!(mutation.input, selector.output.unwrap());
             assert_eq!(mutation.arrays_after.start_x.length, 1);
@@ -589,7 +597,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x9144_6b10, 0x4f28_bf8c, 0x823b_55f6)
+        (0xd293_cb35, 0xfca6_71f7, 0x4f28_bf8c, 0x823b_55f6)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

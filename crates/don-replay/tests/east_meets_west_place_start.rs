@@ -88,7 +88,12 @@ fn both_style19_headers_execute_the_first_exact_selector() {
             &mut map.generation_regions,
         )
         .unwrap();
-        let ContinentStop::AddStartingLocation { selector: got, .. } = &prefix.stop else {
+        let ContinentStop::AddStartingLocation {
+            selector: got,
+            remaining,
+            ..
+        } = &prefix.stop
+        else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
         };
         assert_eq!(got.primitive_va, MAP_PLACE_START_IN_REGION_VA, "{name}");
@@ -138,7 +143,11 @@ fn both_style19_headers_execute_the_first_exact_selector() {
         assert_eq!(got.draws[0].pass, 1, "{name}");
         assert_eq!(got.draws[0].call_va, MAP_PLACE_START_RNG_CALL_VA, "{name}");
         assert_eq!(got.accepted_pass, Some(1), "{name}");
-        assert_eq!(prefix.rng_final, got.random_state_after, "{name}");
+        assert_eq!(
+            remaining.random_state_before, got.random_state_after,
+            "{name}"
+        );
+        assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             prefix.direct_rng_sites.last(),
             Some(&MAP_PLACE_START_RNG_CALL_VA)

@@ -63,7 +63,8 @@ fn continent_implementation_digest() -> [u8; 32] {
             + include_bytes!("edge_canals.rs").len()
             + include_bytes!("east_meets_west_start_boundary.rs").len()
             + include_bytes!("east_meets_west_place_start.rs").len()
-            + include_bytes!("east_meets_west_add_start.rs").len(),
+            + include_bytes!("east_meets_west_add_start.rs").len()
+            + include_bytes!("east_meets_west_remaining_starts.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
@@ -73,6 +74,7 @@ fn continent_implementation_digest() -> [u8; 32] {
     source.extend_from_slice(include_bytes!("east_meets_west_start_boundary.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_place_start.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_add_start.rs"));
+    source.extend_from_slice(include_bytes!("east_meets_west_remaining_starts.rs"));
     sha256(&source)
 }
 

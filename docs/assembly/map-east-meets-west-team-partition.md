@@ -2,12 +2,12 @@
 
 ## Result and fidelity boundary
 
-This tranche closes `Map::fill_cont` at `0x0068a960` and continues
+This chain closes `Map::fill_cont` at `0x0068a960` and continues
 `MapEastMeetsWest::make_continents` through the two caller-owned angle draws,
-region seeding, both `Map::grow_region` passes, the exact centroid loop, and
-`Map::eliminate_pools(EntireWorld, dead)`. It stops at
-`Map::eliminate_edge_canals` `0x0068b360`. It does not synthesize starting
-locations or any later draw.
+region seeding, both `Map::grow_region` passes, the exact centroid loop,
+pool/edge cleanup, and all active-player start selectors and World appends. It
+stops before the post-loop `Map::check_player_land` call at `0x00697492`;
+the next body is `0x0068ef00`.
 
 Every address and instruction claim below is **measured** from
 `ron-bin/riseofnations.exe` (SHA-256
@@ -118,9 +118,11 @@ Each growth's dynamic RNG sites are appended in execution order by the existing
 `RetryGeneration`; this bounded call does not pretend it executed the caller's
 whole-pass retry loop. The exact selector success path executes and receipts
 `AddStartingLocation { primitive_va: 0x006b2de0, caller_va: 0x00697461,
-next_va: 0x00697466, ... }`
+next_va: 0x0068ef00, ... }`
 with the complete centroid, pool, edge-canal, call-argument and selector
-receipts retained before the stop. The edge body has no RNG site. Caller setup through the first call is
+receipts retained before the stop. Its remaining-loop receipt also retains each
+later call, selector and World append plus the unexecuted post-loop call site
+`0x00697492`. The edge body has no RNG site. Caller setup through each call is
 also exact: it resolves the post-rebuild region, computes the centroid angle,
 population spacing, radius/search distance and both integer arguments. When
 the selected continent population is one, it executes and receipts the direct
@@ -130,7 +132,7 @@ two and execute no draw there.
 For the 100×100, four-player fixture the frozen prefix has two regions of area
 1,388, growth targets `(1,1388)`, `(2,1388)`, `(1,2776)`, `(2,2776)`, and max
 distance 27. Before/after World channel values are `0xd293cb35` and
-`0x91446b10`; the isolated WData values are `0x4f28bf8c` and `0x823b55f6`.
+`0xfca671f7`; the isolated WData values are `0x4f28bf8c` and `0x823b55f6`.
 StartArrays and WData are the changed checksum sections. These are regression
 outputs of the binary-derived schedule, not values fitted to any recording.
 
@@ -154,13 +156,14 @@ The surgical `initial.rs` mapping names the new
 `map_team_continent_add_start` boundary. A selector zero return instead names
 `map_team_continent_start_fallback` at `0x00697003`.
 
-The first selector and first 570-byte World append are now represented; both
-real headers succeed on pass 1 and append one start. The remaining tail begins
-at caller return `0x00697466`, before stack bookkeeping or another player
-iteration. No later start mutation is inferred, and this work makes no retail
-World checksum-match claim. The exact centroid, edge, selector and append
+All four active selectors and 570-byte World appends are now represented; both
+real headers succeed on pass 1 for all four starts. The remaining tail begins
+at the unexecuted post-loop `Map::check_player_land` body `0x0068ef00`. No
+later mutation is inferred, and this work makes no retail World checksum-match
+claim. The exact centroid, edge, selector and append
 bodies are documented in
 `docs/assembly/map-find-region-centroid.md` and
 `docs/assembly/map-eliminate-edge-canals.md`,
-`docs/assembly/map-place-start-in-region-replay.md`, and
-`docs/assembly/world-add-starting-location-replay.md`.
+`docs/assembly/map-place-start-in-region-replay.md`,
+`docs/assembly/world-add-starting-location-replay.md`, and
+`docs/assembly/east-meets-west-remaining-starts-replay.md`.

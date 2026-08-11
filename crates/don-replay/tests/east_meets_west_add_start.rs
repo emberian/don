@@ -72,6 +72,7 @@ fn both_style19_headers_execute_the_first_exact_start_append() {
             caller_va,
             selector,
             mutation: got,
+            remaining,
             ..
         } = &prefix.stop
         else {
@@ -144,10 +145,26 @@ fn both_style19_headers_execute_the_first_exact_start_append() {
         ] {
             assert_eq!((state.capacity, state.increment, state.flags), (4, -1, 0));
         }
-        assert_eq!(map.world.start_x.items, [got.input.0], "{name}");
-        assert_eq!(map.world.start_y.items, [got.input.1], "{name}");
-        assert_eq!(map.world.start_city_x.items, got.appended_city_x, "{name}");
-        assert_eq!(map.world.start_city_y.items, got.appended_city_y, "{name}");
+        assert_eq!(
+            map.world.start_x.items.first(),
+            Some(&got.input.0),
+            "{name}"
+        );
+        assert_eq!(
+            map.world.start_y.items.first(),
+            Some(&got.input.1),
+            "{name}"
+        );
+        assert_eq!(
+            &map.world.start_city_x.items[..4],
+            &got.appended_city_x,
+            "{name}"
+        );
+        assert_eq!(
+            &map.world.start_city_y.items[..4],
+            &got.appended_city_y,
+            "{name}"
+        );
         for write in got.occupancy_writes {
             assert_ne!(write.mask, 0, "{name}");
             assert_eq!(write.byte_after, write.byte_before | write.mask, "{name}");
@@ -188,7 +205,11 @@ fn both_style19_headers_execute_the_first_exact_start_append() {
             (expected.1, expected.2, 0x0010_0001, expected.3),
             "{name}"
         );
-        assert_eq!(prefix.rng_final, selector.random_state_after, "{name}");
+        assert_eq!(
+            remaining.random_state_before, selector.random_state_after,
+            "{name}"
+        );
+        assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
     }
 }
 

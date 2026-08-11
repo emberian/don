@@ -215,6 +215,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             call,
             selector,
             mutation,
+            remaining,
         } = &prefix.stop
         else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
@@ -319,8 +320,17 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             prefix.region_growths.last().unwrap().rng_final,
             "edge and first-call setup must not advance the main RNG: {name}"
         );
-        assert_eq!(prefix.rng_final, selector.random_state_after, "{name}");
-        assert_eq!(*next_va, mutation.caller_return_va, "{name}");
+        assert_eq!(
+            remaining.random_state_before, selector.random_state_after,
+            "{name}"
+        );
+        assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
+        assert_eq!(
+            *next_va,
+            don_replay::continent::MAP_CHECK_PLAYER_LAND_VA,
+            "{name}"
+        );
+        assert_eq!(remaining.entry_va, mutation.caller_return_va, "{name}");
         assert_eq!(mutation.returned_start_index, 0, "{name}");
         assert_eq!(mutation.input, selector.output.unwrap(), "{name}");
     }

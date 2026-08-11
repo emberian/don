@@ -31,11 +31,12 @@ capacity 0 and increment -1, so this first call grows every array to capacity
 4 exactly as the already-oracle-backed sim writer does.
 
 East Meets West calls the body at `0x00697461`. It returns at `0x00697466`.
-The following instructions only store X and Y in caller stack arrays
+The following instructions store X and Y in caller stack arrays
 (`0x0069746c`, `0x00697473`), increment stack-local counters, and jump at
-`0x0069747f` to the player-loop head `0x00696d28`. This tranche freezes at the
-return before that bookkeeping. It does not select another player, execute a
-second selector, or reach any post-loop mutator.
+`0x0069747f` to the player-loop head `0x00696d28`. The continuation now
+executes that bookkeeping and the same exact writer for every remaining active
+slot. It freezes before the post-loop `Map::check_player_land` call at
+`0x00697492` / callee `0x0068ef00`.
 
 ## Frozen style-19 receipts
 
@@ -58,9 +59,11 @@ writer.
 
 ## Exact residual
 
-Success is frozen at caller return `0x00697466`. The later stack bookkeeping
-and data-dependent player loop are disassembled facts only, not executed state.
-No second-player or post-loop mutation is claimed.
+The first append receipt remains independently frozen at caller return
+`0x00697466`. Its owner continuation, documented in
+`docs/assembly/east-meets-west-remaining-starts-replay.md`, now executes all
+remaining active-player selectors and appends and freezes before
+`Map::check_player_land`. No post-loop mutation is claimed.
 
 ## Validation
 
@@ -68,8 +71,8 @@ No second-player or post-loop mutation is claimed.
 - local selector/edge/continent/centroid integration suites: 15/15;
 - local reconstruction/owner-transition suites: 6/6;
 - local full-corpus localizer: coherent owner ledgers 21/21, same-group peer
-  comparisons 265,619/265,619, and the exact measured census is 13,119,236
-  walked / 7,916,784 owned / 5,202,452 unknown bytes;
+  comparisons 265,619/265,619, and the exact measured census is 13,119,476
+  walked / 7,917,024 owned / 5,202,452 unknown bytes;
 - Persvati clean-HEAD overlay compile
   `replay-add-start-check-v2-20260811T204209Z-29161-25203-90ecb6faccea`;
 - Persvati clean-HEAD overlay synthetic suite

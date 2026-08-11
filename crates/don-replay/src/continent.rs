@@ -12,6 +12,8 @@
 mod east_indies_tail;
 #[path = "east_meets_west_add_start.rs"]
 mod east_meets_west_add_start;
+#[path = "east_meets_west_remaining_starts.rs"]
+mod east_meets_west_remaining_starts;
 #[path = "team_continent_partition.rs"]
 mod team_continent_partition;
 
@@ -27,6 +29,13 @@ pub use east_indies_tail::{
 pub use east_meets_west_add_start::{
     EastMeetsWestAddStartError, EastMeetsWestAddStartInput, EastMeetsWestAddStartReceipt,
     StartArrayState, StartArraysState, StartCityOccupancyWrite,
+};
+
+pub use east_meets_west_remaining_starts::{
+    execute_remaining_active_starts, EastMeetsWestRemainingStartIteration,
+    EastMeetsWestRemainingStartsError, EastMeetsWestRemainingStartsNext,
+    EastMeetsWestRemainingStartsReceipt, EAST_MEETS_WEST_CHECK_PLAYER_LAND_CALL_VA,
+    EAST_MEETS_WEST_REMAINING_STARTS_ENTRY_VA,
 };
 
 pub use team_continent_partition::{
@@ -170,8 +179,9 @@ pub enum ContinentStop {
         edge_canals: EliminateEdgeCanalsReceipt,
         call: EastMeetsWestPlaceStartBoundary,
     },
-    /// The first selector returned success and the exact World append completed.
-    /// Execution is frozen at the caller return before its stack bookkeeping.
+    /// Every active selector through the native player loop returned success
+    /// and its exact World append completed. Execution is frozen before the
+    /// post-loop `Map::check_player_land` call.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -181,15 +191,19 @@ pub enum ContinentStop {
         call: EastMeetsWestPlaceStartBoundary,
         selector: PlaceStartSelectorReceipt,
         mutation: EastMeetsWestAddStartReceipt,
+        remaining: EastMeetsWestRemainingStartsReceipt,
     },
-    /// The first selector exhausted both passes and returned zero. The
-    /// style-specific caller fallback is deliberately not inferred here.
+    /// One selector exhausted both passes and returned zero. When it was a
+    /// later active player, the successfully appended first start and the
+    /// exact intervening loop receipt remain attached.
     EastMeetsWestStartFallback {
         next_va: u32,
         centroids: EastMeetsWestCentroidReceipt,
         edge_canals: EliminateEdgeCanalsReceipt,
         call: EastMeetsWestPlaceStartBoundary,
         selector: PlaceStartSelectorReceipt,
+        first_mutation: Option<EastMeetsWestAddStartReceipt>,
+        remaining: Option<EastMeetsWestRemainingStartsReceipt>,
     },
 }
 
@@ -282,6 +296,7 @@ pub enum ContinentError {
     StartBoundary(EastMeetsWestStartBoundaryError),
     PlaceStartSelector(PlaceStartSelectorError),
     AddStartingLocation(EastMeetsWestAddStartError),
+    RemainingStarts(EastMeetsWestRemainingStartsError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1480,19 +1495,55 @@ fn east_meets_west(
                 mutation.caller_return_va,
                 EAST_MEETS_WEST_ADD_START_RETURN_VA
             );
-            (
-                ContinentStop::AddStartingLocation {
-                    primitive_va,
-                    caller_va,
-                    next_va: mutation.caller_return_va,
-                    centroids,
-                    edge_canals,
-                    call: place_start,
-                    selector,
-                    mutation,
-                },
-                1,
+            let remaining = execute_remaining_active_starts(
+                inputs,
+                world,
+                regions,
+                &partition,
+                &centroids,
+                &place_start,
+                &selector,
+                &mutation,
+                rng,
             )
+            .map_err(ContinentError::RemainingStarts)?;
+            sites.extend_from_slice(&remaining.direct_rng_sites);
+            let starts_added = 1 + remaining
+                .iterations
+                .iter()
+                .filter(|iteration| iteration.mutation.is_some())
+                .count();
+            match remaining.next.clone() {
+                EastMeetsWestRemainingStartsNext::CheckPlayerLand {
+                    primitive_va: next_va,
+                    ..
+                } => (
+                    ContinentStop::AddStartingLocation {
+                        primitive_va,
+                        caller_va,
+                        next_va,
+                        centroids,
+                        edge_canals,
+                        call: place_start,
+                        selector,
+                        mutation,
+                        remaining,
+                    },
+                    starts_added,
+                ),
+                EastMeetsWestRemainingStartsNext::CallerFallback { next_va, .. } => (
+                    ContinentStop::EastMeetsWestStartFallback {
+                        next_va,
+                        centroids,
+                        edge_canals,
+                        call: place_start,
+                        selector,
+                        first_mutation: Some(mutation),
+                        remaining: Some(remaining),
+                    },
+                    starts_added,
+                ),
+            }
         }
         PlaceStartSelectorNext::CallerFallback { next_va } => (
             ContinentStop::EastMeetsWestStartFallback {
@@ -1501,6 +1552,8 @@ fn east_meets_west(
                 edge_canals,
                 call: place_start,
                 selector,
+                first_mutation: None,
+                remaining: None,
             },
             0,
         ),

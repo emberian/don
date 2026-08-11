@@ -11,7 +11,7 @@ On the local corpus at 2026-08-11:
 
 | fact | result |
 |---|---:|
-| recordings opened | 61 |
+| recordings opened | 62 |
 | recordings carrying `CheckSumsCommand` `0x39` World checkpoints | 21 |
 | first checksummed turn | 2 in 21/21 |
 | first checkpoints with at least two agreeing same-group peers | 21/21 |
@@ -46,8 +46,8 @@ The executed wipe and generator then add receipt-bound last-writer ownership:
 | owned `place_all` prefix | 5 `WData`, 6 `TDataAndFog` | receipt-proven region/oil/mountain writes only |
 
 Across the 21 recordings the wipe contributes 7,564,500 written bytes, while the later
-transitions contribute 350,688 changed generator bytes: 4,034 in section 2 and 346,654 in
-section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,916,784
+transitions contribute 350,928 changed generator bytes: 4,274 in section 2 and 346,654 in
+section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,917,024
 bytes. Outside explicitly receipted writes, unchanged zeroes and unchanged neighbours remain
 unknown even when an exact routine visited them.
 
@@ -58,14 +58,14 @@ rejected transactionally.
 
 ## Section/range census
 
-The current model walks 13,119,236 bytes over the 21 checksum-bearing recordings. The owner
+The current model walks 13,119,476 bytes over the 21 checksum-bearing recordings. The owner
 snapshot now equals each current model image, so `model delta` is zero by construction; that
 column no longer stands in for missing provenance.
 
 | section | walked | exact owner | unknown |
 |---:|---:|---:|---:|
 | 1 `Dims` | 168 | 168 | 0 |
-| 2 `StartArrays` | 4,244 | 4,034 | 210 |
+| 2 `StartArrays` | 4,484 | 4,274 | 210 |
 | 3 `OilArrays` | 168 | 0 | 168 |
 | 4 `Scalars` | 2,520 | 1,428 | 1,092 |
 | 5 `WData` | 3,530,100 | 346,654 | 3,183,446 |
@@ -74,10 +74,10 @@ column no longer stands in for missing provenance.
 | 8 `Danger` | 1,344,800 | 0 | 1,344,800 |
 | 9 `CollBlocks` | 672,400 | 0 | 672,400 |
 | 10–13 terrain arrays | 336 | 0 | 336 |
-| **total** | **13,119,236** | **7,916,784** | **5,202,452** |
+| **total** | **13,119,476** | **7,917,024** | **5,202,452** |
 
 The earliest lawful unknown is section 2 offset 1 in all 21 recordings. The two
-team-continent-add-start stops now contain and own the changed bytes from their first exact
+team-continent-add-start stops now contain and own the changed bytes from all four exact
 start append. Those offsets are exclusion boundaries only, not observed retail/model
 differences.
 
@@ -88,8 +88,7 @@ bytes from `schema/replay-validation.json`:
 
 | current exact stop | recordings |
 |---|---:|
-| `place_all_mountains_add_mountain` | 13 |
-| `place_all_world_set_oil_at` | 6 |
+| `place_all_mountains_add_mountain` | 19 |
 | `map_team_continent_add_start` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
@@ -111,8 +110,8 @@ snapshot or owners.
 
 ## Ranked blockers
 
-1. **Complete the four measured generator stops.** `Mountains::add_mountain` covers 12 files,
-   `World::set_oil_at` 6, team-continent centroid 2 and East Indies islands 1.
+1. **Continue the two measured generator stops.** `Mountains::add_mountain` covers 19 files;
+   the two team-continent recordings now stop before `Map::check_player_land`.
 2. **Replace the wipe baseline with later TData and visibility producers.** The baseline is
    exact, but starting objects, terrain footprints, LOS and detector passes can overwrite it
    before the turn-2 checkpoint.
