@@ -150,6 +150,14 @@ pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
 /// `PtrArray::length`.
 pub const ARMIES_PER_PLAYER: usize = 16;
 
+/// Non-presence bytes emitted by one non-empty `PtrArray<Army>`: length, capacity,
+/// increment, masked flags, then capacity and increment a second time.
+pub const ARMIES_PTR_ARRAY_FIXED_BYTES: usize = 17;
+
+/// Exact post-`Armies::init` walk size while all 128 preallocated Armies are invalid.
+pub const INITIAL_ARMIES_WALK_BYTES: usize = NUM_LEADERS
+    * (ARMIES_PTR_ARRAY_FIXED_BYTES + ARMIES_PER_PLAYER + ARMIES_PER_PLAYER * ARMY_WALK_HEAD);
+
 /// `ArmyData::list : int[16]`, and `Army::add_group` `0x006F8C00` reports an error at
 /// `num_groups == 0x10` rather than growing.
 pub const ARMY_MAX_GROUPS: usize = 16;
@@ -1447,6 +1455,48 @@ pub struct Armies {
     pub find_dist: i32,
 }
 
+/// Refusal to synthesize erased `PtrArray` history for a noncanonical Army container.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArmiesWalkError {
+    OwnerListCount {
+        expected: usize,
+        actual: usize,
+    },
+    ArmySlotCount {
+        owner: usize,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl std::fmt::Display for ArmiesWalkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OwnerListCount { expected, actual } => write!(
+                f,
+                "Armies has {actual} owner lists; post-init authority requires {expected}"
+            ),
+            Self::ArmySlotCount {
+                owner,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Armies owner {owner} has {actual} slots; post-init authority requires {expected}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ArmiesWalkError {}
+
+/// Evidence returned by the exact save/log walk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArmiesWalkReceipt {
+    pub bytes_walked: usize,
+    pub live_armies: usize,
+}
+
 /// One non-negative global Group id reached by `Armies::leader_defeated` -> `Army::stop`.
 ///
 /// The Army slot is retained because the live adapter reports malformed membership against
@@ -2136,31 +2186,74 @@ impl Armies {
     ///
     /// Each `PtrArray<Army>` contributes its `length` (i32), its `size` (i32), its
     /// `increment` (i16 at `+0x0C`) and its `flags` byte **with bit 6 masked off**
-    /// (`and byte [esi+0x14], 0xBF`), then every element's `Army::walk_data`. That the
-    /// capacity and growth hint are hashed is the `Array<T>` property `CODEX.md` warns
-    /// about; a `Vec` with its own growth policy diverges here on identical logical state.
+    /// (`and byte [esi+0x14], 0xBF`), followed by one pointer-presence byte per slot, then
+    /// `size` and `increment` a second time, then every non-null element's
+    /// `Army::walk_data`. That duplicate container history is the retail pointer-array
+    /// walk, not redundant Rust bookkeeping.
+    ///
+    /// [`Armies::init`] fixes all authority Rust erases: eight lists, sixteen non-null
+    /// pointers each, `length == size == 16`, increment -1 and flags zero. The shape is
+    /// validated for every owner before the checksum is mutated; anything else fails
+    /// closed rather than synthesizing unknown container history.
     ///
     /// **This walk feeds save/load and `GameLog::say_checksum`, not `CheckSums::check_all`**
     /// — see the module header.
-    pub fn walk(&self, cs: &mut CheckSum) {
+    pub fn walk(&self, cs: &mut CheckSum) -> Result<ArmiesWalkReceipt, ArmiesWalkError> {
+        self.validate_walk_authority()?;
+        let length = ARMIES_PER_PLAYER as i32;
+        let increment = -1i16;
+        let presence = [1u8; ARMIES_PER_PLAYER];
+        let mut live_armies = 0usize;
         for list in &self.lists {
-            let length = list.len() as i32;
             cs.walk(&length.to_le_bytes());
-            cs.walk(&length.to_le_bytes()); // size == length after Armies::init
-            cs.walk(&(-1i16).to_le_bytes()); // increment, as Armies::init writes it
+            cs.walk(&length.to_le_bytes()); // capacity == length after Armies::init
+            cs.walk(&increment.to_le_bytes());
             cs.walk(&[0u8]); // flags & 0xBF
+            cs.walk(&presence);
+            cs.walk(&length.to_le_bytes()); // repeated capacity history
+            cs.walk(&increment.to_le_bytes());
             for a in list {
                 a.walk(cs);
+                live_armies += usize::from(a.valid != 0);
             }
         }
+        Ok(ArmiesWalkReceipt {
+            bytes_walked: INITIAL_ARMIES_WALK_BYTES + live_armies * 150,
+            live_armies,
+        })
     }
 
     /// Bytes an [`Armies::walk`] would hash, useful as a cheap structural assertion.
-    pub fn walked_len(&self) -> usize {
-        self.lists
+    pub fn walked_len(&self) -> Result<usize, ArmiesWalkError> {
+        self.validate_walk_authority()?;
+        Ok(self
+            .lists
             .iter()
-            .map(|l| 11 + l.iter().map(|a| a.walked_len()).sum::<usize>())
-            .sum()
+            .map(|list| {
+                ARMIES_PTR_ARRAY_FIXED_BYTES
+                    + ARMIES_PER_PLAYER
+                    + list.iter().map(ArmyData::walked_len).sum::<usize>()
+            })
+            .sum())
+    }
+
+    fn validate_walk_authority(&self) -> Result<(), ArmiesWalkError> {
+        if self.lists.len() != NUM_LEADERS {
+            return Err(ArmiesWalkError::OwnerListCount {
+                expected: NUM_LEADERS,
+                actual: self.lists.len(),
+            });
+        }
+        for (owner, list) in self.lists.iter().enumerate() {
+            if list.len() != ARMIES_PER_PLAYER {
+                return Err(ArmiesWalkError::ArmySlotCount {
+                    owner,
+                    expected: ARMIES_PER_PLAYER,
+                    actual: list.len(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2487,8 +2580,88 @@ mod tests {
     #[test]
     fn a_fresh_armies_walks_eight_lists_of_sixteen_dead_slots() {
         let ar = Armies::new();
-        // 8 * (4 + 4 + 2 + 1 header bytes + 16 * 2) = 8 * 43
-        assert_eq!(ar.walked_len(), 8 * (11 + 16 * 2));
+        assert_eq!(INITIAL_ARMIES_WALK_BYTES, 520);
+        assert_eq!(ar.walked_len(), Ok(INITIAL_ARMIES_WALK_BYTES));
+
+        let mut cs = CheckSum::default();
+        let receipt = ar.walk(&mut cs).unwrap();
+        assert_eq!(
+            receipt,
+            ArmiesWalkReceipt {
+                bytes_walked: 520,
+                live_armies: 0,
+            }
+        );
+
+        let mut expected = Vec::with_capacity(520);
+        for _ in 0..NUM_LEADERS {
+            expected.extend_from_slice(&16i32.to_le_bytes());
+            expected.extend_from_slice(&16i32.to_le_bytes());
+            expected.extend_from_slice(&(-1i16).to_le_bytes());
+            expected.push(0);
+            expected.extend_from_slice(&[1u8; 16]);
+            expected.extend_from_slice(&16i32.to_le_bytes());
+            expected.extend_from_slice(&(-1i16).to_le_bytes());
+            expected.extend_from_slice(&[0u8; 32]);
+        }
+        assert_eq!(expected.len(), 520);
+        let mut expected_cs = CheckSum::default();
+        expected_cs.walk(&expected);
+        assert_eq!(cs, expected_cs);
+    }
+
+    #[test]
+    fn real_armies_walk_hashes_live_state_but_not_invalid_dormant_tail() {
+        let mut ar = Armies::new();
+        let mut baseline = CheckSum::default();
+        ar.walk(&mut baseline).unwrap();
+
+        ar.lists[7][15].status = 0x1122_3344;
+        let mut dormant = CheckSum::default();
+        ar.walk(&mut dormant).unwrap();
+        assert_eq!(dormant, baseline);
+
+        ar.lists[3][4].valid = 1;
+        ar.lists[3][4].army = 4;
+        ar.lists[3][4].who = 3;
+        ar.lists[3][4].status = 0x5566_7788;
+        let mut live = CheckSum::default();
+        let receipt = ar.walk(&mut live).unwrap();
+        assert_eq!(receipt.bytes_walked, 670);
+        assert_eq!(receipt.live_armies, 1);
+        assert_eq!(ar.walked_len(), Ok(670));
+        assert_ne!(live, baseline);
+
+        ar.lists[3][4].status ^= 1;
+        let mut mutated = CheckSum::default();
+        ar.walk(&mut mutated).unwrap();
+        assert_ne!(mutated, live);
+    }
+
+    #[test]
+    fn malformed_armies_shape_refuses_before_touching_the_checksum() {
+        let mut ar = Armies::new();
+        ar.lists[5].pop();
+        let mut cs = CheckSum::default();
+        cs.walk(&[0xaa, 0x55]);
+        let before = cs;
+        assert_eq!(
+            ar.walk(&mut cs),
+            Err(ArmiesWalkError::ArmySlotCount {
+                owner: 5,
+                expected: 16,
+                actual: 15,
+            })
+        );
+        assert_eq!(cs, before);
+        assert_eq!(
+            ar.walked_len(),
+            Err(ArmiesWalkError::ArmySlotCount {
+                owner: 5,
+                expected: 16,
+                actual: 15,
+            })
+        );
     }
 
     // --- container ---------------------------------------------------------------------

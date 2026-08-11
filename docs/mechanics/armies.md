@@ -17,6 +17,14 @@ structure, targeting prologue, and command fan-out. `CheckSums::check_armies` at
 has no callers; `Armies::walk_data` is reached by save/load verification and
 `GameLog::say_checksum`, but not by `CheckSums::check_all`.
 
+The save/log walk now preserves the complete `PtrArray<Army>` stream. For each of the eight
+owners it hashes length, capacity, increment, masked flags, sixteen pointer-presence bytes,
+then capacity and increment again before recursing into the sixteen Army records. The fixed
+post-init all-invalid image is 520 bytes; every live Army adds 150 bytes. Because Rust does
+not retain the original container metadata, the walk admits only the exact `Armies::init`
+shape of eight lists with sixteen non-null preallocated pointers and fails before changing
+the checksum otherwise. This correction does not add Armies to `CheckSums::check_all`.
+
 ## What is not derived
 
 The following retail bodies are reached by the step-13 control flow and remain absent:
@@ -59,7 +67,8 @@ oracle work close.
 
 ## Verification
 
-Focused module tests cover the PDB image, save walk, container lifecycle,
+Focused module tests cover the PDB image, complete save walk and its fail-closed post-init
+authority, live-field mutation sensitivity, dormant invalid tails, container lifecycle,
 membership and aggregates, group sorting, movement/engagement tests, action fan-out,
 targeting prologue, owner gates, both phase schedules, hurry, retirement, merge, retarget and
 the production dispatcher trace. Real-tick tests pin active/vacuous dispatch, the

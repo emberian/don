@@ -45,12 +45,13 @@ An invalid Army hashes only `valid:i16`; a live Army hashes the full 152-byte `A
 image. Fresh post-init state therefore walks `8 × (33 + 16 × 2) = 520` bytes. Each live
 Army adds 150 bytes.
 
-## Shared hooks deliberately not changed
+## Shared save-walk convergence
 
-The existing `don_sim::systems::armies::Armies::walk` and `walked_len` omit the sixteen
-pointer-presence bytes and the repeated capacity/increment pair for each owner. Correcting
-those shared helpers is a narrow future Sim change; this tranche uses an independent exact
-walk so it does not collide with active mechanics work.
+`don_sim::systems::armies::Armies::walk` and `walked_len` now use the same post-init
+authority and include the sixteen pointer-presence bytes plus the repeated
+capacity/increment pair for each owner. The Sim path validates all eight lists and all
+sixteen slots before mutating the checksum, and returns a receipt recording 520 base bytes
+plus 150 bytes for every live Army.
 
 No `don-replay/src/lib.rs`, `SimBridge::PRODUCES`, `CHANNEL_SOURCE`, or replay-state hook is
 changed. Installing Armies as a replay channel would contradict the shipped call graph.
