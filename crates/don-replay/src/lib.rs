@@ -45,6 +45,7 @@
 #![forbid(unsafe_code)]
 
 pub mod armies_runtime;
+pub mod build_init_prefix;
 pub mod build_spawn_runtime;
 pub mod check_all;
 pub mod check_player_forest;
