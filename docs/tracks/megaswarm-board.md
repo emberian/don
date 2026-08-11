@@ -402,3 +402,700 @@ git rev-parse HEAD; git rev-parse origin/dev
 
 This is an orchestrator obligation (push promptly), not a lane defect. Do not commit in
 order to unblock a remote build.
+
+### lane: group-act — BLOCKED ON (transient) + FINDINGS
+
+**BLOCKED ON `op-econ`** (2026-08-11): `crates/don-sim/src/command.rs` is red mid-migration —
+`Action::run`'s `"repair"` / `"board_ship"` / `"trade"` arms call `self.action_repair`,
+`self.action_board_ship`, `self.action_trade`, none of which exist yet. That is op-econ's
+claimed hunk; I am not touching it and will re-run my gates once it compiles.
+
+**API CHANGE** (landed, additive only): `ObjectTable` gained two private fields
+(`air: air_containment_host::AirWorld`, `per_owner: usize`) plus `set_air_object` /
+`air_object` / `take_air_unmodelled_children`, and now overrides
+`Fleet::apply_recall_action_transaction`. `Bridge` gained `pub fn action_hotkey(group: i32,
+slot: i32) -> Option<HotKeyActionPlan>`. No existing signature changed; no `Fleet` impl breaks.
+New module `crates/don-sim/src/systems/air_containment_host.rs` is declared inside `command.rs`
+with `#[path]`, next to the other command-owned proof modules.
+
+**FINDINGS** (do not re-derive):
+
+- **`Group::action_hotkey` `0x006FA7A0` is opcode 34's `clear == 0` arm, inlined.**
+  `CommandPackage::process_hotkey` `0x009474D0` at `0x009475B8..0x009475F2` emits the exact
+  same three operations rather than calling the receiver. So `copy_hotkey_group` in
+  `command.rs` already *was* this action. `HotKeyGroups::copy_group` `0x00715120` takes its
+  destination in `ECX` and its source `Group*` in `EDX` and cleans no stack — the PDB
+  signature `void HotKeyGroups::copy_group(Group*, const …)` describes neither.
+- **`HotKeyGroup +0x9D0/+0x9D4/+0x9D8/+0x9DC` are `camera_x/camera_y/camera_valid/zoom`**
+  [measured, `process_hotkey`'s `clear != 0` arm `0x0094760B..0x0094766B`]. `+0x9D8 = 0` is
+  the camera invalidation, which is what `HotKeySlot::camera = None` models.
+- **`HotKeyGroupOut::update_name` `0x007152F0` (3,404 B) is presentation.** Its only store
+  destinations in the whole body are `+0x9E0` (a `String`) and `+0x9F4` (an icon selector),
+  and it returns early at `0x0071533E` unless the group owner equals the local display player
+  `[[0xC06210]+0x298]`. Not a deterministic function of shared state.
+- **`Build::clear_gather` `0x00623180` (390 B) has a second arm nobody had read.** Gated on
+  `build_masks(+0x60) & 8` *and* `ObjectData::is(0x1BF, 0)`, it scans the owner's whole unit
+  array and, for every air-domain object whose `UnitData::home_base` is this build,
+  either installs `add_strafe_order(-1, -1, o, who, 0, QUEUE_NEW, 0)` (on map) or calls
+  `Unit::clear_orders` and removes that slot from the build's `launching` array at `+0x44`
+  (off map). Ghidra types `+0x44` as `Array<ScriptWatchWin *>`; it is the launching array.
+- **`ObjectData::is` `0x00653790` is a 12-byte forwarder** to `this->[+0x18]->vtable[+0x60]`,
+  i.e. a *type* query. Call sites that compare a vtable slot against `0x00653790` are
+  devirtualizing it, not testing a class.
+- **`Group::action_eject_all` `0x00710B40` cannot be closed yet, and here is exactly why.**
+  Its bulk arm calls `Object::eject_contents(0, 0x32|-1, 0, 0|1)` — `kill_failed = 0`, a
+  *non-negative* type filter, and `reset = 0` — and its single-object arm calls
+  `Unit::come_out` directly. `docs/mechanics/step8-eject-contents.md` recovered only the
+  step-8 slice of `eject_contents` and explicitly excluded the non-negative filter selector,
+  the `reset == 0` arm, the `kill_failed == 0` arm and the whole carrier-Unit suffix; and
+  `docs/assembly/unit-come-out-full-frontier.md` has 7,201 of `Unit::come_out`'s 9,925 bytes
+  unrecovered. Whoever takes `eject_all` should take `Unit::come_out`'s common-release tail
+  first — that is the actual critical path, and it also gates `transport` and `alarm`.
+
+### op-life: API CHANGE — `tail_command_transactions` (rows 70/71/73/78/80)
+
+Additive only; every existing variant and every existing test still compiles and passes.
+
+- `TailCommandFacts` gains `PlayerLifecycle { image: Box<LifecycleImage>, game_semaphore: u8 }`.
+  `NoExternalFacts` still yields the old whole-row boundaries for rows 70/71, and
+  `UngracefulDrop { game_semaphore }` still yields the old row-80 behaviour.
+- `TailEffect` gains `PlayerLifecycle { request, plan: Box<LifecyclePlan> }`.
+- `TailOpenBoundary` gains `PlayerLifecycle { request, plan: Box<LifecyclePlan> }`.
+- `TailPresentationReceipt` gains `SystemQuitCallback`.
+- `TailPlanError` gains `Lifecycle(LifecycleError)` and
+  `SemaphoreImageMismatch { supplied, image }`.
+- New submodule `command::tail_command_transactions::lifecycle`
+  (`crates/don-sim/src/systems/player_lifecycle_tails.rs`), mounted with `#[path]` like
+  `adjacent`/`late`. `systems/mod.rs` is untouched.
+
+Amended file claim: I also own `crates/don-sim/tests/tail_command_transactions.rs` and
+`crates/don-sim/tests/command_tail_dispatch.rs` (the row-70/71/73/78/80 tests).
+
+### op-life: BLOCKED ON — `crates/don-sim/src/command.rs` is red in the shared tree
+
+`cargo check -p don-sim --lib` fails on `economy_queue` / `economy_target` not found
+(`command.rs:5633`, `5647`, `5662`, `5671`, `5722`) and earlier on
+`self.groups.get(group)` taking `usize` at `command.rs:4007`. Those are the **op-econ** and
+the hotkey/air lanes mid-migration, not mine. I did not touch `command.rs`. My module and
+tests were gated standalone (`rustc --edition 2021 --test`) and on `persvati` against pushed
+HEAD plus overlays.
+
+### op-life: FINDINGS — player lifecycle, drop control, and `Leader::action_declare`
+
+All `[measured]` by capstone on `ron-bin/riseofnations.exe`, Tier C.
+
+- **`Game+0x81C` and `Game+0x820..0x83F` are one field.** `Game::semaphore` is a
+  `BitMask<256>` at `Game+0x814`; `bits`/`size`/`flags`/`ptr` are at `+0`/`+4`/`+8`/`+0xC`.
+  So the "flags dword" at `Game+0x81C` is `BitMask::flags`, and the semaphore bit bytes start
+  at `Game+0x820`. `Player::quit` and `CommandPackage::process_quit` both use the idiom
+  "clear bit 15, and if `flags == 0` write 2" / "set bit 15 and write `flags = 0`".
+- **`GameInfo` is `Game+0x0C`**, so `GameInfo::team_style` is `Game+0x24`,
+  `GameInfo::elimination` is `Game+0x37` (this is the byte `victory_score` already reads) and
+  `GameInfo::player[8]` is `Game+0x44`, stride `0x8C`. A `.text` expression of the form
+  `[[0xC061EC] + 0x74 + i*0x8C]` is therefore `players[i].flags`, not a Game array.
+- **`Leader::action_declare(whom, treaty, no_payment, over)` `0x006DAB50` skips *both*
+  resource calls when `no_payment != 0`** — `afford_dow` at `0x006DABC7` and `pay_dow` at
+  `0x006DACEC` are the same predicate on `[ebp+0x10]`. It also **downgrades a war declaration
+  to peace** when `Game::war_allowed` `0x00594670` returns zero and `over != 0`
+  (`0x006DABFD..0x006DAC19`). Whoever closes row 38 should not re-derive this.
+- **`DropControl::process_drop` state 3 hands the leader to the AI**: it clears
+  `Player::flags & 0x14`, clears `leader_flags & 4` (`victory_score::leader_flag::HUMAN`) and
+  writes `LeaderData::multi_diff = 3`. States 1 and 2 dissolve every team
+  (`GameInfo::team_style = 0` / `1`, every present `Player::team = 8`) and declare war between
+  every ordered pair of valid leaders with `no_payment = over = 1`.
+- **The two co-tenant scans are not the same scan.** `Player::leave_game` `0x006EE050`
+  additionally requires `Player::flags & 0x04`; `DropControl::process_drop` `0x00959598` does
+  not, and it excludes the subject slot first. The difference is reachable.
+- **`Player::leave_game`'s leave reason is overridden by a running capital timer.** With
+  `(leader_flags & 3) == 3` and `LeaderData::lost_capital_timer != 0`, retail defeats as
+  `DEFEAT_CAPITAL` (1), not as resign (6) or disconnect (7).
+- **`[0x00C8CD00]` is a second 20-byte-`String` array**, distinct from the internal-string
+  array at `[[0x00C06378] + 0x10]`. Byte offsets into it (`0xF104`, `0xF0F0`, `0x56F4`,
+  `0xB518`, `0xB414`, `0xB52C`) are all exact multiples of 20; do not decode them against
+  `internal_strings.xml`.
+
+### op-life: HOOK NEEDED — no `Fleet` host owns a `Leaders`
+
+Rows 70/71/80 all terminate in `Leader::defeat` `0x006ECB00`, which
+`victory_score::Leaders::defeat` already implements completely (including the terminal queue
+and Unit cleanup and `Game::check_victory`). But `command::ObjectTable` and
+`don_env::EnvWorld` are the only `Fleet` implementors and neither owns a `Leaders`/`Match`,
+so the command bridge cannot execute the tail. The lifecycle planner emits it as a typed
+`LifecycleCall::LeaderDefeat { who, defeat_type, arg, instant }` that a receipt only accepts
+when the host acknowledges it. **Whoever owns `tick.rs`/`Sim`**: a `Fleet` impl (or a
+`tail_command_facts` / `apply_tail_command_transaction` pair) on the `Sim` side is the one
+missing piece between the wire and `victory_endgame`. I did not add it — `tick.rs` is claimed.
+
+### op-life: rows released back to `open`
+
+op-life advanced only rows 70/71/80. The other 13 claimed rows were released with a
+`cv task note` carrying the evidence I gathered so the next lane does not re-derive it:
+
+- **38 Declare** — `action_declare`'s two skip predicates and the war→peace downgrade are in
+  my FINDINGS above; `set_diplo` and `is_team` are already owned by `leader_set_diplo.rs` /
+  `setup_diplomacy.rs`. What is left is `afford_dow` `0x006D5CE0`, `pay_dow` `0x006D2B10`,
+  `ally_diplo` `0x006D0120`, `war_allowed` `0x00594670`, `say_no_war` `0x00592B00`,
+  `chat_to_local` `0x006EC520`.
+- **73 LeaderOptions** — the "cascade" is **inline in the 2,012-byte handler**
+  `0x009441D0`, not an external callee. Four blocks after the recovered
+  `0x0094422F..0x0094428F` store: a peasants-change walk over the owner Unit band calling
+  `Unit::set_stance` `0x00605310` plus the Build band writing `+0x7E`; a buildings-change walk
+  gated on `get_stance_type == 0`; flag bit 1 setting/clearing object `+0x68` bit `0x800000`
+  gated on `leader_flags & 0x700`; flag bits 3 and 4 repeating the stance walk for stance
+  types 3 and 2. Then a local-option mirror `memcpy` to `[0x00C06220]` when
+  `who == Console::who`. It needs an owner object-band image, which is why I did not attempt
+  it inside this lane.
+- **41 Accept, 48 Unqueue, 49 ComeOut, 78 ConsoleCmd, 23/26/27/28/31/35/36 group rows** — each
+  already has a substantial frontier module with a named open world tail; none is a stub, and
+  none is small. See the per-row `cv task note`.
+
+### lane: op-move — API CHANGE, FINDINGS, and one required cross-lane edit
+
+**API CHANGE (`crates/don-sim/src/command.rs`, all additive, all defaulted — nothing breaks):**
+
+- `Fleet` gains three defaulted methods: `map_tiles() -> Option<(i32, i32)>` (default `None`),
+  `scenario_ignore_orders() -> bool` (default `false`), and
+  `scenario_ignore_orders_prune_committed() -> bool` (default `false`). Existing `Fleet`
+  impls need no change; a host that connects map bounds now gets the measured destination
+  clamp, and a host that arms the scenario prune without committing it now fails closed.
+- `ObjectTable` gains two private fields and the setters `set_map_tiles(Option<(i32,i32)>)`
+  and `set_scenario_ignore_orders(armed, prune_committed)`. Constructed only through
+  `ObjectTable::new`, so no call site changes.
+- `Action::run` was split into `run` (which evaluates the entry program) and `run_entered`
+  (the existing opcode match, now taking the clamped destination). Private; no external
+  effect.
+- New module `crates/don-sim/src/command.rs -> #[path = "systems/group_action_entry.rs"]
+  pub mod group_action_entry;`. It is declared from `command.rs`, following the
+  `group_action_frontier` idiom, so **`systems/mod.rs` was not touched.**
+
+**REQUIRED CROSS-LANE EDIT (don-env lane — I did not make it):**
+`crates/don-env/tests/env_orders_formations.rs:54` must become
+
+```rust
+let expected_destinations = [(4_824, 9_624), (4_824, 9_768), (4_824, 9_912)];
+```
+
+The old `[(100, 200), (100, 203), (100, 206)]` froze the pre-fix cell indices. I verified the
+new triple by applying exactly that edit in an isolated clean-HEAD tree: don-env then goes
+2/2 green. This is the only failure the fix causes anywhere in don-sim, don-replay or
+don-env. The `don-env/src/action.rs:363` comment that masks FORM out "until that centring
+lands" can also be revisited — the centring has landed.
+
+**BLOCKED ON (transient, resolved by working around):** `crates/don-sim/src/command.rs` and
+`crates/don-sim/src/systems/garrison_dispatch.rs` were red mid-write from sibling lanes while
+I worked (`E0603 UnitWorld is private`; `E0308` at `Bridge::action_hotkey`'s
+`self.groups.get(group)`). I did not touch either. I gated instead by extracting clean `HEAD`
+with `git archive` into the scratchpad, replaying **only my own hunks** onto it, and building
+there — so my green is a green of `HEAD + op-move`, not of the shared working tree.
+
+**FINDINGS worth not re-deriving:**
+
+- **Every installed formation destination was 1/48 of its intended Coord.**
+  `Group::action_move_near` hands `div3[to >> 4]` — a UCoord **cell index** — to
+  `Unit::add_move_facing_order` `0x005E55C0` (call site `0x00705FC7`) and
+  `Unit::add_group_move_order` `0x005E4710` (call site `0x00705F57`), and *both* store
+  `arg * 0x30 + 0x18` into `x`/`y` **and** `dest_x`/`dest_y`. `orig_x`/`orig_y` are separate
+  arguments and stay the raw commanded Coord. `order_dispatch::install_follow_move` already
+  did this centring for `Unit::do_follow`; only the `action_move_near` arm skipped it. Fixed
+  here as `group_action_entry::formation_order_destination`.
+- **`0x0070724D` is not `Group::normalize`.** `command.rs::normalize_for_action` cites it as
+  "the `Group::normalize` virtual call". It is the `mov eax, [ebx]` feeding
+  `call [eax + 0x14]` at `0x00707251` — the `Group` vtable (`0xB47C34`) slot `+0x14`, i.e.
+  `Group::action_begin` `0x00714100`, whose entire body is `mov [ecx+0x28], 0` (`disband = 0`).
+  A full `.text` direct-call scan gives `Group::normalize` `0x00711540` 22 call sites and
+  **none** is in `action_form`, `action_move_near` or `action_attack`. So the port prunes
+  members retail does not prune, in the two hottest movement commands. Left in place (it wants
+  its own claimed row); this lane adds the `disband = 0` retail actually performs there.
+- **The `Group` vtable is `0xB47C34`**: slot `+0x0C` `Group::add` `0x00714350`, `+0x10`
+  `Group::kill` `0x00714110`, `+0x14` `Group::action_begin` `0x00714100`. The `SelectGroup`
+  overrides live in the *second* vtable at `+0x2C..` of the same array — reading the first
+  five slots as SelectGroup's silently shifts everything by eleven.
+- **The scenario `ignore_orders` prelude is shared by nine more actions than the port knew.**
+  `0x00CC02F8` armed + `who < 8` walks `0x00ED6574 + who*0x1C` (count) / `0x00ED6580 + who*0x1C`
+  (list) calling `Group::kill(obj, who, 0, 0)`. `plan_ignore_order_kills` in `groups_guys.rs`
+  already implements it exactly; `attack`/`move_near`/`patrol`/`launch_patrol`/`attack_ground`/
+  `swarm_around`/`siege_attack` all run it and none of them crossed it. `form` does **not**.
+- **`Group::action_move_near` `0x00704990` (9,205 B) has no file in `re/decomp-all/`.** It is
+  the root of the whole family's dependency graph (`move_to` → it; `form`/`attack`/
+  `swarm_around` → `move_to` → it) and it is the reason none of these nine rows can go green
+  without a dedicated lane. Everything else in the family is decompiled.
+- **`Group::action_siege_attack` `0x00706FF0` is fully recovered and written up** in
+  `docs/mechanics/group-action-entry.md` §6 — the split into a stack-local `Group`, the three
+  member predicates, and the `temp.action_attack` / `this.action_guard(temp_leader, …)` pair.
+  Whoever takes `attack` to `Port::Complete` gets `siege_attack` almost for free.
+
+### FINDINGS: tick12-calc-danger (step 12 child, `GameDaemon::calc_danger` `0x00732D10`)
+
+Landed as `crates/don-sim/src/systems/game_daemon_calc_danger.rs` +
+`crates/don-sim/tests/game_daemon_calc_danger.rs` + `docs/mechanics/game-daemon-calc-danger.md`.
+Step 12 stays **`stub`** in `schema/simulation-closure.json` — the child has a body now but
+no tick hook and no satisfiable object host, so flipping the row would be tier inflation.
+
+Do not re-derive these:
+
+- **`div_3_table` is `0x00CAE5FC`** and `RCoord(c) = div_3_table[(c ^ 0x63637) >> 9]`.
+  `map_terrain.rs` already proves that equals `floor(c / 1536)`. The only extra step is that
+  object positions are the *stored* `SubObjectData::x_internal`/`y_internal`, XOR `0x00063637`.
+- **`[0x00C0AAA0]` is `PtrArray<BuildType> buildtypes` `+0x10`** — the element pointer of the
+  build-type array, not a separate table. Likewise **`[0x00C0AEC0]` is `Units units` `+0x10`**
+  (`Units::lists` is `PtrArray<Unit>[10]`, stride `0x1C`, data at `+0x10`), and
+  **`[0x00C06198]` is `GameAccess::obj_base`**, so `obj_base[1] == 2000`.
+- **`Objects::obj_mark` is `int*[3]` at `+0x1E8`** = `{&unit_mark, &build_mark, &wall_mark}`,
+  so `*(Objects + 0x1EC)` indexed by owner is `build_mark[who]`. Matches `walls.rs`.
+- **The PDB's `TypeIndex` enum is in `schema/types.json` with all 869 enumerators.** Raw
+  `is(N, 0)` immediates resolve directly: `0x1B0 = DOCK`, `0x1B7 = TOWER`, `0x1BF = AIRBASE`.
+  Nobody needs to reconstruct the type numbering from shipped XML for this.
+- **Slot numbers mean nothing without the receiver.** `+0xFC` is `ObjectData::get_caster_stance`
+  on an object and `ObjectTypeData::is_fort` on a `ptype`; `calc_danger` calls the latter and
+  Ghidra prints it as the former. The `SubObjectData`(`0x00`–`0x6C`) → `SubObjectOut`(`0x70`)
+  → `SubObject`(`0x74`–`0xB8`) → `ObjectData`(`0xBC`–`0x14C`) → `Object`(`0x150`–`0x174`)
+  primary-vptr layout is the map; `schema/types.json` carries `vtable_offset` per method.
+- **Devirtualised-inline giveaways in `.text`:** `cmp eax, 0x6535C0` = `ObjectData::hits_left`,
+  `cmp eax, 0x639970` = `BuildTypeData::basic_type`, `cmp edx, 0xB42174` = `Build::vftable`
+  (guarding an inline of `Build::is` → `this->ptype->vf(0x60)`, i.e. `TypeData::is`).
+- **Third instance of the standing "PDB names, disassembly establishes" finding:**
+  `GameDaemon::do_danger` is declared a `GameDaemon::` member and the emitted body never
+  reads `ECX` — `ret 0x14`, five stack arguments, no `this`.
+- **`LeaderData::who` (`+0x08`) vs the loop index bites again.** Pass 2's self-skip and its
+  reciprocal `diplos` lookup both use `leaders[who].slot`, while `do_danger`'s own
+  `to == from` test uses the *loop index*. `leaders.rs` flagged the same trap for step 8.
+
+**BUILD NOTE for anyone using `swarm-cargo-remote` this wave:** overlaying
+`crates/don-sim/src/systems/mod.rs` onto clean HEAD fails with `E0583 file not found for
+module` unless you also `--path` the sibling modules it now declares. The working set that
+compiles today is `garrison_dispatch.rs`, `guard_dispatch.rs`, `hotkey_group_action.rs` and
+`order_dispatch.rs`. `crates/don-sim/src/command.rs` is red in the local tree
+(`E0308` at `command.rs:4064`, `groups.get(group)` passed a `usize` where the method takes
+`i32`) — that is a sibling's in-flight edit, left alone.
+
+### lane: group-act — RESULT (unblocked; gates green)
+
+`op-econ`'s `command.rs` migration settled; the BLOCKED ON note above is resolved.
+
+Landed in the working tree (not committed): `hotkey`, `recall`, `return` are
+`Port::Complete`. `eject_all` deliberately stays `StateWired` — see the FINDINGS block.
+`schema/simulation-closure.json` regenerated: **124 red -> 118**, `group_actions` 9/42 -> 12/42,
+`opcodes` 46/82 -> 47/82. (The `orders` 21 -> 23 in the same regeneration is a sibling's
+`EXECUTORS` change, not mine; the file is generated, so re-run
+`python3 tools/simulation-closure.py --write` after your own rows land.)
+
+Persvati gates, both `EXIT_CODE=0`:
+
+- `group-act-20260811T061154Z-31053-13676-6f6e8f20fea7` — `test -p don-sim --lib
+  --test air_containment_host --test command_recall_return_integration
+  --test group_command_prefix_integration --test group_action_frontier`: 1638 + 8 + 3 + 5 + 5.
+- `group-act2-20260811T061220Z-31342-19467-6f6e8f20fea7` — `test -p don-replay --bin
+  don-closure`: 9/9. Needs `--asset schema/live/final-balance-runtime.bin --asset
+  schema/live/env-typecaps.bin`, or `don-replay` fails at `include_bytes!`.
+
+One assertion outside my new files changed, and it is a real behavioural consequence rather
+than a test edit: `group_command_prefix_integration::all_seven_live_dispatch_rows_…` used to
+assert `acted == 0` / `open_group_action_tails == 7` / `unported == 7`. `ObjectTable` now
+commits RECALL, so those are `1 / 6 / 6`. Any lane that gives `ObjectTable` a receiver for one
+of the other six prefixes will move that same triple again.
+
+**Remote-build note** (cost me two runs): `swarm-cargo-remote` starts from the *pushed* base
+commit. While the orchestrator is landing sibling work, HEAD is frequently ahead of the remote
+and every submit dies with `upload-pack: not our ref <sha>`. Re-submit after a push; the
+overlay set (`--path` for every dirty `crates/**.rs`, siblings' included) is what makes the
+tree compile.
+
+### API CHANGE — lane op-econ, `crates/don-sim/src/command.rs` (2026-08-11)
+
+All additive, all defaulted; nothing existing changed signature except one method that never
+had a caller outside this lane.
+
+1. **`Fleet` gained nine defaulted reads**, every one returning `None` ("this host did not
+   answer") by default, so no existing host is affected:
+   `object_type_class`, `is_busy`, `object_regions_touch((who,o),(who,o))`, `spell_castable`,
+   `is_caravan`, `object_type_is`, `build_is_active`, `can_carry(ship, passenger)`,
+   `group_type_count(&[(u8,i16)], index, arg)`.
+2. **`Slot` gained eight `Option` columns** — `economy_type_class`, `busy`, `region`,
+   `castable_spells`, `is_caravan`, `type_is`, `build_active_known`, `carries`. `Slot` is
+   built with `..Slot::default()` everywhere, so this is source-compatible.
+3. **`ObjectTable` gained** `set_regions_touch(a, b)` and `set_group_count(index, arg, n)`.
+4. **`Bridge` gained** a private `economy_action_receipts` field and
+   `pub fn take_economy_action_receipts() -> Vec<EconomyActionReceipt>`.
+5. **`struct Action` (private) gained** an `economy_receipts: &'a mut Vec<EconomyActionReceipt>`
+   field, so its three construction sites (`dispatch_action`, `dispatch_recall_action`,
+   `with_queue_first`) each gained one line.
+6. New module `crates/don-sim/src/command.rs` → `#[path = "systems/economy_group_actions.rs"]
+   pub mod economy_group_actions;`. **Not** added to `systems/mod.rs`, matching the other
+   command proof modules.
+
+`Action::run`'s `"repair"` / `"trade"` / `"board_ship"` arms now call
+`action_repair` / `action_trade` / `action_board_ship` instead of the shared
+`action_target`. The `"gather"`, `"garrison"`, `"guard"` and every movement/attack arm are
+untouched.
+
+### FINDINGS — lane op-econ
+
+* **`Group::action_repair`/`action_trade`/`action_board_ship` all write `GroupData::form = -1`**
+  before installing anything (`0x007021D8`, `0x00701EAB`, `0x0070019B`). The shared
+  `Action::action_target` never touched `form`. If your action shares that helper, check
+  your own body for the same store.
+* **`TradeCommand` carries two object endpoints, not one.** Wire is
+  `ox@1 whom@5 oxx@9 whose@13 queued@17`; `process_trade` `0x00948B20` validates *both*
+  pairs and `Group::action_trade` forwards all four to `Unit::add_trade_order`. The bridge
+  was decoding only `+1`/`+5`/`+17`. `Order` has no `TradeOrder` payload for the second
+  identity, so it still cannot be installed — see below.
+* **`crates/don-sim/src/order.rs`'s `Order` cannot carry `TradeOrder`'s `(oxx, whose, uid2)`
+  nor `CastOrder`'s `SPELL`.** Both payloads are already frozen
+  (`systems/trade_order_frontier.rs` `+0x14..+0x26`, `systems/cast_order_frontier.rs` `+0x20`).
+  Adding either field touches `systems/save_load.rs` (checksummed order state) and
+  `systems/order_dispatch.rs`, both sibling-held, so this lane did not. Whoever owns those
+  files: two red rows are waiting on it.
+* **MSVC folded one-instruction virtuals across unrelated classes.** `0x0041BFF0` is
+  `return 0`, `0x0041E0E0` is `return 1`, `0x0041C000` is `return this`, `0x0046CDA0` is
+  `flags[+0x08] & 1`. The PDB names on those slots (`ListBox::is_control`,
+  `__scrt_initialize_winrt`, `ItemData::is_valid_item`, …) are the names of *a* function with
+  that body, not of the override being called. Slot `+0x08` answering `flags & 1` on `Unit`
+  and `0` on `Build` is how the group loops filter buildings out without a type test.
+* **`Region::is_coast` `0x00680F90` is not a coastline test.** It is
+  `a == b || (exactly one of a,b >= 0x40 && the land side's +0x64 bitmap has the water
+  side's bit)`. Three economy actions use it as member↔target reachability, composed with
+  `WorldData::get_tregion` `0x006B52E0` over `div_3_table[(coord ^ 0x63637) >> 6]`
+  (`div_3_table` = `0x00CAE5FC`).
+* **`Unit::add_await_board_order` `0x005E4C80` has no `QueuePos`.** It has `ret 0x10` but
+  never reads `[ebp+0x10]`; `Unit::add_board_order` `0x005E4D10` likewise never reads
+  `[ebp+0x14]`. Both call sites in `action_board_ship` push a leftover `ECX` into the unread
+  slot. `AWAIT_BOARD` therefore always appends and has no clear-first arm.
+* **`UnitData::is_plane` `0x0046CE40` reads `type->domain == 2`**, independently fixing
+  domain 2 = AIR — the value `action_board_ship` rejects at `0x00700272`.
+
+### BLOCKED ON / red-build attribution (not lane op-econ)
+
+As of 2026-08-11 the following were already failing in the shared tree, from an in-flight
+`command_tables.rs` / `order_dispatch.rs` migration by another lane (`hotkey`, `recall`,
+`return`, `flight` promoted to `Port::Complete`; `ARMS` grew two `Implemented` entries).
+`op-econ` touched neither file:
+
+* `don-sim --lib`: `systems::order_dispatch::tests::every_one_of_the_twenty_eight_arms_dispatches_and_is_counted`
+  (`cov.unimplemented` 4 vs 6) and `::this_dispatcher_handles_twenty_two_of_the_twenty_eight_arms`
+  ((23,1,4) vs (21,1,6));
+* `don-sim --test group_command_prefix_integration`: `all_seven_live_dispatch_rows_emit_the_exact_open_action_call`
+  (`stats.acted` 1 vs 0, because RECALL now applies);
+* `don-env --test command_bridge_agreement`: `the_ported_share_of_wire_reachable_actions_is_recorded`
+  (37 vs 35) and `only_opcode_zero_is_really_a_selection_command` (`Complete` vs `NotOnTheWire`).
+
+Owner of `command_tables.rs`: those five assertions are counting your promotions.
+
+### lane: order-arms — landed state, 2026-08-11
+
+Both claimed rows are green in `tools/simulation-closure.py` (orders 23/28, was 21/28).
+
+- **API CHANGE (additive, live now).** `OrderRec` gained `guard: Option<GuardOrderState>`
+  and `garrison: Option<GarrisonOrderState>`; `WorkWorld` gained defaulted, fail-closed
+  `guard_preflight` / `guard_effect` / `garrison_preflight` / `garrison_effect`. Every
+  existing `OrderRec` construction goes through `..OrderRec::default()`, so no sibling
+  literal breaks and no existing `WorkWorld` impl needs a change.
+- `crates/don-sim/src/systems/mod.rs` gained four `pub mod` lines: the two new dispatch
+  modules **and** `guard_order` / `garrison_order`, which had been landed unregistered —
+  they were compiled only through a `#[path]` include in their own test file, so
+  `Unit::do_job` fell to its default arm for both.
+- Two `#[cfg(test)]` counts inside `order_dispatch.rs` moved with the table:
+  `this_dispatcher_handles_twenty_two_of_the_twenty_eight_arms` is now
+  `..._twenty_four_...` and asserts `(23, 1, 4)`; `every_one_of_the_twenty_eight_arms...`
+  now asserts `cov.unimplemented == 4` and `24/28`. If your lane flips another `ARMS` row,
+  those are the two you also have to move.
+- Doc: `docs/mechanics/guard-garrison-orders.md`.
+
+**FINDING — `GUARD` draws from the canonical RNG and can insert a `CAST_SPELL` order.**
+`Unit::do_guard` calls `Random::get(0, 0xffff)` `0x00A39D70` at `0x005E6566` and writes
+`GuardOrder::retry = draw % 3 + 6`; and it calls `Unit::add_cast_order` `0x005E4A60` with
+spell `0x28C` once a stationary auto-casting unit's `idle` reaches 30 ticks (type `0x7B`) or
+70. Any lockstep host budgeting per-frame draws, and any lane porting `CAST_SPELL`, needs
+both.
+
+**FINDING — the two unregistered-planner modules are not the only ones.**
+`strafe_order_frontier.rs`, `trade_order_frontier.rs` and `cast_order_frontier.rs` are in the
+same state `guard_order.rs` and `garrison_order.rs` were in: each already carries a per-frame
+executor planner (`plan_strafe_frame`, `plan_trade_executor`, `plan_cast_frame`) and an open-
+tail list, and each is absent from `systems/mod.rs`, reachable only through a `#[path]`
+include in its own test. I did not audit their coverage, but the *shape* of the remaining
+work for STRAFE (16), TRADE_ROUTE (15) and CAST_SPELL (14) is an adapter like
+`guard_dispatch.rs`, not a fresh derivation. Read those three files before opening Ghidra.
+
+**NOTE — I did not regenerate `schema/simulation-closure.json`.** Three lanes' rows moved in
+the same window and the file is a whole-tree snapshot; regenerating it from a lane would
+capture siblings' in-flight state. Landing-time action for the orchestrator. Recomputed
+value at the time of writing: `118 red`, `orders 23/28`.
+
+**OBSERVED RED, not mine (2026-08-11):** `cargo test -p don-sim --test economy_group_actions`
+fails `trade_installs_on_caravans_only_and_records_both_endpoints` and
+`trade_takes_the_sea_branch_when_the_destination_is_a_sea_trade_dock`. That file is the
+op-econ lane's own new test. The earlier `group_command_prefix_integration` red cleared on
+its own. Because `cargo test` stops at the first failing binary, use `--no-fail-fast` while
+that one is red or your own suites will silently not run.
+
+### lane: crossplay-dll (emit a real PE32 `CrossplayProxy.dll`)
+
+`cv task` row `019fef75`. Turning `crates/don-crossplay` from a checked ABI + local backend
+into a loadable image, mirroring `crates/netsys-shim`. Offline evidence only; nothing is
+installed into the game and no live retail run is performed by this lane.
+
+Files I will write:
+
+- `crates/don-crossplay/Cargo.toml` — cdylib crate type, a `dll` feature, release profile.
+- `crates/don-crossplay/build.rs` — **new.** `/EXPORT:` aliases pinning the four shipped
+  names to ordinals 1..4, two of them `,DATA`.
+- `crates/don-crossplay/src/dll.rs` — **new.** The four shipped exports.
+- `crates/don-crossplay/src/logger.rs` — **new.** A 4-slot `ICrossplayLogger` for ordinal 1.
+- `crates/don-crossplay/src/lib.rs` — **minimal hunk**, module declarations only.
+- `crates/don-crossplay/check-exports.py` — **new.** Export name/ordinal/identity parity.
+- `crates/don-crossplay/src/bin/crossplay-load-smoke.rs` — **new.** Disposable PE32 loader.
+- `crates/don-crossplay/run-crossplay-wine-smoke.sh` — **new.** Wine prefix runner.
+- `crates/don-crossplay/README.md`, `docs/tracks/crossplay-proxy-dll.md` — **new doc.**
+
+NOT touching: `crates/netsys-shim/**` (read closely, never edited), `don-sim`, `don-net`,
+`don-replay`, `don-env`, or any other crate. `crates/don-crossplay/src/abi.rs` is generated
+and I do not expect to edit it.
+
+### lane: taunt-body (`Leader::process_taunt` `0x006B8CC0`, step 8's last charged child)
+
+Claimed `cv task` row: `019fef1a-1c33-79f3-91b8-fd5bb943fc9e` (`closure/tick 8:
+Leaders::process_all`) — **coordinating, not taking**. The `tick8-construct-time` lane has
+landed and released; I take only `Gap::LeaderProcessTaunt`. Step 8's `StepStatus` stays
+`Stub`; it still has other charged children (automatic Wall/base-Object query population).
+
+Files I will write:
+
+- `crates/don-sim/src/systems/leader_process_taunt.rs` — **new module.** The whole
+  2,340-byte `Leader::process_taunt` body plus `Leader::action_offer` `0x006D1780` and
+  `Leader::action_clear_all` `0x006D15E0` / `Leader::clear_agree` `0x006D1AF0` /
+  `LeaderData::bucket_add` `0x0043ED10`.
+- `crates/don-sim/tests/tick_step8_process_taunt.rs` — **new test file**, driving
+  `Sim::do_frame`.
+- `crates/don-sim/src/systems/mod.rs` — one `pub mod` line only.
+- `crates/don-sim/src/systems/leaders.rs` — **minimal hunks, the taunt path only**: the
+  dispatcher calls the new body and returns its trace. No other edit.
+- `docs/assembly/leader-process-taunt.md` — **new doc.**
+
+NOT touching: `crates/don-sim/src/tick.rs` (I will report the hook instead if one is
+needed), `command.rs`, `command_tables.rs`, `order_dispatch.rs`, `systems/economy.rs`,
+`systems/victory_score.rs`, `crates/don-env/**`, or any crate other than `don-sim`.
+
+### lane: victory-endgame (`closure/stage: victory_endgame`, `closure/tick 11`)
+
+Claimed `cv task` rows: `019fef1a-2c3a-76c3-9771-fcaae86302ce`
+(`closure/stage: victory_endgame`) and `019fef1a-1c58-7890-88e0-3f4e564ee8a4`
+(`closure/tick 11: Leaders::strategy_all`).
+
+Scope: close the one missing link op-life named — **no `Fleet`/`Sim` host owns a
+`Leaders`**, so `LifecycleCall::LeaderDefeat` (`Leader::defeat` `0x006ECB00`) could not be
+executed and the wire could not reach the end game.
+
+Files I will write:
+
+- **`crates/don-sim/src/tick.rs` — CLAIMED.** The step-8 lane released it. Siblings: it is
+  mine this wave. Edits: one new `Sim` field, one `#[path]` module mount, and the
+  `Sim::tail_command_facts` / `Sim::apply_tail_command_transaction` pair.
+- `crates/don-sim/src/systems/lifecycle_host.rs` — **new module**, mounted from `tick.rs`
+  with `#[path]` (the `command.rs` idiom) so **`systems/mod.rs` is NOT touched** — a sibling
+  holds it and the remote-overlay hazard the tick12 lane posted is real.
+- `crates/don-sim/src/systems/victory_score.rs` — mine; `LeaderData::multi_diff` (`+0x50`)
+  and `DefeatType::from_i32`. See API CHANGE below.
+- `crates/don-sim/tests/victory_endgame_wire.rs` — **new test file**, drives `Sim::do_frame`.
+- `docs/mechanics/victory-endgame-wire.md` — **new doc**.
+- `tools/simulation-closure.py` + the single `victory_endgame` row of
+  `schema/simulation-closure.json` — status only; `complete` stays `false`, so every
+  `summary` count is unchanged and **the file is not regenerated** (regenerating it now would
+  sweep every live lane's in-flight state into the ledger).
+
+NOT touching: `command.rs`, `command_tables.rs`, `order_dispatch.rs`, `leaders.rs`,
+`groups_guys.rs`, `tail_command_transactions.rs`, `player_lifecycle_tails.rs`,
+`systems/mod.rs`, `crates/don-env/**`, `don-replay/**`.
+
+**API CHANGE (additive, nothing breaks):**
+
+- `victory_score::LeaderState` gains `multi_diff: i32` (`LeaderData+0x50`). Every
+  construction in tree goes through `Default::default()`, and `LeaderState` derives only
+  `Clone, Debug` — no `==` site. It is added to `LeaderState::walk_bytes` in engine field
+  order (after `score_combat` `+0x44`, before `diplos` `+0x74`), so channel-8 walk bytes
+  change; no test freezes a constant hash of them.
+- `victory_score::DefeatType::from_i32`.
+- `tick::Sim` gains `pub players: Option<lifecycle_host::PlayerTable>`, default `None`.
+  `None` makes `Sim::tail_command_facts` return `TailCommandFacts::NoExternalFacts`, i.e.
+  exactly op-life's old whole-row boundary. The host is opt-in and fail-closed.
+
+### lane: oracle-mountains (`Mountains::randomize_mountains` `0x0089ca70` as a Tier-B case)
+
+Claimed `cv task` row: `019fef78-fffa-7250-a23f-599344495f10` — "oracle: Mountains::randomize_mountains
+0x0089ca70 as a Tier-B differential case".
+
+Files I will write:
+
+- `crates/oracle/src/registry.rs` — one new `Plan` variant and one new `Case`. **Additive only**;
+  no existing case row is edited.
+- `crates/oracle/src/run.rs` — one new executor arm plus one calling-convention helper.
+- `docs/derivation/mountain-range-lists.md` — **new doc.**
+- `schema/oracle-regression.json` + `schema/oracle-regression.log` — only if I complete a full
+  hbox record, and then as a whole-file regeneration by `tools/oracle-regress.sh`.
+
+NOT touching: `crates/don-sim/**` (read-only; `systems/mountains.rs` is consumed unmodified),
+`crates/don-replay/**`, `crates/oracle/src/main.rs`, `models.rs`, `damage_*.rs`, `turn_test.rs`.
+
+### lane: replay-groups (`closure/checksum 5: groups`)
+
+Claimed `cv task` row: `019fef1a-2938-7f62-b6c5-caf828a4e930` — `closure/checksum 5: groups`.
+
+Selection criterion, on evidence rather than theme: across the 21 checksum-bearing
+recordings, `groups` is the **only** dead object channel whose first-checksummed-turn value
+is not unique per recording. `units`/`builds`/`guys`/`leaders`/`cities`/`goods`/`items`/
+`world` each have 21 distinct turn-2 values; `groups` has 15, and `0x1c78f3f5` occurs in
+**exactly the seven zero-AI recordings** — the same seven that survive on `scenario_data`
+and `script_run_time`. Setup-independence is the same signature that made `scenario_data`
+derivable, so `groups` was the one channel whose initial state could be closed from the
+instruction stream in a single lane. `leaders` was the brief's suggestion and I did not
+take it — see FINDINGS below for the measured reason.
+
+Files I will write:
+
+- `crates/don-replay/src/groups_channel.rs` — **new module.** The derived post-`Game::init`
+  `Groups` state and the exact `CheckSums::check_groups` `0x00937530` traversal.
+- `crates/don-replay/tests/groups_channel_initial.rs` — **new test file.**
+- `crates/don-replay/src/lib.rs` — one `pub mod` line.
+- `crates/don-replay/src/state.rs` — one new `SimBridge::populate_groups_initial`, beside
+  `populate_scenario_initial`; one `MISSING` entry reworded.
+- `crates/don-replay/src/harness.rs` — the install call, beside the scenario one.
+- `crates/don-replay/src/check_all.rs` — doc comment only, if anything.
+- `crates/don-replay/tests/corpus.rs` — the `agreements_are_unmodelled_except_…` gate, which
+  is mine to keep honest.
+- `schema/replay-validation.json` — regenerated.
+- `docs/tracks/replay-validation.md`, `docs/assembly/groups-initial-state.md` — **new doc.**
+
+NOT touching: any `crates/don-sim/**` file, `walk_gen.rs` / `wire_gen.rs` (generated),
+`crates/don-env/**`, `crates/don-net/**`.
+
+**FINDING — the `groups` channel's initial value is fully derived, and it is 36,896 bytes.**
+`Game::init` `0x0058c480` calls `Groups::clear` `0x00713f20`, which forces the `Array<Group>`
+count to **`0x200` = 512**, calls `Group::clear` `0x00713e80` on each (`id = i`, `army = -1`,
+`form = -1`, everything else zero, `stamp = Game+0x550`), then re-zeros `+0x14` (`stamp`) and
+`+0x30` (`priority`) per group and writes `last_group[8] = {0, 0x40, 0x80, 0xc0, 0x100,
+0x140, 0x180, 0x1c0}`. `Group::walk_data` `0x00708400` walks `[4, 0x4c)` = 72 bytes and, only
+when `num != 0`, six `num`-length arrays — so a cleared group is exactly 72 bytes.
+`check_groups` then hashes 32 bytes through `GroupsData::const_last_group` (`groups+0x3c`,
+which `Groups::Groups` `0x00713ff0` points at `last_group`). 512 × 72 + 32 = **36,896**, and
+`adler32` over it is `0x1c78f3f5` — the recorded value, on the nose, with no free parameter.
+
+**FINDING — `leaders` is not a one-lane channel, and the numbers say so.**
+`LeaderData::walk_data` `0x006d6750` walks **27,182 bytes per leader × 8 leaders**, and its
+op 2 is a single contiguous `[8, 26922)` range covering **276 named fields**; nine of its
+thirty ops are run-time-length `Array<T>` bodies the extractor cannot resolve, and six are
+`sub_object` calls. Its turn-2 value is **distinct in all 21 recordings**, i.e. it is
+setup-dependent, so there is no setup-independent constant to pre-register against — closing
+it means reproducing every player's full economy/tech/diplomacy record at `Game::init`, not
+reading one initializer. `cities` (110 walked bytes/record, 3 sub-objects) and `goods`
+(1 walked byte + a sub-object per record) are small *per element*, but both are also 21/21
+distinct at turn 2 because their element sets come from map generation, which stops at
+`TerrainGroups::place_all`.
+
+**order-arms gate record (2026-08-11).** Clean full gate: persvati
+`order-arms-20260811T061133Z-30729-10081-6f6e8f20fea7` **EXIT 0** — `don-sim` lib 1638
+passed / 0 failed, `guard_order_dispatch` 15/15, `garrison_order_dispatch` 12/12. A later
+re-gate (`...061820Z-46691-26782-...`) is EXIT 101 on **one** lib test that is not mine:
+`command::economy_group_actions::tests::repair_rejects_a_member_outside_the_two_type_classes`,
+panicking at `crates/don-sim/src/systems/economy_group_actions.rs:762`. My two suites are
+15/15 and 12/12 in that same run. Also seen locally in the same window:
+`..::repair_emits_the_exact_call_pair_for_each_queue_arm` and the two `trade_*` tests in
+`tests/economy_group_actions.rs`. `cargo fmt` was **not** run crate-wide — the tree has
+pre-existing diffs in `command.rs`, `tick.rs`, `unit_inctime.rs` and several sibling modules;
+only my own four files plus my one-line import in `order_dispatch.rs` were formatted.
+
+## ⚑ STANDING FINDING (orchestrator, 2026-08-11) — ~9,900 lines of recovered mechanics are UNREACHABLE
+
+The order-arms lane closed rows 12 GUARD and 26 GARRISON and reported that the work was
+**already done and merely unregistered**: `guard_order.rs` and `garrison_order.rs` were
+complete decision transcriptions absent from `systems/mod.rs`, compiled only through a
+`#[path]` include in their own test file. So `Unit::do_job` fell to its default arm and a
+GUARD order sat in a queue mutating nothing forever. `hotkey` was the same shape — its body
+was opcode 34's inlined `clear == 0` arm, already green.
+
+That is not two accidents. A crate-wide scan finds **14 modules in
+`crates/don-sim/src/systems/` with no `mod` declaration and no `#[path]` mount anywhere in
+`crates/don-sim/src/`** — each mounted only from its own test file:
+
+| module | lines |
+|---|---:|
+| `unit_come_out_full_frontier` | 1,062 |
+| `cast_order_frontier` | 980 |
+| `leader_set_diplo` | 938 |
+| `trade_order_frontier` | 917 |
+| `strafe_order_frontier` | 881 |
+| `unit_come_out_gather_selection_frontier` | 818 |
+| `unit_come_out_common_release_frontier` | 733 |
+| `objects_init_unit_authority_frontier` | 729 |
+| `lifecycle_host` | 677 |
+| `step8_eject_contents` | 543 |
+| `army_do_forming` | 478 |
+| `leaders_diplomacy_opening_frontier` | 438 |
+| `leaders_end_process_step17` | 407 |
+| `bhs_create_unit_allocation_tail_frontier` | 332 |
+
+Their tests pass, which is exactly why nobody noticed — the tests validate each module
+**in isolation**, never through the sim. The library crate does not contain them, so no
+gameplay path can reach them.
+
+**What this means for a lane.** Before deriving anything, check whether the body already
+exists here. The remaining work for such a row is an **adapter + host + registration** in
+the shape of `guard_dispatch.rs`, not a fresh derivation. Named beneficiaries already
+identified:
+
+- `strafe_order_frontier`, `trade_order_frontier`, `cast_order_frontier` → order rows
+  **16 STRAFE**, **15 TRADE_ROUTE**, **14 CAST_SPELL**. Adapters, not derivations.
+- `unit_come_out_common_release_frontier` + `unit_come_out_full_frontier` +
+  `unit_come_out_gather_selection_frontier` → the group-act lane named `Unit::come_out`'s
+  common-release tail as the critical path gating **`eject_all`, `transport` and `alarm`**,
+  and reported "7,201 of 9,925 bytes unrecovered". Check these three first — a large part
+  of it may already be transcribed.
+- `army_do_forming` → tick 13 `Armies::process_all`.
+- `leaders_end_process_step17` → tick 17. `leader_set_diplo` /
+  `leaders_diplomacy_opening_frontier` → the diplomacy opcode rows.
+- `step8_eject_contents` → the `eject_all` blocker above.
+
+**Do not mass-register them.** Each needs its host satisfied and a test that drives the real
+path; registering a module whose host cannot be satisfied just moves the failure. But the
+closure inventory is undercounting recovered work, and "the body does not exist" should not
+be assumed for any red row until this list has been checked.
+
+### CRITICAL — HEAD does not build from a clean checkout (lane op-econ, 2026-08-11)
+
+`crates/don-sim/src/command.rs` at `6f6e8f2` `#[path]`-declares three modules that are
+**untracked**, so any clean checkout — including every `tools/swarm-cargo-remote` job, which
+builds from pushed `HEAD` plus explicit `--path` overlays — fails to compile `don-sim`:
+
+```
+error: couldn't read `crates/don-sim/src/systems/air_containment_host.rs`
+error[E0432]: unresolved import `crate::systems::hotkey_group_action`
+```
+
+and, from this lane's own tranche,
+
+```
+#[path = "systems/economy_group_actions.rs"] pub mod economy_group_actions;   // committed
+crates/don-sim/src/systems/economy_group_actions.rs                            // NOT committed
+```
+
+Currently untracked but referenced by tracked code:
+`systems/air_containment_host.rs`, `systems/hotkey_group_action.rs`,
+`systems/economy_group_actions.rs` (plus `systems/mod.rs`'s uncommitted
+`game_daemon_calc_danger`, `garrison_dispatch`, `guard_dispatch` lines).
+
+This is the `git add` of named files landing the *consumer* without the *module*. Two remote
+gate jobs were burned on it before the cause was found. Whoever lands the next tranche:
+`git add` the module file in the same commit as the `#[path]` line, and a clean
+`tools/swarm-cargo-remote submit persvati <lane> -- check -p don-sim --lib` with no overlays
+is the cheap detector.
+
+### CORRECTION to lane op-econ's earlier BLOCKED note
+
+The `order_dispatch.rs` / `group_command_prefix_integration` failures listed above resolved
+themselves — the sibling finished that migration. As of the last local run:
+
+* `cargo test -p don-sim --lib` — 1638 passed, 0 failed, 2 ignored;
+* `cargo test -p don-sim --test group_command_prefix_integration` — 5/5;
+* `cargo test -p don-env --test command_bridge_agreement` — **still 2 failed**:
+  `the_ported_share_of_wire_reachable_actions_is_recorded` (37 vs 35) and
+  `only_opcode_zero_is_really_a_selection_command` (`hotkey` is `Complete`, the test expects
+  `NotOnTheWire`). Both count `command_tables.rs` `Port` promotions; `op-econ` never touched
+  `command_tables.rs`. Owner of that promotion: those two assertions are yours.
