@@ -186,6 +186,8 @@ pub mod map_terrain;
 /// Exact mode-4 `Mountains::add_mountain` mutation runtime. The sixteen shipped
 /// displacement-template producer remains an explicit external evidence boundary.
 pub mod mountain_add_runtime;
+/// Installed-content producer for the retail-derived MountainRange displacement templates.
+pub mod mountain_template_producer;
 /// Exact `Mountains::randomize_mountains` three-list RNG/cursor transaction and
 /// the return-then-advance `get_range` primitive used by terrain placement.
 pub mod mountains;
