@@ -83,6 +83,7 @@ pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
 pub mod state;
+pub mod units_runtime;
 pub mod walk;
 pub mod wire;
 pub mod world_owner_frontier;
