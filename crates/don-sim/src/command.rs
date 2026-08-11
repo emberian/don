@@ -751,6 +751,19 @@ pub struct TailCommandReceiptRecord {
     pub valid: bool,
 }
 
+/// Bridge-owned evidence for a lifecycle boundary discharged by the canonical `Sim` host.
+///
+/// Kept separately from [`TailCommandReceiptRecord`]: the legacy receipt deliberately
+/// refuses planner `Boundary` decisions, while this proof can validate one only after the
+/// Sim-side receipt proves every reached lifecycle call and optional capital lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DischargedTailCommandReceiptRecord {
+    pub expected: TailCommandRequest,
+    pub facts: TailCommandFacts,
+    pub observed: crate::tick::lifecycle_host::SimTailReceipt,
+    pub valid: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupHaltTransactionRequest {
     pub group: GroupData,
@@ -1516,6 +1529,17 @@ pub trait Fleet {
         _facts: TailCommandFacts,
     ) -> TailCommandReceipt {
         TailCommandReceipt::unavailable(request)
+    }
+
+    /// Optional canonical `Sim` completion seam for rows whose recovered lifecycle call
+    /// made the legacy row planner return `Boundary`. The old callback above remains the
+    /// only path for every non-Sim host and for no-tail rows.
+    fn apply_discharged_tail_command_transaction(
+        &mut self,
+        _request: TailCommandRequest,
+        _facts: TailCommandFacts,
+    ) -> Option<crate::tick::lifecycle_host::SimTailReceipt> {
+        None
     }
 }
 
@@ -3474,6 +3498,9 @@ pub struct InlineCommandState {
     pub direct_entity_receipts: Vec<DirectEntityReceiptRecord>,
     /// Validated no-tail/boundary evidence for opcodes 70, 71, 73, 78, and 80.
     pub tail_command_receipts: Vec<TailCommandReceiptRecord>,
+    /// Canonical Sim receipts for a recovered lifecycle boundary actually discharged by
+    /// the host. Today only whole-row opcodes 70 and 71 may enter this vector.
+    pub discharged_tail_command_receipts: Vec<DischargedTailCommandReceiptRecord>,
     pub command_side_effect_receipts: Vec<CommandSideEffectReceipt>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
@@ -3521,6 +3548,7 @@ impl Default for InlineCommandState {
             cheat_init_unit_receipts: Vec::new(),
             direct_entity_receipts: Vec::new(),
             tail_command_receipts: Vec::new(),
+            discharged_tail_command_receipts: Vec::new(),
             command_side_effect_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
@@ -3626,6 +3654,12 @@ impl Bridge {
 
     pub fn take_tail_command_receipts(&mut self) -> Vec<TailCommandReceiptRecord> {
         std::mem::take(&mut self.inline.tail_command_receipts)
+    }
+
+    pub fn take_discharged_tail_command_receipts(
+        &mut self,
+    ) -> Vec<DischargedTailCommandReceiptRecord> {
+        std::mem::take(&mut self.inline.discharged_tail_command_receipts)
     }
 
     pub fn take_command_side_effect_receipts(&mut self) -> Vec<CommandSideEffectReceipt> {
@@ -4521,6 +4555,23 @@ impl Bridge {
         let Some(facts) = f.tail_command_facts(&expected) else {
             return;
         };
+        if let Some(observed) =
+            f.apply_discharged_tail_command_transaction(expected.clone(), facts.clone())
+        {
+            let valid = observed.request == expected
+                && observed.facts == facts
+                && observed.committed()
+                && observed.validates();
+            self.inline
+                .discharged_tail_command_receipts
+                .push(DischargedTailCommandReceiptRecord {
+                    expected,
+                    facts,
+                    observed,
+                    valid,
+                });
+            return;
+        }
         let observed = f.apply_tail_command_transaction(expected.clone(), facts.clone());
         let valid = observed.validates_for(&expected, &facts);
         self.inline

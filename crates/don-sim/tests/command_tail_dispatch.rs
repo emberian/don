@@ -185,8 +185,11 @@ fn all_five_rows_reach_the_transaction_seam_without_becoming_inert() {
 }
 
 #[test]
-fn row_level_closure_remains_red_for_every_dynamic_tail() {
-    for opcode in [70, 71, 73, 78, 80] {
+fn sim_discharged_lifecycle_rows_close_without_weakening_the_other_dynamic_tails() {
+    for opcode in [70, 71] {
+        assert_eq!(InlineDef::find(opcode).unwrap().port, InlinePort::Complete);
+    }
+    for opcode in [73, 78, 80] {
         assert_eq!(
             InlineDef::find(opcode).unwrap().port,
             InlinePort::StateWired

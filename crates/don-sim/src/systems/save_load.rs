@@ -2436,20 +2436,6 @@ fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
 }
 
 fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
-    if sim
-        .vic_leaders
-        .slots
-        .iter()
-        .any(|leader| leader.cities_captured != 0 || leader.cities_lost != 0)
-    {
-        return Err(SaveError::Unsupported("City capture counters"));
-    }
-    let pristine_cities = crate::systems::tech_cities::CityPool::new();
-    if sim.cities.city_mark != pristine_cities.city_mark
-        || sim.cities.slots != pristine_cities.slots
-    {
-        return Err(SaveError::Unsupported("Cities pool"));
-    }
     if sim.step12_visibility
         != crate::systems::step12_visibility_runtime::Step12VisibilityAuthority::default()
     {
@@ -2653,7 +2639,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         },
     };
     let leader_match = match sections[9] {
-        Some(data) => Some(leader_match::read(data)?),
+        Some(data) => Some(leader_match::read(data, core.format_version)?),
         None => None,
     };
     if let Some(setup) = player_setup {
@@ -2874,6 +2860,9 @@ mod tests {
                 } else if child.header.id == OBJECTS {
                     data =
                         write_world_state_for_version(&state, LEGACY_ORDER_FORMAT_VERSION).unwrap();
+                } else if child.header.id == LEADER_MATCH {
+                    data =
+                        leader_match::write_for_version(sim, LEGACY_ORDER_FORMAT_VERSION).unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })

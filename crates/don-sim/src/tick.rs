@@ -87,6 +87,10 @@ pub mod leader_match_host;
 /// it follows `command.rs`'s `#[path]` idiom for host modules owned by one driver.
 #[path = "systems/lifecycle_host.rs"]
 pub mod lifecycle_host;
+/// CityPool-backed resolution of the last opcode-70/71 simulation boundary,
+/// `LeaderData::find_capital` `0x006EB930`.
+#[path = "systems/lifecycle_opcode_cohort.rs"]
+pub mod lifecycle_opcode_cohort;
 
 /// The 29 entries of `Game::do_frame`.
 pub const NUM_STEPS: usize = DO_FRAME.len();

@@ -8,6 +8,10 @@
 
 use super::{Reader, SaveError, Writer};
 use crate::systems::leader_init_diplomacy_loop::LeaderInitDiplomacyRow;
+use crate::systems::tech_cities::{
+    CaravanLink, CaravanLinkArray, CityPool, CityRecord, CITIES_PER_PLAYER,
+    NUM_PLAYERS as CITY_PLAYERS,
+};
 use crate::systems::victory_score::{
     DefeatType, EncryptedEconomy, LeaderState, Leaders, Match, MatchEvent, ScoreConstants,
     TypeKind, TypeRow, TypeTable, VictoryOptions, VictoryType, NUM_BUILD_SLOTS, NUM_LEADERS,
@@ -18,11 +22,16 @@ use crate::tick::Sim;
 
 const MAX_CATEGORY_ROWS: usize = 4096;
 const MAX_EVENTS: usize = 256;
+const MAX_CITY_ROWS_PER_PLAYER: usize = 4096;
+const MAX_CITY_CARAVAN_LINKS: usize = 1 << 16;
+const MAX_CITY_STRING_BYTES: usize = 1 << 20;
+const CITY_POOL_FORMAT_VERSION: u32 = 12;
 
 pub(super) struct LeaderMatchState {
     game: Match,
     leaders: Leaders,
     players: Option<PlayerTable>,
+    cities: CityPool,
 }
 
 fn write_i32s(w: &mut Writer, values: &[i32]) {
@@ -57,6 +66,232 @@ fn write_bools(w: &mut Writer, values: &[bool]) {
 
 fn read_bools(r: &mut Reader<'_>, n: usize) -> Result<Vec<bool>, SaveError> {
     (0..n).map(|_| r.bool()).collect()
+}
+
+fn write_string(w: &mut Writer, value: &str, what: &'static str) -> Result<(), SaveError> {
+    if value.len() > MAX_CITY_STRING_BYTES {
+        return Err(SaveError::Limit(what));
+    }
+    w.len(value.len(), what)?;
+    w.bytes(value.as_bytes());
+    Ok(())
+}
+
+fn read_string(r: &mut Reader<'_>, max: usize, what: &'static str) -> Result<String, SaveError> {
+    let len = r.len(max, what)?;
+    String::from_utf8(r.take(len)?.to_vec()).map_err(|_| SaveError::Invalid("city string utf-8"))
+}
+
+fn write_city(w: &mut Writer, city: &CityRecord) -> Result<(), SaveError> {
+    w.u16(city.city_flags);
+    w.i16(city.city);
+    w.i16(city.o);
+    w.i16(city.reg);
+    for value in [
+        city.x,
+        city.y,
+        city.attack_stamp,
+        city.raid_stamp,
+        city.reduce_stamp,
+        city.capture_stamp,
+        city.assimilation_timer,
+        city.capture_strength,
+    ] {
+        w.i32(value);
+    }
+    write_i32s(w, &city.traded_with);
+    for value in [
+        city.scouted,
+        city.in_port,
+        city.peasant_dist,
+        city.trade_val,
+        city.conquest_node,
+    ] {
+        w.i16(value);
+    }
+    for value in [
+        city.granary,
+        city.lumber_mill,
+        city.smelter,
+        city.refinery,
+        city.free,
+        city.busy,
+        city.gatherers,
+        city.pop,
+        city.who as u8,
+        city.race as u8,
+        city.founder as u8,
+        city.plundered,
+        city.ocean,
+        city.land,
+        city.filled,
+        city.bordering,
+        city.ocean_filled,
+        city.dock_tile,
+        city.was_capital_flags,
+    ] {
+        w.u8(value);
+    }
+    w.bytes(&city.space);
+    w.bytes(&city.ter);
+    if city.vans.capacity < city.vans.items.len() as i32 {
+        return Err(SaveError::Invalid("city caravan capacity"));
+    }
+    w.len(city.vans.items.len(), "city caravan links")?;
+    w.i32(city.vans.capacity);
+    w.i16(city.vans.grow);
+    w.u8(city.vans.flags);
+    for link in &city.vans.items {
+        w.i32(link.cara);
+        w.i32(link.who);
+    }
+    write_string(w, &city.name, "city name bytes")?;
+    write_string(w, &city.id, "city id bytes")?;
+    Ok(())
+}
+
+fn read_city(r: &mut Reader<'_>) -> Result<CityRecord, SaveError> {
+    let city_flags = r.u16()?;
+    let city = r.i16()?;
+    let o = r.i16()?;
+    let reg = r.i16()?;
+    let x = r.i32()?;
+    let y = r.i32()?;
+    let attack_stamp = r.i32()?;
+    let raid_stamp = r.i32()?;
+    let reduce_stamp = r.i32()?;
+    let capture_stamp = r.i32()?;
+    let assimilation_timer = r.i32()?;
+    let capture_strength = r.i32()?;
+    let traded_with = read_i32_array(r)?;
+    let scouted = r.i16()?;
+    let in_port = r.i16()?;
+    let peasant_dist = r.i16()?;
+    let trade_val = r.i16()?;
+    let conquest_node = r.i16()?;
+    let granary = r.u8()?;
+    let lumber_mill = r.u8()?;
+    let smelter = r.u8()?;
+    let refinery = r.u8()?;
+    let free = r.u8()?;
+    let busy = r.u8()?;
+    let gatherers = r.u8()?;
+    let pop = r.u8()?;
+    let who = r.i8()?;
+    let race = r.i8()?;
+    let founder = r.i8()?;
+    let plundered = r.u8()?;
+    let ocean = r.u8()?;
+    let land = r.u8()?;
+    let filled = r.u8()?;
+    let bordering = r.u8()?;
+    let ocean_filled = r.u8()?;
+    let dock_tile = r.u8()?;
+    let was_capital_flags = r.u8()?;
+    let mut space = [0u8; 3];
+    space.copy_from_slice(r.take(3)?);
+    let mut ter = [0u8; 6];
+    ter.copy_from_slice(r.take(6)?);
+    let links = r.len(MAX_CITY_CARAVAN_LINKS, "city caravan links")?;
+    let capacity = r.i32()?;
+    if capacity < links as i32 {
+        return Err(SaveError::Invalid("city caravan capacity"));
+    }
+    let grow = r.i16()?;
+    let flags = r.u8()?;
+    let items = (0..links)
+        .map(|_| {
+            Ok(CaravanLink {
+                cara: r.i32()?,
+                who: r.i32()?,
+            })
+        })
+        .collect::<Result<Vec<_>, SaveError>>()?;
+    let name = read_string(r, MAX_CITY_STRING_BYTES, "city name bytes")?;
+    let id = read_string(r, MAX_CITY_STRING_BYTES, "city id bytes")?;
+    Ok(CityRecord {
+        city_flags,
+        city,
+        o,
+        reg,
+        x,
+        y,
+        attack_stamp,
+        raid_stamp,
+        reduce_stamp,
+        capture_stamp,
+        assimilation_timer,
+        capture_strength,
+        traded_with,
+        scouted,
+        in_port,
+        peasant_dist,
+        trade_val,
+        conquest_node,
+        granary,
+        lumber_mill,
+        smelter,
+        refinery,
+        free,
+        busy,
+        gatherers,
+        pop,
+        who,
+        race,
+        founder,
+        plundered,
+        ocean,
+        land,
+        filled,
+        bordering,
+        ocean_filled,
+        dock_tile,
+        was_capital_flags,
+        space,
+        ter,
+        vans: CaravanLinkArray {
+            items,
+            capacity,
+            grow,
+            flags,
+        },
+        name,
+        id,
+    })
+}
+
+fn write_cities(w: &mut Writer, cities: &CityPool) -> Result<(), SaveError> {
+    for who in 0..CITY_PLAYERS {
+        let rows = &cities.slots[who];
+        let mark = cities.city_mark[who];
+        if rows.len() < CITIES_PER_PLAYER
+            || rows.len() > MAX_CITY_ROWS_PER_PLAYER
+            || mark < 0
+            || mark as usize > rows.len()
+        {
+            return Err(SaveError::Invalid("city pool shape"));
+        }
+        w.i32(mark);
+        w.len(rows.len(), "city rows per player")?;
+        for city in rows {
+            write_city(w, city)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_cities(r: &mut Reader<'_>) -> Result<CityPool, SaveError> {
+    let mut pool = CityPool::new();
+    for who in 0..CITY_PLAYERS {
+        let mark = r.i32()?;
+        let rows = r.len(MAX_CITY_ROWS_PER_PLAYER, "city rows per player")?;
+        if rows < CITIES_PER_PLAYER || mark < 0 || mark as usize > rows {
+            return Err(SaveError::Invalid("city pool shape"));
+        }
+        pool.city_mark[who] = mark;
+        pool.slots[who] = (0..rows).map(|_| read_city(r)).collect::<Result<_, _>>()?;
+    }
+    Ok(pool)
 }
 
 fn write_score_constants(w: &mut Writer, c: ScoreConstants) {
@@ -305,7 +540,7 @@ fn read_init_row(r: &mut Reader<'_>) -> Result<LeaderInitDiplomacyRow, SaveError
     })
 }
 
-fn write_leader(w: &mut Writer, row: &LeaderState) -> Result<(), SaveError> {
+fn write_leader(w: &mut Writer, row: &LeaderState, format_version: u32) -> Result<(), SaveError> {
     validate_leader(row)?;
     for value in [
         row.leader_flags,
@@ -348,6 +583,12 @@ fn write_leader(w: &mut Writer, row: &LeaderState) -> Result<(), SaveError> {
     ] {
         w.i32(value);
     }
+    if format_version >= CITY_POOL_FORMAT_VERSION {
+        w.i32(row.cities_captured);
+        w.i32(row.cities_lost);
+    } else if row.cities_captured != 0 || row.cities_lost != 0 {
+        return Err(SaveError::Unsupported("City capture counters"));
+    }
     write_u16s(w, &row.num_buildings);
     write_u16s(w, &row.num_units);
     write_u16s(w, &row.num_queued);
@@ -367,7 +608,7 @@ fn write_leader(w: &mut Writer, row: &LeaderState) -> Result<(), SaveError> {
     Ok(())
 }
 
-fn read_leader(r: &mut Reader<'_>) -> Result<LeaderState, SaveError> {
+fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, SaveError> {
     let leader_flags = r.i32()?;
     let leader_flags2 = r.i32()?;
     let who = r.i32()?;
@@ -401,6 +642,11 @@ fn read_leader(r: &mut Reader<'_>) -> Result<LeaderState, SaveError> {
     let take_attrition_disabled = r.i32()?;
     let neutral_attrition = r.i32()?;
     let building_attrition_disabled = r.i32()?;
+    let (cities_captured, cities_lost) = if format_version >= CITY_POOL_FORMAT_VERSION {
+        (r.i32()?, r.i32()?)
+    } else {
+        (0, 0)
+    };
     let num_buildings = read_u16s(r, NUM_BUILD_SLOTS)?;
     let num_units = read_u16s(r, NUM_UNIT_SLOTS)?;
     let num_queued = read_u16s(r, NUM_TYPES)?;
@@ -451,10 +697,8 @@ fn read_leader(r: &mut Reader<'_>) -> Result<LeaderState, SaveError> {
         take_attrition_disabled,
         neutral_attrition,
         building_attrition_disabled,
-        // Formats through DoNSave v11 predate the canonical city-capture counters.
-        // The writer rejects nonzero values, so zero is the only lossless decode.
-        cities_captured: 0,
-        cities_lost: 0,
+        cities_captured,
+        cities_lost,
         num_buildings,
         num_units,
         num_queued,
@@ -569,6 +813,10 @@ fn read_players(r: &mut Reader<'_>) -> Result<Option<PlayerTable>, SaveError> {
 }
 
 pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
+    write_for_version(sim, CITY_POOL_FORMAT_VERSION)
+}
+
+pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {
     if sim.vic_match.frame != sim.world.frame || sim.vic_match.tick != sim.world.seconds {
         return Err(SaveError::Invalid("victory match/world clock mismatch"));
     }
@@ -585,7 +833,7 @@ pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
         if leader.who != slot as i32 {
             return Err(SaveError::Invalid("victory leader identity"));
         }
-        write_leader(&mut w, leader)?;
+        write_leader(&mut w, leader, format_version)?;
     }
     w.len(sim.vic_leaders.events.len(), "match events")?;
     if sim.vic_leaders.events.len() > MAX_EVENTS {
@@ -595,16 +843,24 @@ pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
         write_event(&mut w, event);
     }
     write_players(&mut w, sim.players.as_ref());
+    if format_version >= CITY_POOL_FORMAT_VERSION {
+        write_cities(&mut w, &sim.cities)?;
+    } else {
+        let pristine = CityPool::new();
+        if sim.cities.city_mark != pristine.city_mark || sim.cities.slots != pristine.slots {
+            return Err(SaveError::Unsupported("Cities pool"));
+        }
+    }
     Ok(w.0)
 }
 
-pub(super) fn read(data: &[u8]) -> Result<LeaderMatchState, SaveError> {
+pub(super) fn read(data: &[u8], format_version: u32) -> Result<LeaderMatchState, SaveError> {
     let mut r = Reader::new(data);
     let game = read_match(&mut r)?;
     let types = read_type_table(&mut r)?;
     let mut leaders = Leaders::new(types);
     for leader in &mut leaders.slots {
-        *leader = read_leader(&mut r)?;
+        *leader = read_leader(&mut r, format_version)?;
     }
     for (slot, leader) in leaders.slots.iter().enumerate() {
         if leader.who != slot as i32 {
@@ -616,11 +872,17 @@ pub(super) fn read(data: &[u8]) -> Result<LeaderMatchState, SaveError> {
         .map(|_| read_event(&mut r))
         .collect::<Result<_, _>>()?;
     let players = read_players(&mut r)?;
+    let cities = if format_version >= CITY_POOL_FORMAT_VERSION {
+        read_cities(&mut r)?
+    } else {
+        CityPool::new()
+    };
     r.finish()?;
     Ok(LeaderMatchState {
         game,
         leaders,
         players,
+        cities,
     })
 }
 
@@ -644,5 +906,6 @@ pub(super) fn restore(sim: &mut Sim, mut state: LeaderMatchState) -> Result<(), 
     sim.vic_match = state.game;
     sim.vic_leaders = state.leaders;
     sim.players = state.players;
+    sim.cities = state.cities;
     Ok(())
 }

@@ -209,7 +209,7 @@ mod tests {
     fn recovered_inline_commands_are_complete() {
         for op in [
             34, 37, 39, 40, 42, 43, 44, 45, 46, 47, 48, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-            61, 62, 63, 64, 65, 66, 67, 68, 69, 72, 74, 75, 76, 77, 79, 81,
+            61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 74, 75, 76, 77, 79, 81,
         ] {
             assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
         }
@@ -234,8 +234,8 @@ mod tests {
     }
 
     #[test]
-    fn late_control_rows_with_dynamic_open_tails_stay_red() {
-        for op in [70, 71, 73, 78, 80] {
+    fn remaining_late_control_rows_with_dynamic_open_tails_stay_red() {
+        for op in [73, 78, 80] {
             assert_eq!(
                 inline_status(InlineDef::find(op).unwrap().port),
                 "state_wired"

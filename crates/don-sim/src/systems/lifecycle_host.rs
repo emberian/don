@@ -47,6 +47,9 @@
 //!   and the row planner refuses them with `FactsMismatch`.
 
 use super::leader_match_host::{apply_leader_match, LeaderMatchRequest};
+use super::lifecycle_opcode_cohort::{
+    resolve_capital_boundary, FindCapitalError, FindCapitalReceipt, ResolvedCapitalBoundary,
+};
 use super::Sim;
 use crate::command::tail_command_transactions as tail;
 use crate::systems::victory_score::{DefeatType, Leaders, Match, NUM_LEADERS};
@@ -197,6 +200,15 @@ pub enum SimTailError {
     /// `Sim::players` is not installed. Without a `GameInfo::player[8]` image this host owns
     /// no lifecycle facts at all, and the row keeps op-life's whole-row boundary.
     NoPlayerTable,
+    /// Facts supplied by the Bridge no longer match the canonical Sim image. This is a
+    /// CAS refusal and occurs before planning or mutation.
+    StaleFacts,
+    /// The CityPool image captured with the Bridge facts changed before the optional
+    /// discharged-lifecycle callback. No Player/Leader/Match state was mutated.
+    StaleCapitalImage,
+    /// A supplied capital lookup proof did not recompute from its own embedded image.
+    /// This is checked before comparing it with the live CityPool or mutating lifecycle state.
+    CapitalProofMismatch,
     /// The row planner refused.
     TailPlan(TailPlanError),
     /// The row planned, but reached an effect or an open boundary this host does not own —
@@ -206,6 +218,9 @@ pub enum SimTailError {
         opcode: u8,
     },
     Lifecycle(LifecycleHostError),
+    /// The canonical CityPool could not discharge `LeaderData::find_capital` without
+    /// indexing outside its installed PtrArray image.
+    CapitalLookup(FindCapitalError),
     /// The host's own `CommandPackage::process_quit` `0x00943A7B..0x00943AA6` prefix
     /// transcription does not reproduce the plan the row planner carried. Nothing mutated.
     QuitPrefixDisagreement,
@@ -363,6 +378,9 @@ pub struct CommittedTailRow {
     /// and for the row-80 network arm. Absent for a row the planner authorized with no
     /// lifecycle body at all.
     pub lifecycle: Option<AppliedLifecycle>,
+    /// Self-validating proof that the one remaining lifecycle boundary was replaced by
+    /// the exact CityPool-backed call. Absent for every ordinary path.
+    pub capital_resolution: Option<ResolvedCapitalBoundary>,
     /// Present when the decision was [`TailDecision::Apply`] — the row planner authorized
     /// the whole row atomically, so op-life's own row receipt is meaningful.
     pub row: Option<TailCommandReceipt>,
@@ -426,15 +444,61 @@ impl SimTailReceipt {
         }
         let carried = carried_lifecycle(&committed.decision);
         match (carried, committed.lifecycle.as_ref()) {
-            (None, None) => true,
+            (None, None) => committed.capital_resolution.is_none(),
             (Some((request, plan)), Some(applied)) => {
-                applied.receipt.request == request
-                    && applied.receipt.plan.as_ref() == Some(plan)
-                    && applied.receipt.validates(request)
+                if let Some(resolution) = committed.capital_resolution.as_ref() {
+                    resolution.source == *plan
+                        && resolution.validates()
+                        && applied.receipt.request == request
+                        && applied.receipt.plan.as_ref() == Some(&resolution.resolved)
+                        && resolved_lifecycle_receipt_validates(
+                            &applied.receipt,
+                            request,
+                            plan,
+                            &resolution.resolved,
+                        )
+                } else {
+                    committed.capital_resolution.is_none()
+                        && applied.receipt.request == request
+                        && applied.receipt.plan.as_ref() == Some(plan)
+                        && applied.receipt.validates(request)
+                }
             }
             _ => false,
         }
     }
+}
+
+/// Validate a receipt whose original planner boundary was discharged by an independently
+/// self-validating proof. `LifecycleReceipt::validates` cannot accept it directly because
+/// replanning correctly reconstructs the *source* boundary rather than the resolved call.
+fn resolved_lifecycle_receipt_validates(
+    receipt: &LifecycleReceipt,
+    request: LifecycleRequest,
+    source: &LifecyclePlan,
+    resolved: &LifecyclePlan,
+) -> bool {
+    if receipt.status != LifecycleStatus::Applied
+        || receipt.plan.as_ref() != Some(resolved)
+        || resolved.boundary.is_some()
+    {
+        return false;
+    }
+    let Some(before) = receipt.before.as_ref() else {
+        return false;
+    };
+    if lifecycle::plan_lifecycle(before, request).as_ref() != Ok(source) {
+        return false;
+    }
+    let expected_calls: Vec<_> = resolved
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            LifecycleEffect::Call(call) => Some(*call),
+            _ => None,
+        })
+        .collect();
+    receipt.executed_calls == expected_calls
 }
 
 /// The `(LifecycleRequest, LifecyclePlan)` pair a decision carries, if it carries one.
@@ -553,6 +617,27 @@ impl Sim {
         &mut self,
         request: &TailCommandRequest,
     ) -> SimTailReceipt {
+        self.apply_tail_command_transaction_inner(request, None)
+    }
+
+    /// Commit with the exact capital lookup captured alongside the Bridge facts.
+    ///
+    /// The proof must validate from its embedded immutable image and equal a fresh lookup
+    /// from the live CityPool. Both checks happen before the quit prefix or any lifecycle
+    /// mutation, making a forged proof and a stale-but-valid proof distinct atomic refusals.
+    pub fn apply_tail_command_transaction_with_capital_lookup(
+        &mut self,
+        request: &TailCommandRequest,
+        lookup: FindCapitalReceipt,
+    ) -> SimTailReceipt {
+        self.apply_tail_command_transaction_inner(request, Some(lookup))
+    }
+
+    fn apply_tail_command_transaction_inner(
+        &mut self,
+        request: &TailCommandRequest,
+        mut supplied_lookup: Option<FindCapitalReceipt>,
+    ) -> SimTailReceipt {
         let facts = self.tail_command_facts(request);
         let refuse = |facts: TailCommandFacts, err: SimTailError| SimTailReceipt {
             request: request.clone(),
@@ -594,10 +679,8 @@ impl Sim {
 
         // ---- preflight; every refusal below leaves `Sim` untouched ----
         let mut prefixed_and_plan = None;
+        let mut capital_resolution = None;
         if let Some((lifecycle_request, carried_plan)) = carried {
-            if let Err(err) = preflight(carried_plan) {
-                return refuse(facts, SimTailError::Lifecycle(err));
-            }
             // The host's own image, plus the row-71 handler prefix, must replan to *exactly*
             // the plan the row planner carried. This is the pin described in the module
             // header: the prefix is the one thing this host re-transcribes, and it cannot
@@ -611,7 +694,41 @@ impl Sim {
                 Ok(replanned) if replanned == *carried_plan => {}
                 _ => return refuse(facts, SimTailError::QuitPrefixDisagreement),
             }
-            prefixed_and_plan = Some((lifecycle_request, prefixed, carried_plan.clone()));
+            let effective_plan = if matches!(
+                carried_plan.boundary,
+                Some(LifecycleBoundary::FindCapitalForDefeat { .. })
+            ) {
+                let resolution = match resolve_capital_boundary(
+                    &self.cities,
+                    &self.vic_leaders,
+                    &prefixed,
+                    lifecycle_request,
+                    carried_plan,
+                ) {
+                    Ok(resolution) => resolution,
+                    Err(err) => return refuse(facts, SimTailError::CapitalLookup(err)),
+                };
+                if let Some(supplied) = supplied_lookup.take() {
+                    if !supplied.validates() {
+                        return refuse(facts, SimTailError::CapitalProofMismatch);
+                    }
+                    if supplied != resolution.lookup {
+                        return refuse(facts, SimTailError::StaleCapitalImage);
+                    }
+                }
+                let plan = resolution.resolved.clone();
+                capital_resolution = Some(resolution);
+                plan
+            } else {
+                carried_plan.clone()
+            };
+            if let Err(err) = preflight(&effective_plan) {
+                return refuse(facts, SimTailError::Lifecycle(err));
+            }
+            prefixed_and_plan = Some((lifecycle_request, prefixed, effective_plan));
+        }
+        if supplied_lookup.is_some() {
+            return refuse(facts, SimTailError::CapitalProofMismatch);
         }
 
         // ---- past this point nothing can fail ----
@@ -649,6 +766,7 @@ impl Sim {
             outcome: SimTailOutcome::Committed(Box::new(CommittedTailRow {
                 decision,
                 lifecycle,
+                capital_resolution,
                 row,
             })),
         }
@@ -737,18 +855,19 @@ mod tests {
     }
 
     #[test]
-    fn capital_elimination_arm_stays_a_boundary() {
+    fn capital_elimination_without_a_city_uses_the_retail_self_fallback() {
         let mut sim = two_player_sim();
         sim.vic_match.options.elimination = Elimination::Capital as u8;
         sim.vic_leaders.slots[1].lost_capital_timer = 5;
         let request = TailCommandRequest::Resign(tail::ResignRequest { play: 1 });
         let receipt = sim.apply_tail_command_transaction(&request);
+        assert!(receipt.committed(), "{:?}", receipt.outcome);
+        assert!(receipt.validates());
+        assert!(sim.vic_leaders.slots[1].flag(leader_flag::DEFEATED));
         assert_eq!(
-            receipt.outcome,
-            SimTailOutcome::Refused(SimTailError::Lifecycle(LifecycleHostError::Boundary(
-                LifecycleBoundary::FindCapitalForDefeat { who: 1 }
-            )))
+            sim.vic_leaders.slots[1].defeat_type,
+            DefeatType::Capital as i32
         );
-        assert!(!sim.vic_leaders.slots[1].flag(leader_flag::DEFEATED));
+        assert_eq!(sim.vic_leaders.slots[1].defeated_by, 1);
     }
 }
