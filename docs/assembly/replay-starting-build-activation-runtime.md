@@ -16,9 +16,10 @@ The source order retained by the receipt is:
    before `Object::add_to_world`;
 3. add the object to an empty center WData cell;
 4. complete `Wall::init` and the `Build::init` tail;
-5. execute the checksum-relevant final state of `Wall::start`;
-6. execute common `Wall::activate` writes, emit the exact activation-side
-   `Wall::mask_city` request, and execute the already-proven City join in
+5. execute the checksum-relevant final state of `Wall::start` and attest its native
+   `Wall::mask_city` call boundary;
+6. execute common `Wall::activate` writes, emit the normalized CITY-transaction handoff,
+   and execute the already-proven City join in
    `Build::activate`;
 7. retain the final Setup visibility bytes after `Object::update_seen(0)` and
    `Object::update_seen_ally`;
@@ -68,13 +69,15 @@ identity and the ordinary building footprint:
 - the final 7-by-7 footprint clears transient STARTED/STARTED2 bits and installs blocker
   kind 3.
 
-`Build::activate` reaches the CITY writer through the exact chain
-`Wall::mask_me -> BuildType::mask_me -> Wall::mask_city`. This owner emits a typed
+`Wall::start` reaches the CITY writer through the exact chain
+`Wall::mask_me -> BuildType::mask_me -> Wall::mask_city`. At the native call the Build
+flags are `0x23` (STARTED, not ACTIVE), the City link is still `-1`, and the `0x20` city
+gate is set. This owner emits a typed
 `WallMaskCityRequest` containing the decoded center TCoord, resolved radius 20 or 24,
-exact `on == 1`, canonical owner/object identity, and final Build flags `0x27` with the
-`0x20` city gate set. It deliberately does **not** stamp TData CITY. The separate World
-transaction must validate and consume that request before the City census. That owner
-also preserves the retail `even_circle_*` table and write order.
+exact `on == 1`, canonical owner/object identity, those native call facts, and normalized
+post-activation flags `0x27`. It deliberately does **not** stamp TData CITY. The separate
+World transaction must validate and consume that request before the City census. That
+owner also preserves the retail `even_circle_*` table and write order.
 
 This is not a World-channel readiness claim. The receipt keeps the following residuals
 red: terrain terraform/height refresh, the activation CITY-mask transaction, the content

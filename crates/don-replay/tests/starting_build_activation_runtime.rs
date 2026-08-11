@@ -28,10 +28,10 @@ use subject::{
     BUILD_PROCESS_VA, BUILD_QUEUE_INIT_VA, BUILD_TYPE_MASK_ME_VA, LEADER_PROCESS_ALL_VA,
     OBJECT_ADD_TO_WORLD_VA, OBJECT_UPDATE_SEEN_ALLY_VA, OBJECT_UPDATE_SEEN_VA,
     STARTING_BUILD_STAGE_ORDER, STARTING_VILLAGE_BUILD_MASK, STARTING_VILLAGE_FINAL_FLAGS,
-    STARTING_VILLAGE_FOOTPRINT, STARTING_VILLAGE_QUEUE_ROWS, STARTING_VILLAGE_TYPE,
-    STARTING_VILLAGE_WALK_BYTES, WALL_ACTIVATE_VA, WALL_INIT_VA, WALL_MASK_CITY_VA,
-    WALL_MASK_ME_VA, WALL_START_VA, WALL_UPDATE_HITS_VA, WALL_UPDATE_LOS_VA, WDATA_BUILD_MASK,
-    WORLD_RESIDUALS,
+    STARTING_VILLAGE_FOOTPRINT, STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS,
+    STARTING_VILLAGE_QUEUE_ROWS, STARTING_VILLAGE_TYPE, STARTING_VILLAGE_WALK_BYTES,
+    WALL_ACTIVATE_VA, WALL_INIT_VA, WALL_MASK_CITY_VA, WALL_MASK_ME_VA, WALL_START_VA,
+    WALL_UPDATE_HITS_VA, WALL_UPDATE_LOS_VA, WDATA_BUILD_MASK, WORLD_RESIDUALS,
 };
 
 const OWNER: u8 = 2;
@@ -279,7 +279,12 @@ fn object_link_and_blockers_land_while_city_disc_stays_a_typed_request() {
     assert_eq!(receipt.wall_mask_city.owner, OWNER);
     assert_eq!(receipt.wall_mask_city.object_id, BUILD_BAND_BASE as i16);
     assert_eq!(
-        receipt.wall_mask_city.build_flags,
+        receipt.wall_mask_city.native_call_flags,
+        STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS
+    );
+    assert_eq!(receipt.wall_mask_city.native_call_city, -1);
+    assert_eq!(
+        receipt.wall_mask_city.post_activation_flags,
         STARTING_VILLAGE_FINAL_FLAGS
     );
     assert!(receipt.wall_mask_city.city_flag_set());

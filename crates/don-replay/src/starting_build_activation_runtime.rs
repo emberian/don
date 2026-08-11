@@ -58,6 +58,8 @@ pub const STARTING_VILLAGE_FOOTPRINT: Footprint = Footprint {
     y_size: 7,
 };
 pub const STARTING_VILLAGE_BUILD_MASK: u16 = 0x1000;
+pub const STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS: u8 =
+    production::flag::VALID | production::flag::STARTED | 0x20;
 pub const STARTING_VILLAGE_FINAL_FLAGS: u8 =
     production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE | 0x20;
 pub const STARTING_VILLAGE_WALK_BYTES: u64 = 491;
@@ -78,8 +80,8 @@ pub enum StartingBuildStage {
     WallInitComplete,
     BuildInitComplete,
     WallStartComplete,
+    WallMaskCityNativeCallAttested,
     WallActivateComplete,
-    WallMaskCityRequestComplete,
     BuildActivateCityJoinComplete,
     SetupVisibilityComplete,
     FrameZeroWallStatsComplete,
@@ -94,8 +96,8 @@ pub const STARTING_BUILD_STAGE_ORDER: [StartingBuildStage; 13] = [
     StartingBuildStage::WallInitComplete,
     StartingBuildStage::BuildInitComplete,
     StartingBuildStage::WallStartComplete,
+    StartingBuildStage::WallMaskCityNativeCallAttested,
     StartingBuildStage::WallActivateComplete,
-    StartingBuildStage::WallMaskCityRequestComplete,
     StartingBuildStage::BuildActivateCityJoinComplete,
     StartingBuildStage::SetupVisibilityComplete,
     StartingBuildStage::FrameZeroWallStatsComplete,
@@ -164,8 +166,8 @@ pub struct StartingBuildObjectLinkReceipt {
     pub object_down_who: i16,
 }
 
-/// Source-attested arguments at the exact
-/// `Build::activate -> Wall::mask_me -> BuildType::mask_me -> Wall::mask_city` boundary.
+/// Source-attested native arguments plus the post-activation normalized Build evidence
+/// handed to the separate World transaction.
 ///
 /// The World owner must validate this request against the canonical Build identity before
 /// executing the ordered even-circle TData transaction. This Build owner deliberately
@@ -178,13 +180,17 @@ pub struct WallMaskCityRequest {
     pub on: i32,
     pub owner: u8,
     pub object_id: i16,
-    /// Exact flags at the call boundary; bit `0x20` is the is-city gate.
-    pub build_flags: u8,
+    /// Exact native `Wall::mask_city` call-boundary flags inside `Wall::start`.
+    pub native_call_flags: u8,
+    /// Exact native City link at that call boundary; City activation has not linked it yet.
+    pub native_call_city: i16,
+    /// Normalized flags after `Wall::activate`, carried as later join evidence.
+    pub post_activation_flags: u8,
 }
 
 impl WallMaskCityRequest {
     pub fn city_flag_set(&self) -> bool {
-        self.build_flags & 0x20 != 0
+        self.native_call_flags & 0x20 != 0
     }
 }
 
@@ -566,8 +572,9 @@ pub fn complete_starting_village_build(
     let center_tx = production::tile_of(position.0);
     let center_ty = production::tile_of(position.1);
 
-    // Wall::activate, then the activation-side mask boundary. The separate World owner
-    // consumes this request and performs the ordered even-circle CITY writes; this Build
+    // Wall::start reaches Wall::mask_city with STARTED but not ACTIVE and before the City
+    // link. Wall::activate then supplies the normalized evidence carried in the handoff.
+    // The separate World owner performs the ordered even-circle CITY writes; this Build
     // transaction does not stamp those TData bits.
     staged_build.ever_seen_completed = activation_completed;
     staged_build.flags |= production::flag::STARTED;
@@ -582,9 +589,14 @@ pub fn complete_starting_village_build(
         on: 1,
         owner,
         object_id,
-        build_flags: staged_build.flags,
+        native_call_flags: staged_build.flags & !production::flag::ACTIVE,
+        native_call_city: staged_build.city,
+        post_activation_flags: staged_build.flags,
     };
-    if !wall_mask_city.city_flag_set() || wall_mask_city.build_flags != STARTING_VILLAGE_FINAL_FLAGS
+    if !wall_mask_city.city_flag_set()
+        || wall_mask_city.native_call_flags != STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS
+        || wall_mask_city.native_call_city != -1
+        || wall_mask_city.post_activation_flags != STARTING_VILLAGE_FINAL_FLAGS
     {
         return Err(StartingVillageBuildActivationError::InvalidSourceFacts);
     }
