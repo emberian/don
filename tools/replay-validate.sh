@@ -39,8 +39,12 @@ t = d["totals"]
 print(f"files {t['files']} ({t['files_with_checksums']} with checksums), "
       f"turns {t['turns']}, checksum packets {t['checksum_packets']}")
 per = t["per_channel"]
-best = max(((k, v["best_survived_turns"]) for k, v in per.items() if k != "all"),
-           key=lambda kv: kv[1])
+substantive = (
+    (k, v["best_survived_turns"])
+    for k, v in per.items()
+    if k != "all" and v.get("nontrivial_compares", 0) > 0
+)
+best = max(substantive, key=lambda kv: kv[1], default=("none", 0))
 print(f"HEADLINE: {best[1]} turns survived on channel `{best[0]}`")
 for k, v in per.items():
     if v["best_survived_turns"]:
