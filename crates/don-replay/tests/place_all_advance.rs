@@ -13,7 +13,7 @@ use don_replay::initial::InitialItemBoundary;
 use don_replay::place_all_advance::{
     advance_place_all_boundary, advance_place_all_boundary_owned, resolve_mountain_ranges,
     OilGoodPolicy, PlaceAllAdvanceError, PlaceAllAdvanceFacts, PlaceAllStop,
-    MOUNTAINS_ADD_MOUNTAIN_VA, MOUNTAIN_RANGE_SOURCE_FILE, WORLD_SET_OIL_AT_VA,
+    MOUNTAINS_ADD_MOUNTAIN_VA, MOUNTAIN_RANGE_SOURCE_FILE,
 };
 use don_replay::replay::Replay;
 use don_sim::rng::Random;
@@ -102,13 +102,14 @@ fn the_shipped_mountain_section_gives_one_small_eight_medium_and_seven_large_ran
     assert!(receipt.selected_indices[2] < 7);
 }
 
-/// Great Lakes reaches `World::set_oil_at` `0x006b2a10`, inside `place_all`.
+/// Great Lakes executes its exact oil/Good prefix, then reaches the still-red
+/// proprietary mountain-template producer at group two.
 ///
 /// Catches a regression to the coarse `terrain_groups_place_all` boundary, to
-/// the earlier `place_all_mountain_range_lists` boundary, or to a production
-/// oil policy that silently crosses the unmodelled `goods` channel.
+/// the earlier `place_all_mountain_range_lists`/oil boundaries, or to a
+/// production mountain runtime synthesized without the shipped templates.
 #[test]
-fn great_lakes_place_all_boundary_is_world_set_oil_at_inside_the_call() {
+fn great_lakes_automatic_owner_stops_at_group_two_mountain_template() {
     let Some(rep) = great_lakes() else {
         return;
     };
@@ -127,10 +128,10 @@ fn great_lakes_place_all_boundary_is_world_set_oil_at_inside_the_call() {
             plan.boundary, sim.initial_item_error
         );
     };
-    assert_eq!(boundary, "place_all_world_set_oil_at");
+    assert_eq!(boundary, "place_all_mountains_add_mountain");
     assert_eq!(place_all_va, PLACE_ALL_VA);
-    assert_eq!(primitive_va, WORLD_SET_OIL_AT_VA);
-    assert_eq!(group_index, Some(0));
+    assert_eq!(primitive_va, MOUNTAINS_ADD_MOUNTAIN_VA);
+    assert_eq!(group_index, Some(2));
     assert_eq!(plan.mountain_range_error, None);
 
     let advance = plan.place_all_advance.as_ref().expect("survey receipt");
@@ -138,6 +139,12 @@ fn great_lakes_place_all_boundary_is_world_set_oil_at_inside_the_call() {
     assert!(advance.crossed_oil_good_effects.is_empty());
     assert_eq!(advance.mountain_range_lengths, Some([1, 8, 7]));
     assert_eq!(advance.mountain_randomize_draws, Some(2));
+    assert_eq!(advance.completed_groups, [0, 1]);
+    assert!(!advance.owner_receipts.is_empty());
+    assert!(advance
+        .owner_receipts
+        .iter()
+        .all(|receipt| matches!(receipt.source, PlaceAllOwnerSource::Player { .. })));
     // greatlakes.xml carries ten GROUPENTRY rows, all chance="100".
     assert_eq!(advance.catalog_groups, 10);
     assert_eq!(advance.selected_groups.len(), 10);

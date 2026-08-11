@@ -23,6 +23,9 @@ use don_sim::systems::map_terrain::{World, WorldChecksum};
 use don_sim::systems::regions::Regions;
 use std::path::Path;
 
+#[path = "replay_place_all_owners.rs"]
+pub mod replay_place_all_owners;
+
 pub const TAG_GAME: u8 = 0x16;
 pub const TAG_GAME_INFO: u8 = 0x42;
 pub const TAG_PLAYER: u8 = 0x50;
@@ -963,8 +966,20 @@ impl InitialItemReconstruction {
                 progress: crate::place_all_advance::RETAIL_GAME_START_PROGRESS,
                 oil_good_policy: crate::place_all_advance::OilGoodPolicy::Stop,
             };
-            match crate::place_all_advance::advance_place_all_boundary(self, map, &receipt, &facts)
-            {
+            // This is a read-only survey: it retains exact leaf receipts but
+            // commits neither World nor owner state. Reconstruct the lawful
+            // fresh-process entry owner locally; a future mutating schedule
+            // must retain its owner runtime across subsequent Good producers.
+            let owner_initialization =
+                replay_place_all_owners::ReplayPlaceAllOwnerInitialization::cold_process();
+            let entry_owners = owner_initialization.entry_owners();
+            match crate::place_all_advance::advance_place_all_boundary_owned(
+                self,
+                map,
+                &receipt,
+                &facts,
+                &entry_owners,
+            ) {
                 Ok(advance) => {
                     self.boundary =
                         InitialItemBoundary::MapTerrainGroupsPlaceAllPrimitiveUnavailable {

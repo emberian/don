@@ -285,11 +285,10 @@ fn checksum_bearing_great_lakes_replay_runs_its_whole_style_virtual() {
     assert_eq!(
         executed.boundary.name(),
         // `ron-data/tilesets.xml` and `ron-data/effects_graphics.xml` are extracted, so the
-        // generator now runs INTO `place_all` 0x006a70d0. Great Lakes' group 0 is
-        // `type="trees" pattern="player"`, whose growth tail calls `World::set_oil_at`
-        // 0x006b2a10; its Good-object create/close belongs to the unmodelled `goods`
-        // channel, so the strict oil policy stops there.
-        "place_all_world_set_oil_at",
+        // generator now runs INTO `place_all` 0x006a70d0. The cold-process oil/Good
+        // owner executes groups 0 and 1 exactly; group 2 then reaches the still-red
+        // proprietary mountain-template producer.
+        "place_all_mountains_add_mountain",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -320,6 +319,12 @@ fn checksum_bearing_great_lakes_replay_runs_its_whole_style_virtual() {
         .as_ref()
         .expect("the common coastline chain runs once the hook returns");
     assert_eq!(post.next_va, don_replay::TERRAIN_GROUPS_FILL_FERTILE_VA);
+    let place_all = executed
+        .place_all_advance
+        .as_ref()
+        .expect("owned place_all survey must be retained");
+    assert_eq!(place_all.completed_groups, [0, 1]);
+    assert!(!place_all.owner_receipts.is_empty());
 }
 
 #[test]
