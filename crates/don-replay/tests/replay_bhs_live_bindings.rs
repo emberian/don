@@ -19,12 +19,25 @@ mod replay_bhs_runtime;
 use don_bhs::{find_builtin, Host, HostError, Value, VmError};
 use don_replay::replay::Replay;
 use replay_bhs_live_bindings::{
-    bind_production_call, bind_production_map_style, run_production_call, ProductionBuiltinImage,
-    ProductionCallBindError, ProductionCityImage, ProductionLeaderImage,
-    ProductionMapStyleBindError, ProductionRetainedState, ProductionRunFailure,
-    ProductionSetupImage, ReplayProductionBuiltinHost,
+    bind_production_call, bind_production_map_style, bind_production_type_counts,
+    run_production_call, ProductionBuiltinImage, ProductionCallBindError, ProductionCityImage,
+    ProductionLeaderImage, ProductionMapStyleBindError, ProductionRetainedState,
+    ProductionRunFailure, ProductionSetupImage, ReplayProductionBuiltinHost,
 };
 use replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
+
+use don_sim::systems::bhs_create_unit_runtime::{
+    BhsCreateUnitRuntime, CreateUnitLeaderProjection, CreateUnitProjectionWitness,
+    CreateUnitRuntimeInput,
+};
+use don_sim::systems::bhs_type_factory::{
+    produce_type_builtin_state, ComposedTypeRow, RulesCompositionId, Sha256Digest,
+    TypeBuiltinFactoryInput, TypeSourceRole, TypeSourceWitness, WitnessedTypeSource,
+};
+use don_sim::systems::bhs_type_table::{
+    LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
+};
+use don_sim::systems::victory_score::LeaderState as VictoryLeaderState;
 
 const CHECKSUM_RECORDINGS: [&str; 21] = [
     "Playback___2018.11.17_13_21_42__Sat_.rcx",
@@ -56,6 +69,127 @@ fn repo_root() -> PathBuf {
 
 fn skip(reason: &str) {
     eprintln!("\n  SKIPPED — NOT A PASS. {reason}\n  Nothing was established.\n");
+}
+
+fn digest(byte: u8) -> Sha256Digest {
+    Sha256Digest([byte; 32])
+}
+
+fn type_witness(role: TypeSourceRole, component: u8) -> TypeSourceWitness {
+    TypeSourceWitness {
+        role,
+        composition: RulesCompositionId(digest(1)),
+        manifest_sha256: digest(2),
+        component_sha256: digest(component),
+    }
+}
+
+/// Build canonical owners with all 806 upgrade/graft cells present. The selected
+/// Citizen path intentionally crosses two different targets so the adapter test
+/// cannot pass by counting the source row.
+fn type_count_owners() -> (
+    TypeBuiltinState,
+    BhsCreateUnitRuntime,
+    Vec<VictoryLeaderState>,
+) {
+    let rows = (0..NUM_TYPES)
+        .map(|slot| {
+            let mut row = TypeRow::empty(slot);
+            row.name = match slot {
+                0 => "Food".into(),
+                50 | 51 => "Citizen".into(),
+                52 => "Upgraded Citizen".into(),
+                53 => "Grafted Citizen".into(),
+                427 => "Barracks".into(),
+                436 => "Market".into(),
+                _ => format!("Internal {slot}"),
+            };
+            row.type_name = format!("Family {slot}");
+            Some(ComposedTypeRow {
+                index: row.index,
+                name: row.name,
+                type_name: row.type_name,
+                common: row.common,
+                from: row.from,
+                where_type: row.where_type,
+                modified: row.modified,
+                grid_x: row.grid_x,
+                grid_y: row.grid_y,
+                is_non_strict: Some(row.is_list),
+                body: row.body,
+            })
+        })
+        .collect();
+    let produced = produce_type_builtin_state(TypeBuiltinFactoryInput {
+        types: WitnessedTypeSource {
+            witness: type_witness(TypeSourceRole::TypeRows, 3),
+            value: rows,
+        },
+        tribes: WitnessedTypeSource {
+            witness: type_witness(TypeSourceRole::TribeRoster, 4),
+            value: (0..NUM_TRIBES)
+                .map(|slot| Some(format!("Tribe {slot}")))
+                .collect(),
+        },
+        leaders: WitnessedTypeSource {
+            witness: type_witness(TypeSourceRole::LeaderMasks, 5),
+            value: (0..NUM_LEADERS)
+                .map(|slot| {
+                    Some(LeaderTypeMasks {
+                        leader_flags: if slot == 0 { 3 } else { 0 },
+                        ..LeaderTypeMasks::default()
+                    })
+                })
+                .collect(),
+        },
+    })
+    .unwrap();
+    let (state, provenance) = produced.into_parts();
+
+    let projections = (0..NUM_LEADERS)
+        .map(|leader_slot| {
+            let mut current_upgrade = (0..NUM_TYPES)
+                .map(|slot| Some(slot as i32))
+                .collect::<Vec<_>>();
+            let mut graft = current_upgrade.clone();
+            if leader_slot == 0 {
+                current_upgrade[50] = Some(52);
+                graft[52] = Some(53);
+            }
+            Some(CreateUnitLeaderProjection {
+                leader_slot,
+                current_upgrade,
+                graft,
+            })
+        })
+        .collect();
+    let upgrades = BhsCreateUnitRuntime::new(
+        CreateUnitRuntimeInput {
+            witness: CreateUnitProjectionWitness {
+                composition: RulesCompositionId(digest(1)),
+                manifest_sha256: digest(2),
+                component_sha256: digest(6),
+            },
+            types: vec![None; NUM_TYPES],
+            leaders: projections,
+            numeric_groups: Vec::new(),
+        },
+        &state,
+        provenance,
+    )
+    .unwrap();
+
+    let mut leaders = vec![VictoryLeaderState::default(); NUM_LEADERS];
+    leaders[0].leader_flags = 3;
+    leaders[0].num_units[0] = 3;
+    leaders[0].num_units[53 - 50] = 7;
+    leaders[0].num_buildings[427 - 414] = 4;
+    leaders[0].num_queued[53] = 5;
+    leaders[0].num_queued[427] = 6;
+    leaders[0].num_queued[0] = 9;
+    leaders[0].num_queued[402] = 11;
+    leaders[0].economy.bucket[0] = 321;
+    (state, upgrades, leaders)
 }
 
 #[test]
@@ -155,7 +289,62 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     );
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
-        [81, 147, 248, 254, 255, 258, 323, 358, 377, 383, 712, 713]
+        [81, 147, 248, 254, 255, 258, 259, 260, 261, 323, 358, 377, 383, 712, 713]
+    );
+}
+
+#[test]
+fn canonical_type_count_join_covers_direct_upgrade_graft_queue_resource_and_alias_paths() {
+    let (state, upgrades, leaders) = type_count_owners();
+    let counts = bind_production_type_counts(&state, &upgrades, &leaders).unwrap();
+    let image = ProductionBuiltinImage {
+        type_counts: Some(counts),
+        ..Default::default()
+    };
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    let num_type = find_builtin("num_type").unwrap();
+    let num_upgrade = find_builtin("num_type_upgrade").unwrap();
+    let with_queued = find_builtin("num_type_with_queued").unwrap();
+
+    assert_eq!(
+        host.call(num_type, &[Value::Int(1), Value::str("cItIzEn")]),
+        Ok(Value::Int(3)),
+        "ordered duplicate lookup selects TypeIndex 50 without upgrade/graft"
+    );
+    assert_eq!(
+        host.call(num_upgrade, &[Value::Int(1), Value::str("Citizen")]),
+        Ok(Value::Int(7)),
+        "50 -> current_upgrade 52 -> graft 53 reads the final active counter"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Citizen")]),
+        Ok(Value::Int(12)),
+        "builtin 261 adds num_queued[53] to the final active counter"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Barracks")]),
+        Ok(Value::Int(10)),
+        "the same join covers the full Build counter band"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Food")]),
+        Ok(Value::Int(321)),
+        "Good types return the decoded resource stockpile without adding a queue"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Internal 6")]),
+        Err(HostError::Unimplemented),
+        "unowned encrypted Good slots stay red instead of becoming zero"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Internal 402")]),
+        Ok(Value::Int(20)),
+        "retail Unit types 402..413 alias their active read onto queue slots 0..11"
+    );
+    assert_eq!(
+        host.call(with_queued, &[Value::Int(1), Value::str("Internal 700")]),
+        Ok(Value::Int(-1)),
+        "a resolved non-Unit/Build/Good row is not a counter target"
     );
 }
 
@@ -348,7 +537,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back() {
+fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -375,6 +564,7 @@ fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back(
         12,
     )
     .expect("load installed Mediterranean owner");
+    let (type_state, upgrades, counter_leaders) = type_count_owners();
     let image = ProductionBuiltinImage {
         map_style: Some(bind_production_map_style(12, &installed_style).unwrap()),
         setup: Some(ProductionSetupImage {
@@ -406,6 +596,9 @@ fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back(
                 ProductionLeaderImage::default()
             }
         }),
+        type_counts: Some(
+            bind_production_type_counts(&type_state, &upgrades, &counter_leaders).unwrap(),
+        ),
         techs_per_age: [Some(4), None, None, None, None, None, None],
         ..Default::default()
     };
@@ -414,8 +607,8 @@ fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back(
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 261,
-            name: "num_type_with_queued"
+            index: 245,
+            name: "population"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -451,6 +644,9 @@ fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back(
             "find_city_id",
             "find_city_id",
             "find_city_id",
+            "num_type_with_queued",
+            "num_type_with_queued",
+            "num_type",
         ]
     );
     assert_eq!(

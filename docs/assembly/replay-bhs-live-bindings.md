@@ -3,11 +3,11 @@
 ## Result
 
 The stock `economic.bhs` Program image can now be entered through the exact
-four-argument `Leader::production_ai` boundary. The replay adapter owns eleven
+four-argument `Leader::production_ai` boundary. The replay adapter owns fifteen
 ScenarioFuncSet handlers on the smallest reached subdomain. Installed `rules.xml`
 owns `get_mapstyle`; replay setup owns the reached conquest and starting-option gates.
-Execution now owns dynamic builtin 377, `find_city_id`, and stops strictly at the
-current-upgrade type-counter builtin 261, `num_type_with_queued`.
+Execution now owns dynamic builtin 377, `find_city_id`, plus the exact joined
+type-counter cohort 259--261, and stops strictly at builtin 245, `population`.
 
 No replay checksum match is claimed. The adapter is not registered in the default
 harness, and a failed prefix atomically rolls back both BHS static-variable writes and
@@ -80,13 +80,15 @@ followed by:
 8. `377 find_city_id(capital_name)`
 
 The helper immediately repeats builtin 377 for the second- and third-city names even
-when those ordinal reads returned empty strings. Only then does it reach builtin 261,
-`num_type_with_queued(who, "Citizen")`, the next unsupported boundary.
+when those ordinal reads returned empty strings. The measured bytecode then calls builtin
+261, `num_type_with_queued(who, "Citizen")`, twice before that helper exits. The main
+script next calls builtin 259, `num_type(who, "Market")`, and reaches builtin 245,
+`population(who)`, as the next honest unsupported boundary.
 
 That path uses replay settings `starting_resources=1`, `starting_town=2`, no conquest
 or scenario semaphore bit, one live city, and a sea map. It changes `step` from 1 to 6,
 then enters `train_unit_with_need`. The failed run proves the external ref cell and the
-candidate Program both roll back after the missing dynamic call.
+candidate Program both roll back after the later missing `population` call.
 
 ## Installed and replay setup bindings
 
@@ -142,26 +144,47 @@ layouts at those offsets. An empty query can therefore match an active City with
 identifiers, which covers the reached installed names, and fails closed for Unicode/locale
 comparison instead of claiming to emulate Windows `_wcsicmp`.
 
-## Exact next boundary
+## Joined type-counter owner
 
-Builtin 261 is not a simple object scan. The PE resolves the script String across all 806
-Type entries, calls `LeaderData::current_upgrade`, then `LeaderData::get_graft`, dispatches
-the resolved Type virtually as Build/Unit/resource, and reads the corresponding live
-unsigned-short active and queued counters (or XOR-obfuscated resource stockpile). Those
-type-registry, upgrade/graft, and counter owners must be attached together; a hand-entered
-`Citizen` count would be an isolated stub. The Program must ultimately share one owner
-with the step-4 game/general-powers runtime; duplicating the Program would split its
-checksummed static state.
+The shipped PDB identifies builtins 259--261 at `0x009e9320`, `0x009e94a0`, and
+`0x009e9630`. Capstone and the PE bodies establish one semantic cohort:
+
+1. generate hashes for a nonempty query and scan all 806 `Types::list` rows in ascending
+   order, selecting the first case-insensitive internal-name match;
+2. validate one-based `who` and require both low Leader flags;
+3. for 260 and 261 only, call `LeaderData::current_upgrade(source)` and then
+   `LeaderData::get_graft(current)`;
+4. classify the final Type virtually and read the active `u16` Unit or Build counter, or
+   the decoded `LeaderDataEncrypt` Good value;
+5. for 261 only, add `num_queued[final_type]` to Unit and Build results. Good values do not
+   receive a queued addition.
+
+The replay binder consumes the canonical `TypeBuiltinState::types` rows, the complete
+8-by-806 current-upgrade/graft projection already owned by `BhsCreateUnitRuntime`, and the
+exact `victory_score::LeaderState` `num_units`, `num_buildings`, and `num_queued` arrays.
+It also consumes that Sim owner's six decoded primary-resource buckets. Good indices 6--49
+remain fail-closed because the canonical Sim does not model the adjacent encrypted fields;
+they are not silently zero-filled.
+
+One retail layout edge is pinned explicitly. `is_unit_type` accepts indices 50..413, but
+`num_units[352]` covers only 50..401. The raw address calculation for 402..413 therefore
+aliases onto `num_queued[0..11]`; builtin 261 adds the ordinary queue cell for the final
+type after that aliased active read. The focused test exercises this, first-match duplicate
+name selection, a two-hop current-upgrade/graft resolution, Unit and Build queues, a primary
+Good, and a resolved non-counter Type. This is a full-table adapter, not a `Citizen` stub.
+
+The next measured unsupported call is builtin 245, `population(who)`. The Program must
+ultimately share one owner with the step-4 game/general-powers runtime; duplicating the
+Program would split its checksummed static state.
 
 ## Validation
 
-All eight focused tests pass in split gates. The three local content tests cover the
-installed BHS, ordered map-style catalog, and all 21 checksum-bearing recordings.
-Persvati overlay job
-`replay-bhs-city-id-tranche-20260811T172824Z-19296-8416-d1806561a17b` passes the five
-content-independent adapter tests; the three installed-content/corpus tests were
-explicitly filtered rather than reported as remote passes. A later aggregate local launch
-was stopped after macOS remained parked in `_dyld_start`; it is not counted as a test result.
+All nine focused tests pass locally, including the installed `economic.bhs` trace, ordered
+map-style catalog, and 21-recording census. Persvati overlay job
+`replay-bhs-type-count-v3-20260811T180144Z-77595-26923-3cbabbeef478` passes the six
+content-independent tests; the installed map-style, installed BHS, and replay-corpus tests
+were explicitly filtered rather than reported as remote passes. Its required ignored
+`final-balance-runtime.bin` asset was supplied through the SHA-pinned remote asset allowlist.
 
 Fidelity remains Tier C: instruction-level static recovery plus corpus shape. No live
 retail execution or VM attachment was used in this tranche.

@@ -12,6 +12,13 @@ use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 use don_bhs::{
     BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
 };
+use don_sim::systems::bhs_create_unit_runtime::BhsCreateUnitRuntime;
+use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::victory_score::{
+    LeaderState as VictoryLeaderState, BUILD_END, BUILD_FIRST, NUM_BUILD_SLOTS,
+    NUM_LEADERS as NUM_VICTORY_LEADERS, NUM_TYPES, NUM_UNIT_SLOTS, UNIT_FIRST, UNIT_SCORE_END,
+    UNIT_TYPE_END,
+};
 
 /// `economic.bhs` labels, and therefore the values interpreted by
 /// `Leader::production_ai` after a successful BHS call.
@@ -140,6 +147,9 @@ pub struct ProductionBuiltinImage {
     /// Replay-carried GameInfo settings and fixed Game semaphore bytes.
     pub setup: Option<ProductionSetupImage>,
     pub leaders: [ProductionLeaderImage; 8],
+    /// Composition-bound type registry, upgrade/graft projections, and live
+    /// Leader counter snapshot used by builtins 259--261.
+    pub type_counts: Option<ProductionTypeCountImage>,
     /// `Rules::get_num(0x220 + age)` for ages 0 through 6. `None` is an unowned
     /// rules fact and fails closed if execution reaches it.
     pub techs_per_age: [Option<i32>; 7],
@@ -151,9 +161,130 @@ impl Default for ProductionBuiltinImage {
             map_style: None,
             setup: None,
             leaders: std::array::from_fn(|_| ProductionLeaderImage::default()),
+            type_counts: None,
             techs_per_age: [None; 7],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProductionCountDomain {
+    Good,
+    Unit,
+    Build,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductionTypeCountRow {
+    name: String,
+    domain: ProductionCountDomain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductionTypeCountLeader {
+    flags: u32,
+    effective_types: Vec<Option<usize>>,
+    num_buildings: Vec<u16>,
+    num_units: Vec<u16>,
+    num_queued: Vec<u16>,
+    /// The canonical Sim currently owns the six primary resource buckets. The
+    /// remaining retail Good slots stay absent rather than reading adjacent
+    /// `LeaderDataEncrypt` fields as if they were stockpiles.
+    goods: [Option<i32>; 50],
+}
+
+/// Immutable joined owner for the three native type-count registrations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductionTypeCountImage {
+    rows: Vec<ProductionTypeCountRow>,
+    leaders: [ProductionTypeCountLeader; NUM_VICTORY_LEADERS],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionTypeCountBindError {
+    LeaderCount { actual: usize },
+    BuildingCounterCount { leader: usize, actual: usize },
+    UnitCounterCount { leader: usize, actual: usize },
+    QueueCounterCount { leader: usize, actual: usize },
+}
+
+fn count_domain(index: usize) -> ProductionCountDomain {
+    match index {
+        0..UNIT_FIRST => ProductionCountDomain::Good,
+        UNIT_FIRST..UNIT_TYPE_END => ProductionCountDomain::Unit,
+        BUILD_FIRST..BUILD_END => ProductionCountDomain::Build,
+        _ => ProductionCountDomain::Other,
+    }
+}
+
+/// Join the canonical 806-row BHS type table and complete per-leader
+/// current-upgrade/graft projection to the exact Sim-owned active, queued, and
+/// decoded primary-resource counters.
+pub fn bind_production_type_counts(
+    state: &TypeBuiltinState,
+    upgrades: &BhsCreateUnitRuntime,
+    leaders: &[VictoryLeaderState],
+) -> Result<ProductionTypeCountImage, ProductionTypeCountBindError> {
+    if leaders.len() != NUM_VICTORY_LEADERS {
+        return Err(ProductionTypeCountBindError::LeaderCount {
+            actual: leaders.len(),
+        });
+    }
+    let rows = state
+        .types
+        .rows()
+        .iter()
+        .enumerate()
+        .map(|(index, row)| ProductionTypeCountRow {
+            name: row.name.clone(),
+            domain: count_domain(index),
+        })
+        .collect();
+    let mut joined = Vec::with_capacity(NUM_VICTORY_LEADERS);
+    for (leader_slot, leader) in leaders.iter().enumerate() {
+        if leader.num_buildings.len() != NUM_BUILD_SLOTS {
+            return Err(ProductionTypeCountBindError::BuildingCounterCount {
+                leader: leader_slot,
+                actual: leader.num_buildings.len(),
+            });
+        }
+        if leader.num_units.len() != NUM_UNIT_SLOTS {
+            return Err(ProductionTypeCountBindError::UnitCounterCount {
+                leader: leader_slot,
+                actual: leader.num_units.len(),
+            });
+        }
+        if leader.num_queued.len() != NUM_TYPES {
+            return Err(ProductionTypeCountBindError::QueueCounterCount {
+                leader: leader_slot,
+                actual: leader.num_queued.len(),
+            });
+        }
+        let effective_types = (0..NUM_TYPES)
+            .map(|source| {
+                upgrades
+                    .effective_type_for_count(leader_slot, source)
+                    .and_then(|target| usize::try_from(target).ok())
+            })
+            .collect();
+        let mut goods = [None; 50];
+        for (slot, value) in leader.economy.bucket.iter().copied().enumerate() {
+            goods[slot] = Some(value);
+        }
+        joined.push(ProductionTypeCountLeader {
+            flags: leader.leader_flags as u32,
+            effective_types,
+            num_buildings: leader.num_buildings.clone(),
+            num_units: leader.num_units.clone(),
+            num_queued: leader.num_queued.clone(),
+            goods,
+        });
+    }
+    let leaders: [ProductionTypeCountLeader; NUM_VICTORY_LEADERS] = joined
+        .try_into()
+        .expect("leader count was checked before joining");
+    Ok(ProductionTypeCountImage { rows, leaders })
 }
 
 /// Replay-backed inputs read by the three setup gates in the reached prefix.
@@ -269,8 +400,9 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 12] =
-    [81, 147, 248, 254, 255, 258, 323, 358, 377, 383, 712, 713];
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 15] = [
+    81, 147, 248, 254, 255, 258, 259, 260, 261, 323, 358, 377, 383, 712, 713,
+];
 
 /// A strict host for the first stock-economic prefix.
 pub struct ReplayProductionBuiltinHost<'a> {
@@ -360,6 +492,86 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
         Ok(left.eq_ignore_ascii_case(right))
     }
 
+    fn type_count(
+        &self,
+        args: &[Value],
+        resolve_upgrade_and_graft: bool,
+        include_queued: bool,
+    ) -> HostResult {
+        let query = Self::str_arg(args, 1)?;
+        if !query.is_ascii() {
+            return Err(HostError::Unimplemented);
+        }
+        let counts = self
+            .image
+            .type_counts
+            .as_ref()
+            .ok_or(HostError::Unimplemented)?;
+        let Some(source) = (!query.is_empty())
+            .then(|| {
+                counts.rows.iter().position(|row| {
+                    row.name.len() == query.len() && row.name.eq_ignore_ascii_case(query)
+                })
+            })
+            .flatten()
+        else {
+            return Ok(Value::Int(-1));
+        };
+        let Some(who0) = Self::who0(args, 0)? else {
+            return Ok(Value::Int(-1));
+        };
+        let leader = &counts.leaders[who0];
+        if leader.flags & 3 != 3 {
+            return Ok(Value::Int(-1));
+        }
+        let target = if resolve_upgrade_and_graft {
+            leader.effective_types[source].ok_or(HostError::Unimplemented)?
+        } else {
+            source
+        };
+        let row = counts.rows.get(target).ok_or(HostError::Unimplemented)?;
+        let active = match row.domain {
+            ProductionCountDomain::Good => leader.goods[target].ok_or(HostError::Unimplemented)?,
+            ProductionCountDomain::Unit if target < UNIT_SCORE_END => i32::from(
+                *leader
+                    .num_units
+                    .get(target - UNIT_FIRST)
+                    .ok_or(HostError::Unimplemented)?,
+            ),
+            // `is_unit_type` accepts 402..413 even though `num_units[352]`
+            // ends at 401. Retail's raw address arithmetic aliases those twelve
+            // reads onto `num_queued[0..12]` at +0x5a22.
+            ProductionCountDomain::Unit => i32::from(
+                *leader
+                    .num_queued
+                    .get(target - UNIT_SCORE_END)
+                    .ok_or(HostError::Unimplemented)?,
+            ),
+            ProductionCountDomain::Build => i32::from(
+                *leader
+                    .num_buildings
+                    .get(target - BUILD_FIRST)
+                    .ok_or(HostError::Unimplemented)?,
+            ),
+            ProductionCountDomain::Other => return Ok(Value::Int(-1)),
+        };
+        let value = if include_queued
+            && matches!(
+                row.domain,
+                ProductionCountDomain::Unit | ProductionCountDomain::Build
+            ) {
+            active.wrapping_add(i32::from(
+                *leader
+                    .num_queued
+                    .get(target)
+                    .ok_or(HostError::Unimplemented)?,
+            ))
+        } else {
+            active
+        };
+        Ok(Value::Int(value))
+    }
+
     fn dispatch(&self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match decl.index {
             // get_mapstyle(), `0x009e4cc0`: `Rules::map_styles[GameInfo::map_style]`
@@ -437,6 +649,14 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                         .map_or(-1, |leader| leader.city_num),
                 ))
             }
+            // num_type / num_type_upgrade / num_type_with_queued,
+            // `0x009e9320`, `0x009e94a0`, and `0x009e9630`. All three
+            // resolve the first matching internal name in the ordered 806-row
+            // table. The latter two then run current_upgrade -> get_graft;
+            // only 261 joins the final Unit/Build queued counter.
+            259 => self.type_count(args, false, false),
+            260 => self.type_count(args, true, false),
+            261 => self.type_count(args, true, true),
             // find_nation(who), `0x009ed190`.
             323 => {
                 let Some(who0) = Self::who0(args, 0)? else {

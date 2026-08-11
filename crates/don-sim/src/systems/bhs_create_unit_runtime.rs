@@ -373,6 +373,17 @@ impl BhsCreateUnitRuntime {
         self.faulted_calls
     }
 
+    /// Resolve the exact read-only projection shared by the type-count builtins:
+    /// `LeaderData::current_upgrade(source)` followed by
+    /// `LeaderData::get_graft(current)`. Missing composition authority remains
+    /// `None`; callers must not substitute the source type.
+    pub fn effective_type_for_count(&self, leader_slot: usize, source_type: usize) -> Option<i32> {
+        let leader = self.leaders.get(leader_slot)?.as_ref()?;
+        let current =
+            usize::try_from(leader.current_upgrade.get(source_type).copied().flatten()?).ok()?;
+        leader.graft.get(current).copied().flatten()
+    }
+
     pub fn shipped_prefix_reachable_calls(&self) -> u32 {
         CREATE_UNIT_COHORT_CALLS
     }
