@@ -94,7 +94,7 @@ arguments (`who`, retained `step`, and two production-policy values) and immedia
 world-backed ScenarioFuncSet facts.  The first useful cohort is:
 
 1. `num_cities` (258),
-2. `find_city_with_num` (383), including its persistent ScenarioData search cursor,
+2. `find_city_with_num` (383), a direct ordinal read from the owner's City pointer array,
 3. `was_city_attacked` (713) and `was_city_raided` (712),
 4. `find_nation` (323),
 5. `get_techs_per_age` (358), then the already owned `age` (248).
