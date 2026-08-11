@@ -14,6 +14,7 @@
 
 use super::bots::Bot;
 use super::cmd::Cmd;
+use super::gather_upgrades;
 use super::map::{Map, MapParams, Spatial};
 use super::obs::Obs;
 use super::types::Types;
@@ -105,7 +106,12 @@ impl MatchResult {
 /// Load everything the arena needs from the repo's gitignored game data.
 pub fn load_world(cfg: &MatchConfig) -> Result<World, String> {
     let types = Types::load_default()?;
-    let spatial = Spatial::load(&crate::rules::default_data_dir().join("rules.xml"))?;
+    let rules_path = crate::rules::default_data_dir().join("rules.xml");
+    let rules_text = std::fs::read_to_string(&rules_path)
+        .map_err(|error| format!("read {}: {error}", rules_path.display()))?;
+    gather_upgrades::validate_shipped_rule_text(&rules_text)
+        .map_err(|error| format!("gather-upgrade rules refused: {error:?}"))?;
+    let spatial = Spatial::load(&rules_path)?;
     let mut mp = cfg.map;
     mp.players = cfg.tribes.len();
     let map = Map::generate(mp, spatial);

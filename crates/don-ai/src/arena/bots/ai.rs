@@ -192,6 +192,8 @@ impl Ai {
                 gather_upgrades::MATHEMATICS_TYPE,
                 ids.art_of_war,
                 gather_upgrades::CHEMISTRY_TYPE,
+                gather_upgrades::CARPENTRY_TYPE,
+                gather_upgrades::AGRICULTURE_TYPE,
             ]
         } else {
             [
@@ -202,6 +204,8 @@ impl Ai {
                 gather_upgrades::MATHEMATICS_TYPE,
                 ids.art_of_war,
                 gather_upgrades::CHEMISTRY_TYPE,
+                gather_upgrades::CARPENTRY_TYPE,
+                gather_upgrades::AGRICULTURE_TYPE,
             ]
         };
         if let Some(tech) = next_tech(obs, &tech_order) {
@@ -328,9 +332,10 @@ impl Ai {
         if let Some(scholar) = scholar {
             let count = obs.count_with_queued(scholar) as i32;
             // Preserve one early knowledge decision per completed University, then let
-            // Market tax accumulate to Mathematics before additional Scholar ramp costs
-            // can repeatedly consume the same wealth source.
-            let scholar_budget_open = count < 1 || obs.has_tech(gather_upgrades::MATHEMATICS_TYPE);
+            // Market tax fund Mathematics and Chemistry before additional Scholar ramp
+            // costs repeatedly consume the same wealth source. This is ordering only;
+            // every Scholar and research still pays its exact loaded queue cost.
+            let scholar_budget_open = count < 1 || obs.has_tech(gather_upgrades::CHEMISTRY_TYPE);
             if scholar_budget_open && count < don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS {
                 let t = obs
                     .ty(scholar)

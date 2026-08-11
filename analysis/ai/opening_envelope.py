@@ -42,7 +42,20 @@ ECONOMIC_FAMILIES = {
     },
     "knowledge_economy": {"University", "Scholar"},
     "wealth_economy": {"Market", "Caravan", "Merchant"},
-    "gather_upgrades": {"Granary", "Lumber Mill", "Smelter"},
+    "gather_upgrades": {
+        "Granary",
+        "Lumber Mill",
+        "Smelter",
+        "Carpentry",
+        "Logging Industry",
+        "Papermill",
+        "Agriculture",
+        "Crop Rotation",
+        "Food Industry",
+        "Metal Alloys",
+        "Cold Casting",
+        "Steel",
+    },
     "city_expansion": {"Small City"},
 }
 
@@ -104,17 +117,20 @@ KNOWLEDGE_ECONOMY_AUDIT = {
 }
 
 GATHER_UPGRADE_AUDIT = {
-    "scope": "first-copy base Granary / Lumber Mill / Smelter policy and city-local enhancer arithmetic, enabled by one completed-Market base tax source",
-    "type_source": "validated schema/live BuildType/TechType rows 423/424/425 and 552/553",
+    "scope": "Roman Granary / Lumber Mill / Smelter construction, nine shipped enhancer researches, and dynamic city-local enhancer arithmetic, enabled by one completed-Market base tax source",
+    "type_source": "validated schema/live rows 423/424/425, 552/553, 609..614 and 620..622 plus rules.xml BonusTypes 699..711",
     "exact_owners": [
         "don_sim::systems::tech_cities::CityRules enhancer tables",
         "don_sim::systems::tech_cities::calc_gather_enhancers",
+        "LeaderData::get_granary 0x006DB340",
+        "CityData::lumber_level 0x00736820",
+        "LeaderData::get_smelter 0x006DB3F0",
         "CityData::enhancer_amount 0x00738360 multiply-then-divide ordering",
         "don_sim::systems::tech_cities::city_taxes over a completed same-city census",
     ],
-    "pinned_result": "base completed enhancers yield 120% food, 120% timber, and 150% metal; 11 food gross becomes 13 before accumulation; one completed Market credits exactly 10 wealth per 450 frames",
-    "authority_boundary": "Arena construction and ordinary generated-map payout remain MODEL; Market tax retains its exact 7200-point source accumulator but composes with the model economy; Caravan, Merchant and trade remain absent; the nearest-city duplicate gate is a conservative projection of retail's overlapping-city graph; a retained exact Farm keeps its externally supplied enhancer snapshot until explicitly rebound.",
-    "interpretation": "Accepted Market and enhancer-building rows remove zero policy surfaces and exercise exact source arithmetic, but do not make Camp/Mine terrain payout, trade, or the whole-Arena economy authoritative.",
+    "pinned_result": "Roman level vectors are Granary/Lumber 20/50/100/200 and Smelter 50/100/150/200 through research level 4; Agriculture changes 11 food gross from 13 to 16 dynamically; one completed Market credits exactly 10 wealth per 450 frames",
+    "authority_boundary": "Arena construction and ordinary generated-map payout remain MODEL; the generic queue owns exact loaded cost/timer and held-tech insertion, while unrelated tech effects remain unhosted; Greek research cost/speed and Egyptian/French early enhancer properties/grants are RED; Market tax retains its exact accumulator but composes with the model economy; Caravan, Merchant and trade remain absent; the nearest-city duplicate gate is a conservative projection of retail's overlapping-city graph; a retained exact Farm keeps its externally supplied enhancer snapshot until explicitly rebound.",
+    "interpretation": "Accepted enhancer-building/research rows exercise exact source queries and dynamic arithmetic for the default Roman cohort, but do not make construction, Camp/Mine terrain payout, nation powers, trade, or the whole-Arena economy authoritative.",
 }
 
 
@@ -342,22 +358,22 @@ def recommend(envelope: dict, policies: dict) -> dict:
     for family, row in ai["economic_families"].items():
         if family in {"basic_labor", "city_expansion"}:
             continue
-        if row["accepted_decisions"] == 0 and row["missing_human_decision_weight"]:
+        if row["missing_human_decision_weight"]:
             candidates.append((row["missing_human_decision_weight"], family, row))
     if not candidates:
         return {
-            "status": "no_zero-coverage_family",
-            "reason": "all ranked economic families appear at least once; inspect timing rows rather than inferring a world correction",
+            "status": "no_missing_ranked_economic_type",
+            "reason": "every human-observed type in the ranked economic families appears at least once; inspect timing rows rather than inferring a world correction",
         }
     weight, family, row = max(candidates)
     total = envelope["production_decisions"]
     correction = {
         "knowledge_economy": "Add University placement, Scholar production, and their knowledge-income accounting to the independent AI/Arena evaluation path.",
         "wealth_economy": "Add Market/Caravan/Merchant wealth production and their income accounting to the independent AI/Arena evaluation path.",
-        "gather_upgrades": "Add gather-upgrade production and its city bonus accounting to the independent AI/Arena evaluation path.",
+        "gather_upgrades": "Add the missing gather-upgrade construction/research lifecycle and its dynamic city bonus accounting to the independent AI/Arena evaluation path.",
     }[family]
     return {
-        "status": "diagnostic_priority",
+        "status": "diagnostic_priority" if row["accepted_decisions"] == 0 else "partial_coverage_priority",
         "family": family,
         "correction": correction,
         "missing_human_decisions": weight,

@@ -4768,14 +4768,29 @@ impl World {
                     let model_gross = self.types.constants.peasant_rate * active_workers;
                     // MODEL 3 remains red: generated-map Camp/Mine geometry and ordinary
                     // seating are not retail sources.  Only the city-local completed
-                    // enhancer lookup and `CityData::enhancer_amount` arithmetic are exact.
+                    // enhancer lookup and `CityData::enhancer_amount` arithmetic are exact
+                    // for the default Roman cohort, including held research completion.
                     // The retained authoritative-Farm branch returned above with its own
                     // externally supplied enhancer snapshot and is never recombined here.
-                    let enhanced = gather_upgrades::enhancer_amount(
-                        self.completed_base_enhancers(pi, e.city),
-                        e.gather_res,
-                        model_gross,
+                    let completed = self.completed_base_enhancers(pi, e.city);
+                    let levels = gather_upgrades::roman_enhancer_levels(
+                        self.players[pi].tribe,
+                        completed,
+                        |type_id| self.players[pi].techs.contains(&type_id),
                     );
+                    let enhanced = levels
+                        .map(|levels| {
+                            gather_upgrades::researched_enhancer_amount(
+                                levels,
+                                e.gather_res,
+                                model_gross,
+                            )
+                        })
+                        // MODEL/red outside the Roman cohort: Greek research modifiers
+                        // and Egyptian/French early enhancer properties are unhosted.
+                        .unwrap_or_else(|| {
+                            gather_upgrades::enhancer_amount(completed, e.gather_res, model_gross)
+                        });
                     gross[e.gather_res] += enhanced;
                 }
             } else if let Some(u) = self.types.upkeep.get(&e.type_id) {
@@ -4875,8 +4890,8 @@ impl World {
     ///
     /// Arena assigns `Ent::city` when the building object is created. This lookup does not
     /// substitute a new proximity rule at payout time, does not cross owners, and does not
-    /// activate an unfinished building. Higher BonusType/property levels are intentionally
-    /// absent from this base-only tranche.
+    /// activate an unfinished building. Roman higher levels are resolved separately from
+    /// the owner's completed research; this census only owns building completion.
     fn completed_base_enhancers(&self, pi: usize, city: EntId) -> CompletedBaseEnhancers {
         if city.is_none() {
             return CompletedBaseEnhancers::default();

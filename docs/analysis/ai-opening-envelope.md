@@ -24,7 +24,7 @@ families by the actual command counts:
 |---|---:|---:|---|
 | basic labour | 11,089 | 26.07% | Citizen, Farm, Fishermen, Woodcutter's Camp, Mine |
 | **knowledge economy** | **4,665** | **10.97%** | Scholar 4,134; University 531 |
-| gather upgrades | 973 | 2.29% | Granary, Lumber Mill, Smelter |
+| **gather-upgrade lifecycle** | **1,343** | **3.16%** | buildings 973; nine enhancer researches 370 |
 | wealth economy | 837 | 1.97% | Market, Caravan, Merchant |
 | city expansion | 580 | 1.36% | Small City |
 
@@ -59,9 +59,10 @@ and all declared confounds:
 
 - Arena travel, ordinary gather capacity/income, construction, combat, and map generation
   retain declared MODEL paths. Base University/Scholar mechanics, gather-enhancer source
-  rows and city arithmetic, and the base completed-Market tax source call recovered exact
-  owners inside that larger non-retail Arena. Applying enhancer percentages to ordinary
-  generated-map payout remains MODEL.
+  rows, Roman BonusType query levels and city arithmetic, and the base completed-Market
+  tax source call recovered exact owners inside that larger non-retail Arena. Applying
+  enhancer percentages to ordinary generated-map payout remains MODEL. Greek research
+  modifiers and Egyptian/French early enhancer properties remain RED.
 - The replay setup is not stratified.
 - The shipped opening trace is not the compiled retail AI.
 - Accepted issue time is comparable to a replay production command; completion time is not.
@@ -70,28 +71,37 @@ Consequently, bot-vs-bot outcomes are deliberately absent. A win would jointly m
 two policies and these incomplete Arena physics.
 
 The gather-upgrade bounded three-seed/two-seat run produced six traces per policy. `Ai`
-had 153 accepted queue/build decisions, including 96 basic-labour, **six Markets, six
-Universities, eight Scholars, and four Lumber Mills**. Every run accepted Barter, Market
+had 149 accepted queue/build decisions, including 96 basic-labour, **six Markets, six
+Universities, four Scholars, and four Lumber Mills**. Every run accepted Barter, Market
 and University. Mathematics appeared in 5/6 runs at frames 8,610..10,425 (p50 8,625), and
 Lumber Mill in 4/6 at 8,895..8,911 (p50 8,910). Those purchases used ordinary starting
 stock plus completed-Market tax, never injected wealth or Scholar income. Granary and
 Smelter remained absent. `ShippedOpening` remained 160 accepted decisions with six Markets
 and zero knowledge or gather upgrades.
 
-The prior knowledge surface remains exercised: Scholar appeared in 4/6 runs, eight accepted
-decisions total, at frames 5,445..5,475. The policy permits one early Scholar per University
-but reserves later ramped purchases until Mathematics so Scholar spending cannot consume
-the tax bank indefinitely. Candidate rows are Arena issue measurements, not human timing
-targets or completion-parity claims.
+The prior knowledge surface remains exercised. The policy permits one early Scholar per
+University but now reserves later ramped purchases until Chemistry, so the same renewable
+Market wealth source can fund the measured gather-research prerequisite without injected
+income. Candidate rows are Arena issue measurements, not human timing targets or
+completion-parity claims.
 
 ## Correction outcome and next boundary
 
-The former zero-coverage **gather upgrades** family is now represented. Live rows validate
-the first-copy six-slot costs, prerequisites, job times, footprints and flags; recovered
-city tables yield 120% food, 120% timber and 150% metal; multiply-before-divide makes an
-11-point food source become 13. The deterministic economy test keeps the authoritative
-Farm snapshot separate and applies these percentages only to the explicitly MODEL
-generated-map ordinary term.
+The earlier building-only count understated the surface. The measured family now contains
+the three buildings plus Carpentry/Logging Industry/Papermill,
+Agriculture/Crop Rotation/Food Industry, and Metal Alloys/Cold Casting/Steel: **1,343
+human decisions**. Live rows validate every six-slot cost, prerequisite, producer and
+300..450-frame timer. `rules.xml` BonusTypes 699..711 validate the TechType-to-property
+mapping used by `LeaderData::get_granary`, `CityData::lumber_level`, and
+`LeaderData::get_smelter`.
+
+For the default Roman cohort, held research changes the completed same-city enhancer level
+dynamically: Granary/Lumber use 20/50/100/200 and Smelter 50/100/150/200 through level four.
+Thus Agriculture changes an 11-point food source from 13 at base level to 16. The
+deterministic economy test keeps the authoritative Farm snapshot separate and applies these
+percentages only to the explicitly MODEL generated-map ordinary term. The generic queue
+charges the exact loaded research cost, counts down the exact job time, and installs the
+held TechType on completion.
 
 The enabler is equally bounded. `CityData::get_taxes` over a completed same-city census
 contributes `10 << 4` Market wealth gross, exactly ten wealth per 450 frames through its
@@ -99,15 +109,22 @@ own 7,200-point accumulator. Incomplete or unlinked Markets pay zero. Porcelain 
 Caravan, Merchant and trade remain absent, and composition with Arena's MODEL-period
 ordinary economy does not become a whole-economy authority claim.
 
-Because the measured `Ai` trace now contains Market, Lumber Mill and University, every
-ranked economic family appears at least once. The analyzer therefore returns
-`no_zero-coverage_family` and directs the next investigation to per-type/timing gaps rather
-than inferring another world correction. This does not erase the missing Scholar, Granary,
-Smelter, Caravan or Merchant rows; Scholar alone still carries 4,134 human decisions.
-Knowledge timing and the remaining gather types need policy/construction evidence, while
-Camp/Mine terrain payout and the overlapping-city placement graph remain explicit MODEL
-boundaries. Full derivations are in `docs/mechanics/arena-knowledge-economy.md` and
-`docs/mechanics/arena-gather-upgrades.md`.
+The analyzer no longer treats one token family row as closure. It ranks missing type weight
+inside partially represented families. Before this tranche, the accepted Lumber row still
+left **1,025 gather decisions** absent, larger than the remaining wealth/trade types. The
+exact completed-producer lifecycle is pinned by tests, but a natural 30-minute Roman run
+reaches Chemistry around frame 19,410 and still issues no Carpentry: accepted 5x5
+Lumber/Granary sites remain at `build_left=1000` because the Arena construction/movement
+MODEL strands their founding Citizens. That is RED evidence, not permission to mark the
+building complete or queue research at an incomplete producer. The shared movement platform
+must close that cause later.
+
+Greek `GREEK_RESEARCH_SPEED/COST` and Egyptian/French early enhancer enable/grant properties
+are source-validated but unhosted, so this adapter refuses to generalize its exact Roman
+level query to those nation-power games. Camp/Mine terrain payout, unrelated tech effects,
+the overlapping-city placement graph, and whole construction activation remain explicit
+MODEL/RED boundaries. Full derivations are in `docs/mechanics/arena-knowledge-economy.md`
+and `docs/mechanics/arena-gather-upgrades.md`.
 
 ## Reproduction
 
@@ -127,5 +144,5 @@ fails closed, and its minutes/seeds/FPS metadata prevents a 12-minute trace from
 silently scored against a different human horizon. The analyzer also requires both seats
 for every configured seed and both fixed policies, so a vanished/empty run cannot improve
 coverage by disappearing. The tests pin the zero-AI-command corpus fact, the original
-knowledge-economy diagnosis for a trace missing that family, and the advance to gather
-upgrades once University and Scholar rows are present.
+knowledge-economy diagnosis for a trace missing that family, and the partial gather-upgrade
+priority that remains after University, Scholar, Market and a Lumber row are present.

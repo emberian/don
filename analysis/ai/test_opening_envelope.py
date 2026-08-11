@@ -114,11 +114,15 @@ class OpeningEnvelopeTests(unittest.TestCase):
         )
         upgrades = report["policy_traces"]["Ai"]["economic_families"]["gather_upgrades"]
         self.assertEqual(upgrades["accepted_decisions"], 2)
-        self.assertEqual(upgrades["human_types_missing"], ["Granary", "Smelter"])
+        self.assertIn("Granary", upgrades["human_types_missing"])
+        self.assertIn("Smelter", upgrades["human_types_missing"])
+        self.assertIn("Carpentry", upgrades["human_types_missing"])
         wealth = report["policy_traces"]["Ai"]["economic_families"]["wealth_economy"]
         self.assertGreater(wealth["accepted_decisions"], 0)
-        self.assertEqual(report["next_model_correction"]["status"], "no_zero-coverage_family")
-        self.assertIn("11 food gross becomes 13", report["gather_upgrade_runtime_audit"]["pinned_result"])
+        self.assertEqual(report["next_model_correction"]["status"], "partial_coverage_priority")
+        self.assertEqual(report["next_model_correction"]["family"], "gather_upgrades")
+        self.assertEqual(report["next_model_correction"]["missing_human_decisions"], 1025)
+        self.assertIn("Agriculture changes 11 food gross", report["gather_upgrade_runtime_audit"]["pinned_result"])
 
 
 if __name__ == "__main__":

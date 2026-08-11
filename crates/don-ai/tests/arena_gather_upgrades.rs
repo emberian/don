@@ -1,8 +1,10 @@
 use don_ai::arena::bots::ai::Ai;
 use don_ai::arena::bots::Bot;
 use don_ai::arena::gather_upgrades::{
-    self, CompletedBaseEnhancers, GatherUpgradeSourceError, CHEMISTRY_TYPE, GRANARY_TYPE,
-    LUMBER_MILL_TYPE, MATHEMATICS_TYPE, SMELTER_TYPE,
+    self, CompletedBaseEnhancers, GatherEnhancerLevels, GatherUpgradeSourceError, AGRICULTURE_TYPE,
+    CARPENTRY_TYPE, CHEMISTRY_TYPE, COLD_CASTING_TYPE, CROP_ROTATION_TYPE, FOOD_INDUSTRY_TYPE,
+    GATHER_RESEARCH_TYPES, GRANARY_TYPE, LOGGING_INDUSTRY_TYPE, LUMBER_MILL_TYPE, MATHEMATICS_TYPE,
+    METAL_ALLOYS_TYPE, PAPERMILL_TYPE, SMELTER_TYPE, STEEL_TYPE,
 };
 use don_ai::arena::map::MapParams;
 use don_ai::arena::match_run::{load_world, MatchConfig};
@@ -117,6 +119,7 @@ fn shipped_rows_costs_and_exact_base_arithmetic_fail_closed_on_mutation() {
     assert_eq!(sources.smelter, SMELTER_TYPE);
     assert_eq!(sources.mathematics, MATHEMATICS_TYPE);
     assert_eq!(sources.chemistry, CHEMISTRY_TYPE);
+    assert_eq!(sources.research, GATHER_RESEARCH_TYPES);
 
     assert_eq!(
         world.types.get(GRANARY_TYPE).unwrap().cost,
@@ -136,6 +139,110 @@ fn shipped_rows_costs_and_exact_base_arithmetic_fail_closed_on_mutation() {
         assert_eq!((row.x_size, row.y_size), (5, 5));
         assert_eq!(row.build_flags, 0x0800_0201);
     }
+    for (type_id, name, job_time, cost, preq, where_) in [
+        (
+            CARPENTRY_TYPE,
+            "Carpentry",
+            300,
+            [150, 0, 0, 0, 150, 0],
+            &[CHEMISTRY_TYPE][..],
+            LUMBER_MILL_TYPE,
+        ),
+        (
+            LOGGING_INDUSTRY_TYPE,
+            "Logging Industry",
+            350,
+            [250, 0, 0, 0, 250, 0],
+            &[554, CARPENTRY_TYPE][..],
+            LUMBER_MILL_TYPE,
+        ),
+        (
+            PAPERMILL_TYPE,
+            "Papermill",
+            450,
+            [450, 0, 0, 0, 450, 0],
+            &[556, LOGGING_INDUSTRY_TYPE][..],
+            LUMBER_MILL_TYPE,
+        ),
+        (
+            AGRICULTURE_TYPE,
+            "Agriculture",
+            300,
+            [0, 150, 0, 0, 150, 0],
+            &[CHEMISTRY_TYPE][..],
+            GRANARY_TYPE,
+        ),
+        (
+            CROP_ROTATION_TYPE,
+            "Crop Rotation",
+            350,
+            [0, 250, 0, 0, 250, 0],
+            &[554, AGRICULTURE_TYPE][..],
+            GRANARY_TYPE,
+        ),
+        (
+            FOOD_INDUSTRY_TYPE,
+            "Food Industry",
+            450,
+            [0, 450, 0, 0, 450, 0],
+            &[556, CROP_ROTATION_TYPE][..],
+            GRANARY_TYPE,
+        ),
+        (
+            METAL_ALLOYS_TYPE,
+            "Metal Alloys",
+            350,
+            [250, 250, 0, 0, 0, 0],
+            &[554][..],
+            SMELTER_TYPE,
+        ),
+        (
+            COLD_CASTING_TYPE,
+            "Cold Casting",
+            400,
+            [350, 350, 0, 0, 0, 0],
+            &[555, METAL_ALLOYS_TYPE][..],
+            SMELTER_TYPE,
+        ),
+        (
+            STEEL_TYPE,
+            "Steel",
+            450,
+            [450, 450, 0, 0, 0, 0],
+            &[556, COLD_CASTING_TYPE][..],
+            SMELTER_TYPE,
+        ),
+    ] {
+        let row = world.types.get(type_id).unwrap();
+        assert_eq!(row.name, name);
+        assert_eq!(row.job_time, job_time);
+        assert_eq!(row.cost, cost);
+        assert_eq!(row.preq, preq);
+        assert_eq!(row.where_, where_);
+    }
+
+    let rules_path = don_ai::rules::default_data_dir().join("rules.xml");
+    let rules = std::fs::read_to_string(rules_path).expect("shipped rules.xml");
+    gather_upgrades::validate_shipped_rule_text(&rules)
+        .expect("shipped BonusType and nation descriptors match");
+    let mutated_rules = rules.replacen("preq0=\"Carpentry\"", "preq0=\"Agriculture\"", 1);
+    assert_eq!(
+        gather_upgrades::validate_shipped_rule_text(&mutated_rules),
+        Err(GatherUpgradeSourceError::RulesMismatch(
+            "BonusType prerequisite"
+        ))
+    );
+    let mutated_nation = rules.replacen(
+        "GREEK_RESEARCH_COST value=\"10% cost reduction\"",
+        "GREEK_RESEARCH_COST value=\"9% cost reduction\"",
+        1,
+    );
+    assert_eq!(
+        gather_upgrades::validate_shipped_rule_text(&mutated_nation),
+        Err(GatherUpgradeSourceError::RulesMismatch(
+            "nation-power descriptor"
+        ))
+    );
 
     let all = CompletedBaseEnhancers {
         granary: true,
@@ -172,6 +279,84 @@ fn shipped_rows_costs_and_exact_base_arithmetic_fail_closed_on_mutation() {
             field: "type_id",
         })
     );
+}
+
+#[test]
+fn roman_research_levels_follow_shipped_query_precedence_and_refuse_other_tribes() {
+    let all = CompletedBaseEnhancers {
+        granary: true,
+        lumber_mill: true,
+        smelter: true,
+    };
+    assert_eq!(
+        gather_upgrades::roman_enhancer_levels(6, all, |_| false),
+        Some(GatherEnhancerLevels {
+            granary: 1,
+            lumber_mill: 1,
+            smelter: 1,
+        })
+    );
+    let first = [AGRICULTURE_TYPE, CARPENTRY_TYPE, METAL_ALLOYS_TYPE];
+    let levels = gather_upgrades::roman_enhancer_levels(6, all, |id| first.contains(&id)).unwrap();
+    assert_eq!(levels.granary, 2);
+    assert_eq!(levels.lumber_mill, 2);
+    assert_eq!(levels.smelter, 2);
+    let exact = gather_upgrades::researched_enhancers(levels);
+    assert_eq!(
+        (exact.granary, exact.lumber_mill, exact.smelter),
+        (50, 50, 100)
+    );
+
+    let highest = [FOOD_INDUSTRY_TYPE, PAPERMILL_TYPE, STEEL_TYPE];
+    assert_eq!(
+        gather_upgrades::roman_enhancer_levels(6, all, |id| highest.contains(&id)),
+        Some(GatherEnhancerLevels {
+            granary: 4,
+            lumber_mill: 4,
+            smelter: 4,
+        })
+    );
+    for tribe in [5, 7, 10] {
+        assert_eq!(
+            gather_upgrades::roman_enhancer_levels(tribe, all, |_| true),
+            None,
+            "nation-power research/grant paths stay red for tribe {tribe}"
+        );
+    }
+}
+
+#[test]
+fn exact_queue_cost_timer_and_completion_install_the_held_research() {
+    let mut world = world(0x5eed_0001);
+    let lumber_mill = install_completed(&mut world, 0, LUMBER_MILL_TYPE);
+    world.players[0].techs.insert(CHEMISTRY_TYPE);
+    world.players[0].stock = [1_000; 6];
+    let before = world.players[0].stock;
+    assert_eq!(
+        world.submit(
+            0,
+            Cmd::Queue {
+                producer: lumber_mill,
+                type_id: CARPENTRY_TYPE,
+                count: 1,
+            },
+        ),
+        OrderResult::Ok(1)
+    );
+    assert_eq!(
+        world.players[0].stock,
+        std::array::from_fn(|resource| {
+            before[resource] - world.types.get(CARPENTRY_TYPE).unwrap().cost[resource]
+        })
+    );
+    assert_eq!(world.ent(lumber_mill).unwrap().queue[0].frames_left, 300);
+    for _ in 0..299 {
+        world.step();
+    }
+    assert!(!world.players[0].techs.contains(&CARPENTRY_TYPE));
+    world.step();
+    assert!(world.players[0].techs.contains(&CARPENTRY_TYPE));
+    assert!(world.ent(lumber_mill).unwrap().queue.is_empty());
 }
 
 #[test]
@@ -265,6 +450,19 @@ fn completed_same_city_granary_scales_only_the_model_farm_term() {
     }
     let with = world.players[0].gathered[RES_FOOD];
     assert_eq!(with - without, 2);
+
+    // Agriculture moves the same completed Granary from level 1 (+20) to level 2
+    // (+50). It is read dynamically from the owner's completed research, not frozen
+    // when either the Farm or Granary was installed.
+    world.players[0].techs.insert(AGRICULTURE_TYPE);
+    world.players[0].stock[RES_FOOD] = 0;
+    world.players[0].acc[RES_FOOD] = 0;
+    world.players[0].gathered[RES_FOOD] = 0;
+    for _ in 0..450 {
+        world.step();
+    }
+    let researched = world.players[0].gathered[RES_FOOD];
+    assert_eq!(researched - without, 5);
 }
 
 #[test]
@@ -318,7 +516,7 @@ fn policy_commands(mut world: World, mutate_granary_cost: bool) -> Vec<Cmd> {
 }
 
 #[test]
-fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_seats() {
+fn ai_policy_reads_affordability_and_naturally_reaches_chemistry_across_fixed_seeds_and_seats() {
     let baseline = policy_commands(world(0x5eed_0001), false);
     assert!(baseline
         .iter()
@@ -329,6 +527,7 @@ fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_sea
         .any(|command| matches!(command, Cmd::Build { type_id, .. } if *type_id == GRANARY_TYPE)));
 
     let mut multi_seed_reached_upgrade = false;
+    let mut multi_seed_reached_chemistry = false;
     let mut diagnostics = Vec::new();
     for seed_index in 0_u32..2 {
         let seed = 0x5EED_0001u32.wrapping_add(seed_index.wrapping_mul(0x9E37_79B9));
@@ -337,7 +536,7 @@ fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_sea
             let mut ai = Ai::default();
             let mut commands = Vec::new();
             let mut accepted = [false; 3];
-            while world.frame < 12 * 60 * FPS && world.players[seat].alive {
+            while world.frame < 23 * 60 * FPS && world.players[seat].alive {
                 if world.frame % ai.decide_period().max(1)
                     == seat as i64 % ai.decide_period().max(1)
                 {
@@ -345,7 +544,9 @@ fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_sea
                     ai.act(&Obs::of(&world, seat), &mut commands);
                     for command in commands.drain(..) {
                         let type_id = match command {
-                            Cmd::Build { type_id, .. } => Some(type_id),
+                            Cmd::Build { type_id, .. } | Cmd::Queue { type_id, .. } => {
+                                Some(type_id)
+                            }
                             _ => None,
                         };
                         if matches!(world.submit(seat as u8, command), OrderResult::Ok(_)) {
@@ -367,6 +568,7 @@ fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_sea
                     .own_ents(seat)
                     .any(|ent| ent.type_id == world.ids.market && ent.complete));
             }
+            multi_seed_reached_chemistry |= world.players[seat].techs.contains(&CHEMISTRY_TYPE);
             diagnostics.push(format!(
                 "seed={seed_index} seat={seat} accepted={accepted:?} techs={:?} stock={:?} sites={:?}",
                 world.players[seat].techs,
@@ -382,5 +584,9 @@ fn ai_policy_reads_affordability_and_accepts_upgrades_across_fixed_seeds_and_sea
     assert!(
         multi_seed_reached_upgrade,
         "neither fixed seed had a seat reach a gather upgrade from ordinary starting stock: {diagnostics:#?}"
+    );
+    assert!(
+        multi_seed_reached_chemistry,
+        "no fixed seed completed Chemistry from ordinary starting stock: {diagnostics:#?}"
     );
 }

@@ -2,7 +2,9 @@
 
 This is the next decision-weighted correction after the base University/Scholar loop.
 Within the first twelve replay minutes, human players issue 973 Granary, Lumber Mill or
-Smelter production decisions. The previous three-seed/two-seat `Ai` trace issued none.
+Smelter decisions plus 370 decisions across their nine gather-enhancer researches. The
+complete measured lifecycle is therefore 1,343 decisions, not the earlier building-only
+count.
 
 The bounded correction is deliberately smaller than “ordinary gathering is exact.” It
 adds first-copy enhancer policy, validates the shipped rows, and calls the recovered city
@@ -12,7 +14,7 @@ activation remain their existing declared models.
 ## Shipped source rows
 
 `schema/live/live-tables-building.tsv` and `live-tables-tech.tsv`, checked at `World::new`,
-give the complete generic first-copy source set:
+plus `rules.xml`, checked by `load_world`, give the complete generic source set:
 
 | object | TypeIndex | prerequisites | effective cost | job time | footprint | base bonus |
 |---|---:|---|---|---:|---:|---:|
@@ -26,6 +28,20 @@ Both research at the Library. Any identity, name, cost, job time, prerequisite, 
 tribe mask, footprint or flag mismatch makes Arena creation fail rather than silently
 renaming this tranche.
 
+The same validation covers the actual gather research rows:
+
+| chain | TypeIndex | effective costs | job times | producer |
+|---|---|---|---|---|
+| Carpentry → Logging Industry → Papermill | 609 → 610 → 611 | 150/250/450 food + the same metal | 300/350/450 | Lumber Mill 424 |
+| Agriculture → Crop Rotation → Food Industry | 612 → 613 → 614 | 150/250/450 timber + the same metal | 300/350/450 | Granary 423 |
+| Metal Alloys → Cold Casting → Steel | 620 → 621 → 622 | 250/350/450 food + the same timber | 350/400/450 | Smelter 425 |
+
+Their age/science prerequisites also come from the loaded rows. The `rules.xml`
+`TECHBONUSES` order is validated at BonusTypes 699..711: Agriculture/Crop Rotation/Food
+Industry map to Granary levels 2..4, Carpentry/Logging Industry/Papermill to Lumber levels
+2..4, and Metal Alloys/Cold Casting/Steel to Smelter levels 2..4. A source mutation fails
+before the match loads.
+
 The policy buys only the first copy of each building. That matters: retail's later-copy
 building cost uses the civilian/Worker ramp, while Arena's generic building command still
 charges the loaded base row. At owned-plus-queued count zero the base row is the exact
@@ -34,16 +50,20 @@ cost, so no unsupported ramp enters the candidate trace.
 ## Exact arithmetic
 
 `City::calc_gather` `0x00737C60` writes the city bytes from the shipped tables recovered in
-`don_sim::systems::tech_cities::calc_gather_enhancers`. At level one they are 20, 20 and
-50. `CityData::enhancer_amount` `0x00738360` then computes:
+`don_sim::systems::tech_cities::calc_gather_enhancers`. Granary and Lumber levels 1..4 are
+20/50/100/200; Smelter levels 1..4 are 50/100/150/200.
+`LeaderData::get_granary` `0x006DB340`, `CityData::lumber_level` `0x00736820`, and
+`LeaderData::get_smelter` `0x006DB3F0` define the descending held-property precedence.
+`CityData::enhancer_amount` `0x00738360` then computes:
 
 ```text
 enhanced = (100 + city_bonus_byte) * amount / 100
 ```
 
 The multiplication precedes signed integer division. Thus a mutated base gross of 11
-becomes 13 under a Granary, not 13.2 carried into the accumulator. Only food, timber and
-metal select an enhancer byte. `CITY_GATHER` is added outside each building's
+becomes 13 under a base Granary, not 13.2 carried into the accumulator; Agriculture raises
+the same source to 16 immediately after its TechType completes. Only food, timber and metal
+select an enhancer byte. `CITY_GATHER` is added outside each building's
 `BuildTypeData::calc_gather` result and is not multiplied.
 
 Arena activates this adapter only for a completed enhancer whose stored `Ent::city`
@@ -87,31 +107,40 @@ University costs: it researches Barter before Classical only when both timber ch
 already banked; otherwise Classical/University precede Barter. It prioritises the Market,
 reserves a public founder-local University footprint before paying an early Market, holds
 optional construction until that reservation is consumed, allows one early Scholar decision
-per University, and reserves further Scholar ramp costs until Mathematics. Thus the first
-gather-upgrade path starts from normal stock and Market tax without injected wealth or
-Scholar income; the University and one Scholar preserve the prior policy surface but their
-knowledge output does not fund Mathematics.
+per University, and reserves further Scholar ramp costs until Chemistry. Thus the first
+gather-upgrade path starts from normal stock and Market tax without injected wealth; the
+University and one Scholar preserve the prior policy surface.
+
+The adapter is intentionally Roman-bounded. The shipped descriptors for Greek research
+speed/cost and Egyptian/French early Granary/Lumber enable/grant properties are validated,
+but Arena has no nation-power host for them. Non-Roman games therefore do not receive a
+false exact higher-level claim from this adapter.
 
 ## Policy and evaluation meaning
 
 The observation-only `Ai` researches City State, Written Word, Barter, Classical Age and
 Mathematics to expose the first two buildings; Chemistry follows the later University-fed
-knowledge loop. Placement and affordability are read from `Obs` and the validated live
-rows. Scholar state is never consulted to reach Mathematics or decide whether a Granary,
-Lumber Mill or Smelter is useful; Chemistry's shipped knowledge cost merely makes the
-existing feedback loop economically relevant.
+knowledge loop, and Carpentry/Agriculture follow only through their shipped completed
+producers. Placement and affordability are read from `Obs` and the validated live rows.
 
 An accepted trace row means `World::submit` charged and installed a building site. It does
-not claim completion-time parity. A changed generated-map income proves that the exact
-percentage is wired into the Arena evaluation feedback loop, but the composed payout
-remains red because ordinary Camp/Mine terrain geometry, generated Farm terrain facts,
-seating, construction activation, national exceptions and higher BonusType/property
-levels are not all authoritative.
+not claim completion-time parity. A focused completed-producer test pins Carpentry's exact
+150 food + 150 metal charge, 300-frame countdown, held-tech insertion and dynamic payout.
+A changed generated-map income proves that the exact percentage is wired into the Arena
+evaluation feedback loop, but the composed payout remains red because ordinary Camp/Mine
+terrain geometry, generated Farm terrain facts, seating, construction activation and
+national exceptions are not all authoritative.
+
+The natural 30-minute Roman trace reaches Chemistry without injected resources but issues
+no Carpentry. Accepted 5x5 enhancer sites remain untouched at `build_left=1000` when their
+founders are stranded by the declared construction/movement MODEL. This tranche does not
+complete them by fiat, admit research at an incomplete producer, or widen the movement
+model. That RED cause belongs to the shared movement platform.
 
 `arena_gather_upgrades.rs` pins source mutation, exact integer ordering, Market completion
 and city census, enhancer completion and city locality, sibling-city admission, policy
-affordability mutation, and fixed seeds in both seats. Because the enabling Market now also
-represents the wealth family, `analysis/ai/test_opening_envelope.py` proves that a trace with
-Market plus gather upgrades has no remaining wholly zero economic family. That does not
-erase its missing Caravan/Merchant types; the analyzer directs the next comparison to
-timing/type gaps rather than inventing another zero-coverage world correction.
+affordability mutation, exact research queue completion, dynamic held-tech effects, and
+fixed seeds in both seats. `analysis/ai/test_opening_envelope.py` ranks missing type weight
+even after a family appears once: Market/University/Scholar plus one Lumber row still leave
+a 1,025-decision gather lifecycle gap. This is a correction priority, not retail-AI,
+timing-parity, Elo, or whole-economy evidence.
