@@ -592,6 +592,7 @@ def verify(paths):
     nfail += not allok
     print("\n%d predicates passed, %d failed, over %d specimens"
           % (npass, nfail, len(rows)))
+    return 0 if nfail == 0 else 1
 
 
 # ---------------------------------------------------------------------------
@@ -685,8 +686,7 @@ def main():
         show_toc()
         return
     if a.verify:
-        verify(a.files)
-        return
+        raise SystemExit(verify(a.files))
     if a.schema:
         show_schema(a.schema)
         return
