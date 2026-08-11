@@ -1485,7 +1485,10 @@ function validateAgreedLocalTurn(turn) {
   const packets = [];
   for (let play = 0; play < 2; play++) {
     const package_ = turn.agreement.packages[play];
-    if (package_?.stamp !== turn.stamp || package_?.play !== play) {
+    const lockstepSerial = turn.stamp * 2 + play + 1;
+    if (!Number.isSafeInteger(lockstepSerial) || lockstepSerial > 0x7fff_ffff ||
+        package_?.stamp !== turn.stamp || package_?.play !== play ||
+        package_?.lockstepSerial !== lockstepSerial) {
       throw new Error('native turn relay exposed a misordered browser command package');
     }
     const bytes = hexToBytes(package_.payload);
@@ -1529,6 +1532,7 @@ async function maybeApplyLocalTurn() {
       local.lastAppliedStamp = turn.stamp;
       local.pendingAck = {
         stamp: turn.stamp,
+        agreementHash: turn.agreement.hash,
         frame: state.mod.frame,
         digest: state.mod.digest(),
         rngState: state.mod.rngState >>> 0,

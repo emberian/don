@@ -4,12 +4,19 @@
 // native peers prove Create/Find/Join/ready/StartGame -> MatchStart agreement. An opt-in,
 // one-HaltCommand turn barrier then keeps those peers alive: a browser frame advances only
 // after both native ServiceMatch owners return the same ordered TurnPackage set, and the
-// next stamp stays closed until both paused browser Sims acknowledge equal state.
+// next stamp stays closed until both paused browser Sims acknowledge the exact package-set hash
+// and equal state. Halt remains the advertised live cohort; the bounded validator and gateway
+// are also prepared for the exact 27-byte singleton Group -> Move cohort.
 
 import { spawn as spawnChild } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
+
+import {
+  HALT_COMMAND_HEX,
+  validateCanonicalCommandHex,
+} from './public/js/play/canonical-command-package.mjs';
 
 export const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
 export const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
@@ -18,7 +25,22 @@ export const MAX_LOCAL_MATCH_LOBBIES = 16;
 export const MAX_LOCAL_MATCH_BODY_BYTES = 16 * 1024;
 export const MAX_LOCAL_MATCH_OUTPUT_BYTES = 256 * 1024;
 export const DEFAULT_LOCAL_MATCH_TIMEOUT_MS = 60_000;
-export const HALT_COMMAND_HEX = '0c';
+export { HALT_COMMAND_HEX };
+
+// The replay-file `CommandPackage::group` field is a monotone serial before the receiver
+// reuses it as Group scratch. It is not carried by NetMsg_CommandPackageData, so the local
+// two-seat owner derives one unambiguously from the ordered (stamp, play) pair.
+export function packageLockstepSerial(stamp, play) {
+  if (!Number.isSafeInteger(stamp) || stamp < 0 ||
+      !Number.isInteger(play) || play < 0 || play >= LOCAL_MATCH_PLAYERS) {
+    throw new Error('package serial requires a nonnegative stamp and a valid play slot');
+  }
+  const serial = stamp * LOCAL_MATCH_PLAYERS + play + 1;
+  if (!Number.isSafeInteger(serial) || serial > 0x7fff_ffff) {
+    throw new Error('local package lockstep serial exceeds the positive retail i32 range');
+  }
+  return serial;
+}
 
 function boundedName(value) {
   if (typeof value !== 'string') throw new Error('player name must be text');
@@ -51,6 +73,22 @@ export function validateHaltTurnRequest(value) {
     throw new Error('turn relay admits exactly canonical one-byte HaltCommand 0x0c');
   }
   return { token: value.token, stamp: value.stamp, commandHex: value.commandHex };
+}
+
+/** Strict request boundary for Halt plus the prepared 27-byte Group+Move cohort. */
+export function validateCanonicalTurnRequest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some((key) => !['token', 'stamp', 'commandHex'].includes(key))) {
+    throw new Error('turn request contains unsupported browser input');
+  }
+  if (typeof value.token !== 'string' || !Number.isInteger(value.stamp)) {
+    throw new Error('turn request requires a token and integer stamp');
+  }
+  return {
+    token: value.token,
+    stamp: value.stamp,
+    commandHex: validateCanonicalCommandHex(value.commandHex),
+  };
 }
 
 function processLine(line) {
@@ -344,7 +382,7 @@ function closePeer(peer) {
   }
 }
 
-function validateRelayTurn(value, stamp, side) {
+function validateRelayTurn(value, stamp, side, expectedPayloads) {
   if (!value || value.stamp !== stamp || value.packages !== LOCAL_MATCH_PLAYERS ||
       !Array.isArray(value.ordered) || value.ordered.length !== LOCAL_MATCH_PLAYERS ||
       !/^[a-f0-9]{16}$/.test(value.hash ?? '')) {
@@ -353,9 +391,10 @@ function validateRelayTurn(value, stamp, side) {
   for (let play = 0; play < LOCAL_MATCH_PLAYERS; play++) {
     const package_ = value.ordered[play];
     if (package_?.stamp !== stamp || package_?.play !== play ||
-        package_?.payload !== HALT_COMMAND_HEX) {
-      throw new Error(`${side} peer returned a noncanonical or misordered Halt turn ${stamp}`);
+        package_?.payload !== expectedPayloads[play]) {
+      throw new Error(`${side} peer returned a noncanonical, changed, or misordered package for turn ${stamp}`);
     }
+    validateCanonicalCommandHex(package_.payload);
   }
   return value;
 }
@@ -374,10 +413,10 @@ class NativeTurnRelay {
     if (stamp !== this.nextStamp) {
       throw new Error(`native turn relay expected stamp ${this.nextStamp}, got ${stamp}`);
     }
-    if (!Array.isArray(payloads) || payloads.length !== LOCAL_MATCH_PLAYERS ||
-        payloads.some((payload) => payload !== HALT_COMMAND_HEX)) {
-      throw new Error('native turn relay admits exactly one canonical HaltCommand per seat');
+    if (!Array.isArray(payloads) || payloads.length !== LOCAL_MATCH_PLAYERS) {
+      throw new Error('native turn relay requires exactly one canonical package per seat');
     }
+    payloads = payloads.map(validateCanonicalCommandHex);
     const peers = [this.host, this.client];
     const waits = peers.map((peer) =>
       waitPeerEvent(peer, 'turn', this.timeoutMs, (value) => value.stamp === stamp));
@@ -387,8 +426,8 @@ class NativeTurnRelay {
       peer.child.stdin.write(`TURN ${stamp} ${payloads[play]}\n`);
     }
     const [hostTurn, clientTurn] = await Promise.all(waits);
-    validateRelayTurn(hostTurn, stamp, 'host');
-    validateRelayTurn(clientTurn, stamp, 'client');
+    validateRelayTurn(hostTurn, stamp, 'host', payloads);
+    validateRelayTurn(clientTurn, stamp, 'client', payloads);
     if (hostTurn.hash !== clientTurn.hash ||
         JSON.stringify(hostTurn.ordered) !== JSON.stringify(clientTurn.ordered)) {
       throw new Error(`native peers disagreed on ordered package set for turn ${stamp}`);
@@ -397,7 +436,9 @@ class NativeTurnRelay {
     return Object.freeze({
       stamp,
       hash: hostTurn.hash,
-      packages: Object.freeze(hostTurn.ordered.map((package_) => Object.freeze({ ...package_ }))),
+      packages: Object.freeze(hostTurn.ordered.map((package_) => Object.freeze({
+        ...package_, lockstepSerial: packageLockstepSerial(stamp, package_.play),
+      }))),
     });
   }
 
@@ -586,15 +627,14 @@ export class LocalMatchGateway {
 
   submitTurn(code, token, stamp, commandHex) {
     const { lobby, member } = this.#startedMember(code, token);
-    if (!Number.isInteger(stamp) || stamp < 0 || stamp > 0xffff_ffff) {
-      throw new Error('turn stamp must be a u32');
+    if (!Number.isInteger(stamp) || stamp < 0) {
+      throw new Error('turn stamp must be a nonnegative integer');
     }
+    packageLockstepSerial(stamp, LOCAL_MATCH_PLAYERS - 1);
     if (!lobby.turn || lobby.turn.stamp !== stamp || lobby.turn.phase !== 'waiting') {
       throw new Error(`turn ${stamp} is not the open native barrier`);
     }
-    if (commandHex !== HALT_COMMAND_HEX) {
-      throw new Error('turn relay admits exactly canonical one-byte HaltCommand 0x0c');
-    }
+    commandHex = validateCanonicalCommandHex(commandHex);
     if (lobby.turn.submitted[member.seat]) return publicLobby(lobby, token);
     lobby.turn.submitted[member.seat] = true;
     lobby.turn.payloads[member.seat] = commandHex;
@@ -607,18 +647,19 @@ export class LocalMatchGateway {
     return publicLobby(lobby, token);
   }
 
-  acknowledgeTurn(code, token, stamp, frame, digest, rngState) {
+  acknowledgeTurn(code, token, stamp, agreementHash, frame, digest, rngState) {
     const { lobby, member } = this.#startedMember(code, token);
     if (!Number.isInteger(stamp) || lobby.turn?.stamp !== stamp ||
         lobby.turn.phase !== 'agreed') {
       throw new Error(`turn ${stamp} has no agreed package set to acknowledge`);
     }
-    if (!Number.isInteger(frame) || frame !== stamp + 1 ||
+    if (agreementHash !== lobby.turn.agreement.hash ||
+        !Number.isInteger(frame) || frame !== stamp + 1 ||
         typeof digest !== 'string' || !/^[a-f0-9]{16}$/.test(digest) ||
         !Number.isInteger(rngState) || rngState < 0 || rngState > 0xffff_ffff) {
-      throw new Error('browser turn acknowledgement has an invalid frame/digest/RNG state');
+      throw new Error('browser turn acknowledgement has an invalid package hash/frame/digest/RNG witness');
     }
-    const ack = { frame, digest, rngState: rngState >>> 0 };
+    const ack = { agreementHash, frame, digest, rngState: rngState >>> 0 };
     const previous = lobby.turn.acks[member.seat];
     if (previous && JSON.stringify(previous) !== JSON.stringify(ack)) {
       this.#fail(lobby, `seat ${member.seat} contradicted its turn ${stamp} acknowledgement`);
@@ -689,9 +730,10 @@ export class LocalMatchGateway {
   }
 
   #newTurn(stamp) {
-    if (!Number.isSafeInteger(stamp) || stamp > 0xffff_ffff) {
+    if (!Number.isSafeInteger(stamp)) {
       throw new Error('local turn stamp space exhausted');
     }
+    packageLockstepSerial(stamp, LOCAL_MATCH_PLAYERS - 1);
     return {
       stamp, phase: 'waiting', submitted: [false, false], payloads: [null, null],
       agreement: null, acks: null,

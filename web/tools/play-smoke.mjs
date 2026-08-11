@@ -171,6 +171,35 @@ try {
     bad++;
   }
 
+  // This module is served to and executed by Chrome, not merely imported by the Node tests.
+  // The renderer id is only a lookup key; the exact retail bytes must contain returned `o=1`.
+  out.canonicalGroupMoveBridge = await c.eval(`import('./js/play/canonical-command-package.mjs')
+    .then((codec) => {
+      const rendererId = 0x710000;
+      const identity = codec.discoverOwnerLocalSingleton(
+        [rendererId], (seen) => seen === rendererId ? { who: 0, o: 1, uid: 0x6a31 } : null, 0);
+      const built = codec.encodeCanonicalSingletonGroupMove(identity, 47435, 47486);
+      const decoded = codec.decodeCanonicalCommandPackage(built.bytes);
+      let mutationRefused = false;
+      const changed = new Uint8Array(built.bytes);
+      changed[25] = 49;
+      try { codec.decodeCanonicalCommandPackage(changed); } catch { mutationRefused = true; }
+      return {
+        rendererId, identity, bytes: built.bytes.length, hex: built.hex,
+        decodedWho: decoded.who, decodedO: decoded.o, mutationRefused,
+      };
+    }).then(JSON.stringify)`).then(JSON.parse);
+  if (out.canonicalGroupMoveBridge.bytes !== 27 ||
+      out.canonicalGroupMoveBridge.hex !==
+        '0001000100074bb900007eb9000000000000000000000102003200' ||
+      out.canonicalGroupMoveBridge.decodedWho !== 0 ||
+      out.canonicalGroupMoveBridge.decodedO !== 1 ||
+      out.canonicalGroupMoveBridge.rendererId === out.canonicalGroupMoveBridge.decodedO ||
+      !out.canonicalGroupMoveBridge.mutationRefused) {
+    console.error('FAIL: browser canonical Group+Move package/identity boundary');
+    bad++;
+  }
+
   // The recovered playable page must say what it is, show a usable initial catalog, and
   // keep its controls live at boot. These checks caught the cut-off lane's blank palette
   // and the old whole-world "fidelity" label.

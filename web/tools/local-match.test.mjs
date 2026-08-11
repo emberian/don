@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   LOCAL_MATCH_PROTOCOL, LOCAL_MATCH_TURN_RELAY, LocalMatchGateway, runServiceMatch,
-  startServiceMatchRelay, validateHaltTurnRequest,
+  packageLockstepSerial, startServiceMatchRelay, validateCanonicalTurnRequest,
+  validateHaltTurnRequest,
 } from '../local-match.mjs';
+import { encodeCanonicalSingletonGroupMove } from '../public/js/play/canonical-command-package.mjs';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-service-match-peer.mjs', import.meta.url));
 const fixtureSpawn = (_command, args, options) => spawn(process.execPath, [FIXTURE, ...args], options);
@@ -46,13 +48,14 @@ test('long-lived native peers admit only identical ordered HaltCommand packages'
   try {
     assert.equal(started.handoff.turnRelay, LOCAL_MATCH_TURN_RELAY);
     await assert.rejects(
-      () => started.relay.completeTurn(0, ['00', '0c']), /HaltCommand/);
+      () => started.relay.completeTurn(0, ['00', '0c']), /canonical Halt/);
     const turn = await started.relay.completeTurn(0, ['0c', '0c']);
     assert.equal(turn.stamp, 0);
     assert.deepEqual(turn.packages.map(({ play, payload }) => ({ play, payload })), [
       { play: 0, payload: '0c' },
       { play: 1, payload: '0c' },
     ]);
+    assert.deepEqual(turn.packages.map(({ lockstepSerial }) => lockstepSerial), [1, 2]);
     await assert.rejects(() => started.relay.completeTurn(0, ['0c', '0c']), /expected stamp 1/);
   } finally {
     started.relay.close();
@@ -98,10 +101,11 @@ test('two browser seats cannot see a handoff until both are ready', async () => 
   }
   assert.equal(hostView.turn.phase, 'agreed');
   assert.equal(hostView.turn.agreement.packages.length, 2);
+  const agreementHash = hostView.turn.agreement.hash;
   assert.equal(gateway.acknowledgeTurn(
-    host.lobby.code, host.token, 0, 1, '1111222233334444', 99).turn.stamp, 0);
+    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99).turn.stamp, 0);
   const advanced = gateway.acknowledgeTurn(
-    host.lobby.code, join.token, 0, 1, '1111222233334444', 99);
+    host.lobby.code, join.token, 0, agreementHash, 1, '1111222233334444', 99);
   assert.equal(advanced.turn.stamp, 1);
   assert.equal(advanced.lastConfirmed.stamp, 0);
   gateway.leave(host.lobby.code, host.token);
@@ -133,20 +137,112 @@ test('browser state disagreement fails closed and closes the relay', async () =>
     if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.throws(() => gateway.submitTurn(host.lobby.code, host.token, 0, '00'), /HaltCommand/);
+  assert.throws(() => gateway.submitTurn(host.lobby.code, host.token, 0, '00'), /canonical Halt/);
   gateway.submitTurn(host.lobby.code, host.token, 0, '0c');
   gateway.submitTurn(host.lobby.code, join.token, 0, '0c');
   for (let attempt = 0; attempt < 100; attempt++) {
     if (gateway.snapshot(host.lobby.code, host.token).turn?.phase === 'agreed') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  gateway.acknowledgeTurn(host.lobby.code, host.token, 0, 1, '1111222233334444', 99);
+  const agreementHash = gateway.snapshot(host.lobby.code, host.token).turn.agreement.hash;
   assert.throws(() => gateway.acknowledgeTurn(
-    host.lobby.code, join.token, 0, 1, '9999222233334444', 99), /disagreed/);
+    host.lobby.code, host.token, 0, 'ffffffffffffffff', 1, '1111222233334444', 99),
+  /package hash/);
+  gateway.acknowledgeTurn(
+    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99);
+  assert.throws(() => gateway.acknowledgeTurn(
+    host.lobby.code, join.token, 0, agreementHash, 1, '9999222233334444', 99), /disagreed/);
   const failed = gateway.snapshot(host.lobby.code, host.token);
   assert.equal(failed.phase, 'failed');
   assert.match(failed.error, /disagreed/);
   gateway.leave(host.lobby.code, host.token);
+});
+
+test('canonical request and native relay preserve two distinct 27-byte Group+Move packages', async () => {
+  const payloads = [
+    encodeCanonicalSingletonGroupMove({ who: 0, o: 1, uid: 0x101 }, 47_435, 47_486).hex,
+    encodeCanonicalSingletonGroupMove({ who: 1, o: 9, uid: 0x202 }, 12_000, 16_000).hex,
+  ];
+  assert.deepEqual(validateCanonicalTurnRequest({
+    token: 'seat', stamp: 7, commandHex: payloads[0],
+  }), { token: 'seat', stamp: 7, commandHex: payloads[0] });
+  assert.throws(() => validateCanonicalTurnRequest({
+    token: 'seat', stamp: 7, commandHex: payloads[0], rendererId: 1,
+  }), /unsupported/);
+
+  const generalizedSpawn = (_command, args, options) => spawn(
+    process.execPath, [FIXTURE, ...args], {
+      ...options,
+      env: { ...process.env, DON_FAKE_RELAY_PAYLOADS: payloads.join(',') },
+    });
+  const started = await startServiceMatchRelay('/unused/service-match-peer', 0x89abcdef, {
+    spawn: generalizedSpawn,
+    timeoutMs: 2_000,
+  });
+  try {
+    const turn = await started.relay.completeTurn(0, payloads);
+    assert.deepEqual(turn.packages.map((package_) => package_.payload), payloads);
+    assert.deepEqual(turn.packages.map((package_) => package_.lockstepSerial), [1, 2]);
+  } finally {
+    started.relay.close();
+  }
+});
+
+test('two-seat gateway locks, orders, and ACKs the generalized package set', async () => {
+  const payloads = [
+    encodeCanonicalSingletonGroupMove({ who: 0, o: 4, uid: 0x111 }, 4_000, 5_000).hex,
+    encodeCanonicalSingletonGroupMove({ who: 1, o: 8, uid: 0x222 }, 6_000, 7_000).hex,
+  ];
+  const generalizedSpawn = (_command, args, options) => spawn(
+    process.execPath, [FIXTURE, ...args], {
+      ...options,
+      env: { ...process.env, DON_FAKE_RELAY_PAYLOADS: payloads.join(',') },
+    });
+  const gateway = new LocalMatchGateway('/usr/bin/true', {
+    spawn: generalizedSpawn, timeoutMs: 2_000,
+  });
+  const host = gateway.create(0x89abcdef, 'Host');
+  const peer = gateway.join(host.lobby.code, 'Peer');
+  gateway.ready(host.lobby.code, host.token);
+  gateway.ready(host.lobby.code, peer.token);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(gateway.submitTurn(
+    host.lobby.code, host.token, 0, payloads[0]).turn.phase, 'waiting');
+  assert.equal(gateway.submitTurn(
+    host.lobby.code, peer.token, 0, payloads[1]).turn.phase, 'agreeing');
+  let view;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    view = gateway.snapshot(host.lobby.code, host.token);
+    if (view.turn?.phase === 'agreed') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(view.turn.phase, 'agreed');
+  assert.deepEqual(view.turn.agreement.packages.map(({ play, lockstepSerial, payload }) => ({
+    play, lockstepSerial, payload,
+  })), [
+    { play: 0, lockstepSerial: 1, payload: payloads[0] },
+    { play: 1, lockstepSerial: 2, payload: payloads[1] },
+  ]);
+  const agreementHash = view.turn.agreement.hash;
+  gateway.acknowledgeTurn(
+    host.lobby.code, host.token, 0, agreementHash, 1, '2222333344445555', 0x1234);
+  const advanced = gateway.acknowledgeTurn(
+    host.lobby.code, peer.token, 0, agreementHash, 1, '2222333344445555', 0x1234);
+  assert.equal(advanced.lastConfirmed.hash, agreementHash);
+  assert.equal(advanced.lastConfirmed.agreementHash, agreementHash);
+  assert.equal(advanced.turn.stamp, 1);
+  gateway.leave(host.lobby.code, host.token);
+});
+
+test('package serials are monotone, distinct from stamps, and i32 bounded', () => {
+  assert.equal(packageLockstepSerial(0, 0), 1);
+  assert.equal(packageLockstepSerial(0, 1), 2);
+  assert.equal(packageLockstepSerial(1, 0), 3);
+  assert.equal(packageLockstepSerial(0x3fff_fffe, 1), 0x7fff_fffe);
+  assert.throws(() => packageLockstepSerial(0x4000_0000, 0), /i32/);
 });
 
 test('peer disagreement and stalled processes expose no handoff', async () => {

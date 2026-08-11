@@ -3,6 +3,8 @@
 
 import { createInterface } from 'node:readline';
 
+import { validateCanonicalCommandHex } from '../../public/js/play/canonical-command-package.mjs';
+
 const [mode, ...args] = process.argv.slice(2);
 let seed = 0x89abcdef;
 if (mode === 'host') {
@@ -34,14 +36,30 @@ if (!args.includes('--relay')) {
       input.close();
       return;
     }
-    if (line !== `TURN ${nextStamp} 0c`) {
+    const fields = line.split(' ');
+    let payload;
+    try {
+      if (fields.length !== 3 || fields[0] !== 'TURN' || fields[1] !== String(nextStamp)) {
+        throw new Error('wrong TURN framing');
+      }
+      payload = validateCanonicalCommandHex(fields[2]);
+    } catch {
       console.error(`unexpected fake relay input ${JSON.stringify(line)}`);
       process.exitCode = 2;
       input.close();
       return;
     }
-    const ordered = [0, 1].map((play) => ({
-      stamp: nextStamp, play, payload: '0c',
+    const configured = process.env.DON_FAKE_RELAY_PAYLOADS?.split(',');
+    const localPlay = mode === 'host' ? 0 : 1;
+    if (configured && (configured.length !== 2 || configured[localPlay] !== payload)) {
+      console.error(`unexpected fake relay payload for play ${localPlay}`);
+      process.exitCode = 2;
+      input.close();
+      return;
+    }
+    const payloads = configured ?? [payload, payload];
+    const ordered = payloads.map((orderedPayload, play) => ({
+      stamp: nextStamp, play, payload: validateCanonicalCommandHex(orderedPayload),
     }));
     const hash = mode === 'join' && process.env.DON_FAKE_TURN_MISMATCH === '1'
       ? 'fedcba9876543210' : '0123456789abcdef';
