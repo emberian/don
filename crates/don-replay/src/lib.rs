@@ -51,6 +51,7 @@ pub mod check_all;
 pub mod check_player_forest;
 pub mod builds_runtime;
 pub mod cities_runtime;
+pub mod city_build_constructor_runtime;
 pub mod checksum;
 pub mod continent;
 pub mod fractal_boundary;
