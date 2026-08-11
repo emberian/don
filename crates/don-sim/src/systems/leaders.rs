@@ -93,7 +93,9 @@
 //!   speed/armor packages are rebuilt from an explicitly installed, provenance-bound local
 //!   post-load type source plus live leader/object state. The retail-derived table is not
 //!   compiled into or conveyed by `don-sim`; an absent source and missing type identities remain
-//!   explicit misses. Wall query population, `Wall::update_construct_time`, and reached
+//!   explicit misses. `Wall::update_construct_time` `0x0063D560` now executes its complete
+//!   545-byte body, with `LeaderData::get_building_speed_upgrade` `0x006DAE90` ported beside
+//!   it, whenever its type package is supplied. Wall query population and reached
 //!   `Object::eject_contents` remain explicit.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
@@ -188,6 +190,9 @@ pub mod offsets {
     /// `0x006ED38B` — grace timer 0's freeze flag; also `process_elimination`'s gate
     /// (`0x006B8A36`).
     pub const TIMER0_FROZEN: usize = 0x418;
+    /// `0x0063D72D` — `LeaderData::city_num`. `Wall::update_construct_time` applies
+    /// `CAPITAL_BUILD_TIME` while it is zero.
+    pub const CITY_NUM: usize = 0x3F8;
     /// `0x00594587` — the 8.8 per-leader scale `Game::retake_capital` multiplies by.
     pub const RETAKE_SCALE: usize = 0x41C;
     /// `0x006ED39A` / `0x006ED3A4`.
@@ -265,6 +270,11 @@ impl RareMask {
     /// Rare bit 30 — the one `calc_anti_attrition` tests as `byte[3] & 0x40`
     /// (`0x006CDE47`), whose rule is `TITANIUM_ATTRITION`.
     pub const TITANIUM: usize = 30;
+
+    /// Rare bit 13 — tested by `Wall::update_construct_time` as `byte[1] & 0x20` on both
+    /// the effective mask (`Leader + 0x6DA5`, `0x0063D614`) and mask B (`+0x6DCD`,
+    /// `0x0063D623`). The rule it gates is `TOBACCO_BUILDING_SPEED`.
+    pub const TOBACCO: usize = 13;
 
     /// Bit count. `economy::NUM_RARES` is the same 44.
     pub const BITS: usize = 44;
@@ -414,6 +424,33 @@ pub struct Step8Rules {
     pub colosseum_fort_range: i32,
     /// `RULES + 0x914` = 2324, `FURS_LOS`, shipped 0.
     pub furs_los: i32,
+
+    // -- Wall::update_construct_time 0x0063D560 -------------------------------------------
+    // Every one of the seven is a divisor-or-multiplier of construction *time*, so a
+    // larger value makes a building go up faster, not slower. The XML descriptions
+    // captured beside each stored value say so in words.
+    /// `RULES + 0x590` = 1424, `MAYA_BUILDING_SPEED`, shipped 20 ("20% bonus")
+    /// [`0x0063D5A1`].
+    pub maya_building_speed: i32,
+    /// `RULES + 0x4E4` = 1252, `VERSAILLES_BUILDING_SPEED`, shipped 0 ("0% faster")
+    /// [`0x0063D5FA`].
+    pub versailles_building_speed: i32,
+    /// `RULES + 0x90C` = 2316, `TOBACCO_BUILDING_SPEED`, shipped 10 ("10%")
+    /// [`0x0063D633`].
+    pub tobacco_building_speed: i32,
+    /// `RULES + 0x6E4` = 1764, `BRITISH_AA_SPEED`, shipped 33 ("33% faster creation")
+    /// [`0x0063D67B`].
+    pub british_aa_speed: i32,
+    /// `RULES + 0x8B4` = 2228, `DUTCH_FORT_SPEED`, shipped 0 ("0% faster") [`0x0063D6C7`].
+    pub dutch_fort_speed: i32,
+    /// `RULES + 0x610` = 1552, `ROMAN_FORT_SPEED`, shipped 50 ("50% faster")
+    /// [`0x0063D713`].
+    pub roman_fort_speed: i32,
+    /// `RULES + 0x3BC` = 956, `CAPITAL_BUILD_TIME`, shipped 300 ("300% of normal city
+    /// build time (this is for nomad games only)") [`0x0063D73B`]. Unlike the six above it
+    /// is a plain `v * RULE / 100` multiplier, and the emitted code applies it to **every**
+    /// building of a leader whose `city_num` is zero, with no type gate.
+    pub capital_build_time: i32,
 }
 
 /// Byte offsets of every [`Step8Rules`] field, so [`Step8Rules::from_block`] and a
@@ -454,6 +491,13 @@ pub mod rule_offsets {
     pub const TITANIUM_ATTRITION: usize = 2396;
     pub const CATTLE_CITIZEN_ARMOR: usize = 2400;
     pub const CTW_ATTRITION: usize = 2572;
+    pub const CAPITAL_BUILD_TIME: usize = 956;
+    pub const VERSAILLES_BUILDING_SPEED: usize = 1252;
+    pub const MAYA_BUILDING_SPEED: usize = 1424;
+    pub const ROMAN_FORT_SPEED: usize = 1552;
+    pub const BRITISH_AA_SPEED: usize = 1764;
+    pub const DUTCH_FORT_SPEED: usize = 2228;
+    pub const TOBACCO_BUILDING_SPEED: usize = 2316;
 }
 
 impl Default for Step8Rules {
@@ -501,6 +545,13 @@ impl Step8Rules {
             tower_fort_range: [0, 1, 2, 3],
             colosseum_fort_range: 0,
             furs_los: 0,
+            maya_building_speed: 20,
+            versailles_building_speed: 0,
+            tobacco_building_speed: 10,
+            british_aa_speed: 33,
+            dutch_fort_speed: 0,
+            roman_fort_speed: 50,
+            capital_build_time: 300,
         }
     }
 
@@ -543,6 +594,13 @@ impl Step8Rules {
             tower_fort_range: [0; 4],
             colosseum_fort_range: 0,
             furs_los: 0,
+            maya_building_speed: 0,
+            versailles_building_speed: 0,
+            tobacco_building_speed: 0,
+            british_aa_speed: 0,
+            dutch_fort_speed: 0,
+            roman_fort_speed: 0,
+            capital_build_time: 0,
         }
     }
 
@@ -611,6 +669,13 @@ impl Step8Rules {
             ],
             colosseum_fort_range: at(rule_offsets::COLOSSEUM_FORT_RANGE),
             furs_los: at(rule_offsets::FURS_LOS),
+            maya_building_speed: at(rule_offsets::MAYA_BUILDING_SPEED),
+            versailles_building_speed: at(rule_offsets::VERSAILLES_BUILDING_SPEED),
+            tobacco_building_speed: at(rule_offsets::TOBACCO_BUILDING_SPEED),
+            british_aa_speed: at(rule_offsets::BRITISH_AA_SPEED),
+            dutch_fort_speed: at(rule_offsets::DUTCH_FORT_SPEED),
+            roman_fort_speed: at(rule_offsets::ROMAN_FORT_SPEED),
+            capital_build_time: at(rule_offsets::CAPITAL_BUILD_TIME),
         }
     }
 }
@@ -717,8 +782,57 @@ pub struct Leader {
     pub econ_dirty: bool,
     /// Live leader answers used to rebuild Unit speed/armor query packages. These are
     /// port-owned decoded state, like [`Leader::econ`], rather than another recovered
-    /// offset block.
+    /// offset block. `Wall::update_construct_time` reads its `has_tribe_bonus` and
+    /// Versailles answers too — they are the *same* `LeaderData` queries, and a second
+    /// copy of a tribe-bonus word is how one retail predicate becomes two disagreeing ones.
     pub unit_stats: UnitLeaderStatState,
+    /// `LeaderData::city_num` (`Leader + 0x3F8`), read by `Wall::update_construct_time`
+    /// at `0x0063D72D`.
+    pub city_num: i32,
+    /// The three `has_preq` answers `LeaderData::get_building_speed_upgrade` `0x006DAE90`
+    /// counts, and the one `Wall::update_construct_time` tests directly.
+    pub build_stats: BuildLeaderStatState,
+}
+
+/// The `LeaderData::has_preq` answers `Wall::update_construct_time` `0x0063D560` needs.
+///
+/// Retail asks `LeaderData` for each of these at the moment it needs it. Holding them on
+/// the leader keeps the construct-time package edge-safe in exactly the way
+/// [`UnitLeaderStatState`] keeps the Unit packages edge-safe: a stat pass triggered by a
+/// rare-mask edge reads the *current* tech state, never a package built on a prior edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct BuildLeaderStatState {
+    /// `LeaderData::has_preq(BUILDINGS_CREATED_FASTER)`, `TypeIndex` `0x313` = 787
+    /// (`0x0063D5BB`). Its effect is the only non-percentage step in the chain:
+    /// `v = (v * 3) >> 2`.
+    pub buildings_created_faster: bool,
+    /// `LeaderData::has_preq(BUILDINGS_FASTER_1..=3)`, `TypeIndex` `0x2F2..=0x2F4` =
+    /// 754..=756, in that order — the three the `0x006DAE90` loop counts.
+    pub buildings_faster: [bool; 3],
+}
+
+impl BuildLeaderStatState {
+    /// `LeaderData::get_building_speed_upgrade` `0x006DAE90` (77 bytes), ported whole.
+    ///
+    /// The loop runs `t = 0x2F2 ..= 0x2F4` and adds one for each `has_preq(t)` that
+    /// answers non-zero. Two details a paraphrase loses. It is **not** a consecutive run
+    /// like `Leader::calc_attrition`'s: `0x006DAECA` is `test ecx,ecx; lea eax,[edi+1];
+    /// cmove eax,edi`, an unconditional per-iteration accumulate, so a gap in the middle
+    /// does not stop the count. And `0x006DAEA0` compares the loop variable against
+    /// `0x2AD` (`BUY_SELL`) before consulting `has_tribe_bonus(4)` — a value the
+    /// `0x2F2..=0x2F4` range never takes, so that arm is unreachable in this build. It is
+    /// the *same* dead `0x2AD` compare `calc_attrition` carries, recorded rather than
+    /// silently dropped.
+    #[inline]
+    pub fn get_building_speed_upgrade(self) -> i32 {
+        let mut count = 0i32;
+        for present in self.buildings_faster.iter().copied() {
+            if present {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 impl Leader {
@@ -1567,6 +1681,51 @@ fn derive_unit_query_packages(
     Some((speed, armor))
 }
 
+/// Object- and type-local query answers consumed by `Wall::update_construct_time`
+/// `0x0063D560`.
+///
+/// Everything the function asks *the leader* — four `has_tribe_bonus` calls, one
+/// `has_wonder`, two rare-mask bits, `city_num`, and three `has_preq` calls — is read
+/// straight off [`Leader`], so this package carries only what lives on the object or in
+/// the global type table. Its presence is what distinguishes a resolved call from a
+/// charged one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct WallConstructTimeInputs {
+    /// `TypeData::time(who)` `0x00663F20` through `ObjectType` vtable `+0x6C`
+    /// (`0x0063D56F`), the seed of the whole chain and an **unsigned** dword.
+    ///
+    /// The 86-byte body is: `is_spell_type` — either the base test `0x275 <= type < 0x2AC`
+    /// (`BASE_SPELLTYPES`..`CANCEL_ALLIANCE7`) when vtable `+0x48` is still
+    /// `TypeData::is_spell_type` `0x00470590`, or the override's answer — then
+    /// `job_time * 100` for anything that is not a spell type or that
+    /// `LeaderData::has_spell` `0x006E0BC0` already answers for, and `res_time * 100`
+    /// otherwise. A building type is never in the spell range, so for both bands this is
+    /// `BuildTypeData::job_time * 100`. It is a *global type table* read, which is why it
+    /// is an input here and not a derivation.
+    pub type_time: u32,
+    /// Object vtable `+0x2C` (`0x0063D593`, `0x0063D6B9`, `0x0063D705`).
+    ///
+    /// Band 2000 dispatches to `BuildData::is_wonder` `0x00472320`, which is
+    /// `0x20E <= ptype->type < 0x21F` — `BASE_WONDERTYPES`..`SPACEPROGRAM` inclusive.
+    /// Band 3000's `WallData` vtable holds the constant-zero body `0x0041BFF0`, so a plain
+    /// wall is never a wonder. Same slot, and therefore the same answer, as
+    /// [`WallHitInputs::is_wonder`].
+    pub is_wonder: bool,
+    /// `ObjectData::is(AIRDEFENSE, 0)` — `TypeIndex` `0x20B` = 523 — reached only when the
+    /// owner has the British bonus (`0x0063D652`).
+    ///
+    /// Retail devirtualises it: `0x0063D65D` compares vtable `+0xB8` against
+    /// `ObjectData::is` `0x00653790` and, when it matches, calls the type's `+0x60`
+    /// (`ObjectTypeData::is` `0x0065F7D0`) directly instead of through the one-jump
+    /// trampoline. Every band's `+0xB8` *is* `ObjectData::is`, so the two arms are one
+    /// predicate and the fast path is always the taken one.
+    pub is_airdefense: bool,
+    /// Type vtable `+0xFC` (`0x0063D6AB`, `0x0063D6F7`) — `BuildTypeData::is_fort`
+    /// `0x00472BA0`, which is `ObjectTypeData::is(FORTX, 0)`, `TypeIndex` `0x1BB` = 443.
+    /// Reached only for a Dutch or Roman owner.
+    pub is_fort: bool,
+}
+
 /// Global query answers consumed by the percentage chain in `Wall::update_hits`
 /// `0x0063F0D0`. Object-local construction fields remain on [`StatObject`] and the base
 /// `Object::update_hits` row remains [`StatObject::hit_inputs`].
@@ -1651,6 +1810,9 @@ pub struct StatObject {
     /// Query packages consumed by the building-band Wall override pair.
     pub wall_hit_inputs: Option<WallHitInputs>,
     pub wall_los_inputs: Option<WallLosInputs>,
+    /// Query package consumed by `Wall::update_construct_time`. Both bands direct-call the
+    /// same body, so both bands carry this.
+    pub wall_construct_time_inputs: Option<WallConstructTimeInputs>,
     /// Resolved `UnitData::o_down` (`+0x90`). Retail stores a signed object index and uses
     /// every negative value as the end sentinel; `None` is that sentinel here.
     pub o_down: Option<usize>,
@@ -1673,6 +1835,10 @@ pub struct StatObject {
     pub inside_down: i16,
     pub wall_hits_written: bool,
     pub wall_los_written: bool,
+    /// Edge-local write marker for `constr_time`, reset by the tick adapter with the other
+    /// two. `Wall::update_construct_time` runs *before* `Wall::update_hits` in the same
+    /// loop body, so the value it stores is the one the construction ramp then consumes.
+    pub construct_time_written: bool,
     pub eject_contents_requested: bool,
     /// How many times `vtbl + 0x160` was invoked on this object.
     pub v160_calls: u32,
@@ -1680,6 +1846,8 @@ pub struct StatObject {
     pub v15c_calls: u32,
     /// How many times `Wall::update_construct_time` `0x0063D560` was invoked.
     pub construct_time_updates: u32,
+    /// How many of those resolved their type package and stored `constr_time`.
+    pub construct_time_resolved: u32,
     /// `Unit::update_speed` `0x006055C0`.
     pub speed_updates: u32,
     /// `Unit::update_armor` `0x006054C0`.
@@ -1706,6 +1874,10 @@ pub struct StatPassCounts {
     pub visited: u32,
     pub active: u32,
     pub construct_time_updates: u32,
+    /// Of those, the ones whose type package was present and whose `constr_time` was
+    /// stored. `construct_time_updates - construct_time_resolved` is exactly what this
+    /// pass charged to `Gap::LeaderCalcWallStats` for the construct-time call.
+    pub construct_time_resolved: u32,
     pub speed_updates: u32,
     pub armor_updates: u32,
     pub object_hits_updates: u32,
@@ -1726,6 +1898,7 @@ impl StatPassCounts {
         self.visited += other.visited;
         self.active += other.active;
         self.construct_time_updates += other.construct_time_updates;
+        self.construct_time_resolved += other.construct_time_resolved;
         self.speed_updates += other.speed_updates;
         self.armor_updates += other.armor_updates;
         self.object_hits_updates += other.object_hits_updates;
@@ -1968,6 +2141,114 @@ pub fn unit_update_armor(
     Some(stored as i32)
 }
 
+/// The reduction retail spells out seven times inside `Wall::update_construct_time`:
+/// `imul eax, ebx, 0x64` / `add ecx, 0x64` / `xor edx, edx` / `div ecx`.
+///
+/// Every operand is a **u32** and the divide is `div`, not `idiv` — construction time is
+/// unsigned everywhere in this function, unlike the signed `pct_scale` chain in
+/// `Wall::update_hits`. The multiply is a 32-bit truncating `imul`, so it wraps.
+///
+/// A rule of exactly `-100` makes the divisor zero, which is a `#DE` fault in retail and
+/// not a value the port may invent an answer for. It is refused, and the refusal is what
+/// the caller charges.
+#[inline]
+fn construct_time_pct(v: u32, rule: i32) -> Option<u32> {
+    v.wrapping_mul(100)
+        .checked_div((rule as u32).wrapping_add(100))
+}
+
+/// `Wall::update_construct_time` `0x0063D560` (545 bytes), ported whole.
+///
+/// Retail calls it directly — not through a vtable — from **both** of
+/// `Leader::calc_wall_stats`'s loops (`0x006CF838`, `0x006CF908`), for every active object
+/// whose `WallData::is_active` answers zero. That is the under-construction predicate, so
+/// this is the function that decides how long a building takes to go up, recomputed on
+/// every stat-pass edge for every building still going up.
+///
+/// The chain, in emitted order. Nothing here is reassociated:
+///
+/// ```text
+/// v = TypeData::time(who)                                        0x0063D56F
+/// if maya && !is_wonder             v = v*100 / (MAYA_BUILDING_SPEED       + 100)
+/// if has_preq(BUILDINGS_CREATED_FASTER)
+///                                   v = (v*3) >> 2                0x0063D5CF
+/// if has_wonder(VERSAILLES)         v = v*100 / (VERSAILLES_BUILDING_SPEED + 100)
+/// if rare 13 (effective or B)       v = v*100 / (TOBACCO_BUILDING_SPEED    + 100)
+/// if british && is_airdefense       v = v*100 / (BRITISH_AA_SPEED          + 100)
+/// if dutch && is_fort && !is_wonder v = v*100 / (DUTCH_FORT_SPEED          + 100)
+/// if roman && is_fort && !is_wonder v = v*100 / (ROMAN_FORT_SPEED          + 100)
+/// if city_num == 0                  v = CAPITAL_BUILD_TIME * v / 100       0x0063D746
+/// v = (10 - get_building_speed_upgrade()) * v / 10                         0x0063D767
+/// this->constr_time = v                                                    0x0063D76F
+/// ```
+///
+/// Four things a paraphrase gets wrong.
+///
+/// **The `!is_wonder` guards are three separate calls, not one hoisted flag.** Maya, Dutch
+/// and Roman each re-issue vtable `+0x2C`; Versailles, Tobacco and the British do not
+/// consult it at all. So a Wonder still gets the Versailles, Tobacco and airdefense
+/// reductions.
+///
+/// **The last two steps divide by literals, not by a rule.** `0x0063D741` and `0x0063D762`
+/// load `0x51EB851F` and `0xCCCCCCCD` and take the high half of an unsigned `mul` — the
+/// standard unsigned magic divisions by 100 and by 10 — so `CAPITAL_BUILD_TIME` is a
+/// multiplier over a fixed 100 and the upgrade step is over a fixed 10, in the opposite
+/// direction from the six `RULE + 100` divisors above them.
+///
+/// **`CAPITAL_BUILD_TIME` has no type gate.** The XML text calls it "300% of normal *city*
+/// build time (this is for nomad games only)", but `0x0063D72D` tests only
+/// `LeaderData::city_num == 0` and then scales whatever building it was handed. Recorded
+/// as measured; the name is the rule's, not the code's.
+///
+/// **The two rare-mask reads are `& 0x20` at payload byte 1**, `Leader + 0x6DA5` and
+/// `+0x6DCD` (`0x0063D614`, `0x0063D623`) — bit 13 of the effective mask or of mask B.
+/// They sit one byte below the `& 0x40` pair at `+0x6DA7`/`+0x6DCF` that
+/// [`calc_anti_attrition`] reads for Titanium, which is the cross-check that both are
+/// indexing the same 12-byte-header `BitMask<44>` payload.
+pub fn wall_update_construct_time(
+    o: &mut StatObject,
+    leader: &Leader,
+    rules: &Step8Rules,
+) -> Option<u32> {
+    let input = o.wall_construct_time_inputs?;
+    let live = leader.unit_stats;
+    let mut v = input.type_time;
+
+    // has_tribe_bonus(1). The gated rule is named MAYA_BUILDING_SPEED, which is the
+    // independent evidence that bonus index 1 is the Maya; the same holds for 6/0xB/0x16
+    // below against ROMAN_FORT_SPEED / BRITISH_AA_SPEED / DUTCH_FORT_SPEED.
+    if live.has_tribe_bonus(1) && !input.is_wonder {
+        v = construct_time_pct(v, rules.maya_building_speed)?;
+    }
+    if leader.build_stats.buildings_created_faster {
+        v = v.wrapping_mul(3) >> 2;
+    }
+    if live.versailles {
+        v = construct_time_pct(v, rules.versailles_building_speed)?;
+    }
+    if leader.rare_effective.get(RareMask::TOBACCO) || leader.rare_b.get(RareMask::TOBACCO) {
+        v = construct_time_pct(v, rules.tobacco_building_speed)?;
+    }
+    if live.has_tribe_bonus(0x0B) && input.is_airdefense {
+        v = construct_time_pct(v, rules.british_aa_speed)?;
+    }
+    if live.has_tribe_bonus(0x16) && input.is_fort && !input.is_wonder {
+        v = construct_time_pct(v, rules.dutch_fort_speed)?;
+    }
+    if live.has_tribe_bonus(6) && input.is_fort && !input.is_wonder {
+        v = construct_time_pct(v, rules.roman_fort_speed)?;
+    }
+    if leader.city_num == 0 {
+        v = (rules.capital_build_time as u32).wrapping_mul(v) / 100;
+    }
+    let upgrade = leader.build_stats.get_building_speed_upgrade();
+    v = (10i32.wrapping_sub(upgrade) as u32).wrapping_mul(v) / 10;
+
+    o.constr_time = v;
+    o.construct_time_written = true;
+    Some(v)
+}
+
 /// Result of the recovered `Wall::update_hits` override. The ejection call is exposed
 /// separately because `Object::eject_contents` is its own 2,962-byte transaction.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2133,10 +2414,15 @@ fn build_band_pass(band: &mut [StatObject], leader: &Leader, rules: &Step8Rules)
         if !o.wall_active {
             // `Wall::update_construct_time` 0x0063D560 — the only non-virtual call in the
             // loop, and the one thing here that is a named retail function rather than a
-            // vtable slot.
+            // vtable slot. It stores `constr_time` before `Wall::update_hits` below reads
+            // it for the construction ramp, so the order of these two is load-bearing.
             o.construct_time_updates += 1;
             c.construct_time_updates += 1;
-            c.unresolved_calls += 1;
+            if wall_update_construct_time(o, leader, rules).is_some() {
+                c.construct_time_resolved += 1;
+            } else {
+                c.unresolved_calls += 1;
+            }
         }
         o.v15c_calls += 1;
         match wall_update_hits(o, rules, false) {
@@ -2163,7 +2449,12 @@ fn build_band_pass(band: &mut [StatObject], leader: &Leader, rules: &Step8Rules)
 
 /// The 3000 band is a plain `WallData` vtable: `+0x15C/+0x160` resolve to the base Object
 /// implementations, unlike the building band's `Wall` overrides.
-fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
+///
+/// `Wall::update_construct_time` is **not** one of the differences. `0x006CF908` is a
+/// direct `call 0x63d560`, byte-identical in intent to `0x006CF838` in the building loop,
+/// so the same body runs here — with the `WallData` vtable's constant-zero `+0x2C`, which
+/// is why a plain wall's [`WallConstructTimeInputs::is_wonder`] is always false.
+fn wall_band_pass(band: &mut [StatObject], leader: &Leader, rules: &Step8Rules) -> StatPassCounts {
     let mut c = StatPassCounts::default();
     for o in band.iter_mut() {
         c.visited += 1;
@@ -2174,7 +2465,11 @@ fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
         if !o.wall_active {
             o.construct_time_updates += 1;
             c.construct_time_updates += 1;
-            c.unresolved_calls += 1;
+            if wall_update_construct_time(o, leader, rules).is_some() {
+                c.construct_time_resolved += 1;
+            } else {
+                c.unresolved_calls += 1;
+            }
         }
         o.v15c_calls += 1;
         if object_update_hits(o, false).is_some() {
@@ -2205,7 +2500,7 @@ pub fn calc_wall_stats(
     objs: &mut OwnerObjects,
 ) -> StatPassCounts {
     let mut c = build_band_pass(&mut objs.band_2000, leader, rules);
-    c.add(wall_band_pass(&mut objs.band_3000));
+    c.add(wall_band_pass(&mut objs.band_3000, leader, rules));
     c
 }
 
@@ -4266,6 +4561,239 @@ mod tests {
         assert_eq!(wall_update_los(&mut o, &leader, &rules), Some(0));
     }
 
+    /// `LeaderData::get_building_speed_upgrade` `0x006DAE90` accumulates unconditionally
+    /// per iteration (`cmove` at `0x006DAECC`), so a hole in the middle of
+    /// `BUILDINGS_FASTER_1..3` still counts the far end. That is the *opposite* of
+    /// `Leader::calc_attrition`'s consecutive run, and getting it wrong is silent.
+    #[test]
+    fn building_speed_upgrade_counts_all_three_preqs_not_a_consecutive_run() {
+        let mut s = BuildLeaderStatState::default();
+        assert_eq!(s.get_building_speed_upgrade(), 0);
+        s.buildings_faster = [true, false, true];
+        assert_eq!(s.get_building_speed_upgrade(), 2);
+        s.buildings_faster = [false, false, true];
+        assert_eq!(s.get_building_speed_upgrade(), 1);
+        s.buildings_faster = [true, true, true];
+        assert_eq!(s.get_building_speed_upgrade(), 3);
+    }
+
+    /// Drives `Wall::update_construct_time` `0x0063D560` one reduction at a time, in
+    /// emitted order, against hand-independent expectations: every value below is
+    /// recomputed here from the shipped rule and the previous stage, not copied from a run.
+    #[test]
+    fn construct_time_applies_every_reduction_in_emitted_order() {
+        let rules = Step8Rules::shipped();
+        let package = WallConstructTimeInputs {
+            type_time: 100_000,
+            ..Default::default()
+        };
+        let base = |leader: &Leader, package: WallConstructTimeInputs| -> u32 {
+            let mut o = StatObject {
+                wall_construct_time_inputs: Some(package),
+                ..Default::default()
+            };
+            let v = wall_update_construct_time(&mut o, leader, &rules).unwrap();
+            assert!(o.construct_time_written);
+            assert_eq!(o.constr_time, v);
+            v
+        };
+
+        // A leader with a city, no tribe, no tech: only the final `(10 - 0) * v / 10`
+        // runs, and it is the identity.
+        let mut leader = Leader::new(0);
+        leader.city_num = 1;
+        assert_eq!(base(&leader, package), 100_000);
+
+        // Nomad: CAPITAL_BUILD_TIME is a multiplier over a literal 100, so 300 triples.
+        leader.city_num = 0;
+        assert_eq!(base(&leader, package), 300_000);
+        leader.city_num = 1;
+
+        // Maya, MAYA_BUILDING_SPEED = 20: v*100/120.
+        leader.unit_stats.set_tribe_bonus(1, true);
+        assert_eq!(base(&leader, package), 100_000 * 100 / 120);
+        // ... but not for a Wonder, which re-issues vtable +0x2C.
+        assert_eq!(
+            base(
+                &leader,
+                WallConstructTimeInputs {
+                    is_wonder: true,
+                    ..package
+                }
+            ),
+            100_000
+        );
+        leader.unit_stats.set_tribe_bonus(1, false);
+
+        // BUILDINGS_CREATED_FASTER is the one non-percentage step: (v*3) >> 2.
+        leader.build_stats.buildings_created_faster = true;
+        assert_eq!(base(&leader, package), 100_000 * 3 / 4);
+        leader.build_stats.buildings_created_faster = false;
+
+        // Versailles and Tobacco do NOT consult +0x2C, so a Wonder still gets them.
+        leader.unit_stats.versailles = true;
+        assert_eq!(
+            base(
+                &leader,
+                WallConstructTimeInputs {
+                    is_wonder: true,
+                    ..package
+                }
+            ),
+            100_000 * 100 / 100 // VERSAILLES_BUILDING_SPEED ships 0
+        );
+        leader.unit_stats.versailles = false;
+
+        leader.rare_b.set(RareMask::TOBACCO, true);
+        assert_eq!(base(&leader, package), 100_000 * 100 / 110);
+        leader.rare_b.set(RareMask::TOBACCO, false);
+        leader.rare_effective.set(RareMask::TOBACCO, true);
+        assert_eq!(base(&leader, package), 100_000 * 100 / 110);
+        leader.rare_effective.set(RareMask::TOBACCO, false);
+
+        // British: only for an AIRDEFENSE type, and with no Wonder gate at all.
+        leader.unit_stats.set_tribe_bonus(0x0B, true);
+        assert_eq!(base(&leader, package), 100_000);
+        let aa = WallConstructTimeInputs {
+            is_airdefense: true,
+            ..package
+        };
+        assert_eq!(base(&leader, aa), 100_000 * 100 / 133);
+        assert_eq!(
+            base(
+                &leader,
+                WallConstructTimeInputs {
+                    is_wonder: true,
+                    ..aa
+                }
+            ),
+            100_000 * 100 / 133
+        );
+        leader.unit_stats.set_tribe_bonus(0x0B, false);
+
+        // Roman: FORTX only, and suppressed on a Wonder. ROMAN_FORT_SPEED ships 50.
+        let fort = WallConstructTimeInputs {
+            is_fort: true,
+            ..package
+        };
+        leader.unit_stats.set_tribe_bonus(6, true);
+        assert_eq!(base(&leader, package), 100_000);
+        assert_eq!(base(&leader, fort), 100_000 * 100 / 150);
+        assert_eq!(
+            base(
+                &leader,
+                WallConstructTimeInputs {
+                    is_wonder: true,
+                    ..fort
+                }
+            ),
+            100_000
+        );
+        leader.unit_stats.set_tribe_bonus(6, false);
+
+        // The upgrade tail divides by a literal 10, applied last.
+        leader.build_stats.buildings_faster = [true, true, false];
+        assert_eq!(base(&leader, package), (10 - 2) * 100_000 / 10);
+
+        // Order check: Roman then capital then upgrade, each on the previous result.
+        leader.city_num = 0;
+        leader.unit_stats.set_tribe_bonus(6, true);
+        let expect = {
+            let v = 100_000u32 * 100 / 150;
+            let v = 300 * v / 100;
+            (10 - 2) * v / 10
+        };
+        assert_eq!(base(&leader, fort), expect);
+    }
+
+    /// A missing type package is refused, not guessed, and leaves `constr_time` alone —
+    /// that refusal is what `Gap::LeaderCalcWallStats` counts.
+    #[test]
+    fn construct_time_without_a_type_package_is_refused_and_charged_by_both_bands() {
+        let leader = Leader::new(0);
+        let rules = Step8Rules::shipped();
+        let under_construction = StatObject {
+            active: true,
+            wall_active: false,
+            constr_time: 4242,
+            ..Default::default()
+        };
+        let mut objects = OwnerObjects {
+            band_2000: vec![under_construction],
+            band_3000: vec![under_construction],
+            ..Default::default()
+        };
+        let c = calc_wall_stats(&leader, &rules, &mut objects);
+        assert_eq!(c.construct_time_updates, 2);
+        assert_eq!(c.construct_time_resolved, 0);
+        assert_eq!(objects.band_2000[0].constr_time, 4242);
+        assert_eq!(objects.band_3000[0].constr_time, 4242);
+        assert!(!objects.band_2000[0].construct_time_written);
+
+        // Supply the package on both bands: the same direct-called body runs in each loop.
+        let package = Some(WallConstructTimeInputs {
+            type_time: 900,
+            ..Default::default()
+        });
+        objects.band_2000[0].wall_construct_time_inputs = package;
+        objects.band_3000[0].wall_construct_time_inputs = package;
+        let c = calc_wall_stats(&leader, &rules, &mut objects);
+        assert_eq!(c.construct_time_updates, 2);
+        assert_eq!(c.construct_time_resolved, 2);
+        // city_num is 0 on a fresh leader, so CAPITAL_BUILD_TIME applies: 900 -> 2700.
+        assert_eq!(objects.band_2000[0].constr_time, 2700);
+        assert_eq!(objects.band_3000[0].constr_time, 2700);
+
+        // An active object never reaches the call at all.
+        objects.band_2000[0].wall_active = true;
+        objects.band_3000[0].wall_active = true;
+        let c = calc_wall_stats(&leader, &rules, &mut objects);
+        assert_eq!(c.construct_time_updates, 0);
+        assert_eq!(c.construct_time_resolved, 0);
+    }
+
+    /// `Wall::update_construct_time` stores `constr_time` *before* `Wall::update_hits`
+    /// reads it for the construction ramp (`0x006CF838` precedes `0x006CF85B`). If the two
+    /// were reordered the ramp would quantise against last frame's total work.
+    #[test]
+    fn construct_time_is_stored_before_the_hit_ramp_consumes_it() {
+        let mut leader = Leader::new(0);
+        leader.city_num = 1;
+        let rules = Step8Rules::shipped();
+        let mut objects = OwnerObjects {
+            band_2000: vec![StatObject {
+                active: true,
+                wall_active: false,
+                owner_in_game: true,
+                job_counter: 32,
+                // Deliberately stale: retail overwrites this before the ramp runs.
+                constr_time: 32,
+                hit_inputs: Some(ObjectHitInputs {
+                    base_hits: 1000,
+                    ..Default::default()
+                }),
+                wall_hit_inputs: Some(WallHitInputs {
+                    can_carry_domain_2: true,
+                    ..Default::default()
+                }),
+                wall_construct_time_inputs: Some(WallConstructTimeInputs {
+                    type_time: 128,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        calc_wall_stats(&leader, &rules, &mut objects);
+        let o = &objects.band_2000[0];
+        assert_eq!(o.constr_time, 128);
+        // With ct = 128 the ramp is (32>>5) * 1000 / (128>>5) = 1 * 1000 / 4 = 250. Had the
+        // stale ct = 32 survived, `job_counter < constr_time` would have been false and the
+        // ramp would have left the full 1000.
+        assert_eq!(o.construct_hits, 250);
+        assert_eq!(o.myhits, 1000);
+    }
+
     #[test]
     fn build_band_gap_accounting_charges_only_missing_or_reached_nested_bodies() {
         let leader = Leader::new(0);
@@ -5173,6 +5701,13 @@ mod tests {
         block[rule_offsets::FURS_LOS / 4] = s.furs_los;
         block[rule_offsets::CTW_MISSIONARIES_BONUS / 4] = s.ctw_missionaries_bonus;
         block[rule_offsets::SENATE_HP_BONUS / 4] = s.senate_hp_bonus;
+        block[rule_offsets::MAYA_BUILDING_SPEED / 4] = s.maya_building_speed;
+        block[rule_offsets::VERSAILLES_BUILDING_SPEED / 4] = s.versailles_building_speed;
+        block[rule_offsets::TOBACCO_BUILDING_SPEED / 4] = s.tobacco_building_speed;
+        block[rule_offsets::BRITISH_AA_SPEED / 4] = s.british_aa_speed;
+        block[rule_offsets::DUTCH_FORT_SPEED / 4] = s.dutch_fort_speed;
+        block[rule_offsets::ROMAN_FORT_SPEED / 4] = s.roman_fort_speed;
+        block[rule_offsets::CAPITAL_BUILD_TIME / 4] = s.capital_build_time;
         assert_eq!(Step8Rules::from_block(&block), s);
     }
 }

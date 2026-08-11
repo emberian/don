@@ -344,6 +344,9 @@ pub struct Coverage {
     pub leader_wall_stat_passes: u64,
     pub leader_unit_stat_passes: u64,
     pub leader_stat_objects_visited: u64,
+    /// `Wall::update_construct_time` `0x0063D560` calls that resolved their type package
+    /// and stored `constr_time`. Both stat-pass bands direct-call the same body.
+    pub leader_construct_time_updates: u64,
     pub leader_timer_creeps: u64,
     pub leader_taunt_dispatches: u64,
     pub market_cycles: u64,
@@ -397,6 +400,7 @@ impl Default for Coverage {
             leader_wall_stat_passes: 0,
             leader_unit_stat_passes: 0,
             leader_stat_objects_visited: 0,
+            leader_construct_time_updates: 0,
             leader_timer_creeps: 0,
             leader_taunt_dispatches: 0,
             market_cycles: 0,
@@ -2085,6 +2089,7 @@ impl Sim {
                     view.inside_down = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
                     view.wall_hits_written = false;
                     view.wall_los_written = false;
+                    view.construct_time_written = false;
                     view.eject_contents_requested = false;
                 } else {
                     view.active = false;
@@ -2103,6 +2108,11 @@ impl Sim {
                         self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
                     view.myhits = wall.myhits;
                     view.mylos = wall.mylos;
+                    // The 3000 band reaches `Wall::update_construct_time` through the same
+                    // direct call as the building band (`0x006CF908`), so its `+0x50` is
+                    // live state here too.
+                    view.constr_time = wall.constr_time;
+                    view.construct_time_written = false;
                 } else {
                     view.active = false;
                 }
@@ -2137,6 +2147,9 @@ impl Sim {
             if trace.wall_stats_ran[who] {
                 for (view, &row) in objects.band_2000.iter().zip(slot.band(Band::Build)) {
                     if let Some(build) = self.builds.get_mut(row as usize) {
+                        if view.construct_time_written {
+                            build.constr_time = view.constr_time;
+                        }
                         if view.wall_hits_written {
                             build.myhits = view.myhits;
                             build.construct_hits = view.construct_hits;
@@ -2148,6 +2161,9 @@ impl Sim {
                 }
                 for (view, &row) in objects.band_3000.iter().zip(slot.band(Band::Wall)) {
                     if let Some(wall) = self.walls.get_mut(row as usize) {
+                        if view.construct_time_written {
+                            wall.constr_time = view.constr_time;
+                        }
                         if view.active && view.hit_inputs.is_some() {
                             wall.myhits = view.myhits;
                         }
@@ -2163,9 +2179,10 @@ impl Sim {
     /// `Leaders::process_all` `0x006ED2A0`, the recovered 387-byte dispatcher: outer
     /// `flags & 2` gate, per-frame resets, hostile scan, gather, edge-triggered wall/unit
     /// stat traversals, elimination, grace timers, taunt-table dispatch, and tail-bit clear.
-    /// The base Object virtual bodies execute when their type rows are present. The Wall
-    /// override pair, construction-time update, automatic speed/armor gate population, and
-    /// `Leader::process_taunt` AI-chat body remain call-site-counted gaps.
+    /// The base Object virtual bodies, the Wall override pair, and
+    /// `Wall::update_construct_time` execute when their type rows are present. Automatic
+    /// Wall/base-Object query population and the `Leader::process_taunt` AI-chat body
+    /// remain call-site-counted gaps.
     fn leaders_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
         self.sync_step8_inputs();
@@ -2209,6 +2226,11 @@ impl Sim {
             .chain(trace.unit_pass.iter())
             .map(|pass| pass.visited as u64)
             .sum::<u64>();
+        self.cover.leader_construct_time_updates += trace
+            .wall_pass
+            .iter()
+            .map(|pass| pass.construct_time_resolved as u64)
+            .sum::<u64>();
         self.cover.leader_timer_creeps += trace
             .timers_crept
             .iter()
@@ -2217,8 +2239,9 @@ impl Sim {
         self.cover.leader_taunt_dispatches += trace.taunts.len() as u64;
 
         // Charge only genuinely unresolved calls. The four slot addresses are resolved;
-        // plain Object hit/LOS bodies run when their type rows are supplied, while the
-        // building overrides, unit speed, and armor gate population remain explicit.
+        // plain Object hit/LOS bodies and `Wall::update_construct_time` run when their
+        // type rows are supplied, while automatic Wall/base-Object query population
+        // remains explicit.
         self.cover.gaps[Gap::LeaderCalcWallStats.index()] += trace
             .wall_pass
             .iter()

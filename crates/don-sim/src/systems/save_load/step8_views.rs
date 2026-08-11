@@ -67,6 +67,12 @@ fn leader_has_only_mirrors(
         && actual.rare_a == fresh.rare_a
         && actual.rare_b == fresh.rare_b
         && actual.unit_stats == fresh.unit_stats
+        // Decoded `LeaderData` answers for `Wall::update_construct_time` `0x0063D560`,
+        // in the same fail-closed position as `unit_stats`: DoNSave has no chunk for
+        // `city_num` or the `BUILDINGS_FASTER`/`BUILDINGS_CREATED_FASTER` preqs, so a
+        // non-default value here is state without a save owner and is refused.
+        && actual.city_num == fresh.city_num
+        && actual.build_stats == fresh.build_stats
 }
 
 fn expected_unit_view(sim: &Sim, row: u32) -> Option<leaders::StatObject> {
