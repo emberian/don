@@ -23,20 +23,16 @@ GLOBAL_STAGES = [
     ("initial_world", "deterministic map, starts, players, nations, teams, diplomacy",
      "required", ""),
     ("save_load", "complete save/load and resumed deterministic execution", "partial",
-     "DoNSave (crates/don-sim/src/systems/save_load.rs, format 10) writes and reads a "
-     "retail-shaped chunk container for the owned Sim tranche and resumes from it: a "
+     "DoNSave (crates/don-sim/src/systems/save_load.rs, format 12) writes and reads a "
+     "retail-shaped chunk container for the owned Sim tranche and resumes from it. A "
      "two-player match with live Groups saves, reloads, resaves byte-identically, and runs "
      "70 further frames with the groups channel (CheckSums::check_groups 0x00937530) and "
-     "the whole-sim channel digest agreeing every frame. The group pool got its owner this "
-     "wave from Groups::walk_data 0x00713E30 / Array<Group>::walk_data 0x0047EA30 / "
-     "Group::walk_data 0x00708400; evidence: crates/don-sim/tests/save_load_groups.rs, "
-     "docs/derivation/savegame-groups.md. Still red: the save point is frame 0 for any "
-     "match that ran the PlayerSetup transaction, because the PLAYER_SETUP section is "
-     "reconstructive and canonical_player_setup_snapshot refuses world.frame != 0 -- and a "
-     "Sim without that owner cannot have an active leader at all, so no mid-match save "
-     "exists yet; closing it needs real save owners for victory_score::LeaderState "
-     "(vic_leaders.slots diplos/init_diplomacy/has_preq_2b0) and vic_match. Also refused "
-     "by reject_unsupported: step-12 visibility authority, cannon-time state, walls, "
+     "the whole-sim channel digest agreeing every frame. A configured post-frame-zero "
+     "lifecycle match also round-trips Leaders, Match, PlayerTable, CityPool, and city-capture "
+     "counters; v7-v11 retain their exact legacy order bytes. Evidence: crates/don-sim/tests/"
+     "save_load_groups.rs, crates/don-sim/tests/save_load_leader_match.rs, and docs/derivation/"
+     "savegame-groups.md. Still refused by reject_unsupported: step-12 visibility authority, "
+     "step-8 leader state/hosts, cannon-time state, walls, "
      "herds, projectile type rules, the live/consumed projectile pool, live death records, "
      "aircraft crash hosts, the Wonder lifecycle, and installed rule overrides. This is "
      "DoNSave, not a .svx writer: the retail stream's other 90 WalkDataGame::walk_data "
@@ -52,8 +48,9 @@ GLOBAL_STAGES = [
      "victory_endgame_wire.rs, docs/mechanics/victory-endgame-wire.md. Still red: "
      "tick 11 children Leader::plan_strategy and Leader::diplomacy are call-counted gaps; "
      "score inputs (num_units/num_buildings/territory/encrypted economy) are not all live; "
-     "drop states 1 and 2 need command row 38 Leader::action_declare 0x006DAB50; the "
-     "capital-elimination ending stops at LeaderData::find_capital 0x006EB930; "
+     "drop states 1 and 2 need command row 38 Leader::action_declare 0x006DAB50. The "
+     "capital-elimination ending now discharges LeaderData::find_capital 0x006EB930 through "
+     "the CityPool-backed self-validating proof in docs/assembly/lifecycle-opcode-cohort.md. "
      "Game::process_end_game's statistics/leaderboard/menu tail is a product boundary."),
     ("multiplayer_match", "owned-client setup, launch, lockstep turns, checksums, drop/rejoin",
      "required", ""),
