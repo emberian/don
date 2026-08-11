@@ -94,6 +94,7 @@ fn continent(random_state: i32) -> ContinentReceipt {
         pool_eliminations: Vec::new(),
         player_land: None,
         team_partition: None,
+        east_indies_tail: None,
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::HookComplete {

@@ -351,20 +351,15 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     );
     let sim = WorldSim::from_replay(&rep);
     assert_eq!(sim.initial_item_style_error, None);
+    let executed = sim.initial_items.as_ref().unwrap();
     assert_eq!(
-        sim.initial_items.as_ref().unwrap().boundary.name(),
-        "map_east_indies_nonplayer_islands",
-        "continent execution error: {:?}",
-        sim.initial_item_error
+        executed.boundary.name(),
+        "place_all_mountains_add_mountain",
+        "East Indies must return from its virtual and reach the exact place_all leaf; continent error: {:?}",
+        sim.initial_item_error,
     );
     let continent = sim.initial_continent.as_ref().unwrap();
-    let tile_selection = sim
-        .initial_items
-        .as_ref()
-        .unwrap()
-        .tile_selection
-        .as_ref()
-        .unwrap();
+    let tile_selection = executed.tile_selection.as_ref().unwrap();
     assert_eq!(tile_selection.passes.len(), 2);
     assert_eq!(
         continent.rng_initial,
@@ -373,13 +368,41 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     assert_ne!(continent.rng_initial, rep.initial.info.seed as i32);
     assert_eq!(continent.map_style, 18);
     assert_eq!(continent.starts_added, 6);
-    assert_eq!(continent.region_seeds.len(), 6);
-    assert_eq!(continent.region_growths.len(), 12);
+    assert!(matches!(
+        continent.stop,
+        don_replay::ContinentStop::HookComplete { .. }
+    ));
+    assert_eq!(continent.region_seeds.len(), 17);
+    assert_eq!(continent.region_growths.len(), 23);
+    assert_eq!(continent.grow_valid_calls.len(), 11);
+    assert_eq!(continent.rng_final as u32, 0xab88_731c);
+    assert_eq!(
+        continent
+            .east_indies_tail
+            .as_ref()
+            .expect("canonical East Indies receipt")
+            .remaining_islands,
+        0
+    );
+    assert_eq!(
+        continent.region_seeds.len() - 6,
+        continent.region_growths.len() - 12,
+        "each accepted non-player island has one seed and one growth"
+    );
     assert!(continent
         .region_growths
         .iter()
+        .take(12)
         .all(|growth| growth.completed && growth.retail_return == 0));
-    assert_ne!(sim.initial_items.as_ref().unwrap().boundary, plan.boundary);
+    assert!(continent
+        .direct_rng_sites
+        .contains(&don_replay::continent::EAST_INDIES_NONPLAYER_ISLANDS_VA));
+    let post = executed
+        .post_continent
+        .as_ref()
+        .expect("native East Indies return must enter the common coastline chain");
+    assert_eq!(post.next_va, don_replay::TERRAIN_GROUPS_FILL_FERTILE_VA);
+    assert_ne!(executed.boundary, plan.boundary);
     assert_eq!(
         sim.world.items_channel(),
         Err(ItemRuntimeError::Unavailable)

@@ -54,6 +54,18 @@ fn receipt_digest(label: &str, receipt: &impl std::fmt::Debug) -> [u8; 32] {
     sha256(format!("{label}\0{receipt:?}").as_bytes())
 }
 
+fn continent_implementation_digest() -> [u8; 32] {
+    let mut source = Vec::with_capacity(
+        include_bytes!("continent.rs").len()
+            + include_bytes!("east_indies_tail.rs").len()
+            + include_bytes!("team_continent_partition.rs").len(),
+    );
+    source.extend_from_slice(include_bytes!("continent.rs"));
+    source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
+    source.extend_from_slice(include_bytes!("team_continent_partition.rs"));
+    sha256(&source)
+}
+
 fn continent_resume_va(receipt: &ContinentReceipt) -> u32 {
     match &receipt.stop {
         ContinentStop::HookComplete { next_va } => *next_va,
@@ -127,7 +139,7 @@ pub fn advance_continent_world_ownership(
         ExactPortTransitionProof {
             entry_va: receipt.make_continents_va,
             resume_va: continent_resume_va(receipt),
-            implementation_sha256: sha256(include_bytes!("continent.rs")),
+            implementation_sha256: continent_implementation_digest(),
             receipt_sha256: receipt_digest("MapStyle::make_continents", receipt),
             proof_document: PROOF_DOCUMENT,
             input_checksum,

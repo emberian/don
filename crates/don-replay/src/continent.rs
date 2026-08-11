@@ -8,8 +8,19 @@
 //! It stops at the first unported geometry/region primitive and returns that
 //! call as data; it never skips the primitive and consumes later RNG draws.
 
+#[path = "east_indies_tail.rs"]
+mod east_indies_tail;
 #[path = "team_continent_partition.rs"]
 mod team_continent_partition;
+
+pub use east_indies_tail::{
+    execute_east_indies_tail, EastIndiesAreaAdjustment, EastIndiesAreaAdjustmentKind,
+    EastIndiesDirectDraw, EastIndiesDirectDrawKind, EastIndiesIslandReceipt,
+    EastIndiesRegionDefaults, EastIndiesRngSpan, EastIndiesRngSpanKind, EastIndiesTailCall,
+    EastIndiesTailError, EastIndiesTailReceipt, EastIndiesTailReturn,
+    EAST_INDIES_ISLAND_AREA_RNG_VA, EAST_INDIES_ISLAND_X_RNG_VA, EAST_INDIES_ISLAND_Y_RNG_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, EAST_INDIES_RETURN_VA,
+};
 
 pub use team_continent_partition::{
     execute_team_continent_partition, TeamContinentPartitionError, TeamContinentPartitionReceipt,
@@ -40,7 +51,6 @@ use don_sim::trig::{cosx, sinx};
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
-pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
 pub const MAP_FIND_REGION_CENTROID_VA: u32 = 0x0068_ae50;
 
 /// `MapGreatLakes::make_continents` `0x00699e40` derives the
@@ -103,8 +113,8 @@ pub enum ContinentStop {
         primitive_va: u32,
         call: GrowRegionCall,
     },
-    /// East Indies completed both player-region growth passes. The next stage
-    /// chooses and grows non-player islands.
+    /// Compatibility boundary emitted by the earlier East Indies prefix after
+    /// its player-region growth passes and before the now-admitted island tail.
     EastIndiesNonplayerIslands { next_rng_va: u32 },
     /// Retail abandons this generation pass and restarts the style virtual.
     RetryGeneration {
@@ -150,6 +160,10 @@ pub struct ContinentReceipt {
     pub player_land: Option<CheckPlayerLandReceipt>,
     /// Present only for East Meets West after executing `Map::fill_cont`.
     pub team_partition: Option<TeamContinentPartitionReceipt>,
+    /// Present only for East Indies after the privately mounted residual has
+    /// returned from the style virtual. This retains native bounded-exit and
+    /// exact interleaved RNG-span evidence for owner-transition provenance.
+    pub east_indies_tail: Option<EastIndiesTailReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -204,6 +218,7 @@ pub enum ContinentError {
     RegionRebuild(don_sim::systems::regions::RegionsError),
     PoolElimination(EliminatePoolsError),
     PlayerLand(CheckPlayerLandError),
+    EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
     InvalidActiveSlot {
         slot: u8,
@@ -443,6 +458,7 @@ pub fn execute_continent_prefix_with_regions_from_rng(
         pool_eliminations: partial.pool_eliminations,
         player_land: partial.player_land,
         team_partition: partial.team_partition,
+        east_indies_tail: partial.east_indies_tail,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -459,6 +475,7 @@ struct PartialReceipt {
     pool_eliminations: Vec<EliminatePoolsReceipt>,
     player_land: Option<CheckPlayerLandReceipt>,
     team_partition: Option<TeamContinentPartitionReceipt>,
+    east_indies_tail: Option<EastIndiesTailReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
@@ -515,6 +532,7 @@ fn old_world_or_himalayas(
         pool_eliminations: Vec::new(),
         player_land: None,
         team_partition: None,
+        east_indies_tail: None,
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
@@ -579,6 +597,7 @@ fn mediterranean(
             pool_eliminations: Vec::new(),
             player_land: None,
             team_partition: None,
+            east_indies_tail: None,
             starts_added: 0,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -725,6 +744,7 @@ fn mediterranean(
             pool_eliminations: vec![first_pools, second_pools],
             player_land: Some(player_land),
             team_partition: None,
+            east_indies_tail: None,
             starts_added: players,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -745,6 +765,7 @@ fn mediterranean(
         pool_eliminations: vec![first_pools, second_pools, final_pools],
         player_land: Some(player_land),
         team_partition: None,
+        east_indies_tail: None,
         starts_added: players,
         start_min: None,
         stop: ContinentStop::HookComplete {
@@ -1010,6 +1031,7 @@ fn great_lakes(
         pool_eliminations: vec![pools],
         player_land: Some(player_land),
         team_partition: None,
+        east_indies_tail: None,
         starts_added: players,
         start_min: None,
         stop: ContinentStop::HookComplete {
@@ -1147,6 +1169,7 @@ fn east_indies(
                     pool_eliminations: Vec::new(),
                     player_land: None,
                     team_partition: None,
+                    east_indies_tail: None,
                     starts_added: players as usize,
                     start_min: None,
                     stop: ContinentStop::RetryGeneration {
@@ -1157,20 +1180,63 @@ fn east_indies(
             }
         }
     }
+    let tail = execute_east_indies_tail(
+        world,
+        regions,
+        rng,
+        &mut growth_config,
+        EastIndiesTailCall {
+            player_regions: i32::from(players),
+            region_defaults: EastIndiesRegionDefaults {
+                common_factor: defaults.common_factor,
+                goody_factor: defaults.goody_factor,
+                flags: defaults.flags,
+            },
+        },
+    )
+    .map_err(ContinentError::EastIndiesTail)?;
+
+    // Preserve the tail's exact direct/helper interleaving in the canonical
+    // receipt stream. Successful island seeds and growths follow the player
+    // regions in their native execution order; grow-valid also records the
+    // rejected candidates which did not create a region.
+    sites.extend(
+        tail.rng_chronology
+            .iter()
+            .flat_map(|span| span.call_sites.iter().copied()),
+    );
+    seeds.extend(tail.islands.iter().map(|island| RegionSeedReceipt {
+        call: RegionSeedCall {
+            region: island.region,
+            x: island.x,
+            y: island.y,
+            area: island.target_area,
+        },
+        coord_capacity_before: island.coord_capacity_before,
+        coord_capacity_after: island.coord_capacity_after,
+        common_factor: island.common_factor,
+        goody_factor: island.goody_factor,
+        flags: island.flags,
+    }));
+    growths.extend(tail.islands.iter().map(|island| island.growth.clone()));
+
     Ok(PartialReceipt {
         world_inverted: false,
         regions_cleared: 1,
         region_seeds: seeds,
         region_growths: growths,
-        grow_valid_calls: Vec::new(),
+        grow_valid_calls: tail.grow_valid_calls.clone(),
         lake_candidates: Vec::new(),
         pool_eliminations: Vec::new(),
         player_land: None,
         team_partition: None,
+        east_indies_tail: Some(tail),
         starts_added: players as usize,
         start_min: None,
-        stop: ContinentStop::EastIndiesNonplayerIslands {
-            next_rng_va: EAST_INDIES_NONPLAYER_ISLANDS_VA,
+        // Both bounded native escape paths return from the style virtual even
+        // if one or more requested islands remain unplaced.
+        stop: ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA,
         },
     })
 }
@@ -1283,6 +1349,7 @@ fn east_meets_west(
                     pool_eliminations: Vec::new(),
                     player_land: None,
                     team_partition: Some(partition),
+                    east_indies_tail: None,
                     starts_added: 0,
                     start_min: None,
                     stop: ContinentStop::RetryGeneration {
@@ -1304,6 +1371,7 @@ fn east_meets_west(
         pool_eliminations: Vec::new(),
         player_land: None,
         team_partition: Some(partition),
+        east_indies_tail: None,
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::FindRegionCentroid {

@@ -3,17 +3,19 @@
 ## Result and boundary
 
 This tranche owns the residual of `MapEastIndies::make_continents(int)` from the
-current replay stop at `0x00697b72` through the style virtual's return at
+former replay stop at `0x00697b72` through the style virtual's return at
 `0x00697da4`. It chooses and grows the non-player islands, applies their final
 region metadata, and reports either complete placement or the exact bounded
 native escape that left islands unplaced.
 
-The tranche deliberately stops at the virtual return. The common `Map::make`
-driver next calls `Regions::clear_all` at `0x00680060`; rebuilding provisional
-regions is not owned here. Integration therefore consists of replacing
-`ContinentStop::EastIndiesNonplayerIslands` with the new atomic adapter and, on
-its successful return, continuing through the existing `HookComplete` common
-chain. No edit to that shared caller is part of this lane.
+The leaf remains a private path-mounted module under the canonical continent
+owner. `continent.rs` now gives it the same live `World`, `Regions`, main RNG,
+and `MapGrowthConfig` used by both player-region passes. It folds the leaf's
+chronological direct/helper call sites, accepted seeds, growths, and rejected
+`grow_valid` calls into the existing continent receipt. Every successful native
+return becomes `ContinentStop::HookComplete` at `Regions::clear_all`
+`0x00680060`; neither bounded return is falsely rejected merely because its
+receipt reports remaining islands.
 
 Evidence is fidelity Tier C: instruction-for-instruction transcription of
 `ron-bin/riseofnations.exe` (SHA-256
@@ -94,8 +96,24 @@ and returns at area 19 without changing any World checksum section.
 ## Residual after this tranche
 
 There is no remaining East Indies style-virtual instruction after the adapter:
-its `return_va` is `0x00697da4`. The only continuation is the already-mapped
+its `return_va` is `0x00697da4`. Production now executes the already-mapped
 common map-construction chain beginning with `Regions::clear_all` at
-`0x00680060`. Full replay compatibility still depends on that common chain and
-later terrain/resource producers; this tranche makes no World checksum match
-claim by itself.
+`0x00680060` and reaches `TerrainGroups::place_all`.
+
+The checksum-bearing recording
+`Playback___2024.04.10_17_05_19__Wed_.rcx` pins the integrated result: six
+player seeds, 12 player growths, 11 accepted island seeds/growths, 11 direct
+`grow_valid` calls, 37,018 chronological RNG sites, final main-RNG state
+`0xab88731c`, and the next exact boundary
+`place_all_mountains_add_mountain`. Its continent owner transition is
+`0x00697540 -> 0x00680060`; the resulting ledger is coherent and the offline
+localizer advances from the obsolete East Indies boundary to the place-all
+boundary and retains section 2 offset 1 as the earliest lawful unknown. The
+whole-ledger byte census is reported by the World-owner/localizer evidence,
+because independent wipe and terrain-owner tranches change that total.
+
+The peer-agreed retail World checksum at that first checkpoint remains
+`0x91c052d8`, while the current model is `0xd50f5f47`. Those values are a red
+comparison, not a byte oracle: full replay compatibility still depends on later
+terrain/resource producers, and this tranche makes no World checksum-match
+claim.

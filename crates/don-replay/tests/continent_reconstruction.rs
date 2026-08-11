@@ -355,20 +355,54 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     )
     .unwrap();
     assert!(indies.direct_rng_sites.len() > 3);
-    assert_eq!(indies.region_growths.len(), 12);
-    assert_eq!(
-        indies.rng_final,
-        indies.region_growths.last().unwrap().rng_final
-    );
+    assert!(indies.region_growths.len() > 12);
     assert_eq!(indies.starts_added, 6);
-    assert_eq!(indies.region_seeds.len(), 6);
-    match indies.stop {
-        ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => {
-            assert_eq!(next_rng_va, EAST_INDIES_NONPLAYER_ISLANDS_VA);
+    assert!(matches!(
+        indies.stop,
+        ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA
         }
-        other => panic!("East Indies stopped at {other:?}"),
-    }
-    for (index, seed) in indies.region_seeds.iter().enumerate() {
+    ));
+    let tail_start = indies
+        .direct_rng_sites
+        .iter()
+        .position(|site| *site == EAST_INDIES_NONPLAYER_ISLANDS_VA)
+        .expect("canonical receipt retains the tail's first direct draw");
+    assert!(
+        tail_start > 3,
+        "player-region helper draws precede the tail"
+    );
+    assert!(indies.direct_rng_sites[tail_start..]
+        .iter()
+        .any(|site| *site == don_replay::continent::EAST_INDIES_ISLAND_X_RNG_VA));
+    assert!(indies.direct_rng_sites[tail_start..]
+        .iter()
+        .any(|site| *site == don_replay::continent::EAST_INDIES_ISLAND_Y_RNG_VA));
+    let tail = indies
+        .east_indies_tail
+        .as_ref()
+        .expect("canonical receipt retains the complete East Indies tail");
+    assert_eq!(tail.rng_final, indies.rng_final);
+    assert_eq!(
+        tail.rng_initial, indies.region_growths[11].rng_final,
+        "the tail continues from the second player-growth pass without reseeding"
+    );
+    let tail_sites: Vec<_> = tail
+        .rng_chronology
+        .iter()
+        .flat_map(|span| span.call_sites.iter().copied())
+        .collect();
+    assert_eq!(
+        &indies.direct_rng_sites[tail_start..],
+        tail_sites.as_slice()
+    );
+
+    let islands = indies.region_growths.len() - 12;
+    assert_eq!(indies.region_seeds.len(), 6 + islands);
+    assert!(indies.grow_valid_calls.len() >= islands);
+    assert_eq!(tail.islands.len(), islands);
+    assert_eq!(tail.grow_valid_calls, indies.grow_valid_calls);
+    for (index, seed) in indies.region_seeds[..6].iter().enumerate() {
         let region = index + 1;
         assert_eq!((seed.call.region, seed.call.area), (region as i32, 125));
         assert_eq!(
@@ -387,7 +421,19 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             region as i16
         );
     }
-    assert_eq!(indies_regions.land, 6);
+    for seed in &indies.region_seeds[6..] {
+        let region = seed.call.region as usize;
+        assert_eq!(
+            (seed.common_factor, seed.goody_factor, seed.flags),
+            (5, 5, 0)
+        );
+        assert_eq!(indies_regions.list[region].climate, 1);
+        assert_eq!(
+            indies_world.wdata(seed.call.x, seed.call.y).region,
+            seed.call.region as i16
+        );
+    }
+    assert_eq!(indies_regions.land as usize, indies.region_seeds.len());
 
     let mut eastwest_world = seeded_world(100, seed);
     let eastwest_before = eastwest_world.checksum_sections();
