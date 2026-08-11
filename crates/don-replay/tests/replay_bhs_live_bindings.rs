@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 mod initial {
     pub use don_replay::initial::*;
 }
+mod leader_initial_prefix {
+    pub use don_replay::leader_initial_prefix::*;
+}
+#[path = "../src/leaders_runtime_frontier.rs"]
+mod leaders_runtime_frontier;
 mod map_style {
     pub use don_replay::map_style::*;
 }
@@ -19,10 +24,11 @@ mod replay_bhs_runtime;
 use don_bhs::{find_builtin, Host, HostError, Value, VmError};
 use don_replay::replay::Replay;
 use replay_bhs_live_bindings::{
-    bind_production_call, bind_production_map_style, bind_production_type_counts,
-    run_production_call, ProductionBuiltinImage, ProductionCallBindError, ProductionCityImage,
-    ProductionLeaderImage, ProductionMapStyleBindError, ProductionRetainedState,
-    ProductionRunFailure, ProductionSetupImage, ReplayProductionBuiltinHost,
+    bind_production_call, bind_production_map_style, bind_production_population,
+    bind_production_type_counts, run_production_call, ProductionBuiltinImage,
+    ProductionCallBindError, ProductionCityImage, ProductionLeaderImage,
+    ProductionMapStyleBindError, ProductionRetainedState, ProductionRunFailure,
+    ProductionSetupImage, ReplayProductionBuiltinHost,
 };
 use replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 
@@ -38,6 +44,8 @@ use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
 use don_sim::systems::victory_score::LeaderState as VictoryLeaderState;
+use don_sim::systems::{leaders as step8_leaders, victory_score};
+use leaders_runtime_frontier::bind_live as bind_runtime_leaders;
 
 const CHECKSUM_RECORDINGS: [&str; 21] = [
     "Playback___2018.11.17_13_21_42__Sat_.rcx",
@@ -100,8 +108,12 @@ fn type_count_owners() -> (
                 50 | 51 => "Citizen".into(),
                 52 => "Upgraded Citizen".into(),
                 53 => "Grafted Citizen".into(),
+                420 => "University".into(),
                 427 => "Barracks".into(),
+                432 => "Dock".into(),
                 436 => "Market".into(),
+                439 => "Tower".into(),
+                572 => "The Art of War".into(),
                 _ => format!("Internal {slot}"),
             };
             row.type_name = format!("Family {slot}");
@@ -190,6 +202,72 @@ fn type_count_owners() -> (
     leaders[0].num_queued[402] = 11;
     leaders[0].economy.bucket[0] = 321;
     (state, upgrades, leaders)
+}
+
+fn population_owner_with_probe(
+    control: i32,
+    population_cap: i32,
+    probe_flags: i32,
+    probe_slot: Option<usize>,
+) -> Option<(replay_bhs_live_bindings::ProductionPopulationImage, i32)> {
+    let replay_root = repo_root().join("ron-data/replays/multi");
+    for name in CHECKSUM_RECORDINGS {
+        let Ok(replay) = Replay::open(&replay_root.join(name)) else {
+            continue;
+        };
+        let Ok(prefix) = don_replay::leader_initial_prefix::derive(&replay.initial) else {
+            continue;
+        };
+        let wants_active = probe_flags & victory_score::leader_flag::VALID != 0;
+        let probe = probe_slot
+            .filter(|slot| prefix.rows[*slot].active == wants_active)
+            .or_else(|| {
+                probe_slot
+                    .is_none()
+                    .then(|| {
+                        prefix
+                            .rows
+                            .iter()
+                            .position(|row| row.active == wants_active)
+                    })
+                    .flatten()
+            });
+        let Some(probe) = probe else {
+            continue;
+        };
+        let types = victory_score::TypeTable::with_default_kinds(Default::default());
+        let mut victory = victory_score::Leaders::new(types);
+        let mut step8 = step8_leaders::Leaders::new();
+        for slot in 0..NUM_LEADERS {
+            let mut flags = 0i32;
+            if prefix.rows[slot].active {
+                flags |= victory_score::leader_flag::VALID | victory_score::leader_flag::ACTIVE;
+            }
+            if prefix.rows[slot].human {
+                flags |= victory_score::leader_flag::HUMAN;
+            }
+            if slot == probe {
+                flags = probe_flags;
+            }
+            victory.slots[slot].leader_flags = flags;
+            victory.slots[slot].population_cap = population_cap;
+            step8.leaders[slot].flags = flags as u32;
+            step8.leaders[slot].pop_cap = population_cap;
+            step8.leaders[slot].ai.control = control;
+        }
+        let frontier = bind_runtime_leaders(&prefix, &victory, &step8).ok()?;
+        return bind_production_population(&frontier)
+            .ok()
+            .map(|image| (image, probe as i32 + 1));
+    }
+    None
+}
+
+fn population_owner(
+    control: i32,
+    population_cap: i32,
+) -> Option<replay_bhs_live_bindings::ProductionPopulationImage> {
+    population_owner_with_probe(control, population_cap, 3, Some(0)).map(|(image, _)| image)
 }
 
 #[test]
@@ -289,8 +367,60 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     );
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
-        [81, 147, 248, 254, 255, 258, 259, 260, 261, 323, 358, 377, 383, 712, 713]
+        [
+            81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712,
+            713,
+        ]
     );
+}
+
+#[test]
+fn population_reads_the_reconciled_runtime_leader_control_and_cap_bytes() {
+    let Some(population) = population_owner(123, 7) else {
+        skip("no replay-derived Leader prefix could bind the runtime owner.");
+        return;
+    };
+    let image = ProductionBuiltinImage {
+        population: Some(population),
+        ..Default::default()
+    };
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    assert_eq!(
+        host.call(find_builtin("population").unwrap(), &[Value::Int(1)]),
+        Ok(Value::Int(123)),
+        "retail returns control directly without clamping it to pop_cap"
+    );
+    assert_eq!(
+        host.call(find_builtin("population_cap").unwrap(), &[Value::Int(1)]),
+        Ok(Value::Int(7))
+    );
+    assert_eq!(
+        host.call(find_builtin("population").unwrap(), &[Value::Int(9)]),
+        Ok(Value::Int(-1))
+    );
+    for who in [0, i32::MIN, i32::MAX] {
+        assert_eq!(
+            host.call(find_builtin("population").unwrap(), &[Value::Int(who)]),
+            Ok(Value::Int(-1))
+        );
+    }
+
+    for flags in [1, 2] {
+        let Some((population, who)) = population_owner_with_probe(123, 7, flags, None) else {
+            skip("no replay-derived Leader row matched the requested validity shape.");
+            return;
+        };
+        let image = ProductionBuiltinImage {
+            population: Some(population),
+            ..Default::default()
+        };
+        assert_eq!(
+            ReplayProductionBuiltinHost::new(&image)
+                .call(find_builtin("population").unwrap(), &[Value::Int(who)]),
+            Ok(Value::Int(-1)),
+            "each low Leader flag is independently required"
+        );
+    }
 }
 
 #[test]
@@ -345,6 +475,30 @@ fn canonical_type_count_join_covers_direct_upgrade_graft_queue_resource_and_alia
         host.call(with_queued, &[Value::Int(1), Value::str("Internal 700")]),
         Ok(Value::Int(-1)),
         "a resolved non-Unit/Build/Good row is not a counter target"
+    );
+    assert_eq!(
+        host.call(
+            find_builtin("have_tech").unwrap(),
+            &[Value::Int(1), Value::str("The Art of War")]
+        ),
+        Ok(Value::Int(0)),
+        "have_tech consumes the canonical TypeBuiltinState Leader bitmask"
+    );
+    assert_eq!(
+        host.call(
+            find_builtin("have_tech").unwrap(),
+            &[Value::Int(1), Value::str("Food")]
+        ),
+        Ok(Value::Int(1)),
+        "retail's Good domain returns true without reading the bitmask"
+    );
+    assert_eq!(
+        host.call(
+            find_builtin("have_tech").unwrap(),
+            &[Value::Int(1), Value::str("Citizen")]
+        ),
+        Err(HostError::Unimplemented),
+        "Unit and Build domains remain red until tribe_can_type is joined"
     );
 }
 
@@ -537,7 +691,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_back() {
+fn strict_economic_prefix_reaches_stop_timer_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -565,6 +719,7 @@ fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_ba
     )
     .expect("load installed Mediterranean owner");
     let (type_state, upgrades, counter_leaders) = type_count_owners();
+    let population = population_owner(0, 77).expect("bind the reconciled Leader control owner");
     let image = ProductionBuiltinImage {
         map_style: Some(bind_production_map_style(12, &installed_style).unwrap()),
         setup: Some(ProductionSetupImage {
@@ -599,6 +754,7 @@ fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_ba
         type_counts: Some(
             bind_production_type_counts(&type_state, &upgrades, &counter_leaders).unwrap(),
         ),
+        population: Some(population),
         techs_per_age: [Some(4), None, None, None, None, None, None],
         ..Default::default()
     };
@@ -607,8 +763,8 @@ fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_ba
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 245,
-            name: "population"
+            index: 78,
+            name: "stop_timer"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -647,6 +803,12 @@ fn strict_economic_prefix_crosses_type_count_cohort_then_population_and_rolls_ba
             "num_type_with_queued",
             "num_type_with_queued",
             "num_type",
+            "population",
+            "num_type",
+            "num_type",
+            "have_tech",
+            "num_type",
+            "find_nation",
         ]
     );
     assert_eq!(

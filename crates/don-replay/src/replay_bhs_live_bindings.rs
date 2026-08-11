@@ -7,6 +7,7 @@
 //! a plausible map style, object count, command result, or checksum value.
 
 use crate::initial::{InitialPlayer, InitialState};
+use crate::leaders_runtime_frontier::{RuntimeCoveredRange, RuntimeLeadersFrontier};
 use crate::map_style::{MapStyleStaticData, StaticFileEvidence, SHIPPED_MAP_STYLE_CATALOG};
 use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
 use don_bhs::{
@@ -150,6 +151,9 @@ pub struct ProductionBuiltinImage {
     /// Composition-bound type registry, upgrade/graft projections, and live
     /// Leader counter snapshot used by builtins 259--261.
     pub type_counts: Option<ProductionTypeCountImage>,
+    /// Canonical joined `LeaderData::control`/`pop_cap` projection used by
+    /// population builtins 245 and 246.
+    pub population: Option<ProductionPopulationImage>,
     /// `Rules::get_num(0x220 + age)` for ages 0 through 6. `None` is an unowned
     /// rules fact and fails closed if execution reaches it.
     pub techs_per_age: [Option<i32>; 7],
@@ -162,6 +166,7 @@ impl Default for ProductionBuiltinImage {
             setup: None,
             leaders: std::array::from_fn(|_| ProductionLeaderImage::default()),
             type_counts: None,
+            population: None,
             techs_per_age: [None; 7],
         }
     }
@@ -192,6 +197,7 @@ struct ProductionTypeCountLeader {
     /// remaining retail Good slots stay absent rather than reading adjacent
     /// `LeaderDataEncrypt` fields as if they were stockpiles.
     goods: [Option<i32>; 50],
+    has_tech: Vec<bool>,
 }
 
 /// Immutable joined owner for the three native type-count registrations.
@@ -207,6 +213,76 @@ pub enum ProductionTypeCountBindError {
     BuildingCounterCount { leader: usize, actual: usize },
     UnitCounterCount { leader: usize, actual: usize },
     QueueCounterCount { leader: usize, actual: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProductionPopulationLeader {
+    flags: u32,
+    control: Option<i32>,
+    population_cap: Option<i32>,
+}
+
+/// Joined snapshot of the two existing canonical Leader population owners.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductionPopulationImage {
+    leaders: [ProductionPopulationLeader; NUM_VICTORY_LEADERS],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionPopulationBindError {
+    MissingFlags { leader: usize },
+    MissingPopulationCap { leader: usize },
+    MissingControl { leader: usize },
+}
+
+fn runtime_i32(frontier: &RuntimeLeadersFrontier, leader: usize, offset: usize) -> Option<i32> {
+    let bytes = frontier
+        .rows
+        .get(leader)?
+        .owned_slice(RuntimeCoveredRange {
+            begin: offset,
+            end: offset + 4,
+        })?;
+    Some(i32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+/// Bind only bytes already admitted by the checksum-facing canonical Leader
+/// projection. That receipt has reconciled duplicate victory/step-8 owners and
+/// sources `control` from `leaders::Leader.ai`, never the queue sidecar.
+pub fn bind_production_population(
+    frontier: &RuntimeLeadersFrontier,
+) -> Result<ProductionPopulationImage, ProductionPopulationBindError> {
+    let mut rows = Vec::with_capacity(NUM_VICTORY_LEADERS);
+    for leader in 0..NUM_VICTORY_LEADERS {
+        let flags = runtime_i32(frontier, leader, 0)
+            .ok_or(ProductionPopulationBindError::MissingFlags { leader })?
+            as u32;
+        let (population_cap, control) = if flags & 3 == 3 {
+            (
+                Some(
+                    runtime_i32(frontier, leader, 0x7e4)
+                        .ok_or(ProductionPopulationBindError::MissingPopulationCap { leader })?,
+                ),
+                Some(
+                    runtime_i32(frontier, leader, 0x940)
+                        .ok_or(ProductionPopulationBindError::MissingControl { leader })?,
+                ),
+            )
+        } else {
+            // Retail returns before either body read for an invalid Leader row.
+            (None, None)
+        };
+        rows.push(ProductionPopulationLeader {
+            flags,
+            population_cap,
+            control,
+        });
+    }
+    Ok(ProductionPopulationImage {
+        leaders: rows
+            .try_into()
+            .expect("both canonical owners were checked for eight Leader rows"),
+    })
 }
 
 fn count_domain(index: usize) -> ProductionCountDomain {
@@ -279,6 +355,9 @@ pub fn bind_production_type_counts(
             num_units: leader.num_units.clone(),
             num_queued: leader.num_queued.clone(),
             goods,
+            has_tech: (0..NUM_TYPES)
+                .map(|type_index| state.leaders[leader_slot].tech.get(type_index))
+                .collect(),
         });
     }
     let leaders: [ProductionTypeCountLeader; NUM_VICTORY_LEADERS] = joined
@@ -400,8 +479,8 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 15] = [
-    81, 147, 248, 254, 255, 258, 259, 260, 261, 323, 358, 377, 383, 712, 713,
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 18] = [
+    81, 147, 245, 246, 248, 254, 255, 258, 259, 260, 261, 323, 358, 362, 377, 383, 712, 713,
 ];
 
 /// A strict host for the first stock-economic prefix.
@@ -592,6 +671,28 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                     .ok_or(HostError::Unimplemented)?
                     .semaphore_bit(17) as i32,
             )),
+            // population / population_cap, `0x009e8e70` / `0x009e8eb0`:
+            // require both low Leader flags, then directly read control +0x940
+            // or pop_cap +0x7e4 from one reconciled runtime-Leader receipt.
+            245 | 246 => {
+                let Some(who0) = Self::who0(args, 0)? else {
+                    return Ok(Value::Int(-1));
+                };
+                let population = self
+                    .image
+                    .population
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?;
+                let leader = &population.leaders[who0];
+                if leader.flags & 3 != 3 {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(if decl.index == 245 {
+                    leader.control.ok_or(HostError::Unimplemented)?
+                } else {
+                    leader.population_cap.ok_or(HostError::Unimplemented)?
+                }))
+            }
             // age(who), `0x009e8f50`.
             248 => {
                 let Some(who0) = Self::who0(args, 0)? else {
@@ -682,6 +783,50 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                 Ok(Value::Int(
                     self.image.techs_per_age[age].ok_or(HostError::Unimplemented)?,
                 ))
+            }
+            // have_tech(who, type), `0x009ee990`: the same ordered
+            // internal-name lookup and both-low-flags gate as the type-count
+            // cohort, followed by the proven Good/Other branches of
+            // LeaderData::has_tech(source type).
+            362 => {
+                let query = Self::str_arg(args, 1)?;
+                if !query.is_ascii() {
+                    return Err(HostError::Unimplemented);
+                }
+                let counts = self
+                    .image
+                    .type_counts
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?;
+                let Some(type_index) = (!query.is_empty())
+                    .then(|| {
+                        counts.rows.iter().position(|row| {
+                            row.name.len() == query.len() && row.name.eq_ignore_ascii_case(query)
+                        })
+                    })
+                    .flatten()
+                else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(who0) = Self::who0(args, 0)? else {
+                    return Ok(Value::Int(-1));
+                };
+                let leader = &counts.leaders[who0];
+                if leader.flags & 3 != 3 {
+                    return Ok(Value::Int(-1));
+                }
+                match counts.rows[type_index].domain {
+                    ProductionCountDomain::Good => Ok(Value::Int(1)),
+                    ProductionCountDomain::Other => {
+                        Ok(Value::Int(i32::from(leader.has_tech[type_index])))
+                    }
+                    // Unit and Build rows call `tribe_can_type` before or
+                    // instead of consulting the bitmask. That owner is not
+                    // joined here, so those query shapes stay red.
+                    ProductionCountDomain::Unit | ProductionCountDomain::Build => {
+                        Err(HostError::Unimplemented)
+                    }
+                }
             }
             // find_city_id(city_name), `0x009ef580`: scan each in-game leader and
             // active City row, compare City::id then City::name case-insensitively,

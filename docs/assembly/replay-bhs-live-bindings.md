@@ -3,11 +3,12 @@
 ## Result
 
 The stock `economic.bhs` Program image can now be entered through the exact
-four-argument `Leader::production_ai` boundary. The replay adapter owns fifteen
+four-argument `Leader::production_ai` boundary. The replay adapter owns eighteen
 ScenarioFuncSet handlers on the smallest reached subdomain. Installed `rules.xml`
 owns `get_mapstyle`; replay setup owns the reached conquest and starting-option gates.
 Execution now owns dynamic builtin 377, `find_city_id`, plus the exact joined
-type-counter cohort 259--261, and stops strictly at builtin 245, `population`.
+type-counter cohort 259--261, the canonical population reads 245--246, and the reached
+Tech/Other branch of 362, `have_tech`. It stops strictly at builtin 78, `stop_timer`.
 
 No replay checksum match is claimed. The adapter is not registered in the default
 harness, and a failed prefix atomically rolls back both BHS static-variable writes and
@@ -83,12 +84,24 @@ The helper immediately repeats builtin 377 for the second- and third-city names 
 when those ordinal reads returned empty strings. The measured bytecode then calls builtin
 261, `num_type_with_queued(who, "Citizen")`, twice before that helper exits. The main
 script next calls builtin 259, `num_type(who, "Market")`, and reaches builtin 245,
-`population(who)`, as the next honest unsupported boundary.
+`population(who)`. The now-owned continuation is:
+
+1. `245 population(who)`
+2. `259 num_type(who, "University")`
+3. `259 num_type(who, "Dock")`
+4. `362 have_tech(who, "The Art of War")`
+5. `259 num_type(who, "Tower")`
+6. `323 find_nation(who)`
+7. `78 stop_timer(who)` — the next honest unsupported boundary
+
+The BHS source supplies integer `who` to `stop_timer` even though the native declaration
+takes a String. Retail's `ScriptInt::get_string` conversion therefore presents `"1"` on
+this fixture. Timer mutation is not admitted by the immutable read-only image.
 
 That path uses replay settings `starting_resources=1`, `starting_town=2`, no conquest
 or scenario semaphore bit, one live city, and a sea map. It changes `step` from 1 to 6,
 then enters `train_unit_with_need`. The failed run proves the external ref cell and the
-candidate Program both roll back after the later missing `population` call.
+candidate Program both roll back after the later missing `stop_timer` call.
 
 ## Installed and replay setup bindings
 
@@ -173,18 +186,52 @@ type after that aliased active read. The focused test exercises this, first-matc
 name selection, a two-hop current-upgrade/graft resolution, Unit and Build queues, a primary
 Good, and a resolved non-counter Type. This is a full-table adapter, not a `Citizen` stub.
 
-The next measured unsupported call is builtin 245, `population(who)`. The Program must
+Builtin 362, `have_tech`, uses the same ordered internal-name lookup and Leader validity
+gate, but its body is not generally a raw tech-mask read. `LeaderData::has_tech` returns
+true directly for Good indices below 50, calls `tribe_can_type` for Unit and Build rows,
+and reads the Leader tech bit for ordinary Tech/Other rows. The reached Art-of-War row is
+index 572 and therefore belongs to that last exact branch. The adapter admits only the
+proven Good and Tech/Other domains; Unit and Build queries fail closed until the tribe
+owner is joined.
+
+## Population authority
+
+The shipped PDB identifies builtin 245 at `0x009e8e70` and `LeaderData::control` at
+`+0x940`. Capstone over the pinned PE establishes a 55-byte leaf body: wrapping-decrement
+the one-based `who`, unsigned-check 0..7, require Leader flag bits 0 and 1 independently,
+then return the signed dword at `Leader+0x940`. It does not read the queue, effective
+population, `pop` at `+0x95c`, or population cap, and it performs no clamp or arithmetic.
+Builtin 246 applies the same gate and directly reads the signed dword at `+0x7e4`.
+
+The replay binder does not copy `production_runtime.leaders[].control`. That field is a
+queue-completion sidecar mutated by allocation/destruction and is not synchronized with
+the instruction-derived owner, `step8.leaders[].ai.control`. Instead it consumes the
+existing `RuntimeLeadersFrontier` receipt, which already rejects disagreement between
+the victory and step-8 copies of flags and population cap and projects the production-AI
+control byte range. The resulting call-scoped image reads `+0`, `+0x7e4`, and `+0x940`
+from one reconciled row and introduces no mutable population counter.
+
+Builtin 247, `set_population_cap`, remains red. It must transactionally update the
+ScenarioData override, misery policy, effective cap, and all canonical mirrors before a
+replay host can safely own it. Likewise no full support-count builtin is claimed: the
+runtime frontier owns decoded expense/support cells, but the active/queued family join
+does not yet have one complete current-owner provenance.
+
+The next measured unsupported call is builtin 78, `stop_timer`. The Program must
 ultimately share one owner with the step-4 game/general-powers runtime; duplicating the
 Program would split its checksummed static state.
 
 ## Validation
 
-All nine focused tests pass locally, including the installed `economic.bhs` trace, ordered
-map-style catalog, and 21-recording census. Persvati overlay job
-`replay-bhs-type-count-v3-20260811T180144Z-77595-26923-3cbabbeef478` passes the six
-content-independent tests; the installed map-style, installed BHS, and replay-corpus tests
-were explicitly filtered rather than reported as remote passes. Its required ignored
-`final-balance-runtime.bin` asset was supplied through the SHA-pinned remote asset allowlist.
+All ten focused tests pass locally, including the installed `economic.bhs` trace, ordered
+map-style catalog, and 21-recording census. Persvati validation is recorded against the
+same source in overlay job
+`replay-bhs-population-v5-20260811T183018Z-18780-21147-27c48c816a79`: the six
+content-independent tests establish their assertions, while the installed map-style,
+installed BHS, replay-corpus census, and replay-derived population-owner tests print
+explicit **SKIPPED — NOT A PASS** notices because those content assets are absent. The
+required ignored `final-balance-runtime.bin` compile-time asset was supplied through the
+SHA-pinned remote asset allowlist.
 
 Fidelity remains Tier C: instruction-level static recovery plus corpus shape. No live
 retail execution or VM attachment was used in this tranche.
