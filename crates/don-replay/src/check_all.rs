@@ -95,9 +95,9 @@ pub struct ChannelWalker {
 
 /// The fifteen walkers, in `check_all` call order.
 ///
-/// The two owner-loop bounds are [measured] from the loop guards: `check_units`
-/// runs `&DAT_00e3a390 .. 0xe789dc` and `check_builds`/`check_walls`/
-/// `check_guys`/`check_cities` run `.. 0xe71af0`, stride `0x6eec`, which is
+/// The two owner-loop bounds are [measured] from the loop guards: `check_units` and
+/// `check_guys` run `&DAT_00e3a390 .. 0xe789dc`, while `check_builds`/`check_walls`/
+/// `check_cities` run `.. 0xe71af0`, stride `0x6eec`, which is
 /// **9** leader slots for `units`/`guys` and **8** for the rest. That the two
 /// differ is not a transcription slip; it is in the binary.
 pub const WALKERS: [ChannelWalker; NUM_WALKED] = [

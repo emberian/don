@@ -40,6 +40,11 @@ the guy turret settle, group membership pruning and compaction, and the formatio
 | collision-block bit writes | **not ported** (hook) | §6 |
 | graphics-derived gpiece, track offsets, and turret pivot state | exact extractor boundary | `graphics_turret`; [graphics-turrets.md](graphics-turrets.md) |
 
+Groups and Guys deliberately have different owner domains. Groups retains eight playable
+owners (`8 × 64 = 512` slots and eight `last_group` words), while `check_guys` walks nine
+leader records: owners `0..=7` plus the owner-8 Animal Unit band. Owner 9 participates in
+normal object processing but is excluded from the Guys checksum.
+
 ### How it was measured
 
 Everything is `[measured]` on this Mac against `ron-bin/riseofnations.exe`
@@ -649,6 +654,8 @@ let mut cs = CheckSum { value: <incoming> };
 groups.check_groups(&mut cs);
 
 // channel 7
+let leader_active = [true; GUYS_CHANNEL_OWNER_SLOTS]; // exactly owners 0..=8
+let owners: [OwnerUnits; GUYS_CHANNEL_OWNER_SLOTS] = Default::default();
 check_guys(&mut cs, objects_valid, &leader_active, &owners);
 ```
 

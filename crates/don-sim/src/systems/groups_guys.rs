@@ -71,10 +71,18 @@ use crate::trig::{find_angle, sin_table};
 // Shapes and constants, all [measured]
 // ---------------------------------------------------------------------------
 
-/// Leader slots iterated by `check_guys` and `Groups::process`: the loops run
-/// `leaders` `0x00E3A390` with stride `0x6EEC` while `ptr < 0x00E789DC`, which is
-/// `(0xE789DC - 0xE3A390) / 0x6EEC = 8` exactly.
+/// Playable leader slots iterated by `Groups::process`.
+///
+/// This must stay distinct from [`GUYS_CHANNEL_OWNER_SLOTS`]: Groups owns eight
+/// player bands, while the Guys checksum also reaches the owner-8 Animal band.
 pub const NUM_LEADERS: usize = 8;
+
+/// Owner slots iterated by `CheckSums::check_guys` `0x00937430`.
+///
+/// The loop runs `leaders` `0x00E3A390` with stride `0x6EEC` while
+/// `ptr < 0x00E789DC`, so `(0xE789DC - 0xE3A390) / 0x6EEC = 9` exactly. Owner 8
+/// is the first Animal owner; owner 9 is outside this checksum traversal.
+pub const GUYS_CHANNEL_OWNER_SLOTS: usize = 9;
 
 /// `Groups::process` `0x006FA210` indexes group `proc_group + who*0x40` and wraps
 /// `proc_group` at `0x3F`, so each player owns 64 contiguous group slots.
@@ -3559,7 +3567,7 @@ pub struct UnitSlot {
 ///
 /// ```text
 /// if (objects.valid == 0) return;                              ; +0x1F4
-/// for (who = 0; who < 8; who++) {                              ; leaders, stride 0x6EEC
+/// for (who = 0; who < 9; who++) {                              ; leaders, stride 0x6EEC
 ///     if (!(leaders[who].flags & 1)) continue;
 ///     for (i = *obj_base; i < objects.obj_mark[0][who]; i++) {  ; unit band only
 ///         obj = objects.lists[who].list[i];
@@ -3579,13 +3587,13 @@ pub struct UnitSlot {
 pub fn check_guys(
     cs: &mut CheckSum,
     objects_valid: bool,
-    leader_active: &[bool; NUM_LEADERS],
-    owners: &[OwnerUnits; NUM_LEADERS],
+    leader_active: &[bool; GUYS_CHANNEL_OWNER_SLOTS],
+    owners: &[OwnerUnits; GUYS_CHANNEL_OWNER_SLOTS],
 ) {
     if !objects_valid {
         return;
     }
-    for who in 0..NUM_LEADERS {
+    for who in 0..GUYS_CHANNEL_OWNER_SLOTS {
         if !leader_active[who] {
             continue;
         }
@@ -5426,8 +5434,8 @@ mod tests {
                 guys: UnitGuys::spawn_full(50, 0, 0, &t),
             })],
         };
-        let owners: [OwnerUnits; NUM_LEADERS] = [mk(), mk(), mk(), mk(), mk(), mk(), mk(), mk()];
-        let all = [true; NUM_LEADERS];
+        let owners: [OwnerUnits; GUYS_CHANNEL_OWNER_SLOTS] = std::array::from_fn(|_| mk());
+        let all = [true; GUYS_CHANNEL_OWNER_SLOTS];
 
         let mut a = CheckSum::default();
         check_guys(&mut a, true, &all, &owners);
@@ -5438,7 +5446,7 @@ mod tests {
         assert_eq!(b, CheckSum::default());
 
         // an inactive leader removes its whole band
-        let mut some = [true; NUM_LEADERS];
+        let mut some = [true; GUYS_CHANNEL_OWNER_SLOTS];
         some[5] = false;
         let mut c = CheckSum::default();
         check_guys(&mut c, true, &some, &owners);
@@ -5453,10 +5461,36 @@ mod tests {
     }
 
     #[test]
+    fn check_guys_reaches_owner_eight_without_widening_groups() {
+        assert_eq!(NUM_LEADERS, 8);
+        assert_eq!(NUM_GROUPS, 8 * GROUPS_PER_PLAYER);
+        assert_eq!(GUYS_CHANNEL_OWNER_SLOTS, 9);
+
+        let t = ut();
+        let mut owners: [OwnerUnits; GUYS_CHANNEL_OWNER_SLOTS] = Default::default();
+        owners[8].units.push(Some(UnitSlot {
+            flags: 1,
+            guys: UnitGuys::spawn_full(50, 8, 0, &t),
+        }));
+        let active = [true; GUYS_CHANNEL_OWNER_SLOTS];
+
+        let mut before = CheckSum::default();
+        check_guys(&mut before, true, &active, &owners);
+        owners[8].units[0].as_mut().unwrap().guys.guys[0]
+            .as_mut()
+            .unwrap()
+            .x += 1;
+        let mut after = CheckSum::default();
+        check_guys(&mut after, true, &active, &owners);
+
+        assert_ne!(before, after, "owner-8 Animal Guys are checksummed");
+    }
+
+    #[test]
     fn a_single_guy_moving_moves_the_guys_channel() {
         let t = ut();
         let mut guys = UnitGuys::spawn_full(50, 0, 0, &t);
-        let owners_of = |g: &UnitGuys| -> [OwnerUnits; NUM_LEADERS] {
+        let owners_of = |g: &UnitGuys| -> [OwnerUnits; GUYS_CHANNEL_OWNER_SLOTS] {
             let empty = OwnerUnits::default();
             [
                 OwnerUnits {
@@ -5471,10 +5505,11 @@ mod tests {
                 empty.clone(),
                 empty.clone(),
                 empty.clone(),
+                empty.clone(),
                 empty,
             ]
         };
-        let active = [true; NUM_LEADERS];
+        let active = [true; GUYS_CHANNEL_OWNER_SLOTS];
         let mut before = CheckSum::default();
         check_guys(&mut before, true, &active, &owners_of(&guys));
 

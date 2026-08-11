@@ -87,11 +87,10 @@ Guys therefore reaches owner slots `0..=8` in fixed order. Owner 9 participates 
 object processing but is outside this checksum. This agrees with `don-replay::state` and
 `check_all` and with the independently derived Units runtime.
 
-The older `don_sim::systems::groups_guys::check_guys` uses `NUM_LEADERS = 8` and consequently
-omits owner 8. That existing shared module was not edited in this lane. Its future narrow
-correction is to separate `GUYS_CHANNEL_OWNER_SLOTS = 9` from the eight Group/playable
-owners and widen only `OwnerUnits`, the leader gate, and `check_guys`; Group allocation must
-remain eight-owner.
+`don_sim::systems::groups_guys::check_guys` now keeps this boundary explicit with
+`GUYS_CHANNEL_OWNER_SLOTS = 9`, separate from the eight Group/playable owners. Its owner
+bands and leader gate reach owner 8 without widening Group allocation, processing, or the
+eight-word `last_group` tail.
 
 ## Corpus deadline, not a fitted input
 

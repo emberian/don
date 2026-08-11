@@ -202,6 +202,28 @@ fn channel_is_owner_major_reaches_ninth_owner_and_excludes_tenth() {
     assert_eq!(result.guys_walked, 3);
     assert_eq!(result.skipped_outside_walk, 1);
     assert_eq!(result.registry_entries, 4);
+
+    authority.get_mut(h8).unwrap().guys.guys[0]
+        .as_mut()
+        .unwrap()
+        .x += 1;
+    let owner_eight_mutated =
+        check_world_guys(&world, GuysDriverFacts::all_active(), &mut authority).unwrap();
+    assert_ne!(
+        owner_eight_mutated.checksum, result.checksum,
+        "owner-8 Animal Guys are inside the checksum walk"
+    );
+
+    authority.get_mut(h9).unwrap().guys.guys[0]
+        .as_mut()
+        .unwrap()
+        .x += 1;
+    let owner_nine_mutated =
+        check_world_guys(&world, GuysDriverFacts::all_active(), &mut authority).unwrap();
+    assert_eq!(
+        owner_nine_mutated.checksum, owner_eight_mutated.checksum,
+        "owner-9 Animal Guys are outside the checksum walk"
+    );
 }
 
 #[test]
