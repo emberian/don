@@ -84,6 +84,7 @@ pub mod player_land;
 pub mod pools;
 pub mod post_continent;
 pub mod post_nubify_transition_frontier;
+pub mod region_centroid;
 pub mod replay;
 pub mod replay_bhs_live_bindings;
 pub mod replay_bhs_runtime;

@@ -42,6 +42,10 @@ use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
 pub use crate::post_continent::{REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA};
+use crate::region_centroid::{
+    execute_east_meets_west_centroids, EastMeetsWestCentroidReceipt, RegionCentroidError,
+    MAP_ELIMINATE_EDGE_CANALS_VA,
+};
 use don_sim::rng::Random;
 use don_sim::systems::combat::circle_table;
 use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
@@ -51,7 +55,7 @@ use don_sim::trig::{cosx, sinx};
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
-pub const MAP_FIND_REGION_CENTROID_VA: u32 = 0x0068_ae50;
+pub use crate::region_centroid::MAP_FIND_REGION_CENTROID_VA;
 
 /// `MapGreatLakes::make_continents` `0x00699e40` derives the
 /// `Map::check_player_land` radius from a shipped unit type rather than from map
@@ -127,10 +131,16 @@ pub enum ContinentStop {
         primitive_va: u32,
         active_teams: Vec<u8>,
     },
-    /// East Meets West completed the team partition, both direct angle draws,
-    /// every region seed, and both region-growth passes. Start placement first
-    /// asks for the centroid of region 1.
+    /// Compatibility boundary emitted by older reconstructions before the
+    /// exact centroid loop was admitted.
     FindRegionCentroid { primitive_va: u32, region: i32 },
+    /// East Meets West completed its two centroid arrays and the existing exact
+    /// `eliminate_pools(EntireWorld, dead)` transaction. The next mutator is
+    /// the still-unported `Map::eliminate_edge_canals` body.
+    EliminateEdgeCanals {
+        primitive_va: u32,
+        centroids: EastMeetsWestCentroidReceipt,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +227,7 @@ pub enum ContinentError {
     RegionGrowth(GrowRegionError),
     RegionRebuild(don_sim::systems::regions::RegionsError),
     PoolElimination(EliminatePoolsError),
+    RegionCentroid(RegionCentroidError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1361,22 +1372,30 @@ fn east_meets_west(
         }
     }
 
+    let centroids = execute_east_meets_west_centroids(regions, sides as i32)
+        .map_err(ContinentError::RegionCentroid)?;
+    debug_assert_eq!(centroids.next_va, crate::pools::MAP_ELIMINATE_POOLS_VA);
+    debug_assert_eq!(centroids.next_pool_param, ElimPoolParam::EntireWorld as i32);
+    debug_assert_eq!(centroids.after_pools_va, MAP_ELIMINATE_EDGE_CANALS_VA);
+    let pools = execute_eliminate_pools(world, regions, ElimPoolParam::EntireWorld)
+        .map_err(ContinentError::PoolElimination)?;
+
     Ok(PartialReceipt {
         world_inverted: false,
-        regions_cleared: 1,
+        regions_cleared: 2,
         region_seeds,
         region_growths,
         grow_valid_calls: Vec::new(),
         lake_candidates: Vec::new(),
-        pool_eliminations: Vec::new(),
+        pool_eliminations: vec![pools],
         player_land: None,
         team_partition: Some(partition),
         east_indies_tail: None,
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::FindRegionCentroid {
-            primitive_va: MAP_FIND_REGION_CENTROID_VA,
-            region: 1,
+        stop: ContinentStop::EliminateEdgeCanals {
+            primitive_va: MAP_ELIMINATE_EDGE_CANALS_VA,
+            centroids,
         },
     })
 }

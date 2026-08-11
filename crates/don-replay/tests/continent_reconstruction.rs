@@ -4,8 +4,7 @@
 use don_replay::continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions,
     execute_team_continent_partition, ContinentError, ContinentStop,
-    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_EQUAL_SIZE_RNG_VA, MAP_FIND_REGION_CENTROID_VA,
-    REGIONS_CLEAR_ALL_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_EQUAL_SIZE_RNG_VA, REGIONS_CLEAR_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
 use don_replay::map_style::{
@@ -508,16 +507,26 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         eastwest.region_growths.last().unwrap().rng_final
     );
     assert_eq!(eastwest.starts_added, 0);
-    match eastwest.stop {
-        ContinentStop::FindRegionCentroid {
+    match &eastwest.stop {
+        ContinentStop::EliminateEdgeCanals {
             primitive_va,
-            region,
+            centroids,
         } => {
-            assert_eq!(primitive_va, MAP_FIND_REGION_CENTROID_VA);
-            assert_eq!(region, 1);
+            assert_eq!(
+                *primitive_va,
+                don_replay::region_centroid::MAP_ELIMINATE_EDGE_CANALS_VA
+            );
+            assert_eq!(centroids.centroids.len(), 2);
+            assert_eq!(centroids.centroid_x.len(), 2);
+            assert_eq!(centroids.centroid_y.len(), 2);
         }
         other => panic!("East Meets West stopped at {other:?}"),
     }
+    assert_eq!(eastwest.pool_eliminations.len(), 1);
+    assert_eq!(
+        eastwest.pool_eliminations[0].param,
+        don_replay::pools::ElimPoolParam::EntireWorld
+    );
     assert_eq!(
         eastwest_before.differing_sections(&eastwest_world.checksum_sections()),
         [WorldSection::WData]
@@ -532,9 +541,9 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x59de_fbc7, 0x4f28_bf8c, 0x34f0_f01e)
+        (0xd293_cb35, 0x193d_611d, 0x4f28_bf8c, 0xa996_5574)
     );
-    assert_eq!(eastwest_regions.land, 2);
+    assert_eq!(eastwest_regions.land, 0);
 }
 
 #[test]

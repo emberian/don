@@ -919,6 +919,14 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
+            crate::continent::ContinentStop::EliminateEdgeCanals { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_team_continent_edge_canals",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
         };
         *map = staged_map;
         self.post_continent = post_continent;

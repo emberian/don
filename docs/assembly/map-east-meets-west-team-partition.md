@@ -4,9 +4,10 @@
 
 This tranche closes `Map::fill_cont` at `0x0068a960` and continues
 `MapEastMeetsWest::make_continents` through the two caller-owned angle draws,
-region seeding, and both `Map::grow_region` passes. It stops before the first
-call to `Map::find_region_centroid` at `0x0068ae50`. It does not synthesize the
-centroid, starting locations, or any later draw.
+region seeding, both `Map::grow_region` passes, the exact centroid loop, and
+`Map::eliminate_pools(EntireWorld, dead)`. It stops at
+`Map::eliminate_edge_canals` `0x0068b360`. It does not synthesize starting
+locations or any later draw.
 
 Every address and instruction claim below is **measured** from
 `ron-bin/riseofnations.exe` (SHA-256
@@ -105,18 +106,21 @@ The caller schedule transcribed from `0x00696743..0x00696c82` is:
 | angle step | `0x006969ce..0x006969f9` | add logical halves of the wrapped current and next `count * (0xffffffff / players)` products |
 | first growth pass | `0x00696a30..0x00696b34` | target `(region_area / 2) * count`, max distance `radius * 3 / 4` |
 | second growth pass | `0x00696b60..0x00696c5f` | target `region_area * count`, same max distance |
-| next external body | `0x00696c82` | `find_region_centroid(1, ...)` |
+| centroid continuation | `0x00696c82` | exact one-based `find_region_centroid` loop |
+| pool cleanup | `0x00696d0a` | exact `eliminate_pools(EntireWorld, dead)` |
+| next external body | `0x00696d0f` | `eliminate_edge_canals()` |
 
 Each growth's dynamic RNG sites are appended in execution order by the existing
 `execute_grow_region` receipt. A nonzero retail growth return is exposed as
 `RetryGeneration`; this bounded call does not pretend it executed the caller's
 whole-pass retry loop. On success it reports
-`FindRegionCentroid { primitive_va: 0x0068ae50, region: 1 }`.
+`EliminateEdgeCanals { primitive_va: 0x0068b360, ... }` with the complete
+centroid receipt retained inside the stop.
 
 For the 100×100, four-player fixture the frozen prefix has two regions of area
 1,388, growth targets `(1,1388)`, `(2,1388)`, `(1,2776)`, `(2,2776)`, and max
 distance 27. Before/after World channel values are `0xd293cb35` and
-`0x59defbc7`; the isolated WData values are `0x4f28bf8c` and `0x34f0f01e`.
+`0x193d611d`; the isolated WData values are `0x4f28bf8c` and `0xa9965574`.
 WData is the only changed checksum section. These are regression outputs of the
 binary-derived schedule, not values fitted to any recording.
 
@@ -127,20 +131,19 @@ binary-derived schedule, not values fitted to any recording.
 - both checksum-bearing headers' exact two leaf draws, exchange decisions,
   output arrays, final RNG words, and zero World mutation;
 - full style-19 caller ordering (orientation, two partition calls, two angle
-  calls, then growth-internal calls), exact seed/growth parameters, and the
-  centroid stop;
+  calls, then growth-internal calls), exact seed/growth parameters, centroid
+  arrays, the pool transaction, and the edge-canal stop;
 - an exact full-World and isolated-WData checksum mutation with every other
   World section unchanged;
 - transactional validation through the existing continent entry point.
 
-The source is privately path-mounted from the already-public `continent`
-module, so no `don-replay/src/lib.rs` registration is required. The only shared
-schedule integration is a new `ContinentStop::FindRegionCentroid` mapping in
-`initial.rs`, naming `map_team_continent_centroid`; it does not cross the
-external call.
+The centroid source is a public replay module because its full typed receipt is
+retained by `ContinentStop::EliminateEdgeCanals`. The surgical `initial.rs`
+mapping names the new `map_team_continent_edge_canals` boundary.
 
-The remaining tail starts with the 587-byte centroid body, then stores the
-centroids, balances/builds regions, selects per-leader starts, and eventually
-reaches the third direct style draw at `0x00696f82`. None of those mutations or
+The remaining tail starts with the 1,318-byte edge-canal mutator, then
+balances/builds regions, selects per-leader starts, and eventually reaches the
+third direct style draw at `0x00696f82`. None of those residual mutations or
 draws is represented here, and this work makes no retail World checksum-match
-claim.
+claim. The exact centroid body and replay fixtures are documented in
+`docs/assembly/map-find-region-centroid.md`.

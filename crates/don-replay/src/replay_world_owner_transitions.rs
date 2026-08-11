@@ -58,11 +58,13 @@ fn continent_implementation_digest() -> [u8; 32] {
     let mut source = Vec::with_capacity(
         include_bytes!("continent.rs").len()
             + include_bytes!("east_indies_tail.rs").len()
-            + include_bytes!("team_continent_partition.rs").len(),
+            + include_bytes!("team_continent_partition.rs").len()
+            + include_bytes!("region_centroid.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
     source.extend_from_slice(include_bytes!("team_continent_partition.rs"));
+    source.extend_from_slice(include_bytes!("region_centroid.rs"));
     sha256(&source)
 }
 
@@ -72,6 +74,7 @@ fn continent_resume_va(receipt: &ContinentReceipt) -> u32 {
         ContinentStop::MakeRegion { primitive_va, .. }
         | ContinentStop::GrowRegion { primitive_va, .. }
         | ContinentStop::FindRegionCentroid { primitive_va, .. }
+        | ContinentStop::EliminateEdgeCanals { primitive_va, .. }
         | ContinentStop::FillCont { primitive_va, .. } => *primitive_va,
         ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => *next_rng_va,
         ContinentStop::RetryGeneration { .. } => receipt.make_continents_va,
