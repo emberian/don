@@ -90,6 +90,7 @@ pub mod units_runtime;
 pub mod walk;
 pub mod wire;
 pub mod world_owner_frontier;
+pub mod world_tdata_frontier;
 
 pub mod walk_gen;
 mod wire_gen;
