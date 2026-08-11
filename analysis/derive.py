@@ -122,10 +122,21 @@ def main() -> None:
         rec["age"] = i(r["age"])
         T.setdefault(r["name"], rec)
 
+    # slot -> name over EVERY shipped row, not just the name-deduped survivors.
+    #
+    # U/B/T are keyed by name and keep the first slot ("first slot wins: the
+    # duplicate rows are per-nation graft variants").  Building slot_names from
+    # them dropped the 129 graft slots -- 449 of 578 shipped type ids resolved,
+    # and a replay that queues a Korean Citizen (slot 51) or a French General
+    # (slot 56) decoded as `?51` / `?56`.  Every duplicate group was checked and
+    # agrees on cost0..5 and job_time, so mapping a graft slot to the shared name
+    # loses nothing quantitative; refusing to map it lost the command.
     slot_names = {}
-    for d in (U, B, T):
-        for n, rec in d.items():
-            slot_names[rec["slot"]] = n
+    slot_kind = {}
+    for rows_, kind in ((units, "unit"), (builds, "building"), (techs, "tech")):
+        for r in rows_:
+            slot_names[i(r["slot"])] = r["name"]
+            slot_kind[i(r["slot"])] = kind
 
     derived = {
         "_provenance": {
@@ -180,6 +191,7 @@ def main() -> None:
         "buildings": B,
         "techs": T,
         "slot_names": slot_names,
+        "slot_kind": slot_kind,
     }
     with open(OUT, "w") as f:
         json.dump(derived, f, indent=1, sort_keys=False)

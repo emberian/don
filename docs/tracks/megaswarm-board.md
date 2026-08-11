@@ -2969,3 +2969,314 @@ mine. The 119 -> 120 is not a regression from this lane.
 `leader_production_ai` while I was writing. My "still in that state" line above is stale;
 the rest of that finding stands. Both of us landed a `mod` line in the same region of
 `systems/mod.rs`; the two hunks are adjacent and do not conflict.
+
+### lane: analysis — RESULT + FINDINGS (corpus is readable from Python; the scoreboard exists)
+
+Task `019ff0ef-7fc7-7103-a8c8-b39d143cdccf`. Files landed in the working tree (not
+committed): `analysis/corpus.py` (new), `analysis/scoreboard.py` (new),
+`analysis/derive.py` (one hunk), `analysis/derived.json` (regenerated),
+`analysis/corpus-commands.json` (new, GENERATED, 3.1 MB — see the last bullet).
+No crate touched. Reproduce with:
+
+```sh
+python3 analysis/corpus.py verify        # refutation test vs crates/don-replay
+python3 analysis/corpus.py extract       # -> analysis/corpus-commands.json (~100 s)
+python3 analysis/scoreboard.py all
+```
+
+**⚑ `analysis/` could not read 60 of the 61 recordings, and had not been able to since
+the pillar started.** `analysis/replay_order.py` shells out to
+`re/scripts/rcx_parse.py --commands`, whose own header says the multiplayer payload
+transform "is NOT yet fully derived … Treat the result as a probe, not a parse."
+**60 of 61 recordings are multiplayer.** `crates/don-net/src/obfuscate.rs` derived that
+transform (key `G >> 8`; a **stack-local** `Random::get(0,2)` pad that restarts every
+package) and it has been solved for some time. `analysis/corpus.py` is a Python port of
+`don-net`'s `find_stream` + XOR + pad + the PDB-generated wire sizes.
+**`re/scripts/rcx_parse.py`'s stale §"multiplayer payload obfuscation — NOT yet fully
+derived" should be deleted** — it cost a pillar two days. `re/` is not mine to edit.
+
+**The port passes a real refutation test.** `corpus.py verify` recomputes the corpus-wide
+opcode histogram and diffs it against `schema/replay-validation.json`, produced by the
+independent Rust harness: **5,055,253 commands, 61 opcodes, 0 disagreements**,
+1,296,192/1,296,194 packages decoded (99.9998%), 61 of 63 files opened — the same 61
+`don-replay` opens.
+
+**⚑ THE REPLAY CORPUS CONTAINS NO AI PLAY AT ALL.** Not one of the 5,055,253 commands
+was issued by a slot without the HUMAN flag, across **301 present player slots** in 61
+recordings — and many of those recordings do contain AI players. That is what lockstep
+requires: an AI is simulated identically on every client from shared state, so its
+decisions are never transmitted and never recorded. **Consequence for the AI pillar:
+retail AI behaviour cannot be mined, imitated or scored from `.rcx` files. It is
+impossible in principle, not merely hard.** `docs/tracks/ron-ai-impl.md`'s 306 compiled
+functions are the only place it exists; the `.bhs` book is the only shipped-as-data part.
+
+**FINDINGS — do not re-derive:**
+
+- **`ron-data/replays/multi/` and `web/public/data/replays/` are byte-identical copies.**
+  126 files, **63 distinct sha256**. Globbing both double-counts every game.
+- **Two recordings are not gzipped.** `CommandManager::finish_recording` `0x00952b40`
+  only compresses at game end, so a game that never ended normally leaves the raw
+  stream. Test the gzip magic (as `crates/don-replay/src/replay.rs::load_payload` does).
+- **Header player-flags bit 2 is `leader_flag::HUMAN`**, cross-checked three ways, all
+  61/61: exactly one present slot per recording carries `0x2` (the recorder); every
+  `0x2` slot also carries `0x4`; no `0x4` slot is named from the shipped skirmish AI
+  table. **A naive "an AI slot is called `Player <n>`" test FAILS on 66 of 301 slots** —
+  AI slots carry shipped personality names (`Queen Chennamma` is a `<STRING>` in
+  `ron-data/bhs-corpus/scenario/Custom/skirmish/scen_script_loc.xml`). Four more AI names
+  seen in the corpus (`Pharaoh Amenhotep III`, `Nachancan`, `Mehmed II Khan Gazi`,
+  `King Shaka`) appear **nowhere in `ron-data/`**; that name pool is unlocated.
+- **`derived.json` was NOT stale against the 228-file shipped set** — the brief's
+  hypothesis is wrong, and checking it is cheap. `derive.py` reads **no numbers** from
+  `ron-data/`; its sources are `schema/live/*-attributes.txt` and
+  `docs/derivation/rules-constants.json`. The coverage check that could have failed did
+  not: `unitrules.xml` 364 `UNIT` = 364 live rows, `buildingrules.xml` 129 = 129,
+  `techrules.xml` 85 = 85. Exact, all three.
+- **`derived.json` WAS stale in exactly one entry, and it is a generated file being
+  hand-carried.** `scholar_rate`: `rules-constants.json` had been corrected to
+  `Constants+0x284` = `int[6]` scale-256 `[1280,1792,2560,3840,5120,6400]` and
+  `derive.py` was never re-run, so `derived.json` still said 5 `wtoi` entries. Worse,
+  `opening.py facts` already printed that as a CORRECTION — two artefacts in tree
+  disagreeing. Fixed by regenerating.
+- **`derived.json.slot_names` resolved 449 of 578 shipped type ids.** `derive.py` keys
+  its dicts by name (per-nation graft variants collapse) and then built `slot_names`
+  from the deduped dicts, dropping **129 graft slots** — a Korean Citizen (51), a French
+  General (56), a Supply Wagon (64) decoded as `?51`. The dedup itself is sound and I
+  checked it: **zero** name-collision groups disagree on `cost0..5` or `job_time`.
+  Fixed to 578/578 plus a new `slot_kind`. Measured impact: **1,385 of 72,769 ordered
+  types (1.9%) over 36 type ids**, concentrated in late-age military.
+
+**⚑ THE CLOSURE HEADLINE IS 57.3%; PLAYERS SPEND 83.7% OF THEIR COMMANDS ON RED
+OPCODES.** Three weightings of `schema/simulation-closure.json`, and the obvious repair
+is a trap:
+
+| weighting | result | |
+|---|---:|---|
+| unweighted | 47/82 = **57.3%** | treats `MarwanCommand` == `GroupCommand` |
+| all-command-weighted | 4,907,332/5,055,253 = **97.1%** | **INFLATED — do not use** |
+| **player-decision-weighted** | **28,886/176,807 = 16.3%** | the scoreboard |
+
+Five opcodes are emitted on a **schedule** and are **96.5% of all commands**:
+`CameraCommand` 2.215/turn, `TurnDataCommand` 2.197, `PlayerSpeedCommand` 1.728,
+`NextCheckSumCommand` 1.362, `CheckSumsCommand` 0.835 — then a **6× gap** to
+`GroupCommand` at 0.134. All five are already `complete`, which is the entire reason the
+middle number reads 97%. Threshold 0.5/turn sits in the measured gap. Heaviest red
+opcodes by real player decisions: `GroupCommand` 78,197 (`selection_partial`),
+`QueueUpCommand` 28,993, `BuildCommand` 14,042, `MoveToCommand` 9,178, `AttackCommand`
+5,715. **23 of 82 opcodes never appear in the corpus and 16 of those are already marked
+complete** — those sixteen carry no replay evidence at all.
+
+**⚑ OUR OPENING OPTIMISER SCORES WORSE AGAINST REAL PLAY THAN THE SHIPPED AI's ORDER,
+AND GETS WORSE AS THE BEAM WIDENS.** Reference: the first-issue-frame envelope over the
+**115 player-games** that produce anything.
+
+| plan | supported | inside envelope | ahead of ALL 115 |
+|---|---:|---:|---:|
+| `economic.bhs` (shipped AI opening) | 100% | **78%** | 11% |
+| `opening.py` beam search, beam=900 | 100% | **40%** | 30% |
+| `opening.py` beam search, beam=300 | 100% | 50% | 20% |
+
+The signature is readable: at beam=900 the plan is **ahead of all 115 games** on `Farm`,
+`Citizen` and `Barter` (all frame 0) and **behind all 115** on `Written Word` (5:30 vs
+corpus max 3:49), `City State` (5:51 vs 5:08) and `Classical Age` (8:03 vs 7:24).
+Front-loading raw economy and arriving late to every technology is what an income model
+that under-counts mid-game knowledge/wealth looks like. `econ.py`'s own header names
+three unmodelled income terms that land exactly there — **caravans, rare resources and
+territory taxes** (`FUN_006CEEE0`'s `0x1a2`/`0x1a3`; `Constants::territory_taxes` at
+`0x006CF6A5`). Directed lead, not a conclusion: none of the three has been measured in.
+`AHEAD` is reported as a **suspicion counter, never a win** — `plan.py` declares
+`walk_frames = 0`, `build_linear = True`, `caravan_wealth = 0`, all of which make the
+model faster than a real game.
+
+**S1, for whoever prioritises mechanics:** the corpus exercises **337 of 578** shipped
+type slots — units 197/364, buildings 55/129, **techs 85/85**. Every shipped technology
+is researched somewhere. Never-*built* buildings are a sanity check that passes
+(`Large City`/`Major City`/`House` are not `BuildCommand` targets).
+
+**WHAT I DID NOT BUILD, on purpose.** No bot-vs-bot scoreboard — `crates/don-ai`'s bots
+playing each other inside our own simulation yields a number whose only referent is the
+physics under test, and §2 shows the corpus cannot supply the missing referent. No
+human-vs-AI opening comparison (not computable — no AI play in the corpus). No skill/Elo
+metric (`ResignCommand` fires 6 times and `QuitCommand` 22 across 61 games; outcomes are
+not attributable). No nation attribution (the header player blob past flags+name is
+undecoded).
+
+**LANDING NOTE.** `analysis/corpus-commands.json` is 3.1 MB, **generated** in ~100 s, a
+pure function of gitignored `ron-data/replays/`, and is **not** currently gitignored.
+Either add it to `.gitignore` or accept a regenerable blob — `analysis/derived.json`
+(180 KB) is tracked, so the convention is ambiguous. I did not edit `.gitignore`; it is
+a shared file this lane did not claim. My earlier claim block listed
+`docs/tracks/analysis-scoreboard.md`; the findings are in this block instead.
+
+### lane: save-groups — RESULT, and the blocker that is now on top
+
+`closure/stage: save_load` moved **`required` → `partial`**, and the note in
+`tools/simulation-closure.py` names what is left. Gates: `tools/swarm-cargo stages --
+test -p don-sim --lib` **1729 passed / 0 failed / 2 ignored**, and the whole crate
+`tools/swarm-cargo stages -- test -p don-sim` **151 targets, 2869 passed, 0 failed, 3
+ignored** — which covers the eight other integration targets that touch
+`save_sim`/`load_sim` (`sparse_object_bands_live_integration`,
+`bhs_type_runtime_integration`, `player_setup_owner`, `attack_target_transaction`,
+`leaders_unit_stat_source`, `bhs_session_owner`, `save_step8_views`,
+`special_anim_core_tick_integration`) plus my `save_load_groups` **8/8**.
+`tools/test_simulation_closure.py` passes; `rustfmt --check` clean on every file I wrote.
+
+Landed:
+
+- `crates/don-sim/src/systems/save_load/groups.rs` — new `GROUPS` section (chunk `0x0009`,
+  DoNSave format **9 → 10**; 7/8/9 streams still load).
+- `crates/don-sim/src/systems/save_load.rs` — the minimal hunks I claimed, plus two
+  test-fixture updates in that file's own `mod tests` that the behaviour change required
+  (`divergent_step12_cursor_views_and_live_group_slots_still_fail_closed` →
+  `…_and_impossible_group_slots_…`, and the v8 fixture now strips `GROUPS` too).
+- `crates/don-sim/tests/save_load_groups.rs`, `docs/derivation/savegame-groups.md`.
+- `tools/simulation-closure.py` — the `save_load` tuple only. I then ran
+  `--write`; **note that this also picked up three siblings' already-committed source
+  changes** that nobody had regenerated: tick step 10 `22/29 → 21/29` (the audit lane's
+  re-label, correct), the `groups` checksum channel producer `absent →
+  groups_init_frozen`, and the arena-diplomacy blocker seam. Total red 119 → 120. None of
+  that is a regression I introduced; the artifact was stale.
+
+**API CHANGE:** none. No public signature changed; `SaveError::Unsupported("groups")` is no
+longer reachable, and `save_load::REQUIRED`/`FORMAT_VERSION` are private.
+
+**FINDING — the real top blocker for `save_load` is the PlayerSetup frame-zero boundary,
+not any missing subsystem.** `canonical_player_setup_snapshot` refuses
+`world.frame != 0` whenever `vic_leaders.setup_owner.applied()` is `Some`, because the
+`PLAYER_SETUP` section is *reconstructive* — it stores the `ManualPlayerSetup` request and
+replays `Sim::start_manual_player_setup` on load. And a `Sim` **without** that owner cannot
+have an active leader at all: `leader_is_supported` requires
+`leaders[who].active == setup_owner.configured_mask() & (1<<who)`, which is `0` with no
+owner. So DoNSave can save exactly two shapes today — a player-less sim at any frame, or a
+fully set-up sim at frame 0 — and **never a set-up sim mid-match**.
+`a_set_up_match_still_cannot_be_saved_past_frame_zero` pins that as a test rather than
+prose. Closing it means real save owners for the rows the transaction derives:
+`vic_leaders.slots[*].diplos` / `init_diplomacy` / `has_preq_2b0` and
+`vic_match.options` / `on_team` / `num_sides` / `semaphore` / `frame`. That is
+`victory_score::LeaderState`, which `save_load/step8_views.rs` already names four times as
+having no DoNSave chunk. **victory-endgame lane: that is yours, and it is worth more than
+one more refused subsystem.** I did not touch it.
+
+**HOOK NEEDED (`tick.rs` owner) — `Sim::channel_digest` does not cover the group pool.**
+`tick.rs:3888` mixes world, ammo, leader econ, vic_leaders, market, map, walls, builds,
+frame and RNG. It never mixes `CheckSums::check_groups`. Every test that proves determinism
+by comparing `channel_digest()` — including `save_load`'s own
+`save_load_resave_and_resume_are_deterministic` — is blind to a group desync. My tests
+compare `check_groups` explicitly to work around it, but the digest should mix it. One
+line: `mix(<check_groups over self.groups>)`. I did not edit `tick.rs`.
+
+**FINDING — `Group::walk_data`'s member walks stop at `num`, and that is sound, not
+lossy.** `Group::add` `0x00714350` zeroes `off_x/off_y/curr_x/curr_y/angles` at index `num`
+**before** publishing `list[num]` and incrementing, so growth re-initialises the slot. The
+only shipped read past `num` is `Group::update_positions`, whose bound is `form_num`
+(and `form_num > num` *is* reachable — `Group::normalize` decrements `num` without touching
+`form_num`); it reads `off_*[i]` only to write `curr_*[i]` at the same out-of-range `i`,
+which nothing consumes. Driven end to end in
+`save_load_groups.rs::member_slots_at_or_past_num_are_not_state`, including an assertion
+that the excursion is real so the test cannot pass vacuously.
+
+**FINDING — an independent cross-check of the `replay-groups` lane's number.** An empty
+`GROUPS` section is `4 + 512*72 + 32 = 36,900` bytes, whose `512*72 + 32 = 36,896` is
+exactly that lane's separately derived initial value of the `groups` channel. Two
+extractors, same number.
+
+Mutations run against the landed tests, with the observed failures:
+
+| mutation | observed |
+|---|---|
+| `write`/`read` stop carrying `last_group` (`Groups+0x1C`) | 4 of 8 fail; the resume test reports `last_group` `[5,69,0,…]` vs `[0,0,0,…]`, and the section shrinks 36,900 → 36,868 |
+| member arrays walked to `GROUP_MAX_MEMBERS` instead of `num` on both sides | 3 of 8 fail; the section grows 36,900 → 1,282,084 and the tail-is-not-state test loses its byte equality |
+| `read_header` swaps the adjacent header words `new_speed`/`speed` | 2 of 8 fail, including the 70-frame resume round-trip (the fixture deliberately sets `new_speed != speed` so the two words cannot alias) |
+
+Not done, deliberately, and not invented: the `.svx`-compatible form of this section.
+`Array<Group>`'s `size` `[0x00E85F18]`, `increment` `[0x00E85F1C]` and `flags`
+`[0x00E85F24]` are in the retail stream and `don-sim` has no value to put in them —
+`groups_guys::Groups::list` is a fixed 512-slot `Vec`, not a growing `Array<Group>`. I
+wrote the length word, pinned it to `NUM_GROUPS`, and named the other three as a boundary
+rather than emitting a plausible number.
+
+### lane: bhs-builtins — RESULT and FINDINGS
+
+Landed in the working tree (not committed). Gates: `cargo test -p don-bhs -p don-bhs-cc`
+green locally (33 + 12 + 7 + 24 + 18 + 32 + 4 + 2 + 7 + 7 tests, the 363-file corpus
+included and still 363/363 compiling), and on persvati
+`bhs2-20260811T133009Z-12280-27769-9505cd1ca1b8` `EXIT_CODE=0`.
+
+**21 `ScenarioFuncSet` builtins now execute against a read `handler_va`** (indices 77, 78,
+79, 94, 95, 96–105, 147, 298, 311, 390, 392, 783), taking `don-bhs` from 25 implemented
+builtins to 46. Full derivation in `docs/mechanics/bhs-scenario-builtins.md`.
+
+**What a shipped script can now do.** `ron-data/bhs-corpus/scenario/scriptlibrary/general_powers.bhs`
+calls exactly seven builtins; six of them were missing and are now here. It **runs frame by
+frame to its last statement** — `crates/don-bhs-cc/tests/general_powers_runtime.rs` drives
+it for sixteen game seconds and asserts the `run_once` arm, the six re-arms at t=5,7,9,11,
+13,15, the `find_unit(1,"Alexander")` hit and the emitted bubble at the un-XORed position.
+Both new suites were mutation-checked (`now >= due` → `now > due` fails 2 tests).
+
+**FINDINGS — do not re-derive:**
+
+- **`Game+0x560` is `Game::tick`, and it is the script clock.** `time_sec` `0x009ead40` is
+  twelve bytes returning it verbatim; `set_timer` `0x009e4bc0` computes `tick + seconds`.
+  Confirms `docs/mechanics/victory-score.md`'s "game seconds" reading from a second site.
+- **`is_victory_territory` (index 103, `0x009e52c0`) compares `GameInfo::victory == 7`,
+  which the PDB's `VictoryIndex` calls `VICTORY_POPULATION`.** There is no
+  `VICTORY_TERRITORY` enumerator. `VictoryTypeIndex` — a different enum — has
+  `VICTORY_BY_TERRITORY = 2`. Reading the builtin's *name* to pick the mode gives the wrong
+  mode. All ten immediates are tabulated in the doc; `VICTORY_SCENARIO` (10) has no gate.
+- **`GameInfo` byte offsets from the handlers, all via `Game+0x0C`:** `Game+0x20` =
+  `GameInfo::flags` (bit 2 = no-nation-powers), `Game+0x32` = `rush_rules`, `Game+0x38` =
+  `victory`. Third independent corroboration of op-life's `Game::semaphore` layout:
+  `is_conquest_scenario` reads `Game+0x822` bit 1 = **semaphore bit 17**, and the two
+  selection builtins read `Game+0x820` bit 2 = **semaphore bit 2**.
+- **`String::operator==` `0x00a1f140` forwards to `_wcsicmp` — BHS string comparison is
+  CASE-INSENSITIVE.** Timer names, type names, `find_unit`'s `unit_type`: all of it. There
+  is also a hash fast path (`String+0x10`, set by `String::generate_hashes` `0x00a1ee60`)
+  where a **collision reads as equal**; `String::generate_hash` `0x00a1b6b0` and its 50-word
+  table at `0x00b14500` are written out in the doc but deliberately not implemented,
+  because reproducing the predicate needs a `String` flags model `don_bhs::Value` cannot
+  hold.
+- **`who` is 1-based in every scenario builtin and the bound is unsigned.** Each begins
+  `dec` then `cmp .., 7 / ja`, so `who = 0` becomes `0xffffffff` and is refused; the range
+  is `1..=8`. Then `leaders[who-1]`'s first dword (`0x00e3a390`, stride `0x6eec`) bits 0
+  and 1 — **except `object_type_selected` `0x009f055e`, which tests bit 0 only** while
+  `num_objects_selected` four instructions away tests both. That asymmetry is reachable and
+  is pinned by a test.
+- **`find_unit` `0x009ebe10` is stateful through a single file-static, `[0x00cc2214]`.**
+  Not per player, not per type. It is clamped at zero and written back on every hit, and the
+  inner scan `0x009e2850` starts at `cursor + 1`, so consecutive `find_unit` calls **iterate
+  the band** rather than returning the same object. `general_powers.bhs` makes thirteen such
+  calls per frame. A host that resets it per call changes what shipped scripts select.
+- **`object_type_selected` / `num_objects_selected` read LOCAL UI state** — the console's
+  select group at `[0x00e8d444] + Console+0x2a0 * 0x9f0`, owner byte `+0x4a`, count `+0xc`,
+  `short[]` handles `+0x8cc`. `general_powers.bhs`'s whole body is gated on it, while the
+  statics and timers it writes are `RunTimeEnv`/`ScenarioData` state on the `DataWalk`
+  interface. **Whoever wires channel 13 or 14 to a producer**: this script's writes are
+  driven by an input that is not in the command stream.
+- **`num_objects_selected` is not the group's member count.** It is
+  `GroupData::get_num_cap_const` `0x0070f960`, which decrements for every member that is not
+  `(o->[8] & 1) && ObjectData::is_captain()`.
+- **Object vtable slots used by these scans** (`schema/types.json`): `+0x08`
+  `SubObjectData::is_valid_unit`, `+0x20 is_build`, `+0x4c is_active`, `+0xb8 SubObject::is`,
+  `+0xbc ObjectData::is_on_map`, `+0xe8 ObjectData::is_captain`. `find_unit`'s three modes
+  are three different predicates over these; the builtin passes mode 1.
+- **`bubble_text_obj` `0x009ff550` corroborates the tick12 position finding**: object x/y are
+  `SubObjectData+0x10`/`+0x14` XOR `0x00063637`. `valid_object_o` `0x009e32a0` bounds the
+  handle at `0xbb7` (0..=2999).
+- **`Units::lists` (`0x00c0aec0`) and `Objects::lists` (`[0x00c0618c]+0x14`, stride `0x1c`)
+  share a slot space.** Not proven to alias, but `general_powers.bhs` assigns `find_unit`'s
+  *band index* to `o` and hands it to `bubble_text_obj`, which resolves through
+  `Objects::lists`, so the number means the same thing in both.
+- **`re/decomp-all/` drops information here too** (fourth instance of the standing finding):
+  `009e4c80.c` types `timer_expired` as `void` and drops its second argument entirely; the
+  disassembly tail-calls `ScriptTimers::check` with `Game+0x560` and returns its EAX, and
+  `schema/bhs-builtins.json` agrees it is `int`.
+
+**API CHANGE (`crates/don-bhs`, additive only — nothing existing changed signature):**
+`trait Host` gained 21 defaulted methods, every one `Err(HostError::Unimplemented)` by
+default, so `NullHost`, `UtilHost` and every external impl compile unchanged. New module
+`crates/don-bhs/src/scenario.rs` and re-exports from `lib.rs`.
+
+**HOOK NEEDED (don-sim / whoever owns `Sim`)** — §9 of the doc lists the 21 `Host` methods
+by the retail field each stands for. A `don-sim`-backed `Host` needs: `Game::tick`,
+`GameInfo::flags/rush_rules/victory`, `Game::semaphore`, the `Leaders` flag word, the type
+table by name, the per-owner object band with the six vtable predicates, the local select
+group, and a `ScriptTimers` it owns and checksums. I did not add it; `don-sim` is not mine.

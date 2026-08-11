@@ -36,3 +36,6 @@ web/play-results*.json
 re/decomp-all/
 ron-data/replays/
 schema/bhs-compiler-regression.log
+
+# Regenerable corpus index (~3.1 MB, ~100 s from gitignored ron-data/).
+analysis/corpus-commands.json
