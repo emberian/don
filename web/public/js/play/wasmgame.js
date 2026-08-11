@@ -243,9 +243,6 @@ export class GameModule {
   /** Copy the deterministic `don_sim::systems::save_load` image out of wasm memory. */
   saveCore() {
     if (!this.supports('save')) throw new Error('core save export is unavailable');
-    if (this.activePlayers().length) {
-      throw new Error('core save unavailable after roster activation; start or load an inactive setup boundary');
-    }
     if (this.x.game_save(this.g) !== 1) throw new Error(this._lastError());
     const len = this.x.game_save_len(this.g) >>> 0;
     const ptr = this.x.game_save_ptr(this.g) >>> 0;

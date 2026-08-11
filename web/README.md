@@ -107,9 +107,10 @@ baselines. `setup`, `active`, and `ended` remain live core projections.
 This does not make later diplomacy or victory setup complete. ATTACK ingress refuses self, allied,
 and other non-hostile targets before installing an order; the mutable `Leader::set_diplo`
 transaction stays red. Raw `game_set_team` and `game_set_victory_mode` exports stay forbidden.
-DoNSave v9 reconstructs the exact PlayerSetup transaction at frame zero and refuses divergent or
-advanced active state. Browser-source save/load now roundtrips that owner, pending the next canonical
-Wasm convergence rebuild and smoke.
+DoNSave v11 reconstructs the exact PlayerSetup transaction at frame zero, then restores the
+authoritative mutable Leaders/Match lifecycle and derives and verifies the step-8 views. Browser
+save/load therefore admits supported active matches as well as inactive setup state; every still
+unsupported subsystem continues to fail closed before serialization.
 
 The authoritative-roster ABI tranche passed six focused native tests in both independent remote
 profiles on 2026-08-09: hbox
@@ -162,12 +163,15 @@ pending, and fail-closed commands, so UI activity is not mistaken for engine act
 
 The Save and Load controls exchange the bounded deterministic `DoNSave` byte image owned by
 `don_sim::systems::save_load`. Decode is atomic: malformed input leaves the current session
-unchanged. Supported post-step worlds roundtrip and resume: load derives and verifies the exact
-step-8 leader views from saved canonical inputs instead of serializing a second copy. Unsupported
-subsystems and adapter queue shapes still fail closed rather than being silently dropped.
-Canonical frame-zero manual PlayerSetup is the bounded active-owner exception: v9 stores its small
-request/options/semaphore input image, reruns the sequential transaction on load, and validates all
-derived leader/world/fog projections.
+unchanged. Supported post-step worlds and active matches roundtrip and resume: load derives and
+verifies the exact step-8 leader views from saved canonical inputs instead of serializing a second
+copy, while DoNSave v11 owns the mutable Leaders/Match lifecycle. Unsupported subsystems and
+adapter queue shapes still fail closed rather than being silently dropped. Manual PlayerSetup
+stores its small request/options/semaphore input image, reruns the sequential transaction at frame
+zero on load, and validates all derived leader/world/fog projections before installing current
+match state. After load, the exact DoNSave bytes remain an in-memory command-journal seek anchor;
+the page refuses to export that journal as a frame-zero restart document because doing so would
+silently omit its native-save baseline.
 
 ## Playing
 

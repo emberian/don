@@ -1,4 +1,7 @@
+use don_sim::objects::BUILD_BAND_BASE;
 use don_sim::systems::leaders::{ObjectHitInputs, StatObject};
+use don_sim::systems::player_setup::ManualPlayerSetup;
+use don_sim::systems::production::{self, BuildData};
 use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
 use don_sim::tick::Sim;
 
@@ -11,6 +14,44 @@ fn post_step_sim() -> Sim {
     sim.spawn_unit(0, 17, 768, 768, 4).unwrap();
     sim.do_frame();
     assert_eq!(sim.step8_env.leaders[0].objects.units.len(), 1);
+    sim
+}
+
+fn active_post_step_sim() -> Sim {
+    let mut sim = Sim::new(0x5a8e_2026, 8);
+    sim.map.world.seed = 0x5a8e_2026;
+    let mut setup = ManualPlayerSetup {
+        active_mask: 0x01,
+        local_player_setup_slot: 0,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[0] = 0;
+    sim.start_manual_player_setup(setup).unwrap();
+    sim.spawn_unit(0, 17, 768, 768, 4).unwrap();
+
+    let mut build = BuildData {
+        flags: production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE,
+        myhits: 100,
+        construct_hits: 100,
+        job_counter: 1000,
+        constr_time: 1000,
+        gather_down: -1,
+        city: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..BuildData::default()
+    };
+    build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+    build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+        .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
+    sim.spawn_build(0, build);
+
+    sim.do_frame();
+    assert!(sim.step8_env.leaders[0].objects.units[0].owner_in_game);
+    assert!(sim.step8_env.leaders[0].objects.band_2000[0].owner_in_game);
     sim
 }
 
@@ -27,6 +68,48 @@ fn exact_post_step_views_roundtrip_without_a_shadow_owner() {
     loaded.do_frame();
     assert_eq!(original.channel_digest(), loaded.channel_digest());
     assert_eq!(save_sim(&original).unwrap(), save_sim(&loaded).unwrap());
+}
+
+#[test]
+fn active_owner_query_is_derived_for_unit_and_build_views() {
+    let original = active_post_step_sim();
+    let bytes = save_sim(&original).unwrap();
+    let loaded = load_sim(&bytes).unwrap();
+
+    assert_eq!(loaded.world.frame, original.world.frame);
+    assert_eq!(loaded.channel_digest(), original.channel_digest());
+    assert_eq!(save_sim(&loaded).unwrap(), bytes);
+}
+
+#[test]
+fn active_owner_query_disagreement_is_still_refused() {
+    let mut unit_mismatch = active_post_step_sim();
+    unit_mismatch.step8_env.leaders[0].objects.units[0].owner_in_game = false;
+    assert_eq!(
+        save_sim(&unit_mismatch),
+        Err(SaveError::Unsupported("step-8 leader state/hosts"))
+    );
+
+    let mut build_mismatch = active_post_step_sim();
+    build_mismatch.step8_env.leaders[0].objects.band_2000[0].owner_in_game = false;
+    assert_eq!(
+        save_sim(&build_mismatch),
+        Err(SaveError::Unsupported("step-8 leader state/hosts"))
+    );
+
+    let mut end_flag_mismatch = active_post_step_sim();
+    end_flag_mismatch.step8.end.players[0].flags |= 0x4000;
+    assert_eq!(
+        save_sim(&end_flag_mismatch),
+        Err(SaveError::Unsupported("step-8 leader state/hosts"))
+    );
+
+    let mut end_identity_mismatch = active_post_step_sim();
+    end_identity_mismatch.step8.end.players[0].who = 7;
+    assert_eq!(
+        save_sim(&end_identity_mismatch),
+        Err(SaveError::Unsupported("step-8 leader state/hosts"))
+    );
 }
 
 #[test]

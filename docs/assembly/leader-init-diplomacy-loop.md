@@ -64,10 +64,11 @@ The transaction retains every fact, row, and ordered receipt. Tests pin the asym
 shared-vision result: an earlier teammate cannot observe a reciprocal declaration that a later
 Leader has not initialized yet, while the later row can observe the earlier write.
 
-DoNSave v9 stores the small request/option/semaphore input image and reconstructs these derived
-rows through the same transaction on load. Admission compares the retained owner, match projection,
-Leader rows, activation flags, Objects owner bits, and fog masks; it refuses divergent setup state
-or any snapshot after frame zero rather than serializing a plausible shadow roster.
+DoNSave v11 stores the small request/option/semaphore input image and reconstructs these derived
+rows through the same frame-zero transaction on load. Admission compares the retained owner,
+activation flags, Objects owner bits, and fog masks; the separate Leaders/Match section then
+restores the mutable runtime rows and clocks. Divergent setup state and unowned step-8 host answers
+still refuse rather than serializing a plausible shadow roster.
 
 The remaining `Leader::init` body before and after this loop still owns tribe, economy,
 technology, type, personality, scoring, production-script and host callback state. Later

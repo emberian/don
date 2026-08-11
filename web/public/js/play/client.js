@@ -103,9 +103,9 @@ const state = {
   settings: null,
   bindingCapture: null,
   settingsStatus: 'loading browser settings',
-  coreSaveStatus: 'core save/load ready at inactive setup boundary',
+  coreSaveStatus: 'core save/load ready for supported setup and live-match state',
   replay: {
-    events: [], baseline: null, headFrame: 0,
+    events: [], baseline: null, nativeBaseline: null, baseFrame: 0, headFrame: 0,
     applying: false, playback: false, restoring: false,
     status: 'recording exact browser command packets',
   },
@@ -159,7 +159,7 @@ async function boot() {
   state.sessionInitialDigest = mod.digest();
   if (requestedRoster.length) {
     state.coreSaveStatus =
-      'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+      'core save/load ready — active PlayerSetup, step-8 views, Leaders, and Match state are authoritative';
   }
   if (!mod.hasGameData || !mod.hasPlayData) {
     throw new Error('packed retail-derived tables failed validation');
@@ -1305,7 +1305,7 @@ function activateSessionRoster() {
   const roster = state.mod.activePlayers();
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
-    'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+    'core save/load ready — active PlayerSetup, step-8 views, Leaders, and Match state are authoritative';
   $('core-save-status').textContent = state.coreSaveStatus;
   startReplayJournal();
   setPaused(false, false);
@@ -1364,7 +1364,7 @@ function resetClientForWorld(seed, paused, cameraSource) {
   state.mod.setIncomeMode(state.sessionIncomeMode);
   state.mod.setPopSetting(state.sessionPopSetting);
   state.sessionInitialDigest = state.mod.digest();
-  state.coreSaveStatus = 'core save/load ready at inactive setup boundary';
+  state.coreSaveStatus = 'core save/load ready for supported setup and live-match state';
   if ($('session-activate')) {
     $('session-activate').disabled = state.mod.activePlayers().length > 0;
     $('session-activate').textContent = state.mod.activePlayers().length
@@ -1372,7 +1372,7 @@ function resetClientForWorld(seed, paused, cameraSource) {
   }
   if ($('session-team')) $('session-team').disabled = state.mod.activePlayers().length > 0;
   if ($('core-save')) {
-    $('core-save').disabled = !state.mod.supports('save') || state.mod.activePlayers().length > 0;
+    $('core-save').disabled = !state.mod.supports('save');
   }
   resetCommandFeedback();
   miniVersion = -1;
@@ -1480,7 +1480,7 @@ function renderSessionStatus() {
   }
   $('session-team').disabled = match.phase !== 'setup';
   if ($('core-save')) {
-    $('core-save').disabled = !state.mod.supports('save') || match.activePlayers.length > 0;
+    $('core-save').disabled = !state.mod.supports('save');
   }
   $('session-status').textContent =
     `${match.phase} · ${formatSeed(state.sessionSeed)} · player ${state.who} · frame ${state.mod.frame} · ` +
@@ -1931,14 +1931,18 @@ function replayBaseline() {
   });
 }
 
-function startReplayJournal() {
+function startReplayJournal({ nativeBaseline = null } = {}) {
   state.replay.events = [];
   state.replay.baseline = replayBaseline();
+  state.replay.nativeBaseline = nativeBaseline ? new Uint8Array(nativeBaseline) : null;
+  state.replay.baseFrame = state.mod.frame;
   state.replay.headFrame = state.mod.frame;
   state.replay.applying = false;
   state.replay.playback = false;
   state.replay.restoring = false;
-  state.replay.status = 'recording exact browser command packets from this new-session baseline';
+  state.replay.status = state.replay.nativeBaseline
+    ? `recording exact browser command packets from loaded DoNSave frame ${state.replay.baseFrame}`
+    : 'recording exact browser command packets from this new-session baseline';
   state.mod.observeCommands(({ frame: at, who, bytes }) => {
     recordCommandIssued({ frame: at, who, bytes }, state.replay.applying ? 'journal replay' : 'player');
     if (state.replay.applying) return;
@@ -1997,6 +2001,10 @@ function replayDocument() {
 }
 
 function exportReplayJournal() {
+  if (state.replay.nativeBaseline) {
+    throw new Error(
+      'this journal starts from an in-memory DoNSave baseline; download the core save instead');
+  }
   const documentValue = replayDocument();
   if (documentValue.headFrame > MAX_JOURNAL_FRAMES || documentValue.events.length > MAX_JOURNAL_EVENTS) {
     throw new Error(`journal exceeds the ${MAX_JOURNAL_FRAMES}-frame or ${MAX_JOURNAL_EVENTS}-event bound`);
@@ -2185,8 +2193,9 @@ function applyReplayEventsAt(frame) {
 async function restoreReplayFrame(targetFrame) {
   const target = Number(targetFrame);
   if (state.replay.restoring) throw new Error('a journal restore is already running');
-  if (!Number.isInteger(target) || target < 0 || target > state.replay.headFrame) {
-    throw new Error(`journal target must be between 0 and ${state.replay.headFrame}`);
+  if (!Number.isInteger(target) || target < state.replay.baseFrame || target > state.replay.headFrame) {
+    throw new Error(
+      `journal target must be between ${state.replay.baseFrame} and ${state.replay.headFrame}`);
   }
   const setup = state.replay.baseline;
   state.replay.restoring = true;
@@ -2199,22 +2208,27 @@ async function restoreReplayFrame(targetFrame) {
     state.who = setup.player;
     state.sessionIncomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income).value;
     state.sessionPopSetting = POPULATION_LIMITS.indexOf(setup.population);
-    if (!state.mod.restart(parseSessionSeed(setup.seed))) throw new Error('Wasm world restart failed');
-    resetClientForWorld(parseSessionSeed(setup.seed), true, `journal frame ${target}`);
-    if (setup.activePlayers.length && !state.mod.startManualTeams(
-      setup.activePlayers, setup.teams, setup.teamStyle, setup.player, false)) {
-      throw new Error('Wasm world refused the journal PlayerSetup/team transaction');
+    if (state.replay.nativeBaseline) {
+      state.mod.loadCore(state.replay.nativeBaseline);
+      resetClientForWorld(state.mod.coreSeed, true, `DoNSave journal frame ${target}`);
+    } else {
+      if (!state.mod.restart(parseSessionSeed(setup.seed))) throw new Error('Wasm world restart failed');
+      resetClientForWorld(parseSessionSeed(setup.seed), true, `journal frame ${target}`);
+      if (setup.activePlayers.length && !state.mod.startManualTeams(
+        setup.activePlayers, setup.teams, setup.teamStyle, setup.player, false)) {
+        throw new Error('Wasm world refused the journal PlayerSetup/team transaction');
+      }
     }
     state.sessionInitialDigest = state.mod.digest();
     if (setup.activePlayers.length) {
       state.coreSaveStatus =
-        'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+        'core save/load ready — active PlayerSetup, step-8 views, Leaders, and Match state are authoritative';
       $('core-save-status').textContent = state.coreSaveStatus;
     }
     if (state.sessionInitialDigest !== setup.initialDigest) {
       throw new Error(`baseline digest mismatch: expected ${setup.initialDigest}, got ${state.sessionInitialDigest}`);
     }
-    for (let frame = 0; frame < target; frame++) {
+    for (let frame = state.replay.baseFrame; frame < target; frame++) {
       applyReplayEventsAt(frame);
       state.mod.step(1);
       reconcileCommandFeedback();
@@ -2262,11 +2276,15 @@ async function importReplayJournal(input) {
   const previous = {
     events: state.replay.events,
     baseline: state.replay.baseline,
+    nativeBaseline: state.replay.nativeBaseline,
+    baseFrame: state.replay.baseFrame,
     headFrame: state.replay.headFrame,
     status: state.replay.status,
   };
   state.replay.events = journal.events.slice();
   state.replay.baseline = journal.setup;
+  state.replay.nativeBaseline = null;
+  state.replay.baseFrame = 0;
   state.replay.headFrame = journal.headFrame;
   try {
     const snapshot = await restoreReplayFrame(journal.frame);
@@ -2276,6 +2294,8 @@ async function importReplayJournal(input) {
   } catch (error) {
     state.replay.events = previous.events;
     state.replay.baseline = previous.baseline;
+    state.replay.nativeBaseline = previous.nativeBaseline;
+    state.replay.baseFrame = previous.baseFrame;
     state.replay.headFrame = previous.headFrame;
     state.replay.status = `import refused: ${error.message}`;
     renderReplayPanel();
@@ -2304,12 +2324,14 @@ function replaySnapshot() {
   return Object.freeze({
     protocol: JOURNAL_PROTOCOL,
     frame: state.mod.frame,
+    baseFrame: state.replay.baseFrame,
     headFrame: state.replay.headFrame,
     events: state.replay.events.length,
     playback: state.replay.playback,
     paused: state.paused,
     digest: state.mod.digest(),
     initialDigest: state.replay.baseline?.initialDigest ?? '',
+    baseline: state.replay.nativeBaseline ? 'DoNSave' : 'new-session',
     status: state.replay.status,
   });
 }
@@ -2319,18 +2341,21 @@ function renderReplayPanel() {
   updateReplayHead();
   const frame = state.mod.frame;
   const timeline = $('replay-timeline');
+  timeline.min = String(state.replay.baseFrame);
   timeline.max = String(state.replay.headFrame);
   timeline.value = String(Math.min(frame, state.replay.headFrame));
   timeline.disabled = state.replay.restoring;
   $('replay-frame').textContent = `frame ${frame}`;
   $('replay-head').textContent = `head ${state.replay.headFrame} · ${state.replay.events.length} events`;
-  $('replay-status').textContent = `${state.replay.status}. This is a command journal, not a native save-state.`;
+  $('replay-status').textContent = state.replay.nativeBaseline
+    ? `${state.replay.status}. Seeking is anchored by the loaded core save; journal export is unavailable.`
+    : `${state.replay.status}. This is a command journal, not a native save-state.`;
   $('replay-play').textContent = state.paused
     ? (state.replay.playback ? 'play journal' : 'resume') : 'pause';
   $('replay-step').disabled = state.replay.restoring;
   $('replay-live').disabled = state.replay.restoring || frame === state.replay.headFrame;
   $('replay-import').disabled = state.replay.restoring;
-  $('replay-export').disabled = state.replay.restoring;
+  $('replay-export').disabled = state.replay.restoring || !!state.replay.nativeBaseline;
   $('replay-speed').value = String(state.speed);
 }
 
@@ -2396,10 +2421,11 @@ function downloadCoreSave() {
 
 function importCoreSave(input) {
   try {
-    const result = state.mod.loadCore(input);
+    const baseline = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
+    const result = state.mod.loadCore(baseline);
     const seed = state.mod.coreSeed;
     resetClientForWorld(seed, true, 'loaded core save');
-    startReplayJournal();
+    startReplayJournal({ nativeBaseline: baseline });
     $('session-seed').value = formatSeed(seed);
     syncSessionUrl();
     state.coreSaveStatus = `loaded ${result.bytes.toLocaleString()} authoritative bytes · ` +
@@ -2447,7 +2473,7 @@ function initializeReplayPanel() {
       say(`command journal refused — ${error.message}`, 'warn');
     }
   });
-  $('core-save').disabled = !state.mod.supports('save') || state.mod.activePlayers().length > 0;
+  $('core-save').disabled = !state.mod.supports('save');
   $('core-load').disabled = !state.mod.supports('load');
   $('core-save').addEventListener('click', downloadCoreSave);
   $('core-load').addEventListener('click', () => $('core-load-file').click());

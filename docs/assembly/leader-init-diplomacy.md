@@ -39,8 +39,9 @@ setup:
   initialization state in the 6,102-byte body remain red;
 - later diplomacy commands still require the atomic `Leader::set_diplo` ejection, vision,
   victory, army, and event tail;
-- DoNSave v9 admits only the canonical frame-zero PlayerSetup snapshot. Advanced active matches
-  remain refused until their later mutable owners are encoded.
+- DoNSave v11 reconstructs the immutable PlayerSetup recipe at frame zero, then restores the
+  separately owned mutable Leaders/Match lifecycle. Supported post-step active matches now admit;
+  unowned step-8 host answers and later subsystems still refuse before serialization.
 
 The source tests cover alternating teams, free-for-all preservation, inactive rows/columns,
 nonzero-frame and missing-leader refusal, and stale-plan atomicity. The PlayerSetup and native

@@ -2119,7 +2119,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_team_setup_is_atomic_sim_owned_initializes_allies_and_roundtrips_save() {
+    fn manual_team_setup_is_atomic_sim_owned_and_post_step_active_state_roundtrips_save() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -2147,19 +2147,35 @@ mod tests {
         assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 2);
         assert_eq!(unsafe { game_diplomacy(&mut game, 0, 1) }, 0);
 
+        unsafe { game_step(&mut game, 3) };
+        game.core.vic_leaders.slots[0].score = 42;
+        game.refresh();
+        assert_eq!(game.core.world.frame, 3);
+        assert_eq!(unsafe { game_victory_score(&mut game, 0) }, 42);
         let digest = game.core.channel_digest();
-        assert_eq!(unsafe { game_save(&mut game) }, 1);
+        assert_eq!(
+            unsafe { game_save(&mut game) },
+            1,
+            "{}",
+            String::from_utf8_lossy(&game.error)
+        );
         assert!(!game.save_bytes.is_empty());
+        unsafe { game_step(&mut game, 2) };
+        game.core.vic_leaders.slots[0].score = 99;
+        assert_eq!(game.core.world.frame, 5);
         game.load_bytes = game.save_bytes.clone();
         assert_eq!(unsafe { game_load_commit(&mut game) }, 1);
         assert_eq!(game.core.channel_digest(), digest);
+        assert_eq!(game.core.world.frame, 3);
+        assert_eq!(unsafe { game_victory_score(&mut game, 0) }, 42);
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0x0f);
         assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0x0f);
         assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 2);
         assert_eq!(
             unsafe { game_start_manual_teams(&mut game, 0x0f, packed, 1, 0, 0) },
             0
         );
-        assert!(String::from_utf8_lossy(&game.error).contains("MatchAlreadyStarted"));
+        assert!(String::from_utf8_lossy(&game.error).contains("WorldFrameIsNotZero"));
     }
 
     #[test]

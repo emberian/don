@@ -45,10 +45,9 @@ v1/v2 journals map to the older inactive/own-slot-team baseline.
 - The rest of `Leader::init` still owns tribe, economy, technology, production-script,
   personality, and callback state. Later diplomacy mutation still requires complete
   `Leader::set_diplo`.
-- DoNSave v9 reconstructs and validates the canonical transaction, but only at frame zero.
-  Advanced active matches remain refused until their other mutable leader/game owners are encoded.
-- The checked-in Wasm artifact predates this source integration; browser enablement remains gated
-  on root convergence, native ABI validation, canonical rebuild, and smoke.
+- DoNSave v11 reconstructs and validates the canonical transaction at frame zero, then restores
+  current Leaders/Match state from its separate lifecycle owner. Supported active matches admit;
+  unowned later subsystems and external step-8 host answers remain fail-closed.
 - Random-team RNG, ranked ELO balancing, AI slots, and victory-mode mutation remain red.
 
 ## Validation handoff

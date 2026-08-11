@@ -842,8 +842,8 @@ try {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
 
-  // Roster activation is deliberately after the save/resume gate: active step-8 and
-  // victory state are not in the current save format, so the UI must never imply otherwise.
+  // Roster activation is deliberately after the inactive save/resume gate so the next
+  // tranche independently proves DoNSave v11 over a live PlayerSetup/Leaders/Match owner.
   out.activation = await c.eval(`(async () => {
     const d = window.don;
     const teamLayout = document.getElementById('session-team');
@@ -880,10 +880,39 @@ try {
     const afterFriendlyAttack = {
       gaps: m.gaps(), order: m.info(own)?.order, transport: m.transport(),
     };
+    const activeSaveBytes = d.save.export();
+    const activeSaved = {
+      frame: m.frame, digest: m.digest(), rngState: m.rngState,
+      activePlayers: m.activePlayers(), match: m.match(),
+      leaders: Array.from({ length: m.playerCount }, (_, p) => m.leader(p)),
+      relations: Array.from({ length: m.playerCount }, (_, other) => m.relation(0, other)),
+    };
+    m.step(1);
+    const activeMutated = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
+    const activeLoaded = d.save.import(activeSaveBytes);
+    const activeRestored = {
+      frame: m.frame, digest: m.digest(), rngState: m.rngState,
+      activePlayers: m.activePlayers(), match: m.match(),
+      leaders: Array.from({ length: m.playerCount }, (_, p) => m.leader(p)),
+      relations: Array.from({ length: m.playerCount }, (_, other) => m.relation(0, other)),
+      saveDisabled: document.getElementById('core-save').disabled,
+    };
+    const nativeJournal = d.replay.snapshot();
+    let nativeJournalExportRefused = false, nativeJournalExportReason = '';
+    try { d.replay.export(); } catch (error) {
+      nativeJournalExportRefused = true;
+      nativeJournalExportReason = error.message;
+    }
+    d.replay.step();
+    const nativeJournalAdvanced = d.replay.snapshot();
+    const nativeJournalRestored = await d.replay.seek(activeSaved.frame);
     const activeUrl = d.session.url();
     return JSON.stringify({ activated, leaders, activePlayers, activeMask, match, startedFrame,
       journal, saveDisabled, status, imported, importedMatch, relations, own, teammate,
-      beforeFriendlyAttack, afterFriendlyAttack, activeUrl });
+      beforeFriendlyAttack, afterFriendlyAttack, activeSaveBytes: activeSaveBytes.length,
+      activeSaved, activeMutated, activeLoaded, activeRestored, nativeJournal,
+      nativeJournalExportRefused, nativeJournalExportReason,
+      nativeJournalAdvanced, nativeJournalRestored, activeUrl });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['frame-zero match start reaches every Sim leader and is queried without a JS roster copy',
@@ -915,8 +944,33 @@ try {
       out.activation.afterFriendlyAttack.order === out.activation.beforeFriendlyAttack.order &&
       out.activation.afterFriendlyAttack.transport.ordersApplied ===
         out.activation.beforeFriendlyAttack.transport.ordersApplied],
-    ['active roster makes unsupported live save status explicit',
-      out.activation.saveDisabled && out.activation.status.includes('not serialized')],
+    ['active roster exposes the v11 live-match save owner instead of a stale setup-only gate',
+      !out.activation.saveDisabled && out.activation.status.includes('active PlayerSetup')],
+    ['active DoNSave rewinds a later live tick with PlayerSetup, Leaders, Match, and diplomacy intact',
+      out.activation.activeSaveBytes > 0 &&
+      out.activation.activeSaved.frame > 0 &&
+      out.activation.activeMutated.frame === out.activation.activeSaved.frame + 1 &&
+      out.activation.activeMutated.digest !== out.activation.activeSaved.digest &&
+      out.activation.activeLoaded.frame === out.activation.activeSaved.frame &&
+      out.activation.activeRestored.frame === out.activation.activeSaved.frame &&
+      out.activation.activeRestored.digest === out.activation.activeSaved.digest &&
+      out.activation.activeRestored.rngState === out.activation.activeSaved.rngState &&
+      JSON.stringify(out.activation.activeRestored.activePlayers) ===
+        JSON.stringify(out.activation.activeSaved.activePlayers) &&
+      JSON.stringify(out.activation.activeRestored.leaders) ===
+        JSON.stringify(out.activation.activeSaved.leaders) &&
+      JSON.stringify(out.activation.activeRestored.relations) ===
+        JSON.stringify(out.activation.activeSaved.relations) &&
+      out.activation.activeRestored.match.phase === 'active' &&
+      !out.activation.activeRestored.saveDisabled],
+    ['a loaded DoNSave becomes an exact in-memory seek anchor without fabricating an exportable restart journal',
+      out.activation.nativeJournal.baseline === 'DoNSave' &&
+      out.activation.nativeJournal.baseFrame === out.activation.activeSaved.frame &&
+      out.activation.nativeJournalExportRefused &&
+      out.activation.nativeJournalExportReason.includes('in-memory DoNSave baseline') &&
+      out.activation.nativeJournalAdvanced.frame === out.activation.activeSaved.frame + 1 &&
+      out.activation.nativeJournalRestored.frame === out.activation.activeSaved.frame &&
+      out.activation.nativeJournalRestored.digest === out.activation.activeSaved.digest],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -953,11 +1007,11 @@ try {
       JSON.stringify(out.sharedRoster.beforeRestart.activePlayers) ===
         JSON.stringify(out.activation.activePlayers) &&
       out.sharedRoster.beforeRestart.urlSlots === out.activation.activePlayers.join(',')],
-    ['a shared active roster owns its journal baseline and disables unsupported live save export',
+    ['a shared active roster owns its journal baseline and exposes supported live save export',
       JSON.stringify(out.sharedRoster.beforeRestart.journalSetup.activePlayers) ===
         JSON.stringify(out.activation.activePlayers) &&
-      out.sharedRoster.beforeRestart.saveDisabled &&
-      out.sharedRoster.beforeRestart.saveStatus.includes('not serialized')],
+      !out.sharedRoster.beforeRestart.saveDisabled &&
+      out.sharedRoster.beforeRestart.saveStatus.includes('active PlayerSetup')],
     ['restarting a shared match returns to an authoritative inactive setup',
       out.sharedRoster.afterRestart.length === 0 && out.sharedRoster.afterRestartMatch.phase === 'setup'],
   ]) {

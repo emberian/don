@@ -22,12 +22,12 @@ export const REPLAY_EVIDENCE = Object.freeze({
       2
     ],
     "walkedBytes": {
-      "min": 280968,
-      "max": 780168
+      "min": 281076,
+      "max": 780476
     },
     "unsourcedBytes": {
-      "min": 280892,
-      "max": 780092
+      "min": 281000,
+      "max": 780400
     }
   }
 });

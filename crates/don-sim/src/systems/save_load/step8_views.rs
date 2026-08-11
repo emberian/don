@@ -81,7 +81,11 @@ fn leader_has_only_mirrors(
         && actual.taunt == fresh.taunt
 }
 
-fn expected_unit_view(sim: &Sim, row: u32) -> Option<leaders::StatObject> {
+fn expected_owner_in_game(sim: &Sim, who: usize) -> bool {
+    sim.step8.leaders[who].flags & leaders::flag::IN_GAME != 0
+}
+
+fn expected_unit_view(sim: &Sim, who: usize, row: u32) -> Option<leaders::StatObject> {
     let row = row as usize;
     Some(leaders::StatObject {
         active: (*sim.world.units.flags().get(row)? as u8) & OBJ_FLAG_ACTIVE != 0,
@@ -90,7 +94,9 @@ fn expected_unit_view(sim: &Sim, row: u32) -> Option<leaders::StatObject> {
             type_id: *sim.unit_type.get(row)?,
             unit_masks2: *sim.world.units.unit_masks2().get(row)? as u32,
         }),
-        owner_in_game: false,
+        // `Sim::sync_step8_inputs` derives this query answer from the exact leader flags
+        // immediately before dispatch. It is not an independently saved object field.
+        owner_in_game: expected_owner_in_game(sim, who),
         myhits: *sim.world.units.myhits().get(row)?,
         mylos: *sim.world.units.mylos().get(row)?,
         o_down: {
@@ -103,7 +109,7 @@ fn expected_unit_view(sim: &Sim, row: u32) -> Option<leaders::StatObject> {
     })
 }
 
-fn expected_build_view(sim: &Sim, row: u32) -> leaders::StatObject {
+fn expected_build_view(sim: &Sim, who: usize, row: u32) -> leaders::StatObject {
     let Some(build) = sim.builds.get(row as usize) else {
         return leaders::StatObject::default();
     };
@@ -112,7 +118,7 @@ fn expected_build_view(sim: &Sim, row: u32) -> leaders::StatObject {
         wall_active: build.is_active(),
         wall_started: build.flags & production::flag::STARTED != 0,
         wall_city_flag: build.flags & production::flag::CAPTURED != 0,
-        owner_in_game: false,
+        owner_in_game: expected_owner_in_game(sim, who),
         myhits: build.myhits,
         mylos: build.other[0x3c] as i8,
         job_counter: build.job_counter,
@@ -150,7 +156,7 @@ fn objects_are_exact_mirrors(sim: &Sim) -> bool {
             .units
             .iter()
             .zip(unit_rows)
-            .all(|(view, &row)| expected_unit_view(sim, row).as_ref() == Some(view))
+            .all(|(view, &row)| expected_unit_view(sim, who, row).as_ref() == Some(view))
         {
             return false;
         }
@@ -158,12 +164,28 @@ fn objects_are_exact_mirrors(sim: &Sim) -> bool {
             .band_2000
             .iter()
             .zip(build_rows)
-            .all(|(view, &row)| *view == expected_build_view(sim, row))
+            .all(|(view, &row)| *view == expected_build_view(sim, who, row))
         {
             return false;
         }
     }
     true
+}
+
+fn end_is_empty_or_exact_mirror(sim: &Sim, fresh: &leaders::Leaders) -> bool {
+    if sim.step8.end == fresh.end {
+        return true;
+    }
+    let mut expected = fresh.end.clone();
+    for who in 0..NUM_LEADERS {
+        expected.players[who].who = sim.step8.leaders[who].slot as u8;
+        expected.players[who].flags = if expected_owner_in_game(sim, who) {
+            leaders::PLAYER_VALID
+        } else {
+            0
+        };
+    }
+    sim.step8.end == expected
 }
 
 /// Whether step 8 contains no state that needs its own save owner.
@@ -186,7 +208,7 @@ pub(super) fn is_supported_derived_snapshot(sim: &Sim) -> bool {
     }
 
     let fresh = leaders::Leaders::new();
-    if sim.step8.end != fresh.end || sim.step8.event != fresh.event {
+    if !end_is_empty_or_exact_mirror(sim, &fresh) || sim.step8.event != fresh.event {
         return false;
     }
     for who in 0..NUM_LEADERS {

@@ -510,11 +510,11 @@
         <input id="replay-file" type="file" accept="application/json,.json">
       </div>
       <div id="replay-capabilities" aria-label="Save and replay capability boundaries">
-        <div class="replay-capability"><span>Command journal v2: authoritative roster baseline, tick-boundary restart, and exact frame-stamped wire packets; seek and resume supported.</span><b>supported</b></div>
-        <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes at the inactive setup boundary. Live active step-8/victory state is not yet serialized.</span><button id="core-save" type="button">download save</button></div>
+        <div class="replay-capability"><span>Command journal v3: authoritative roster/team baseline, tick-boundary restart, and exact frame-stamped wire packets. A loaded DoNSave is an in-memory seek anchor and remains a separate non-exportable boundary.</span><b>supported</b></div>
+        <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes for supported setup and live-match state, including PlayerSetup, derived step-8 views, Leaders, and Match.</span><button id="core-save" type="button">download save</button></div>
         <div class="replay-capability"><span>DoN core load: bounded, validated, and atomic; malformed files leave the running session unchanged.</span><button id="core-load" type="button">load save</button></div>
         <input id="core-load-file" type="file" accept="application/octet-stream,.donsave">
-        <div id="core-save-status" class="status-note" role="status" aria-live="polite">Core save/load ready at the inactive setup boundary. Activating the roster disables save export.</div>
+        <div id="core-save-status" class="status-note" role="status" aria-live="polite">Core save/load ready for supported setup and live-match state.</div>
         <div class="replay-capability"><span>Retail .rcx replay: unavailable because no retail replay playback bridge is exported.</span><button type="button" disabled title="Unavailable: no retail replay playback bridge">open .rcx</button></div>
       </div>
     </fieldset>
