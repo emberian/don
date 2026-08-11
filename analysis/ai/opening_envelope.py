@@ -57,7 +57,7 @@ CONFOUNDS = [
     },
     {
         "id": "arena_physics_under_test",
-        "effect": "Arena travel, ordinary gather capacity/income, construction, combat, and map generation retain declared MODEL paths. Base University capacity, contained Scholar placement, cost ramp, literacy, and Scholar gross are recovered exact owners inside that larger non-retail Arena.",
+        "effect": "Arena travel, ordinary gather capacity/income, construction, combat, and map generation retain declared MODEL paths. Base University/Scholar mechanics and gather-enhancer source rows, city percentages, and integer arithmetic call recovered exact owners inside that larger non-retail Arena; applying an enhancer to generated-map Farm/Camp/Mine gross remains MODEL.",
     },
     {
         "id": "shipped_opening_is_not_full_retail_ai",
@@ -101,6 +101,20 @@ KNOWLEDGE_ECONOMY_AUDIT = {
     "pinned_result": "one city University with seven base Scholars credits 45 knowledge per 450 frames",
     "authority_boundary": "University construction still uses Arena ResearchModel; levels 2..6 need the unhosted BonusType/property resolver; contained-object destruction/come-out teardown is not claimed.",
     "interpretation": "Accepted University/Scholar rows now measure a represented economic feedback loop, not retail-AI imitation or whole-Arena fidelity.",
+}
+
+GATHER_UPGRADE_AUDIT = {
+    "scope": "first-copy base Granary / Lumber Mill / Smelter policy and city-local enhancer arithmetic, enabled by one completed-Market base tax source",
+    "type_source": "validated schema/live BuildType/TechType rows 423/424/425 and 552/553",
+    "exact_owners": [
+        "don_sim::systems::tech_cities::CityRules enhancer tables",
+        "don_sim::systems::tech_cities::calc_gather_enhancers",
+        "CityData::enhancer_amount 0x00738360 multiply-then-divide ordering",
+        "don_sim::systems::tech_cities::city_taxes over a completed same-city census",
+    ],
+    "pinned_result": "base completed enhancers yield 120% food, 120% timber, and 150% metal; 11 food gross becomes 13 before accumulation; one completed Market credits exactly 10 wealth per 450 frames",
+    "authority_boundary": "Arena construction and ordinary generated-map payout remain MODEL; Market tax retains its exact 7200-point source accumulator but composes with the model economy; Caravan, Merchant and trade remain absent; the nearest-city duplicate gate is a conservative projection of retail's overlapping-city graph; a retained exact Farm keeps its externally supplied enhancer snapshot until explicitly rebound.",
+    "interpretation": "Accepted Market and enhancer-building rows remove zero policy surfaces and exercise exact source arithmetic, but do not make Camp/Mine terrain payout, trade, or the whole-Arena economy authoritative.",
 }
 
 
@@ -382,6 +396,7 @@ def build_report(derived: dict, corpus: dict, trace: Trace) -> dict:
         "corpus_audit": audit,
         "shipped_production_ai_audit": PRODUCTION_AI_AUDIT,
         "knowledge_economy_runtime_audit": KNOWLEDGE_ECONOMY_AUDIT,
+        "gather_upgrade_runtime_audit": GATHER_UPGRADE_AUDIT,
         "human_envelope": envelope,
         "policy_traces": policies,
         "physics_and_model_confounds": CONFOUNDS,

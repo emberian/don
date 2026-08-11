@@ -138,6 +138,7 @@ use super::gather_runtime::{
     AuthoritativeGatherSitePlacement, AuthoritativeGatherSiteType, GatherCapacityAuthority,
     GatherObjectKey, GatherPerWorkerEvaluationRequest, GatherPrerequisiteRefusal,
 };
+use super::gather_upgrades::{self, CompletedBaseEnhancers};
 use super::knowledge_economy::{self, KnowledgeEconomy, KnowledgeObject, ScholarContainmentPlan};
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
@@ -268,6 +269,7 @@ pub enum PlaceErr {
     Terrain,
     Occupied,
     NoCityInRange,
+    DuplicateInCity,
     TooCloseToCity,
     NoResource,
 }
@@ -640,6 +642,10 @@ pub struct World {
     /// Exact off-map University/Scholar identity, containment and knowledge-gross state.
     /// This is separate from ordinary on-map Citizen gathering by construction.
     knowledge_economy: KnowledgeEconomy,
+    /// Exact sixteenths-scale accumulator for the bounded completed-Market city-tax source.
+    /// Arena's ordinary economy uses a separate MODEL period, so combining the two in
+    /// `PlayerState::acc[wealth]` would distort the recovered 7200-point trajectory.
+    market_tax_acc: Vec<i32>,
     /// Per-site external facts admitted only after the retained terrain plane and the
     /// shared completed-Farm evaluator have succeeded transactionally.
     authoritative_farm_sites: BTreeMap<GatherObjectKey, AuthoritativeFarmSiteFacts>,
@@ -2839,6 +2845,8 @@ impl World {
         tribes: &[u8],
         params: ArenaParams,
     ) -> Result<World, String> {
+        gather_upgrades::validate_shipped_sources(|type_id| types.get(type_id))
+            .map_err(|error| format!("gather-upgrade source rows refused: {error:?}"))?;
         let ids = Ids::resolve(&types)?;
         if tribes.len() > map.starts.len() {
             return Err(format!(
@@ -2939,6 +2947,7 @@ impl World {
             collision_units: CollisionUnits::default(),
             gather_runtime: ArenaGatherRuntime::default(),
             knowledge_economy: KnowledgeEconomy::default(),
+            market_tax_acc: vec![0; tribes.len()],
             authoritative_farm_sites: BTreeMap::new(),
             target_world,
             target_circle: circle_table(),
@@ -3951,6 +3960,30 @@ impl World {
         if !near_city {
             return Err(PlaceErr::NoCityInRange);
         }
+        if matches!(
+            type_id,
+            gather_upgrades::GRANARY_TYPE
+                | gather_upgrades::LUMBER_MILL_TYPE
+                | gather_upgrades::SMELTER_TYPE
+        ) {
+            // MODEL boundary: the shipped enhancer `j=0x200` arm in
+            // `BuildTypeData::blocked_location` 0x006375B0 enters a wider overlapping-city
+            // graph. Arena lacks that graph, so its existing single `Ent::city` projection
+            // conservatively admits at most one per nearest completed owner-city.
+            // Incomplete or foreign centres cannot create a second allowance.
+            let linked_city = self
+                .own_ents(pi)
+                .filter(|ent| ent.type_id == self.ids.small_city && ent.complete)
+                .min_by_key(|ent| Map::tile_dist(ent.tile(), (tx, ty)))
+                .map(|ent| ent.id)
+                .expect("near-city placement admission supplies a completed city");
+            if self
+                .own_ents(pi)
+                .any(|ent| ent.type_id == type_id && ent.city == linked_city)
+            {
+                return Err(PlaceErr::DuplicateInCity);
+            }
+        }
         // MODEL: `WOODCUTTER_RADIUS` / `MINE_RADIUS` read as "how far the building may be
         // from the resource it works". Both are shipped values; the *reading* is ours.
         if type_id == self.ids.camp
@@ -4688,6 +4721,7 @@ impl World {
         let age = self.age_of(pi);
         let mut gross = [0i32; NRES];
         let mut upkeep = [0i32; NRES];
+        let market_tax_gross = self.completed_market_tax_gross(pi);
         let cities = self
             .own_ents(pi)
             .filter(|e| e.type_id == self.ids.small_city && e.complete)
@@ -4731,7 +4765,18 @@ impl World {
                     && ordinary_gather_kind(&self.ids, e.type_id).is_some()
                     && active_workers > 0
                 {
-                    gross[e.gather_res] += self.types.constants.peasant_rate * active_workers;
+                    let model_gross = self.types.constants.peasant_rate * active_workers;
+                    // MODEL 3 remains red: generated-map Camp/Mine geometry and ordinary
+                    // seating are not retail sources.  Only the city-local completed
+                    // enhancer lookup and `CityData::enhancer_amount` arithmetic are exact.
+                    // The retained authoritative-Farm branch returned above with its own
+                    // externally supplied enhancer snapshot and is never recombined here.
+                    let enhanced = gather_upgrades::enhancer_amount(
+                        self.completed_base_enhancers(pi, e.city),
+                        e.gather_res,
+                        model_gross,
+                    );
+                    gross[e.gather_res] += enhanced;
                 }
             } else if let Some(u) = self.types.upkeep.get(&e.type_id) {
                 for r in 0..NRES {
@@ -4784,6 +4829,71 @@ impl World {
                 }
             }
         }
+
+        // `CityData::get_taxes` returns whole resources and `calc_city_resources` shifts
+        // the result left four before the shared accumulator. Keep this authoritative
+        // source on its exact 7200-point subchannel: Arena's ordinary economy intentionally
+        // runs at a separately labelled MODEL period. The later composition with model
+        // upkeep/caps is not promoted to a whole-economy fidelity claim.
+        let market_whole = credit_resource(
+            market_tax_gross,
+            resource_period(self.econ.gather_rate),
+            &mut self.market_tax_acc[pi],
+        );
+        if market_whole != 0 {
+            let wealth = don_sim::systems::economy::RES_WEALTH;
+            self.players[pi].stock[wealth] =
+                self.players[pi].stock[wealth].saturating_add(market_whole);
+            if market_whole > 0 {
+                self.players[pi].gathered[wealth] += i64::from(market_whole);
+            }
+        }
+    }
+
+    /// Sum the exact base city-tax term over completed owner cities and their completed,
+    /// stored same-city building census. Multiple Markets in one city remain one boolean
+    /// tax source, matching `CityData::get_taxes`; foreign, incomplete and unlinked rows
+    /// never enter the census.
+    fn completed_market_tax_gross(&self, pi: usize) -> i32 {
+        self.own_ents(pi)
+            .filter(|ent| ent.complete && ent.type_id == self.ids.small_city)
+            .map(|city| {
+                let completed: Vec<&Ent> = self
+                    .own_ents(pi)
+                    .filter(|ent| ent.complete && ent.building && ent.city == city.id)
+                    .collect();
+                gather_upgrades::base_city_tax_gross(
+                    completed.len() as i32,
+                    completed.iter().any(|ent| ent.type_id == self.ids.market),
+                    completed.iter().any(|ent| ent.type_id == self.ids.temple),
+                )
+            })
+            .fold(0, i32::wrapping_add)
+    }
+
+    /// Completed base gather enhancers in the same Arena-owned city as `site`.
+    ///
+    /// Arena assigns `Ent::city` when the building object is created. This lookup does not
+    /// substitute a new proximity rule at payout time, does not cross owners, and does not
+    /// activate an unfinished building. Higher BonusType/property levels are intentionally
+    /// absent from this base-only tranche.
+    fn completed_base_enhancers(&self, pi: usize, city: EntId) -> CompletedBaseEnhancers {
+        if city.is_none() {
+            return CompletedBaseEnhancers::default();
+        }
+        let mut completed = CompletedBaseEnhancers::default();
+        for ent in self
+            .own_ents(pi)
+            .filter(|ent| ent.complete && ent.city == city)
+        {
+            match ent.type_id {
+                gather_upgrades::GRANARY_TYPE => completed.granary = true,
+                gather_upgrades::LUMBER_MILL_TYPE => completed.lumber_mill = true,
+                gather_upgrades::SMELTER_TYPE => completed.smelter = true,
+                _ => {}
+            }
+        }
+        completed
     }
 
     fn tick_band(&mut self, pi: usize, buildings: bool, object_frame: i64) {

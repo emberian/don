@@ -196,6 +196,14 @@ impl<'a> Obs<'a> {
     pub fn terrain(&self, tx: i32, ty: i32) -> Terrain {
         self.map.at(tx, ty)
     }
+    /// Whether this observing owner may place one public type at this tile.
+    ///
+    /// This exposes only command-admission truth for the caller's own seat. It returns no
+    /// entity, owner, occupancy or refusal detail, so a policy cannot use it to inspect
+    /// hidden enemy state through the authoritative world.
+    pub fn placement_ok(&self, type_id: i32, tx: i32, ty: i32) -> bool {
+        self.world.placement_ok(self.pi, type_id, tx, ty).is_ok()
+    }
     pub fn explored(&self, tx: i32, ty: i32) -> bool {
         self.world.explored(self.pi, tx, ty)
     }

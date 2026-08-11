@@ -36,6 +36,13 @@ TRACE_WITH_KNOWLEDGE = TRACE.replace(
     "ShippedOpening\t0x5eed0001\t0\t0",
 )
 
+TRACE_WITH_GATHER_UPGRADES = TRACE_WITH_KNOWLEDGE.replace(
+    "ShippedOpening\t0x5eed0001\t0\t0",
+    "Ai\t0x5eed0001\t0\t555\tbuilding\tLumber Mill\t1\n"
+    "Ai\t0x5eed0001\t1\t556\tbuilding\tLumber Mill\t1\n"
+    "ShippedOpening\t0x5eed0001\t0\t0",
+)
+
 
 class OpeningEnvelopeTests(unittest.TestCase):
     @classmethod
@@ -98,6 +105,20 @@ class OpeningEnvelopeTests(unittest.TestCase):
         self.assertEqual(knowledge["human_types_missing"], [])
         self.assertEqual(report["next_model_correction"]["family"], "gather_upgrades")
         self.assertIn("45 knowledge", report["knowledge_economy_runtime_audit"]["pinned_result"])
+
+    def test_represented_market_and_gather_upgrades_exhaust_zero_coverage_ranking(self):
+        report = opening_envelope.build_report(
+            self.derived,
+            self.corpus,
+            opening_envelope.parse_trace(TRACE_WITH_GATHER_UPGRADES),
+        )
+        upgrades = report["policy_traces"]["Ai"]["economic_families"]["gather_upgrades"]
+        self.assertEqual(upgrades["accepted_decisions"], 2)
+        self.assertEqual(upgrades["human_types_missing"], ["Granary", "Smelter"])
+        wealth = report["policy_traces"]["Ai"]["economic_families"]["wealth_economy"]
+        self.assertGreater(wealth["accepted_decisions"], 0)
+        self.assertEqual(report["next_model_correction"]["status"], "no_zero-coverage_family")
+        self.assertIn("11 food gross becomes 13", report["gather_upgrade_runtime_audit"]["pinned_result"])
 
 
 if __name__ == "__main__":

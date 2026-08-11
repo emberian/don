@@ -17,6 +17,7 @@ use super::boom::place_except;
 use super::marshal::{buildable_military, counter_pick, enemy_army};
 use super::{capital, employ_except, next_tech, queue_at, seats, useful_slots, Bot};
 use crate::arena::cmd::{Cmd, EntId};
+use crate::arena::gather_upgrades;
 use crate::arena::knowledge_economy;
 use crate::arena::obs::{MyEnt, Obs};
 use crate::arena::world::{Job, FPS};
@@ -46,6 +47,8 @@ pub struct Ai {
     /// Highest observed count per enemy type. This is memory, not hidden live state.
     observed_mix: BTreeMap<i32, i64>,
     builders: Vec<EntId>,
+    /// Public owner-local founder/tile reserved while an early Market is placed.
+    reserved_university_site: Option<(EntId, (i32, i32))>,
 }
 
 impl Default for Ai {
@@ -64,6 +67,7 @@ impl Default for Ai {
             composition_turn: 0,
             observed_mix: BTreeMap::new(),
             builders: Vec::new(),
+            reserved_university_site: None,
         }
     }
 }
@@ -167,37 +171,67 @@ impl Ai {
         let ids = obs.ids();
         let skip: Vec<EntId> = self.scout.into_iter().collect();
 
-        // City State raises the useful economy ceiling, then Classical Age opens the
-        // missing University economy before Art of War. Barter then compounds it. A
-        // commerce-first mirror merely inherits
-        // the arena map's large construction-seat bias: Marshal can arrive while the
-        // far-side expansion is still unfinished. The policy still researches every economic
-        // gate, but it first establishes the ability to contest that timing.
-        if let Some(tech) = next_tech(
-            obs,
-            &[
+        // City State and Written Word retain the prior opening. Barter has no prerequisite,
+        // so one Market can establish the only base renewable wealth source while the
+        // Classical food bank refills. Optional construction remains reserved through the
+        // already represented University site. Mathematics then follows from ordinary
+        // starting stock plus tax income, independently of University/Scholar income.
+        let barter_before_age =
+            obs.ty(ids.barter)
+                .zip(obs.ty(ids.university))
+                .is_some_and(|(barter, university)| {
+                    let timber = don_sim::systems::economy::RES_TIMBER;
+                    obs.stock[timber] >= barter.cost[timber] + university.cost[timber]
+                });
+        let tech_order = if barter_before_age {
+            [
                 ids.city_state,
-                ids.classical_age,
-                ids.art_of_war,
-                ids.barter,
                 ids.written_word,
-            ],
-        ) {
-            queue_at(obs, tech, 1, out);
+                ids.barter,
+                ids.classical_age,
+                gather_upgrades::MATHEMATICS_TYPE,
+                ids.art_of_war,
+                gather_upgrades::CHEMISTRY_TYPE,
+            ]
+        } else {
+            [
+                ids.city_state,
+                ids.written_word,
+                ids.classical_age,
+                ids.barter,
+                gather_upgrades::MATHEMATICS_TYPE,
+                ids.art_of_war,
+                gather_upgrades::CHEMISTRY_TYPE,
+            ]
+        };
+        if let Some(tech) = next_tech(obs, &tech_order) {
+            // Preserve the already represented knowledge tranche before Mathematics can
+            // spend its wealth bank. This is purchase sequencing only: Mathematics still
+            // consumes starting knowledge and Market tax, never Scholar income.
+            let university_site_pending = tech == gather_upgrades::MATHEMATICS_TYPE
+                || (tech == ids.barter && obs.has_tech(ids.classical_age));
+            let university_site_pending =
+                university_site_pending && obs.count_with_queued(ids.university) < 1;
+            if !university_site_pending {
+                queue_at(obs, tech, 1, out);
+            }
         }
 
         let age_pending = !obs.has_tech(ids.classical_age)
-            && next_tech(obs, &[ids.classical_age]) == Some(ids.classical_age)
-            && obs
-                .ty(ids.classical_age)
-                .map(|t| obs.stock[0] * 10 >= t.cost[0] * 6)
-                .unwrap_or(false);
+            && (obs.count_with_queued(ids.market) > 0
+                || (next_tech(obs, &[ids.classical_age]) == Some(ids.classical_age)
+                    && obs
+                        .ty(ids.classical_age)
+                        .map(|t| obs.stock[0] * 10 >= t.cost[0] * 6)
+                        .unwrap_or(false)));
         // Once City State lands, grow a minimum viable gather base, then stop spending
         // the food bank until the Barracks prerequisite completes. Locking immediately
         // with only the opening workers saved nominal stock but took four minutes to
         // gather the tech; never locking let repeated citizen queues starve it entirely.
         let war_pending = !obs.has_tech(ids.art_of_war)
             && next_tech(obs, &[ids.art_of_war]) == Some(ids.art_of_war);
+        let critical_economy_pending =
+            obs.count_with_queued(ids.market) < 1 || obs.count_with_queued(ids.university) < 1;
         let food_gap = useful_slots(obs, 0) - seats(obs, 0);
         let wood_gap = useful_slots(obs, 1) - seats(obs, 1);
         let barracks_goal = if obs.age >= 1 || self.mode == Mode::Defending {
@@ -209,14 +243,35 @@ impl Ai {
             .mine
             .iter()
             .any(|m| m.type_id == ids.barracks && !m.complete);
-        let placed_university = !barracks_incomplete
+        let placed_market = !barracks_incomplete
+            && obs.has_tech(ids.barter)
+            && obs.count_with_queued(ids.market) < 1
+            && self.place_adjacent_city_building(obs, ids.market, out);
+        let placed_university = !placed_market
+            && !barracks_incomplete
             && obs.has_tech(ids.classical_age)
             && obs.count_with_queued(ids.university) < 1
-            && self.place_adjacent_university(obs, out);
+            && self.place_adjacent_city_building(obs, ids.university, out);
 
         let mut wants = Vec::new();
         if obs.has_tech(ids.art_of_war) && obs.count_with_queued(ids.barracks) < barracks_goal {
             wants.push(ids.barracks);
+        }
+        // The next measured zero-coverage surface is the base gather-enhancer trio.
+        // Their exact identities, costs and gates were validated when World was created;
+        // affordability and placement still come solely from this public observation.
+        if obs.has_tech(gather_upgrades::MATHEMATICS_TYPE) {
+            if obs.count_with_queued(gather_upgrades::GRANARY_TYPE) < 1 {
+                wants.push(gather_upgrades::GRANARY_TYPE);
+            }
+            if obs.count_with_queued(gather_upgrades::LUMBER_MILL_TYPE) < 1 {
+                wants.push(gather_upgrades::LUMBER_MILL_TYPE);
+            }
+        }
+        if obs.has_tech(gather_upgrades::CHEMISTRY_TYPE)
+            && obs.count_with_queued(gather_upgrades::SMELTER_TYPE) < 1
+        {
+            wants.push(gather_upgrades::SMELTER_TYPE);
         }
         if !barracks_incomplete
             && self.mode == Mode::Defending
@@ -233,10 +288,15 @@ impl Ai {
         {
             wants.push(ids.small_city);
         }
-        if !barracks_incomplete && wood_gap > 0 && obs.count_with_queued(ids.camp) < 4 {
+        if !barracks_incomplete
+            && !critical_economy_pending
+            && wood_gap > 0
+            && obs.count_with_queued(ids.camp) < 4
+        {
             wants.push(ids.camp);
         }
         if !barracks_incomplete
+            && !critical_economy_pending
             && food_gap > 0
             && obs.count_with_queued(ids.farm) < 10
             && !age_pending
@@ -244,20 +304,14 @@ impl Ai {
             wants.push(ids.farm);
         }
         if !barracks_incomplete
-            && obs.has_tech(ids.barter)
-            && obs.count_with_queued(ids.market) < 1
-            && !age_pending
-        {
-            wants.push(ids.market);
-        }
-        if !barracks_incomplete
+            && !critical_economy_pending
             && obs.has_tech(ids.classical_age)
             && useful_slots(obs, 4) > seats(obs, 4)
             && obs.count_with_queued(ids.mine) < 3
         {
             wants.push(ids.mine);
         }
-        if !placed_university {
+        if !placed_market && !placed_university {
             for type_id in wants {
                 if place_except(obs, type_id, &skip, out) {
                     break;
@@ -273,7 +327,11 @@ impl Ai {
         });
         if let Some(scholar) = scholar {
             let count = obs.count_with_queued(scholar) as i32;
-            if count < don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS {
+            // Preserve one early knowledge decision per completed University, then let
+            // Market tax accumulate to Mathematics before additional Scholar ramp costs
+            // can repeatedly consume the same wealth source.
+            let scholar_budget_open = count < 1 || obs.has_tech(gather_upgrades::MATHEMATICS_TYPE);
+            if scholar_budget_open && count < don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS {
                 let t = obs
                     .ty(scholar)
                     .expect("roster Scholar remains in the live table");
@@ -321,17 +379,53 @@ impl Ai {
         }
     }
 
-    /// Put the University's nearest footprint edge one tile from its selected founder.
+    /// Put a critical city building's nearest footprint edge one tile from its founder.
     /// Generic capital-first placement is legal but, on some generated layouts, strands a
-    /// construction worker behind the 5x5 site. This searches the same public placement
+    /// construction worker behind the site. This searches the same public placement
     /// predicate from the worker outward and changes no movement or construction rule.
-    fn place_adjacent_university(&self, obs: &Obs, out: &mut Vec<Cmd>) -> bool {
+    fn place_adjacent_city_building(
+        &mut self,
+        obs: &Obs,
+        type_id: i32,
+        out: &mut Vec<Cmd>,
+    ) -> bool {
         let ids = obs.ids();
-        let Some(t) = obs.ty(ids.university) else {
+        let Some(t) = obs.ty(type_id) else {
             return false;
         };
         if !obs.can_pay(&t.cost) || !t.preq.iter().all(|tech| obs.has_tech(*tech)) {
             return false;
+        }
+        if type_id == ids.university {
+            if let Some((worker, site)) = self.reserved_university_site {
+                let worker = obs
+                    .mine
+                    .iter()
+                    .find(|ent| {
+                        ent.id == worker && matches!(ent.job, Job::Idle | Job::Gather { .. })
+                    })
+                    .or_else(|| {
+                        obs.mine.iter().find(|ent| {
+                            ent.type_id == ids.citizen
+                                && Some(ent.id) != self.scout
+                                && matches!(ent.job, Job::Idle | Job::Gather { .. })
+                        })
+                    });
+                if obs.placement_ok(type_id, site.0, site.1) {
+                    let Some(worker) = worker else {
+                        return false;
+                    };
+                    out.push(Cmd::Build {
+                        worker: worker.id,
+                        type_id,
+                        tx: site.0,
+                        ty: site.1,
+                    });
+                    self.reserved_university_site = None;
+                    return true;
+                }
+                self.reserved_university_site = None;
+            }
         }
         let founder = self
             .builders
@@ -348,25 +442,40 @@ impl Ai {
         let Some(founder) = founder else {
             return false;
         };
-        for radius in 3..18 {
-            for (dx, dy) in crate::arena::world::ring(radius) {
-                let (tx, ty) = (founder.tx + dx, founder.ty + dy);
-                if obs
-                    .world
-                    .placement_ok(obs.pi, ids.university, tx, ty)
-                    .is_ok()
-                {
-                    out.push(Cmd::Build {
-                        worker: founder.id,
-                        type_id: ids.university,
-                        tx,
-                        ty,
-                    });
-                    return true;
-                }
-            }
+        // An early Market must not occupy the only founder-local University footprint.
+        // Both sites come from the same public command-admission boolean; the reservation
+        // is policy geometry, not a hidden object or occupancy query.
+        let reserved_university = if type_id == ids.market {
+            founder_local_site(obs, ids.university, founder.tx, founder.ty, None)
+        } else {
+            None
+        };
+        let avoid = if type_id == ids.market {
+            let market = obs.ty(ids.market).expect("Market row remains public");
+            let university = obs
+                .ty(ids.university)
+                .expect("University row remains public");
+            reserved_university.map(|site| {
+                let sep = ((market.x_size + university.x_size) / 2)
+                    .max((market.y_size + university.y_size) / 2);
+                (site, sep)
+            })
+        } else {
+            None
+        };
+        let Some((tx, ty)) = founder_local_site(obs, type_id, founder.tx, founder.ty, avoid) else {
+            return false;
+        };
+        out.push(Cmd::Build {
+            worker: founder.id,
+            type_id,
+            tx,
+            ty,
+        });
+        if let Some(site) = reserved_university {
+            self.reserved_university_site = Some((founder.id, site));
         }
-        false
+        true
     }
 
     /// One citizen follows a deterministic wide circuit until it observes an enemy base.
@@ -482,7 +591,12 @@ impl Ai {
         let Some(site) = obs
             .mine
             .iter()
-            .find(|m| m.type_id == ids.university && !m.complete)
+            .find(|m| m.type_id == ids.market && !m.complete)
+            .or_else(|| {
+                obs.mine
+                    .iter()
+                    .find(|m| m.type_id == ids.university && !m.complete)
+            })
             .or_else(|| {
                 obs.mine
                     .iter()
@@ -746,6 +860,34 @@ fn midpoint(a: (i32, i32), b: (i32, i32)) -> (i32, i32) {
 
 fn distance(a: (i32, i32), b: (i32, i32)) -> i32 {
     (a.0 - b.0).abs().max((a.1 - b.1).abs())
+}
+
+fn founder_local_site(
+    obs: &Obs,
+    type_id: i32,
+    founder_tx: i32,
+    founder_ty: i32,
+    avoid: Option<((i32, i32), i32)>,
+) -> Option<(i32, i32)> {
+    for radius in 3..18 {
+        // Prefer a straight cardinal approach. The generic ring begins at its north-west
+        // corner; on dense starts that diagonal can be legal for the footprint yet leave
+        // the founding Citizen behind neighbouring bodies.
+        let cardinal = [(0, -radius), (radius, 0), (0, radius), (-radius, 0)];
+        for (dx, dy) in cardinal
+            .into_iter()
+            .chain(crate::arena::world::ring(radius))
+        {
+            let site = (founder_tx + dx, founder_ty + dy);
+            if avoid.is_some_and(|(other, sep)| distance(site, other) < sep) {
+                continue;
+            }
+            if obs.placement_ok(type_id, site.0, site.1) {
+                return Some(site);
+            }
+        }
+    }
+    None
 }
 
 fn scout_waypoint(obs: &Obs, sx: i32, sy: i32, leg: usize) -> Option<(i32, i32)> {
