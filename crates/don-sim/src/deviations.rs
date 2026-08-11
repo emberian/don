@@ -945,7 +945,12 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
               remains until full Arena/Marshal gates, retail visibility scheduling and live \
               building-territory invalidation all pass.",
         derived_from: &[
-            "Object::find_auto_target 0x0064DDA0",
+            // `Object::find_auto_target` is OUR name, not a retail symbol — the PDB has no
+            // such export — and `0x0064DDA0` is `ObjectData::count_inside` (1,743 B), an
+            // unrelated per-cell counting walk. Cite the real chain instead.
+            "Unit::find_new_target 0x005FF6A0",
+            "Unit::find_melee_target 0x005FF9C0",
+            "Object::find_nearby_target 0x00648DA0",
             "Object::check_target building tail",
             "crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
         ],

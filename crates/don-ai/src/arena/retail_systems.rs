@@ -683,15 +683,21 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "live Arena support registries, object-table host and unit-band call site",
             "live UnitData::in_supply query at the post-volley siege recharge call site",
             "French and completed-Versailles supply-healing arm with full repair postlude",
-            "same-owner land-worker healing, marker clock and singleton repair mutation",
-            "same-owner Iroquois ordinary-unit healing with live age and composition preflight",
+            "complete civilian healing-family admission: worker, caravan, merchant and the \
+             literal Fishermen TypeIndex, with the marker clock and singleton repair mutation",
+            "Iroquois ordinary-unit healing with the live is_moving order virtual, live age \
+             and composition preflight",
             "Antipater/Wellington singleton healing through the live hero registry and radius",
             "Senator/President/CEO singleton healing with live relations, masks and ordered composition",
+            "one mutual LeaderData::is_ally territory gate shared by the Iroquois, patriot \
+             and civilian arms, consuming the live Arena declaration matrix",
         ],
         missing: &[
-            "foreign/allied worker and Iroquois healing do not yet consume the live diplomacy matrix",
-            "caravan, merchant and captain healing-family composition",
             "multi-slot captain repair for ObjectType uber_size greater than one",
+            "Unit::process_healing's domain-1 naval repair arm (0x005E08F0) and its \
+             inside-object ObjectData::get_inside garrison arm (0x005E06D7)",
+            "the Conquer-the-World arm at Game +0x822; the arena never sets that mode, so \
+             the arm is exactly disabled rather than approximated",
         ],
     },
 ];
@@ -1381,7 +1387,15 @@ pub struct SupplyAttritionUnitState {
     pub unit_masks: u32,
     pub unit_masks2: u32,
     pub is_supply: bool,
-    pub is_hero: bool,
+    /// `UnitData::is_moving` (`0x00610AF0`), reached through `Unit` vftable `+0xD8`
+    /// \[measured: the slot at `riseofnations.exe` `0x00B417D0 + 0xD8` holds `0x00610AF0`\].
+    /// The body resets the order list to its front node, caches that node's `UnitOrder*`
+    /// into `UnitData +0xCC current_data`, and returns the virtual `UnitOrder::is_move`
+    /// (`UnitOrder` vftable `+0x14`); it answers zero when the unit has no order.
+    pub is_moving: bool,
+    /// `UnitData::is_caravan` (`0x0046CE90`), which tail-dispatches the type virtual
+    /// `+0x130` `UnitTypeData::is_caravan` (`0x00470420`) — `unit_flags2 +0x2B8 & 8`.
+    pub is_caravan: bool,
     pub militia: bool,
     pub domain: i32,
     pub type_308: i32,
@@ -1483,7 +1497,12 @@ pub trait ArenaHeroAuraHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHo
 /// `0x005E0B49..0x005E0C90`. The optional scenario TypeIndex is a mandatory game-mode
 /// fact: `None` means the retail scenario flag is disabled, not that its type lookup was
 /// unavailable.
+///
+/// `is_allied` must expose the mutual `LeaderData::is_ally` (`0x006EDB50`) result, which
+/// this arm and the civilian arm below both consume for their territory gate; owner
+/// equality is a strict subset of it and would silently deny allied-territory healing.
 pub trait ArenaIroquoisHealingHost: ArenaHeroAuraHealingHost {
+    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error>;
     fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error>;
     fn healing_age(&self, who: i32) -> Result<usize, Self::Error>;
     fn scenario_healing_type(&self) -> Result<Option<i32>, Self::Error>;
@@ -1499,11 +1518,10 @@ pub trait ArenaIroquoisHealingHost: ArenaHeroAuraHealingHost {
     ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
-/// Live relations and the atomic repair write for the consecutive Senator, President and
-/// CEO aura arms at `0x005E0C90..0x005E0F1A`. `is_allied` must expose the mutual
-/// `LeaderData::is_ally` result; owner inequality is not sufficient.
+/// The atomic repair write for the consecutive Senator, President and CEO aura arms at
+/// `0x005E0C90..0x005E0F1A`. Their territory gate is the same mutual `LeaderData::is_ally`
+/// query declared on [`ArenaIroquoisHealingHost`]; owner inequality is not sufficient.
 pub trait ArenaPatriotHealingHost: ArenaIroquoisHealingHost {
-    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error>;
     fn repair_patriot_damage(
         &mut self,
         who: i32,
@@ -1516,10 +1534,10 @@ pub trait ArenaPatriotHealingHost: ArenaIroquoisHealingHost {
     ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
-/// Live facts and the atomic repair write for the final worker arm of
-/// `Unit::process_healing` (`0x005E1000..0x005E110D`). The worker predicate is recovered
-/// as the four literal TypeIndexes `0x32..=0x35`; caravan and merchant virtual predicates
-/// deliberately remain outside this boundary.
+/// Live facts and the atomic repair write for the final civilian arm of
+/// `Unit::process_healing` (`0x005E1000..0x005E110D`). Its family admission is the ordered
+/// `is_worker` / `is_caravan` / `is_merchant` / TypeIndex `0x13D` chain resolved in
+/// [`execute_worker_healing`]; the host only owns the mutation.
 pub trait ArenaWorkerHealingHost: ArenaPatriotHealingHost {
     fn repair_worker_damage(
         &mut self,
@@ -1834,7 +1852,9 @@ pub enum WorkerHealingTransaction {
     UnderAttack {
         rate: i32,
     },
-    NotWorker {
+    /// The unit is none of worker, caravan, merchant or TypeIndex `0x13D`, so the ordered
+    /// family chain at `0x005E103A..0x005E107A` rejected it.
+    NotCivilian {
         rate: i32,
     },
     NotLand {
@@ -1843,7 +1863,8 @@ pub enum WorkerHealingTransaction {
     UnownedTerritory {
         rate: i32,
     },
-    BlockedForeignTerritory {
+    /// The territory owner is live but `LeaderData::is_ally` (`0x006EDB50`) is false.
+    NonAlliedTerritory {
         rate: i32,
         territory_owner: i32,
     },
@@ -1940,7 +1961,8 @@ pub enum IroquoisHealingTransaction {
     NoDamage,
     OtherNation,
     Suppressed,
-    HeroUnit,
+    /// `Unit` vftable `+0xD8` `UnitData::is_moving` returned non-zero at `0x005E0B79`.
+    Moving,
     NotLand,
     InvalidAge {
         age: usize,
@@ -1951,7 +1973,8 @@ pub enum IroquoisHealingTransaction {
     UnownedTerritory {
         rate: i32,
     },
-    BlockedForeignTerritory {
+    /// The territory owner is live but `LeaderData::is_ally` (`0x006EDB50`) is false.
+    NonAlliedTerritory {
         rate: i32,
         territory_owner: i32,
     },
@@ -2583,14 +2606,28 @@ pub fn execute_hero_aura_healing<H: ArenaHeroAuraHealingHost>(
     })
 }
 
-/// Execute the exact same-owner, ordinary-unit subdomain of the Iroquois healing arm in
+/// Execute the exact ordinary-unit subdomain of the Iroquois healing arm in
 /// `Unit::process_healing` (`0x005E0B49..0x005E0C90`).
 ///
-/// `LeaderData::get_age` selects the shipped `{20,15,10,5}` frame rate. The exact
+/// Retail's own order, read from the disassembly at those addresses:
+///
+/// | # | retail step | site |
+/// |---|---|---|
+/// | 1 | `LeaderData::has_tribe_bonus(0x12)` on the unit's own leader | `0x005E0B5B` |
+/// | 2 | `unit_masks +0x68 & 0x1000` | `0x005E0B68` |
+/// | 3 | `Unit` vftable `+0xD8` `UnitData::is_moving` | `0x005E0B79` |
+/// | 4 | `ObjectTypeData::domain +0x218 != 0` | `0x005E0B8A` |
+/// | 5 | `Constants[0x814 + LeaderData::get_heal_level()*4]`, zero returns | `0x005E0BA7` |
+/// | 6 | `(unit_id + Game +0x550) % rate` | `0x005E0BD2` |
+/// | 7 | `WData[cell] +0x0F who < 0` | `0x005E0C27` |
+/// | 8 | `LeaderData::is_ally(territory_owner)` on the unit's own leader | `0x005E0C3C` |
+/// | 9 | `Unit::repair_damage(1,1,1)` then the `is_captain` `0x4000` clear | `0x005E0C4F` |
+///
+/// `LeaderData::get_heal_level` selects the shipped `{20,15,10,5}` frame rate. The exact
 /// Antipater/Wellington family is sequenced by the live World before this call and the
-/// exact patriot family after it. Civilian/merchant and multi-slot shapes remain typed
-/// blockers; foreign territory consumes the live World's mutual diplomacy matrix outside
-/// this bounded same-owner transaction.
+/// exact patriot family after it. Step 8 is the mutual `LeaderData::is_ally`, so allied
+/// territory heals exactly as own territory does. Civilian/merchant and multi-slot shapes
+/// remain typed blockers.
 pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     frame: i32,
     who: i32,
@@ -2626,8 +2663,8 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     if state.unit_masks & 0x1000 != 0 {
         return Ok(IroquoisHealingTransaction::Suppressed);
     }
-    if state.is_hero {
-        return Ok(IroquoisHealingTransaction::HeroUnit);
+    if state.is_moving {
+        return Ok(IroquoisHealingTransaction::Moving);
     }
     if state.domain != 0 {
         return Ok(IroquoisHealingTransaction::NotLand);
@@ -2691,8 +2728,11 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     if territory_owner < 0 {
         return Ok(IroquoisHealingTransaction::UnownedTerritory { rate });
     }
-    if territory_owner != who {
-        return Ok(IroquoisHealingTransaction::BlockedForeignTerritory {
+    if !host
+        .is_allied(who, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(IroquoisHealingTransaction::NonAlliedTerritory {
             rate,
             territory_owner,
         });
@@ -2919,15 +2959,34 @@ pub fn execute_patriot_healing<H: ArenaPatriotHealingHost>(
     })
 }
 
-/// Execute the exact friendly-land worker subdomain of the final civilian arm in
-/// `Unit::process_healing` (`0x005E1000..0x005E110D`).
+/// Execute the land subdomain of the final civilian arm in `Unit::process_healing`
+/// (`0x005E1000..0x005E110D`).
 ///
-/// The shipped rate is 45 frames. Retail rejects the due call while under attack, accepts
-/// four literal worker TypeIndexes, then repairs on sea or allied territory. Arena has no
-/// diplomacy matrix, so same-owner land is exact, unowned land is an exact no-op, and a
-/// foreign owner is a typed authority boundary. The live World sequences the supported
-/// hero and patriot auras first; Iroquois/supply and multi-slot composition remain explicit
-/// instead of being silently combined here.
+/// The shipped rate is `Constants +0xBFC` = 45 frames. Retail's order, from the
+/// disassembly:
+///
+/// | # | retail step | site |
+/// |---|---|---|
+/// | 1 | rate `Constants +0xBFC`, zero returns | `0x005E1005` |
+/// | 2 | `(unit_id + Game +0x550) % rate` | `0x005E1024` |
+/// | 3 | `unit_masks2 +0x6C & 1` — under attack | `0x005E102E` |
+/// | 4 | `ObjectData::is_worker` — TypeIndex `0x32..=0x35` | `0x005E103A` |
+/// | 5 | else `UnitData::is_caravan` → `UnitTypeData::is_caravan`, `unit_flags2 & 8` | `0x005E1045` |
+/// | 6 | else `ObjectData::is_merchant` — TypeIndex `0x3D`, `0x3E`, `0x190` | `0x005E1067` |
+/// | 7 | else `ObjectTypeData +0x04 TypeIndex == 0x13D` (Fishermen) | `0x005E1073` |
+/// | 8 | `WData[cell] +0x0F who`, then `domain == 1` skips the territory gate entirely | `0x005E10C2` |
+/// | 9 | else unowned returns, and `LeaderData::is_ally(owner)` gates the repair | `0x005E10E0` |
+/// | 10 | `Unit::repair_damage(1,0,1)` — **no** `is_captain` `0x4000` clear | `0x005E10F3` |
+///
+/// Step 8's sea bypass is unreachable from a live on-map unit: `Unit::process_healing`
+/// returns for `domain == 2` at `0x005E06AB`, and the `domain == 1` naval arm entered at
+/// `0x005E08F0` returns at `0x005E09EC` rather than falling through.
+/// [`WorkerHealingTransaction::NotLand`] therefore stands for those two earlier returns,
+/// which this per-arm entry point does not share, and not for a gate inside the civilian
+/// arm itself.
+///
+/// The live World sequences the supported hero and patriot auras first; Iroquois/supply and
+/// multi-slot composition remain explicit instead of being silently combined here.
 pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
     frame: i32,
     who: i32,
@@ -2964,8 +3023,10 @@ pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
             rate: CIVILIAN_HEAL_RATE,
         });
     }
-    if !matches!(state.type_id, 0x32..=0x35) {
-        return Ok(WorkerHealingTransaction::NotWorker {
+    let is_worker = matches!(state.type_id, 0x32..=0x35);
+    let is_merchant = matches!(state.type_id, 0x3D | 0x3E | 0x190);
+    if !(is_worker || state.is_caravan || is_merchant || state.type_id == 0x13D) {
+        return Ok(WorkerHealingTransaction::NotCivilian {
             rate: CIVILIAN_HEAL_RATE,
         });
     }
@@ -3013,8 +3074,11 @@ pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
             rate: CIVILIAN_HEAL_RATE,
         });
     }
-    if territory_owner != who {
-        return Ok(WorkerHealingTransaction::BlockedForeignTerritory {
+    if !host
+        .is_allied(who, territory_owner)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(WorkerHealingTransaction::NonAlliedTerritory {
             rate: CIVILIAN_HEAL_RATE,
             territory_owner,
         });
@@ -4302,7 +4366,8 @@ mod tests {
                 unit_masks: 0,
                 unit_masks2: 0x20,
                 is_supply: false,
-                is_hero: false,
+                is_moving: false,
+                is_caravan: false,
                 militia: false,
                 domain: 0,
                 type_308: 0,
@@ -4455,7 +4520,8 @@ mod tests {
                     unit_masks: 0x40_0080,
                     unit_masks2: RESUPPLIED_THIS_TICK,
                     is_supply: false,
-                    is_hero: false,
+                    is_moving: false,
+                    is_caravan: false,
                     militia: false,
                     domain: 0,
                     type_308: 0,

@@ -40,15 +40,20 @@
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
 //! 6. No water, naval, air or diplomacy command/side-effect runtime. Arena now owns the
-//!    retail all-war declaration matrix, and healing consumes its mutual ally relation.
+//!    retail all-war declaration matrix, and every healing arm that reads territory
+//!    consumes its mutual `LeaderData::is_ally` relation rather than owner equality.
 //!    Supply source traversal, siege reload selection, French/Versailles healing, live
-//!    Antipater/Wellington and Senator/President/CEO aura healing, same-owner
-//!    worker/Iroquois healing, the 32-frame attrition recompute and due-frame attrition
-//!    mutation are wired into the live unit band. `Unit::process_attrition`'s complete
-//!    ordered selection now runs against live Arena state; it stops at typed blockers for
+//!    Antipater/Wellington and Senator/President/CEO aura healing, Iroquois healing over
+//!    the live `UnitData::is_moving` order virtual, the complete civilian
+//!    worker/caravan/merchant/Fishermen family, the 32-frame attrition recompute and
+//!    due-frame attrition mutation are wired into the live unit band.
+//!    `Unit::process_attrition`'s complete ordered selection now runs against live Arena
+//!    state; it stops at typed blockers for
 //!    `Leader::calc_attrition`/`calc_anti_attrition` output, the peace and assassin
-//!    trespass transactions, and the live `GatherOrder::non_flat_gather` byte. The
-//!    remaining healing families stay explicit blockers.
+//!    trespass transactions, and the live `GatherOrder::non_flat_gather` byte.
+//!    `Unit::process_healing`'s naval and inside-object arms, and every multi-slot
+//!    (`uber_size > 1`) repair, stay explicit blockers — see
+//!    `docs/mechanics/arena-supply-healing-selection.md`.
 //!
 //! Construction no longer fabricates a builder-frame countdown. Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -901,7 +906,16 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
             unit_masks: motion.unit_masks,
             unit_masks2: motion.unit_masks2,
             is_supply: ty.unit_flags2 & 0x40 != 0,
-            is_hero: ty.unit_flags2 & 0x20 != 0,
+            // `UnitData::is_moving` 0x00610AF0 resets the order list to its front node,
+            // caches that node's `UnitOrder*` into `UnitData +0xCC current_data`, and
+            // returns the constant `UnitOrder::is_move` virtual (vftable +0x14) of the
+            // concrete order class. `OrderQueue::front` is that same node and
+            // `OrderRec::is_move` is `don-sim`'s recovered override set; an absent order
+            // answers zero exactly as the `+0xDC == 0` arm does.
+            is_moving: motion.orders.front().is_some_and(|order| order.is_move()),
+            // `UnitData::is_caravan` 0x0046CE90 tail-dispatches type virtual +0x130
+            // `UnitTypeData::is_caravan` 0x00470420 = `unit_flags2 +0x2B8 & 8`.
+            is_caravan: ty.unit_flags2 & 8 != 0,
             // `get_bonus(0x42)` devirtualizes to ObjectTypeData::is(TypeIndex 66, 0).
             militia: type_is(self.types, ent.type_id, 0x42),
             domain: ty.domain,
@@ -1145,6 +1159,19 @@ impl ArenaHeroAuraHealingHost for ArenaSupplyHost<'_> {
 }
 
 impl ArenaIroquoisHealingHost for ArenaSupplyHost<'_> {
+    /// `LeaderData::is_ally` `0x006EDB50`: true for the leader itself, otherwise the two
+    /// `LeaderData::diplos` cells must both read `2`. `DiplomacyState::is_ally` walks the
+    /// same mutual pair through `victory_score::effective_diplo`, so this is the exact
+    /// predicate rather than an owner-equality narrowing.
+    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error> {
+        let who = usize::try_from(who).map_err(|_| ArenaSupplyHostError::InvalidOwner(who))?;
+        let other =
+            usize::try_from(other).map_err(|_| ArenaSupplyHostError::InvalidOwner(other))?;
+        self.diplomacy
+            .is_ally(who, other)
+            .map_err(|slot| ArenaSupplyHostError::InvalidOwner(slot.0 as i32))
+    }
+
     fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error> {
         let owner = self.owner(who)?;
         Ok(self.players[owner].tribe == 0x12)
@@ -1186,15 +1213,6 @@ impl ArenaIroquoisHealingHost for ArenaSupplyHost<'_> {
 }
 
 impl ArenaPatriotHealingHost for ArenaSupplyHost<'_> {
-    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error> {
-        let who = usize::try_from(who).map_err(|_| ArenaSupplyHostError::InvalidOwner(who))?;
-        let other =
-            usize::try_from(other).map_err(|_| ArenaSupplyHostError::InvalidOwner(other))?;
-        self.diplomacy
-            .is_ally(who, other)
-            .map_err(|slot| ArenaSupplyHostError::InvalidOwner(slot.0 as i32))
-    }
-
     fn repair_patriot_damage(
         &mut self,
         who: i32,
@@ -4492,8 +4510,12 @@ impl World {
         transaction
     }
 
-    /// The exact same-owner ordinary-unit subdomain of the Iroquois healing family,
-    /// sequenced before the supply and civilian arms as in `Unit::process_healing`.
+    /// The exact ordinary-unit subdomain of the Iroquois healing family, sequenced before
+    /// the supply and civilian arms as in `Unit::process_healing`. Its territory gate is
+    /// the live mutual `LeaderData::is_ally`, so allied territory heals; its movement gate
+    /// is the live front order's `UnitOrder::is_move`.
+    ///
+    /// See `docs/mechanics/arena-supply-healing-selection.md`.
     fn tick_iroquois_healing(&mut self, i: usize) -> IroquoisHealingTransaction {
         if self.ents[i].hp.damage <= 0 {
             return IroquoisHealingTransaction::NoDamage;
@@ -4603,9 +4625,11 @@ impl World {
         transaction
     }
 
-    /// The exact same-owner land-worker subdomain of the final civilian-healing arm.
-    /// Foreign territory reports the missing diplomacy matrix; the remaining unsupported
-    /// family compositions and multi-slot object graphs stay typed blockers.
+    /// The land subdomain of the final civilian-healing arm, over retail's complete
+    /// worker / caravan / merchant / Fishermen family and the live mutual
+    /// `LeaderData::is_ally` territory gate. Multi-slot object graphs stay typed blockers.
+    ///
+    /// See `docs/mechanics/arena-supply-healing-selection.md`.
     fn tick_worker_healing(&mut self, i: usize) -> WorkerHealingTransaction {
         if self.ents[i].hp.damage <= 0 {
             return WorkerHealingTransaction::NoDamage;
@@ -6925,13 +6949,60 @@ mod supply_attrition_integration {
         world.frame = due + 135;
         assert_eq!(
             world.tick_worker_healing(wi),
-            WorkerHealingTransaction::BlockedForeignTerritory {
+            WorkerHealingTransaction::NonAlliedTerritory {
                 rate: 45,
                 territory_owner: 1,
             }
         );
         assert_eq!(world.ents[wi].hp.damage, 2);
 
+        // `LeaderData::is_ally` reads both `diplos` cells, so one declaration leaves the
+        // same foreign tile refusing; the mutual pair then heals on it exactly as on the
+        // unit's own territory.
+        world
+            .diplomacy
+            .write_declaration_state_only(0, 1, Diplo::Ally)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world.frame = due + 180;
+        assert_eq!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::NonAlliedTerritory {
+                rate: 45,
+                territory_owner: 1,
+            }
+        );
+        assert_eq!(world.ents[wi].hp.damage, 2);
+
+        world
+            .diplomacy
+            .write_declaration_state_only(1, 0, Diplo::Ally)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world.frame = due + 225;
+        assert!(matches!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::Healed {
+                rate: 45,
+                repair: HealingRepairMutation {
+                    damage_before: 2,
+                    damage_after: 1,
+                    healing_after: 45,
+                    ..
+                },
+            }
+        ));
+        assert_eq!(world.ents[wi].hp.damage, 1);
+
+        world
+            .diplomacy
+            .write_declaration_state_only(0, 1, Diplo::War)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world
+            .diplomacy
+            .write_declaration_state_only(1, 0, Diplo::War)
+            .expect("arena owner ids fit the ten retail Leader slots");
+
+        world.ents[wi].hp.damage = 2;
+        world.ents[wi].healing = 0;
         world.collision_world.wdata_mut(wx, wy).who = 0;
         world
             .types
@@ -6939,7 +7010,7 @@ mod supply_attrition_integration {
             .get_mut(&world.ids.citizen)
             .unwrap()
             .uber_size = 2;
-        world.frame = due + 180;
+        world.frame = due + 270;
         assert_eq!(
             world.tick_worker_healing(wi),
             WorkerHealingTransaction::BlockedPriorFamily {
@@ -6952,6 +7023,66 @@ mod supply_attrition_integration {
         );
         assert_eq!(world.ents[wi].hp.damage, 2);
         assert_eq!(world.ents[wi].healing, 0);
+    }
+
+    /// `Unit::process_healing`'s civilian family is the ordered `is_worker` /
+    /// `is_caravan` / `is_merchant` / TypeIndex `0x13D` chain at
+    /// `0x005E103A..0x005E107A`, not the four worker TypeIndexes alone.
+    #[test]
+    fn civilian_healing_admits_the_whole_retail_family_and_rejects_everything_else() {
+        let Ok(mut world) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        const MERCHANT: i32 = 0x3D;
+        const CATAPULT: i32 = 0x109;
+        let merchant_row = world
+            .types
+            .get(MERCHANT)
+            .expect("live tables carry the Merchant TypeRow")
+            .clone();
+        assert!(!matches!(merchant_row.id, 0x32..=0x35));
+        assert_eq!(merchant_row.domain, 0);
+        assert_eq!(merchant_row.uber_size, 1);
+        assert_eq!(merchant_row.unit_flags2 & 8, 0, "Merchant is not a caravan");
+
+        let center = world.map.w / 2;
+        world.players[0].tribe = 0;
+        world.hero_records[0].clear();
+
+        for (type_id, heals) in [(MERCHANT, true), (CATAPULT, false)] {
+            let ent = world.spawn(0, type_id, center, center, true);
+            let i = ent.index().expect("spawn returned a dense Arena handle");
+            let o = world.ents[i].object_o;
+            let (tx, ty) = world.ents[i].tile();
+            world
+                .collision_world
+                .wdata_mut(tx.div_euclid(4), ty.div_euclid(4))
+                .who = 0;
+            world.ents[i].hp.damage = 2;
+            world.ents[i].healing = 0;
+            world.frame = (-i64::from(o)).rem_euclid(45);
+            let transaction = world.tick_worker_healing(i);
+            if heals {
+                assert!(
+                    matches!(
+                        transaction,
+                        WorkerHealingTransaction::Healed {
+                            rate: 45,
+                            repair: HealingRepairMutation {
+                                damage_before: 2,
+                                damage_after: 1,
+                                ..
+                            },
+                        }
+                    ),
+                    "{type_id:#x} is in the retail civilian family: {transaction:?}"
+                );
+                assert_eq!(world.ents[i].hp.damage, 1);
+            } else {
+                assert_eq!(transaction, WorkerHealingTransaction::NotCivilian { rate: 45 });
+                assert_eq!(world.ents[i].hp.damage, 2);
+            }
+        }
     }
 
     #[test]
@@ -7028,21 +7159,73 @@ mod supply_attrition_integration {
         );
         assert_eq!(world.ents[ui].hp.damage, 1);
 
+        // `Unit` vftable +0xD8 is `UnitData::is_moving`, which answers the front order's
+        // `UnitOrder::is_move`. A live MOVE_TO therefore stops the arm before the rate is
+        // even read; retiring it restores the exact same due phase.
         world.ents[ui].motion.as_mut().unwrap().unit_masks &= !0x1000;
+        let (mx, my) = (world.ents[ui].x + 4 * UCELL, world.ents[ui].y);
+        world.ents[ui]
+            .motion
+            .as_mut()
+            .unwrap()
+            .orders
+            .push_front(OrderRec::move_to(mx, my, UCELL));
+        world.frame = age_one_due + 15;
+        assert_eq!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::Moving
+        );
+        assert_eq!(world.ents[ui].hp.damage, 1);
+        world.ents[ui].motion.as_mut().unwrap().orders.clear();
+
         world.collision_world.wdata_mut(wx, wy).who = 1;
         world.frame = age_one_due + 30;
         assert_eq!(
             world.tick_iroquois_healing(ui),
-            IroquoisHealingTransaction::BlockedForeignTerritory {
+            IroquoisHealingTransaction::NonAlliedTerritory {
                 rate: 15,
                 territory_owner: 1,
             }
         );
         assert_eq!(world.ents[ui].hp.damage, 1);
 
+        // The mutual declaration makes that same foreign tile allied territory, which the
+        // retail arm heals on.
+        world
+            .diplomacy
+            .write_declaration_state_only(0, 1, Diplo::Ally)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world
+            .diplomacy
+            .write_declaration_state_only(1, 0, Diplo::Ally)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world.frame = age_one_due + 45;
+        assert!(matches!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::Healed {
+                rate: 15,
+                repair: HealingRepairMutation {
+                    damage_before: 1,
+                    damage_after: 0,
+                    ..
+                },
+            }
+        ));
+        assert_eq!(world.ents[ui].hp.damage, 0);
+        world
+            .diplomacy
+            .write_declaration_state_only(0, 1, Diplo::War)
+            .expect("arena owner ids fit the ten retail Leader slots");
+        world
+            .diplomacy
+            .write_declaration_state_only(1, 0, Diplo::War)
+            .expect("arena owner ids fit the ten retail Leader slots");
+
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
         world.collision_world.wdata_mut(wx, wy).who = 0;
         world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 2;
-        world.frame = age_one_due + 45;
+        world.frame = age_one_due + 60;
         assert_eq!(
             world.tick_iroquois_healing(ui),
             IroquoisHealingTransaction::BlockedComposition {
@@ -7060,7 +7243,7 @@ mod supply_attrition_integration {
         // prevents the exact earlier Iroquois mutation.
         world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 1;
         world.spawn(0, 0x161, center + 8, center, true);
-        world.frame = age_one_due + 60;
+        world.frame = age_one_due + 75;
         assert!(matches!(
             world.tick_iroquois_healing(ui),
             IroquoisHealingTransaction::Healed {
