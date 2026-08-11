@@ -154,6 +154,8 @@ pub mod late_command_plans;
 pub mod object_command_plans;
 #[path = "systems/recall_action_frontier.rs"]
 pub mod recall_action_frontier;
+#[path = "systems/queue_up_action.rs"]
+pub mod queue_up_action;
 #[path = "systems/return_action_frontier.rs"]
 pub mod return_action_frontier;
 #[path = "systems/setup_diplomacy.rs"]
@@ -192,6 +194,9 @@ use self::object_command_plans::{
 };
 use self::recall_action_frontier::{
     plan_recall, RecallBoundary, RecallEffect, RecallFacts, RecallPlan, RecallRequest,
+};
+use self::queue_up_action::{
+    QueueUpActionReceipt, QueueUpActionRequest, QueueUpTransactionStatus,
 };
 use self::return_action_frontier::{
     plan_return, ReturnEffect, ReturnFacts, ReturnPlan, ReturnRequest,
@@ -1366,6 +1371,16 @@ pub trait Fleet {
                 addressed_object_flag_1: None,
             },
         )
+    }
+
+    /// Atomic receiver boundary for the admitted ordinary-Unit cohort of opcode 24.
+    /// Applied hosts commit every reached Build queue, resource, and aggregate mutation;
+    /// the Bridge publishes the recomputable `Group::action_begin` after-image only then.
+    fn apply_queue_up_action_transaction(
+        &mut self,
+        request: QueueUpActionRequest,
+    ) -> QueueUpActionReceipt {
+        QueueUpActionReceipt::unavailable(request)
     }
 
     /// Atomic host boundary for opcode 35 and the complete conditional RETURN tail.
@@ -3758,6 +3773,12 @@ impl Bridge {
                     self.stats.acted += 1;
                     return;
                 }
+                if let GroupActionCall::QueueUp { type_index, num } = delegate.call {
+                    if self.dispatch_queue_up_action(pkg.group, type_index, num, f) {
+                        self.stats.acted += 1;
+                        return;
+                    }
+                }
                 self.stats.open_group_action_tails += 1;
                 self.stats.unported += 1;
             }
@@ -4588,6 +4609,35 @@ impl Bridge {
             economy_receipts: &mut self.economy_action_receipts,
         };
         act.action_recall(f)
+    }
+
+    fn dispatch_queue_up_action(
+        &mut self,
+        slot: i32,
+        type_index: i32,
+        num: i32,
+        f: &mut dyn Fleet,
+    ) -> bool {
+        let Some(group) = self.groups.get(slot).cloned() else {
+            return false;
+        };
+        let request = QueueUpActionRequest {
+            group,
+            type_index,
+            num,
+            ignore_orders: f.scenario_ignore_orders(),
+            ignore_orders_prune_committed: f.scenario_ignore_orders_prune_committed(),
+        };
+        let receipt = f.apply_queue_up_action_transaction(request.clone());
+        if receipt.status != QueueUpTransactionStatus::Applied || !receipt.validates(&request) {
+            return false;
+        }
+        let Some(plan) = receipt.plan else { return false };
+        let Some(group) = self.groups.get_mut(slot) else {
+            return false;
+        };
+        *group = plan.group;
+        true
     }
 }
 

@@ -2424,6 +2424,240 @@ pub fn apply_sim_unqueue_fleet_transaction(
     }
 }
 
+/// Execute opcode 24's admitted ordinary-Unit receiver over the canonical Sim Build band.
+///
+/// The installed type profile must identify an armed Unit with one of retail's four fixed
+/// training sites, an exact six-good `action_queue` cost, and a homogeneous matching Build
+/// receiver for every selected object. This deliberately leaves Library, aircraft, unarmed,
+/// research/build, scenario-prune, and opaque `can_queue` pairs unavailable.
+pub fn apply_sim_queue_up_fleet_transaction(
+    sim: &mut Sim,
+    runtime: &mut LiveProductionRuntime,
+    request: crate::command::queue_up_action::QueueUpActionRequest,
+) -> crate::command::queue_up_action::QueueUpActionReceipt {
+    use crate::command::queue_up_action::{
+        plan_queue_up_action, QueueUpActionReceipt, QueueUpFacts, QueueUpProducerFacts,
+        QueueUpTrainingFamily, QueueUpTransactionStatus, QueueUpTypeFacts,
+    };
+
+    if request.ignore_orders || request.ignore_orders_prune_committed {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+    if request.group.buildings == 0 {
+        let facts = QueueUpFacts::default();
+        let Some(plan) = plan_queue_up_action(&request, &facts) else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        return QueueUpActionReceipt {
+            request,
+            status: QueueUpTransactionStatus::Applied,
+            facts: Some(facts),
+            plan: Some(plan),
+        };
+    }
+
+    let owner = usize::from(request.group.who);
+    if owner >= RETAIL_LEADER_SLOTS {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+    let Ok(stored_type) = i16::try_from(request.type_index) else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let Some(installed) = runtime.facts(request.type_index) else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let available = installed.class == LiveTypeClass::Unit
+        && installed.can_make
+        && installed.type_eligible
+        && installed
+            .prerequisites
+            .iter()
+            .all(|&preq| prerequisite_held(&runtime.leaders[owner].tech, preq));
+    let Some(profile) = installed.carrier_unqueue else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let Some(object) = profile.object else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    if object.attack == 0 || object.domain.is_some() {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+    let Some(training_site) = object.training_site else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let training_family = match training_site {
+        TRAIN_AT_BARRACKS => QueueUpTrainingFamily::Barracks,
+        TRAIN_AT_STABLE => QueueUpTrainingFamily::Stable,
+        TRAIN_AT_FACTORY => QueueUpTrainingFamily::Factory,
+        TRAIN_AT_DOCK => QueueUpTrainingFamily::Dock,
+        _ => return QueueUpActionReceipt::unavailable(request),
+    };
+    let cost = if runtime.leaders[owner]
+        .gain_context
+        .suppress_resource_effects
+    {
+        [0; NUM_RES]
+    } else {
+        let Some(cost) = installed.repeat_cost else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        cost
+    };
+    let leader = &runtime.leaders[owner];
+    let Some(queued_counter_index) = usize::try_from(request.type_index).ok() else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    if leader.queued_counts.get(queued_counter_index).is_none() {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+    if leader.resources != sim.leaders[owner].econ.stockpile
+        || leader.resources != sim.step8.leaders[owner].econ.stockpile
+    {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+
+    let Ok(n) = usize::try_from(request.group.num) else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let Some(members) = request.group.list.get(..n) else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let mut producers = Vec::with_capacity(n);
+    for &object_index in members {
+        let Some(build_slot) = usize::try_from(object_index)
+            .ok()
+            .and_then(|object| object.checked_sub(BUILD_BAND_BASE as usize))
+        else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        let Some(&row) = sim
+            .world
+            .objects
+            .slot(owner)
+            .band(Band::Build)
+            .get(build_slot)
+        else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        let row = row as usize;
+        let Some(build) = sim.builds.get(row) else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        let Some(producer_type) = runtime.build_types.get(row).copied().flatten() else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        let Some(producer_profile) = runtime.facts(producer_type) else {
+            return QueueUpActionReceipt::unavailable(request);
+        };
+        if build.who as usize != owner
+            || producer_profile.class != LiveTypeClass::Building
+            || producer_profile.is_library
+        {
+            return QueueUpActionReceipt::unavailable(request);
+        }
+        producers.push(QueueUpProducerFacts {
+            object_index,
+            build_row: row,
+            receiver_reached: build.is_valid() && build.is_active(),
+            // The fixed armed-unit training-site projection is the exact admitted
+            // `ObjectType::can_queue(type, 1)` cohort.
+            can_queue_requested: producer_type == training_site,
+            queued: build.queue.queued,
+            allocated: build.queue.entries.len(),
+        });
+    }
+    let facts = QueueUpFacts {
+        type_facts: Some(QueueUpTypeFacts {
+            is_unit_type: installed.class == LiveTypeClass::Unit,
+            available,
+            cost,
+            training_family,
+        }),
+        resources_before: leader.resources,
+        producers,
+    };
+    let Some(plan) = plan_queue_up_action(&request, &facts) else {
+        return QueueUpActionReceipt::unavailable(request);
+    };
+    let receipt = QueueUpActionReceipt {
+        request: request.clone(),
+        status: QueueUpTransactionStatus::Applied,
+        facts: Some(facts),
+        plan: Some(plan.clone()),
+    };
+    if !receipt.validates(&request) {
+        return QueueUpActionReceipt::unavailable(request);
+    }
+
+    let mut queue_entry = BuildQueueEntry {
+        type_index: stored_type,
+        res: [-1; 3],
+        ..BuildQueueEntry::default()
+    };
+    let mut stored_good = 0usize;
+    for (good, &amount) in cost.iter().enumerate() {
+        if amount == 0 || stored_good == queue_entry.res.len() {
+            continue;
+        }
+        queue_entry.res[stored_good] = good as i16;
+        queue_entry.amt[stored_good] = amount as i16;
+        stored_good += 1;
+    }
+    for attempt in &plan.attempts {
+        let crate::command::queue_up_action::QueueUpAttemptDisposition::Enqueued { slot } =
+            attempt.disposition
+        else {
+            continue;
+        };
+        sim.builds[attempt.build_row].queue.entries[usize::from(slot)] = queue_entry;
+    }
+    for after in &plan.producers_after {
+        sim.builds[after.build_row].queue.queued = after.queued;
+    }
+    let leader = &mut runtime.leaders[owner];
+    leader.resources = plan.resources_after;
+    let queued_count = &mut leader.queued_counts[queued_counter_index];
+    *queued_count = queued_count.wrapping_add(plan.enqueued as i32);
+    let increment = plan.enqueued as i32;
+    match training_family {
+        QueueUpTrainingFamily::Barracks => {
+            leader.carrier_training_queued.barracks = leader
+                .carrier_training_queued
+                .barracks
+                .wrapping_add(increment);
+            leader.carrier_training_queued.combat = leader
+                .carrier_training_queued
+                .combat
+                .wrapping_add(increment);
+        }
+        QueueUpTrainingFamily::Stable => {
+            leader.carrier_training_queued.stable = leader
+                .carrier_training_queued
+                .stable
+                .wrapping_add(increment);
+            leader.carrier_training_queued.combat = leader
+                .carrier_training_queued
+                .combat
+                .wrapping_add(increment);
+        }
+        QueueUpTrainingFamily::Factory => {
+            leader.carrier_training_queued.factory = leader
+                .carrier_training_queued
+                .factory
+                .wrapping_add(increment);
+        }
+        QueueUpTrainingFamily::Dock => {
+            leader.carrier_training_queued.dock = leader
+                .carrier_training_queued
+                .dock
+                .wrapping_add(increment);
+        }
+    }
+    sim.leaders[owner].econ.stockpile = plan.resources_after;
+    sim.step8.leaders[owner].econ.stockpile = plan.resources_after;
+    receipt
+}
+
 /// Result of one live `Build::process -> Build::do_queue(0)` phase.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveProductionReceipt {
