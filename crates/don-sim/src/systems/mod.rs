@@ -221,6 +221,13 @@ pub mod step12_visibility_producer_frontier;
 /// Sim-attached revisioned join for Step-12 Unit visibility facts. Plane publication remains
 /// fail-closed until Build/Wall and reveal-fog effects can join the same transaction.
 pub mod step12_visibility_runtime;
+/// Registered by lane `come-out` on 2026-08-11 after the orchestrator's UNREACHABLE finding:
+/// this module existed on disk with no `mod` line and was compiled only from its own test
+/// file. Source-only `Object::eject_contents` `0x0064CD20` transaction plan under the fixed
+/// step-8 `Wall::update_hits` arguments `(1, -1, 0, 1)`. `std`-only, no crate-root
+/// dependencies. It does **not** cover the `Group::action_eject_all` argument set — see
+/// `docs/mechanics/step8-eject-contents.md` §"What this does not cover".
+pub mod step8_eject_contents;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
@@ -251,6 +258,33 @@ pub mod terrain_player_mountain_retry;
 pub mod terrain_region_continuation;
 pub mod terrain_region_patterns;
 pub mod terrain_region_placement;
+/// Registered by lane `come-out` on 2026-08-11. `Unit::action_come_out` `0x005E20B0`, the
+/// 532-byte opcode-49 wrapper. Its `Unit::come_out(0)` call is the authority step the four
+/// `unit_come_out_*_frontier` modules below now tile completely.
+pub mod unit_action_come_out_frontier;
+/// Registered by lane `come-out` on 2026-08-11. Second tranche of `Unit::come_out`
+/// `0x00617C10`: the common release prologue `0x006186B4..0x00618B22` plus three outlined
+/// virtual-call islands. 1,169 logical bytes.
+pub mod unit_come_out_common_release_frontier;
+/// Registered by lane `come-out` on 2026-08-11. First tranche of `Unit::come_out`
+/// `0x00617C10`: entry cleanup, captain redirection, uncontained search, the Oil Platform
+/// transport bridge and contained placement/unlink, `0x00617C10..0x006186B4`. 2,724
+/// sequential bytes plus the 72 bytes of outlined islands it never billed — 2,796 in total.
+pub mod unit_come_out_full_frontier;
+/// Registered by lane `come-out` on 2026-08-11. Third tranche of `Unit::come_out`
+/// `0x00617C10`: the gather-point selection loop `0x00618B22..0x006191A5` plus two outlined
+/// islands. 1,683 logical bytes.
+pub mod unit_come_out_gather_selection_frontier;
+/// Added by lane `come-out` on 2026-08-11. Fourth and final tranche of `Unit::come_out`
+/// `0x00617C10`: the post-placement order-installation dispatcher, the SPECIAL_ANIM order
+/// tail and the terminal `Unit::add_to_army` RNG gate. 4,277 logical bytes — together with
+/// the three tranches above this tiles all 9,925 bytes of the body with no gap and no
+/// overlap, which [`unit_come_out_body_map`] asserts byte by byte.
+pub mod unit_come_out_release_tail_frontier;
+/// Added by lane `come-out` on 2026-08-11. The address-space accounting that ties the four
+/// `unit_come_out_*_frontier` tranches to the retail body, and the typed boundary every
+/// caller of `Unit::come_out` stops at today.
+pub mod unit_come_out_body_map;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
 /// event-execution paths.

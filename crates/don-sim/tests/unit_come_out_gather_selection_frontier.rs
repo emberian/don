@@ -1,7 +1,8 @@
-#[path = "../src/systems/unit_come_out_gather_selection_frontier.rs"]
-mod subject;
-
-use subject::*;
+// Registered by lane `come-out` on 2026-08-11: this test used to `#[path]`-include the
+// module source, which compiled it standalone and proved nothing about the library. It
+// now drives the module through `don_sim::systems`, so it fails if the `pub mod` line
+// is ever removed again.
+use don_sim::systems::unit_come_out_gather_selection_frontier::*;
 
 fn stamp(seed: u32, draws: u64) -> RngStamp {
     RngStamp { seed, draws }

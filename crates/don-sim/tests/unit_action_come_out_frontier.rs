@@ -1,7 +1,8 @@
-#[path = "../src/systems/unit_action_come_out_frontier.rs"]
-mod unit_action_come_out_frontier;
-
-use unit_action_come_out_frontier::*;
+// Registered by lane `come-out` on 2026-08-11: this test used to `#[path]`-include the
+// module source, which compiled it standalone and proved nothing about the library. It
+// now drives the module through `don_sim::systems`, so it fails if the `pub mod` line
+// is ever removed again.
+use don_sim::systems::unit_action_come_out_frontier::*;
 
 const ACTOR: ObjectIdentity = ObjectIdentity::new(2, 17);
 

@@ -1,7 +1,8 @@
-#[path = "../src/systems/step8_eject_contents.rs"]
-mod step8_eject_contents;
-
-use step8_eject_contents::*;
+// Registered by lane `come-out` on 2026-08-11: this test used to `#[path]`-include the
+// module source, which compiled it standalone and proved nothing about the library. It
+// now drives the module through `don_sim::systems`, so it fails if the `pub mod` line
+// is ever removed again.
+use don_sim::systems::step8_eject_contents::*;
 
 fn key(who: i8, object: i16, uid: u16) -> ObjectKey {
     ObjectKey { who, object, uid }
