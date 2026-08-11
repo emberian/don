@@ -128,6 +128,12 @@ unclamped, and none of the four ran `action_begin`.
   prune changes what those two actions do to a group and wants its own claimed row. This
   lane supplies the `disband = 0` that retail actually performs at that call site.
 
+  **Closed 2026-08-11 by lane `move-near`.** `normalize_for_action` is deleted and both
+  call sites are gone. The full 9,205-byte decompilation of `Group::action_move_near`
+  confirms it contains zero `call 0x711540`, and the `Group` vtable `0xB47C34` has only six
+  slots (`+0x00..+0x14`) — `+0x18` onward is already vbtable data — so there is no virtual
+  route to `Group::normalize` either. See `docs/mechanics/group-action-move-near.md` §5.
+
 * **`docs/assembly/command-bridge.md`** "the ~44 other `Group::action_*`" correction stands,
   and its `move_to` row is confirmed exactly: the 49-byte body pushes `[ebp+0x2C]` down to
   `[ebp+0x10]`, then a literal `0` for `tolerance`, then `[ebp+0xC]` and `[ebp+8]`, and tail
@@ -145,6 +151,15 @@ simulation-side effect, and the dependency graph makes `move_near` the root:
   `re/decomp-all/` — it is one of the largest uncited bodies in the command layer. Wedge /
   Square / Mob layout, subordinate (non-captain) sorting, the garrison-into-transport branch
   and the disembark executor all live inside it.
+
+  **Superseded 2026-08-11 by lane `move-near`.** It *does* decompile — `re/decomp-all/` is
+  capped at 8,192 body bytes by `re/scripts/BulkDecomp.java`, and Ghidra headless produces
+  1,287 lines of C in seconds. The whole body is now mapped in
+  `docs/mechanics/group-action-move-near.md`, the local corpus has
+  `re/decomp-all/00704990.c`, and the garrison-into-transport branch turns out to be a
+  **selection split** — a mixed land/sea or partly-embarked selection is pushed as two new
+  groups, re-issued the identical command, and the receiver is `Group::clear(-1)`ed. Wedge /
+  Square / Mob, subordinate (`o_down`) sorting and the disembark tail remain unported.
 * **`action_attack`'s reach split.** `0x00712490` calls `Unit::find_attack_pos` `0x00601280`
   once at `0x007128A5`, `Group::action_move_to` at `0x007129FA`, `Unit::add_cast_order`
   `0x005E4A60` at `0x00712F1B` and `0x007130A8`, and `Unit::add_move_order` `0x00616ED0` at

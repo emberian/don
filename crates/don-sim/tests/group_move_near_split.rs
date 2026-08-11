@@ -240,6 +240,42 @@ fn a_building_selection_installs_nothing() {
 }
 
 #[test]
+fn a_plane_led_selection_installs_nothing() {
+    // `0x007050AD`: `GroupData::find_leader(0)`'s answer is tested against the inlined
+    // `UnitData::is_plane` and a plane leader returns from the whole body at `0x007050C7`.
+    let mut fleet = ObjectTable::new(8);
+    connected_unit(&mut fleet, 0, 2);
+    fleet.get_mut(WHO, 0).expect("slot").is_plane = true;
+    connected_unit(&mut fleet, 1, 2);
+    fleet.get_mut(WHO, 1).expect("slot").is_plane = true;
+
+    let mut bridge = Bridge::new();
+    bridge.frame = 5;
+    let mut package = Package::new(WHO as i32, 0);
+    select(&mut bridge, &mut package, &mut fleet, &[0, 1]);
+    move_near(&mut bridge, &mut package, &mut fleet);
+    for o in 0..2 {
+        assert!(installed(&fleet, o).is_empty(), "plane {o} is not commanded");
+    }
+}
+
+#[test]
+fn a_leaderless_selection_installs_nothing() {
+    // `0x0070507F` then `0x00705088`: `GroupData::find_leader(0)` returning `-1` skips
+    // the entire remainder of the body.
+    let mut fleet = ObjectTable::new(8);
+    connected_unit(&mut fleet, 0, 0);
+    fleet.get_mut(WHO, 0).expect("slot").is_captain = false;
+
+    let mut bridge = Bridge::new();
+    bridge.frame = 5;
+    let mut package = Package::new(WHO as i32, 0);
+    select(&mut bridge, &mut package, &mut fleet, &[0]);
+    move_near(&mut bridge, &mut package, &mut fleet);
+    assert!(installed(&fleet, 0).is_empty());
+}
+
+#[test]
 fn move_near_keeps_a_member_the_old_group_normalize_prune_dropped() {
     // `Group::normalize` `0x00711540` has 22 direct call sites and none of them is in
     // `action_move_near`, `action_move_to`, `action_form` or `action_attack` — the

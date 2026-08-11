@@ -366,7 +366,12 @@ fn action_hotkey_refuses_an_out_of_range_slot_instead_of_writing_past_the_array(
 /// The closure ledger rows these tests are the evidence for.
 #[test]
 fn the_four_receivers_report_their_recovered_port() {
-    assert_eq!(ActionDef::find("hotkey").unwrap().port, Port::Complete);
+    // `hotkey`'s BODY is complete — it is opcode 34's inlined `clear == 0` arm, and
+    // `copy_hotkey_group` is that body. But `Port` records wire dispatch, not body presence:
+    // `process_hotkey` calls `HotKeyGroups::copy_group` directly and never dispatches the
+    // action, whose only caller is `Console::on_key_down`. Those are different claims, and
+    // `command_bridge_agreement` pins the same boundary from the don-env side.
+    assert_eq!(ActionDef::find("hotkey").unwrap().port, Port::NotOnTheWire);
     assert_eq!(ActionDef::find("recall").unwrap().port, Port::Complete);
     assert_eq!(ActionDef::find("return").unwrap().port, Port::Complete);
     // Still red: `Group::action_eject_all`'s two arms both bottom out in `Unit::come_out`

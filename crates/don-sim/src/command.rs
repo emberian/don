@@ -5511,6 +5511,19 @@ impl Action<'_> {
         }
         let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
             let kind = move_order_kind(orders);
+            // `0x00705067..0x007050D9`, the main (`queued != QUEUE_FIRST`) path: retail
+            // re-tests `buildings`, then `num > 0`, then `GroupData::find_leader(0)`
+            // `0x0070CCB0` and returns when it is negative (`0x00705088`), and finally
+            // returns when that leader satisfies `UnitData::is_plane` — devirtualised
+            // inline at `0x007050AD` as `ptype->domain == 2 && !(ptype->unit_flags & 0x20)`,
+            // with the refusing branch at `0x007050C7`. A plane-led selection installs
+            // nothing at all here; air movement is `Group::action_flight`'s, not this body's.
+            let Some(entry_leader) = a.form_leader(f) else {
+                return;
+            };
+            if f.is_plane(a.groups.get(a.slot).map_or(0, |g| g.who), entry_leader) {
+                return;
+            }
             let (who, list) = a.members();
             if list
                 .iter()

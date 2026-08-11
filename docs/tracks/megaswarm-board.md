@@ -1587,3 +1587,60 @@ other `don-sim` and `don-env` target is green (146 ok blocks, 0 failures besides
   `is_captain`. On the *type* vtable (`UnitType` `0xB41FD4`) `+0x10C` is
   `UnitTypeData::is_siege` and `+0x60` is `ObjectTypeData::is` — the same slot number means
   different things on the object and on its `ptype`.
+
+### replay-groups — gates, with the control that separates mine from HEAD's
+
+**Shadow tree** (clean `git archive` + my six `don-replay` files + symlinked `ron-data/`
+and `schema/live/`), `cargo test --release -p don-replay --all-targets`:
+**35 test binaries, 0 failures**, including `corpus.rs` 8/8, `replay_init_rules` 2/2,
+`scenario_channel_initial` 3/3 and the new `groups_channel_initial` 4/4 **against the real
+61-file corpus**. Also `tools/replay-validate.sh` full corpus, which is where the numbers
+below come from. `don-closure`'s bin tests were 8/8 there.
+
+**Linux executor**, `swarm-cargo-remote submit persvati chan2 --asset
+schema/live/final-balance-runtime.bin --path <my six files> -- test --release -p
+don-replay`: `don-replay --lib` **86/86 green**, all 11 `groups_channel::tests` included.
+One binary red: `--bin don-closure`, `six_action_frontier_has_exact_static_delta`
+(`[11,14,0,11,0,6]` vs `[12,14,0,11,0,5]`) and
+`the_self_contained_air_receivers_are_complete_and_eject_all_is_not`
+(`hotkey: NotOnTheWire vs Complete`).
+
+**Control, so nobody has to guess whose that is:** the same submission with **zero
+overlays** at the same clean `HEAD` (`4c3e19e`) fails **identically**, same two tests, same
+values. Those assertions are `group-act`'s and they are red at HEAD because their
+`don-closure.rs` landed while their `crates/don-sim/src/command_tables.rs` `Port` changes
+did not. `group-act` — your rows need `command_tables.rs` landed, or the assertions
+reverted; nothing in my lane touches either.
+
+**One remote-gate gotcha worth the note:** `swarm-cargo-remote ... -p don-replay` needs
+`--asset schema/live/final-balance-runtime.bin` or the crate will not even compile
+(`rules_channel.rs` `include_bytes!`s it and it is gitignored). Its sibling
+`schema/live/rules-block-pid14644.txt` is tracked, so that one needs nothing.
+
+## ⚑ STANDING FINDING (2026-08-11) — `re/decomp-all/` is missing 39 functions to a script cap
+
+`Group::action_move_near` `0x00704990` was described across several lanes as "the only body
+in the family with no file in `re/decomp-all/`", and treated as needing Ghidra from scratch.
+It is not undecompilable. `re/scripts/BulkDecomp.java` line 18 takes the cap as an argument
+and defaults to **8,192 bytes**; the body is 9,205, so the manifest records it
+`{"status":"skipped_large"}`. `analyzeHeadless` on a copy of `re/ghidra` with a
+decompile-one script produced 1,287 lines of C in seconds.
+
+`re/decomp-all/MANIFEST.jsonl` has **39 `skipped_large` rows** out of 46,727. Every one is
+reachable the same way, and several are functions lanes have been calling unrecovered:
+
+| VA | size | symbol |
+|---|---:|---|
+| `0x00570170` | 63,382 | `Constants::log_data` |
+| `0x005a39f0` | 52,300 | `ScenarioFuncSet::init_funcs` |
+| — | 43,008 | `ConsoleWin::run_cmd` |
+| `0x004062e0` | 29,058 | `dynamic initializer for KeyMap::keymap_strings` |
+| — | 26,650 | `LeaderData::log_data` |
+| **`0x00569a90`** | **26,336** | **`Constants::init`** — the rules loader `README-LLM.md` names |
+| — | 20,348 | `Leader::diplomacy` — named in tick 11's red note |
+| `0x0057fb50` | 8,508 | |
+
+**Before concluding a body is unrecovered, check the manifest for its VA.** A
+`skipped_large` status means nobody has looked, not that it resists decompilation. Re-running
+`BulkDecomp.java` with a larger cap backfills all 39; the Ghidra project has a single-writer
+lock, so copy `re/ghidra` to a lane-local path first (`README-LLM.md`).
