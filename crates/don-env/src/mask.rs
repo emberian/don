@@ -12,11 +12,16 @@
 //!    the Verb head always has NOOP. A policy that samples under the mask can therefore
 //!    never be stuck, which is the failure mode that makes masked training diverge.
 //! 3. **A dead entity masks to NOOP only**, so padded rows cost the policy nothing.
+//! 4. **The observation never diverges from authoritative state.** Several environment
+//!    columns (`form`, `stance`) mirror a walked `don-sim` field. An applied action that
+//!    writes only the mirror reports a world that does not exist, which is strictly worse
+//!    than a counted no-op — the policy is trained on a number nothing else in the engine
+//!    agrees with. `tests/mask_dynamics_contract.rs` enforces 1 and 4 mechanically.
 
 use crate::generated as g;
 use crate::spec::{fill_bits, set_bit, EnvConfig, MaskLayout};
 use crate::state::EnvWorld;
-use crate::typecaps::{F_ATTACK, F_BUILDING, F_CIVILIAN, F_MOVE, F_PRODUCER, F_SIEGE, F_UNIT};
+use crate::typecaps::{F_ATTACK, F_BUILDING, F_CIVILIAN, F_MOVE, F_PRODUCER, F_UNIT};
 
 /// Conjunctions a factored mask cannot express. Each is a real, quantified looseness in
 /// invariant 1, not a hand-wave.
@@ -211,13 +216,19 @@ impl MaskWriter {
                     if !w.rules.caps.is_permissive() && !c.is_plane {
                         allow(g::uv::PATROL);
                     }
-                    allow(g::uv::FORM);
+                    // FORM is not advertised. `Group::action_form` `0x00707220` writes
+                    // `UnitData::form` and then always delegates to `action_move_near`,
+                    // whose installed destination is still a UCoord cell index rather than
+                    // the centred Coord `Unit::add_move_facing_order` `0x005E55C0` stores.
+                    // See the FORM note in `action.rs`.
                 }
                 if c.has(F_ATTACK) && any_hostile {
                     allow(g::uv::ATTACK);
-                    if c.has(F_SIEGE) {
-                        allow(g::uv::SIEGE_ATTACK);
-                    }
+                    // SIEGE_ATTACK is not advertised. Its receiver is an
+                    // `OpenActionTail` frontier opcode in `don-sim`, and no
+                    // `add_siege_attack_order` exists in `ADD_ORDER_KINDS`; advertising it
+                    // while installing an ordinary `OrderIndex::Attack` would sell the
+                    // policy a distinction this environment does not implement.
                 }
                 if c.has(F_CIVILIAN) && !is_building {
                     // GATHER stays masked out in the ordinary VecEnv. EnvWorld now owns a
@@ -276,10 +287,11 @@ impl MaskWriter {
                 self.unit.head(r, g::UnitHead::Stance as usize),
                 stance_options.unwrap_or(4),
             );
-            fill_bits(
-                self.unit.head(r, g::UnitHead::Form as usize),
-                g::FORMS.len(),
-            );
+            // The Form head has no consumer while FORM is unadvertised: `apply_unit` reads
+            // it nowhere. Offering all ten `FORMS` rows would advertise ten distinguishable
+            // parameter values that the environment discards, which is the per-parameter
+            // form of invariant 1. Exactly one well-defined value stays legal.
+            set_bit(self.unit.head(r, g::UnitHead::Form as usize), 0);
             fill_bits(self.unit.head(r, g::UnitHead::OrderMods as usize), 8);
             fill_bits(self.unit.head(r, g::UnitHead::Count as usize), 5);
         }
@@ -350,4 +362,4 @@ impl MaskWriter {
 
 /// `1` where `F_*` capability flags exist but no verb consumes them yet. Kept as a list so
 /// the report can be generated rather than written from memory.
-pub const UNCONSUMED_FLAGS: [&str; 4] = ["STEALTH", "DETECT", "ANTIAIR", "SIEGE(partial)"];
+pub const UNCONSUMED_FLAGS: [&str; 4] = ["STEALTH", "DETECT", "ANTIAIR", "SIEGE"];

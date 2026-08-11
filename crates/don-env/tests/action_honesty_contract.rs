@@ -126,9 +126,7 @@ fn every_advertised_unit_verb_applies_without_accepted_no_effect() {
 
     let expected = [
         g::uv::STANCE,
-        g::uv::FORM,
         g::uv::ATTACK,
-        g::uv::SIEGE_ATTACK,
         g::uv::MOVE_TO,
         g::uv::MOVE_NEAR,
         g::uv::PATROL,
@@ -152,6 +150,17 @@ fn every_advertised_unit_verb_applies_without_accepted_no_effect() {
     assert!(
         !advertised[g::uv::LAUNCH_PATROL],
         "AIR_PATROL needs the mandatory air-physics/type/target-search host"
+    );
+    assert!(
+        !advertised[g::uv::FORM],
+        "Group::action_form 0x00707220 always delegates to action_move_near, whose \
+         installed destination is still a UCoord cell index rather than the centred Coord \
+         Unit::add_move_facing_order 0x005E55C0 stores"
+    );
+    assert!(
+        !advertised[g::uv::SIEGE_ATTACK] && !advertised[g::uv::SWARM_AROUND],
+        "both receivers are OpenActionTail frontier opcodes in don-sim and neither has an \
+         add_*_order row; advertising them as ordinary ATTACK is a substitution"
     );
 }
 

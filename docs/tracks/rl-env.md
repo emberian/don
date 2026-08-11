@@ -154,7 +154,10 @@ cannot classify is a hard error, so the table cannot silently drift.
 
 **Head sizes are engine constants, not round numbers.** `Type` is 806 because
 `TypeIndex::NUM_TYPES` is 806. `QueuePos` is 3 because the `QueuePos` enum has three
-members. `Stance` is 4 from `StanceTypes`. `Form` is 10 from `FormIndex::NUM_FORM_ALL`.
+members. `Stance` is 4 from `StanceTypes`. `Form` is 10 from `FormIndex::NUM_FORM_ALL` — though while
+`FORM` is unadvertised no verb reads that head, so its runtime mask offers exactly one value
+rather than all ten. Head *sizes* are engine constants and never move; head *masks* track
+what the environment actually consumes.
 `Treaty` is 3 from the `WAR/PEACE/ALLY` enum. `TargetPlayer` is 8 because every
 `LeaderData` diplomacy array is `int[8]`.
 
@@ -302,10 +305,70 @@ The env prints this itself (`env.provenance()`); repeated here so it is not only
   dynamic world facts are not yet adapted into `EnvWorld`, so no straight-line movement,
   unordered scan, or always-empty target-search substitute executes. Captured postload
   `AirTypeData` is available through `Rules::air_type_data`; absent live tables fail closed.
+  The three registered `don-env` blockers cannot close independently of `don-sim`; see
+  §5.1.
+* **formations** — `FORM` is **not advertised**. Its receiver is `Group::action_form`
+  `0x00707220`, which is reachable through the shipped command bridge over this crate's
+  `Fleet` impl, but it always delegates to `Group::action_move_near` for the formation
+  destination and that delegate is not yet usable; see §5.2.
+* **siege and swarm attacks** — `SIEGE_ATTACK` (opcode 5) and `SWARM_AROUND` (opcode 6) are
+  **not advertised**. Both are members of
+  `don_sim::systems::unimplemented_group_command_plans::FRONTIER_OPCODES`: the bridge
+  recovers their `CommandPackage::process_*` prefix and classifies the receiver as
+  `OpenActionTail`, and no `add_siege_attack_order` / `add_swarm_order` appears in
+  `ADD_ORDER_KINDS`. Installing an ordinary `OrderIndex::Attack` for them (which this env
+  used to do) advertised a distinction the environment does not implement.
 * **pathfinding, gathering, economy rates, build-queue timing, tech tree, terrain, map
   generation, real fog** — absent. `QueueUp` and `Build` complete instantly with cost and
   pop enforced from the shipped tables; the timing would otherwise be invented.
 * **start positions** — a placeholder ring.
+
+### 5.1 Why the three AIR_PATROL blockers are not a `don-env` change
+
+`state::AirPatrolHost` has no default methods, and `EnvWorld::frame` supplies no host, so a
+patrol frame advances only when **all** of `do_air_physics`, `find_unit_target` and
+`find_building_target` are available. Closing one registered blocker alone therefore changes
+nothing observable, and the physics one cannot be closed from this crate at all:
+
+`don_sim::systems::air_physics_frontier::plan_air_physics` is a planner over mandatory
+receipts, not an implementation. Reaching a plan requires the complete post-call image of
+`Unit::check_fuel` `0x005E9BE0` (home, returning, aim point, altitude goal), plus
+`MutationReceipt`s for `Unit::bank_aircraft`, `Unit::pitch_aircraft`, `Guy::set_angle`,
+`WorldData::restrict` + `Unit::set_new_location`, `Unit::land_plane`, `Unit::set_anim` and
+`Unit::kill_current_order` — the fifteen rows of `AIR_PHYSICS_OPEN_HOSTS`. Of those, only
+`check_fuel` exists in `crates/don-sim` at all (`systems::air`, explicitly partial);
+`bank_aircraft`, `pitch_aircraft`, `set_new_location` and `land_plane` appear nowhere in the
+tree. The unit search additionally needs `Objects::find_units` `0x0065A620` /
+`find_builds` `0x0065A120` with their scratch-array order, `Object::valid_target`
+`0x00648BA0` and `Object::compare_target` `0x0064E5C0`; the building search needs a coherent
+`map_terrain::World` (`TData::mask`, `WData::down/down_who`), per-building
+`ObjectTypeData::x_size/y_size`, and `WallData::ever_seen +0x62`, none of which `EnvWorld`
+owns. These are `crates/don-sim` recoveries and are reported, not attempted here.
+
+### 5.2 The blocker under `FORM`
+
+`Group::action_form` writes each member's `UnitData::form` and then calls
+`Group::action_move_near`, which installs the per-member destination as
+
+```text
+to_x = formation_order_coord(layout.to_x[i])      // div_3_table[coord >> 4], i.e. Coord/48
+OrderRec { x: to_x, y: to_y, .. }
+```
+
+Retail does not store that value. `Unit::add_move_facing_order` `0x005E55C0` takes `UCoord`
+parameters and stores `param * 0x30 + 0x18` — the centred `Coord` — into both
+`MoveOrder::x/y` and `dest_x/dest_y`, and `Unit::add_move_order` `0x00616ED0` reaches it by
+first converting `Coord` to `UCoord` through the same `div_3_table[coord >> 4]`. So the
+bridge currently keeps the *argument* form and drops the callee's centring: the installed
+destination is 1/48 of the intended one. Every executor in `don-env` reads `OrderRec::x/y`
+as `Coord` (`OrderRec::move_to` is built from `tile * SUBTILE + SUBTILE/2`), so wiring FORM
+today would walk the actor toward the map origin.
+
+`crates/don-env/tests/env_orders_formations.rs` freezes the current values (`(100, 200)`
+for an actor at `(4800, 9600)`); retail's stored pair is `(4824, 9624)`. The centring belongs
+to `crates/don-sim/src/command.rs::action_move_near` and is reported rather than patched
+around here, because a `don-env`-side rescale would leave two different meanings for
+`OrderRec::x` in one crate.
 
 What is *not* scaffolding: storage/identity/tick kernels are `don-sim`'s; damage is
 `don_sim::mechanics::damage` (`ObjectData::get_damage` `0x00644130`) driven by the real
@@ -317,9 +380,20 @@ from `Objects::process_all` is reproduced, including for the order in which agen
 are applied.
 
 Every verb with no dynamics is counted per verb: `env.unimplemented()`. In the smoke test
-**34 %** of applied actions are `accepted_no_effect`, dominated by `GARRISON`, `GUARD`,
-`FOLLOW`, `REPAIR`, `GATHER`. That percentage is the single best summary of how much of
-this environment is still surface.
+**34 %** of applied actions were `accepted_no_effect`, dominated by `GARRISON`, `GUARD`,
+`FOLLOW`, `REPAIR`, `GATHER`; `FORM`, `SIEGE_ATTACK` and `SWARM_AROUND` have since joined
+that set and the figure has not been remeasured. That percentage is the single best summary
+of how much of this environment is still surface — but it only counts verbs an *unmasked*
+sampler emits. The masked contract is enforced separately, and mechanically:
+
+* `tests/action_honesty_contract.rs` pins exactly which verbs are advertised and asserts a
+  masked rollout produces zero `accepted_no_effect` and zero `illegal`.
+* `tests/mask_dynamics_contract.rs` adds the two gates that catch a verb which reports
+  `applied` while doing nothing: every advertised verb must move authoritative state
+  (`World::digest` over walked `UnitData` fields, live row count, order queues, or leader
+  economy), and no environment column that mirrors a walked field may diverge from it after
+  an advertised verb runs. Both fail when `FORM`'s former mirror-only write is restored,
+  which is how that defect was found.
 
 ---
 

@@ -346,9 +346,12 @@ mod tests {
     /// after the action-honesty gate stopped advertising unsupported verbs and removed
     /// padding fallback bits from live records. It was recaptured again when exact HALT
     /// and DISBAND lifecycle predicates replaced the approximate STANCE advertisement,
-    /// then when captured stance types 1..3 gained their exact executable transaction.
-    /// Together they catch accidental changes to plane clearing, entity occupancy, or
-    /// packed-mask emission independently of the cross-thread comparison above.
+    /// then when captured stance types 1..3 gained their exact executable transaction, and
+    /// again when FORM, SIEGE_ATTACK and the unconsumed Form-head values stopped being
+    /// advertised (`mask.rs` invariants 1 and 4). Together they catch accidental changes to
+    /// plane clearing, entity occupancy, or packed-mask emission independently of the
+    /// cross-thread comparison above. The spatial digest is deliberately *not* recaptured
+    /// with the mask digest: a mask-only change that moves it is a bug.
     #[test]
     fn hot_output_fingerprint_matches_the_pre_optimization_capture() {
         let cfg = EnvConfig {
@@ -371,7 +374,7 @@ mod tests {
             (h ^ u32::from(*v)).wrapping_mul(0x0100_0193)
         });
         assert_eq!(spatial, 0xD9EA_9DC5);
-        assert_eq!(masks, 0x0B6D_3EB1);
+        assert_eq!(masks, 0x53F4_C0A9);
     }
 
     #[test]

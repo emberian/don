@@ -221,7 +221,15 @@ pub fn apply_unit(
             }
             st.applied += 1;
         }
-        g::uv::ATTACK | g::uv::SIEGE_ATTACK | g::uv::SWARM_AROUND => {
+        // SIEGE_ATTACK (opcode 5) and SWARM_AROUND (opcode 6) deliberately do **not** join
+        // this arm. `Unit::add_attack_order` `0x005E5410` is the only shipped installer of
+        // `OrderIndex::Attack` (`don_sim::command::ADD_ORDER_KINDS`), and no
+        // `add_siege_attack_order` / `add_swarm_order` exists. Both opcodes are members of
+        // `don_sim::systems::unimplemented_group_command_plans::FRONTIER_OPCODES`: the
+        // bridge recovers their `CommandPackage::process_*` prefix and classifies the
+        // receiver as `OpenActionTail`. Aliasing them onto ATTACK would advertise a
+        // distinction the environment does not have and would train a policy on it.
+        g::uv::ATTACK => {
             let Some(tr) = target_row else {
                 // No target selected (the head's only legal value when the world holds no
                 // hostile), or a masked-in target that has since died.
@@ -341,10 +349,25 @@ pub fn apply_unit(
                 st.illegal += 1;
             }
         }
-        g::uv::FORM => {
-            w.form[row] = g::FORMS[(a.form as usize).min(g::FORMS.len() - 1)].1;
-            st.applied += 1;
-        }
+        // FORM has no arm. The retail receiver is `Group::action_form` `0x00707220`, which
+        // writes every member's `UnitData::form` and then *always* delegates to
+        // `Group::action_move_near` for the formation destination; the delegate is not
+        // optional on any queue value. Writing only the environment's private `form` mirror
+        // (as this arm used to) left the authoritative `UnitData::form` that `Fleet::form`,
+        // `formation_member`, and `action_form` itself read at its spawn value, so the
+        // observation reported a formation the world did not have.
+        //
+        // The complete transaction is reachable through the shipped command bridge
+        // (`don_sim::command::Bridge` over this crate's `Fleet` impl, exercised by
+        // `tests/env_orders_formations.rs`), but the destination it installs is not yet
+        // usable: `action_move_near` stores `formation_order_coord(..)` — a UCoord cell
+        // index — directly into `OrderRec::x/y`, while retail's
+        // `Unit::add_move_facing_order` `0x005E55C0` stores `ucoord * 0x30 + 0x18`, the
+        // centred Coord (and `Unit::add_move_order` `0x00616ED0` reaches it by converting
+        // Coord to UCoord first). Consuming those order coordinates as Coord — which every
+        // executor in this crate does — would move the actor to 1/48 of its intended
+        // destination. That centring belongs to `crates/don-sim`; until it lands, FORM is
+        // masked out and falls through to the `accepted_no_effect` catch-all below.
         g::uv::DISBAND => {
             let cap = *w.cap(w.type_index[row]);
             // Active buildings take the special Build::queue_up(DISBAND) branch and the
