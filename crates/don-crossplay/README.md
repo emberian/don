@@ -264,6 +264,8 @@ cd crates/don-crossplay && cargo test --features std-rpc --test directory_rpc_pr
 cd crates/don-crossplay && cargo test --features local-match --test service_match_process
 # two OS processes prove Create -> Find -> Join -> ready -> StartGame ->
 # authoritative MatchStart -> a complete two-package turn
+# service-match-peer host --seed U32 lets a bounded caller choose the exact lobby seed;
+# omitting it preserves the historical process-fixture seed
 
 cd crates/don-crossplay && cargo check --lib --target i686-pc-windows-msvc
 cd crates/don-crossplay && cargo check --lib --no-default-features --target i686-pc-windows-msvc

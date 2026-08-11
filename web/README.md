@@ -182,6 +182,30 @@ match state. After load, the exact DoNSave bytes remain an in-memory command-jou
 the page refuses to export that journal as a frame-zero restart document because doing so would
 silently omit its native-save baseline.
 
+The new-game panel also has a loopback-only, two-seat lobby handoff. `web/serve.mjs` exposes a
+bounded same-origin JSON API and invokes the configured native `service-match-peer`; it never
+returns seed, epoch, or roster until the independent host and joining processes agree on
+Crossplay StartGame and the `don-net` MatchStart. Each browser then reconstructs the exact
+two-player Sim setup from that handoff. Both clients remain locked paused at frame zero because a
+browser turn relay is not attached yet; the UI and automation surface report that boundary as
+`unavailable` instead of claiming multiplayer synchronization.
+
+Build the native seam and run the Web server with its explicit path:
+
+```sh
+cargo build --manifest-path crates/don-crossplay/Cargo.toml \
+  --features local-match --bin service-match-peer
+DON_SERVICE_MATCH_PEER="$PWD/crates/don-crossplay/target/debug/service-match-peer" \
+  node web/serve.mjs &
+node web/tools/play-smoke.mjs --local-match
+```
+
+The server binds only `127.0.0.1`, admits at most 16 in-memory lobbies, caps JSON bodies and child
+output, kills over-time processes, uses unguessable per-seat tokens, and fails closed when the
+configured executable is absent. `node --test web/tools/local-match.test.mjs` mutation-tests those
+admission rules with a parser fixture; the `--local-match` Chrome smoke uses the real compiled Rust
+peer and two actual browser tabs.
+
 ## Playing
 
 Left click selects — that emits a real `GroupCommand` (`0x00`): `num`, `who`, then `num`

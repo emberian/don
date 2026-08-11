@@ -50,6 +50,7 @@ const CDP = Number(flag('--cdp', 9336));
 const KEEP = has('--keep');
 const OUT = flag('--json', null);
 const BACKEND = flag('--backend', null);
+const LOCAL_MATCH = has('--local-match');
 
 const CHROME = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -124,7 +125,7 @@ try { await fetch(`http://127.0.0.1:${PORT}/play.html`); }
 catch { console.error(`no server on ${PORT} — run: node web/serve.mjs ${PORT}`); process.exit(3); }
 
 const profile = await mkdtemp(join(tmpdir(), 'don-play-smoke-'));
-let proc = null, c = null;
+let proc = null, c = null, c2 = null;
 const out = { generated_by: 'web/tools/play-smoke.mjs', when: new Date().toISOString() };
 let bad = 0;
 
@@ -262,6 +263,14 @@ try {
       sessionTeamEnabled: !document.getElementById('session-team')?.disabled,
       sessionVictoryReadOnly: document.getElementById('session-victory')?.disabled,
       sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
+      localMatchProtocol: window.don.localMatch.snapshot().protocol,
+      localMatchAvailable: window.don.localMatch.snapshot().available,
+      localMatchTurnRelay: window.don.localMatch.snapshot().turnRelay,
+      localMatchControls: [
+        'local-match-name', 'local-match-code', 'local-match-create', 'local-match-join',
+        'local-match-ready', 'local-match-leave', 'local-match-status', 'local-match-roster',
+      ].every(id => !!document.getElementById(id)),
+      localMatchBoundary: document.getElementById('session')?.textContent ?? '',
       coreMatch: m.match(),
       coreLeader: m.leader(0),
       coreRelation: m.relation(0, 1),
@@ -355,6 +364,12 @@ try {
     ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
     ['team layout is frame-zero mutable while victory remains read-only',
       out.ui.sessionTeamEnabled && out.ui.sessionVictoryReadOnly],
+    ['the local lobby surface exposes a bounded MatchStart handoff without a turn-relay claim',
+      out.ui.localMatchProtocol === 'don.local-match-handoff.v1' && out.ui.localMatchControls &&
+      out.ui.localMatchTurnRelay === 'unavailable' &&
+      out.ui.localMatchBoundary.includes('Browser turn relay is not attached')],
+    ['the configured local MatchStart service is available for this smoke',
+      !LOCAL_MATCH || out.ui.localMatchAvailable],
     ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
       out.ui.sessionSetup.map === 'integration-land' && out.ui.sessionSetup.size === '128x128' &&
       out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 0 &&
@@ -1740,6 +1755,118 @@ try {
     }
   }
 
+  // ---- 4c. two browser seats consume one native StartGame -> MatchStart ----------------
+  //
+  // The local gateway invokes the existing Rust two-process lifecycle. It exposes no seed,
+  // epoch, or roster until both native peers agree. The browser turn relay is deliberately
+  // absent, so both tabs must remain paused at the identical frame-zero Sim setup.
+  if (LOCAL_MATCH) {
+    const cleanSecondUrl = `http://127.0.0.1:${PORT}/play.html?seed=0x2468ace0&player=1`;
+    const created = await c.send('Target.createTarget', { url: cleanSecondUrl });
+    const secondTargetId = created.result?.targetId;
+    if (!secondTargetId) throw new Error('Chrome did not create the second local-match tab');
+    let secondTarget = null;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const listed = await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json();
+      secondTarget = listed.find((target) => target.id === secondTargetId);
+      if (secondTarget?.webSocketDebuggerUrl) break;
+      await sleep(100);
+    }
+    if (!secondTarget?.webSocketDebuggerUrl) throw new Error('second local-match tab has no CDP target');
+    c2 = await Cdp.open(secondTarget.webSocketDebuggerUrl);
+    await c2.send('Runtime.enable');
+    await c2.send('Log.enable');
+    await c2.send('Page.enable');
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const bothReady = await Promise.all([
+        c.eval('!!(window.don?.ready?.() && window.don.localMatch.snapshot().available)'),
+        c2.eval('!!(window.don?.ready?.() && window.don.localMatch.snapshot().available)'),
+      ]);
+      if (bothReady.every(Boolean)) break;
+      if (attempt === 99) throw new Error('two local-match browser clients never became ready');
+      await sleep(100);
+    }
+
+    await c.eval(`document.getElementById('session-seed').value = '0x2468ace0'`);
+    const hostLobby = await c.eval(
+      `window.don.localMatch.create('Host browser').then(JSON.stringify)`).then(JSON.parse);
+    await c2.eval(
+      `window.don.localMatch.join('${hostLobby.code}', 'Peer browser').then(JSON.stringify)`);
+    await c.eval(`window.don.localMatch.ready().then(JSON.stringify)`);
+    await c2.eval(`window.don.localMatch.ready().then(JSON.stringify)`);
+
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const phases = await Promise.all([
+        c.eval('window.don.localMatch.snapshot().phase'),
+        c2.eval('window.don.localMatch.snapshot().phase'),
+      ]);
+      const applied = await Promise.all([
+        c.eval('window.don.localMatch.snapshot().applied'),
+        c2.eval('window.don.localMatch.snapshot().applied'),
+      ]);
+      if (phases.every((phase) => phase === 'started') && applied.every(Boolean)) break;
+      if (phases.some((phase) => phase === 'failed')) {
+        const failures = await Promise.all([
+          c.eval('window.don.localMatch.snapshot().error'),
+          c2.eval('window.don.localMatch.snapshot().error'),
+        ]);
+        throw new Error(`local MatchStart failed: ${failures.join(' | ')}`);
+      }
+      if (attempt === 149) throw new Error(`local MatchStart did not reach both tabs`);
+      await sleep(100);
+    }
+
+    const clientEvidence = async (client) => client.eval(`(() => {
+      const d = window.don, local = d.localMatch.snapshot(), mod = d.state.mod;
+      const beforeResume = { frame: mod.frame, digest: mod.digest(), paused: d.state.paused };
+      d.replay.play();
+      return JSON.stringify({
+        local,
+        setup: d.session.setup(),
+        frame: mod.frame,
+        digest: mod.digest(),
+        rngState: mod.rngState,
+        activePlayers: mod.activePlayers(),
+        leaders: [mod.leader(0), mod.leader(1)],
+        match: mod.match(),
+        paused: d.state.paused,
+        beforeResume,
+        status: document.getElementById('local-match-status').textContent,
+      });
+    })()`).then(JSON.parse);
+    const [hostBrowser, peerBrowser] = await Promise.all([
+      clientEvidence(c), clientEvidence(c2),
+    ]);
+    out.localMatch = { host: hostBrowser, peer: peerBrowser };
+    for (const [name, ok] of [
+      ['native StartGame and MatchStart produce one exact seed/epoch/reference in both tabs',
+        hostBrowser.local.handoff.seed === 0x2468ace0 &&
+        hostBrowser.local.handoff.seed === peerBrowser.local.handoff.seed &&
+        hostBrowser.local.handoff.epoch === peerBrowser.local.handoff.epoch &&
+        hostBrowser.local.handoff.sessionReference === peerBrowser.local.handoff.sessionReference &&
+        hostBrowser.local.handoff.nativeTurnHash === peerBrowser.local.handoff.nativeTurnHash],
+      ['both browser clients reconstruct the same authoritative two-player frame-zero setup',
+        hostBrowser.frame === 0 && peerBrowser.frame === 0 &&
+        hostBrowser.digest === peerBrowser.digest && hostBrowser.rngState === peerBrowser.rngState &&
+        JSON.stringify(hostBrowser.activePlayers) === JSON.stringify([0, 1]) &&
+        JSON.stringify(peerBrowser.activePlayers) === JSON.stringify([0, 1]) &&
+        JSON.stringify(hostBrowser.setup.teams) === JSON.stringify(peerBrowser.setup.teams) &&
+        JSON.stringify(hostBrowser.leaders) === JSON.stringify(peerBrowser.leaders) &&
+        JSON.stringify(hostBrowser.match) === JSON.stringify(peerBrowser.match)],
+      ['browser perspective is seat-specific without becoming a second roster authority',
+        hostBrowser.setup.player === 0 && peerBrowser.setup.player === 1 &&
+        hostBrowser.setup.slots === 2 && peerBrowser.setup.slots === 2],
+      ['both clients remain paused and refuse resume while browser turn relay is unavailable',
+        hostBrowser.paused && peerBrowser.paused &&
+        hostBrowser.beforeResume.paused && peerBrowser.beforeResume.paused &&
+        hostBrowser.local.turnRelay === 'unavailable' && peerBrowser.local.turnRelay === 'unavailable' &&
+        hostBrowser.status.includes('browser turn relay unavailable') &&
+        peerBrowser.status.includes('browser turn relay unavailable')],
+    ]) {
+      if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+    }
+  }
+
   // ---- 5. cross-target determinism -----------------------------------------------------
   out.freshDigest = await c.eval(
     'JSON.stringify(window.don.freshDigest(0xc0ffee, 600, []))').then(JSON.parse);
@@ -1780,7 +1907,12 @@ try {
     .filter((e) => e.method === 'Log.entryAdded' && e.params.entry.level === 'error')
     .map((e) => e.params.entry.text)
     .concat(c.events.filter((e) => e.method === 'Runtime.exceptionThrown')
-      .map((e) => e.params.exceptionDetails?.exception?.description ?? 'exception'));
+      .map((e) => e.params.exceptionDetails?.exception?.description ?? 'exception'))
+    .concat((c2?.events ?? [])
+      .filter((e) => e.method === 'Log.entryAdded' && e.params.entry.level === 'error')
+      .map((e) => `second tab: ${e.params.entry.text}`))
+    .concat((c2?.events ?? []).filter((e) => e.method === 'Runtime.exceptionThrown')
+      .map((e) => `second tab: ${e.params.exceptionDetails?.exception?.description ?? 'exception'}`));
   if (out.consoleErrors.length) {
     console.error('page errors: ' + out.consoleErrors.slice(0, 3).join(' | '));
     bad++;
@@ -1790,6 +1922,7 @@ try {
   out.error = e.message;
   bad++;
 } finally {
+  c2?.close();
   c?.close();
   if (!KEEP && proc) await stopChrome(proc);
   if (!KEEP) await rm(profile, { recursive: true, force: true });

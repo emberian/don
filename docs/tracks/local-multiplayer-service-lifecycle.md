@@ -148,10 +148,33 @@ same hash over two independently submitted turn packages. Process-local
 Crossplay storage, a hard-coded MatchStart, a mismatched start reference, or an
 early turn all make the test fail.
 
+## Browser frame-zero handoff
+
+The playable Web client now consumes this real seam through a loopback-only owner in
+`web/serve.mjs`. Two browser seats create/join one bounded in-memory lobby and publish readiness.
+Only after the configured `service-match-peer` independently completes the host and join
+processes does the server return the agreed StartGame reference, nonzero epoch, seed, and roster.
+The peer accepts a caller-supplied `--seed U32`, so the browser's requested seed is the lobby seed
+that `ServiceMatch` validates rather than a second frontend value.
+
+Each tab installs `[0, 1]` through the existing authoritative frame-zero
+`GameModule.startManualTeams` transaction. The full Chrome/WebGPU gate opens two real tabs and
+requires identical frame-zero digest, RNG, roster, teams, Leaders, and Match state while the local
+perspective is respectively P0 and P1. Both clients are locked paused and visibly report browser
+turn relay `unavailable`; a resume attempt is refused. The native subprocesses prove a two-package
+turn internally, but those fixture packages are evidence for the handoff and are not presented as
+browser commands or browser multiplayer synchronization.
+
+The API binds only `127.0.0.1`, caps lobby count, request bytes, child output and process lifetime,
+uses per-seat random tokens, and fails closed when its configured peer binary is absent. Its Node
+mutation tests use a parser fixture; `play-smoke.mjs --local-match` uses the real compiled Rust
+peer. No Wasm ABI or Sim/save owner changed in this tranche.
+
 ## What remains
 
-This is a headless executable path over the DoN semantic `Backend`, its real
-loopback RPC worker/authority, and real `TcpTransport`. It does not claim that
+The authoritative lifecycle remains a headless executable path over the DoN semantic `Backend`,
+its real loopback RPC worker/authority, and real `TcpTransport`; the browser now consumes its
+confirmed frame-zero handoff but does not yet carry its turn stream. It does not claim that
 `riseofnations.exe` has driven the replacement DLL, that the DLL constructs a
 `don-net` transport, or that retail's PlayFab/Party wire behaves this way. The
 `local-match` feature is deliberately absent from the DLL build: stitching an

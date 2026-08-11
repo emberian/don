@@ -113,6 +113,11 @@ const state = {
     nextId: 1, entries: [],
     lastTransport: null, lastGaps: null,
   },
+  localMatch: {
+    available: false, code: '', token: '', seat: null, phase: 'offline',
+    members: [], error: null, handoff: null, applied: false, polling: null,
+    pauseLocked: false,
+  },
 };
 
 // ---------------------------------------------------------------------------------------
@@ -188,6 +193,7 @@ async function boot() {
   wirePanels();
   initializeSettingsPanel();
   initializeSessionPanel();
+  initializeLocalMatchPanel();
   initializeObjectivesPanel();
   initializeControlGroupsPanel();
   initializeCommandFeedbackPanel();
@@ -1292,7 +1298,249 @@ function initializeSessionPanel() {
   renderSessionSummary();
 }
 
+const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
+
+async function localMatchRequest(path, method = 'GET', body = null) {
+  const init = { method, headers: {} };
+  if (body !== null) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, init);
+  let value;
+  try { value = await response.json(); }
+  catch { throw new Error(`local match service returned HTTP ${response.status} without JSON`); }
+  if (!response.ok) throw new Error(value?.error || `local match service returned HTTP ${response.status}`);
+  if ((value?.protocol ?? value?.lobby?.protocol) !== LOCAL_MATCH_PROTOCOL) {
+    throw new Error('local match service protocol mismatch');
+  }
+  return value;
+}
+
+function localMatchPublicSnapshot() {
+  const local = state.localMatch;
+  return Object.freeze({
+    protocol: LOCAL_MATCH_PROTOCOL,
+    available: local.available,
+    code: local.code,
+    seat: local.seat,
+    phase: local.phase,
+    members: Object.freeze(local.members.map((member) => Object.freeze({ ...member }))),
+    error: local.error,
+    handoff: local.handoff ? Object.freeze({ ...local.handoff }) : null,
+    applied: local.applied,
+    pausedAtHandoff: local.pauseLocked && state.paused,
+    turnRelay: 'unavailable',
+  });
+}
+
+function renderLocalMatchPanel() {
+  if (!$('local-match-status')) return;
+  const local = state.localMatch;
+  const joined = !!local.code && !!local.token;
+  $('local-match-create').disabled = !local.available || joined;
+  $('local-match-join').disabled = !local.available || joined;
+  $('local-match-code').disabled = joined;
+  $('local-match-name').disabled = joined;
+  $('local-match-ready').disabled = !joined || local.phase !== 'lobby' ||
+    local.members.find((member) => member.seat === local.seat)?.ready;
+  $('local-match-leave').disabled = !joined || local.phase === 'starting';
+  $('session-new').disabled = local.pauseLocked;
+  if (local.code) $('local-match-code').value = local.code;
+  $('local-match-roster').textContent = local.members.length
+    ? local.members.map((member) =>
+      `P${member.seat} ${member.name} — ${member.ready ? 'ready' : 'not ready'}`).join(' · ')
+    : 'no local lobby joined';
+
+  let status;
+  if (!local.available) {
+    status = local.error || 'local match service unavailable — configured peer binary not found';
+  } else if (!joined) {
+    status = 'loopback match service ready · create or join a two-seat lobby';
+  } else if (local.phase === 'lobby') {
+    status = `lobby ${local.code} · seat P${local.seat} · waiting for two ready players`;
+  } else if (local.phase === 'starting') {
+    status = 'both ready · native directory StartGame and transport MatchStart are converging…';
+  } else if (local.phase === 'started' && local.handoff) {
+    status = `MatchStart confirmed · epoch ${local.handoff.epoch} · ` +
+      `${formatSeed(local.handoff.seed)} · paused frame 0 · browser turn relay unavailable`;
+  } else if (local.phase === 'failed') {
+    status = `local MatchStart refused: ${local.error || 'native lifecycle failed'}`;
+  } else {
+    status = `local lobby ${local.phase}`;
+  }
+  $('local-match-status').textContent = status;
+}
+
+function adoptLocalLobby(result) {
+  const local = state.localMatch;
+  local.token = result.token ?? local.token;
+  const lobby = result.lobby ?? result;
+  local.code = lobby.code;
+  local.seat = lobby.seat;
+  local.phase = lobby.phase;
+  local.members = lobby.members.slice();
+  local.error = lobby.error;
+  local.handoff = lobby.handoff;
+  renderLocalMatchPanel();
+  return localMatchPublicSnapshot();
+}
+
+async function createLocalMatch(name = $('local-match-name').value) {
+  const seed = parseSessionSeed($('session-seed').value);
+  const result = await localMatchRequest('/api/local-match/lobbies', 'POST', { seed, name });
+  adoptLocalLobby(result);
+  scheduleLocalMatchPoll();
+  return localMatchPublicSnapshot();
+}
+
+async function joinLocalMatch(code = $('local-match-code').value,
+  name = $('local-match-name').value) {
+  code = String(code).trim().toLowerCase();
+  const result = await localMatchRequest(
+    `/api/local-match/lobbies/${encodeURIComponent(code)}/join`, 'POST', { name });
+  adoptLocalLobby(result);
+  scheduleLocalMatchPoll();
+  return localMatchPublicSnapshot();
+}
+
+async function readyLocalMatch() {
+  const local = state.localMatch;
+  if (!local.code || !local.token) throw new Error('no local lobby joined');
+  const result = await localMatchRequest(
+    `/api/local-match/lobbies/${local.code}/ready`, 'POST', { token: local.token, ready: true });
+  adoptLocalLobby(result);
+  scheduleLocalMatchPoll();
+  return localMatchPublicSnapshot();
+}
+
+async function pollLocalMatch() {
+  const local = state.localMatch;
+  if (!local.code || !local.token) return localMatchPublicSnapshot();
+  const result = await localMatchRequest(
+    `/api/local-match/lobbies/${local.code}?token=${encodeURIComponent(local.token)}`);
+  adoptLocalLobby(result);
+  if (local.phase === 'started' && local.handoff && !local.applied) {
+    applyLocalMatchHandoff(local.handoff);
+  }
+  if (['lobby', 'starting'].includes(local.phase)) scheduleLocalMatchPoll();
+  return localMatchPublicSnapshot();
+}
+
+function scheduleLocalMatchPoll() {
+  const local = state.localMatch;
+  if (local.polling !== null || !['lobby', 'starting'].includes(local.phase)) return;
+  local.polling = setTimeout(async () => {
+    local.polling = null;
+    try { await pollLocalMatch(); }
+    catch (error) {
+      local.error = error.message;
+      if (/does not exist|token is invalid/.test(error.message)) local.phase = 'failed';
+      renderLocalMatchPanel();
+      scheduleLocalMatchPoll();
+    }
+  }, 200);
+}
+
+async function leaveLocalMatch() {
+  const local = state.localMatch;
+  const resetWorld = local.applied || local.pauseLocked;
+  const seed = state.sessionSeed;
+  if (local.polling !== null) clearTimeout(local.polling);
+  local.polling = null;
+  if (local.code && local.token && local.phase !== 'starting') {
+    await localMatchRequest(`/api/local-match/lobbies/${local.code}`, 'DELETE', {
+      token: local.token,
+    });
+  }
+  Object.assign(local, {
+    code: '', token: '', seat: null, phase: 'offline', members: [], error: null,
+    handoff: null, applied: false, pauseLocked: false,
+  });
+  if (resetWorld) {
+    if (!state.mod.restart(seed)) throw new Error('could not leave the local MatchStart world');
+    resetClientForWorld(seed, true, 'left local MatchStart');
+    startReplayJournal();
+    syncSessionUrl();
+    say('left local MatchStart and returned to an inactive paused session', 'hi');
+  }
+  renderLocalMatchPanel();
+  return localMatchPublicSnapshot();
+}
+
+function applyLocalMatchHandoff(handoff) {
+  const local = state.localMatch;
+  if (!handoff || handoff.protocol !== LOCAL_MATCH_PROTOCOL ||
+      !Number.isInteger(handoff.seed) || handoff.seed < 0 || handoff.seed > 0xffff_ffff ||
+      !Number.isInteger(handoff.epoch) || handoff.epoch <= 0 ||
+      ![0, 1].includes(handoff.player) || handoff.teamStyle !== 0 ||
+      JSON.stringify(handoff.activePlayers) !== JSON.stringify([0, 1]) ||
+      JSON.stringify(handoff.teams) !== JSON.stringify([0, 1, 8, 8]) ||
+      handoff.turnRelay !== 'unavailable') {
+    throw new Error('local MatchStart handoff is malformed or overstates browser turn support');
+  }
+  local.pauseLocked = false;
+  if (!state.mod.restart(handoff.seed >>> 0)) throw new Error('local MatchStart world allocation failed');
+  state.who = handoff.player;
+  $('session-player').value = String(state.who);
+  resetClientForWorld(handoff.seed >>> 0, true, `local MatchStart: P${state.who}`);
+  if (!state.mod.startManualTeams(
+    handoff.activePlayers, handoff.teams, handoff.teamStyle, handoff.player, false)) {
+    throw new Error('authoritative Sim refused the confirmed local MatchStart roster');
+  }
+  const exactRoster = JSON.stringify(state.mod.activePlayers()) === JSON.stringify([0, 1]);
+  if (!exactRoster || state.mod.frame !== 0 || state.mod.coreSeed !== (handoff.seed >>> 0)) {
+    throw new Error('authoritative Sim did not reproduce the confirmed frame-zero handoff');
+  }
+  state.sessionInitialDigest = state.mod.digest();
+  state.coreSaveStatus =
+    'core save/load ready — local MatchStart roster is authoritative; browser turn relay unavailable';
+  $('core-save-status').textContent = state.coreSaveStatus;
+  startReplayJournal();
+  local.applied = true;
+  local.pauseLocked = true;
+  setPaused(true, false);
+  syncSessionUrl();
+  renderSessionStatus();
+  renderSessionSummary();
+  renderObjectivesPanel();
+  renderLocalMatchPanel();
+  say(`local MatchStart confirmed at epoch ${handoff.epoch}; both browser clients are paused ` +
+    'at frame 0 until a real browser turn relay is attached', 'ok');
+  return localMatchPublicSnapshot();
+}
+
+async function initializeLocalMatchPanel() {
+  $('local-match-create').addEventListener('click', async () => {
+    try { await createLocalMatch(); }
+    catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
+  });
+  $('local-match-join').addEventListener('click', async () => {
+    try { await joinLocalMatch(); }
+    catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
+  });
+  $('local-match-ready').addEventListener('click', async () => {
+    try { await readyLocalMatch(); }
+    catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
+  });
+  $('local-match-leave').addEventListener('click', async () => {
+    try { await leaveLocalMatch(); }
+    catch (error) { state.localMatch.error = error.message; renderLocalMatchPanel(); }
+  });
+  try {
+    const status = await localMatchRequest('/api/local-match');
+    state.localMatch.available = status.available === true && status.turnRelay === 'unavailable';
+    if (!state.localMatch.available) {
+      state.localMatch.error = 'local match service unavailable — configured peer binary not found';
+    }
+  } catch (error) {
+    state.localMatch.error = error.message;
+  }
+  renderLocalMatchPanel();
+}
+
 function activateSessionRoster() {
+  detachLocalMatchHandoff();
   const requested = Array.from({ length: state.mod.playerCount }, (_, player) => player);
   const layout = selectedTeamLayout();
   // Match start is a reproducible setup transaction, not a mutation of however many
@@ -1332,6 +1580,7 @@ function restartSessionFromPanel() {
     return false;
   }
 
+  detachLocalMatchHandoff();
   if (!state.mod.restart(seed)) {
     const message = 'new game allocation failed; the previous session is still live';
     $('session-status').textContent = message;
@@ -1345,6 +1594,16 @@ function restartSessionFromPanel() {
   say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
     'seed-dependent map generation remains blocked', 'ok');
   return true;
+}
+
+function detachLocalMatchHandoff() {
+  const local = state.localMatch;
+  if (!local.applied && !local.pauseLocked) return;
+  local.applied = false;
+  local.pauseLocked = false;
+  local.handoff = null;
+  local.phase = local.code ? 'detached' : 'offline';
+  renderLocalMatchPanel();
 }
 
 function resetClientForWorld(seed, paused, cameraSource) {
@@ -2551,6 +2810,12 @@ function zoomCentre(factor) {
 }
 
 function setPaused(paused, announce = true) {
+  if (state.localMatch?.pauseLocked && !paused) {
+    paused = true;
+    if (announce) {
+      say('resume refused — this local MatchStart is paused until browser turn relay exists', 'warn');
+    }
+  }
   state.paused = paused;
   const el = $('pause');
   if (el) {
@@ -3391,6 +3656,14 @@ window.don = {
     setup: () => sessionDescriptor(),
     activate: () => activateSessionRoster(),
   },
+  localMatch: {
+    snapshot: () => localMatchPublicSnapshot(),
+    create: (name) => createLocalMatch(name),
+    join: (code, name) => joinLocalMatch(code, name),
+    ready: () => readyLocalMatch(),
+    poll: () => pollLocalMatch(),
+    leave: () => leaveLocalMatch(),
+  },
   objectives: {
     snapshot: () => exportedWorldSnapshot(),
     camera: () => cameraSnapshot(),
@@ -3461,6 +3734,7 @@ window.don = {
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
     sessionSetup: sessionDescriptor(),
+    localMatch: localMatchPublicSnapshot(),
     objectives: exportedWorldSnapshot(), camera: cameraSnapshot(), replay: replaySnapshot(),
     save: coreSaveSnapshot(),
     controlGroups: controlGroupsSnapshot(), commands: commandFeedbackSnapshot(),

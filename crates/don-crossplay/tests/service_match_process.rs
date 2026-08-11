@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 
 use don_crossplay::match_bridge::service_epoch;
 
+const TEST_SEED: u32 = 0x89ab_cdef;
+
 #[test]
 fn service_start_authorizes_match_start_and_turns_across_processes() {
     let peer = env!("CARGO_BIN_EXE_service-match-peer");
     let mut host = Command::new(peer)
-        .arg("host")
+        .args(["host", "--seed", "0x89abcdef"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -76,7 +78,7 @@ fn service_start_authorizes_match_start_and_turns_across_processes() {
             "{side} did not use the completed StartGame reference: {output}"
         );
         assert!(
-            output.contains(&format!(r#""epoch":{expected_epoch},"seed":3134984190"#)),
+            output.contains(&format!(r#""epoch":{expected_epoch},"seed":{TEST_SEED}"#)),
             "{side} did not derive MatchStart from directory state: {output}"
         );
         assert!(

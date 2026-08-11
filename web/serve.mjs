@@ -1,4 +1,4 @@
-// Static server for the spectator. No dependencies.
+// Loopback server for the playable client. No third-party dependencies.
 //
 // # Why this file exists instead of `python3 -m http.server`
 //
@@ -20,14 +20,25 @@
 // isolated page of ours.
 //
 //     node web/serve.mjs [port]     # default 8787
+//
+// A bounded same-origin JSON API also owns the browser side of the local MatchStart handoff.
+// It invokes the configured native service-match-peer, and exposes seed/epoch/roster only after
+// both of that program's independent processes agree on StartGame and MatchStart. The API never
+// binds beyond 127.0.0.1 and does not claim a browser turn relay.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  LOCAL_MATCH_PROTOCOL, LocalMatchGateway, MAX_LOCAL_MATCH_BODY_BYTES,
+} from './local-match.mjs';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 const PORT = Number(process.argv[2] || 8787);
+const LOCAL_MATCH_PEER = process.env.DON_SERVICE_MATCH_PEER || join(
+  ROOT, '..', '..', 'crates', 'don-crossplay', 'target', 'debug', 'service-match-peer');
+const localMatches = new LocalMatchGateway(LOCAL_MATCH_PEER);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -41,19 +52,107 @@ const MIME = {
   '.wgsl': 'text/plain; charset=utf-8',
 };
 
+const BASE_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Cache-Control': 'no-store',
+};
+
+function sendJson(res, status, value) {
+  const body = Buffer.from(JSON.stringify(value));
+  res.writeHead(status, {
+    ...BASE_HEADERS,
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': body.length,
+  }).end(body);
+}
+
+async function readJson(req) {
+  const contentType = String(req.headers['content-type'] ?? '').split(';', 1)[0].trim();
+  if (contentType !== 'application/json') throw new Error('request content type must be application/json');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_LOCAL_MATCH_BODY_BYTES) throw new Error('local match request body is too large');
+    chunks.push(chunk);
+  }
+  let value;
+  try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw new Error('local match request body is not valid JSON'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('local match request body must be an object');
+  }
+  return value;
+}
+
+async function serveLocalMatch(req, res, url) {
+  if (!url.pathname.startsWith('/api/local-match')) return false;
+  try {
+    if (url.pathname === '/api/local-match' && req.method === 'GET') {
+      sendJson(res, 200, {
+        protocol: LOCAL_MATCH_PROTOCOL,
+        available: await localMatches.available(),
+        players: 2,
+        turnRelay: 'unavailable',
+      });
+      return true;
+    }
+    if (url.pathname === '/api/local-match/lobbies' && req.method === 'POST') {
+      if (!(await localMatches.available())) {
+        sendJson(res, 503, {
+          protocol: LOCAL_MATCH_PROTOCOL,
+          error: 'configured service-match-peer binary is absent or not executable',
+        });
+        return true;
+      }
+      const body = await readJson(req);
+      sendJson(res, 201, localMatches.create(body.seed, body.name));
+      return true;
+    }
+    const route = url.pathname.match(
+      /^\/api\/local-match\/lobbies\/([a-f0-9]{8})(?:\/(join|ready))?$/);
+    if (!route) {
+      sendJson(res, 404, { protocol: LOCAL_MATCH_PROTOCOL, error: 'unknown local match endpoint' });
+      return true;
+    }
+    const [, code, action] = route;
+    if (!action && req.method === 'GET') {
+      sendJson(res, 200, localMatches.snapshot(code, url.searchParams.get('token') ?? ''));
+      return true;
+    }
+    if (!action && req.method === 'DELETE') {
+      const body = await readJson(req);
+      sendJson(res, 200, { protocol: LOCAL_MATCH_PROTOCOL, left: localMatches.leave(code, body.token) });
+      return true;
+    }
+    if (action === 'join' && req.method === 'POST') {
+      const body = await readJson(req);
+      sendJson(res, 200, localMatches.join(code, body.name));
+      return true;
+    }
+    if (action === 'ready' && req.method === 'POST') {
+      const body = await readJson(req);
+      sendJson(res, 200, localMatches.ready(code, body.token, body.ready ?? true));
+      return true;
+    }
+    sendJson(res, 405, { protocol: LOCAL_MATCH_PROTOCOL, error: 'method not allowed' });
+  } catch (error) {
+    sendJson(res, 400, { protocol: LOCAL_MATCH_PROTOCOL, error: error.message });
+  }
+  return true;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (await serveLocalMatch(req, res, url)) return;
   let p = normalize(decodeURIComponent(url.pathname));
   if (p === '/' || p.endsWith('/')) p += 'index.html';
   const file = join(ROOT, p);
   if (!file.startsWith(ROOT)) { res.writeHead(403).end('no'); return; }
 
-  const headers = {
-    'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Embedder-Policy': 'require-corp',
-    'Cross-Origin-Resource-Policy': 'same-origin',
-    'Cache-Control': 'no-store',
-  };
+  const headers = { ...BASE_HEADERS };
 
   try {
     const s = await stat(file);
@@ -68,5 +167,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`spectator on http://127.0.0.1:${PORT}/  (cross-origin isolated)`);
+  console.log(`web client on http://127.0.0.1:${PORT}/  (cross-origin isolated, loopback only)`);
 });

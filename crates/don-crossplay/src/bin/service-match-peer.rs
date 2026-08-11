@@ -17,7 +17,7 @@ use don_net::{LocalMatch, Role, Session, TcpTransport};
 
 const HOST_ID: i32 = 101;
 const CLIENT_ID: i32 = 202;
-const GAME_SEED: u32 = 3_134_984_190;
+const DEFAULT_GAME_SEED: u32 = 3_134_984_190;
 const MATCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn main() {
@@ -30,13 +30,23 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("host") if args.len() == 2 => host(),
+        Some("host") if args.len() == 2 => host(DEFAULT_GAME_SEED),
+        Some("host") if args.len() == 4 && args[2] == "--seed" => host(parse_seed(&args[3])?),
         Some("join") if args.len() == 4 => join(&args[2], &args[3]),
-        _ => Err("usage: service-match-peer host | join DIRECTORY LOBBY_ID".into()),
+        _ => Err("usage: service-match-peer host [--seed U32] | join DIRECTORY LOBBY_ID".into()),
     }
 }
 
-fn host() -> Result<(), String> {
+fn parse_seed(text: &str) -> Result<u32, String> {
+    let parsed = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .map_or_else(|| text.parse::<u32>(), |hex| u32::from_str_radix(hex, 16))
+        .map_err(|_| format!("invalid u32 game seed {text:?}"))?;
+    Ok(parsed)
+}
+
+fn host(game_seed: u32) -> Result<(), String> {
     let mut directory = DirectoryRpcClient::listen("127.0.0.1:0")
         .map_err(|error| format!("listen for directory: {error}"))?;
     let directory_address = directory
@@ -53,7 +63,7 @@ fn host() -> Result<(), String> {
         ServiceMatch::new(LocalMatch::new(Session::new(transport, Role::Host, "Host")));
 
     let mut attributes = Attributes::new();
-    attributes.insert(GAME_SEED_ATTRIBUTE.into(), GAME_SEED.to_string());
+    attributes.insert(GAME_SEED_ATTRIBUTE.into(), game_seed.to_string());
     attributes.insert(
         DON_MATCH_ENDPOINT_ATTRIBUTE.into(),
         match_address.to_string(),

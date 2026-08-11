@@ -430,6 +430,36 @@
         </select>
       </label>
 
+      <div class="setup-heading">local multiplayer handoff</div>
+      <label>player name
+        <input id="local-match-name" type="text" value="Browser player" maxlength="40"
+          autocomplete="nickname" spellcheck="false" aria-describedby="local-match-status">
+      </label>
+      <label>lobby code
+        <input id="local-match-code" type="text" maxlength="8" size="10"
+          autocomplete="off" spellcheck="false" inputmode="text"
+          aria-describedby="local-match-status" placeholder="8 hex chars">
+      </label>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button id="local-match-create" type="button">create 2-seat lobby</button>
+        <button id="local-match-join" type="button">join lobby</button>
+        <button id="local-match-ready" type="button" disabled>ready</button>
+        <button id="local-match-leave" type="button" disabled>leave</button>
+      </div>
+      <div id="local-match-roster" class="hint" aria-label="Local multiplayer roster">
+        no local lobby joined
+      </div>
+      <div id="local-match-status" class="hint" role="status" aria-live="polite">
+        checking the loopback match service…
+      </div>
+      <div class="hint" style="margin-top:4px">
+        This loopback-only path admits a seed and two-player roster only after the native
+        <code>don-crossplay</code> directory and <code>don-net</code> transport agree on
+        StartGame and the authoritative MatchStart. Browser turn relay is not attached yet;
+        both clients stop at the identical paused frame-zero boundary instead of claiming
+        multiplayer synchronization.
+      </div>
+
       <div id="session-summary" aria-label="Pregame summary">
         <div class="summary-row"><span>phase</span><b id="summary-phase">loading…</b></div>
         <div class="summary-row"><span>world</span><b id="summary-world">loading…</b></div>
