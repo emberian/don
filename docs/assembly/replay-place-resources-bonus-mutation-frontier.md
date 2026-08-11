@@ -94,9 +94,11 @@ receipt with different chance-group or placement facts.
 ports. `PlacementHost` is a two-phase boundary: it returns a receipt, and the caller
 commits nothing until that receipt validates.
 
-The receipt must carry the complete ordered RNG transcript. The only admitted direct
-call sites in this cone are:
+The receipt must carry the complete ordered RNG transcript. The admitted main-RNG call
+sites in this cone are:
 
+- region transitive `Map::find_avail_regions` `0x0068f498` (zero or one, and first
+  in the placement transcript when present);
 - region placement `0x0069071a`;
 - player placement `0x00692114`;
 - `ResourceDivvyPool::get_water` `0x0068a4cd`;

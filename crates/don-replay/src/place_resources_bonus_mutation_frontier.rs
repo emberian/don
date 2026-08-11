@@ -69,6 +69,9 @@ pub const RANDOM_GET_VA: u32 = 0x00a3_9d70;
 pub const RESOURCE_POOL_GET_WATER_RANDOM_CALL_VA: u32 = 0x0068_a4cd;
 pub const RESOURCE_POOL_GET_LATE_RANDOM_CALL_VA: u32 = 0x0068_a59d;
 pub const RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA: u32 = 0x0068_a66c;
+/// Transitive main-RNG call in `Map::find_avail_regions`, reached only from
+/// `Map::place_region_resource` and chronologically before all region-body draws.
+pub const REGION_FIND_AVAIL_RANDOM_CALL_VA: u32 = 0x0068_f498;
 pub const REGION_PLACEMENT_RANDOM_CALL_VA: u32 = 0x0069_071a;
 pub const PLAYER_PLACEMENT_RANDOM_CALL_VA: u32 = 0x0069_2114;
 
@@ -591,11 +594,15 @@ fn validate_random_draws(
     };
     let mut random = Random::new(state_before);
     for (index, draw) in draws.iter().enumerate() {
+        let region_find_avail_call =
+            path == PlacementPath::Region && draw.call_va == REGION_FIND_AVAIL_RANDOM_CALL_VA;
         let pool_call = draw.call_va == RESOURCE_POOL_GET_WATER_RANDOM_CALL_VA
             || draw.call_va == RESOURCE_POOL_GET_LATE_RANDOM_CALL_VA
             || draw.call_va == RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA;
-        let allowed_call = draw.call_va == path_call || (selector != 0 && pool_call);
+        let allowed_call =
+            draw.call_va == path_call || region_find_avail_call || (selector != 0 && pool_call);
         if !allowed_call
+            || (region_find_avail_call && index != 0)
             || draw.random_get_va != RANDOM_GET_VA
             || draw.low != 0
             || draw.high != 0xffff

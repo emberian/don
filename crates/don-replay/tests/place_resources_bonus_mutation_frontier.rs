@@ -25,7 +25,8 @@ use place_resources_bonus_mutation_frontier::{
     GOOD_WDATA_DOWN_MARKER, GOOD_WDATA_DOWN_WHO_WRITE_VA, GOOD_WDATA_DOWN_WRITE_VA,
     MAP_PLACE_PLAYER_RESOURCE_VA, NEXT_BONUS_ROW_VA, OBJECTS_INIT_GOOD_VA,
     PLAYER_INIT_GOOD_CALL_VA, PLAYER_PLACEMENT_CALL_VA, PLAYER_PLACEMENT_RANDOM_CALL_VA,
-    RANDOM_GET_VA, RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA, SELECTOR_TWO_IGNORE_CALL_VA,
+    RANDOM_GET_VA, REGION_FIND_AVAIL_RANDOM_CALL_VA, REGION_PLACEMENT_RANDOM_CALL_VA,
+    RESOURCE_POOL_GET_EARLY_RANDOM_CALL_VA, SELECTOR_TWO_IGNORE_CALL_VA,
 };
 use place_resources_bonus_mutation_frontier::{PlaceResourcesBonusMutationState, PlacementPattern};
 use place_resources_pool_frontier::{
@@ -319,6 +320,66 @@ impl PlacementHost for ScriptedPlacementHost {
     }
 }
 
+struct TranscriptPlacementHost {
+    call_vas: Vec<u32>,
+    corrupt_state_at: Option<usize>,
+}
+
+impl PlacementHost for TranscriptPlacementHost {
+    fn place(&mut self, request: &PlacementRequest) -> Option<PlacementReceipt> {
+        let mut random = Random::new(request.random_state_before);
+        let random_draws = self
+            .call_vas
+            .iter()
+            .enumerate()
+            .map(|(index, call_va)| {
+                let actual_state_before = random.state();
+                let raw = random.get(0, 0xffff);
+                CalleeRandomDraw {
+                    call_va: *call_va,
+                    random_get_va: RANDOM_GET_VA,
+                    low: 0,
+                    high: 0xffff,
+                    state_before: if self.corrupt_state_at == Some(index) {
+                        actual_state_before ^ 1
+                    } else {
+                        actual_state_before
+                    },
+                    raw,
+                    state_after: random.state(),
+                }
+            })
+            .collect();
+        Some(PlacementReceipt {
+            request: request.clone(),
+            random_draws,
+            random_state_after: random.state(),
+            allocations: Vec::new(),
+            allocated_count: 0,
+            world_checksum_after: request.world_checksum_before.clone(),
+            sourced_walked_bytes_after: request.sourced_walked_bytes,
+            resource_pool_digest_after: request.resource_pool_digest_before,
+            resource_pool_selections: Vec::new(),
+            resource_pool_after: request.resource_pool_before.clone(),
+            evidence: PlacementEvidence::SyntheticFixture {
+                fixture: "placement-rng-transcript".to_owned(),
+            },
+        })
+    }
+}
+
+fn region_facts(entry: &PlaceResourcesBonusRowsHandoff) -> FirstBonusMutationFacts {
+    let mut facts = facts(
+        entry,
+        ResourceTypeResolution::CatalogGood { good_id: 6 },
+        100,
+        0,
+    );
+    facts.pattern_name = "world".to_owned();
+    facts.pattern = PlacementPattern::World;
+    facts
+}
+
 #[test]
 fn first_player_row_draws_then_commits_exact_allocation_and_wdata_write() {
     let world = World::init_default_rules(4, 4);
@@ -527,6 +588,106 @@ fn pool_selector_receipt_may_advance_the_same_rng_and_pool_digest() {
         Some(state.resource_pool_digest)
     );
     assert_eq!(state.world_checksum, entry.world_checksum);
+}
+
+#[test]
+fn region_receipt_accepts_find_avail_rng_only_before_region_point_rng() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 1);
+    let facts = region_facts(&entry);
+    let mut state = PlaceResourcesBonusMutationState::from_handoff(&entry);
+    let mut host = TranscriptPlacementHost {
+        call_vas: vec![
+            REGION_FIND_AVAIL_RANDOM_CALL_VA,
+            REGION_PLACEMENT_RANDOM_CALL_VA,
+        ],
+        corrupt_state_at: None,
+    };
+
+    let receipt = execute_first_bonus_mutation(&mut state, &entry, &facts, &mut host).unwrap();
+
+    assert_eq!(
+        receipt.disposition,
+        FirstBonusDisposition::Placed(PlacementPath::Region)
+    );
+    assert_eq!(
+        receipt
+            .placement
+            .as_ref()
+            .unwrap()
+            .random_draws
+            .iter()
+            .map(|draw| draw.call_va)
+            .collect::<Vec<_>>(),
+        vec![
+            REGION_FIND_AVAIL_RANDOM_CALL_VA,
+            REGION_PLACEMENT_RANDOM_CALL_VA,
+        ]
+    );
+    assert_ne!(state.random_state, entry.random_state);
+}
+
+#[test]
+fn find_avail_rng_rejects_player_wrong_order_state_and_call_atomically() {
+    let world = World::init_default_rules(4, 4);
+    let entry = handoff(&world, 1);
+
+    let cases = [
+        (
+            facts(
+                &entry,
+                ResourceTypeResolution::CatalogGood { good_id: 6 },
+                100,
+                0,
+            ),
+            vec![
+                REGION_FIND_AVAIL_RANDOM_CALL_VA,
+                PLAYER_PLACEMENT_RANDOM_CALL_VA,
+            ],
+            None,
+            0,
+        ),
+        (
+            region_facts(&entry),
+            vec![
+                REGION_PLACEMENT_RANDOM_CALL_VA,
+                REGION_FIND_AVAIL_RANDOM_CALL_VA,
+            ],
+            None,
+            1,
+        ),
+        (
+            region_facts(&entry),
+            vec![
+                REGION_FIND_AVAIL_RANDOM_CALL_VA,
+                REGION_PLACEMENT_RANDOM_CALL_VA,
+            ],
+            Some(1),
+            1,
+        ),
+        (
+            region_facts(&entry),
+            vec![REGION_FIND_AVAIL_RANDOM_CALL_VA + 1],
+            None,
+            0,
+        ),
+    ];
+
+    for (facts, call_vas, corrupt_state_at, expected_index) in cases {
+        let mut state = PlaceResourcesBonusMutationState::from_handoff(&entry);
+        let before = state.clone();
+        let mut host = TranscriptPlacementHost {
+            call_vas,
+            corrupt_state_at,
+        };
+        assert_eq!(
+            execute_first_bonus_mutation(&mut state, &entry, &facts, &mut host),
+            Err(FirstBonusMutationError::InvalidCalleeRandomDraw {
+                index: expected_index,
+            })
+        );
+        assert_eq!(state, before);
+    }
 }
 
 #[test]
