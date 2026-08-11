@@ -260,6 +260,16 @@ pub struct InitialGame {
     pub tick: i32,
     pub market_tick: i32,
     pub market: [i32; 6],
+    /// `Game::start_list` storage at `Game + 0x65c`. The replay snapshot precedes
+    /// `Setup::build_game`, so ordinary recordings retain constructor zeroes here rather
+    /// than the later shuffled Leader traversal.
+    pub start_list: [i32; 8],
+    /// `Game::start_index` storage at `Game + 0x67c`, likewise captured before the later
+    /// inverse traversal ordinals are written.
+    pub start_index: [i32; 8],
+    /// `Game::num_players` storage at `Game + 0x69c`; ordinary replay initial images carry
+    /// zero because setup has not counted the Player bodies yet.
+    pub num_players: i32,
     pub world_cities: i32,
     pub world_villages: i32,
     pub total_units: i32,
@@ -1659,6 +1669,14 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
     for (i, v) in market.iter_mut().enumerate() {
         *v = at_i32(body, 0x18 + i * 4);
     }
+    let mut start_list = [0i32; 8];
+    for (i, v) in start_list.iter_mut().enumerate() {
+        *v = at_i32(body, 0x10c + i * 4);
+    }
+    let mut start_index = [0i32; 8];
+    for (i, v) in start_index.iter_mut().enumerate() {
+        *v = at_i32(body, 0x12c + i * 4);
+    }
     let frame = at_i32(body, 0);
     let frame_to_break = at_i32(body, 4);
     let playing = at_i32(body, 8);
@@ -1706,6 +1724,9 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
             tick,
             market_tick,
             market,
+            start_list,
+            start_index,
+            num_players: at_i32(body, 0x14c),
             world_cities,
             world_villages,
             total_units,

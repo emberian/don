@@ -412,6 +412,12 @@ pub struct WorldSim {
     /// world channel it has no replay input at all, which is exactly why the seven zero-AI
     /// recordings all carry the same first-turn value.
     pub initial_groups: crate::groups_channel::InitialGroupsChannel,
+    /// Atomic owner for the fresh post-constructor City centers and canonical Build
+    /// identities. It retains an exact constructor-time Cities walk for diagnostics, but
+    /// installs neither replay channel until the Build initializer and frame-zero City
+    /// census are both complete.
+    pub initial_setup: Option<crate::setup_cities_builds::StartingSetupState>,
+    pub initial_setup_error: Option<crate::setup_cities_builds::SetupCitiesError>,
 }
 
 impl Default for WorldSim {
@@ -437,6 +443,8 @@ impl WorldSim {
             initial_scenario: None,
             initial_scenario_error: None,
             initial_groups: crate::groups_channel::InitialGroupsChannel::derive(),
+            initial_setup: None,
+            initial_setup_error: None,
         }
     }
 
@@ -459,6 +467,12 @@ impl WorldSim {
         if s.initial_item_error.is_none() {
             if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
                 s.initial_item_error = items.apply(&mut s.world, &mut map.world).err();
+            }
+        }
+        if let Some(map) = &s.initial_world {
+            match crate::setup_cities_builds::StartingSetupState::derive(rep, map) {
+                Ok(setup) => s.initial_setup = Some(setup),
+                Err(error) => s.initial_setup_error = Some(error),
             }
         }
         s.populate_state();
@@ -484,6 +498,9 @@ impl WorldSim {
             crate::state::SimBridge::populate_scenario_initial(scenario, &mut self.state);
         }
         crate::state::SimBridge::populate_groups_initial(&self.initial_groups, &mut self.state);
+        if let Some(setup) = &self.initial_setup {
+            crate::state::SimBridge::populate_starting_setup(setup, &mut self.state);
+        }
     }
 
     /// A world pre-populated with `per_owner` units in each of `owners` owner
@@ -504,6 +521,9 @@ impl WorldSim {
 
 impl Simulation for WorldSim {
     fn step_turn(&mut self, frames: u32) {
+        if self.initial_setup.take().is_some() {
+            crate::state::SimBridge::clear_starting_setup(&mut self.state);
+        }
         self.turns += 1;
         for _ in 0..frames {
             self.world.step();

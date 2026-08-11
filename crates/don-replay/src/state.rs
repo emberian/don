@@ -660,6 +660,46 @@ impl SimBridge {
         );
     }
 
+    /// Atomically replace the two setup-owned City/Build channels only after their shared
+    /// transaction has completed all owner/registry and temporal-boundary validation.
+    ///
+    /// Either missing value is an explicit refusal, not an empty model. Both prior direct
+    /// values and exact flags are cleared before the pair is considered for publication;
+    /// a half-ready transaction therefore installs neither channel.
+    pub fn populate_starting_setup(
+        setup: &crate::setup_cities_builds::StartingSetupState,
+        state: &mut SimState,
+    ) {
+        let channels = setup.channels();
+        state.clear_channel(Channel::Builds);
+        state.clear_channel(Channel::Cities);
+        let (Some(builds), Some(cities)) = (channels.builds, channels.cities) else {
+            return;
+        };
+        state.set_exact_direct_channel_elements(
+            Channel::Builds,
+            builds.checksum,
+            builds.bytes_walked,
+            0,
+            builds.builds_walked,
+        );
+        state.set_exact_direct_channel_elements(
+            Channel::Cities,
+            cities.checksum,
+            cities.bytes_walked,
+            0,
+            cities.cities_walked,
+        );
+    }
+
+    /// Expire the setup pair before the first simulation mutation. Clearing both channels
+    /// in one non-fallible operation prevents a later generic population pass from leaving
+    /// stale exact flags or direct bytes behind.
+    pub fn clear_starting_setup(state: &mut SimState) {
+        state.clear_channel(Channel::Builds);
+        state.clear_channel(Channel::Cities);
+    }
+
     /// Install channel 15 from the authoritative BHS runtime's persistent program state.
     ///
     /// `RunTimeEnv::close` removes transient interpreter frames before walking; DON's VM

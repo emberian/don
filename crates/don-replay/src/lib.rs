@@ -98,6 +98,7 @@ pub mod resource_divvy_pool_selection_frontier;
 pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
+pub mod setup_cities_builds;
 pub mod setup_place_unit_deep_re;
 pub mod state;
 pub mod setup_units_producer;
