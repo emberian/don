@@ -37,12 +37,17 @@ use crate::systems::{
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldObjectIdentity, WorldSaveError, WorldSaveState, MAX_UNITS};
 
+mod command_package_state;
 mod groups;
 mod leader_match;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 12;
+const FORMAT_VERSION: u32 = 13;
+/// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
+const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
+/// First version carrying the typed, extension-safe per-order payload envelope.
+const TYPED_ORDER_FORMAT_VERSION: u32 = 12;
 /// The last version whose order stream omitted executable MoveOrder/GroupOrder scalars.
 const LEGACY_ORDER_FORMAT_VERSION: u32 = 11;
 /// The last version whose root ended at [`GROUPS`], before [`LEADER_MATCH`] was added.
@@ -130,8 +135,9 @@ const BUILDS: u16 = 0x0007;
 const PLAYER_SETUP: u16 = 0x0008;
 const GROUPS: u16 = 0x0009;
 const LEADER_MATCH: u16 = 0x000a;
+const COMMAND_PACKAGE_STATE: u16 = 0x000b;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 10] = [
+const REQUIRED: [u16; 11] = [
     CORE,
     MAP,
     OBJECTS,
@@ -142,11 +148,13 @@ const REQUIRED: [u16; 10] = [
     PLAYER_SETUP,
     GROUPS,
     LEADER_MATCH,
+    COMMAND_PACKAGE_STATE,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        LEGACY_ORDER_FORMAT_VERSION..=FORMAT_VERSION => &REQUIRED,
+        FORMAT_VERSION => &REQUIRED,
+        LEGACY_ORDER_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION => &REQUIRED[..10],
         GROUPS_FORMAT_VERSION => &REQUIRED[..9],
         PLAYER_SETUP_FORMAT_VERSION => &REQUIRED[..8],
         _ => &LEGACY_REQUIRED,
@@ -431,7 +439,7 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     // Validate the typed envelope before appending any bytes. `save_sim` writes into a local
     // buffer too, so an invalid public order cannot leak either a partial stream or a
     // partially normalized replacement order to its caller.
-    if format_version >= FORMAT_VERSION {
+    if format_version >= TYPED_ORDER_FORMAT_VERSION {
         if o.move_state.is_some() && !order_kind_carries_move_state(o.kind) {
             return Err(SaveError::Invalid("movement payload on foreign order kind"));
         }
@@ -484,7 +492,7 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
         w.i32(follow.whose);
         w.u16(follow.uid2);
     }
-    if format_version >= FORMAT_VERSION {
+    if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = if o.move_state.is_some() {
             DoNSaveOrderPayloadTag::Move
         } else {
@@ -584,7 +592,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     } else {
         None
     };
-    let move_state = if format_version >= FORMAT_VERSION {
+    let move_state = if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = DoNSaveOrderPayloadTag::from_raw(r.u8()?).ok_or(SaveError::Invalid(
             "unknown order payload discriminator/version",
         ))?;
@@ -659,6 +667,23 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         move_state,
         ..order
     })
+}
+
+fn write_order_node(w: &mut Writer, order: &Order, format_version: u32) -> Result<(), SaveError> {
+    if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
+        // `OrderList` does not own the retail node metric yet. Reserve its exact v13
+        // position without laundering a nonzero value: the matching reader rejects
+        // every value this producer cannot round-trip.
+        w.u8(0);
+    }
+    write_order(w, order, format_version)
+}
+
+fn read_order_node(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveError> {
+    if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION && r.u8()? != 0 {
+        return Err(SaveError::Unsupported("nonzero order node metric"));
+    }
+    read_order(r, format_version)
 }
 
 fn write_sparse_object_bands(
@@ -835,7 +860,7 @@ fn write_world_state_for_version(
         }
         w.len(list.len(), "orders per unit")?;
         for order in list.iter() {
-            write_order(&mut w, order, format_version)?;
+            write_order_node(&mut w, order, format_version)?;
         }
     }
     for rows in &state.build_rows {
@@ -946,7 +971,7 @@ fn read_world_state(
         let count = r.len(MAX_ORDERS_PER_UNIT, "orders per unit")?;
         let mut list = OrderList::new();
         for _ in 0..count {
-            list.push(read_order(&mut r, format_version)?);
+            list.push(read_order_node(&mut r, format_version)?);
         }
         unit_orders.push(list);
     }
@@ -2436,6 +2461,11 @@ fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
 }
 
 fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
+    if !sim.command_package_state.is_empty() && sim.players.is_none() {
+        return Err(SaveError::Unsupported(
+            "command selection cache without player mapping",
+        ));
+    }
     if sim.step12_visibility
         != crate::systems::step12_visibility_runtime::Step12VisibilityAuthority::default()
     {
@@ -2535,6 +2565,10 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(PLAYER_SETUP, write_player_setup(sim)?),
             Chunk::leaf(GROUPS, groups::write(&sim.groups)?),
             Chunk::leaf(LEADER_MATCH, leader_match::write(sim)?),
+            Chunk::leaf(
+                COMMAND_PACKAGE_STATE,
+                command_package_state::write(&sim.command_package_state)?,
+            ),
         ],
     )
     .encode()?;
@@ -2642,6 +2676,10 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         Some(data) => Some(leader_match::read(data, core.format_version)?),
         None => None,
     };
+    let command_state = match sections[10] {
+        Some(data) => command_package_state::read(data)?,
+        None => crate::systems::canonical_group_move_host::CommandPackageState::default(),
+    };
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
             return Err(SaveError::Invalid("player setup outside frame zero"));
@@ -2711,6 +2749,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             core.game_daemon.empty_colls,
         );
     sim.groups = group_pool;
+    sim.command_package_state = command_state;
     if let Some(state) = leader_match {
         leader_match::restore(&mut sim, state)?;
     } else {
@@ -2719,6 +2758,11 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         // than manufacturing a frame-zero Match beside a later World.
         sim.vic_match.frame = sim.world.frame;
         sim.vic_match.tick = sim.world.seconds;
+    }
+    if !sim.command_package_state.is_empty() && sim.players.is_none() {
+        return Err(SaveError::Invalid(
+            "command selection cache without player mapping",
+        ));
     }
     // A loaded state must itself be saveable. This catches accidental constructor state
     // that would otherwise make the first post-load save fail or silently differ.
@@ -2845,24 +2889,23 @@ mod tests {
         }
     }
 
-    /// Re-encode the two version-sensitive leaves while retaining v11's complete root.
-    fn format_eleven_stream(sim: &Sim) -> Vec<u8> {
+    /// Re-encode version-sensitive leaves and retain exactly that version's root shape.
+    fn prior_format_stream(sim: &Sim, format_version: u32) -> Vec<u8> {
         let state = sim.world.export_save_state().unwrap();
         let current = save_sim(sim).unwrap();
         let parsed = parse_chunk(&current[MAGIC.len()..]).unwrap();
         let children = parsed
             .children
             .iter()
+            .filter(|child| required_sections(format_version).contains(&child.header.id))
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
-                    data[..4].copy_from_slice(&LEGACY_ORDER_FORMAT_VERSION.to_le_bytes());
+                    data[..4].copy_from_slice(&format_version.to_le_bytes());
                 } else if child.header.id == OBJECTS {
-                    data =
-                        write_world_state_for_version(&state, LEGACY_ORDER_FORMAT_VERSION).unwrap();
+                    data = write_world_state_for_version(&state, format_version).unwrap();
                 } else if child.header.id == LEADER_MATCH {
-                    data =
-                        leader_match::write_for_version(sim, LEGACY_ORDER_FORMAT_VERSION).unwrap();
+                    data = leader_match::write_for_version(sim, format_version).unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })
@@ -2871,6 +2914,10 @@ mod tests {
         let mut legacy = MAGIC.to_vec();
         legacy.extend_from_slice(&root);
         legacy
+    }
+
+    fn format_eleven_stream(sim: &Sim) -> Vec<u8> {
+        prior_format_stream(sim, LEGACY_ORDER_FORMAT_VERSION)
     }
 
     fn sim_with_stable_items() -> Sim {
@@ -3119,6 +3166,72 @@ mod tests {
     }
 
     #[test]
+    fn format_twelve_typed_orders_load_with_empty_cache_and_upgrade_to_v13() {
+        let mut original = supported_sim();
+        let row = 0;
+        original
+            .world
+            .orders_mut(row)
+            .replace(Order::move_to(4_321, 7_654, 0));
+        let legacy = prior_format_stream(&original, TYPED_ORDER_FORMAT_VERSION);
+        let loaded = load_sim(&legacy).unwrap();
+        assert!(loaded.command_package_state.is_empty());
+        assert_eq!(loaded.world.orders(row), original.world.orders(row));
+        let upgraded = save_sim(&loaded).unwrap();
+        let parsed = parse_chunk(&upgraded[MAGIC.len()..]).unwrap();
+        assert_eq!(
+            read_core(parsed.children[0].data).unwrap().format_version,
+            13
+        );
+        assert!(parsed
+            .children
+            .iter()
+            .any(|child| child.header.id == COMMAND_PACKAGE_STATE));
+    }
+
+    #[test]
+    fn v13_order_node_metric_is_new_exact_and_fail_closed() {
+        let order = Order {
+            kind: OrderIndex::Think,
+            flags: 0x5a,
+            x: 0x1122_3344,
+            y: -77,
+            ..Order::default()
+        };
+        let mut v12 = Writer::default();
+        write_order_node(&mut v12, &order, TYPED_ORDER_FORMAT_VERSION).unwrap();
+        let mut v13 = Writer::default();
+        write_order_node(&mut v13, &order, FORMAT_VERSION).unwrap();
+
+        assert_eq!(v13.0.first(), Some(&0));
+        assert_eq!(&v13.0[1..], v12.0.as_slice());
+
+        let mut v12_reader = Reader::new(&v12.0);
+        assert_eq!(
+            read_order_node(&mut v12_reader, TYPED_ORDER_FORMAT_VERSION).unwrap(),
+            order
+        );
+        v12_reader.finish().unwrap();
+        let mut v13_reader = Reader::new(&v13.0);
+        assert_eq!(
+            read_order_node(&mut v13_reader, FORMAT_VERSION).unwrap(),
+            order
+        );
+        v13_reader.finish().unwrap();
+
+        let mut nonzero = v13.0.clone();
+        nonzero[0] = 1;
+        assert_eq!(
+            read_order_node(&mut Reader::new(&nonzero), FORMAT_VERSION),
+            Err(SaveError::Unsupported("nonzero order node metric"))
+        );
+        assert_eq!(
+            read_order_node(&mut Reader::new(&[]), FORMAT_VERSION),
+            Err(SaveError::Invalid("truncated payload"))
+        );
+    }
+
+    #[test]
     fn format_eight_sparse_stream_remains_loadable_without_player_setup_chunk() {
         let original = supported_sim();
         let state = original.world.export_save_state().unwrap();
@@ -3127,7 +3240,12 @@ mod tests {
         let children = parsed
             .children
             .iter()
-            .filter(|child| !matches!(child.header.id, PLAYER_SETUP | GROUPS | LEADER_MATCH))
+            .filter(|child| {
+                !matches!(
+                    child.header.id,
+                    PLAYER_SETUP | GROUPS | LEADER_MATCH | COMMAND_PACKAGE_STATE
+                )
+            })
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
@@ -3169,7 +3287,7 @@ mod tests {
         let children = parsed
             .children
             .iter()
-            .filter(|child| child.header.id != LEADER_MATCH)
+            .filter(|child| !matches!(child.header.id, LEADER_MATCH | COMMAND_PACKAGE_STATE))
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {

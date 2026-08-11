@@ -840,6 +840,12 @@ pub struct Sim {
     pub collision_blocks: collision_blocks_live::CollisionBlockRuntime,
     pub road_scan: crate::systems::roads::RoadScanState,
     pub groups: groups_guys::Groups,
+    /// Receive-side opcode-0 selection cache, keyed by network `play`. This is persisted in
+    /// DoNSave v13; package-local Group scratch and transport serials are not.
+    pub command_package_state: crate::systems::canonical_group_move_host::CommandPackageState,
+    /// Revision/digest-bound object/type answers absent from the generated World columns.
+    /// This is an installed content adapter, not a second persistent gameplay owner.
+    pub group_move_authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
 
     // ---- step 13: standing AI armies -------------------------------------------------
     pub armies: crate::systems::armies::Armies,
@@ -1448,7 +1454,11 @@ impl Sim {
             step12_visibility_error: None,
             collision_blocks: collision_blocks_live::CollisionBlockRuntime::new(),
             road_scan: crate::systems::roads::RoadScanState::default(),
-            groups: groups_guys::Groups::default(),
+            groups: crate::systems::canonical_group_move_host::retail_fresh_groups(),
+            command_package_state:
+                crate::systems::canonical_group_move_host::CommandPackageState::default(),
+            group_move_authority:
+                crate::systems::canonical_group_move_host::GroupMoveAuthority::default(),
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
@@ -1472,6 +1482,64 @@ impl Sim {
             cover: Coverage::default(),
             traversal_buf: Vec::new(),
         }
+    }
+
+    /// Install the exact Handle-bound formation/type projection consumed by the canonical
+    /// Group→Move package host. Loaded simulations intentionally start without this external
+    /// projection and fail closed until their content owner installs it again.
+    pub fn replace_group_move_authority(
+        &mut self,
+        authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
+    ) {
+        self.group_move_authority = authority;
+    }
+
+    /// Process the bounded canonical command cohort: exactly opcode 0 Group followed by opcode 7
+    /// MoveTo. The package is planned from all owners, revalidated, and assignment-committed as one
+    /// transaction. `lockstep_serial` is retained in the receipt; Group stamps use Game frame.
+    pub fn process_command_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_group_move_host::GroupMovePackageReceipt,
+        crate::systems::canonical_group_move_host::PackageError,
+    > {
+        use crate::systems::canonical_group_move_host::{
+            commit_group_move_package, prepare_group_move_package, NETWORK_PLAYERS,
+        };
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_group_move_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &player_who,
+            (self.map.world.tile_xs, self.map.world.tile_ys),
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_group_move_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            prepared,
+        )
     }
 
     /// Install/replace the revision-bound type and Constants projection consumed by the

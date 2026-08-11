@@ -60,6 +60,8 @@ pub mod borders_fog;
 /// evaluation, city/Japanese scaling, and the Egyptian Wealth side output. Unsupported
 /// building types and type-data shapes fail closed.
 pub mod building_gather;
+/// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
+pub mod canonical_group_move_host;
 /// Tier-C spell-lifecycle and wildlife/RNG primitives recovered from the interrupted
 /// casters/animals lane. Full casting, object allocation, hunting, tick and checksum
 /// integration remain explicit boundaries; see `docs/mechanics/casters-animals.md`.
@@ -213,6 +215,8 @@ pub mod order_dispatch;
 /// `Unit::do_air_patrol` / `Unit::do_patrol` state transitions. Kept separate from the
 /// dispatcher because air physics and group movement are explicit host boundaries.
 pub mod patrol;
+/// Exact `GameInfo::player` flags/owner constants shared by Sim command admission.
+pub mod player_lifecycle_tails;
 /// Canonical frame-zero PlayerSetup owner and atomic manual cohort/team activation.
 pub mod player_setup;
 /// Added by `build:sim-core` when wiring `systems` into `lib.rs`: both modules were
