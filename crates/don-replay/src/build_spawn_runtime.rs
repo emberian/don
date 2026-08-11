@@ -289,6 +289,16 @@ pub fn spawn_canonical_build(
         .live_identity(address)
         .expect("Sim::spawn_build must mirror the preflighted dense append");
     let committed = &sim.builds[row];
+    let committed_encoded_x = i32::from_le_bytes(
+        committed.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+            .try_into()
+            .expect("fixed BuildData encoded-X window"),
+    );
+    let committed_encoded_y = i32::from_le_bytes(
+        committed.other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+            .try_into()
+            .expect("fixed BuildData encoded-Y window"),
+    );
     let registered_ptype = sim.production_runtime.build_types[row]
         .expect("canonical Build spawn registered current ptype");
 
@@ -298,7 +308,7 @@ pub fn spawn_canonical_build(
         type_index: request.type_index,
         object_id,
         snapped_position: (request.snapped_x, request.snapped_y),
-        encoded_position: (encoded_x, encoded_y),
+        encoded_position: (committed_encoded_x, committed_encoded_y),
         build_mark_before,
         build_mark_after: sim.world.objects.slot(owner).mark(Band::Build),
         owner_active_before,
@@ -318,6 +328,7 @@ pub fn spawn_canonical_build(
     );
     assert_eq!(receipt.body_owner, request.owner);
     assert_eq!(receipt.body_object_id, object_id);
+    assert_eq!(receipt.encoded_position, (encoded_x, encoded_y));
     assert_eq!(receipt.body_position, receipt.snapped_position);
     assert_eq!(receipt.registered_ptype, request.type_index);
     assert_eq!(receipt.build_mark_after, receipt.build_mark_before + 1);
