@@ -54,6 +54,7 @@ pub mod fractal_boundary;
 pub mod groups_channel;
 pub mod growth;
 pub mod groups_dynamic;
+pub mod guys_runtime;
 pub mod harness;
 pub mod image;
 pub mod initial;
