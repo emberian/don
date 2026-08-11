@@ -167,3 +167,50 @@ over any candidate space large enough to contain the answer.
 |---|---|---|---|
 | Retail's initial `ScenarioData` is game-setup-independent | corpus | **C [measured]** | channel 14 = `0x09922b90` on the first checksummed turn of 21/21 recordings, five engine builds, six map styles, all team layouts |
 | Complete checksum-visible initial `ScenarioData`, minus two shipped-data strings | `ScenarioFuncSet::init` `0x00a03c30`, sole caller `Game::init` | **C [measured]** | every field in §2 read off the instruction stream; derived state walks 8,321 bytes; two `int_str_array` ordinals (5958, 5959) unavailable locally |
+
+## 7. The two strings, resolved (2026-08-10)
+
+`internal_strings.xml` was not in `ron-data/`. It is now, extracted from the supported
+install and byte-verified against the guest:
+
+| file | size | SHA-256 |
+|---|---:|---|
+| `internal_strings.xml` | 467,764 | `0e57a21f2458141a31acd507c8f0c6e3c42b61da634179939b7c9dedf08215b6` |
+| `tilesets.xml` | 124,334 | `60f0d076863772d03c107eb1aaa0ed123482e22e679fa8c3505d0273988eba26` |
+
+Extraction protocol: base64 the file in the guest with `[Convert]::ToBase64String`, read it
+back through `prlctl exec ... type`, decode locally, and require the SHA-256 to equal the
+guest's `Get-FileHash` before installing. Both files are gitignored proprietary shipped
+data — the protocol is committed, the bytes are not.
+
+**Parse it as XML, not with a line regex.** A `<STRING hash="…">` regex finds 7,622
+elements; `ElementTree` finds 7,630, matching the raw `<STRING` tag count. The eight it
+drops all precede ordinal 5950, so a regex-derived index is off by exactly eight there —
+enough to silently select the wrong string.
+
+With a real parse, §5 step 1 is done and the positional binder predicted above holds:
+
+| ordinal | value | field |
+|---:|---|---|
+| 5958 | `./scenario/scriptlibrary/general_powers.bhs` | `general_powers_script_file` |
+| 5959 | `editor_scratch_file.svx` | `temp_save` |
+
+This is a derivation, not a fit. The two ordinals came from `ScenarioFuncSet::init`'s
+instruction stream with no reference to this file, and the values standing at them match
+the field semantics independently. Guessing by name would have failed: the file also
+contains `.\conquest\temp\ctw_replay_temp_save.SVX` at ordinal 2839, a better-looking
+"temp save" that is not the one the code reads.
+
+§5 steps 2–5 remain open. The single pre-registered 32-bit test against
+`CORPUS_INITIAL_SCENARIO_CHANNEL = 0x09922b90` has not been run, so nothing here claims the
+channel agrees — only that its last missing input is now local.
+
+### `tilesets.xml` was necessary but not sufficient for `world`
+
+Installing it removes `ron-data/tilesets.xml: No such file or directory` from all 61 files
+of the corpus scoreboard, and **no channel moved**: `world` stays at 0 matches over 222,938
+non-trivial compares. The per-file boundary simply advances to the next unported function —
+61 files at `TerrainGroups::fill_fertile`, 6 at `Map::team_continent_partition`, 1 at
+`Map::east_indies_nonplayer_islands`. The missing file was masking that boundary, not
+gating the channel. Read any "blocked on extracting one XML" claim about `world` as
+"blocked on `fill_fertile`, which a missing file was hiding".
