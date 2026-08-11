@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 124,
+  "red": 119,
   "summary": {
     "tick": {
       "total": 29,
@@ -13,18 +13,18 @@
     },
     "orders": {
       "total": 28,
-      "complete": 21,
-      "red": 7
+      "complete": 23,
+      "red": 5
     },
     "group_actions": {
       "total": 42,
-      "complete": 9,
-      "red": 33
+      "complete": 11,
+      "red": 31
     },
     "opcodes": {
       "total": 82,
-      "complete": 46,
-      "red": 36
+      "complete": 47,
+      "red": 35
     },
     "checksums": {
       "total": 15,
@@ -420,9 +420,9 @@
         "name": "GUARD",
         "retail_va": "0x005E5C70",
         "symbol": "Unit::do_guard",
-        "status": "unimplemented",
-        "note": "calls through to do_move",
-        "complete": false
+        "status": "implemented",
+        "note": "exact eleven-branch guard-post/idle/retry transaction; owns the QueuePos::First move insertion and same-tick do_move; mandatory typed host receipt. NOT a do_move delegate: one of 30 direct calls",
+        "complete": true
       },
       {
         "id": 13,
@@ -546,9 +546,9 @@
         "name": "GARRISON",
         "retail_va": "0x005E6B80",
         "symbol": "Unit::do_garrison",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact fifteen-branch admission/approach/capacity/entry transaction; local bare kill, observed containment-chain retirement, mandatory typed host receipt",
+        "complete": true
       },
       {
         "id": 27,
@@ -582,8 +582,8 @@
         "delegates": [
           "return"
         ],
-        "status": "state_wired",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "return",
@@ -594,8 +594,8 @@
           "STRAFE"
         ],
         "delegates": [],
-        "status": "not_on_wire",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "flight",
@@ -1532,8 +1532,8 @@
         "action": "recall",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 36,
@@ -2250,11 +2250,11 @@
         "name": "scenario_data",
         "walker": "ScenarioData::walk_data",
         "element_class": null,
-        "producer": "absent",
+        "producer": "scenario_init_frozen",
         "compares": 222938,
-        "matches": 0,
-        "nontrivial_compares": 0,
-        "best_survived_turns": 0,
+        "matches": 24245,
+        "nontrivial_compares": 222938,
+        "best_survived_turns": 6320,
         "complete": false
       },
       {
@@ -2262,11 +2262,11 @@
         "name": "script_run_time",
         "walker": "RunTimeEnv::walk_data",
         "element_class": null,
-        "producer": "absent",
+        "producer": "sim_bridge",
         "compares": 222938,
-        "matches": 0,
-        "nontrivial_compares": 0,
-        "best_survived_turns": 0,
+        "matches": 60342,
+        "nontrivial_compares": 222938,
+        "best_survived_turns": 18069,
         "complete": false
       }
     ],
@@ -2356,7 +2356,7 @@
         "title": "Arena MODEL 4 has an incomplete retail target-acquisition host",
         "status": "KnownDrift",
         "seam": null,
-        "retail_evidence": "Object::find_auto_target 0x0064DDA0; Object::check_target building tail; crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
+        "retail_evidence": "Unit::find_new_target 0x005FF6A0; Unit::find_melee_target 0x005FF9C0; Object::find_nearby_target 0x00648DA0; Object::check_target building tail; crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
         "complete": false
       },
       {
@@ -2438,8 +2438,9 @@
       {
         "slug": "victory_endgame",
         "description": "game modes, victory, defeat, scoring, and end-game transition",
-        "status": "required",
-        "complete": false
+        "status": "partial",
+        "complete": false,
+        "note": "A match reaches a real end state through the real path: decoded opcode 70/71 -> Player::resign/quit 0x006EDCB0/0x006EDC00 -> Player::leave_game 0x006EE010 -> Leader::defeat 0x006ECB00 -> Game::check_victory 0x005926B0 -> do_frame step 27 Game::process_end_game. Host: tick::lifecycle_host (Sim::tail_command_facts / Sim::apply_tail_command_transaction); evidence: crates/don-sim/tests/victory_endgame_wire.rs, docs/mechanics/victory-endgame-wire.md. Still red: tick 11 children Leader::plan_strategy and Leader::diplomacy are call-counted gaps; score inputs (num_units/num_buildings/territory/encrypted economy) are not all live; drop states 1 and 2 need command row 38 Leader::action_declare 0x006DAB50; the capital-elimination ending stops at LeaderData::find_capital 0x006EB930; Game::process_end_game's statistics/leaderboard/menu tail is a product boundary."
       },
       {
         "slug": "multiplayer_match",

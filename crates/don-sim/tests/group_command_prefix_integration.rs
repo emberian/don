@@ -189,10 +189,13 @@ fn all_seven_live_dispatch_rows_emit_the_exact_open_action_call() {
             )
         );
     }
-    assert_eq!(bridge.stats.acted, 0);
-    assert_eq!(bridge.stats.open_group_action_tails, 7);
+    // RECALL is no longer an open tail: `ObjectTable` now owns the aircraft/containment
+    // columns and commits `Group::action_recall` (here, its exact empty-group arm). The
+    // other six rows still have no host receiver.
+    assert_eq!(bridge.stats.acted, 1);
+    assert_eq!(bridge.stats.open_group_action_tails, 6);
     assert_eq!(bridge.stats.group_prefix_noops, 0);
-    assert_eq!(bridge.stats.unported, 7);
+    assert_eq!(bridge.stats.unported, 6);
     for name in [
         "siege_attack",
         "swarm_around",
@@ -258,7 +261,6 @@ fn closure_table_marks_prefixes_state_wired_and_no_action_complete() {
         (24, "queue_up"),
         (25, "build"),
         (28, "flight"),
-        (35, "recall"),
     ] {
         let action = ActionDef::find(name).unwrap();
         assert_eq!(action.port, Port::StateWired, "opcode {opcode}");

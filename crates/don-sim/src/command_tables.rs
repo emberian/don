@@ -19,6 +19,12 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         installs: &[],
         delegates: &[],
         port: Port::NotOnTheWire,
+        // `Group::action_hotkey`'s body IS opcode 34's inlined `clear == 0` arm
+        // (0x009475B8..0x009475F2 is instruction-identical), so the behaviour is
+        // reproduced — but `process_hotkey` calls `HotKeyGroups::copy_group` directly and
+        // never dispatches this action. Its only caller is `Console::on_key_down`, the
+        // local UI. Body-present and wire-dispatched are different claims; `Port` is the
+        // second one.
     },
     ActionDef {
         name: "recall",
@@ -27,7 +33,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[OrderIndex::Strafe],
         delegates: &["return"],
-        port: Port::StateWired,
+        port: Port::Complete,
     },
     ActionDef {
         name: "return",
@@ -36,7 +42,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[OrderIndex::Strafe],
         delegates: &[],
-        port: Port::NotOnTheWire,
+        port: Port::Complete,
     },
     ActionDef {
         name: "flight",

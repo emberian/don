@@ -1099,3 +1099,143 @@ themselves — the sibling finished that migration. As of the last local run:
   `only_opcode_zero_is_really_a_selection_command` (`hotkey` is `Complete`, the test expects
   `NotOnTheWire`). Both count `command_tables.rs` `Port` promotions; `op-econ` never touched
   `command_tables.rs`. Owner of that promotion: those two assertions are yours.
+
+### lane: move-near (`Group::action_move_near` `0x00704990`, wave 3)
+
+Claimed `cv task` row: `closure/group: move_near`. This is the root of the movement family's
+dependency graph and the only body in it with no `re/decomp-all/` file.
+
+Files I will write:
+
+- `crates/don-sim/src/systems/group_move_near_split.rs` — **new module.** The recovered
+  selection-split prelude that `Group::action_move_near` runs between the entry gates and
+  the `buildings` refusal.
+- `crates/don-sim/tests/group_move_near_split.rs` — **new test file.**
+- `crates/don-sim/src/command.rs` — **minimal hunks only**: the `action_move_near` body
+  (split call + `buildings` refusal + the `normalize_for_action` removal), the one line in
+  `action_form` that also called `normalize_for_action`, the now-dead
+  `Action::normalize_for_action` itself, four defaulted `Fleet` methods, one `#[path]`
+  module declaration. **`systems/mod.rs` is not touched.**
+- `docs/mechanics/group-action-move-near.md` — **new doc.**
+- `docs/mechanics/group-action-entry.md` — §5's first bullet and §6's first bullet only
+  (they explicitly defer this work to a later lane; I am closing what they defer).
+
+NOT touching: `tick.rs`, `command_tables.rs`, `order_dispatch.rs`, `leaders.rs`,
+`groups_guys.rs`, `group_action_entry.rs`, any crate other than `don-sim`.
+
+**FIRST FINDING (the reason this lane exists): `Group::action_move_near` `0x00704990` now
+has a full decompilation.** `re/decomp-all/` is capped at 8,192 body bytes by
+`re/scripts/BulkDecomp.java`, which is why the 9,205-byte body was missing. Ghidra headless
+(`brew` ghidra 12.1.2, `analyzeHeadless <copy of re/ghidra> ron -process -noanalysis
+-postScript DecompileOne.java 00704990 900 <out>`) decompiles it in seconds. I dropped the
+result at `re/decomp-all/00704990.c` (that directory is gitignored, so this is a local
+corpus repair, not a commit). Any lane that needs one of the other `skipped_large` bodies
+can do the same — do not assume "no file" means "not decompilable".
+
+### FINDING (lane victory-endgame) — **HEAD does not build; every clean-HEAD remote gate is broken**
+
+`git rev-parse HEAD` = `6f6e8f20` declares two modules whose files were **never committed**:
+
+```
+crates/don-sim/src/command.rs:134  pub mod air_containment_host;      -> systems/air_containment_host.rs   (untracked)
+crates/don-sim/src/command.rs:140  pub mod economy_group_actions;     -> systems/economy_group_actions.rs  (untracked)
+```
+
+`tools/swarm-cargo-remote` fetches that exact commit and builds it clean, so **every** lane's
+remote submission dies with `error: couldn't read
+crates/don-sim/src/systems/air_containment_host.rs`, whatever it overlays. Same for
+`git archive HEAD` into a scratch tree, which is the other standard workaround.
+
+Both files exist in the shared working tree and are not gitignored, so the fix for a lane is
+to add them to its own submission:
+
+```sh
+tools/swarm-cargo-remote submit persvati <lane> \
+  --path crates/don-sim/src/systems/air_containment_host.rs \
+  --path crates/don-sim/src/systems/economy_group_actions.rs \
+  ... your own --path files ...
+```
+
+Your gate is then "HEAD + those two sibling files + yours", which is worth saying out loud in
+your return. **Orchestrator**: committing the two files fixes it for everybody.
+
+### FINDING (lane victory-endgame) — `decide_lifecycle` drops its `suffix` on the Boundary arm
+
+`crates/don-sim/src/systems/tail_command_transactions.rs::decide_lifecycle` takes `suffix`
+and pushes it only in the `clean` (`TailDecision::Apply`) arm; the `Boundary` arm never uses
+it. The only suffix in tree is `TailPresentationReceipt::SystemQuitCallback`, and row 71
+reaches the `Boundary` arm precisely when the quit defeats someone — i.e. the product exit
+callback is dropped in exactly the case that matters. Presentation-only, so no simulation
+state is lost, and this lane did **not** work around it by re-deriving the predicate in its
+own host. op-life's file, op-life's call.
+
+### FINDING (lane victory-endgame) — `LeaderData::find_capital` `0x006EB930` is decoded; do not re-derive
+
+Full write-up in `docs/mechanics/victory-endgame-wire.md` §5. Short version:
+`find_capital(int* out_city, int* out_who, int skip_city, int skip_who)`; `[0x00C061D4]` is a
+`PtrArray<City>[8]`, stride `0x1C`, elements at `+0x10`; `LeaderData+0x408` is that leader's
+city count; pass 1 wants `City+0x04 & 1` and `& 0x10` among own cities, pass 2 wants
+`City+0x04 & 1` and `City+0x68 & (1 << this->who)` among the other seven leaders; fallthrough
+writes `-1`. **Not ported**: `Sim` owns no City band, and Ghidra's pass-2 leader guard reads a
+loop-invariant address that has not been confirmed against capstone. It stays
+`LifecycleBoundary::FindCapitalForDefeat`.
+
+### lane: victory-endgame — RESULT, and the hook op-life asked for
+
+**The wire now reaches the end game.** `crates/don-sim/src/systems/lifecycle_host.rs`
+(mounted from `tick.rs`, `systems/mod.rs` untouched) adds
+
+```rust
+Sim::tail_command_facts(&self, &TailCommandRequest) -> TailCommandFacts
+Sim::apply_tail_command_transaction(&mut self, &TailCommandRequest) -> SimTailReceipt
+```
+
+and executes `LifecycleCall::LeaderDefeat` through `victory_score::Leaders::defeat`, which is
+the `Leader::defeat` `0x006ECB00` op-life could plan but not run. A decoded opcode-70 packet
+now goes `Player::resign` → `leave_game(6)` → `Leader::defeat` → `Game::check_victory`
+`0x005926B0` → `GAME_OVER` + `VICTORY_RESOLVED` → `do_frame` step 27 `Game::process_end_game`
+consumes the latch, once. Full write-up: `docs/mechanics/victory-endgame-wire.md`.
+
+Gates (both green):
+
+* shared working tree — `tools/swarm-cargo victory test -p don-sim --test victory_endgame_wire`
+  → `8 passed; 0 failed`.
+* clean `6f6e8f2` + `air_containment_host.rs` + `economy_group_actions.rs` + this lane's four
+  files — `cargo test -p don-sim --lib` → `1671 passed; 0 failed; 2 ignored`, and
+  `--test victory_endgame_wire` → `8 passed`.
+* mutation sweep: 8 seeded, 7 killed, 1 equivalent (the row-71 prefix's final
+  `semaphore.flags = 0` is unobservable — `Player::resign`'s local arm rewrites it a few
+  instructions later). Table in the doc §6.
+
+**`swarm-cargo-remote` is unusable this wave** — see the HEAD-does-not-build finding above.
+Chasing it with overlays cascades: `mod.rs` pulls in `leader_process_taunt.rs`, which needs
+an unlanded `leaders.rs`, which then exposes `guard_dispatch.rs` needing unlanded
+`order_dispatch.rs` fields. Three submissions, three different sibling-in-flight failures,
+none mine. Reporting rather than working around.
+
+**API CHANGE, as landed** (all additive; `cargo test -p don-sim --lib` is 1671/0 on a clean
+baseline, so nothing in tree breaks):
+
+* `victory_score::LeaderState` gains `multi_diff: i32` (`LeaderData+0x50`) and it is walked
+  in engine field order between `score_combat` `+0x44` and `diplos` `+0x74`. Channel-8 walk
+  bytes therefore change; no test froze a constant hash of them.
+* `victory_score::DefeatType::from_i32`.
+* `tick::Sim` gains `pub players: Option<lifecycle_host::PlayerTable>`, default `None`. With
+  `None`, `tail_command_facts` returns `NoExternalFacts` and rows 70/71/80 keep exactly
+  op-life's whole-row boundary.
+* `tick::lifecycle_host` is a new public module of `crate::tick`.
+
+**For the `don-env` / RL lane**: `Sim::players` is what an episode needs to install before a
+policy can resign or be dropped. `PlayerTable::new()` seats `players[i].play == i` and leaves
+`console_play`/`console_who` at `-1`, which fails closed — a **remote** departure
+(`play != Console::play`) reaches `departure_sound`, which indexes `leaders[Console::who]`,
+so a host with no console cannot resign a non-local player at all. Seat a console.
+
+**Still red for `victory_endgame`, precisely** (§7 of the doc): step 11's
+`Leader::plan_strategy` and `Leader::diplomacy` are still call-counted gaps; several score
+inputs are not live; drop states 1 and 2 need row 38 `Leader::action_declare` `0x006DAB50`;
+the capital-elimination ending stops at `LeaderData::find_capital` `0x006EB930`;
+`Game::process_end_game`'s statistics/leaderboard/menu tail is a product boundary.
+`schema/simulation-closure.json`'s `victory_endgame` row moved `required` → **`partial`**
+with that list as its `note`; `complete` stays `false`, so every `summary` count is
+unchanged and the file was **not** regenerated.

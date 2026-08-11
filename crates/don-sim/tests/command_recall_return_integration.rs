@@ -183,7 +183,7 @@ fn opcode_35_executes_recall_and_return_under_one_host_commit() {
     assert_eq!(bridge.stats.orders_cleared, 1);
     assert_eq!(bridge.stats.orders_installed, 1);
     let recall = ActionDef::find("recall").unwrap();
-    assert_eq!(recall.port, Port::StateWired);
+    assert_eq!(recall.port, Port::Complete);
     let recall_index = GROUP_ACTIONS
         .iter()
         .position(|action| action.name == "recall")

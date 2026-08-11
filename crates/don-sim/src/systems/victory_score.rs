@@ -165,6 +165,30 @@ pub enum DefeatType {
     Hero = 10,
 }
 
+impl DefeatType {
+    /// `Leader::defeat`'s first argument arrives as a raw `int` from every caller that is
+    /// not this module — `Player::resign` pushes 6 at `0x006EDE3A`, `Player::drop` pushes 7
+    /// at `0x006EDFF5`, `Player::leave_game`'s capital arm pushes 1 at `0x006EE0C4`. An
+    /// out-of-range value is not a `DefeatTypeIndex` and is refused rather than coerced.
+    pub fn from_i32(v: i32) -> Option<Self> {
+        use DefeatType::*;
+        Some(match v {
+            0 => Conquest,
+            1 => Capital,
+            2 => SuddenDeathCapital,
+            3 => SuddenDeath,
+            4 => MusicalChairs,
+            5 => Victory,
+            6 => Resign,
+            7 => Disconnect,
+            8 => Armageddon,
+            9 => Scenario,
+            10 => Hero,
+            _ => return None,
+        })
+    }
+}
+
 /// `EliminationIndex` — `GameInfo::elimination` (`Game+0x37`).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -772,6 +796,11 @@ pub struct LeaderState {
     /// `+0x44` `score_combat` — never written by the compute path in retail.
     pub score_combat: i32,
 
+    /// `+0x50` `multi_diff`. `DropControl::process_drop` state 3 writes 3 here
+    /// (`mov dword ptr [leader + 0x50], 3`, `0x0095967A`) as it clears
+    /// [`leader_flag::HUMAN`]: the dropped player's leader continues under AI control.
+    pub multi_diff: i32,
+
     /// `+0x74` `diplos[8]`.
     pub diplos: [i32; NUM_LEADERS],
     /// Exact fields initialized by the remaining `Leader::init` diplomacy loop from
@@ -866,6 +895,7 @@ impl Default for LeaderState {
             score_research: 0,
             score_wonders: 0,
             score_combat: 0,
+            multi_diff: 0,
             diplos: [Diplo::War as i32; NUM_LEADERS],
             init_diplomacy: super::leader_init_diplomacy_loop::LeaderInitDiplomacyRow::default(),
             popwin_stamp: 0,
@@ -963,6 +993,8 @@ impl LeaderState {
             self.score_research,
             self.score_wonders,
             self.score_combat,
+            // `+0x50`, between `score_combat` `+0x44` and `diplos` `+0x74`.
+            self.multi_diff,
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }

@@ -105,8 +105,16 @@ pub mod fight;
 /// Exact `Unit::do_follow` planner and atomic host receipt. The live order dispatcher owns
 /// its concrete queue/effect integration.
 pub mod follow_executor;
+/// `GameDaemon::calc_danger` `0x00732D10` and `GameDaemon::do_danger` `0x00732390` — the
+/// step-12 child that rewrites the eight `World::danger` planes.
+pub mod game_daemon_calc_danger;
 /// Exact step-12 GameDaemon scheduler state and child-call transaction.
 pub mod game_daemon_step12;
+/// `do_job` arm 26: the snapshot-bound atomic host boundary and queue integration that turns
+/// [`garrison_order`]'s pure transcription into a dispatched `Unit::do_garrison`.
+pub mod garrison_dispatch;
+/// Source-exact `Unit::do_garrison` `0x005E6B80` branch/effect transcription and install plan.
+pub mod garrison_order;
 /// Exact ordinary Farm/Camp/Mine on-map attachment, building approach, queued movement,
 /// and payout-activation boundary. It composes the gathering chain with both retail
 /// collision views and never turns attachment into containment or teleportation.
@@ -122,7 +130,16 @@ pub mod gathering;
 /// retail hierarchy resolver to checksum-visible Guy graphics/turret state.
 pub mod graphics_turret;
 pub mod groups_guys;
+/// `do_job` arm 12: the snapshot-bound atomic host boundary, concrete payload and same-tick
+/// movement integration that turns [`guard_order`]'s pure transcription into a dispatched
+/// `Unit::do_guard`.
+pub mod guard_dispatch;
+/// Source-exact `Unit::do_guard` `0x005E5C70` branch/effect transcription and install plan.
+pub mod guard_order;
 pub mod held_target;
+/// `Group::action_hotkey` `0x006FA7A0` — the control-group store `Console::on_key_down`
+/// reaches, and the same state transition opcode 34 inlines.
+pub mod hotkey_group_action;
 /// Recovered from an interrupted lane and audited as a Tier-C goody-box registry/checksum
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
 /// remain explicit boundaries; see `docs/mechanics/items.md`.
@@ -131,6 +148,12 @@ pub mod items;
 pub mod leader_init_diplomacy;
 /// Complete source-only `Leader::init` diplomacy/shared-vision eight-target loop.
 pub mod leader_init_diplomacy_loop;
+/// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
+/// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
+/// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp
+/// the six `LeaderData` AI build-priority scalars. Presentation leaves through a typed
+/// outbox. `Leader::action_respond` `0x006D03C0` is the one named boundary.
+pub mod leader_process_taunt;
 /// Added by `economy-step8`. `Leaders::process_all` `0x006ED2A0` — step 8 of `do_frame`,
 /// the caller `economy.rs` never had, plus the second level `Leader::gather` reaches:
 /// the `BitMask<44>` union that arms the two stat-dirty bits, `calc_wall_stats`,

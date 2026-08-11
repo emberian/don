@@ -164,7 +164,9 @@ use crate::systems::follow_executor::{
     FollowActorFacts, FollowExecutorEffect, FollowExecutorReceipt, FollowExecutorRequest,
     FollowExecutorTransactionStatus, FollowIdentity, FollowMoveFacingTail, FollowOrderState,
 };
+use crate::systems::garrison_dispatch::GarrisonHostError;
 use crate::systems::groups_guys::{GuyData, GuyEnv, UnitTypeStats};
+use crate::systems::guard_dispatch::GuardHostError;
 use crate::systems::movement::{
     self, vector_dist, Body, MoveStep, MoveTurnProfile, PathData, PathFinder, PathStack, PathUnit,
     SearchArgs, SearchResult, UPathOutcome, UnitWorld,
@@ -506,6 +508,19 @@ pub struct OrderRec {
     /// Retail stores these in dynamically-sized class instances; keeping the payload on the
     /// queue node preserves the same per-order ownership and permits routes of any length.
     pub patrol_payload: PatrolPayload,
+
+    /// Complete concrete payload for `GuardOrder` (order 12, `sizeof=56`). `dx/dy` and the
+    /// snapped `guard_x/guard_y` post are not layout-compatible with `MoveOrder`'s `x/y`, and
+    /// `idle`/`retry` are separate words from `MoveOrder::retry`, so GUARD gets its own node
+    /// payload rather than borrowing the generic union.
+    /// See [`crate::systems::guard_dispatch`].
+    pub guard: Option<crate::systems::guard_order::GuardOrderState>,
+
+    /// Complete concrete payload for `GarrisonOrder` (order 26, `sizeof=36`). The `search`
+    /// word decides whether a full building looks for an alternate in the same city and is
+    /// therefore checksum-visible state, not a call argument.
+    /// See [`crate::systems::garrison_dispatch`].
+    pub garrison: Option<crate::systems::garrison_order::GarrisonOrderState>,
 }
 
 /// Concrete storage owned by the three coordinate-target executor classes.
@@ -600,6 +615,8 @@ impl Default for OrderRec {
             form_order: None,
             targeted_payload: TargetedOrderPayload::None,
             patrol_payload: PatrolPayload::None,
+            guard: None,
+            garrison: None,
         }
     }
 }
@@ -2119,6 +2136,53 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::special_anim_commit requires a successful SPECIAL_ANIM preflight")
     }
 
+    /// Acquire the object/type/terrain/trig/search facts, the canonical RNG observation, and
+    /// the capability to publish every step reachable from this GUARD snapshot.
+    ///
+    /// The returned receipt is bound to a
+    /// [`crate::systems::guard_dispatch::GuardHostSnapshot`]; the dispatcher recomputes both
+    /// the snapshot's observable half and the plan itself before publishing anything.
+    fn guard_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<crate::systems::guard_dispatch::GuardDispatchReceipt, GuardHostError> {
+        Err(GuardHostError::Unavailable)
+    }
+
+    /// Apply one non-local GUARD effect in the planner's order. Queue insertion, the inserted
+    /// leg's `pause`, the concrete payload writes and the same-tick `Unit::do_move` stay with
+    /// the dispatcher and never reach this callback. A validated receipt guarantees it.
+    fn guard_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _step: crate::systems::guard_order::GuardHostStep,
+    ) {
+        panic!("WorkWorld::guard_effect requires a validated GUARD receipt")
+    }
+
+    /// Acquire every admission, diplomacy, capacity, city, terrain and containment fact this
+    /// GARRISON snapshot can reach, plus the capability to publish the resulting steps.
+    fn garrison_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<crate::systems::garrison_order::GarrisonExecutorReceipt, GarrisonHostError> {
+        Err(GarrisonHostError::Unavailable)
+    }
+
+    /// Apply one non-local GARRISON effect. Only the bare `kill_current_order(0)` is local;
+    /// containment, search, feedback and the chain retirement all arrive here.
+    fn garrison_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _step: crate::systems::garrison_order::GarrisonHostStep,
+    ) {
+        panic!("WorkWorld::garrison_effect requires a validated GARRISON receipt")
+    }
+
     /// Acquire all branch facts and the capability to commit every effect which REPAIR can
     /// reach. This callback is read-only with respect to simulation state. The default makes
     /// a generic movement host fail closed with no animation, queue, target, or economy write.
@@ -2332,7 +2396,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     //  9 AWAIT_BOARD     Unit::do_await_board 0x005ED040
     ArmStatus::Implemented,     // 10 ATTACK          Unit::do_attack 0x005F1B80
     ArmStatus::Implemented,     // 11 FOLLOW          Unit::do_follow 0x005E65D0
-    ArmStatus::Unimplemented,   // 12 GUARD           Unit::do_guard 0x005E5C70
+    ArmStatus::Implemented,     // 12 GUARD           Unit::do_guard 0x005E5C70
     ArmStatus::Implemented,     // 13 REPAIR          Unit::do_repair 0x005EE420
     ArmStatus::Unimplemented,   // 14 CAST_SPELL      Unit::do_cast 0x005EBFE0
     ArmStatus::Unimplemented,   // 15 TRADE_ROUTE     Unit::do_trade 0x005ED270
@@ -2349,7 +2413,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     // red until target relation, ENTER/Airbase-EXIT object, Guy, terrain, containment/death, and
     // RNG tails land.
     ArmStatus::Unimplemented, // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
-    ArmStatus::Unimplemented, // 26 GARRISON        Unit::do_garrison 0x005E6B80
+    ArmStatus::Implemented,   // 26 GARRISON        Unit::do_garrison 0x005E6B80
     ArmStatus::Implemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0
 ];
 
@@ -4767,6 +4831,8 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::AttackGround => do_attack_ground(u, w, cov),
         OrderIndex::AirAttackGround => do_air_attack_ground(u, w, cov),
         OrderIndex::SpecialAnim => do_special_anim(u, w, cov),
+        OrderIndex::Guard => crate::systems::guard_dispatch::do_guard(u, w, pf, cov),
+        OrderIndex::Garrison => crate::systems::garrison_dispatch::do_garrison(u, w, cov),
         // Arm 5 has no case label. Doing nothing here is faithful, not missing.
         OrderIndex::Patrol => ArmResult::Empty,
         _ => {
@@ -5637,7 +5703,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_twenty_two_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_twenty_four_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -5650,8 +5716,12 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Twenty-one implemented; PATROL's missing jump-table arm is faithfully empty.
-        assert_eq!((implemented, empty, absent), (21, 1, 6));
+        // Twenty-three implemented; PATROL's missing jump-table arm is faithfully empty.
+        // GUARD (12) and GARRISON (26) joined on 2026-08-11. The four this dispatcher still
+        // does not carry are CAST_SPELL (14), TRADE_ROUTE (15), STRAFE (16) and
+        // SPECIAL_ANIM (25) — the last of which dispatches but stays red because its
+        // production host cannot serve most branches.
+        assert_eq!((implemented, empty, absent), (23, 1, 4));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -7738,12 +7808,14 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // Six unimplemented arms, each hit once. The smoke actors take all three grouped
+        // Four unimplemented arms, each hit once. The smoke actors take all three grouped
         // executors' exact ungrouped conversion; grouped actors without a snapshot fail
         // closed at the mandatory host seam. Both boarding and both live patrol arms run,
-        // as do the recovered FOLLOW, REPAIR, CHANGE_FORM, and THINK executors.
-        assert_eq!(cov.unimplemented, 6);
-        assert!((cov.covered_fraction() - 22.0 / 28.0).abs() < 1e-12);
+        // as do the recovered FOLLOW, REPAIR, CHANGE_FORM, THINK, GUARD and GARRISON
+        // executors — the last two reject a payload-free smoke order at their own seam,
+        // which is a dispatch, not a miss.
+        assert_eq!(cov.unimplemented, 4);
+        assert!((cov.covered_fraction() - 24.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]

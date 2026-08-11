@@ -10,7 +10,7 @@
 //! remains refused.
 
 use crate::objects::Band;
-use crate::systems::{economy, leaders, production};
+use crate::systems::{economy, leader_process_taunt, leaders, production};
 use crate::tick::{Sim, NUM_LEADERS};
 use crate::world::OBJ_FLAG_ACTIVE;
 
@@ -73,6 +73,12 @@ fn leader_has_only_mirrors(
         // non-default value here is state without a save owner and is refused.
         && actual.city_num == fresh.city_num
         && actual.build_stats == fresh.build_stats
+        // The `LeaderData` slice `Leader::process_taunt` `0x006B8CC0` writes: `gift_stamp`,
+        // `last_taunt`/`taunt_frame`, `tributes`, the six `+0x794..+0x7A8` AI scalars,
+        // `Personality::raid` and `dip[8]`. DoNSave has no chunk for any of them here, and
+        // `dip[].offers` is a two-sided ledger — reloading one side of it without the other
+        // is worse than refusing, so a non-default value is refused.
+        && actual.taunt == fresh.taunt
 }
 
 fn expected_unit_view(sim: &Sim, row: u32) -> Option<leaders::StatObject> {
@@ -169,6 +175,13 @@ pub(super) fn is_supported_derived_snapshot(sim: &Sim) -> bool {
     // its two provenance digests or admitted rows, so accepting it here would reload a Sim that
     // answers the same dirty-edge query differently.
     if sim.step8_env.unit_type_stats.is_some() {
+        return false;
+    }
+    // `Console::who`, `GameInfo::team_style`, `LeaderData::type_avail`/`is_neutral` and the
+    // `internal_random` draw queue are external runtime answers with no DoNSave chunk, in
+    // the same position as the type catalog above: accepting them would reload a `Sim` that
+    // answers a taunt dispatch differently.
+    if sim.step8_env.taunt != leader_process_taunt::TauntEnv::default() {
         return false;
     }
 

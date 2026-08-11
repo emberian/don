@@ -273,7 +273,28 @@ mod tests {
                 }] += 1;
                 counts
             });
-        assert_eq!(counts, [9, 14, 0, 12, 0, 7]);
+        assert_eq!(counts, [12, 14, 0, 11, 0, 5]);
+    }
+
+    #[test]
+    fn the_self_contained_air_receivers_are_complete_and_eject_all_is_not() {
+        // Reference host: `ObjectTable` owns the aircraft/containment columns and commits
+        // `Group::action_recall` + `Group::action_return`; `Group::action_hotkey` is the
+        // receiver form of the state transition opcode 34 already writes.
+        for name in ["hotkey", "recall", "return"] {
+            assert_eq!(
+                don_sim::command::ActionDef::find(name).unwrap().port,
+                Port::Complete,
+                "{name}"
+            );
+        }
+        // `Group::action_eject_all` bottoms out in `Unit::come_out` 0x00617C10 (7,201 of
+        // 9,925 bytes unrecovered) and the general body of `Object::eject_contents`
+        // 0x0064CD20. It must not be promoted until those land.
+        assert_eq!(
+            don_sim::command::ActionDef::find("eject_all").unwrap().port,
+            Port::StateWired
+        );
     }
 
     #[test]
@@ -285,7 +306,6 @@ mod tests {
             "queue_up",
             "build",
             "flight",
-            "recall",
         ] {
             assert_eq!(
                 don_sim::command::ActionDef::find(name).unwrap().port,

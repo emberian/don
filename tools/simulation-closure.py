@@ -13,16 +13,37 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "schema" / "simulation-closure.json"
 
+# (slug, description, status, note).
+#
+# `status` is one of "required" (nothing of the stage executes yet) or "partial" (the stage
+# has a real executable path end to end, with the remaining blockers named in `note`).
+# `complete` is computed below and is deliberately NOT settable here: a global stage only
+# goes complete once every domain row it depends on is complete, which no stage is.
 GLOBAL_STAGES = [
-    ("initial_world", "deterministic map, starts, players, nations, teams, diplomacy"),
-    ("save_load", "complete save/load and resumed deterministic execution"),
-    ("scenario_runtime", "BHS/scenario execution wired into the retail tick"),
-    ("victory_endgame", "game modes, victory, defeat, scoring, and end-game transition"),
-    ("multiplayer_match", "owned-client setup, launch, lockstep turns, checksums, drop/rejoin"),
-    ("frontend_game_flow", "setup through completed match without retail UI"),
-    ("rl_complete_dynamics", "honest actions over complete shared game dynamics"),
-    ("ai_evaluation", "non-cheating full-game opponents and evaluation matrix"),
-    ("content_release", "legal assets/content path, installer, packaging, release audit"),
+    ("initial_world", "deterministic map, starts, players, nations, teams, diplomacy",
+     "required", ""),
+    ("save_load", "complete save/load and resumed deterministic execution", "required", ""),
+    ("scenario_runtime", "BHS/scenario execution wired into the retail tick", "required", ""),
+    ("victory_endgame", "game modes, victory, defeat, scoring, and end-game transition",
+     "partial",
+     "A match reaches a real end state through the real path: decoded opcode 70/71 -> "
+     "Player::resign/quit 0x006EDCB0/0x006EDC00 -> Player::leave_game 0x006EE010 -> "
+     "Leader::defeat 0x006ECB00 -> Game::check_victory 0x005926B0 -> do_frame step 27 "
+     "Game::process_end_game. Host: tick::lifecycle_host (Sim::tail_command_facts / "
+     "Sim::apply_tail_command_transaction); evidence: crates/don-sim/tests/"
+     "victory_endgame_wire.rs, docs/mechanics/victory-endgame-wire.md. Still red: "
+     "tick 11 children Leader::plan_strategy and Leader::diplomacy are call-counted gaps; "
+     "score inputs (num_units/num_buildings/territory/encrypted economy) are not all live; "
+     "drop states 1 and 2 need command row 38 Leader::action_declare 0x006DAB50; the "
+     "capital-elimination ending stops at LeaderData::find_capital 0x006EB930; "
+     "Game::process_end_game's statistics/leaderboard/menu tail is a product boundary."),
+    ("multiplayer_match", "owned-client setup, launch, lockstep turns, checksums, drop/rejoin",
+     "required", ""),
+    ("frontend_game_flow", "setup through completed match without retail UI", "required", ""),
+    ("rl_complete_dynamics", "honest actions over complete shared game dynamics", "required", ""),
+    ("ai_evaluation", "non-cheating full-game opponents and evaluation matrix", "required", ""),
+    ("content_release", "legal assets/content path, installer, packaging, release audit",
+     "required", ""),
 ]
 
 
@@ -110,10 +131,11 @@ def build(rows: list[list[str]], replay: dict) -> dict:
         else:
             raise RuntimeError(f"unknown don-closure row {kind!r}")
 
-    for slug, description in GLOBAL_STAGES:
-        domains["global_stages"].append({
-            "slug": slug, "description": description, "status": "required", "complete": False,
-        })
+    for slug, description, status, note in GLOBAL_STAGES:
+        row = {"slug": slug, "description": description, "status": status, "complete": False}
+        if note:
+            row["note"] = note
+        domains["global_stages"].append(row)
 
     expected = [29, 28, 42, 82, 15]
     actual = [len(domains[x]) for x in ("tick", "orders", "group_actions", "opcodes", "checksums")]

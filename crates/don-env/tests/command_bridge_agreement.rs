@@ -536,7 +536,11 @@ fn the_ported_share_of_wire_reachable_actions_is_recorded() {
         .iter()
         .filter(|a| a.port != cb::Port::NotOnTheWire)
         .collect();
-    assert_eq!(wire_reachable.len(), 35);
+    // 36, not 35: `return` left `NotOnTheWire` when the self-contained group-receiver lane
+    // gave it a host. It is not dispatched directly by an opcode, but `recall` — which is
+    // (opcode 35) — delegates to it, so it is genuinely wire-reachable. `hotkey` did NOT
+    // move: its body is inlined into opcode 34's handler, which never dispatches the action.
+    assert_eq!(wire_reachable.len(), 36);
     let ported = wire_reachable
         .iter()
         .filter(|a| {
@@ -546,8 +550,9 @@ fn the_ported_share_of_wire_reachable_actions_is_recorded() {
             )
         })
         .count();
+    // 36 for the same reason: `return` is now hosted and wire-reachable via `recall`.
     assert_eq!(
-        ported, 35,
+        ported, 36,
         "ported action count changed; update docs/assembly/command-bridge.md"
     );
 }

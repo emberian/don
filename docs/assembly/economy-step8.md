@@ -30,7 +30,7 @@ Concretely, these execute today and did not this morning:
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
 | the three grace timers | `0x006ED35F`..`0x006ED3CE` | absent | ported |
-| the taunt scan | `0x006ED3CE`..`0x006ED405` | named `Gap::LeaderProcessTaunt` | dispatch ported, body not |
+| the taunt scan | `0x006ED3CE`..`0x006ED405` | named `Gap::LeaderProcessTaunt` | dispatch ported, and (since the `taunt-body` lane) the whole 2,340-byte `Leader::process_taunt` body with it — see [`leader-process-taunt.md`](leader-process-taunt.md); `Leader::action_respond` `0x006D03C0` remains |
 
 `cargo run -p don-sim --example step8 -- 27000` is a real execution path outside the test
 harness. Its output is §4.

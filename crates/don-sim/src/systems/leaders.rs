@@ -84,8 +84,14 @@
 //!   retail function, which is the `adler32`-implemented-nine-times failure. [`Step8Trace`]
 //!   records the slots at which retail calls it, in retail's order, so the scheduler can
 //!   drive the existing port from here.
-//! * **`Leader::process_taunt` `0x006B8CC0`** (2,340 B) is AI chat. Dispatches are recorded
-//!   in [`Step8Trace::taunts`] and the body is not ported.
+//! * **`Leader::process_taunt` `0x006B8CC0`** (2,340 B) is **not** AI chat, and this file
+//!   said so for a wave. Its complete body now lives in
+//!   [`crate::systems::leader_process_taunt`]: codes 1–5 stage a two-sided diplomatic
+//!   tribute through `Leader::action_clear_all`/`action_offer`, codes 7–16 rewrite and clamp
+//!   the six `LeaderData` AI build-priority scalars at `+0x794..+0x7A8` plus
+//!   `Personality::raid`, and only code 6 is presentation. Dispatches are still recorded in
+//!   [`Step8Trace::taunts`]; [`Step8Trace::taunt_pass`] now says how much of each executed.
+//!   The one body left inside it is `Leader::action_respond` `0x006D03C0` (3,988 B).
 //! * The four virtual slots are now resolved from the retail vtables. `+0x4C` is
 //!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
 //!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band's complete
@@ -119,6 +125,7 @@ use crate::systems::economy::{
     self, pct, CapGates, DoGatherContext, EconRules, GatherInputs, LeaderEcon, Payout,
     NUM_RESOURCES,
 };
+use crate::systems::leader_process_taunt as taunt;
 use crate::systems::leaders_process_event_frame_step19 as step19;
 
 // ===========================================================================================
@@ -179,10 +186,16 @@ pub mod offsets {
     /// `0x006ED2F1` — 8 dwords, `diplo[other_slot]`.
     pub const DIPLO: usize = 0x074;
     /// `0x006ED3F1` (`[edi - 0x20]`) — 8 dwords, first argument of `Leader::process_taunt`.
+    /// The PDB calls it `LeaderData::incoming_taunt`, an `enum TauntRequest`.
     pub const TAUNT_KIND: usize = 0x394;
-    /// `0x006ED3ED` (`[edi]`) — 8 dwords, second argument.
+    /// `0x006ED3ED` (`[edi]`) — 8 dwords, second argument. The PDB calls it
+    /// `LeaderData::incoming_taunt_who`, and every use inside `Leader::process_taunt`
+    /// treats it as a leader slot, not as an opaque argument.
     pub const TAUNT_ARG: usize = 0x3B4;
     /// `0x006ED3E2` (`[edi + 0x20]`) — 8 dwords, the frame the taunt is stamped for.
+    /// `LeaderData::incoming_taunt_frame`. Distinct from `LeaderData::taunt_frame` at
+    /// `+0x374`, which is what the *body* stamps; see
+    /// [`crate::systems::leader_process_taunt::offsets`].
     pub const TAUNT_FRAME: usize = 0x3D4;
     /// `0x006ED381` — grace timer 0's value. Also `Leader::process_elimination`'s
     /// capital-loss stamp (`0x006B8A4F`, via `0x00E3A7A4 = 0x00E3A390 + 0x414`).
@@ -792,6 +805,11 @@ pub struct Leader {
     /// The three `has_preq` answers `LeaderData::get_building_speed_upgrade` `0x006DAE90`
     /// counts, and the one `Wall::update_construct_time` tests directly.
     pub build_stats: BuildLeaderStatState,
+    /// The `LeaderData` slice `Leader::process_taunt` `0x006B8CC0` and its ported callees
+    /// write: `gift_stamp` `+0x194`, `last_taunt` `+0x354`, `taunt_frame` `+0x374`,
+    /// `tributes` `+0x498`, the six AI build-priority scalars `+0x794..+0x7A8`,
+    /// `Personality::raid` `+0x6DEC`, and `dip[8]` `+0x692C`.
+    pub taunt: taunt::TauntLeaderState,
 }
 
 /// The `LeaderData::has_preq` answers `Wall::update_construct_time` `0x0063D560` needs.
@@ -2704,6 +2722,11 @@ pub struct Step8Env {
     /// must be installed explicitly by the product host before automatic Unit stat queries run.
     pub(crate) unit_type_stats: Option<UnitTypeStatSource>,
     pub leaders: [LeaderEnv; NUM_LEADER_SLOTS],
+    /// The external answers `Leader::process_taunt` needs — `Console::who`,
+    /// `GameInfo::team_style`, `LeaderData::type_avail`, `LeaderData::is_neutral`, the
+    /// profile audio bit and the `internal_random` draws. Every one is absent by default and
+    /// an absent answer refuses the dispatch.
+    pub taunt: taunt::TauntEnv,
 }
 
 /// One `Leader::process_taunt` `0x006B8CC0` call retail would have made.
@@ -2744,6 +2767,14 @@ pub struct Step8Trace {
     pub elimination_calls: Vec<usize>,
     /// `Leader::process_taunt` dispatches, in retail's order.
     pub taunts: Vec<TauntDispatch>,
+    /// What each of those dispatches actually did — the recovered body's stop point, its
+    /// unresolved retail calls, its presentation receipts and its ledger write. Parallel to
+    /// [`Self::taunts`], same order.
+    pub taunt_calls: Vec<taunt::TauntCall>,
+    /// Frame totals over [`Self::taunt_calls`]. `unresolved_calls` is the number a
+    /// scheduler should charge to `Gap::LeaderProcessTaunt`; `taunts.len()` is a dispatch
+    /// count and charging it treats a fully executed body as absent.
+    pub taunt_pass: taunt::TauntPassCounts,
     pub payouts: [[Payout; NUM_RESOURCES]; NUM_LEADER_SLOTS],
 }
 
@@ -2849,6 +2880,17 @@ pub fn process_all(
                         arg: ls.leaders[i].taunt_arg[k],
                         entry: k,
                     });
+                    // 0x006ED3F4 — the recovered 2,340-byte body, which reads both
+                    // arguments back out of the table itself.
+                    let call = taunt::dispatch_table_entry(
+                        ls,
+                        &mut env.taunt,
+                        &mut trace.taunt_pass,
+                        frame,
+                        i,
+                        k,
+                    );
+                    trace.taunt_calls.push(call);
                 }
             }
         }

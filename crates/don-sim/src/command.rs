@@ -115,7 +115,7 @@ use crate::systems::groups_guys::{
     BuildMaskStep, DisbandMemberFacts, DisbandPlan, DisbandStep, Formation, FormationMember,
     GroupBuildMaskReceipt, GroupBuildMaskRequest, GroupData, GroupSetTransportReceipt,
     GroupSetTransportRequest, GroupStanceReceipt, GroupStanceRequest, GroupStateTransactionStatus,
-    GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts, HaltPlan, HaltStep, MemberState,
+    GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts, HaltPlan, HaltStep,
     SetTransportMemberFacts, SetTransportStep, StanceMemberFacts, StanceStep, UnitMaskMemberFacts,
     UnitMaskStep, GROUP_MAX_MEMBERS,
 };
@@ -144,6 +144,8 @@ pub mod follow_action;
 pub mod group_action_entry;
 #[path = "systems/group_action_frontier.rs"]
 pub mod group_action_frontier;
+#[path = "systems/group_move_near_split.rs"]
+pub mod group_move_near_split;
 #[path = "systems/late_command_plans.rs"]
 pub mod late_command_plans;
 #[path = "systems/object_command_plans.rs"]
@@ -1077,6 +1079,40 @@ pub trait Fleet {
     }
 
     // -----------------------------------------------------------------------
+    // `Group::action_move_near`'s selection split (`0x00704B6F..0x00704E58`).
+    //
+    // `inside_of` is the one column retail reads here that nothing in this bridge held.
+    // Returning `None` from it makes `group_move_near_split` answer `Unanswered`, and
+    // `action_move_near` then runs its pre-existing body unchanged — a stated gap, not a
+    // refusal. See `systems/group_move_near_split.rs`.
+    // -----------------------------------------------------------------------
+
+    /// `ObjectData::get_inside(int* who)` `0x00651A80`: the object containing this one and
+    /// that container's owner. The outer `None` is "this host does not model containment";
+    /// the inner `None` is retail's negative return, i.e. "not inside anything".
+    fn inside_of(&self, _who: u8, _o: i16) -> Option<Option<(i16, u8)>> {
+        None
+    }
+    /// `UnitTypeData::unit_flags` `+0x2B4`. Bit `0x10` routes pass 2 of the split; it is
+    /// clear on every shipped unit type.
+    fn unit_type_flags(&self, _who: u8, _o: i16) -> u32 {
+        0
+    }
+    /// `UnitData::o_up` `+0x8E` — the captain `Group::add(o, who, 0, 0)` substitutes for a
+    /// non-captain member. A host that reports [`Fleet::is_captain`] needs no override;
+    /// `None` for a non-captain makes the split `Unanswered`.
+    fn captain_of(&self, who: u8, o: i16) -> Option<i16> {
+        self.is_captain(who, o).then_some(o)
+    }
+    /// `UnitData::o_down` `+0x90` — the subordinate `Group::add` re-adds with the
+    /// captain-killing arm. `-1` is retail's "no link"; a host that models squads must
+    /// answer it, because the re-add arm is not recovered and a non-negative answer makes
+    /// the split `Unanswered` rather than silently dropping the subordinate.
+    fn subordinate_of(&self, _who: u8, _o: i16) -> i16 {
+        -1
+    }
+
+    // -----------------------------------------------------------------------
     // Economy group-action facts (REPAIR 16, TRADE 17, BOARD_SHIP 15)
     //
     // Every one of these is a conditional read the retail body performs on state this
@@ -1792,6 +1828,30 @@ impl Fleet for ObjectTable {
     }
     fn role(&self, who: u8, o: i16) -> i32 {
         self.get(who, o).map_or(0, |s| s.role)
+    }
+    /// `ObjectData::get_inside` `0x00651A80`, answered from the containment column the
+    /// RECALL/RETURN host already installs. A slot with no `AirObject` is unanswered, so a
+    /// test that does not install one keeps the pre-split behaviour.
+    fn inside_of(&self, who: u8, o: i16) -> Option<Option<(i16, u8)>> {
+        let object = self.air_object(who, o)?;
+        Some(
+            object
+                .inside
+                .map(|(inside_o, inside_who)| (inside_o as i16, inside_who as u8)),
+        )
+    }
+    fn unit_type_flags(&self, who: u8, o: i16) -> u32 {
+        self.get(who, o).map_or(0, |s| s.unit_flags)
+    }
+    fn captain_of(&self, who: u8, o: i16) -> Option<i16> {
+        let slot = self.get(who, o)?;
+        if slot.is_captain {
+            return Some(o);
+        }
+        // `Slot::follow_captain_o` is `UnitData::get_captain`'s answer, and its `None`
+        // means "this slot itself" — which for a non-captain is the retail hang, so it
+        // stays unanswered rather than becoming a self-reference.
+        slot.follow_captain_o.map(|captain| captain as i16)
     }
     fn domain(&self, who: u8, o: i16) -> i32 {
         self.get(who, o).map_or(0, |s| s.domain)
@@ -4380,7 +4440,13 @@ impl Bridge {
             return;
         }
         let who = who as u8;
+        // Retail builds a stack `Group` and runs `Group::clear(-1)` over it first
+        // (`0x0094A0C0` calls `0x00713E80` three times, the first at the top of the body).
+        // `GroupData::default()` alone leaves `army = 0` and `form = 0`, where `clear`
+        // writes `-1` to both — and `Group::action_move_near`'s selection split is gated on
+        // `army < 0`, so the default made every pushed selection look like an army.
         let mut g = GroupData::default();
+        group_move_near_split::group_clear(&mut g, -1, self.frame);
         let mut chosen: Vec<(i16, u16)> = Vec::new();
 
         if num == 0 {
@@ -4443,6 +4509,32 @@ impl Bridge {
 // ---------------------------------------------------------------------------
 // Group::action_*
 // ---------------------------------------------------------------------------
+
+/// Adapts a [`Fleet`] to the one object column
+/// [`group_move_near_split::plan_move_near_split`] reads.
+///
+/// `inside_of` is the availability gate: a host that does not model
+/// `ObjectData::get_inside` answers `None`, the plan comes back `Unanswered`, and
+/// `action_move_near` runs its pre-existing body.
+struct SplitFleet<'a>(&'a dyn Fleet);
+
+impl group_move_near_split::SplitWorld for SplitFleet<'_> {
+    fn object(&self, who: u8, o: i16) -> Option<group_move_near_split::SplitObject> {
+        let f = self.0;
+        Some(group_move_near_split::SplitObject {
+            valid: f.alive(who, o),
+            is_unit: f.is_unit(who, o),
+            is_build: f.is_building(who, o),
+            is_captain: f.is_captain(who, o),
+            captain: f.captain_of(who, o)?,
+            subordinate: f.subordinate_of(who, o),
+            role: f.role(who, o),
+            domain: f.domain(who, o),
+            unit_flags: f.unit_type_flags(who, o),
+            inside: f.inside_of(who, o)?,
+        })
+    }
+}
 
 /// One `Group::action_*` invocation, holding the receiver and the counters.
 struct Action<'a> {
@@ -5047,43 +5139,74 @@ impl Action<'_> {
             .any(|o| f.alive(g.who, o) && f.is_captain(g.who, o) && f.is_on_map(g.who, o))
     }
 
-    /// The `Group::normalize` virtual call at `0x0070724D`, before formation leader
-    /// selection. The object-side predicates are all explicit [`Fleet`] hosts.
-    fn normalize_for_action(&mut self, f: &dyn Fleet) {
-        let Some(g) = self.groups.get(self.slot) else {
-            return;
+    /// `Group::action_move_near` `0x00704990`'s selection split, and the two effects it
+    /// leaves behind.
+    ///
+    /// Returns `true` when the caller must stop: either the split fired (both halves have
+    /// already been pushed and re-issued and the receiver cleared) or the `buildings`
+    /// refusal at `0x00704E59` applies. See [`group_move_near_split`].
+    #[allow(clippy::too_many_arguments)]
+    fn move_near_split(
+        &mut self,
+        x: i32,
+        y: i32,
+        tolerance: i32,
+        q: QueuePos,
+        set_angle: bool,
+        angle: i32,
+        orders: i64,
+        form: i32,
+        width: i32,
+        disembark: bool,
+        f: &mut dyn Fleet,
+    ) -> bool {
+        let Some(group) = self.groups.get(self.slot) else {
+            return false;
         };
-        let who = g.who;
-        let group_id = g.id;
-        let priority = g.priority;
-        let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
-        let states: Vec<(i16, MemberState)> = g.list[..n]
-            .iter()
-            .copied()
-            .map(|o| {
-                let state = if !f.alive(who, o) {
-                    MemberState::Dead
-                } else if f.leaves_groups(who, o) {
-                    MemberState::LeavesGroups
-                } else if priority == 0
-                    && group_id >= 0
-                    && (!f.is_unit(who, o) || f.group_of(who, o) != group_id as i16)
-                {
-                    MemberState::NotOurUnit
-                } else {
-                    MemberState::Keep
-                };
-                (o, state)
-            })
-            .collect();
-        if let Some(g) = self.groups.get_mut(self.slot) {
-            g.normalize(&|o| {
-                states
-                    .iter()
-                    .find_map(|&(member, state)| (member == o).then_some(state))
-                    .unwrap_or(MemberState::Dead)
-            });
+        if group.buildings != 0 {
+            // `0x00704E59`: a building selection reaches the end of the body without
+            // installing anything. Retail physically runs the split first, but its member
+            // loop indexes the *unit* band with building object ids, so the only outcome
+            // this bridge can honestly reproduce is the empty one. Recorded in
+            // `docs/mechanics/group-action-move-near.md` §4.
+            return true;
         }
+        let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<i16> = group.list[..n].to_vec();
+        let facts = group_move_near_split::SplitFacts {
+            who: group.who,
+            army: group.army,
+            facing: group.facing,
+            destination_is_water: f.formation_water_destination(x, y),
+            frame: self.frame,
+        };
+        let world = SplitFleet(f);
+        let plan = group_move_near_split::plan_move_near_split(&members, &facts, &world);
+        let group_move_near_split::MoveNearSplit::Split { first, second, .. } = plan else {
+            return false;
+        };
+        for half in [first, second] {
+            let slot = self
+                .groups
+                .push_group(facts.who, &half, true, self.frame, f);
+            if let Some(pushed) = self.groups.get_mut(slot) {
+                pushed.facing = facts.facing;
+            }
+            let mut sub = Action {
+                groups: self.groups,
+                slot,
+                stats: self.stats,
+                frame: self.frame,
+                economy_receipts: self.economy_receipts,
+            };
+            sub.action_move_near(
+                x, y, tolerance, q, set_angle, angle, orders, form, width, disembark, f,
+            );
+        }
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            group_move_near_split::group_clear(group, -1, self.frame);
+        }
+        true
     }
 
     /// `GroupData::find_leader` `0x0070CCB0`: prefer the lowest `FormCatIndex`, first
@@ -5190,7 +5313,11 @@ impl Action<'_> {
         if !self.group_is_on_map(f) {
             return;
         }
-        self.normalize_for_action(f);
+        // `Group::action_form` `0x00707220` runs `is_on_map` → `action_begin` (the
+        // `call [eax+0x14]` at `0x00707251`, whose vptr load at `0x0070724D` this bridge
+        // used to cite as a `Group::normalize` call) → `buildings == 0` → `num > 0`.
+        // `Group::normalize` `0x00711540` appears in none of the three bodies that were
+        // documented as calling it.
         let Some(group) = self.groups.get(self.slot) else {
             return;
         };
@@ -5373,7 +5500,15 @@ impl Action<'_> {
         disembark: bool,
         f: &mut dyn Fleet,
     ) {
-        self.normalize_for_action(f);
+        // Retail's order between the entry gates and the first order queue is: selection
+        // split, then the `buildings` refusal, then the QUEUE_FIRST insert dance. There is
+        // no `Group::normalize` anywhere in this body — see the module docs of
+        // `group_move_near_split` and `docs/mechanics/group-action-move-near.md` §5.
+        if self.move_near_split(
+            x, y, tolerance, q, set_angle, angle, orders, form, width, disembark, f,
+        ) {
+            return;
+        }
         let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
             let kind = move_order_kind(orders);
             let (who, list) = a.members();
@@ -5872,6 +6007,15 @@ impl Action<'_> {
                 facts.active = Action::economy_fact(
                     f.build_is_active(tw, to),
                     "WallData::is_active vslot+0x4C",
+                );
+                // `Build`'s `+0xB0` is `mov eax,ecx; ret` `0x0041C000`, so the entry gate's
+                // receiver and the member loop's receiver are the same object here. A
+                // subclass that returned a contained `BuildData` from `+0xB0` would make
+                // the two `+0x24` reads disagree; that class is outside this model and is
+                // named in `economy_group_actions`.
+                facts.build_is_trade = Action::economy_fact(
+                    f.object_type_is(tw, to, economy_group_actions::TRADE_MARKET_TYPE),
+                    "WallData::is_trade vslot+0xB0->+0x24",
                 );
                 facts.is_trade = Action::economy_fact(
                     f.object_type_is(tw, to, economy_group_actions::TRADE_MARKET_TYPE),

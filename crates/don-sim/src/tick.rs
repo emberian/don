@@ -77,6 +77,15 @@ use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE
 /// Aliased because this file also names [`crate::world::World`], which is the unit SoA.
 pub use crate::systems::map_terrain::World as TerrainWorld;
 
+/// The `Sim`-side host for the recovered player-lifecycle command tails — the link between
+/// the command wire and `Leader::defeat` `0x006ECB00` / `Game::check_victory` `0x005926B0`.
+///
+/// Declared here rather than in `systems/mod.rs` for two reasons: it is a child of this
+/// module, so it can reach `Sim`'s private terminal-cleanup drain the way step 11 does; and
+/// it follows `command.rs`'s `#[path]` idiom for host modules owned by one driver.
+#[path = "systems/lifecycle_host.rs"]
+pub mod lifecycle_host;
+
 /// The 29 entries of `Game::do_frame`.
 pub const NUM_STEPS: usize = DO_FRAME.len();
 
@@ -786,6 +795,14 @@ pub struct Sim {
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
     pub vic_leaders: victory_score::Leaders,
+    /// Live `GameInfo::player[8]` (`Game+0x44`, stride `0x8C`) plus the `Game`/`Console`/
+    /// `DropControl` scalars the player-lifecycle command tails read, which
+    /// [`victory_score::Match`] does not model.
+    ///
+    /// `None` is the fail-closed default: without it [`Sim::tail_command_facts`] reports
+    /// `NoExternalFacts` and rows 70/71/80 keep their whole-row boundary. Install one to
+    /// let a resign/quit/drop actually reach `Leader::defeat`.
+    pub players: Option<lifecycle_host::PlayerTable>,
     /// Completed-Wonder records called by `Build::activate` and read by Wonder victory.
     pub wonders: wonders::Wonders,
     /// Exact object/type/game store for Wonder initialization and live value queries.
@@ -1408,6 +1425,7 @@ impl Sim {
             scenario_data: crate::script_runtime::ScenarioDataState::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
+            players: None,
             wonders: wonders::Wonders::new(),
             wonder_world: None,
             wonder_error: None,
