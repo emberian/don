@@ -2883,3 +2883,89 @@ Files written: `schema/vtables.json`, `schema/types.json` (`_meta` only),
 `crates/donscan/README.md`, `docs/tooling/native-scanner.md`, `docs/derivation/pdb-symbols.md`,
 `docs/derivation/vtable-map.md` (new), `docs/derivation/pdb-extract-name-collisions.md` (new).
 Nothing committed.
+
+### lane: arena-diplo — RESULT (advanced; row stays RED) + FINDINGS
+
+`closure/blocker: arena-diplomacy-model` **cannot close** and I did not flip it. Six named
+residuals, headed by `Leader::victory` `0x006EC9B0` having no arena host — full table in
+`docs/mechanics/arena-diplomacy-host.md` §"What still stops it".
+
+Landed in the working tree (not committed):
+
+- `crates/don-sim/src/systems/mod.rs` — **one export line**, `pub mod leader_set_diplo;`.
+- `crates/don-ai/src/arena/diplomacy_runtime.rs` — new module (host + `PlayerCmd::Declare`).
+- `crates/don-ai/src/arena/mod.rs` — one module line.
+- `crates/don-ai/src/arena/world.rs` — `submit_player`, `declare`, one `World` field, one
+  ctor line, and `visibility_policy` rewritten to read `ally_mask` (see FINDING 2).
+- `crates/don-ai/tests/arena_diplomacy_runtime.rs` — new, 18 tests.
+- `crates/don-sim/src/deviations.rs` — the `ArenaDiplomacyModel` entry's `ours`/`evidence`/
+  `derived_from`/`seam` only. `implementation` stays `KnownDrift`; the row stays red.
+- `docs/mechanics/arena-diplomacy-host.md` — new doc.
+
+Local gates, all green: `cargo test -p don-ai` 130 lib + 33 integration (18 of them new);
+`cargo test -p don-sim --lib` 1729 passed / 2 ignored; `cargo test -p don-sim --test
+leader_set_diplo_transaction --test diplomacy_command_plans --test
+leaders_diplomacy_opening_frontier` 13 + 8 + 9.
+
+**Regeneration warning for the orchestrator.** I ran `python3 tools/simulation-closure.py
+--write`. My own row's `seam`/`retail_evidence` updated as expected, but the same
+regeneration also picked up **three sibling in-flight rows** and moved the headline count
+**119 -> 120 red**: `tick 10` went `out_of_scope "AI diplomacy chat"` -> `stub "rush-rules
+timer expiry"` (a sibling's honest relabel, and a correct one), plus a `tick 24` note and the
+`checksums.groups` producer going `absent -> groups_init_frozen`. None of those three is
+mine. The 119 -> 120 is not a regression from this lane.
+
+**FINDINGS worth not re-deriving:**
+
+- **`crates/don-sim/src/systems/leader_set_diplo.rs` was unreachable** — 938 lines, the whole
+  atomic `Leader::set_diplo` `0x006EC6A0` transaction *and* the `action_respond(..., 1)`
+  resource movement opcode 41 needs, with no `mod` declaration anywhere in the library and no
+  `#[path]` mount from `command.rs` either. It compiled only from its own test file. That is
+  the standing "body exists but is unreachable" finding for the fourth time.
+  **`leaders_diplomacy_opening_frontier.rs` (438 lines) is still in that state** — I did not
+  take it. `diplomacy_command_plans.rs` *is* mounted from `command.rs`; do not confuse them.
+- **`FogLeader::player_mask` is `LeaderData +0x6929` (`ally_mask`), not a live `is_ally`
+  fold.** `crates/don-ai/src/arena/world.rs::visibility_policy` recomputed it from
+  `DiplomacyState::is_ally` every fog frame, which grants allied shared vision
+  *unconditionally*. Retail writes that byte in `Leader::init`'s eight-target loop and then
+  only in `Leader::set_diplo`, and there only behind `has_preq(ALLY_LOS)` or
+  `GameInfo::reveal_map >= 1`. Fixed here. It regresses nothing today because at war both
+  forms give `1 << who`. **Anyone wiring `don-env` or `Sim` fog should check the same thing.**
+- **In a 1v1, declaring an alliance is an immediate shared victory, not a diplomatic state.**
+  `Leader::set_diplo`'s scan at `0x006EC8F0..0x006EC944` counts leaders with
+  `leader_flags & 3 == 3` allied to neither party; zero of them means `Leader::victory(0, 0)`
+  `0x006EC9B0` plus `Game::semaphore` bit 22. `victory_score::Leaders::victory` implements the
+  state part completely — it just needs a `Leaders`/`Match` owner, which neither `ObjectTable`,
+  `EnvWorld` nor the Arena has. **This is the same missing owner `op-life`'s HOOK NEEDED
+  names for rows 70/71/80.** One `Fleet`/`Sim`-side `Leaders` host closes all four.
+- **`LeaderData::has_treaty` `0x006E11E0` is `[this + 0x94 + who*4] & bit` with a five-byte
+  early-out on `who < 0`, and its receiver comes from `get_scary_console_leader`
+  `0x005833E0` = `&Leaders[Console::who]` — indexed **unguarded**. `Console::who == -1` is
+  therefore an out-of-bounds read in retail, not a neutral "headless" value. Any host that
+  wants to model a serverless/observer session must name a console slot, not pass `-1`.
+- **`LeaderData+0x94` is `treaties int[8]`, `+0xB4` is `agendas int[8]`, `+0x6929` is
+  `ally_mask` (`schema/types.json`, `LeaderData` size 28388).** And the opening `treaties`
+  row is **not** all-zero: `Leader::init`'s loop ORs bit 0 when `is_team(who, t, 0)`, and
+  `LeaderData::is_team` `0x006EBD39` returns true for `t == LeaderData::who` before reading
+  any team byte. So `treaties[who] == 1` at frame zero. I shipped `[0; 8]` first and the pin
+  test against `leader_init_diplomacy_loop` caught it.
+- **`TypeIndex 0x2B0` is `ALLY_LOS`** (`schema/types.json` enums), the shared-vision
+  prerequisite both `Leader::init` and `Leader::set_diplo` query through
+  `LeaderData::has_preq` `0x006DB810`. Neighbours: `0x2AF COLONIZE_BONUS`,
+  `0x2B1 SEE_ENEMY_BORDERS`, `0x2B2 EXPLORE_MAP_BONUS`.
+- **`teams_locked` is `!matches!(team_style, 0 | 8 | 11)`**, and with `rush_rules == 0` an
+  unlocked team style opens every non-team pair at **PEACE**, not war. The Arena's
+  `DiplomacyState::at_war()` opening is consistent with a locked style (or with
+  `check_victory_mode`), but the Arena declares no `GameInfo::team_style`. Any consumer that
+  hardcodes an all-war opening is making the same undeclared assumption.
+- **`don_env::generated::pv::DECLARE` = index 4, opcode 38, `wire_size` 13, `heads` 0x13.**
+  Diplomacy is a **player** verb, so it must not become a `don_ai::arena::cmd::Cmd` — every
+  `Cmd` variant's contract is that it carries an acting `EntId`. It went in as a separate
+  `PlayerCmd` with a `World::submit_player` channel.
+
+**arena-diplo — correction to my own FINDING (same shared file, minutes later):**
+`leaders_diplomacy_opening_frontier.rs` is **no longer** unreachable — the
+`tick11-production-ai` lane registered it in `systems/mod.rs` alongside
+`leader_production_ai` while I was writing. My "still in that state" line above is stale;
+the rest of that finding stands. Both of us landed a `mod` line in the same region of
+`systems/mod.rs`; the two hunks are adjacent and do not conflict.

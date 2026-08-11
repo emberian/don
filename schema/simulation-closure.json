@@ -4,12 +4,12 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 119,
+  "red": 120,
   "summary": {
     "tick": {
       "total": 29,
-      "complete": 22,
-      "red": 7
+      "complete": 21,
+      "red": 8
     },
     "orders": {
       "total": 28,
@@ -136,12 +136,12 @@
       },
       {
         "id": 10,
-        "name": "AI diplomacy chat",
+        "name": "rush-rules timer expiry",
         "retail_va": null,
         "source": "leaders.cpp",
-        "status": "out_of_scope",
-        "note": "Leader::set_diplo -> chat_to_local",
-        "complete": true
+        "status": "stub",
+        "note": "MISLABELLED [audit]: rush-rules expiry at frame == rush_rules[i].minutes*900 -- zeroes LeaderData::attrition_stamp and Leader::set_diplo(pair, WAR) for every neutral ordered pair; chat_to_local is the trailing announcement",
+        "complete": false
       },
       {
         "id": 11,
@@ -266,7 +266,7 @@
         "retail_va": "0x009579E0",
         "source": "turncontrol.cpp:116",
         "status": "implemented",
-        "note": "75-frame cannon-time expiry and pending speed transition",
+        "note": "75-frame cannon-time expiry and pending speed transition; retail calls it ONLY on the frame % 15 == 0 branch [0x005924E7], not every frame",
         "complete": true
       },
       {
@@ -2154,11 +2154,11 @@
         "name": "groups",
         "walker": "CheckSums::check_groups",
         "element_class": "Group",
-        "producer": "absent",
+        "producer": "groups_init_frozen",
         "compares": 222938,
-        "matches": 0,
-        "nontrivial_compares": 0,
-        "best_survived_turns": 0,
+        "matches": 140,
+        "nontrivial_compares": 222938,
+        "best_survived_turns": 64,
         "complete": false
       },
       {
@@ -2395,8 +2395,8 @@
         "slug": "arena-diplomacy-model",
         "title": "Arena MODEL 6d has no complete retail diplomacy host",
         "status": "KnownDrift",
-        "seam": null,
-        "retail_evidence": "LeaderData::get_diplo 0x006EBA50; Leader::set_diplo 0x006EC6A0; Leader::diplomacy 0x006BC950",
+        "seam": "don_ai::arena::diplomacy_runtime::plan_declaration",
+        "retail_evidence": "LeaderData::get_diplo 0x006EBA50; Leader::set_diplo 0x006EC6A0; Leader::diplomacy 0x006BC950; Leader::victory 0x006EC9B0; crates/don-sim/src/systems/leader_set_diplo.rs; crates/don-ai/src/arena/diplomacy_runtime.rs",
         "complete": false
       },
       {
@@ -2426,8 +2426,9 @@
       {
         "slug": "save_load",
         "description": "complete save/load and resumed deterministic execution",
-        "status": "required",
-        "complete": false
+        "status": "partial",
+        "complete": false,
+        "note": "DoNSave (crates/don-sim/src/systems/save_load.rs, format 10) writes and reads a retail-shaped chunk container for the owned Sim tranche and resumes from it: a two-player match with live Groups saves, reloads, resaves byte-identically, and runs 70 further frames with the groups channel (CheckSums::check_groups 0x00937530) and the whole-sim channel digest agreeing every frame. The group pool got its owner this wave from Groups::walk_data 0x00713E30 / Array<Group>::walk_data 0x0047EA30 / Group::walk_data 0x00708400; evidence: crates/don-sim/tests/save_load_groups.rs, docs/derivation/savegame-groups.md. Still red: the save point is frame 0 for any match that ran the PlayerSetup transaction, because the PLAYER_SETUP section is reconstructive and canonical_player_setup_snapshot refuses world.frame != 0 -- and a Sim without that owner cannot have an active leader at all, so no mid-match save exists yet; closing it needs real save owners for victory_score::LeaderState (vic_leaders.slots diplos/init_diplomacy/has_preq_2b0) and vic_match. Also refused by reject_unsupported: step-12 visibility authority, cannon-time state, walls, herds, projectile type rules, the live/consumed projectile pool, live death records, aircraft crash hosts, the Wonder lifecycle, and installed rule overrides. This is DoNSave, not a .svx writer: the retail stream's other 90 WalkDataGame::walk_data sections have no owner."
       },
       {
         "slug": "scenario_runtime",

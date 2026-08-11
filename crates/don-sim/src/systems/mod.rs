@@ -148,6 +148,16 @@ pub mod items;
 pub mod leader_init_diplomacy;
 /// Complete source-only `Leader::init` diplomacy/shared-vision eight-target loop.
 pub mod leader_init_diplomacy_loop;
+/// Added by `tick11-production-ai`. `Leader::plan_strategy` `0x006B9620`'s entry and
+/// dispatch skeleton plus the whole 628-byte `Leader::production_ai` `0x006C1960` step
+/// machine — the only door into retail's compiled production pipeline, which nothing but
+/// tick step 11 can open. The eight stage bodies stay named boundaries.
+pub mod leader_production_ai;
+/// Atomic `Leader::set_diplo` `0x006EC6A0` transaction, plus the `action_respond(..., 1)`
+/// resource movement opcode 41 reaches. Registered 2026-08-11: the body was written but had
+/// no `mod` declaration anywhere in the library, so it compiled only from its own test file
+/// and no consumer could reach the one authority the diplomacy blockers name.
+pub mod leader_set_diplo;
 /// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
 /// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
 /// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp
@@ -161,6 +171,13 @@ pub mod leader_process_taunt;
 /// channel jointly with `economy` and `victory_score`; it deliberately does **not**
 /// re-port `Leader::process_elimination`, which `victory_score` already owns.
 pub mod leaders;
+/// Source-only opening cone of `Leader::diplomacy` `0x006BC950`. Registered by
+/// `tick11-production-ai`: like `leader_set_diplo` before it, the body existed with no
+/// `mod` declaration anywhere in the library and compiled only from its own test file, so
+/// step 11 could not reach the one derivation of its own diplomacy child. `strategy_all`
+/// now executes its three-condition entry gate; the scan and target loop still want a
+/// tick-side hook (see `docs/assembly/leader-production-ai-step11.md`).
+pub mod leaders_diplomacy_opening_frontier;
 /// Exact eight-record `Game::do_frame` step-19 reconstruction. The canonical Leader owner
 /// adapts through this receipt-bearing executor; its exact ordered outbox owns every reached
 /// presentation/achievement call without fabricating wall-clock audio behavior.

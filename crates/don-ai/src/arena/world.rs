@@ -129,6 +129,10 @@ use don_sim::systems::target::{
 };
 
 use super::cmd::{Cmd, EntId};
+use super::diplomacy_runtime::{
+    self, ArenaDeclarationOutcome, ArenaDeclarationRecord, ArenaDeclarationRefusal, ArenaDiplomacy,
+    ArenaDiplomacyObject, ArenaLeaderRuntime, PlayerCmd,
+};
 use super::gather_runtime::{
     ArenaGatherRuntime, AuthoritativeFarmFirstTick, AuthoritativeGatherPayoutSource,
     AuthoritativeGatherSitePlacement, AuthoritativeGatherSiteType, GatherCapacityAuthority,
@@ -149,6 +153,8 @@ use super::retail_systems::{
     SupplySearchObject, WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
+use don_sim::systems::victory_score::Diplo;
+
 use crate::orders::OrderResult;
 use crate::rules::NRES;
 
@@ -637,6 +643,11 @@ pub struct World {
     /// declaration state; relation consumers must query this matrix rather than infer
     /// hostility from unequal owner ids.
     pub diplomacy: DiplomacyState,
+    /// The `LeaderData` diplomacy cells outside `diplos` — `treaties` (`+0x94`),
+    /// `ally_mask` (`+0x6929`) and the `ALLY_LOS` prerequisite bit — plus the declaration
+    /// channel that maintains them through `Leader::set_diplo` `0x006EC6A0`. `ally_mask` is
+    /// what the fog planes test with, so it is simulation state, not bookkeeping.
+    pub arena_diplomacy: ArenaDiplomacy,
     age_techs: Vec<i32>,
     /// Per-owner source for `ObjectData::uid`. `Objects::clear`/`Objects::init` zero the
     /// ten counters and `Object::init` 0x00647750 increments the selected `u16` counter.
@@ -2889,6 +2900,11 @@ impl World {
             supply_records: vec![Vec::new(); tribes.len()],
             hero_records: vec![Vec::new(); tribes.len()],
             diplomacy: DiplomacyState::at_war(),
+            // Slot 0 is the display client. Retail always has one and
+            // `get_scary_console_leader` `0x005833E0` indexes `Leaders` with `Console::who`
+            // unguarded, so a headless `-1` would be an out-of-bounds read rather than a
+            // neutral value.
+            arena_diplomacy: ArenaDiplomacy::opening(tribes.len(), 0),
             age_techs,
             next_object_uid: vec![0; tribes.len()],
         };
@@ -3803,6 +3819,109 @@ impl World {
         }
         *self.rejects.entry((who, verb, tag)).or_insert(0) += 1;
         r
+    }
+
+    /// The player-scoped command channel. `don-env` addresses `DECLARE` on the player head
+    /// set, opcode 38, so it does not go through [`Self::submit`], whose contract is that
+    /// every [`Cmd`] carries an acting `EntId`.
+    pub fn submit_player(&mut self, who: u8, c: PlayerCmd) -> OrderResult {
+        let verb = c.verb_name();
+        let r = match c {
+            PlayerCmd::Declare { target, state } => match self.declare(who, target, state) {
+                Ok(_) => OrderResult::Ok(1),
+                // A leader slot that does not exist is retail's `-1`; a refusal the Arena
+                // cannot host is the engine's `0` — the transaction was well-formed and the
+                // player could have issued it, this host just cannot execute its tail.
+                Err(ArenaDeclarationRefusal::UnknownLeader { .. })
+                | Err(ArenaDeclarationRefusal::IncoherentLeaderTables { .. }) => {
+                    OrderResult::Invalid
+                }
+                Err(_) => OrderResult::Refused,
+            },
+        };
+        let p = &mut self.players[who as usize];
+        let tag = match r {
+            OrderResult::Ok(_) => {
+                p.orders_ok += 1;
+                return r;
+            }
+            OrderResult::Refused => "refused",
+            OrderResult::Invalid => "invalid",
+        };
+        match r {
+            OrderResult::Refused => p.orders_refused += 1,
+            _ => p.orders_invalid += 1,
+        }
+        *self.rejects.entry((who, verb, tag)).or_insert(0) += 1;
+        r
+    }
+
+    /// Run one `Leader::set_diplo` `0x006EC6A0` transaction against the live Arena.
+    ///
+    /// Planning completes before anything mutates, so a declaration whose plan reaches an
+    /// authority the Arena does not host — today, `Leader::victory` `0x006EC9B0` — leaves
+    /// the world byte-identical. Both the commit and the refusal are recorded on
+    /// [`ArenaDiplomacy::log`].
+    pub fn declare(
+        &mut self,
+        who: u8,
+        target: u8,
+        state: Diplo,
+    ) -> Result<ArenaDeclarationOutcome, ArenaDeclarationRefusal> {
+        let leaders: Vec<ArenaLeaderRuntime> = self
+            .players
+            .iter()
+            .map(|p| ArenaLeaderRuntime {
+                alive: p.alive,
+                leader_ai: p.leader_ai,
+            })
+            .collect();
+        // `eject_my_shit_from_his_ass` `0x006D0220` walks the owner's whole object array.
+        // `carrier_who` is `ObjectData::get_inside`; the Arena materializes no carrier
+        // (`can_transport` / `can_board_transport` are false everywhere), so every live
+        // object reports `None` and the sweep selects nothing.
+        let objects: Vec<ArenaDiplomacyObject> = self
+            .ents
+            .iter()
+            .filter(|e| e.alive && usize::from(e.who) < self.players.len())
+            .map(|e| ArenaDiplomacyObject {
+                owner: usize::from(e.who),
+                object_o: i32::from(e.object_o),
+                is_unit: !e.building,
+                carrier_who: None,
+            })
+            .collect();
+
+        let planned = {
+            let inputs = self
+                .arena_diplomacy
+                .inputs(&self.diplomacy, &leaders, &objects);
+            diplomacy_runtime::plan_declaration(
+                &inputs,
+                usize::from(who),
+                usize::from(target),
+                state,
+            )
+        };
+        let outcome = match planned {
+            Ok(planned) => diplomacy_runtime::apply_declaration(
+                &mut self.diplomacy,
+                self.arena_diplomacy.rows_mut(),
+                &planned,
+            ),
+            Err(refusal) => Err(refusal),
+        };
+        self.arena_diplomacy.record(ArenaDeclarationRecord {
+            actor: usize::from(who),
+            target: usize::from(target),
+            state,
+            outcome: outcome.clone(),
+        });
+        if outcome.is_ok() {
+            // Shared vision moved, so the fog planes are stale until the next recompute.
+            self.update_fog();
+        }
+        outcome
     }
 
     fn owns(&self, who: u8, id: EntId) -> bool {
@@ -5948,18 +6067,18 @@ impl World {
     // Fog
     // -----------------------------------------------------------------------
 
+    /// `FogLeader::player_mask` is documented in `borders_fog.rs` as `LeaderData +0x6929`,
+    /// the leader's own `ally_mask` byte. It is **not** a live recomputation over `diplos`:
+    /// retail writes it in `Leader::init`'s eight-target loop and then only in
+    /// `Leader::set_diplo` `0x006EC6A0`, and there only when `has_preq(ALLY_LOS)` or
+    /// `GameInfo::reveal_map >= 1`. Deriving it from `is_ally` instead granted allied
+    /// shared vision unconditionally — a permissive difference that is invisible while the
+    /// match stays at war and becomes wrong the moment a declaration lands.
     fn visibility_policy(&self) -> Fog {
         let mut fog = Fog::new();
         for viewer in 0..self.players.len().min(8) {
-            let player_mask = (0..self.players.len().min(8)).fold(0u8, |mask, other| {
-                if self.diplomacy.is_ally(viewer, other).unwrap_or(false) {
-                    mask | (1u8 << other)
-                } else {
-                    mask
-                }
-            });
             fog.leaders[viewer] = FogLeader {
-                player_mask,
+                player_mask: self.arena_diplomacy.ally_mask(viewer),
                 ..FogLeader::default()
             };
         }

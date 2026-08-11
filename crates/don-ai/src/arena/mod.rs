@@ -37,6 +37,7 @@
 
 pub mod bots;
 pub mod cmd;
+pub mod diplomacy_runtime;
 pub mod eval;
 mod gather_runtime;
 pub mod map;

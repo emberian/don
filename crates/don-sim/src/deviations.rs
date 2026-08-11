@@ -1070,19 +1070,28 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         kind: Kind::Drift,
         retail: "Diplomacy stores bilateral declarations, resolves their mutual minimum, and \
                  applies retargeting, vision, event/chat and strategy side effects.",
-        ours: "The exact explicit relation table adapter is available, but arena matches still \
-               expose no declaration command or runtime side-effect channel.",
+        ours: "Arena now hosts the DECLARE command (opcode 38) and runs the registered \
+               Leader::set_diplo transaction: both directional declaration writes in retail's \
+               order, the ally_mask shared-vision grant/revoke, and the fog planes reading \
+               LeaderData::ally_mask instead of a live is_ally recomputation. Alliance still \
+               stops at Leader::victory 0x006EC9B0, which no arena host owns, so every 1v1 \
+               alliance refuses; has_preq(ALLY_LOS), team_style, leader_flags2 and the \
+               treaty/tribute command family remain unhosted.",
         why: "Two players beginning at war does not make diplomacy complete, and relation state \
               may not be hidden inside a bot.",
         derived_from: &[
             "LeaderData::get_diplo 0x006EBA50",
             "Leader::set_diplo 0x006EC6A0",
             "Leader::diplomacy 0x006BC950",
+            "Leader::victory 0x006EC9B0",
+            "crates/don-sim/src/systems/leader_set_diplo.rs",
+            "crates/don-ai/src/arena/diplomacy_runtime.rs",
         ],
-        evidence: "docs/mechanics/victory-score.md and arena MODEL6 integration inventory.",
+        evidence: "docs/mechanics/arena-diplomacy-host.md tables the whole body against \
+                   re/decomp-all/006ec6a0.c and names the six remaining hosts. [measured].",
         default_in_improved: false,
         affects_checksum: true,
-        seam: "",
+        seam: "don_ai::arena::diplomacy_runtime::plan_declaration",
         surfaces: &[Surface::PlayableEdition],
         implementation: ImplementationStatus::KnownDrift,
     },
