@@ -132,6 +132,11 @@ fn main() {
             "sim_bridge"
         } else if CHANNEL_NAMES[i] == "rules" {
             "replay_initial_only"
+        } else if CHANNEL_NAMES[i] == "scenario_data" {
+            // Derived from ScenarioFuncSet::init 0x00a03c30 plus the two shipped
+            // internal_strings.xml ordinals it installs, and frozen there: no don-sim
+            // path writes units_killed / builds_destroyed / city_lost_to.
+            "scenario_init_frozen"
         } else {
             "absent"
         };

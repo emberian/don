@@ -367,7 +367,11 @@ impl CheckAll {
                     (ChannelSource::Modelled, false) => "MISSING",
                     (ChannelSource::Conditional, true) => "modelled",
                     (ChannelSource::Conditional, false) => "MISSING",
-                    (ChannelSource::Absent, _) => "ABSENT",
+                    // `rules` and `scenario_data` have no `don-sim` producer, but a
+                    // replay/shipped-data producer can be installed on the state. Printing
+                    // ABSENT for those was wrong once the bytes were real.
+                    (ChannelSource::Absent, true) => "installed",
+                    (ChannelSource::Absent, false) => "ABSENT",
                 },
                 if c.complete() {
                     "complete".to_string()

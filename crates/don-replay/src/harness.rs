@@ -138,6 +138,11 @@ pub struct RunResult {
     pub initial_rules_serialized_bytes: usize,
     pub initial_rules_walked_bytes: u64,
     pub initial_rules_checksum: Option<u32>,
+    /// `ScenarioData::walk_data` over the derived `ScenarioFuncSet::init` state, when the
+    /// shipped internal string table was available beside the replay.
+    pub initial_scenario_checksum: Option<u32>,
+    pub initial_scenario_walked_bytes: u64,
+    pub initial_scenario_error: Option<String>,
     pub phase: Phase,
     pub latency: u32,
     pub turns_total: usize,
@@ -306,6 +311,12 @@ pub struct WorldSim {
     /// SaveGame Rules section. Unlike `initial_world`, this slice is complete:
     /// all 997,846 visited bytes are present and independently checkpointed.
     pub initial_rules: Option<crate::initial::InitialRules>,
+    /// The `ScenarioData` state a retail `Game::init` leaves behind, derived from
+    /// `ScenarioFuncSet::init` plus the two shipped `internal_strings.xml` ordinals it
+    /// installs. `None` when the local extraction has no string table — in which case
+    /// channel 14 stays uninstalled rather than falling back to empty strings.
+    pub initial_scenario: Option<crate::scenario_channel::InitialScenarioChannel>,
+    pub initial_scenario_error: Option<String>,
 }
 
 impl Default for WorldSim {
@@ -328,6 +339,8 @@ impl WorldSim {
             initial_item_error: None,
             initial_item_style_error: None,
             initial_rules: None,
+            initial_scenario: None,
+            initial_scenario_error: None,
         }
     }
 
@@ -342,6 +355,10 @@ impl WorldSim {
         s.initial_continent = continent;
         s.initial_item_style_error = style_error;
         s.initial_rules = rep.initial.rules;
+        match initial_scenario_for_replay(rep) {
+            Ok(scenario) => s.initial_scenario = Some(scenario),
+            Err(error) => s.initial_scenario_error = Some(error),
+        }
         s.initial_item_error = execution_error;
         if s.initial_item_error.is_none() {
             if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
@@ -366,6 +383,9 @@ impl WorldSim {
         }
         if let Some(rules) = &self.initial_rules {
             crate::state::SimBridge::populate_replay_rules(rules, &mut self.state);
+        }
+        if let Some(scenario) = &self.initial_scenario {
+            crate::state::SimBridge::populate_scenario_initial(scenario, &mut self.state);
         }
     }
 
@@ -416,6 +436,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
     let (initial_items, initial_item_style_error, initial_continent, _execution_error) =
         initial_items_for_replay(rep, report_world.as_mut());
     let style = initial_items.style.as_ref();
+    let initial_scenario = initial_scenario_for_replay(rep);
     let mut res = RunResult {
         file: rep
             .path
@@ -467,6 +488,11 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),
         initial_rules_walked_bytes: rep.initial.rules.map_or(0, |r| r.walked_bytes),
         initial_rules_checksum: rep.initial.rules.map(|r| r.checksum),
+        initial_scenario_checksum: initial_scenario.as_ref().ok().map(|s| s.checksum),
+        initial_scenario_walked_bytes: initial_scenario
+            .as_ref()
+            .map_or(0, |s| s.bytes_walked),
+        initial_scenario_error: initial_scenario.as_ref().err().cloned(),
         phase,
         latency,
         turns_total: rep.turns.len(),
@@ -580,6 +606,21 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         }
     }
     res
+}
+
+/// Derive the retail `Game::init` `ScenarioData` state for a recording.
+///
+/// The two shipped strings are read from the `ron-data` root that **owns this replay**,
+/// never from a guessed install location — the same admission rule the static map-style
+/// content uses. There is no fallback: a missing table returns the refusal.
+fn initial_scenario_for_replay(
+    rep: &Replay,
+) -> Result<crate::scenario_channel::InitialScenarioChannel, String> {
+    let Some(root) = crate::map_style::ron_data_root_for_replay(&rep.path) else {
+        return Err("replay path has no owning ron-data/rules.xml ancestor".into());
+    };
+    crate::scenario_channel::InitialScenarioChannel::load_from_ron_data(&root)
+        .map_err(|error| error.to_string())
 }
 
 fn initial_items_for_replay(

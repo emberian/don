@@ -171,6 +171,7 @@ dependencies = [
 name = "don-content"
 version = "0.1.0"
 dependencies = [
+ "don-bhs-cc",
  "don-rules",
  "quick-xml",
 ]
@@ -206,6 +207,7 @@ version = "0.1.0"
 dependencies = [
  "don-bhs",
  "don-bhs-cc",
+ "don-content",
  "don-net",
  "don-sim",
 ]

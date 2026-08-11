@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Replay-driven validation harness: feed a real .rcx command stream into don-sim and compare our lockstep checksum channels against the recorded ones, turn by turn."
 
-# No dependencies, by choice, for the same reason don-net has none: a green
-# `cargo test` here must never depend on the crates.io registry. Decompression
-# shells out to the system `gzip`, exactly as don-net's corpus tests do.
+# No *direct* third-party dependencies, by choice, for the same reason don-net has none.
+# Decompression shells out to the system `gzip`, exactly as don-net's corpus tests do.
+# `don-content` is a workspace path dependency: `scenario_channel` binds two shipped
+# `internal_strings.xml` ordinals through that crate's retail-derived positional
+# `StringTable` binder rather than growing a second XML parser here.
 [dependencies]
 don-bhs = { path = "../don-bhs" }
+don-content = { path = "../don-content" }
 don-net = { path = "../don-net" }
 don-sim = { path = "../don-sim" }
 

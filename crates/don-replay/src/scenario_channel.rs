@@ -5,17 +5,15 @@
 //! of `user_warnings`. It does not execute scenario scripts or infer any state that the
 //! caller did not supply.
 //!
-//! The module is deliberately standalone until it is wired into `don-replay`:
-//!
-//! ```text
-//! rustc --edition 2021 --test crates/don-replay/src/scenario_channel.rs \
-//!   -o /tmp/scenario-channel-test
-//! /tmp/scenario-channel-test
-//! ```
+//! [`InitialScenarioChannel`] closes the loop: it combines the traversal with the state
+//! `ScenarioFuncSet::init` `0x00a03c30` leaves behind and the two shipped
+//! `internal_strings.xml` ordinals that initializer installs, and is what
+//! [`crate::state::SimBridge::populate_scenario_initial`] puts on the channel.
 
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// First recorded value in every one of the 21 checksum-bearing corpus files.
 ///
@@ -684,9 +682,11 @@ pub fn scenario_checksum(
 //     0x00a04027  call String::operator=   ; = int_str_array[0x1d178 / 0x14 = 5958]
 //     0x00a0423a  call String::operator=   ; temp_save = int_str_array[0x1d18c/0x14 = 5959]
 //
-// Those two values live in shipped `internal_strings.xml`, which is **not** in the local
-// `ron-data/` extraction, so this module cannot produce the channel on its own. It takes
-// them as inputs and refuses to guess.
+// Those two values live in shipped `internal_strings.xml`. The extraction protocol is in
+// `docs/assembly/scenario-initial-state.md` §7; the file itself is gitignored proprietary
+// game data, so [`InitialScenarioChannel::load_from_ron_data`] reads it from the local
+// install at run time and fails closed when it is absent. This module never guesses the
+// two strings and never hard-codes their text.
 
 /// `ScenarioData::msg_color` source constant at `0x00c8d260`, ten bytes.
 /// `0x00a03dfd movq [0xe8fe34], xmm0` plus `0x00a03e31 mov [0xe8fe3c], eax`.
@@ -822,6 +822,159 @@ impl RetailInitialScenario {
             objects_ignoring_orders: [RetailArray::empty(); PLAYER_COUNT],
             ignore_orders: 0,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Binding the two shipped strings, and the channel value that follows
+// ---------------------------------------------------------------------------
+
+/// Shipped file name of the internal string table. Retail loads it once at startup
+/// (`StringTable::init` `0x00A28520`) and never reloads it; see `docs/tracks/mod-story.md`
+/// §2.5.
+pub const INTERNAL_STRINGS_FILE: &str = don_content::string_table::INTERNAL_STRINGS;
+
+/// Why the two shipped ordinals could not be turned into a channel value.
+///
+/// Every variant is a refusal, not a fallback. There is no default string, because a
+/// wrong string produces a plausible-looking 32-bit number that is not retail's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InternalStringsError {
+    /// `ron-data/internal_strings.xml` is not in the local extraction.
+    NotExtracted(PathBuf),
+    Read {
+        path: PathBuf,
+        message: String,
+    },
+    /// The bytes are not the UTF-8 the supported install ships. `don-content`'s decoder
+    /// also accepts UTF-8 BOM and UTF-16LE BOM, but its entry point is private, so this
+    /// path names the encoding instead of guessing at it.
+    Encoding {
+        path: PathBuf,
+        message: String,
+    },
+    Parse {
+        path: PathBuf,
+        message: String,
+    },
+    /// The table parsed but is shorter than the ordinal `ScenarioFuncSet::init` indexes.
+    OrdinalMissing {
+        ordinal: u32,
+        entries: usize,
+    },
+    /// The derived state failed its own structural validation. Unreachable unless the
+    /// initializer table is edited into an inconsistent shape.
+    Checksum(ScenarioChannelError),
+}
+
+impl fmt::Display for InternalStringsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotExtracted(path) => write!(
+                f,
+                "{} is not extracted; channel 14 has no shipped string source",
+                path.display()
+            ),
+            Self::Read { path, message } => write!(f, "reading {}: {message}", path.display()),
+            Self::Encoding { path, message } => write!(f, "decoding {}: {message}", path.display()),
+            Self::Parse { path, message } => write!(f, "parsing {}: {message}", path.display()),
+            Self::OrdinalMissing { ordinal, entries } => {
+                write!(f, "ordinal {ordinal} beyond {entries} STRING entries")
+            }
+            Self::Checksum(e) => write!(f, "derived initial state is malformed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for InternalStringsError {}
+
+/// The `scenario_data` value a retail client carries from `Game::init` until the first
+/// event that moves a scenario counter.
+///
+/// Nothing here is fitted. The byte image is [`RetailInitialScenario`], derived field by
+/// field from `ScenarioFuncSet::init`'s instruction stream; the only two free inputs are
+/// read positionally out of shipped `internal_strings.xml` at the ordinals that
+/// initializer's own `add eax, 0x1d178` / `0x1d18c` name. The recorded wire checksum is
+/// never an input — [`CORPUS_INITIAL_SCENARIO_CHANNEL`] is a target to compare against,
+/// and the comparison is allowed to fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitialScenarioChannel {
+    pub checksum: u32,
+    pub bytes_walked: u64,
+    /// `int_str_array[5958]`, as read from the shipped table.
+    pub general_powers_script_file: String,
+    /// `int_str_array[5959]`.
+    pub temp_save: String,
+}
+
+impl InitialScenarioChannel {
+    /// Bind the two ordinals out of an already-parsed retail string table.
+    pub fn from_table(
+        table: &don_content::RetailStringTable,
+    ) -> Result<InitialScenarioChannel, InternalStringsError> {
+        let pick = |ordinal: u32| -> Result<String, InternalStringsError> {
+            table
+                .get(ordinal as usize)
+                .map(str::to_owned)
+                .ok_or(InternalStringsError::OrdinalMissing {
+                    ordinal,
+                    entries: table.len(),
+                })
+        };
+        let general_powers_script_file = pick(INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE)?;
+        let temp_save = pick(INTERNAL_STRING_ORDINAL_TEMP_SAVE)?;
+
+        let gp: Vec<u16> = general_powers_script_file.encode_utf16().collect();
+        let ts: Vec<u16> = temp_save.encode_utf16().collect();
+        let owner = RetailInitialScenario::new();
+        let checksum = scenario_checksum(&owner.state(ScenarioInitialStrings {
+            general_powers_script_file: Utf16String(&gp),
+            temp_save: Utf16String(&ts),
+        }))
+        .map_err(InternalStringsError::Checksum)?;
+
+        Ok(InitialScenarioChannel {
+            checksum: checksum.checksum,
+            bytes_walked: checksum.bytes_walked,
+            general_powers_script_file,
+            temp_save,
+        })
+    }
+
+    /// Read `<root>/internal_strings.xml` and bind the two ordinals.
+    ///
+    /// The parse is `don_content::string_table::parse_string_table_xml`, the crate's one
+    /// retail-derived positional binder — deliberately not a second parser here. A regex
+    /// over `<STRING hash="…">` misses the eight self-closing empty entries and shifts
+    /// every ordinal after 5950 by eight, which is exactly the window these two live in.
+    pub fn load_from_ron_data(root: &Path) -> Result<InitialScenarioChannel, InternalStringsError> {
+        let path = root.join(INTERNAL_STRINGS_FILE);
+        if !path.is_file() {
+            return Err(InternalStringsError::NotExtracted(path));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| InternalStringsError::Read {
+            path: path.clone(),
+            message: error.to_string(),
+        })?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|error| InternalStringsError::Encoding {
+                path: path.clone(),
+                message: error.to_string(),
+            })?
+            .trim_start_matches('\u{feff}');
+        let table = don_content::string_table::parse_string_table_xml(text).map_err(|error| {
+            InternalStringsError::Parse {
+                path: path.clone(),
+                message: format!("{error}"),
+            }
+        })?;
+        Self::from_table(&table)
+    }
+
+    /// Whether this derivation reproduces the value every checksum-bearing recording in
+    /// the corpus carries on its first checksummed turn.
+    pub fn matches_corpus_initial(&self) -> bool {
+        self.checksum == CORPUS_INITIAL_SCENARIO_CHANNEL
     }
 }
 
@@ -1060,16 +1213,15 @@ mod tests {
         assert_eq!(checksum.checksum, 0xba9c_1111);
     }
 
-    /// The open boundary, stated as a test rather than as prose so it cannot rot.
+    /// The two ordinals are the ones `ScenarioFuncSet::init` indexes, and they are the
+    /// only free inputs left in the state.
     ///
-    /// Every scalar, table, colour and container in `ScenarioFuncSet::init` is derived.
-    /// The two `int_str_array` strings are not available in the local shipped-data
-    /// extraction, and with them empty the derived state does **not** reproduce the value
-    /// all 21 checksum-bearing recordings carry. That is the measurement: those two
-    /// internal strings are non-empty, and the channel is not installable until
-    /// `internal_strings.xml` ordinals 5958 and 5959 are extracted.
+    /// With both strings empty the derived state does **not** reproduce the value all 21
+    /// checksum-bearing recordings carry — that measurement is retained, because it is
+    /// what says the shipped strings are load-bearing rather than decorative. Supplying
+    /// them is the whole remaining gap.
     #[test]
-    fn the_two_unsourced_internal_strings_are_what_still_blocks_the_channel() {
+    fn the_two_internal_strings_are_the_only_free_inputs() {
         assert_eq!(INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE, 5958);
         assert_eq!(INTERNAL_STRING_ORDINAL_TEMP_SAVE, 5959);
 
@@ -1079,12 +1231,9 @@ mod tests {
             .checksum;
         assert_ne!(
             empty_strings, CORPUS_INITIAL_SCENARIO_CHANNEL,
-            "if this ever passes, the two internal strings are empty and the channel \
-             can be installed directly"
+            "the derived state must not reach the corpus value without the shipped strings"
         );
 
-        // And the strings really do reach the checksum, so supplying them is the whole
-        // remaining gap rather than a decoration.
         let name: Vec<u16> = "general_powers".encode_utf16().collect();
         let moved = scenario_checksum(&owner.state(ScenarioInitialStrings {
             general_powers_script_file: Utf16String(&name),
@@ -1093,6 +1242,69 @@ mod tests {
         .unwrap();
         assert_ne!(moved.checksum, empty_strings);
         assert_eq!(moved.bytes_walked, 8_321 + 2 * name.len() as u64);
+    }
+
+    /// The binder, without needing the shipped file: a synthetic table whose ordinals
+    /// 5958/5959 hold known text must produce exactly the traversal's value for that
+    /// text, and neither ordinal may be silently defaulted when the table is short.
+    #[test]
+    fn the_table_binding_is_positional_and_refuses_a_short_table() {
+        let mut xml = String::from("<ROOT internal=\"1\" xml:space=\"preserve\">");
+        for ordinal in 0..=INTERNAL_STRING_ORDINAL_TEMP_SAVE {
+            let text = match ordinal {
+                INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE => "gp/file.bhs",
+                INTERNAL_STRING_ORDINAL_TEMP_SAVE => "scratch.svx",
+                _ => "",
+            };
+            xml.push_str(&format!(
+                "<STRING hash=\"{ordinal}\" needed=\"1\">{text}</STRING>"
+            ));
+        }
+        let short = don_content::string_table::parse_string_table_xml(&format!("{xml}</ROOT>"))
+            .expect("synthetic table parses");
+        assert_eq!(
+            short.len() as u32,
+            INTERNAL_STRING_ORDINAL_TEMP_SAVE + 1,
+            "the short table stops one entry past general_powers_script_file"
+        );
+
+        let bound = InitialScenarioChannel::from_table(&short).unwrap();
+        assert_eq!(bound.general_powers_script_file, "gp/file.bhs");
+        assert_eq!(bound.temp_save, "scratch.svx");
+
+        let owner = RetailInitialScenario::new();
+        let gp: Vec<u16> = "gp/file.bhs".encode_utf16().collect();
+        let ts: Vec<u16> = "scratch.svx".encode_utf16().collect();
+        let direct = scenario_checksum(&owner.state(ScenarioInitialStrings {
+            general_powers_script_file: Utf16String(&gp),
+            temp_save: Utf16String(&ts),
+        }))
+        .unwrap();
+        assert_eq!(bound.checksum, direct.checksum);
+        assert_eq!(bound.bytes_walked, direct.bytes_walked);
+        assert!(!bound.matches_corpus_initial());
+
+        xml.truncate(xml.rfind("<STRING").unwrap());
+        let truncated = don_content::string_table::parse_string_table_xml(&format!("{xml}</ROOT>"))
+            .expect("truncated table parses");
+        assert_eq!(
+            InitialScenarioChannel::from_table(&truncated),
+            Err(InternalStringsError::OrdinalMissing {
+                ordinal: INTERNAL_STRING_ORDINAL_TEMP_SAVE,
+                entries: INTERNAL_STRING_ORDINAL_TEMP_SAVE as usize,
+            })
+        );
+    }
+
+    #[test]
+    fn an_unextracted_string_table_is_a_refusal_not_an_empty_channel() {
+        let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-ron-data");
+        assert_eq!(
+            InitialScenarioChannel::load_from_ron_data(&missing),
+            Err(InternalStringsError::NotExtracted(
+                missing.join(INTERNAL_STRINGS_FILE)
+            ))
+        );
     }
 
     #[test]

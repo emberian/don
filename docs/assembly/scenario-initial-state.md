@@ -201,9 +201,137 @@ the field semantics independently. Guessing by name would have failed: the file 
 contains `.\conquest\temp\ctw_replay_temp_save.SVX` at ordinal 2839, a better-looking
 "temp save" that is not the one the code reads.
 
-§5 steps 2–5 remain open. The single pre-registered 32-bit test against
-`CORPUS_INITIAL_SCENARIO_CHANNEL = 0x09922b90` has not been run, so nothing here claims the
-channel agrees — only that its last missing input is now local.
+## 8. §5 steps 2–5, run (2026-08-11)
+
+The pre-registered test passes.
+
+```text
+int_str_array[5958] = "./scenario/scriptlibrary/general_powers.bhs"
+int_str_array[5959] = "editor_scratch_file.svx"
+walked 8453 bytes -> 0x09922b90   (target 0x09922b90)
+```
+
+`crates/don-replay/tests/scenario_channel_initial.rs::the_derived_game_init_scenario_state_is_the_value_retail_carries`,
+with the two strings bound positionally through `don_content::string_table::parse_string_table_xml`
+and every other byte a named store in §2. There were no free parameters: `8,321` derived
+fixed bytes plus `2 × (42 + 23)` UTF-16 payload bytes, one 32-bit comparison, no field
+touched after the value was computed. The §4 residual prediction — "roughly 6,783 of byte
+weight, on the order of 65 UTF-16 code units between them" — was 65 code units exactly.
+
+It is installed as `SimBridge::populate_scenario_initial` and reaches the corpus scoreboard
+through `WorldSim::from_replay`. The channel now walks 8,453 real bytes on **every** compare;
+none of its agreement is empty-state.
+
+### The deadline splits the corpus exactly in two, on AI players
+
+Over the whole corpus, `scenario_data` goes from 0 matches to **24,245**, all of them
+non-trivial, best survival **6,320** turns. The per-file split is not a spread — it is a
+clean partition, and the discriminator is whether the game had computer players
+(`initial.active_players` minus the play slots that issue commands):
+
+| recording | AI | `scenario_data` survived | first divergence | `script_run_time` |
+|---|---:|---:|---:|---|
+| 2018.11.17 | 0 | **6,320** | turn 6,322 `0x151c27b9` | whole recording |
+| 2018.12.01 | 0 | **6,059** | turn 6,061 `0xb2f1287d` | whole recording |
+| 2019.03.24 | 0 | **4,922** | turn 4,924 `0x443427a2` | whole recording |
+| 2020.02.21 | 0 | **4,210** | turn 4,212 `0x9a902885` | whole recording |
+| 2020.02.08 | 0 | **1,572** | turn 1,574 `0x7a54287c` | whole recording |
+| 2024.02.23 20:49 | 0 | **1,111** | *never* | whole recording |
+| 2024.03.29 21:52 | 0 | **37** | *never* | whole recording |
+| the other 14 | 2–5 | **1** | turn 3 | diverges turn 2 |
+
+All seven zero-AI recordings are also exactly the seven on which `script_run_time` agrees
+throughout, i.e. the seven that loaded **no BHS program**. All fourteen AI recordings load a
+program and lose both channels immediately. The two divergences are the same event seen from
+two channels: **an AI player's script runs, and `ScenarioFuncSet` builtins write
+`ScenarioData`.** That also explains why the turn-3 values repeat across unrelated games
+(`0x01d5286b` in six of them, `0x70b41e2b` and friends later) — same shipped scripts, same
+first calls — and it means channel 14's next increment is BHS work, not scenario work.
+
+### One derived hypothesis for turn 3, tested and rejected
+
+`Setup::build_game` `0x005ac190` is the only writer of `ScenarioData::general_powers_script`
+(`0xe8d41c`) — five of the eleven references to that global, against one read each in
+`Game::do_frame` and the walker. Its instruction stream:
+
+```text
+0x005ad94d  push 0xe8d46c            ; general_powers_script_file
+0x005ad952  mov  ecx, 0xeb6a90
+0x005ad957  call Compiler::compile   ; 0x009bf160, (String const&, ScriptReloadType=1)
+0x005ad95e  jne  0x005ad9b6          ; only on compile() == 0
+0x005ad960  push 0xe8d46c
+0x005ad965  mov  ecx, 0xe8d41c
+0x005ad96a  call String::operator=   ; general_powers_script = general_powers_script_file
+0x005ad972  mov  ecx, 0xe8d41c
+0x005ad978  call String::get_file    ; 0x00a1d320, basename
+0x005ad981  mov  ecx, 0xe8d41c
+0x005ad987  call String::operator=   ; general_powers_script = basename
+0x005ad99b  push 0x2e                ; L'.'
+0x005ad99d  mov  ecx, 0xe8d41c
+0x005ad9a2  call String::find_index_reverse   ; 0x00a16800
+0x005ad9b1  call String::truncate    ; 0x00a1afb0, strip the extension
+```
+
+So retail's post-setup value is the basename with its extension stripped:
+`general_powers`. That is a fully determined transition with no free parameter, which makes
+it a legitimate single hypothesis rather than a fit. It is **wrong**:
+
+| `general_powers_script` | walked | channel |
+|---|---:|---|
+| `""` (`ScenarioFuncSet::init`) | 8,453 | `0x09922b90` ✓ turn 2 |
+| `general_powers` (derived above) | 8,481 | `0x1f9b317b` |
+| `./scenario/scriptlibrary/general_powers` | 8,531 | `0x030a3b2d` |
+| `./scenario/scriptlibrary/general_powers.bhs` | 8,539 | `0x747d3c9c` |
+| `general_powers.bhs` | 8,489 | `0x42b632ea` |
+
+None is `0x01d5286b`. Reading the target as a constraint: `s1` **falls** from 11,152 to
+10,347, so the net byte weight *decreases* by 805, while any string assignment can only
+raise it. Whatever happens at turn 3 lowers a `0xffffffff`-initialized field.
+
+## 9. Residual analysis — what the two adler halves say the writer touched
+
+This section identifies fields; it installs nothing. Nothing below is in the producer.
+
+An adler-32 over a fixed-length buffer gives two independent sums, so a *structural*
+hypothesis with one unknown value is solvable rather than searchable. Take the hypothesis
+"one `int` field that `ScenarioFuncSet::init` left at `-1` now holds `V`, `0 ≤ V < 65536`,
+and the walked length is unchanged". Then with `D = Δs1`, `N = 8453` and the field at offset
+`p`, `d₂ = d₃ = −255` and
+
+```text
+d₀ + d₁ = D + 510            Σ i·dᵢ = (N − p)·D − Δs₂
+```
+
+is two equations in two unknowns — one `V` per offset, or none. Scanning only the 233 real
+`ff ff ff ff` windows of the derived image and keeping solutions that land on a *named*
+field:
+
+| recording | first-divergence value | unique named solution |
+|---|---|---|
+| 2018.11.17 turn 6,322 | `0x151c27b9` | `last_razed[0] = 2077` |
+| 2018.12.01 turn 6,061 | `0xb2f1287d` | `last_razed[2] = 2018` |
+| 2019.03.24 turn 4,924 | `0x443427a2` | `last_razed[1] = 2054` |
+| 2020.02.21 turn 4,212 | `0x9a902885` | `last_razed[0] = 2026` (also `find_counters[10] = 23701`) |
+| 2020.02.08 turn 1,574 | `0x7a54287c` | `last_razed[0] = 2017` |
+| AI turn 3, six recordings | `0x01d5286b` | `find_counters[24] = 2000` |
+| AI turn 3, five other values | — | **no** single-field solution |
+
+`last_razed` (`0xcc2190`) is written by exactly `Object::disband` `0x006455c0` and
+`Object::take_damage` `0x00652020`, and read by `ScenarioFuncSet::get_last_razed_building`
+`0x009f2980`. So §5 step 4's prediction — the channel expires when a building is razed — is
+right for human-only games, and the five independent recordings land on the same field with
+object-id-shaped values 2017–2077. `find_counters` is the scenario/BHS *find* mechanism
+(`ScenarioGroup::find_counter` is walked beside it), which is exactly what an AI script
+touches first.
+
+Weigh this correctly. It is an inference from two 16-bit sums plus one structural
+hypothesis, over a field set this document enumerates completely. Uniqueness within that
+set across five independent recordings is strong evidence and **not** proof: the hypothesis
+excludes multi-field changes by construction, and five of the AI values have no solution at
+all, which proves at least those are multi-field. The next lane should confirm from the
+writer — read `Object::disband`'s `last_razed` store and the `ScenarioFuncSet` find
+builtins — and must not install a value chosen to make a checksum agree. That is why none of
+these numbers is in `RetailInitialScenario`.
 
 ### `tilesets.xml` moved the generator a stage, and moved no channel
 

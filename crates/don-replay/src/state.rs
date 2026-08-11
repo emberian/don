@@ -381,7 +381,7 @@ impl SimBridge {
         "City records (cities)",
         "Good flat list (goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
-        "ScenarioData (scenario_data) — the initial global state is derived from ScenarioFuncSet::init 0x00a03c30, but two internal_strings.xml ordinals (5958, 5959) it assigns are not extracted locally; see docs/assembly/scenario-initial-state.md",
+        "ScenarioData mutation (scenario_data) — the ScenarioFuncSet::init 0x00a03c30 initial state is produced, but nothing writes units_killed/builds_destroyed/city_lost_to, so the channel is frozen at Game::init and expires at the recording's first kill; see docs/assembly/scenario-initial-state.md",
         "ScriptFile records (script_run_time) — only the empty ScriptFile::script_files count is produced; shipped programs still need their retail container/value walk metadata",
     ];
 
@@ -573,6 +573,34 @@ impl SimBridge {
     /// bytes and no recorded wire checksum is copied into state.
     pub fn populate_replay_rules(rules: &crate::initial::InitialRules, state: &mut SimState) {
         state.set_direct_channel(Channel::Rules, rules.checksum, rules.walked_bytes, 0);
+    }
+
+    /// Install channel 14 with the state a retail `Game::init` leaves in `ScenarioData`.
+    ///
+    /// Like [`SimBridge::populate_replay_rules`] this is outside [`SimBridge::PRODUCES`],
+    /// because its last two inputs come from shipped `internal_strings.xml` rather than
+    /// from a `don_sim::World`. Every byte is sourced: the image is
+    /// `ScenarioFuncSet::init` `0x00a03c30` read field by field, plus the two ordinals
+    /// that initializer indexes, walked through `ScenarioData::walk_data` `0x00997ad0`.
+    /// The recorded wire value is never copied in.
+    ///
+    /// **This is a frozen producer, and it is wrong on purpose after a point.**
+    /// `ScenarioData` is mutable: `Object::take_damage` `0x00652020`,
+    /// `Object::disband` `0x006455c0` and `City::capture` `0x00736c40` write
+    /// `units_killed` / `builds_destroyed` / `city_lost_to`, and nothing in `don-sim`
+    /// drives them. So the claim this makes is "no scenario counter has moved yet", which
+    /// is true from `Game::init` and false from the recording's first kill onward. The
+    /// turn it stops matching is the measurement.
+    pub fn populate_scenario_initial(
+        scenario: &crate::scenario_channel::InitialScenarioChannel,
+        state: &mut SimState,
+    ) {
+        state.set_direct_channel(
+            Channel::ScenarioData,
+            scenario.checksum,
+            scenario.bytes_walked,
+            0,
+        );
     }
 
     /// Install channel 15 from the authoritative BHS runtime's persistent program state.
