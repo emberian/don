@@ -740,8 +740,12 @@ not promote adjacent uncased behavior. Specifically:
    inside `crates/don-replay` — Old World (6), Himalayas (9), Mediterranean (12) and,
    as of this lane, **Great Lakes (14)** — while East Indies (18) and East Meets West
    (19) still stop at a named primitive and the remaining seventeen styles are not
-   dispatched at all. None of the four has an executable retail differential: they are
-   structure read off the disassembly, tier **C**.
+   dispatched at all. None of the four style virtuals has an executable retail
+   differential: they are structure read off the disassembly, tier **C**. One leaf they
+   depend on is now tier **B** — `Map::land_dist` `0x0069d970`, the ring distance-to-land
+   test, differentially compared over 100,041 trials with zero mismatches against retail's
+   own `circle_init 0x006817f0` tables (`schema/oracle-regression.json`, case
+   `land_dist`). That covers the leaf, not the virtuals that call it.
 9. **`land` values 0/1/2 are named from behaviour**, not from a definition. `is_ocean`
    accepts 1 and 2, `wipe` and `offmap_world` use 2. The PDB's `TileSetLandTypes`
    (`eTILE_FERTILE=0, eTILE_COASTAL=1, eTILE_OCEAN=2`) is a *tileset* enum and is only a

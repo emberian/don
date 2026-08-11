@@ -163,11 +163,18 @@ first fail (`left: 65, right: 2`).
 
 ## 5. What is deliberately not claimed
 
-- **No oracle case.** Nothing in this document is Tier B. `Map::land_dist`,
-  `Map::grow_valid` and `MapGreatLakes::make_continents` have no executable retail
-  differential; the seven existing world-generation cases in `crates/oracle` cover other
-  functions. `land_dist` is a small call-free leaf with two `WCoord` arguments and an
-  `int`, reading only `World` and the circle tables — it is a good next oracle case.
+- **Mostly no oracle case.** `Map::land_dist` **is** now Tier B: registered in
+  `crates/oracle` and differentially compared over 100,041 trials with zero mismatches,
+  including its answer distribution and termination reasons
+  (`schema/oracle-regression.json`, case `land_dist`). Its ABI note carries one correction
+  to this document's reading — the PDB marks the function virtual, but the body never reads
+  `ECX` and both `WCoord`s arrive **by value** at `[ebp+8]`/`[ebp+0xc]`.
+
+  Everything else here remains Tier C. `Map::grow_valid` and
+  `MapGreatLakes::make_continents` still have no executable retail differential, and the
+  `land_dist` case proves the leaf over generated `WData` planes — it claims nothing about
+  candidate selection, the spacing threshold, or whether a seeded generator ever produces
+  the planes fed to it.
 - **The `check_player_land` radius is a carried constant.** `MAP_PLAYER_LAND_RADIUS = 6`
   comes from the unit-type chain above; no crate in this workspace loads
   `unittypes.items[349]` yet, so the value is inherited from the Mediterranean lane's
