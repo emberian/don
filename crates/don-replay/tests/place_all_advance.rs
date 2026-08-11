@@ -11,13 +11,18 @@
 use don_replay::harness::WorldSim;
 use don_replay::initial::InitialItemBoundary;
 use don_replay::place_all_advance::{
-    advance_place_all_boundary, resolve_mountain_ranges, OilGoodPolicy, PlaceAllAdvanceError,
-    PlaceAllAdvanceFacts, PlaceAllStop, MOUNTAINS_ADD_MOUNTAIN_VA, MOUNTAIN_RANGE_SOURCE_FILE,
-    WORLD_SET_OIL_AT_VA,
+    advance_place_all_boundary, advance_place_all_boundary_owned, resolve_mountain_ranges,
+    OilGoodPolicy, PlaceAllAdvanceError, PlaceAllAdvanceFacts, PlaceAllStop,
+    MOUNTAINS_ADD_MOUNTAIN_VA, MOUNTAIN_RANGE_SOURCE_FILE, WORLD_SET_OIL_AT_VA,
 };
 use don_replay::replay::Replay;
 use don_sim::rng::Random;
 use don_sim::systems::mountains::Mountains;
+use don_sim::systems::terrain_groups::PlaceAllOwnerSource;
+use don_sim::systems::terrain_region_continuation::{
+    PlaceRegionGroupOwnerReceipt, PlaceRegionGroupOwners,
+};
+use don_sim::systems::world_oil_goods::OilGoodRuntime;
 use std::path::{Path, PathBuf};
 
 const PLACE_ALL_VA: u32 = 0x006a_70d0;
@@ -291,6 +296,72 @@ fn crossing_the_void_oil_good_effect_reaches_add_mountain_at_group_two() {
     assert!(!advance.crossed_oil_good_effects.is_empty());
 }
 
+/// Exact owner-state stop delta for the dominant Great Lakes fixture.
+///
+/// The legacy schedule stops at group zero's first oil request. Supplying the
+/// cold post-`Objects::init` Good owner executes every oil leaf, retains their
+/// Goods/World receipts, completes the two leading forest groups, and then
+/// stops at group two's still-proprietary mountain-template producer. No void
+/// acknowledgement participates in this path.
+#[test]
+fn exact_oil_owner_moves_great_lakes_from_group_zero_oil_to_group_two_mountain() {
+    let (Some(rep), Some(mountains)) = (great_lakes(), shipped_mountains()) else {
+        return;
+    };
+    let sim = WorldSim::from_replay(&rep);
+    let plan = sim.initial_items.as_ref().expect("plan");
+    let map = sim.initial_world.as_ref().expect("prefix world");
+    let continent = sim.initial_continent.as_ref().expect("continent receipt");
+    let facts = PlaceAllAdvanceFacts {
+        mountains: Some(mountains),
+        helping: Some(don_replay::place_all_advance::initial_region_helping_state(
+            &map.world,
+        )),
+        oil_good_policy: OilGoodPolicy::Stop,
+        ..PlaceAllAdvanceFacts::default()
+    };
+    let owners = PlaceRegionGroupOwners {
+        mountains: None,
+        oil_goods: Some(OilGoodRuntime::default()),
+    };
+
+    let legacy = advance_place_all_boundary(plan, map, continent, &facts).unwrap();
+    let owned = advance_place_all_boundary_owned(plan, map, continent, &facts, &owners).unwrap();
+
+    assert!(matches!(
+        legacy.stop,
+        PlaceAllStop::OilGoodMutation { group_index: 0, .. }
+    ));
+    assert!(matches!(
+        owned.stop,
+        PlaceAllStop::MountainsAddMountain { group_index: 2, .. }
+    ));
+    assert_eq!(owned.completed_groups, [0, 1]);
+    assert!(owned.crossed_oil_good_effects.is_empty());
+    assert!(!owned.owner_receipts.is_empty());
+    assert!(owned
+        .owner_receipts
+        .iter()
+        .all(|receipt| matches!(receipt.source, PlaceAllOwnerSource::Player { .. })));
+
+    let mut prior_goods_after = None;
+    for receipt in &owned.owner_receipts {
+        let PlaceRegionGroupOwnerReceipt::OilGood(oil) = &receipt.execution else {
+            panic!("Great Lakes prefix should execute only oil owners");
+        };
+        assert_eq!(oil.rng_draws, 0);
+        if let Some(previous) = prior_goods_after {
+            assert_eq!(oil.before.goods_checksum, previous);
+        }
+        prior_goods_after = Some(oil.after.goods_checksum);
+    }
+
+    assert_eq!(
+        owners.oil_goods.as_ref().unwrap(),
+        &OilGoodRuntime::default()
+    );
+}
+
 /// Without the shipped `MOUNTAINS` section the survey must stop at
 /// `Mountains::randomize_mountains` and not guess a draw count.
 #[test]
@@ -302,8 +373,9 @@ fn an_absent_mountain_section_stops_before_the_first_draw() {
     let plan = sim.initial_items.as_ref().expect("plan");
     let map = sim.initial_world.as_ref().expect("prefix world");
     let continent = sim.initial_continent.as_ref().expect("continent receipt");
-    let advance = advance_place_all_boundary(plan, map, continent, &PlaceAllAdvanceFacts::default())
-        .expect("survey");
+    let advance =
+        advance_place_all_boundary(plan, map, continent, &PlaceAllAdvanceFacts::default())
+            .expect("survey");
     assert_eq!(advance.stop, PlaceAllStop::MountainRangeLists);
     assert_eq!(advance.stop.name(), "place_all_mountain_range_lists");
     assert_eq!(advance.mountain_range_lengths, None);

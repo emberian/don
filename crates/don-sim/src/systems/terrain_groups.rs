@@ -31,7 +31,8 @@ use super::terrain_player_mountain_retry::{
     PlayerMountainTemplateRetryError, PlayerMountainTemplateRetryReceipt,
 };
 use super::terrain_region_continuation::{
-    PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupReceipt,
+    PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupOwnerReceipt,
+    PlaceRegionGroupOwners, PlaceRegionGroupReceipt,
 };
 use super::terrain_region_patterns::{
     RegionPatternError, RegionPatternOutcome, RegionPatternReceipt,
@@ -39,6 +40,7 @@ use super::terrain_region_patterns::{
 use super::terrain_region_placement::{
     PlaceRegionGroupCall, PlaceRegionGroupPrefixReceipt, RegionHelpingState,
 };
+use super::world_oil_goods::{apply_world_set_oil_at, OilGoodMutation, OilGoodMutationError};
 use crate::rng::Random;
 
 /// `TerrainGroup` (PDB size 156), excluding native vbase/pointer representation.
@@ -173,6 +175,9 @@ pub struct PlaceAllPreviewReceipt {
     pub region_pattern: Option<RegionPatternReceipt>,
     /// One receipt per attempted pattern-1/2/3 group in native group order.
     pub region_pattern_dispatches: Vec<RegionPatternGroupReceipt>,
+    /// Exact mountain/oil owner leaves executed on staged `place_all` state.
+    /// The caller-owned transaction remains uncommitted on every boundary.
+    pub owner_receipts: Vec<PlaceAllOwnerExecutionReceipt>,
     /// Exact pattern-0 player/start-ring calls, including locally closed growth
     /// and mountain-template retry continuations.
     pub player_group_prefix: Option<Vec<PlacePlayerGroupReceipt>>,
@@ -224,6 +229,24 @@ pub struct PlayerPatternGroupReceipt {
 pub struct RegionPatternGroupReceipt {
     pub group_index: usize,
     pub pattern: RegionPatternReceipt,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PlaceAllOwnerSource {
+    Player {
+        clump_index: usize,
+        player_index: usize,
+    },
+    Region {
+        call_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceAllOwnerExecutionReceipt {
+    pub group_index: usize,
+    pub source: PlaceAllOwnerSource,
+    pub execution: PlaceRegionGroupOwnerReceipt,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -508,6 +531,7 @@ pub enum PlaceAllError {
     InvalidPlacementReporting(PlacementReportingError),
     InvalidRegionGroupContinuation(PlaceRegionGroupError),
     InvalidRegionPattern(RegionPatternError),
+    InvalidOwnedOilGoodMutation(OilGoodMutationError),
     InvalidPlayerGroupPrefix(PlacePlayerGroupError),
     InvalidPlayerMountainTemplateRetry(PlayerMountainTemplateRetryError),
     InvalidMixedGroupInput {
@@ -820,6 +844,7 @@ impl TerrainGroups {
             None,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -855,6 +880,7 @@ impl TerrainGroups {
             place_players,
             helping,
             inputs,
+            None,
             Some(rules),
             None,
             None,
@@ -890,6 +916,7 @@ impl TerrainGroups {
             place_players,
             helping,
             inputs,
+            None,
             Some(rules),
             Some(map_style),
             None,
@@ -927,9 +954,51 @@ impl TerrainGroups {
             place_players,
             helping,
             inputs,
+            None,
             Some(rules),
             Some(map_style),
             Some(reporting),
+            &mut host,
+        )
+    }
+
+    /// Owner-aware replay adapter for the heterogeneous group transaction.
+    ///
+    /// The owner state is cloned beside the existing Group, World, RNG, and
+    /// mountain-cursor previews. It is threaded through player oil calls and
+    /// region-pattern mountain/oil calls, then committed only if `place_all`
+    /// reaches its native return. The optional tail facts select the same
+    /// doober/treeify/reporting continuations as the legacy wrappers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_group_owned_inputs(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        owners: &mut PlaceRegionGroupOwners,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        doober_rules: Option<DooberTilesetRules>,
+        map_style: Option<u8>,
+        reporting: Option<PlacementReportingInputs>,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_with_group_inputs_preview(
+            world,
+            regions,
+            random,
+            mountains,
+            progress,
+            place_players,
+            helping,
+            inputs,
+            Some(owners),
+            doober_rules,
+            map_style,
+            reporting,
             &mut host,
         )
     }
@@ -945,6 +1014,7 @@ impl TerrainGroups {
         place_players: i32,
         helping: Option<RegionHelpingState>,
         inputs: &[PlaceAllGroupInput],
+        mut owners: Option<&mut PlaceRegionGroupOwners>,
         doober_rules: Option<DooberTilesetRules>,
         map_style: Option<u8>,
         reporting: Option<PlacementReportingInputs>,
@@ -980,12 +1050,14 @@ impl TerrainGroups {
 
         let mut preview_world = world.clone();
         let mut preview_groups = self.groups.clone();
+        let mut preview_owners = owners.as_deref().cloned();
         let mut current_helping = helping;
         let mut next = boundary;
         let mut input_cursor = 0usize;
         let mut completed_placement_groups = Vec::new();
         let mut player_group_dispatches = Vec::new();
         let mut region_pattern_dispatches = Vec::new();
+        let mut owner_receipts = Vec::new();
         let mut player_calls = Vec::new();
         let mut player_group_mountain_retries = Vec::new();
         let mut player_group_host_events = Vec::new();
@@ -1043,15 +1115,33 @@ impl TerrainGroups {
 
             match input {
                 PlaceAllGroupInput::Player { externals, .. } => {
-                    let execution = Self::execute_player_pattern_group(
-                        &mut preview_groups[group_index],
-                        &mut preview_world,
-                        &mut preview_random,
-                        &mut preview_mountains,
-                        prepared,
-                        externals,
-                        &mut *host,
-                    )?;
+                    let (execution, executed_owners) =
+                        if let Some(staged_owners) = preview_owners.as_mut() {
+                            Self::execute_player_pattern_group_owned(
+                                &mut preview_groups[group_index],
+                                &mut preview_world,
+                                &mut preview_random,
+                                &mut preview_mountains,
+                                prepared,
+                                externals,
+                                staged_owners,
+                                &mut *host,
+                            )?
+                        } else {
+                            (
+                                Self::execute_player_pattern_group(
+                                    &mut preview_groups[group_index],
+                                    &mut preview_world,
+                                    &mut preview_random,
+                                    &mut preview_mountains,
+                                    prepared,
+                                    externals,
+                                    &mut *host,
+                                )?,
+                                Vec::new(),
+                            )
+                        };
+                    owner_receipts.extend(executed_owners);
                     player_calls.extend(execution.calls.iter().cloned());
                     player_group_mountain_retries
                         .extend(execution.mountain_retries.iter().cloned());
@@ -1100,8 +1190,23 @@ impl TerrainGroups {
                         .ok()
                         .filter(|&slot| slot < 5)
                         .ok_or(PlaceAllError::InvalidRegionPatternInputs { group_index })?;
-                    let receipt = preview_groups[group_index]
-                        .apply_region_pattern(
+                    let receipt = if let Some(staged_owners) = preview_owners.as_mut() {
+                        preview_groups[group_index].apply_region_pattern_owned_audited(
+                            &mut preview_world,
+                            regions,
+                            &mut preview_random,
+                            &mut preview_mountains,
+                            prepared.pattern,
+                            &prepared.primary_sizes,
+                            &prepared.secondary_sizes,
+                            group_selection.normalized_clumps_by_type[type_slot],
+                            place_players,
+                            group_index,
+                            current_helping,
+                            staged_owners,
+                        )
+                    } else {
+                        preview_groups[group_index].apply_region_pattern(
                             &mut preview_world,
                             regions,
                             &mut preview_random,
@@ -1115,7 +1220,17 @@ impl TerrainGroups {
                             current_helping,
                             externals,
                         )
-                        .map_err(PlaceAllError::InvalidRegionPattern)?;
+                    }
+                    .map_err(PlaceAllError::InvalidRegionPattern)?;
+                    for (call_index, call) in receipt.calls.iter().enumerate() {
+                        owner_receipts.extend(call.owners.iter().cloned().map(|execution| {
+                            PlaceAllOwnerExecutionReceipt {
+                                group_index,
+                                source: PlaceAllOwnerSource::Region { call_index },
+                                execution,
+                            }
+                        }));
+                    }
                     current_helping = receipt.helping_after;
                     if let Some(first) = receipt.calls.first() {
                         region_group_prefix = Some(first.placement.prefix.clone());
@@ -1197,6 +1312,9 @@ impl TerrainGroups {
                 *world = preview_world;
                 *random = preview_random;
                 *mountains = preview_mountains;
+                if let (Some(target), Some(staged)) = (owners.as_deref_mut(), preview_owners) {
+                    *target = staged;
+                }
                 return Ok(receipt.return_value);
             }
         }
@@ -1214,6 +1332,7 @@ impl TerrainGroups {
                 region_group_continuation,
                 region_pattern,
                 region_pattern_dispatches,
+                owner_receipts,
                 player_group_prefix: if player_group_dispatches.is_empty() {
                     None
                 } else {
@@ -1750,6 +1869,7 @@ impl TerrainGroups {
                 region_group_continuation,
                 region_pattern,
                 region_pattern_dispatches,
+                owner_receipts: Vec::new(),
                 player_group_prefix,
                 player_group_mountain_retries,
                 player_group_host_events,
@@ -1760,6 +1880,127 @@ impl TerrainGroups {
                 completed_placement_groups,
             },
             boundary,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_player_pattern_group_owned(
+        group: &mut TerrainGroup,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        prepared: &TerrainGroupPlacementPreparation,
+        externals: &[PlayerGroupExternalResolution],
+        owners: &mut PlaceRegionGroupOwners,
+        host: &mut impl FnMut(PlaceAllHostEvent),
+    ) -> Result<
+        (
+            PlayerPatternGroupReceipt,
+            Vec<PlaceAllOwnerExecutionReceipt>,
+        ),
+        PlaceAllError,
+    > {
+        // Without the exact Good owner this is precisely the legacy red
+        // boundary. Mountain mode 5 and Cliffs remain recorded-only red
+        // boundaries even when the region-mode-4 owner is present.
+        if owners.oil_goods.is_none() {
+            return Self::execute_player_pattern_group(
+                group, world, random, mountains, prepared, externals, host,
+            )
+            .map(|receipt| (receipt, Vec::new()));
+        }
+
+        let group_before = group.clone();
+        let world_before = world.clone();
+        let random_before = *random;
+        let mountains_before = mountains.clone();
+        let mut staged_owners = owners.clone();
+        let mut resolutions = externals.to_vec();
+        let mut owner_receipts = Vec::new();
+        let attempt_limit = world.wdata.len().saturating_mul(2).saturating_add(16);
+
+        for _ in 0..attempt_limit {
+            let mut attempt_group = group_before.clone();
+            let mut attempt_world = world_before.clone();
+            let mut attempt_random = random_before;
+            let mut attempt_mountains = mountains_before.clone();
+            let mut discard_host = |_| {};
+            let execution = Self::execute_player_pattern_group(
+                &mut attempt_group,
+                &mut attempt_world,
+                &mut attempt_random,
+                &mut attempt_mountains,
+                prepared,
+                &resolutions,
+                &mut discard_host,
+            )?;
+
+            let outcome = execution.outcome.clone();
+            let PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                clump_index,
+                player_index,
+                request:
+                    PlayerGroupExternalRequest::OilGoodMutation {
+                        world_x,
+                        world_y,
+                        enabled,
+                        good_type,
+                        coord_x,
+                        coord_y,
+                    },
+            } = outcome
+            else {
+                for &event in &execution.host_events {
+                    host(event);
+                }
+                if execution.outcome == PlayerPatternGroupOutcome::Complete {
+                    *group = attempt_group;
+                    *world = attempt_world;
+                    *random = attempt_random;
+                    *mountains = attempt_mountains;
+                    *owners = staged_owners;
+                }
+                return Ok((execution, owner_receipts));
+            };
+
+            let request = PlayerGroupExternalRequest::OilGoodMutation {
+                world_x,
+                world_y,
+                enabled,
+                good_type,
+                coord_x,
+                coord_y,
+            };
+            let goods = staged_owners
+                .oil_goods
+                .as_mut()
+                .expect("checked before the owner loop");
+            let execution = apply_world_set_oil_at(
+                &mut attempt_world,
+                goods,
+                OilGoodMutation {
+                    world_x,
+                    world_y,
+                    enabled,
+                    good_type,
+                    coord_x,
+                    coord_y,
+                },
+            )
+            .map_err(PlaceAllError::InvalidOwnedOilGoodMutation)?;
+            owner_receipts.push(PlaceAllOwnerExecutionReceipt {
+                group_index: prepared.group_index,
+                source: PlaceAllOwnerSource::Player {
+                    clump_index,
+                    player_index,
+                },
+                execution: PlaceRegionGroupOwnerReceipt::OilGood(execution),
+            });
+            resolutions.push(PlayerGroupExternalResolution::OilGoodsApplied { request });
+        }
+
+        Err(PlaceAllError::InvalidPlayerGroupInputs {
+            group_index: prepared.group_index,
         })
     }
 

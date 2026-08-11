@@ -14,6 +14,9 @@
 //! fail-closed in `don-sim`, so a stop leaves World, terrain groups, mountains
 //! and RNG byte-for-byte unchanged. The receipt is evidence about control flow
 //! and data dependencies, not about generated terrain.
+//! [`advance_place_all_boundary_owned`] also threads the canonical mountain
+//! and oil/Good owners through player and region pattern arms, retaining exact
+//! leaf receipts while preserving that read-only outer transaction.
 //!
 //! Addresses, all from the shipped PDB unless noted:
 //!
@@ -39,16 +42,17 @@ use crate::initial::{InitialItemBoundary, InitialItemReconstruction, InitialWorl
 use crate::place_all_boundary::TERRAIN_GROUPS_PLACE_ALL_RETURN_VA;
 use crate::post_continent::REGIONS_CLEAR_ALL_VA;
 use don_sim::rng::Random;
-use don_sim::systems::mountains::{Mountains, MountainRangeEntry, MountainRangeList};
+use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
 use don_sim::systems::terrain_doobers::DooberTilesetRules;
 use don_sim::systems::terrain_drop_tile::{DropTileExternalRequest, DropTileExternalResolution};
 use don_sim::systems::terrain_groups::{
-    PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, PlacementReportingInputs, TerrainGroups,
-    TerrainPlacementBoundary,
+    PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, PlaceAllOwnerExecutionReceipt,
+    PlacementReportingInputs, TerrainGroups, TerrainPlacementBoundary,
 };
 use don_sim::systems::terrain_player_group::{
     PlayerGroupExternalRequest, PlayerGroupExternalResolution,
 };
+use don_sim::systems::terrain_region_continuation::PlaceRegionGroupOwners;
 use don_sim::systems::terrain_region_placement::RegionHelpingState;
 
 pub const MOUNTAINS_RANDOMIZE_MOUNTAINS_VA: u32 = 0x0089_ca70;
@@ -109,15 +113,25 @@ pub const MOUNTAIN_RANGE_CAPACITY: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MountainRangeSourceError {
-    Read { path: String, message: String },
+    Read {
+        path: String,
+        message: String,
+    },
     MissingMountainsSection,
     UnterminatedMountainsSection,
-    MissingAreaAttribute { element: usize },
-    UnsupportedArea { element: usize, area: String },
+    MissingAreaAttribute {
+        element: usize,
+    },
+    UnsupportedArea {
+        element: usize,
+        area: String,
+    },
     /// More `MOUNTAIN` elements than `Mountains::add_range` can accept. Retail
     /// returns `-1` past the cap; refusing is better than silently modelling a
     /// truncation this shipped data never exercises.
-    TooManyRanges { elements: usize },
+    TooManyRanges {
+        elements: usize,
+    },
 }
 
 /// Reconstruct the three `MountainsData` range lists from shipped data.
@@ -310,6 +324,10 @@ pub enum OilGoodPolicy {
     /// default because it assumes nothing at all.
     Stop,
     /// Continue past the call, recording every request.
+    ///
+    /// This is the legacy evidence-only path. New reconstruction should pass
+    /// an `OilGoodRuntime` through [`advance_place_all_boundary_owned`] so the
+    /// Good slot/checksum transaction actually executes.
     ///
     /// This supplies no value: the `don-sim` resolution for this branch carries
     /// only an echo of the request, is void, and consumes no RNG
@@ -512,6 +530,9 @@ pub struct PlaceAllAdvanceReceipt {
     /// Group indices whose complete placement arm reached the common dispatcher
     /// edge at `0x006a8ee5` during this attempt.
     pub completed_groups: Vec<usize>,
+    /// Exact mountain/oil owner leaves executed on the staged preview. The
+    /// read-only survey commits neither this owner state nor the World.
+    pub owner_receipts: Vec<PlaceAllOwnerExecutionReceipt>,
     /// Ordered `World::set_oil_at` calls crossed under
     /// [`OilGoodPolicy::ContinueRecordingGoodEffects`]; always empty otherwise.
     pub crossed_oil_good_effects: Vec<DropTileExternalRequest>,
@@ -538,7 +559,9 @@ pub enum PlaceAllAdvanceError {
     /// driver must converge in at most one row per group plus one per crossed
     /// external. Exceeding the cap means the shipped dispatcher repeated a
     /// boundary without consuming the row that answers it.
-    DidNotConverge { attempts: usize },
+    DidNotConverge {
+        attempts: usize,
+    },
 }
 
 /// One row per selected group, plus one per crossed `World::set_oil_at`, with
@@ -556,6 +579,26 @@ pub fn advance_place_all_boundary(
     map: &InitialWorld,
     continent: &ContinentReceipt,
     facts: &PlaceAllAdvanceFacts,
+) -> Result<PlaceAllAdvanceReceipt, PlaceAllAdvanceError> {
+    advance_place_all_boundary_owned(
+        plan,
+        map,
+        continent,
+        facts,
+        &PlaceRegionGroupOwners::default(),
+    )
+}
+
+/// Owner-aware variant of [`advance_place_all_boundary`]. The supplied state
+/// is an entry snapshot, not a mutation target: every attempt replays from it
+/// and the survey commits nothing. Exact leaf receipts are retained in the
+/// returned schedule receipt.
+pub fn advance_place_all_boundary_owned(
+    plan: &InitialItemReconstruction,
+    map: &InitialWorld,
+    continent: &ContinentReceipt,
+    facts: &PlaceAllAdvanceFacts,
+    entry_owners: &PlaceRegionGroupOwners,
 ) -> Result<PlaceAllAdvanceReceipt, PlaceAllAdvanceError> {
     match plan.boundary {
         InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable { next_va }
@@ -597,6 +640,7 @@ pub fn advance_place_all_boundary(
         catalog_groups: catalog.groups.len(),
         selected_groups: Vec::new(),
         completed_groups: Vec::new(),
+        owner_receipts: Vec::new(),
         crossed_oil_good_effects: Vec::new(),
         oil_good_policy: facts.oil_good_policy,
         stop: PlaceAllStop::MountainRangeLists,
@@ -631,51 +675,27 @@ pub fn advance_place_all_boundary(
         let mut world = map.world.clone();
         let mut random = Random::new(continent.rng_final);
         let mut mountains = mountains.clone();
+        let mut owners = entry_owners.clone();
         // `Map::make` pushes literal one for `place_players` immediately before
         // the call, at 0x0068c007--0x0068c010. The wrapper is chosen by which
         // late-stage facts exist, so an absent one becomes its own stop rather
         // than a substituted default.
         let host = |_: PlaceAllHostEvent| {};
-        let result = match (facts.doober_rules, facts.reporting) {
-            (Some(rules), Some(reporting)) => groups.place_all_with_group_reporting_inputs(
-                &mut world,
-                &map.generation_regions,
-                &mut random,
-                &mut mountains,
-                facts.progress,
-                1,
-                facts.helping,
-                &inputs,
-                rules,
-                plan.inputs.map_style,
-                reporting,
-                host,
-            ),
-            (Some(rules), None) => groups.place_all_with_group_treeify_inputs(
-                &mut world,
-                &map.generation_regions,
-                &mut random,
-                &mut mountains,
-                facts.progress,
-                1,
-                facts.helping,
-                &inputs,
-                rules,
-                plan.inputs.map_style,
-                host,
-            ),
-            (None, _) => groups.place_all_with_group_inputs(
-                &mut world,
-                &map.generation_regions,
-                &mut random,
-                &mut mountains,
-                facts.progress,
-                1,
-                facts.helping,
-                &inputs,
-                host,
-            ),
-        };
+        let result = groups.place_all_with_group_owned_inputs(
+            &mut world,
+            &map.generation_regions,
+            &mut random,
+            &mut mountains,
+            &mut owners,
+            facts.progress,
+            1,
+            facts.helping,
+            &inputs,
+            facts.doober_rules,
+            facts.doober_rules.map(|_| plan.inputs.map_style),
+            facts.doober_rules.and(facts.reporting),
+            host,
+        );
         let (preview, boundary) = match result {
             Ok(return_value) => {
                 receipt.stop = PlaceAllStop::Completed { return_value };
@@ -713,6 +733,7 @@ pub fn advance_place_all_boundary(
         receipt
             .completed_groups
             .clone_from(&preview.completed_placement_groups);
+        receipt.owner_receipts.clone_from(&preview.owner_receipts);
 
         match boundary {
             TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } => {

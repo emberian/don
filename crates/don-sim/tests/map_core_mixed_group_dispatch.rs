@@ -7,10 +7,14 @@ use don_sim::systems::map_terrain::{land, World};
 use don_sim::systems::mountains::Mountains;
 use don_sim::systems::regions::Regions;
 use don_sim::systems::terrain_groups::{
-    PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, TerrainGroup, TerrainGroupInputKind,
-    TerrainGroups, TerrainPlacementBoundary,
+    PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, PlaceAllOwnerSource, TerrainGroup,
+    TerrainGroupInputKind, TerrainGroups, TerrainPlacementBoundary,
+};
+use don_sim::systems::terrain_region_continuation::{
+    PlaceRegionGroupOwnerReceipt, PlaceRegionGroupOwners,
 };
 use don_sim::systems::terrain_region_placement::RegionHelpingState;
+use don_sim::systems::world_oil_goods::OilGoodRuntime;
 
 fn world() -> World {
     let mut world = World::init_default_rules(25, 25);
@@ -247,4 +251,81 @@ fn conflicting_row_kind_fails_closed_before_the_player_kernel() {
     assert_eq!(groups, before_groups);
     assert_eq!(mountains, before_mountains);
     assert_eq!(random, before_random);
+}
+
+#[test]
+fn owned_player_oil_replays_at_the_call_site_and_outer_boundary_is_atomic() {
+    let mut world = world();
+    let regions = regions();
+    let mut oil_group = group(0);
+    oil_group.min_oil = 1;
+    oil_group.max_oil = 1;
+    let mut groups = TerrainGroups {
+        groups: vec![oil_group],
+        ..TerrainGroups::default()
+    };
+    let mut mountains = Mountains::default();
+    let mut random = Random::new(0x1234_5678);
+    let mut owners = PlaceRegionGroupOwners {
+        mountains: None,
+        oil_goods: Some(OilGoodRuntime::default()),
+    };
+    let before = (
+        world.clone(),
+        groups.clone(),
+        mountains.clone(),
+        random,
+        owners.clone(),
+    );
+    let inputs = [PlaceAllGroupInput::Player {
+        group_index: 0,
+        externals: Vec::new(),
+    }];
+
+    let error = groups
+        .place_all_with_group_owned_inputs(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            &mut owners,
+            0,
+            1,
+            Some(helping()),
+            &inputs,
+            None,
+            None,
+            None,
+            |_| {},
+        )
+        .unwrap_err();
+    let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
+        panic!("unexpected place_all result: {error:?}");
+    };
+
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0]);
+    assert_eq!(preview.owner_receipts.len(), 1);
+    assert_eq!(
+        preview.owner_receipts[0].source,
+        PlaceAllOwnerSource::Player {
+            clump_index: 0,
+            player_index: 0,
+        }
+    );
+    let PlaceRegionGroupOwnerReceipt::OilGood(oil) = &preview.owner_receipts[0].execution else {
+        panic!("expected an exact oil/Good owner receipt");
+    };
+    assert_eq!(oil.rng_draws, 0);
+    assert_eq!(oil.before.active_count, 0);
+    assert_eq!(oil.after.active_count, 1);
+    assert_ne!(oil.world_checksum_before, oil.world_checksum_after);
+
+    assert_eq!(world.wdata, before.0.wdata);
+    assert_eq!(world.tdata, before.0.tdata);
+    assert_eq!(world.checksum_image().0, before.0.checksum_image().0);
+    assert_eq!(groups, before.1);
+    assert_eq!(mountains, before.2);
+    assert_eq!(random, before.3);
+    assert_eq!(owners, before.4);
 }

@@ -11,7 +11,8 @@ use super::regions::{Regions, LAND_REGION_COUNT, SEA_REGION_END, SEA_REGION_FIRS
 use super::terrain_drop_tile::{DropTileExternalRequest, DropTileExternalResolution};
 use super::terrain_groups::TerrainGroup;
 use super::terrain_region_continuation::{
-    PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupReceipt,
+    PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupOwnerReceipt,
+    PlaceRegionGroupOwners, PlaceRegionGroupReceipt,
 };
 use super::terrain_region_placement::{PlaceRegionGroupCall, RegionHelpingState};
 use crate::rng::Random;
@@ -27,6 +28,9 @@ pub struct RegionPatternCallReceipt {
     pub oil_deposits: i32,
     pub is_helping: bool,
     pub placement: PlaceRegionGroupReceipt,
+    /// Exact subsystem executions used by the owned adapter. The legacy
+    /// recorded-resolution entry leaves this empty.
+    pub owners: Vec<PlaceRegionGroupOwnerReceipt>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -44,6 +48,8 @@ pub struct RegionPatternReceipt {
     pub initial_cycle_index: Option<usize>,
     pub region_selection_draws: u32,
     pub calls: Vec<RegionPatternCallReceipt>,
+    /// Flattened in native call order from [`Self::calls`].
+    pub owner_receipts: Vec<PlaceRegionGroupOwnerReceipt>,
     pub failed_clumps: Vec<usize>,
     pub helping_after: Option<RegionHelpingState>,
     pub external_resolutions_consumed: usize,
@@ -93,6 +99,93 @@ impl TerrainGroup {
         helping: Option<RegionHelpingState>,
         externals: &[DropTileExternalResolution],
     ) -> Result<RegionPatternReceipt, RegionPatternError> {
+        let mut resolver = RegionPatternResolver::Recorded(externals);
+        self.apply_region_pattern_with_resolver(
+            world,
+            regions,
+            random,
+            mountains,
+            pattern,
+            primary_sizes,
+            secondary_sizes,
+            normalized_clumps_for_type,
+            place_players,
+            group_index,
+            helping,
+            &mut resolver,
+        )
+    }
+
+    /// Execute the same pattern transaction against the exact local mountain
+    /// and oil/Good owners.
+    ///
+    /// The entire pattern is staged. Owner state is threaded across every
+    /// region/clump call, but Group, World, RNG, mountain cursors, and owners
+    /// commit only after the complete pattern returns. A Cliff request or a
+    /// missing owner remains the exact typed boundary and rolls everything
+    /// back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_region_pattern_owned_audited(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        pattern: i32,
+        primary_sizes: &[i32],
+        secondary_sizes: &[i32],
+        normalized_clumps_for_type: i32,
+        place_players: i32,
+        group_index: usize,
+        helping: Option<RegionHelpingState>,
+        owners: &mut PlaceRegionGroupOwners,
+    ) -> Result<RegionPatternReceipt, RegionPatternError> {
+        let mut staged_group = self.clone();
+        let mut staged_world = world.clone();
+        let mut staged_random = *random;
+        let mut staged_mountains = mountains.clone();
+        let mut staged_owners = owners.clone();
+        let mut resolver = RegionPatternResolver::Owned(&mut staged_owners);
+        let receipt = staged_group.apply_region_pattern_with_resolver(
+            &mut staged_world,
+            regions,
+            &mut staged_random,
+            &mut staged_mountains,
+            pattern,
+            primary_sizes,
+            secondary_sizes,
+            normalized_clumps_for_type,
+            place_players,
+            group_index,
+            helping,
+            &mut resolver,
+        )?;
+        if receipt.outcome == RegionPatternOutcome::Complete {
+            *self = staged_group;
+            *world = staged_world;
+            *random = staged_random;
+            *mountains = staged_mountains;
+            *owners = staged_owners;
+        }
+        Ok(receipt)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_region_pattern_with_resolver(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        pattern: i32,
+        primary_sizes: &[i32],
+        secondary_sizes: &[i32],
+        normalized_clumps_for_type: i32,
+        place_players: i32,
+        group_index: usize,
+        helping: Option<RegionHelpingState>,
+        resolver: &mut RegionPatternResolver<'_>,
+    ) -> Result<RegionPatternReceipt, RegionPatternError> {
         if !(1..=3).contains(&pattern) {
             return Err(RegionPatternError::UnsupportedPattern { pattern });
         }
@@ -135,6 +228,7 @@ impl TerrainGroup {
             initial_cycle_index: None,
             region_selection_draws: 0,
             calls: Vec::new(),
+            owner_receipts: Vec::new(),
             failed_clumps: Vec::new(),
             helping_after: helping,
             external_resolutions_consumed: 0,
@@ -154,7 +248,7 @@ impl TerrainGroup {
                 normalized_clumps_for_type,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 &mut receipt,
             )?;
         } else {
@@ -169,13 +263,18 @@ impl TerrainGroup {
                 normalized_clumps_for_type,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 &mut receipt,
             )?;
         }
         receipt.rng_state_after = random.state();
         Ok(receipt)
     }
+}
+
+enum RegionPatternResolver<'a> {
+    Recorded(&'a [DropTileExternalResolution]),
+    Owned(&'a mut PlaceRegionGroupOwners),
 }
 
 fn eligible_regions(group_type: i32, pattern: i32, world: &World, regions: &Regions) -> Vec<usize> {
@@ -210,7 +309,7 @@ fn apply_pattern_one(
     helping_threshold: i32,
     place_players: i32,
     group_index: usize,
-    externals: &[DropTileExternalResolution],
+    resolver: &mut RegionPatternResolver<'_>,
     receipt: &mut RegionPatternReceipt,
 ) -> Result<(), RegionPatternError> {
     let eligible = receipt.eligible_regions.clone();
@@ -234,7 +333,7 @@ fn apply_pattern_one(
                 is_helping,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 receipt,
             )?
             else {
@@ -267,7 +366,7 @@ fn apply_pattern_one(
                 true,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 receipt,
             )?
             else {
@@ -293,7 +392,7 @@ fn apply_pattern_two_or_three(
     helping_threshold: i32,
     place_players: i32,
     group_index: usize,
-    externals: &[DropTileExternalResolution],
+    resolver: &mut RegionPatternResolver<'_>,
     receipt: &mut RegionPatternReceipt,
 ) -> Result<(), RegionPatternError> {
     let mut cycle = receipt.eligible_regions.clone();
@@ -357,7 +456,7 @@ fn apply_pattern_two_or_three(
                 place_players,
                 group_index,
                 &mut used_mountain_regions,
-                externals,
+                resolver,
                 receipt,
             )?
             else {
@@ -377,7 +476,7 @@ fn apply_pattern_two_or_three(
                 is_helping,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 receipt,
             )?
             else {
@@ -418,7 +517,7 @@ fn invoke_type_five_pattern_retry(
     place_players: i32,
     group_index: usize,
     used_regions: &mut [bool; LAND_REGION_COUNT],
-    externals: &[DropTileExternalResolution],
+    resolver: &mut RegionPatternResolver<'_>,
     receipt: &mut RegionPatternReceipt,
 ) -> Result<Option<i32>, RegionPatternError> {
     let Some(mut result) = invoke_region_group(
@@ -433,7 +532,7 @@ fn invoke_type_five_pattern_retry(
         is_helping,
         place_players,
         group_index,
-        externals,
+        resolver,
         receipt,
     )?
     else {
@@ -453,7 +552,7 @@ fn invoke_type_five_pattern_retry(
             false,
             place_players,
             group_index,
-            externals,
+            resolver,
             receipt,
         )?;
         if ignored.is_none() {
@@ -475,7 +574,7 @@ fn invoke_type_five_pattern_retry(
             false,
             place_players,
             group_index,
-            externals,
+            resolver,
             receipt,
         )?;
         if matches!(
@@ -505,7 +604,7 @@ fn invoke_type_five_pattern_retry(
                 false,
                 place_players,
                 group_index,
-                externals,
+                resolver,
                 receipt,
             )?;
             group.coast_space = saved_coast_space;
@@ -536,7 +635,7 @@ fn invoke_type_five_pattern_retry(
                     false,
                     place_players,
                     group_index,
-                    externals,
+                    resolver,
                     receipt,
                 )?;
                 if matches!(
@@ -562,7 +661,7 @@ fn invoke_type_five_pattern_retry(
                         false,
                         place_players,
                         group_index,
-                        externals,
+                        resolver,
                         receipt,
                     )?;
                     if matches!(
@@ -597,7 +696,7 @@ fn invoke_mountain_range_cycle(
     is_helping: bool,
     place_players: i32,
     group_index: usize,
-    externals: &[DropTileExternalResolution],
+    resolver: &mut RegionPatternResolver<'_>,
     receipt: &mut RegionPatternReceipt,
 ) -> Result<i32, RegionPatternError> {
     let first = subtype;
@@ -614,7 +713,7 @@ fn invoke_mountain_range_cycle(
             is_helping,
             place_players,
             group_index,
-            externals,
+            resolver,
             receipt,
         )?
         else {
@@ -646,7 +745,7 @@ fn invoke_region_group(
     is_helping: bool,
     place_players: i32,
     group_index: usize,
-    externals: &[DropTileExternalResolution],
+    resolver: &mut RegionPatternResolver<'_>,
     receipt: &mut RegionPatternReceipt,
 ) -> Result<Option<i32>, RegionPatternError> {
     let helping = receipt.helping_after.map(|mut state| {
@@ -661,18 +760,53 @@ fn invoke_region_group(
         place_players,
         group_index,
     };
-    let placement = group
-        .apply_place_region_group(
-            world,
-            regions,
-            random,
-            call,
-            helping,
-            &externals[receipt.external_resolutions_consumed..],
-        )
-        .map_err(RegionPatternError::InvalidRegionPlacement)?;
+    let (placement, owner_receipts) = match resolver {
+        RegionPatternResolver::Recorded(externals) => (
+            group
+                .apply_place_region_group(
+                    world,
+                    regions,
+                    random,
+                    call,
+                    helping,
+                    &externals[receipt.external_resolutions_consumed..],
+                )
+                .map_err(RegionPatternError::InvalidRegionPlacement)?,
+            Vec::new(),
+        ),
+        RegionPatternResolver::Owned(owners) => {
+            match group.apply_place_region_group_owned_audited(
+                world, regions, random, call, helping, owners,
+            ) {
+                Ok(owned) => (owned.placement, owned.owners),
+                // An absent owner is a red boundary, not a failed simulation.
+                // Re-run on the unchanged state through the audited recorded
+                // entry solely to retain the exact request and prefix receipt.
+                Err(
+                    PlaceRegionGroupError::MissingMountainRuntime { .. }
+                    | PlaceRegionGroupError::MissingOilGoodRuntime { .. },
+                ) => (
+                    group
+                        .apply_place_region_group_audited(
+                            world,
+                            regions,
+                            random,
+                            call,
+                            helping,
+                            &[],
+                        )
+                        .map_err(RegionPatternError::InvalidRegionPlacement)?,
+                    Vec::new(),
+                ),
+                Err(error) => return Err(RegionPatternError::InvalidRegionPlacement(error)),
+            }
+        }
+    };
     receipt.external_resolutions_consumed += placement.external_resolutions_consumed;
     receipt.helping_after = placement.helping_after;
+    receipt
+        .owner_receipts
+        .extend(owner_receipts.iter().cloned());
     let outcome = placement.outcome;
     receipt.calls.push(RegionPatternCallReceipt {
         placed_length_before: group.placed.len(),
@@ -682,6 +816,7 @@ fn invoke_region_group(
         oil_deposits: oil,
         is_helping,
         placement,
+        owners: owner_receipts,
     });
     match outcome {
         PlaceRegionGroupOutcome::Returned(result) => Ok(Some(result)),

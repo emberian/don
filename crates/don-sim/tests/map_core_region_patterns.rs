@@ -4,14 +4,25 @@
 
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, wflag, World};
+use don_sim::systems::mountain_add_runtime::{
+    GridOffset, MountainAddRuntime, MountainTemplateRuntime,
+};
 use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
-use don_sim::systems::regions::Regions;
+use don_sim::systems::regions::{Regions, SEA_REGION_FIRST};
 use don_sim::systems::terrain_drop_tile::{DropTileExternalRequest, DropTileExternalResolution};
 use don_sim::systems::terrain_groups::{
     PlaceAllError, TerrainGroup, TerrainGroups, TerrainPlacementBoundary,
 };
-use don_sim::systems::terrain_region_patterns::{RegionPatternOutcome, RegionPatternReceipt};
+use don_sim::systems::terrain_region_continuation::{
+    PlaceRegionGroupError, PlaceRegionGroupOwnerReceipt, PlaceRegionGroupOwners,
+};
+use don_sim::systems::terrain_region_patterns::{
+    RegionPatternError, RegionPatternOutcome, RegionPatternReceipt,
+};
 use don_sim::systems::terrain_region_placement::RegionHelpingState;
+use don_sim::systems::world_oil_goods::{
+    apply_world_set_oil_at, OilGoodMutation, OilGoodMutationError, OilGoodRuntime,
+};
 
 fn world(xs: i32, ys: i32) -> World {
     let mut world = World::init_default_rules(xs, ys);
@@ -32,6 +43,191 @@ fn group(group_type: i32) -> TerrainGroup {
         group_type,
         ..TerrainGroup::default()
     }
+}
+
+fn mountain_owner(world: &World, template: usize) -> MountainAddRuntime {
+    let mut templates = vec![None; template + 1];
+    templates[template] = Some(MountainTemplateRuntime {
+        mount_tiles: vec![GridOffset::new(0, 0)],
+        mount_wcoords: vec![GridOffset::new(0, 0)],
+        solid_mount_wcoords: vec![GridOffset::new(0, 0)],
+    });
+    MountainAddRuntime::new(world.wdata.len(), templates)
+}
+
+#[test]
+fn owned_pattern_threads_mountain_state_and_retains_the_exact_leaf_receipt() {
+    let mut world = world(9, 9);
+    let mut regions = Regions::default();
+    region(&mut regions, 1, 6, &[(4, 4)]);
+    let mut terrain_group = group(5);
+    let mut mountains = Mountains {
+        small_ranges: MountainRangeList::new(vec![MountainRangeEntry::new(12, 0)]),
+        ..Mountains::default()
+    };
+    let mut random = Random::new(17);
+    let mut owners = PlaceRegionGroupOwners {
+        mountains: Some(mountain_owner(&world, 12)),
+        oil_goods: Some(OilGoodRuntime::default()),
+    };
+
+    let receipt = terrain_group
+        .apply_region_pattern_owned_audited(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            1,
+            &[1],
+            &[0],
+            i32::MAX,
+            0,
+            0,
+            None,
+            &mut owners,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.outcome, RegionPatternOutcome::Complete);
+    assert_eq!(receipt.owner_receipts.len(), 1);
+    assert_eq!(receipt.calls[0].owners, receipt.owner_receipts);
+    let PlaceRegionGroupOwnerReceipt::Mountain(owner) = &receipt.owner_receipts[0] else {
+        panic!("expected the mountain owner receipt");
+    };
+    assert_eq!(owner.execution.liberr, 0);
+    assert_eq!(owner.execution.rng_draws, 0);
+    assert_ne!(owner.world.checksum_before, owner.world.checksum_after);
+    assert_eq!(terrain_group.placed, [1]);
+    assert_eq!(
+        owners.mountains.as_ref().unwrap().mountain_types.items,
+        [12]
+    );
+}
+
+#[test]
+fn owned_pattern_cliff_boundary_rolls_back_every_threaded_owner() {
+    let mut world = world(9, 9);
+    let mut regions = Regions::default();
+    region(&mut regions, 1, 6, &[(4, 4)]);
+    let mut terrain_group = group(8);
+    let mut mountains = Mountains::default();
+    let mut random = Random::new(17);
+    let mut owners = PlaceRegionGroupOwners {
+        mountains: None,
+        oil_goods: Some(OilGoodRuntime::default()),
+    };
+    let before = (
+        terrain_group.clone(),
+        world.clone(),
+        mountains.clone(),
+        random,
+        owners.clone(),
+    );
+
+    let receipt = terrain_group
+        .apply_region_pattern_owned_audited(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            1,
+            &[1],
+            &[0],
+            i32::MAX,
+            0,
+            0,
+            None,
+            &mut owners,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        receipt.outcome,
+        RegionPatternOutcome::ExternalResolutionRequired {
+            request: DropTileExternalRequest::CliffsPositionCliff { .. }
+        }
+    ));
+    assert!(receipt.owner_receipts.is_empty());
+    assert_eq!(terrain_group, before.0);
+    assert_eq!(world.wdata, before.1.wdata);
+    assert_eq!(world.tdata, before.1.tdata);
+    assert_eq!(world.checksum_image().0, before.1.checksum_image().0);
+    assert_eq!(mountains, before.2);
+    assert_eq!(random, before.3);
+    assert_eq!(owners, before.4);
+}
+
+#[test]
+fn owned_pattern_keeps_nonnegative_oil_down_chains_as_a_typed_red_boundary() {
+    let mut world = world(9, 9);
+    for cell in &mut world.wdata {
+        cell.land = land::OCEAN;
+    }
+    let mut regions = Regions::default();
+    region(&mut regions, SEA_REGION_FIRST, 6, &[(4, 4)]);
+    let mut terrain_group = group(7);
+    let mut mountains = Mountains::default();
+    let mut random = Random::new(17);
+
+    // Produce the matching Good through its exact initializer on a separate
+    // world, then present the still-unowned object-band chain to this call.
+    let mut goods_world = world.clone();
+    let mut goods = OilGoodRuntime::default();
+    apply_world_set_oil_at(
+        &mut goods_world,
+        &mut goods,
+        OilGoodMutation::at(4, 4, true),
+    )
+    .unwrap();
+    world.wdata_mut(4, 4).down = 0;
+    world.wdata_mut(4, 4).down_who = 9;
+    let mut owners = PlaceRegionGroupOwners {
+        mountains: None,
+        oil_goods: Some(goods),
+    };
+    let before = (
+        terrain_group.clone(),
+        world.clone(),
+        mountains.clone(),
+        random,
+        owners.clone(),
+    );
+
+    let error = terrain_group
+        .apply_region_pattern_owned_audited(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            1,
+            &[1],
+            &[0],
+            i32::MAX,
+            0,
+            0,
+            None,
+            &mut owners,
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        RegionPatternError::InvalidRegionPlacement(PlaceRegionGroupError::InvalidOilGoodRuntime(
+            OilGoodMutationError::DownChainNeedsObjectBand {
+                slot: 0,
+                world_x: 4,
+                world_y: 4,
+                down: 0,
+                down_who: 9,
+            }
+        ))
+    );
+    assert_eq!(terrain_group, before.0);
+    assert_eq!(world.wdata, before.1.wdata);
+    assert_eq!(world.tdata, before.1.tdata);
+    assert_eq!(mountains, before.2);
+    assert_eq!(random, before.3);
+    assert_eq!(owners, before.4);
 }
 
 #[test]
