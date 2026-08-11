@@ -481,6 +481,24 @@ impl<T: Transport> Session<T> {
 
     /// Queue the local command package for `stamp` and broadcast it.
     pub fn send_command_package(&mut self, stamp: u32, play: i8, payload: &[u8]) -> io::Result<()> {
+        if payload.len() > crate::MAX_COMMAND_PACKAGE_PAYLOAD {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "command package payload is {} bytes; retail capacity is {}",
+                    payload.len(),
+                    crate::MAX_COMMAND_PACKAGE_PAYLOAD,
+                ),
+            ));
+        }
+        // A failed transport send must not leave a local-only package that can
+        // satisfy this participant's lockstep barrier. Queue the owned copy
+        // only after the complete framed message was accepted by Transport.
+        self.send_all(&NetMsg::CommandPackage {
+            stamp,
+            play,
+            payload,
+        })?;
         self.turns.entry(stamp).or_default().insert(
             play,
             TurnPackage {
@@ -489,11 +507,7 @@ impl<T: Transport> Session<T> {
                 payload: payload.to_vec(),
             },
         );
-        self.send_all(&NetMsg::CommandPackage {
-            stamp,
-            play,
-            payload,
-        })
+        Ok(())
     }
 
     /// Have we got a package from every player for this stamp? This is the

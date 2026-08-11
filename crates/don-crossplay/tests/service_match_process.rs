@@ -96,7 +96,7 @@ fn service_start_authorizes_match_start_and_turns_across_processes() {
 }
 
 #[test]
-fn relay_mode_keeps_native_turn_ownership_and_orders_halt_packages() {
+fn relay_mode_keeps_native_turn_ownership_and_orders_canonical_packages() {
     let peer = env!("CARGO_BIN_EXE_service-match-peer");
     let mut host = Command::new(peer)
         .args(["host", "--seed", "0x89abcdef", "--relay"])
@@ -152,6 +152,42 @@ fn relay_mode_keeps_native_turn_ownership_and_orders_halt_packages() {
         ), "{output}");
     }
     assert_eq!(turn_hash(&host_turn), turn_hash(&client_turn));
+
+    // Turn 1 deliberately carries two different, multi-command packages.
+    // Each is a canonical Group(single owner-local object) followed by the
+    // complete 22-byte MoveTo body. The relay supplies `play` from the
+    // confirmed native roster and must preserve each opaque payload exactly.
+    const HOST_GROUP_MOVE: &str = "0001000100074bb900007eb9000000000000000000000102003200";
+    const CLIENT_GROUP_MOVE: &str = "000101090007e02e0000803e000000000000000000000102003200";
+    writeln!(
+        host.stdin.as_mut().expect("host stdin"),
+        "TURN 1 {HOST_GROUP_MOVE}"
+    )
+    .expect("submit host Group+Move turn");
+    writeln!(
+        client.stdin.as_mut().expect("client stdin"),
+        "TURN 1 {CLIENT_GROUP_MOVE}"
+    )
+    .expect("submit client Group+Move turn");
+    let host_move = read_until(
+        &mut host_stdout,
+        r#""event":"turn""#,
+        "host Group+Move turn",
+    );
+    let client_move = read_until(
+        &mut client_stdout,
+        r#""event":"turn""#,
+        "client Group+Move turn",
+    );
+    let expected = format!(
+        r#""ordered":[{{"stamp":1,"play":0,"payload":"{HOST_GROUP_MOVE}"}},{{"stamp":1,"play":1,"payload":"{CLIENT_GROUP_MOVE}"}}]"#
+    );
+    for output in [&host_move, &client_move] {
+        assert!(output.contains(r#""stamp":1,"packages":2"#), "{output}");
+        assert!(output.contains(&expected), "{output}");
+    }
+    assert_eq!(turn_hash(&host_move), turn_hash(&client_move));
+    assert_ne!(turn_hash(&host_turn), turn_hash(&host_move));
 
     host.stdin.as_mut().unwrap().write_all(b"QUIT\n").unwrap();
     client.stdin.as_mut().unwrap().write_all(b"QUIT\n").unwrap();

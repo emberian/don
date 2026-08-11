@@ -16,6 +16,7 @@ use don_crossplay::match_bridge::{
 use don_crossplay::{AsyncDirectory, Attributes, Backend, Emission, Lobby, Outcome, ReqId};
 use don_net::{
     decode_commands, encode_commands, LocalMatch, Obfuscation, Role, Session, TcpTransport,
+    MAX_COMMAND_PACKAGE_PAYLOAD,
 };
 
 const HOST_ID: i32 = 101;
@@ -23,8 +24,8 @@ const CLIENT_ID: i32 = 202;
 const DEFAULT_GAME_SEED: u32 = 3_134_984_190;
 const MATCH_TIMEOUT: Duration = Duration::from_secs(15);
 const RELAY_LIFETIME: Duration = Duration::from_secs(10 * 60);
-const MAX_RELAY_LINE_BYTES: usize = 128;
-const HALT_COMMAND: u8 = 0x0c;
+// `TURN ` + max u32 + one separator + a complete 512-byte retail payload in hex.
+const MAX_RELAY_LINE_BYTES: usize = 4 + 1 + 10 + 1 + MAX_COMMAND_PACKAGE_PAYLOAD * 2;
 
 fn main() {
     if let Err(error) = run() {
@@ -478,17 +479,25 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
 }
 
 fn validate_browser_turn(payload: &[u8]) -> Result<(), String> {
+    if payload.is_empty() {
+        return Err("relay TURN command package must be nonempty".to_string());
+    }
+    if payload.len() > MAX_COMMAND_PACKAGE_PAYLOAD {
+        return Err(format!(
+            "relay TURN command package is {} bytes; retail capacity is {}",
+            payload.len(),
+            MAX_COMMAND_PACKAGE_PAYLOAD,
+        ));
+    }
     let mut obfuscation = Obfuscation::none();
     let commands = decode_commands(payload, &mut obfuscation)
         .map_err(|error| format!("relay TURN command payload is malformed: {error}"))?;
     let mut canonical = Vec::with_capacity(payload.len());
     encode_commands(&commands, &mut Obfuscation::none(), &mut canonical);
-    if commands.len() != 1
-        || commands[0].opcode != HALT_COMMAND
-        || commands[0].bytes != [HALT_COMMAND]
-        || canonical != payload
-    {
-        return Err("relay TURN admits exactly one canonical HaltCommand (0x0c)".to_string());
+    if canonical != payload {
+        return Err(
+            "relay TURN command package did not survive canonical decode/re-encode".to_string(),
+        );
     }
     Ok(())
 }
@@ -556,5 +565,44 @@ fn ensure_deadline(start: Instant, stage: &str) -> Result<(), String> {
         Err(format!("timed out during {stage}"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GROUP_MOVE: &[u8] = &[
+        0x00, 0x01, 0x00, 0x01, 0x00, // Group(who=0, o=1)
+        0x07, 0x4b, 0xb9, 0x00, 0x00, 0x7e, 0xb9, 0x00, 0x00, // x/y
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // set_angle/angle
+        0x01, 0x02, 0x00, 0x32, 0x00, // orders/queued/form/width/disembark
+    ];
+
+    #[test]
+    fn browser_relay_validation_is_package_generic_and_byte_exact() {
+        validate_browser_turn(&[0x0c]).expect("Halt remains canonical");
+        validate_browser_turn(GROUP_MOVE).expect("Group+Move is a canonical command list");
+        validate_browser_turn(&[0x0c, 0x0c])
+            .expect("transport admits more than one recognized command");
+
+        assert!(validate_browser_turn(&[]).unwrap_err().contains("nonempty"));
+        assert!(validate_browser_turn(&[0x52])
+            .unwrap_err()
+            .contains("unknown opcode"));
+        assert!(validate_browser_turn(&GROUP_MOVE[..GROUP_MOVE.len() - 1])
+            .unwrap_err()
+            .contains("truncated"));
+    }
+
+    #[test]
+    fn browser_relay_validation_enforces_retail_data_capacity() {
+        validate_browser_turn(&vec![0x0c; MAX_COMMAND_PACKAGE_PAYLOAD])
+            .expect("512 one-byte commands exactly fill retail data[]");
+        assert!(
+            validate_browser_turn(&vec![0x0c; MAX_COMMAND_PACKAGE_PAYLOAD + 1])
+                .unwrap_err()
+                .contains("retail capacity")
+        );
     }
 }

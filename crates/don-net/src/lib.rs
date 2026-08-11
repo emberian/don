@@ -210,6 +210,12 @@ pub struct Command<'a> {
     pub bytes: &'a [u8],
 }
 
+/// Capacity of retail `CommandPackage::data`.
+///
+/// This is the payload ceiling shared by the replay record and
+/// `NetMsg_CommandPackageData`; it excludes either framing header.
+pub const MAX_COMMAND_PACKAGE_PAYLOAD: usize = 512;
+
 impl<'a> Command<'a> {
     pub fn name(&self) -> &'static str {
         COMMAND_NAMES
