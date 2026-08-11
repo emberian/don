@@ -33,7 +33,18 @@ something already written down.
 
 `tools/swarm-cargo-remote submit persvati <lane> -- <cargo args>` already exists. Use it.
 Remote jobs start from a full tracked checkout of the pushed `HEAD` and overlay only files
-named with repeated `--path`, so a lane must push or overlay explicitly.
+named with repeated `--path`, so a lane must overlay its changed files explicitly.
+
+⚠ **The remote baseline must already be on `origin`.** The submitter takes the *local*
+`HEAD` (`git rev-parse HEAD`) and has the executor fetch that commit from public GitHub, so
+an unpushed commit fails with `upload-pack: not our ref`. A crossplay lane hit exactly this
+on 2026-08-11. Lanes do not commit, so their `HEAD` is the orchestrator's — which makes this
+an **orchestrator obligation: push promptly after every landing.** A lane should check
+before submitting and fall back to local `tools/swarm-cargo` if the base is not published:
+
+```sh
+git rev-parse HEAD; git rev-parse origin/dev     # equal? remote is usable
+```
 
 | host | use for | constraint |
 |---|---|---|

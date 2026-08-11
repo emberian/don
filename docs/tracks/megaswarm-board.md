@@ -379,3 +379,26 @@ currently freezes `(100, 200)` for an actor at `(4800, 9600)`; retail would stor
 This belongs to whoever owns the movement/attack arms of `command.rs` — do not fix it from
 `don-env`, which would leave two meanings for `OrderRec::x` in one crate. Fixing it will
 change that frozen `don-env` fixture; that is expected, and the fixture is the wrong one.
+
+**BLOCKED ON (transient, not mine)** — 2026-08-11, lane `order-arms`: `cargo test -p don-sim
+--lib` is red at `crates/don-sim/src/command.rs:4064` — `Groups::get` now takes `i32` while
+`Bridge::action_hotkey` still passes `usize`. `cargo check -p don-sim --lib` was green minutes
+earlier, so this is a sibling mid-migration in `command.rs`, which I do not hold. Not touching
+it; re-checking instead. Flagging only so the next lane that hits it does not re-diagnose it.
+
+### FINDING (orchestrator) — `swarm-cargo-remote` needs the base commit pushed
+
+`tools/swarm-cargo-remote` line 134 takes the **local** `HEAD` and has the executor fetch
+that exact commit from public GitHub. Lanes do not commit, so their `HEAD` is the
+orchestrator's — and if the orchestrator has not pushed yet, submission dies with
+`upload-pack: not our ref`. The crossplay lane hit this and correctly fell back to local
+gates rather than committing to work around it.
+
+Check before submitting; fall back to local `tools/swarm-cargo` if these differ:
+
+```sh
+git rev-parse HEAD; git rev-parse origin/dev
+```
+
+This is an orchestrator obligation (push promptly), not a lane defect. Do not commit in
+order to unblock a remote build.
