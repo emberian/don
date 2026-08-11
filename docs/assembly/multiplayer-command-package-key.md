@@ -107,6 +107,28 @@ Three decisions worth stating, because each had a plausible alternative:
    raw equality — a ranked key is a representative of that class and can never carry bits
    24..31.
 
+### Why not the `game_seed` lobby attribute
+
+`don_net::lobby` recovers `STEAM_LOBBYKEY_GAME_SEED` = `"game_seed"`, documented there as
+"the simulation seed every peer must share". That looks like retail's own answer to this
+exact problem, and reaching for an invented `0xF0` id instead looks like routing around
+ground truth. It was proposed and rejected on evidence:
+
+`ConnectionData::send_game` `0x0094e200` and `send_player` `0x0094ec40` **do not call
+`NetSys::send*` at all**. They build an `unordered_map<wstring, wstring>` and hand it to
+`MultiplayerManager::Instance()` `0x00a30dc0`. All three addresses are inside the
+executable image (`0x00400000` + `0x00bb4000`), not in `CrossplayNetLib.dll`.
+
+This shim replaces `NetSys` — the transport. The lobby attributes are assembled inside the
+exe and routed to PlayFab through the exe's own manager, so **`game_seed` never crosses our
+wire**; retail never hands it to us. Serving it would mean hooking exe internals, which
+would give up the property this whole approach rests on: provide the eleven shipped exports
+and the retail binary talks to us instead of PlayFab, *with no patching of the game*.
+
+So the extension is not a shortcut past retail's mechanism. It is the only channel we own,
+and `game_seed` remains the right name for the value — it is what retail calls the same
+word on a wire we are not on.
+
 The read is gated the same way the two retail constructor calls are: `retail_executable_base`
 must accept the image, and the twenty instruction bytes at RVA `0x0054c312` must match the
 pinned stream after relocation adjustment. So the offsets are never applied to a build that
