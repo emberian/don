@@ -63,7 +63,8 @@ The client performs the replacement transport's exact direct contract:
 6. it receives the first verbatim retail `NETMSG_COMMANDPACKAGEDATA`, decodes command opcodes and all
    sixteen checksum words, and emits one JSON event per turn;
 7. it sends a slot-1 package for that same first stamp containing only a byte-identical copy of the
-   retail checksum command.
+   retail checksum command — or, when the stamp's package legitimately carries no checksum, a
+   package carrying no commands.
 
 Direct host/client frames retain the original `u32 length + payload` TCP contract. When the host
 relays one client's packet to another client, the shared transport sets the high length bit and
@@ -73,8 +74,9 @@ and host-authority checks tied to the actual origin in sessions with more than t
 and owned-peer binaries must therefore be rebuilt from the same `don-net` revision; a host rejects
 a client-supplied relayed-frame marker instead of accepting a forged origin.
 
-The first package is fail-closed: if its key cannot be recovered, use `--game-key`; if it has no
-checksum command, the client stops instead of skipping the stamp or fabricating a reply.
+The first package is fail-closed on the key: if none is announced and none can be recovered, the
+client stops instead of answering a turn it cannot read. Use `--game-key`, or run a shim host
+that announces `GameInfo::seed`.
 
 `--evidence PATH` is opt-in and never changes the reactive safety boundary. The peer still emits no
 game package until retail supplies the first authoritative stamp and checksum. After each accepted
@@ -107,14 +109,51 @@ only and must satisfy `1 <= N < --turns`. Passive evidence is limited to one obs
 passive mode deliberately emits no slot-1 package with which to commit and advance the lockstep
 stamp.
 
+## The match key
+
 Multiplayer command packages are XORed and have a deterministic 0/1-byte pad after each
-command. If `--game-key` is omitted, the client recovers a wire-compatible key by validating
-candidate XOR keys and all 256 relevant pad seeds against the complete 82-opcode decoder and
-the checksum invariant. The recovered key may be a canonical equivalent rather than the
-literal 32-bit global: the transform exposes only bits 0..23, and a short package can leave
-multiple low-byte seeds with the same observed pad prefix. Any accepted key reproduces the
-exact observed package and the outgoing checksum-only payload. A live-read key can instead be
-forced with `--game-key 0xG`.
+command. Both transforms are driven by one 32-bit word, `Game::info.seed`, which
+`CommandPackage::send` `0x0094c1e0` reads six instructions before it calls the `NetSys` send
+slot. See [`docs/assembly/multiplayer-command-package-key.md`](../assembly/multiplayer-command-package-key.md).
+
+The client takes that key from three places, in this order, and reports which one it used in
+`"game_key_source"`:
+
+1. **`retail-gameinfo-seed`** — the host announced it. A shim host inside
+   `riseofnations.exe` reads the live seed inside its `NetSys` send slot and hands it to each
+   peer over the `don_net::extension` transport extension (packet id `0xF0`, six bytes),
+   immediately before the package that needs it. `Session` refuses an announcement from anyone
+   but the authoritative host.
+2. **`operator-supplied`** — `--game-key 0xG`. If the host later announces a key that is not
+   wire-equivalent to it, the run fails rather than choosing between them. Equivalence is
+   `key & 0x00ffffff`, because the XOR key is bits 8..23 and the pad generator reads only bits
+   0..15; bits 24..31 cannot reach the wire.
+3. **`ciphertext-ranking`** — the offline fallback, which validates candidate XOR keys and all
+   256 relevant pad seeds against the complete 82-opcode decoder and the checksum invariant.
+   The key it returns is a representative of the equivalence class above, not the literal
+   global, and it reproduces the exact observed package and outgoing payload.
+
+Ranking **cannot** settle the first turn of a live match, at any payload length: it is anchored
+on the checksum invariant, and `CommandManager::start` `0x00942E10` sends the first package of
+every match without ever calling `CommandManager::issue_check_sums` `0x00940770`. See
+[`docs/assembly/retail-command-package-cadence.md`](../assembly/retail-command-package-cadence.md).
+
+## Reply policy
+
+One package per stamp, in one of two shapes, neither of which invents simulation state:
+
+- the stamp's package carried a `0x39` checksum → a byte-identical copy of it, re-obfuscated
+  for slot 1 (`"policy":"mirror-retail-checksum"`);
+- it decoded exactly but carried no checksum → a package carrying no commands
+  (`"policy":"empty-package"`, counted in `"empty_replies"`). This is the truthful "this peer
+  issued nothing this turn", it is a legal retail record — `CommandPackage::send` handles
+  `size == 0` and emits the 8-byte header alone — and it is the one package a peer can always
+  form correctly, because an empty payload has no words to XOR and no pad to get wrong.
+  `CommandManager::start` produces exactly one such stamp per game.
+
+The peer still fails closed on everything it cannot read: no key at all, a package that does
+not decode under the key in use, a checksum whose sixteenth word is not the wrapping sum of
+the first fifteen, or two mutually incompatible keys.
 
 `--passive` performs membership/readiness and reports traffic but sends no command package:
 
@@ -136,7 +175,11 @@ The repository test suite includes a mock-retail host over a real TCP socket. Th
 the new mode observes `PlayerJoined` before `ReadyChanged(true)`, reaches an authoritative slot-1
 roster, crosses all-ready, stays game-silent for multiple polls, automatically recovers the first
 package transform, and returns an exactly decodable client checksum package for the identical
-first stamp while preserving the original synthetic harness. The same run now atomically persists
+first stamp while preserving the original synthetic harness. Two further tests cover the key
+path: one announces a seed and then sends a checksum-less `TurnDataCommand`-only start package,
+requiring the peer to decode it from the announced key and answer with a zero-length package
+before mirroring the next stamp's checksum; the other announces a key that contradicts
+`--game-key` and requires the run to fail with both values named. The same run now atomically persists
 one initial epoch, eight exact packages across four committed stamps, four deadline observations,
 two orderly drop epochs, and one same-ID reconnect epoch; the test decodes and replays that file,
 checks its binary/outcome hashes, requires byte-exact re-encoding, then removes the test artifact.

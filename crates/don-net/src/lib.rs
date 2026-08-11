@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 
 pub mod evidence;
+pub mod extension;
 pub mod internal;
 pub mod lobby;
 pub mod lockstep;
@@ -48,6 +49,10 @@ pub use evidence::{
     LOCKSTEP_EVIDENCE_MAGIC, LOCKSTEP_EVIDENCE_VERSION, MAX_LOCKSTEP_ACTIONS,
     MAX_LOCKSTEP_EVIDENCE_BYTES, MAX_LOCKSTEP_OUTCOME_BYTES,
 };
+pub use extension::{
+    game_keys_are_wire_equivalent, DonExtension, ExtensionError, GameKeySource, DON_EXT_BASE,
+    DON_EXT_GAMEKEY, GAME_KEY_WIRE_MASK,
+};
 pub use internal::{InternalError, InternalPacket};
 pub use lockstep::{
     ChecksumDifference, EpochCause, LockstepError, LockstepEvidence, LockstepRunner,
@@ -57,7 +62,9 @@ pub use msg::{Framed, MsgType, NetMsg};
 pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
 pub use retail::{decode_retail_checksum_package, DecodedRetailChecksum, RetailChecksumError};
-pub use session::{Event, Player, Role, Session, SetupRefusal, TurnPackage};
+pub use session::{
+    AnnouncedGameKey, Event, Player, Role, Session, SetupRefusal, TurnPackage,
+};
 pub use setup::{
     GameConnectionData, GameConnectionDataFull, PlayerConnectionData, PlayerSlotPod,
     ScenFilePreviewData,

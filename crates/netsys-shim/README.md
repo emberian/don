@@ -32,7 +32,7 @@ MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
 # arm64 host (`run-gen7-wine-smoke.sh` shows the prefix seeding these need).
 XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 \
   XWIN_ARCH=x86 cargo xwin test --release --no-run
-wine target/i686-pc-windows-msvc/release/deps/CrossplayNetLib-*.exe   # 11 passed
+wine target/i686-pc-windows-msvc/release/deps/CrossplayNetLib-*.exe   # 16 passed
 ```
 
 Both variables are intentional on the current build host. `cargo-xwin` splats one architecture
@@ -100,6 +100,41 @@ There is no UI to hang settings off, so they come from the environment:
 | `DON_NET_NAME` | player name | `donnet` |
 | `DON_NET_LOAD_ONLY` | `1` binds only `127.0.0.1:0`, refuses session/send/get operations, and enables the diagnostic log | unset |
 | `DON_NET_TRACE` | explicit diagnostic log path; calls are logged once and flushed synchronously | `%TEMP%\don-netsys-shim-<pid>.log` in load-only mode |
+| `DON_NET_GAME_KEY` | match key to announce when this process is **not** the pinned retail executable and therefore has no live `Game`; decimal or `0x`-prefixed. Never overrides a live read | unset |
+
+## Announcing the match key
+
+Multiplayer command packages are obfuscated with `Game::info.seed`. A peer joining from another
+machine cannot see it, so the shim hands it over.
+
+`CommandPackage::send` `0x0094c1e0` reads that word and calls the `NetSys` send slot six
+instructions later:
+
+```text
+0094c312  mov   eax, dword ptr [0xc061ec]   ; GameAccess::game
+0094c31d  mov   eax, dword ptr [eax + 0x10]  ; Game::info(+12).seed(+4)
+0094c320  shr   eax, 8
+0094c41c  call  dword ptr [eax + 0x54]       ; -> ns_send
+0094c42e  call  dword ptr [eax + 0x58]       ; -> ns_send_all
+```
+
+So `ns_send` / `ns_send_all` read the same address when the outgoing packet is a
+`NETMSG_COMMANDPACKAGEDATA`, and announce it to each peer that has not been told, ahead of the
+package it explains. The value is the one retail itself just used — same address, same thread,
+same call — rather than a lobby-time guess, and there is no `Game` to misread at menu time.
+
+The read is gated exactly like the two retail constructor calls: `retail_executable_base` must
+accept the image, **and** the twenty instruction bytes at RVA `0x0054c312` must match the pinned
+stream after relocation adjustment, so the offsets are never applied to a build that does not
+contain the code they were read from. The `Game*` is then checked with `VirtualQuery` before the
+20 bytes up to `info.seed` are read; nothing else in the 3184-byte object is touched. Any failure
+returns "unknown" rather than a guess.
+
+The wire form is `don_net::extension`, packet id `0xF0`, six bytes. It is deliberately outside
+`don_net::internal`, whose nine ids are recovered from `CrossplayNetLib.pdb` and are not ours to
+extend. The receiving `Session` consumes it like the shipped internal range, so retail never
+sees one. `NetSys::init` clears the per-peer record, so a second match re-announces rather than
+inheriting.
 
 `DON_NET_LOAD_ONLY=1` is the first-retail-load configuration. It returns a
 fully formed `NetSys`, allowing the loader and multiplayer manager to exercise
@@ -155,6 +190,7 @@ make the DLL self-describing under `dumpbin /exports`.
 | `NetPlayer::{get_id,get_platform_id,get_platform}` return a complete MSVC `wstring` by value | shipped `get_id` `0x10027220`: return object `size=0` at `+0x10`, `capacity=7` at `+0x14`, NUL at `+0`; focused cross-target tests |
 | receive copies cannot exceed the retail destination | `rise.pdb` `NetDaemon::data` type `0x8912`: `unsigned char[2048]` at `+8`; caller `0x00950F30`; shipped copier `0x10013550` |
 | three by-value callbacks are cloned into owner-lifetime storage at concrete `+0x358/+0x380/+0x3A8`, replacements destroy the old target once, and inputs remain callee-destroyed | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78`; focused v4 inline-target ownership gate compiles |
+| the match key handed to peers is `Game::info.seed`, read at the instant retail used it | pinned prefix at RVA `0x0054c312` matches the supported executable byte-for-byte; PDB layouts `Game::info` +12 and `GameInfo::seed` +4; `VirtualQuery`-gated read; five focused PE32 tests. **Not yet executed against a live match** — Tier C |
 | the session/transport underneath works between two processes | `don-net`'s `tcp_session` test and the `donnet-peer` binary |
 | the pinned retail executable constructs the direct-access `LobbyDTO` at concrete `+0xD0` and survives the immediate post-`OnHostUpdated` copy-assignment | generation-5 PID 12080 trace records the retail constructor at exe RVA `0x4B1F0`, then `OnHostUpdated`; the process remained live where generations 3/4 faulted in `std::list::clear` |
 | `get_ip_addresses` returns the shipped borrowed embedded empty `ObjectArray<String>` at concrete `+0x1A0` | PID 5056 faulted at retail `SetupWin::draw_ip_address` `0x005BD635` after the old null result; the replacement uses the pinned executable constructor at RVA `0x39E80`; generation-7 v4 runtime revalidated the non-null offset/layout and ESP gate. Confirmed live 2026-08-10: `ip_array_ctor_rva=0x39e80` executes in the real process |

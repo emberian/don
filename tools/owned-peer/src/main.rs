@@ -1,3 +1,4 @@
+use don_net::extension::game_keys_are_wire_equivalent;
 use don_net::internal::{InternalPacket, MAX_PLAYERS};
 use don_net::lobby::{
     attributes_to_game, attributes_to_player, game_to_attributes, player_to_attributes,
@@ -84,12 +85,24 @@ struct RetailReport {
     packages_seen: u32,
     checksum_turns: u32,
     packages_sent: u32,
+    /// Turns whose host package decoded exactly but carried no `0x39` command,
+    /// answered with a zero-command package. `CommandManager::start`
+    /// `0x00942e10` produces exactly one of these per game.
+    empty_replies: u32,
     orderly_disconnect_sent: bool,
     transcript_hash: u64,
     game_key: u32,
+    game_key_source: &'static str,
     reconnects: u32,
     evidence: Option<EvidenceReport>,
 }
+
+/// Where the key used to decode retail's packages came from. Reported so a run
+/// record never conflates a value read out of the match with one inferred from
+/// ciphertext.
+const KEY_SOURCE_OPERATOR: &str = "operator-supplied";
+const KEY_SOURCE_RANKING: &str = "ciphertext-ranking";
+const KEY_SOURCE_UNKNOWN: &str = "none";
 
 #[derive(Debug)]
 struct EvidenceReport {
@@ -149,7 +162,8 @@ fn main() {
         },
         Mode::Retail(options) => match run_retail(&options) {
             Ok(report) => println!(
-                "{{\"schema\":\"don.owned-peer.retail.v2\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"orderly_disconnect_sent\":{},\"reconnects\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"evidence\":{},\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                "{{\"schema\":\"don.owned-peer.retail.v3\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"{}\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"empty_replies\":{},\"orderly_disconnect_sent\":{},\"reconnects\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"game_key_source\":\"{}\",\"transcript_hash\":\"{:016x}\",\"evidence\":{},\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                json_escape(&options.name),
                 report.local_id,
                 report.host_id,
                 report.local_slot,
@@ -157,10 +171,12 @@ fn main() {
                 report.packages_seen,
                 report.checksum_turns,
                 report.packages_sent,
+                report.empty_replies,
                 report.orderly_disconnect_sent,
                 report.reconnects,
                 if options.passive { "passive" } else { "mirror-retail-checksum" },
                 report.game_key,
+                report.game_key_source,
                 report.transcript_hash,
                 json_evidence(report.evidence.as_ref()),
             ),
@@ -239,7 +255,7 @@ where
             }
             "-h" | "--help" => {
                 println!(
-                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--name NAME] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive] [--evidence PATH] [--reconnect-after N]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint under --name (default DoN, distinct from the host so retail does not warn about duplicate labels); it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package only after each observed retail turn. --passive reports traffic without returning turn packages. --evidence atomically creates a bounded canonical DONLSTP file. --reconnect-after performs one orderly same-ID reconnect after N completed turns and requires N < --turns."
+                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--name NAME] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive] [--evidence PATH] [--reconnect-after N]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint under --name (default DoN, distinct from the host so retail does not warn about duplicate labels); it carries no authentication material. The multiplayer package key comes from the host's announced GameInfo::seed when available, else --game-key, else ciphertext ranking; ranking cannot settle the checksum-less first turn of a match. It returns one package per observed retail turn: a byte-identical copy of that turn's checksum command, or a package carrying no commands when the turn legitimately has none. --passive reports traffic without returning turn packages. --evidence atomically creates a bounded canonical DONLSTP file. --reconnect-after performs one orderly same-ID reconnect after N completed turns and requires N < --turns."
                 );
                 return Ok(None);
             }
@@ -514,8 +530,14 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
     let mut packages_seen = 0u32;
     let mut checksum_turns = 0u32;
     let mut packages_sent = 0u32;
+    let mut empty_replies = 0u32;
     let mut transcript_hash = 0xcbf2_9ce4_8422_2325u64;
     let mut game_key = options.game_key;
+    let mut game_key_source = if options.game_key.is_some() {
+        KEY_SOURCE_OPERATOR
+    } else {
+        KEY_SOURCE_UNKNOWN
+    };
     let mut key_samples = Vec::<Vec<u8>>::new();
     let mut seen_packages = BTreeSet::<(i32, u32, i8)>::new();
     let mut initial_roster_at_ms = None;
@@ -524,7 +546,8 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
     let mut reconnects = 0u32;
 
     println!(
-        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"connected\",\"peer_name\":\"Ai\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"connected\",\"peer_name\":\"{}\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+        json_escape(&options.name),
         options.id,
         json_escape(&options.addr),
     );
@@ -533,6 +556,33 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
         session
             .poll(now(), Duration::from_millis(10))
             .map_err(|e| format!("retail session poll: {e}"))?;
+
+        // The host announces `GameInfo::seed` over the DoN transport extension
+        // immediately before the command package that needs it, so this is
+        // settled before any package is inspected below. `Session` has already
+        // refused anything that did not come from the authoritative host.
+        if let Some(announced) = session.announced_game_key() {
+            if game_key != Some(announced.seed) {
+                if let Some(active) = game_key {
+                    if !game_keys_are_wire_equivalent(active, announced.seed) {
+                        return Err(format!(
+                            "retail host announced match key 0x{:08x} ({}), which is not the transform of the key 0x{active:08x} already in use ({game_key_source}); refusing to reinterpret this lockstep transcript",
+                            announced.seed,
+                            announced.source.as_str(),
+                        ));
+                    }
+                }
+                game_key = Some(announced.seed);
+                game_key_source = announced.source.as_str();
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"game-key-announced\",\"from\":{},\"game_key\":\"0x{:08x}\",\"xor_key\":\"0x{:04x}\",\"source\":\"{}\"}}",
+                    announced.from,
+                    announced.seed,
+                    Obfuscation::xor_key(announced.seed),
+                    announced.source.as_str(),
+                );
+            }
+        }
 
         if let Some((host, slot)) =
             authoritative_retail_roster_named(&session, options.id, &options.name)?
@@ -558,8 +608,11 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                     reconnect_pending = false;
                 }
                 println!(
-                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"roster\",\"host_id\":{},\"host_slot\":0,\"local_id\":{},\"local_slot\":{},\"members\":2,\"peer_name\":\"Ai\"}}",
-                    host_id, options.id, local_slot,
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"roster\",\"host_id\":{},\"host_slot\":0,\"local_id\":{},\"local_slot\":{},\"members\":2,\"peer_name\":\"{}\"}}",
+                    host_id,
+                    options.id,
+                    local_slot,
+                    json_escape(&options.name),
                 );
                 roster_announced = true;
             }
@@ -631,86 +684,113 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             if game_key.is_none() {
                 game_key = recover_game_key(&key_samples);
                 if let Some(key) = game_key {
+                    game_key_source = KEY_SOURCE_RANKING;
                     println!(
-                        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"game-key-recovered\",\"compatible_game_key\":\"0x{key:08x}\",\"xor_key\":\"0x{:04x}\"}}",
+                        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"game-key-recovered\",\"compatible_game_key\":\"0x{key:08x}\",\"xor_key\":\"0x{:04x}\",\"source\":\"{KEY_SOURCE_RANKING}\"}}",
                         Obfuscation::xor_key(key),
                     );
                 }
             }
 
             let Some(key) = game_key else {
+                // Ciphertext ranking anchors a candidate on the checksum
+                // invariant, and `CommandManager::start` `0x00942e10` sends the
+                // first package of every match with no `0x39` command in it —
+                // so ranking is structurally unable to settle the key from that
+                // package, however long it is. The key has to arrive from the
+                // match itself.
                 return Err(format!(
-                    "could not recover the first retail command package key at stamp {stamp}; refusing to skip the authoritative first turn (supply --game-key)"
+                    "no match key at stamp {stamp}: the host announced none and ciphertext ranking cannot settle one from a checksum-less package; refusing to answer a turn this peer cannot read (supply --game-key, or run a shim host that announces GameInfo::seed)"
                 ));
             };
             let traffic = decode_traffic(payload, key)
                 .map_err(|e| format!("decode retail turn {stamp} with key 0x{key:08x}: {e}"))?;
-            let Some(sums) = traffic.checksum else {
-                return Err(format!(
-                    "first retail command package at stamp {stamp} has no checksum command; refusing to synthesize or skip its slot-1 reply"
-                ));
-            };
-            let checksum_bytes = traffic
-                .checksum_bytes
-                .as_deref()
-                .ok_or("decoded checksum lost its command bytes")?;
             let package_ms = now();
-            if options.evidence.is_some() && evidence_capture.is_none() {
-                evidence_capture = Some(EvidenceCapture::new(
-                    key,
-                    options.timeout_secs.saturating_mul(1_000),
-                    initial_roster_at_ms.ok_or(
-                        "authoritative package arrived before a recorded setup roster epoch",
-                    )?,
-                    stamp,
-                    host_id,
-                    options.id,
-                )?);
-            }
-            if let Some(capture) = &mut evidence_capture {
-                capture.submit(
-                    package_ms,
-                    TurnPackage {
-                        stamp,
-                        play,
-                        payload: payload.to_vec(),
-                    },
-                )?;
-            }
-            checksum_turns = checksum_turns.saturating_add(1);
-            hash_bytes(&mut transcript_hash, &stamp.to_le_bytes());
-            hash_bytes(&mut transcript_hash, &[play as u8]);
-            hash_bytes(&mut transcript_hash, checksum_bytes);
+            let checksum_bytes = traffic.checksum_bytes.clone();
             println!(
-                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"commands\":{},\"opcodes\":{},\"checksum_decoded\":true,\"checksums\":{}}}",
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"commands\":{},\"opcodes\":{},\"checksum_decoded\":{},\"checksums\":{}}}",
                 stamp,
                 play,
                 payload.len(),
                 traffic.command_count,
                 json_u8_array(&traffic.opcodes),
-                json_checksum_array(&sums),
+                traffic.checksum.is_some(),
+                match &traffic.checksum {
+                    Some(sums) => json_checksum_array(sums),
+                    None => "null".into(),
+                },
             );
 
-            if !options.passive {
-                let reply = encode_checksum_only(checksum_bytes, key)?;
-                session
-                    .send_command_package(stamp, local_slot as i8, &reply)
-                    .map_err(|e| format!("send checksum-only package for turn {stamp}: {e}"))?;
-                packages_sent = packages_sent.saturating_add(1);
+            // Evidence is the checksum-agreement record, so it opens on the
+            // first checksum-bearing stamp. A checksum-less start package is
+            // reported above and answered below, but there is nothing for a
+            // checksum transcript to hold about it.
+            if checksum_bytes.is_some() {
+                if options.evidence.is_some() && evidence_capture.is_none() {
+                    evidence_capture = Some(EvidenceCapture::new(
+                        key,
+                        options.timeout_secs.saturating_mul(1_000),
+                        initial_roster_at_ms.ok_or(
+                            "authoritative package arrived before a recorded setup roster epoch",
+                        )?,
+                        stamp,
+                        host_id,
+                        options.id,
+                    )?);
+                }
                 if let Some(capture) = &mut evidence_capture {
-                    let reply_ms = now();
                     capture.submit(
-                        reply_ms,
+                        package_ms,
                         TurnPackage {
                             stamp,
-                            play: local_slot as i8,
-                            payload: reply.clone(),
+                            play,
+                            payload: payload.to_vec(),
                         },
                     )?;
-                    capture.observe_and_commit(reply_ms)?;
+                }
+                checksum_turns = checksum_turns.saturating_add(1);
+            }
+            hash_bytes(&mut transcript_hash, &stamp.to_le_bytes());
+            hash_bytes(&mut transcript_hash, &[play as u8]);
+            hash_bytes(&mut transcript_hash, &[u8::from(checksum_bytes.is_some())]);
+            if let Some(bytes) = &checksum_bytes {
+                hash_bytes(&mut transcript_hash, bytes);
+            }
+
+            if !options.passive {
+                // Two reply shapes, neither of which invents simulation state:
+                // mirror the stamp's own checksum when retail issued one, and
+                // otherwise send a package carrying no commands at all — the
+                // truthful "this peer issued nothing this turn", and the one
+                // package a peer can always form because an empty payload has
+                // no XOR words and no inter-command pad to get wrong.
+                let (reply, policy) = match &checksum_bytes {
+                    Some(bytes) => (encode_checksum_only(bytes, key)?, "mirror-retail-checksum"),
+                    None => (Vec::new(), "empty-package"),
+                };
+                session
+                    .send_command_package(stamp, local_slot as i8, &reply)
+                    .map_err(|e| format!("send {policy} for turn {stamp}: {e}"))?;
+                packages_sent = packages_sent.saturating_add(1);
+                if checksum_bytes.is_none() {
+                    empty_replies = empty_replies.saturating_add(1);
+                }
+                if checksum_bytes.is_some() {
+                    if let Some(capture) = &mut evidence_capture {
+                        let reply_ms = now();
+                        capture.submit(
+                            reply_ms,
+                            TurnPackage {
+                                stamp,
+                                play: local_slot as i8,
+                                payload: reply.clone(),
+                            },
+                        )?;
+                        capture.observe_and_commit(reply_ms)?;
+                    }
                 }
                 println!(
-                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-sent\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"policy\":\"mirror-retail-checksum\",\"simulation_equivalence_claimed\":false}}",
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-sent\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"policy\":\"{policy}\",\"simulation_equivalence_claimed\":false}}",
                     stamp,
                     local_slot,
                     reply.len(),
@@ -751,7 +831,8 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             reconnect_pending = true;
             reconnects += 1;
             println!(
-                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"reconnected\",\"peer_name\":\"Ai\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"reconnected\",\"peer_name\":\"{}\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+                json_escape(&options.name),
                 options.id,
                 json_escape(&options.addr),
             );
@@ -805,16 +886,18 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 packages_seen,
                 checksum_turns,
                 packages_sent,
+                empty_replies,
                 orderly_disconnect_sent: true,
                 transcript_hash,
                 game_key: game_key.expect("checksum traffic requires a key"),
+                game_key_source,
                 reconnects,
                 evidence,
             });
         }
         if start.elapsed() >= deadline {
             return Err(format!(
-                "retail-connect timeout after {}s: roster={} ready_sent={} all_ready={} packages_seen={} checksum_turns={} packages_sent={} key={}",
+                "retail-connect timeout after {}s: roster={} ready_sent={} all_ready={} packages_seen={} checksum_turns={} packages_sent={} empty_replies={} key={} key_source={game_key_source}",
                 options.timeout_secs,
                 roster_announced,
                 ready_sent,
@@ -822,9 +905,10 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 packages_seen,
                 checksum_turns,
                 packages_sent,
+                empty_replies,
                 game_key
                     .map(|key| format!("0x{key:08x}"))
-                    .unwrap_or_else(|| "unrecovered (supply --game-key)".into()),
+                    .unwrap_or_else(|| "unannounced (supply --game-key)".into()),
             ));
         }
     }
@@ -1406,11 +1490,13 @@ fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_net::extension::GameKeySource;
 
     fn retail_options(addr: String) -> RetailOptions {
         RetailOptions {
             addr,
             id: CLIENT_ID,
+            name: RETAIL_PEER_NAME.to_string(),
             turns: 1,
             timeout_secs: 5,
             game_key: None,
@@ -1418,6 +1504,37 @@ mod tests {
             evidence: None,
             reconnect_after: None,
         }
+    }
+
+    /// A retail host's roster as the owned peer requires it: the host in slot 0
+    /// under its own profile label, this peer in slot 1 under `--name`.
+    fn retail_roster_is_authoritative(session: &Session<TcpTransport>) -> bool {
+        let players = session.players();
+        players.len() == 2
+            && players[0].unique_id == HOST_ID
+            && players[0].slot == 0
+            && players[1].unique_id == CLIENT_ID
+            && players[1].slot == 1
+            && players[1].name == RETAIL_PEER_NAME
+    }
+
+    /// The shape `CommandManager::start` `0x00942e10` puts on the wire: one
+    /// `TurnDataCommand` (opcode 0x4a, 11 bytes) and no checksum command.
+    fn turn_data_command() -> Vec<u8> {
+        let mut bytes = vec![0x4a_u8];
+        for word in [12u16, 3, 0, 1, 0] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        assert_eq!(bytes.len(), 11);
+        bytes
+    }
+
+    fn encode_commands_with_key(commands: &[Command<'_>], game_key: u32) -> Vec<u8> {
+        let mut payload = Vec::new();
+        let mut obfuscation = Obfuscation::with_seed(game_key);
+        encode_commands(commands, &mut obfuscation, &mut payload);
+        xor_payload(&mut payload, Obfuscation::xor_key(game_key));
+        payload
     }
 
     #[test]
@@ -1472,6 +1589,7 @@ mod tests {
             Some(Mode::Retail(RetailOptions {
                 addr: "127.0.0.1:31337".into(),
                 id: CLIENT_ID,
+                name: RETAIL_PEER_NAME.to_string(),
                 turns: 2,
                 timeout_secs: 9,
                 game_key: Some(0x123456),
@@ -1499,6 +1617,7 @@ mod tests {
             Some(Mode::Retail(RetailOptions {
                 addr: "127.0.0.1:31337".into(),
                 id: CLIENT_ID,
+                name: RETAIL_PEER_NAME.to_string(),
                 turns: 2,
                 timeout_secs: DEFAULT_RETAIL_TIMEOUT_SECS,
                 game_key: None,
@@ -1557,6 +1676,136 @@ mod tests {
         );
     }
 
+    /// Bring a mock retail host and the owned peer to the authoritative
+    /// two-member all-ready state, then hand back the host session.
+    fn mock_retail_host_ready(
+        host_transport: TcpTransport,
+        start: Instant,
+    ) -> Session<TcpTransport> {
+        let mut host = Session::new(host_transport, Role::Host, PEER_NAME);
+        let now = || start.elapsed().as_millis() as u64;
+        while !retail_roster_is_authoritative(&host) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(3));
+        }
+        host.send_ready_flag(true).unwrap();
+        while !host.all_ready() {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(3));
+        }
+        host
+    }
+
+    #[test]
+    fn the_checksum_less_start_package_is_answered_from_the_announced_match_key() {
+        // Retail's very first package of a match comes from
+        // `CommandManager::start` `0x00942e10`, which issues turn data and sends
+        // without ever calling `CommandManager::issue_check_sums` `0x00940770`.
+        // Ciphertext ranking is anchored on the checksum invariant, so it cannot
+        // settle a key from that package at all; the announced `GameInfo::seed`
+        // is what makes turn one readable.
+        let seed = 0x1234_5678u32;
+        let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
+        let addr = host_transport.local_addr().unwrap();
+        let mut options = retail_options(addr.to_string());
+        options.turns = 1;
+        let start = Instant::now();
+        let peer = std::thread::spawn(move || run_retail(&options));
+        let mut host = mock_retail_host_ready(host_transport, start);
+        let now = || start.elapsed().as_millis() as u64;
+
+        host.announce_game_key(seed, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+
+        let start_payload = encode_commands_with_key(
+            &[Command {
+                opcode: 0x4a,
+                bytes: &turn_data_command(),
+            }],
+            seed,
+        );
+        host.send_command_package(1, 0, &start_payload).unwrap();
+        while !host.turn_ready(1) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(5));
+        }
+        let reply = host
+            .take_turn(1)
+            .into_iter()
+            .find(|package| package.play == 1)
+            .expect("owned peer answered the checksum-less start turn");
+        assert!(
+            reply.payload.is_empty(),
+            "a peer with no commands must send a package with none, not an invented one: {reply:?}"
+        );
+
+        let checksum = checksum_command(2);
+        let host_payload = encode_checksum_only(&checksum, seed).unwrap();
+        host.send_command_package(2, 0, &host_payload).unwrap();
+        while !host.turn_ready(2) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(6));
+        }
+        let mirrored = host
+            .take_turn(2)
+            .into_iter()
+            .find(|package| package.play == 1)
+            .expect("owned peer answered the checksum turn");
+        assert_eq!(
+            decode_traffic(&mirrored.payload, seed)
+                .unwrap()
+                .checksum_bytes
+                .as_deref(),
+            Some(checksum.as_slice())
+        );
+
+        let report = peer.join().unwrap().unwrap();
+        assert_eq!(report.packages_seen, 2);
+        assert_eq!(report.checksum_turns, 1);
+        assert_eq!(report.packages_sent, 2);
+        assert_eq!(report.empty_replies, 1);
+        assert_eq!(report.game_key, seed, "the exact announced seed is used");
+        assert_eq!(
+            report.game_key_source,
+            GameKeySource::RetailGameInfoSeed.as_str()
+        );
+    }
+
+    #[test]
+    fn an_announced_key_contradicting_the_operator_supplied_one_is_refused() {
+        let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
+        let addr = host_transport.local_addr().unwrap();
+        let mut options = retail_options(addr.to_string());
+        // Differs inside bits 0..24, which is exactly the part of the key the
+        // package transform reads.
+        options.game_key = Some(0x0012_3456);
+        let start = Instant::now();
+        let peer = std::thread::spawn(move || run_retail(&options));
+        let mut host = mock_retail_host_ready(host_transport, start);
+        let now = || start.elapsed().as_millis() as u64;
+
+        host.announce_game_key(0x0065_4321, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+        while !peer.is_finished() {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(6));
+        }
+        let error = peer.join().unwrap().unwrap_err();
+        assert!(
+            error.contains("0x00654321") && error.contains("0x00123456"),
+            "both keys must be named in the refusal: {error}"
+        );
+
+        // A key differing only above bit 23 drives the identical transform and
+        // must not be treated as a contradiction.
+        assert!(game_keys_are_wire_equivalent(0x0012_3456, 0xff12_3456));
+    }
+
     #[test]
     fn retail_connect_replies_repeatedly_disconnects_and_rejoins_cleanly() {
         let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
@@ -1579,7 +1828,7 @@ mod tests {
         let mut remote_ready_sequence = None;
         let mut transition_sequence = 0u32;
 
-        while !roster_is_authoritative(&host) {
+        while !retail_roster_is_authoritative(&host) {
             host.poll(now(), Duration::from_millis(5)).unwrap();
             for event in host.drain_events() {
                 transition_sequence += 1;
@@ -1672,10 +1921,10 @@ mod tests {
         // reconnect. A socket drop without that packet is not promoted to a
         // protocol guarantee here; it remains timeout-driven in Session.
         let mut host_ready_republished = false;
-        while !roster_is_authoritative(&host) || !host.all_ready() {
+        while !retail_roster_is_authoritative(&host) || !host.all_ready() {
             host.poll(now(), Duration::from_millis(5)).unwrap();
             host.drain_events();
-            if roster_is_authoritative(&host) && !host_ready_republished {
+            if retail_roster_is_authoritative(&host) && !host_ready_republished {
                 // Reconnect is a new setup readiness epoch. Restate the host
                 // flag after membership exists; a pre-roster READYFLAG is
                 // deliberately dropped by the retail-compatible handler.

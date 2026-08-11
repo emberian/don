@@ -9,6 +9,7 @@
 
 use crate::abi::*;
 use core::ffi::c_void;
+use don_net::extension::GameKeySource;
 use don_net::session::{Role, Session};
 use don_net::transport::{Dest, TcpTransport, Transport};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -33,6 +34,84 @@ extern "system" {
 #[link(name = "wininet")]
 extern "system" {
     fn InternetGetConnectedState(flags: *mut u32, reserved: u32) -> i32;
+}
+
+/// 32-bit `MEMORY_BASIC_INFORMATION`. No `PartitionId` member: that field is
+/// `#if defined(_WIN64)` only, and this DLL is PE32/i386 by construction.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MemoryBasicInformation {
+    base_address: *mut c_void,
+    allocation_base: *mut c_void,
+    allocation_protect: u32,
+    region_size: usize,
+    state: u32,
+    protect: u32,
+    memory_type: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<MemoryBasicInformation>() == 28);
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn VirtualQuery(
+        address: *const c_void,
+        buffer: *mut MemoryBasicInformation,
+        length: usize,
+    ) -> usize;
+}
+
+const MEM_COMMIT: u32 = 0x0000_1000;
+const PAGE_GUARD: u32 = 0x0000_0100;
+const PAGE_READABLE: u32 = 0x02 /* READONLY */
+    | 0x04 /* READWRITE */
+    | 0x08 /* WRITECOPY */
+    | 0x20 /* EXECUTE_READ */
+    | 0x40 /* EXECUTE_READWRITE */
+    | 0x80 /* EXECUTE_WRITECOPY */;
+
+/// Is `[address, address + len)` committed and readable *right now*?
+///
+/// Every retail address this shim dereferences outside its own image goes
+/// through here first. `Game` is a heap object whose lifetime we do not own: it
+/// does not exist at menu time, and a read through a stale pointer inside the
+/// game's own process is a crash we would have caused. `VirtualQuery` is the
+/// bounded, non-destructive way to ask.
+unsafe fn readable(address: usize, len: usize) -> bool {
+    if address == 0 || len == 0 {
+        return false;
+    }
+    let Some(end) = address.checked_add(len) else {
+        return false;
+    };
+    let mut info = MemoryBasicInformation {
+        base_address: core::ptr::null_mut(),
+        allocation_base: core::ptr::null_mut(),
+        allocation_protect: 0,
+        region_size: 0,
+        state: 0,
+        protect: 0,
+        memory_type: 0,
+    };
+    let written = VirtualQuery(
+        address as *const c_void,
+        &mut info,
+        core::mem::size_of::<MemoryBasicInformation>(),
+    );
+    if written != core::mem::size_of::<MemoryBasicInformation>() {
+        return false;
+    }
+    let region_base = info.base_address as usize;
+    let Some(region_end) = region_base.checked_add(info.region_size) else {
+        return false;
+    };
+    info.state == MEM_COMMIT
+        && info.protect & PAGE_GUARD == 0
+        && info.protect & PAGE_READABLE != 0
+        // One VirtualQuery describes one region; a range spilling past it may
+        // continue into an uncommitted page, so refuse instead of walking.
+        && region_base <= address
+        && end <= region_end
 }
 
 /// Exact extent of `NetDaemon::data`, the destination passed to `NetSys::get`.
@@ -145,6 +224,19 @@ struct State {
     local_member_id: Vec<u16>,
     setup_bridge: bool,
     bridged_slots: BTreeMap<i32, i32>,
+    /// Loaded image base, set only when this process is the pinned retail build
+    /// *and* the `CommandPackage::send` key instructions are byte-identical to
+    /// the ones the two `Game` offsets were read from. `None` disables the live
+    /// key read entirely.
+    game_key_base: Option<usize>,
+    /// Fallback key for a host that is not the pinned retail executable, so
+    /// there is no live `Game` to read (`DON_NET_GAME_KEY`). Never overrides a
+    /// live read: an invented key would be exactly the guess this path exists to
+    /// replace.
+    configured_game_key: Option<u32>,
+    /// Which match key each peer has already been told, so a key crosses the
+    /// wire once per peer per match and a late joiner still gets one.
+    game_key_announced: BTreeMap<i32, u32>,
 }
 
 #[repr(C)]
@@ -215,6 +307,38 @@ type LobbyDtoCtor = unsafe extern "thiscall" fn(*mut c_void) -> *mut c_void;
 const OBJECT_ARRAY_STRING_CTOR_RVA: usize = 0x0003_9e80;
 type ObjectArrayStringCtor =
     unsafe extern "thiscall" fn(*mut MsvcObjectArrayString) -> *mut MsvcObjectArrayString;
+
+// `public: static class Game &GameAccess::game`, preferred VA 0x00C061EC (PDB
+// public symbol; `ron-bin/sbl/rise.pdb`). MSVC stores a reference as a pointer,
+// so the dword at this address is the live `Game*`.
+const GAME_ACCESS_GAME_RVA: usize = 0x0080_61ec;
+// `Game::info` at offset 12, type `GameInfo`; `GameInfo::seed` at offset 4.
+// Both [measured] from the shipped PDB type records (`schema/pdb-types.json`).
+const GAME_INFO_SEED_OFFSET: usize = 12 + 4;
+// The exact extent this shim dereferences through the `Game*`: everything up to
+// and including `info.seed`. Nothing else in the 3184-byte object is touched.
+const GAME_SEED_READ_EXTENT: usize = GAME_INFO_SEED_OFFSET + 4;
+
+// The instruction stream that proves the two offsets above are the ones retail
+// itself uses, at `CommandPackage::send` `0x0094c1e0` + 0x132:
+//
+//   a1 ec 61 c0 00   mov  eax, dword ptr [0xc061ec]   ; GameAccess::game
+//   83 c1 12         add  ecx, 0x12
+//   0f bf fa         movsx edi, dx
+//   8b 40 10         mov  eax, dword ptr [eax + 0x10] ; Game::info.seed
+//   c1 e8 08         shr  eax, 8
+//   0f b7 d8         movzx ebx, ax                    ; XOR key
+//
+// Pinning it makes the key path share the executable-identity discipline the
+// two constructor RVAs already have: if this is not the code at that address,
+// the offsets are not this build's and nothing is read. Byte 1 is the absolute
+// operand the loader relocates.
+const COMMAND_PACKAGE_KEY_RVA: usize = 0x0054_c312;
+const COMMAND_PACKAGE_KEY_PREFIX: &[u8] = &[
+    0xa1, 0xec, 0x61, 0xc0, 0x00, 0x83, 0xc1, 0x12, 0x0f, 0xbf, 0xfa, 0x8b, 0x40, 0x10, 0xc1, 0xe8,
+    0x08, 0x0f, 0xb7, 0xd8,
+];
+const COMMAND_PACKAGE_KEY_RELOCS: &[usize] = &[1];
 
 const RETAIL_PE_TIMESTAMP: u32 = 0x6674_863f;
 const RETAIL_IMAGE_BASE: u32 = 0x0040_0000;
@@ -360,6 +484,77 @@ unsafe fn retail_executable_base() -> Option<*mut u8> {
     Some(base)
 }
 
+/// The two-step pointer chase, without any pointers: `slot` is the dword stored
+/// at `GameAccess::game`, `read_dword` returns the dword at an address when it
+/// is committed and readable.
+///
+/// Separated out so the refusals below are unit-testable on a machine that has
+/// no `Game` at all. Everything that can be decided without dereferencing retail
+/// memory is decided here.
+fn game_key_from_slot(slot: u32, read_dword: impl Fn(usize) -> Option<u32>) -> Option<u32> {
+    // Retail's `Game` is allocated by the CRT; a null slot means no game exists
+    // yet, and a misaligned one is not an object this build ever produced.
+    if slot == 0 || slot % 4 != 0 {
+        return None;
+    }
+    let game = slot as usize;
+    read_dword(game.checked_add(GAME_INFO_SEED_OFFSET)?)
+}
+
+/// Decide, once, whether this process is a build whose `Game` layout the two
+/// pinned offsets describe.
+///
+/// The image identity cannot change at runtime, so this is settled at load and
+/// the per-package path below only reads. Requiring the instruction stream at
+/// `CommandPackage::send + 0x132` to match — after relocation adjustment — means
+/// the offsets are never applied to a build that does not contain the code they
+/// were read from.
+unsafe fn game_key_read_base(retail_exe: Option<*mut u8>) -> Option<*mut u8> {
+    let base = retail_exe?;
+    let delta = (base as usize as u32).wrapping_sub(RETAIL_IMAGE_BASE);
+    if !prefix_matches_relocated(
+        core::slice::from_raw_parts(
+            base.add(COMMAND_PACKAGE_KEY_RVA),
+            COMMAND_PACKAGE_KEY_PREFIX.len(),
+        ),
+        COMMAND_PACKAGE_KEY_PREFIX,
+        COMMAND_PACKAGE_KEY_RELOCS,
+        delta,
+    ) {
+        trace_detail(format_args!(
+            "game_key=unavailable reason=command-package-send-prefix-mismatch rva=0x{COMMAND_PACKAGE_KEY_RVA:x}"
+        ));
+        return None;
+    }
+    Some(base)
+}
+
+/// Read the multiplayer command-package key out of the live retail process.
+///
+/// This is `Game::info.seed`, the same word `CommandPackage::send` `0x0094c1e0`
+/// reads six instructions before it calls our send slot. Returning `None` is
+/// always allowed and always means "do not claim to know the key": no `Game`
+/// yet, or memory that `VirtualQuery` will not vouch for.
+///
+/// The only caller invokes this from inside a `NetSys` send slot, i.e. while
+/// retail is *itself* partway through `CommandPackage::send` having already
+/// dereferenced this exact pointer at this exact offset on this exact thread. A
+/// pointer that were wild would have faulted in retail's own code first; the
+/// `VirtualQuery` gate below is for the paths where no game is running at all.
+///
+/// **Tier C.** The offsets are the shipped PDB's and the instruction stream at
+/// the pinned RVA is compared byte-for-byte against this build's, but that a
+/// decoded live turn confirms the value is a separate claim this function does
+/// not make.
+unsafe fn read_live_game_seed(base: *mut u8) -> Option<u32> {
+    // The global lives inside the mapped image, so it is readable by
+    // construction; the `Game*` it holds does not.
+    let slot = *(base.add(GAME_ACCESS_GAME_RVA).cast::<u32>());
+    game_key_from_slot(slot, |address| {
+        readable(slot as usize, GAME_SEED_READ_EXTENT).then(|| *(address as *const u32))
+    })
+}
+
 /// Match shipped `CrossplayNetLib::is_connected_to_network` at VA
 /// `0x10018550`: call `InternetGetConnectedState(&flags, 0)` and return whether
 /// its BOOL result is nonzero. This is pre-session OS availability, not the
@@ -396,6 +591,16 @@ pub unsafe fn role_is_host(this: *mut NetSysBase) -> bool {
 
 fn env(k: &str) -> Option<String> {
     std::env::var(k).ok()
+}
+
+/// Decimal or `0x`-prefixed hexadecimal, matching `tools/owned-peer`'s
+/// `--game-key`.
+fn parse_u32(raw: &str) -> Option<u32> {
+    let raw = raw.trim();
+    match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        Some(digits) => u32::from_str_radix(digits, 16).ok(),
+        None => raw.parse::<u32>().ok(),
+    }
 }
 
 fn build_transport(id: i32) -> std::io::Result<(TcpTransport, Role)> {
@@ -498,6 +703,9 @@ pub fn create() -> *mut NetSysBase {
         local_member_id: Vec::new(),
         setup_bridge: env_truthy("DON_NET_SETUP_BRIDGE"),
         bridged_slots: BTreeMap::new(),
+        game_key_base: unsafe { game_key_read_base(retail_exe) }.map(|base| base as usize),
+        configured_game_key: env("DON_NET_GAME_KEY").as_deref().and_then(parse_u32),
+        game_key_announced: BTreeMap::new(),
     });
     let mut obj = Box::new(NetSysObj {
         base: NetSysBase {
@@ -1366,6 +1574,9 @@ unsafe fn reset_attempt_state(this: *mut NetSysBase) {
         state.inbox.clear();
         state.players.clear();
         state.bridged_slots.clear();
+        // A key belongs to one match. `init` opens a new attempt epoch, so the
+        // next match must re-announce rather than inherit.
+        state.game_key_announced.clear();
         state.local_member_id.clear();
         state.defer_local_add_until_identity = false;
         state.started = Instant::now();
@@ -1573,6 +1784,73 @@ unsafe extern "thiscall" fn ns_get_num_allowed_players(this: *mut NetSysBase) ->
     st(this).map(|s| s.num_allowed_players).unwrap_or(8)
 }
 
+/// Hand every peer this match's key just before the package that needs it.
+///
+/// Called from the two `NetSys` slots `CommandPackage::send` `0x0094c1e0`
+/// dispatches to (`+0x54` send, `+0x58` send_all). That is the only instant at
+/// which `Game::info.seed` is known to be the value retail itself just used:
+/// the read is six instructions upstream, on this thread, in this call.
+///
+/// The announcement goes out **before** the package it explains, and the
+/// transport preserves order per peer, so a joining peer never has to decode a
+/// package it has not yet been given the key for. A key crosses the wire once
+/// per peer per match.
+///
+/// This is a DoN transport extension. Retail never sends, parses, or sees one —
+/// the receiving `Session` consumes it exactly like the shipped internal range.
+unsafe fn announce_game_key_for_package(this: *mut NetSysBase, packet: &[u8]) {
+    if !matches!(
+        don_net::msg::NetMsg::decode(packet).map(|framed| framed.msg),
+        Ok(don_net::msg::NetMsg::CommandPackage { .. })
+    ) {
+        return;
+    }
+    let Some(state) = st(this) else { return };
+    if state.load_only {
+        return;
+    }
+    let peers = match state.session.as_ref() {
+        Some(session) => session.transport.peers(),
+        None => return,
+    };
+    if peers.is_empty() {
+        return;
+    }
+    // Read every time rather than once: retail can start a second match on the
+    // same session, and a stale key would make every package of it undecodable.
+    // The image identity behind `game_key_base` is settled at load, so this is
+    // one `VirtualQuery` and two loads.
+    let live = state
+        .game_key_base
+        .and_then(|base| read_live_game_seed(base as *mut u8));
+    let (seed, source) = match live {
+        Some(seed) => (seed, GameKeySource::RetailGameInfoSeed),
+        // Never a substitute for a live read; only for a host that is not the
+        // pinned retail executable and therefore has no `Game` at all.
+        None => match state.configured_game_key {
+            Some(seed) => (seed, GameKeySource::Configured),
+            None => return,
+        },
+    };
+    for peer in peers {
+        if state.game_key_announced.get(&peer) == Some(&seed) {
+            continue;
+        }
+        let sent = state
+            .session
+            .as_mut()
+            .is_some_and(|session| session.announce_game_key_to(peer, seed, source).is_ok());
+        if sent {
+            state.game_key_announced.insert(peer, seed);
+            trace_detail(format_args!(
+                "game_key=announced peer={peer} source={} seed=0x{seed:08x} xor_key=0x{:04x}",
+                source.as_str(),
+                (seed >> 8) as u16,
+            ));
+        }
+    }
+}
+
 unsafe extern "thiscall" fn ns_send(
     this: *mut NetSysBase,
     packet: *const u8,
@@ -1590,6 +1868,7 @@ unsafe extern "thiscall" fn ns_send(
         return false;
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
+    announce_game_key_for_package(this, bytes);
     let dest = Dest::One((*to).unique_id);
     st(this)
         .and_then(|s| s.session.as_mut())
@@ -1612,6 +1891,7 @@ unsafe extern "thiscall" fn ns_send_all(
         return false;
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
+    announce_game_key_for_package(this, bytes);
     st(this)
         .and_then(|s| s.session.as_mut())
         .map(|session| session.transport.send(Dest::All, bytes).is_ok())
@@ -2399,5 +2679,116 @@ mod tests {
             0x3a8
         );
         assert_eq!(core::mem::offset_of!(NetSysObj, state), 0x3d0);
+    }
+
+    #[test]
+    fn the_pinned_key_instructions_are_the_source_of_the_two_key_offsets() {
+        // `a1 <imm32>` is `mov eax, moffs32`: the operand is the address of
+        // `GameAccess::game`, and it must be the same global this file names by
+        // RVA rather than a second, independently guessed constant.
+        assert_eq!(COMMAND_PACKAGE_KEY_PREFIX[0], 0xa1);
+        assert_eq!(
+            read_u32(COMMAND_PACKAGE_KEY_PREFIX, 1),
+            Some(RETAIL_IMAGE_BASE + GAME_ACCESS_GAME_RVA as u32)
+        );
+        assert_eq!(COMMAND_PACKAGE_KEY_RELOCS, &[1]);
+        // `8b 40 10` is `mov eax, [eax + 0x10]`: the displacement is
+        // `Game::info` (+12) plus `GameInfo::seed` (+4).
+        assert_eq!(&COMMAND_PACKAGE_KEY_PREFIX[11..13], &[0x8b, 0x40]);
+        assert_eq!(
+            usize::from(COMMAND_PACKAGE_KEY_PREFIX[13]),
+            GAME_INFO_SEED_OFFSET
+        );
+        assert_eq!(GAME_INFO_SEED_OFFSET, 0x10);
+        // `c1 e8 08` / `0f b7 d8` is `shr eax, 8` / `movzx ebx, ax`, i.e. the
+        // `(seed >> 8) as u16` that `Obfuscation::xor_key` implements.
+        assert_eq!(&COMMAND_PACKAGE_KEY_PREFIX[14..], &[0xc1, 0xe8, 0x08, 0x0f, 0xb7, 0xd8]);
+        assert_eq!(GAME_SEED_READ_EXTENT, 0x14);
+        // Every pinned RVA lies inside the pinned image.
+        assert!(COMMAND_PACKAGE_KEY_RVA + COMMAND_PACKAGE_KEY_PREFIX.len() < RETAIL_IMAGE_SIZE);
+        assert!(GAME_ACCESS_GAME_RVA + 4 < RETAIL_IMAGE_SIZE);
+    }
+
+    #[test]
+    fn the_key_prefix_survives_relocation_and_still_rejects_a_different_callee() {
+        let delta = 0xfd90_0000u32; // the measured live -0x270000
+        let mut relocated = COMMAND_PACKAGE_KEY_PREFIX.to_vec();
+        let operand = read_u32(COMMAND_PACKAGE_KEY_PREFIX, 1).unwrap();
+        relocated[1..5].copy_from_slice(&operand.wrapping_add(delta).to_le_bytes());
+        assert!(prefix_matches_relocated(
+            &relocated,
+            COMMAND_PACKAGE_KEY_PREFIX,
+            COMMAND_PACKAGE_KEY_RELOCS,
+            delta
+        ));
+        // Unrelocated bytes at the same address are not this build.
+        assert!(!prefix_matches_relocated(
+            COMMAND_PACKAGE_KEY_PREFIX,
+            COMMAND_PACKAGE_KEY_PREFIX,
+            COMMAND_PACKAGE_KEY_RELOCS,
+            delta
+        ));
+        // A different displacement is a different field: the whole point of
+        // adjusting the relocated dword rather than masking it out.
+        let mut different_offset = relocated.clone();
+        different_offset[13] = 0x14;
+        assert!(!prefix_matches_relocated(
+            &different_offset,
+            COMMAND_PACKAGE_KEY_PREFIX,
+            COMMAND_PACKAGE_KEY_RELOCS,
+            delta
+        ));
+        let mut wrong_global = relocated.clone();
+        wrong_global[1..5].copy_from_slice(&operand.wrapping_add(delta).wrapping_add(4).to_le_bytes());
+        assert!(!prefix_matches_relocated(
+            &wrong_global,
+            COMMAND_PACKAGE_KEY_PREFIX,
+            COMMAND_PACKAGE_KEY_RELOCS,
+            delta
+        ));
+    }
+
+    #[test]
+    fn the_game_pointer_chase_refuses_everything_it_cannot_justify() {
+        // No `Game` yet: the menu case, and the reason this is not read once at
+        // load time.
+        assert_eq!(game_key_from_slot(0, |_| Some(0xdead_beef)), None);
+        // Retail objects are 4-aligned; an unaligned slot is not one.
+        assert_eq!(game_key_from_slot(0x0040_0002, |_| Some(1)), None);
+        // Unreadable memory is refused, not dereferenced.
+        assert_eq!(game_key_from_slot(0x0040_0000, |_| None), None);
+        // The read lands exactly at `Game + 0x10` and the whole 32-bit word is
+        // returned; the `>> 8` belongs to `Obfuscation::xor_key`.
+        let game = 0x0abc_1000u32;
+        assert_eq!(
+            game_key_from_slot(game, |address| {
+                assert_eq!(address, game as usize + 0x10);
+                Some(0x1234_5678)
+            }),
+            Some(0x1234_5678)
+        );
+        // A seed of zero is a real key, not a failure to read one.
+        assert_eq!(game_key_from_slot(game, |_| Some(0)), Some(0));
+    }
+
+    #[test]
+    fn the_configured_key_override_parses_both_spellings_and_nothing_else() {
+        assert_eq!(parse_u32("0x005ac33d"), Some(0x005a_c33d));
+        assert_eq!(parse_u32("0X005AC33D"), Some(0x005a_c33d));
+        assert_eq!(parse_u32("5942589"), Some(5_942_589));
+        assert_eq!(parse_u32(""), None);
+        assert_eq!(parse_u32("0x"), None);
+        assert_eq!(parse_u32("nope"), None);
+        assert_eq!(parse_u32("0x1_0000_0000"), None);
+    }
+
+    #[test]
+    fn our_own_image_is_readable_and_a_null_or_absurd_range_is_not() {
+        let anchor = &RETAIL_PE_TIMESTAMP as *const u32 as usize;
+        assert!(unsafe { readable(anchor, 4) });
+        assert!(!unsafe { readable(0, 4) });
+        assert!(!unsafe { readable(anchor, 0) });
+        assert!(!unsafe { readable(usize::MAX, 4) });
+        assert!(!unsafe { readable(usize::MAX - 1, 4) });
     }
 }

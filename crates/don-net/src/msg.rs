@@ -422,7 +422,15 @@ impl<'a> NetMsg<'a> {
                 }
             }
             x if x == T::CommandPackageData as u8 => {
-                need(9)?;
+                // `sizeof(NetMsg_CommandPackageData)` is 9 only because `data`
+                // is declared `unsigned char[1]`; the wire record is `8 +
+                // data_size`. `CommandPackage::send` `0x0094c1e0` sends exactly
+                // `*(short *)(this + 0x10) + 8` bytes (`0094c3fd movsx edx,
+                // word ptr [ecx+0x10]` … `0094c407 add edx, 8`) and guards its
+                // scramble loop with `if (size != 0)`, so a package with no
+                // commands is an 8-byte header alone. Requiring 9 dropped that
+                // record silently.
+                need(8)?;
                 let size = u16le(buf, 6) as i16;
                 if size < 0 {
                     return Err(MsgError::NegativeSize(size));
@@ -722,6 +730,31 @@ mod tests {
         let got2 = NetMsg::decode(&b2).unwrap();
         assert!(got2.ty.response);
         assert_eq!(got2.msg, m);
+    }
+
+    #[test]
+    fn a_command_package_carrying_no_commands_is_eight_bytes_and_decodes() {
+        // `sizeof` is 9 because of the `unsigned char[1]` flexible tail, but the
+        // wire length is `8 + data_size`, and retail's own send path handles
+        // `data_size == 0`. This record must survive a round trip rather than
+        // being dropped one byte short.
+        let m = NetMsg::CommandPackage {
+            stamp: 1,
+            play: 1,
+            payload: &[],
+        };
+        let mut b = Vec::new();
+        m.encode(&mut b);
+        assert_eq!(b.len(), 8);
+        assert_eq!(NetMsg::decode(&b).unwrap().msg, m);
+        assert_eq!(
+            NetMsg::decode(&b[..7]),
+            Err(MsgError::Short {
+                id: 7,
+                need: 8,
+                have: 7
+            })
+        );
     }
 
     #[test]

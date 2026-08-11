@@ -30,6 +30,7 @@
 //! peer's `CommandPackage` for the turn covering `f`. [`Session::turn_ready`]
 //! is that predicate and nothing more — the simulation lives in `don-sim`.
 
+use crate::extension::{DonExtension, ExtensionError, GameKeySource};
 use crate::internal::{InternalError, InternalPacket, MAX_PLAYERS};
 use crate::msg::{Framed, MsgError, NetMsg};
 use crate::transport::{Datagram, Dest, Transport};
@@ -88,6 +89,13 @@ pub enum Event {
         unique_id: i32,
         frame: i32,
     },
+    /// The host announced the match's `GameInfo::seed` over the DoN transport
+    /// extension. Not a retail packet — see [`crate::extension`].
+    GameKeyAnnounced {
+        from: i32,
+        seed: u32,
+        source: GameKeySource,
+    },
     /// A game-layer message arrived. `from` is the sender's unique id.
     Game {
         from: i32,
@@ -98,6 +106,12 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupRefusal {
     Malformed(InternalError),
+    MalformedExtension(ExtensionError),
+    /// A game key may only come from the authoritative host. Accepting one from
+    /// any peer would let a third party choose how we decode retail's packages.
+    GameKeyFromNonHost {
+        expected_host: Option<i32>,
+    },
     SenderIdMismatch { announced: i32 },
     UnexpectedHostClaim,
     DuplicateAddConflict { unique_id: i32 },
@@ -156,6 +170,18 @@ pub struct Session<T: Transport> {
     last_pulse_sent_ms: u64,
     pulse_interval_ms: u64,
     timeout_ms: u64,
+    /// The most recent host-announced match key, and who announced it. This is
+    /// the DoN transport extension, not retail traffic — see
+    /// [`crate::extension`].
+    announced_game_key: Option<AnnouncedGameKey>,
+}
+
+/// A host-announced `GameInfo::seed` and its provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnouncedGameKey {
+    pub from: i32,
+    pub seed: u32,
+    pub source: GameKeySource,
 }
 
 impl<T: Transport> Session<T> {
@@ -175,6 +201,7 @@ impl<T: Transport> Session<T> {
             last_pulse_sent_ms: 0,
             pulse_interval_ms: 1000,
             timeout_ms: 30_000,
+            announced_game_key: None,
         };
         s.players.push(Player {
             unique_id: id,
@@ -225,6 +252,10 @@ impl<T: Transport> Session<T> {
         self.all_ready_fired = false;
         self.now_ms = 0;
         self.last_pulse_sent_ms = 0;
+        // A key belongs to one match. `init` starts a new attempt epoch, so
+        // carrying the previous match's seed into it would be the exact silent
+        // substitution this whole path exists to avoid.
+        self.announced_game_key = None;
     }
 
     pub fn local_id(&self) -> i32 {
@@ -262,6 +293,33 @@ impl<T: Transport> Session<T> {
     /// `CrossplayNetLibSys::send_dsync(int)`.
     pub fn send_dsync(&mut self, frame: i32) -> io::Result<()> {
         self.emit_all(&InternalPacket::Dsync { frame })
+    }
+
+    /// The match key this session was told about, if any.
+    pub fn announced_game_key(&self) -> Option<AnnouncedGameKey> {
+        self.announced_game_key
+    }
+
+    /// Announce the match key to one peer over the DoN transport extension.
+    ///
+    /// Not a retail packet. Only the host has a reason to call this: it is the
+    /// side running inside `riseofnations.exe`, where `GameInfo::seed` lives.
+    pub fn announce_game_key_to(
+        &mut self,
+        peer: i32,
+        seed: u32,
+        source: GameKeySource,
+    ) -> io::Result<()> {
+        let mut bytes = Vec::new();
+        DonExtension::GameKey { seed, source }.encode(&mut bytes);
+        self.transport.send(Dest::One(peer), &bytes)
+    }
+
+    /// Announce the match key to every peer.
+    pub fn announce_game_key(&mut self, seed: u32, source: GameKeySource) -> io::Result<()> {
+        let mut bytes = Vec::new();
+        DonExtension::GameKey { seed, source }.encode(&mut bytes);
+        self.transport.send(Dest::All, &bytes)
     }
 
     /// Announce an orderly local departure with the exact five-byte
@@ -439,6 +497,21 @@ impl<T: Transport> Session<T> {
         let Some(&first) = d.bytes.first() else {
             return Ok(());
         };
+        if DonExtension::is_extension(first) {
+            // Ours, not retail's. Consumed here exactly like the shipped
+            // internal range, so it can never reach the game layer.
+            let p = match DonExtension::decode(&d.bytes) {
+                Ok(packet) => packet,
+                Err(error) => {
+                    self.events.push(Event::SetupRefused {
+                        from: d.from,
+                        reason: SetupRefusal::MalformedExtension(error),
+                    });
+                    return Ok(());
+                }
+            };
+            return self.handle_extension(d.from, p);
+        }
         if first >= crate::internal::IPT_BASE {
             let p = match InternalPacket::decode(&d.bytes) {
                 Ok(packet) => packet,
@@ -453,6 +526,37 @@ impl<T: Transport> Session<T> {
             self.handle_internal(d.from, p)
         } else {
             self.handle_game(d)
+        }
+    }
+
+    fn handle_extension(&mut self, from: i32, p: DonExtension) -> io::Result<()> {
+        match p {
+            DonExtension::GameKey { seed, source } => {
+                let host = self
+                    .players
+                    .iter()
+                    .find(|player| player.is_host)
+                    .map(|player| player.unique_id);
+                if host != Some(from) {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::GameKeyFromNonHost {
+                            expected_host: host,
+                        },
+                    });
+                    return Ok(());
+                }
+                let announcement = AnnouncedGameKey { from, seed, source };
+                // Re-announcement of the same key is normal: the announcing side
+                // restates it to every peer it has not told. Only a change is
+                // news, and it is reported rather than resolved here — the
+                // consumer decides whether a second key is legitimate.
+                if self.announced_game_key != Some(announcement) {
+                    self.announced_game_key = Some(announcement);
+                    self.events.push(Event::GameKeyAnnounced { from, seed, source });
+                }
+                Ok(())
+            }
         }
     }
 
@@ -959,5 +1063,98 @@ mod tests {
     #[test]
     fn normal_speed_is_sixty_seven_milliseconds() {
         assert_eq!(TURN_TIMINGS_MS[SPEED_NORMAL], 67);
+    }
+
+    #[test]
+    fn the_host_announced_match_key_reaches_the_client_and_never_the_game_layer() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+        client.drain_events();
+        assert_eq!(client.announced_game_key(), None);
+
+        host.announce_game_key(0x005a_c33d, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        let events = client.drain_events();
+        assert_eq!(
+            client.announced_game_key(),
+            Some(AnnouncedGameKey {
+                from: 101,
+                seed: 0x005a_c33d,
+                source: GameKeySource::RetailGameInfoSeed,
+            })
+        );
+        assert!(events.contains(&Event::GameKeyAnnounced {
+            from: 101,
+            seed: 0x005a_c33d,
+            source: GameKeySource::RetailGameInfoSeed,
+        }));
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Game { .. })),
+            "an extension packet must never surface as game traffic: {events:?}"
+        );
+
+        // Restating the identical key is how a late peer is told; it must not
+        // look like news.
+        host.announce_game_key(0x005a_c33d, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        assert!(client.drain_events().is_empty());
+
+        // A different key is reported, not swallowed, so a consumer can refuse.
+        host.announce_game_key(0x005a_c33e, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        assert!(client.drain_events().contains(&Event::GameKeyAnnounced {
+            from: 101,
+            seed: 0x005a_c33e,
+            source: GameKeySource::RetailGameInfoSeed,
+        }));
+    }
+
+    #[test]
+    fn a_match_key_from_anyone_but_the_host_is_refused() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+        host.drain_events();
+
+        // The client is not the host; the host must not adopt its key.
+        client
+            .announce_game_key(0xdead_beef, GameKeySource::Configured)
+            .unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        assert_eq!(host.announced_game_key(), None);
+        assert!(host.drain_events().contains(&Event::SetupRefused {
+            from: 202,
+            reason: SetupRefusal::GameKeyFromNonHost {
+                expected_host: Some(101)
+            },
+        }));
+    }
+
+    #[test]
+    fn a_malformed_extension_is_consumed_without_touching_membership() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+        client.drain_events();
+        let before = client.players().to_vec();
+
+        // Right id, wrong length: fail closed rather than guess the seed.
+        host.transport
+            .send(Dest::All, &[crate::extension::DON_EXT_GAMEKEY, 1, 2, 3])
+            .unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        assert_eq!(client.announced_game_key(), None);
+        assert_eq!(client.players(), before.as_slice());
+        assert!(client.drain_events().iter().any(|event| matches!(
+            event,
+            Event::SetupRefused {
+                reason: SetupRefusal::MalformedExtension(_),
+                ..
+            }
+        )));
     }
 }
