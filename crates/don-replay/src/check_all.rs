@@ -267,8 +267,13 @@ pub struct ChannelReport {
     /// ceiling on this channel's fidelity: every one is a byte retail hashes and
     /// we hash a zero for.
     pub unsourced_walked_bytes: u64,
-    /// An authoritative producer was installed even if it currently walked zero bytes.
+    /// A producer was installed even if it currently walked zero bytes. Exact ownership
+    /// is a separate gate below.
     pub installed: bool,
+    /// The producer owns the retail traversal exactly. Generic object-image walkers are
+    /// coverage probes and leave this false even when they happen to execute every op in
+    /// an empty state.
+    pub exact_producer: bool,
     pub outcome: WalkOutcome,
 }
 
@@ -277,6 +282,18 @@ impl ChannelReport {
     /// can still produce a number; it just cannot be believed.
     pub fn complete(&self) -> bool {
         self.outcome.is_complete()
+    }
+
+    /// Whether an equality on this channel is substantive compatibility evidence.
+    /// Every gate is load-bearing: installation admits the owner, non-empty bytes rule
+    /// out adler-of-nothing, zero unsourced bytes rules out placeholders, a complete walk
+    /// rules out skipped operations, and `exact_producer` excludes the generic bridge.
+    pub fn substantive(&self) -> bool {
+        self.installed
+            && self.bytes > 0
+            && self.unsourced_walked_bytes == 0
+            && self.complete()
+            && self.exact_producer
     }
 }
 
@@ -302,6 +319,7 @@ impl CheckAll {
                 bytes: outcomes[i].bytes_walked,
                 unsourced_walked_bytes: state.unsourced_walked_bytes(i),
                 installed: state.channel_is_installed(i),
+                exact_producer: state.channel_has_exact_producer(i),
                 outcome: outcomes[i],
             };
         }
@@ -351,12 +369,12 @@ impl CheckAll {
     pub fn format(&self) -> String {
         let mut s = String::new();
         s.push_str(
-            "  channel            value     elements      bytes  unsourced  source     walk\n",
+            "  channel            value     elements      bytes  unsourced  source     walk       exact  substantive\n",
         );
         for i in 0..NUM_WALKED {
             let c = &self.per[i];
             s.push_str(&format!(
-                "  {:<16} {:08x} {:12} {:10} {:10}  {:<9} {}\n",
+                "  {:<16} {:08x} {:12} {:10} {:10}  {:<9} {:<10} {:<5}  {}\n",
                 CHANNEL_NAMES[i],
                 c.value,
                 c.elements,
@@ -377,7 +395,9 @@ impl CheckAll {
                     "complete".to_string()
                 } else {
                     format!("{} ops missed", c.outcome.ops_missed())
-                }
+                },
+                if c.exact_producer { "yes" } else { "no" },
+                if c.substantive() { "yes" } else { "no" },
             ));
         }
         s.push_str(&format!(

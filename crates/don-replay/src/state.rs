@@ -140,6 +140,11 @@ pub struct SimState {
     /// A producer can be installed while walking zero elements. This distinguishes a
     /// modelled empty registry from a missing subsystem.
     installed: [bool; NUM_WALKED],
+    /// The installed producer follows a complete, independently derived checksum
+    /// traversal rather than the generic best-effort object-image bridge.  This is
+    /// deliberately separate from `unsourced_walked`: an exact traversal can still be
+    /// fed a provisional state whose missing bytes are explicitly accounted there.
+    exact_producer: [bool; NUM_WALKED],
 }
 
 impl SimState {
@@ -164,6 +169,7 @@ impl SimState {
         self.direct[i] = None;
         self.unsourced_walked[i] = 0;
         self.installed[i] = true;
+        self.exact_producer[i] = false;
         &mut self.channels[i]
     }
 
@@ -187,8 +193,8 @@ impl SimState {
                 .map_or(0, |d| d.elements)
     }
 
-    /// True when this channel has an authoritative producer, including an initialized
-    /// producer whose current traversal is empty.
+    /// True when this channel has an installed producer, including an initialized
+    /// producer whose current traversal is empty. Exact ownership is tracked separately.
     pub fn channel_is_installed(&self, i: usize) -> bool {
         self.installed.get(i).copied().unwrap_or(false)
     }
@@ -198,17 +204,32 @@ impl SimState {
         self.installed
     }
 
-    fn set_direct_channel(
+    /// True when channel `i` was installed through an exact checksum owner rather than
+    /// the generic coverage bridge.
+    pub fn channel_has_exact_producer(&self, i: usize) -> bool {
+        self.exact_producer.get(i).copied().unwrap_or(false)
+    }
+
+    /// Exact-owner state for the fifteen walked channels.
+    pub fn exact_producer_channels(&self) -> [bool; NUM_WALKED] {
+        self.exact_producer
+    }
+
+    /// Install a checksum produced by an exact channel-specific traversal. Callers with
+    /// only a prefix or best-effort projection must not use this admission path; their
+    /// missing coverage belongs in the generic bridge until an explicit partial-direct
+    /// representation exists.
+    fn set_exact_direct_channel(
         &mut self,
         c: Channel,
         checksum: u32,
         bytes_walked: u64,
         unsourced_walked: u64,
     ) {
-        self.set_direct_channel_elements(c, checksum, bytes_walked, unsourced_walked, 1);
+        self.set_exact_direct_channel_elements(c, checksum, bytes_walked, unsourced_walked, 1);
     }
 
-    fn set_direct_channel_elements(
+    fn set_exact_direct_channel_elements(
         &mut self,
         c: Channel,
         checksum: u32,
@@ -225,6 +246,7 @@ impl SimState {
         });
         self.unsourced_walked[i] = unsourced_walked;
         self.installed[i] = true;
+        self.exact_producer[i] = true;
     }
 
     fn clear_channel(&mut self, c: Channel) {
@@ -233,6 +255,7 @@ impl SimState {
         self.direct[i] = None;
         self.unsourced_walked[i] = 0;
         self.installed[i] = false;
+        self.exact_producer[i] = false;
     }
 
     /// Walked bytes on channel `i` that the bridge left zero because no column
@@ -291,6 +314,7 @@ impl SimState {
                 self.direct[i] = None;
                 self.unsourced_walked[i] = 0;
                 self.installed[i] = true;
+                self.exact_producer[i] = false;
                 self.channels[i].objects.push(vec![0u8; n]);
                 true
             }
@@ -421,6 +445,7 @@ impl SimBridge {
             class_coverage::<don_sim::generated::state::UnitCols>().unsourced_walked as u64;
 
         state.installed[ui] = true;
+        state.exact_producer[ui] = false;
         let ch = &mut state.channels[ui];
         ch.objects.clear();
         for who in 0..don_sim::objects::OWNER_SLOTS {
@@ -464,7 +489,7 @@ impl SimBridge {
     /// be called after `populate`.
     fn populate_empty_script_runtime(state: &mut SimState, rep: &mut BridgeReport) {
         let empty = crate::script_channel::checksum_empty_runtime();
-        state.set_direct_channel_elements(
+        state.set_exact_direct_channel_elements(
             Channel::ScriptRunTime,
             empty.checksum,
             empty.bytes_walked,
@@ -478,7 +503,7 @@ impl SimBridge {
         let ii = Channel::Items as usize;
         match world.items_channel() {
             Ok(items) => {
-                state.set_direct_channel_elements(
+                state.set_exact_direct_channel_elements(
                     Channel::Items,
                     items.checksum,
                     u64::from(items.bytes_walked),
@@ -556,7 +581,7 @@ impl SimBridge {
         let mut rep = Self::populate(world, state);
         Self::validate_item_map_shape(world, map_shape, state, &mut rep);
         let wi = Channel::World as usize;
-        state.set_direct_channel(
+        state.set_exact_direct_channel(
             Channel::World,
             checksum.full,
             checksum.bytes,
@@ -576,7 +601,7 @@ impl SimBridge {
     /// matching every cumulative retail checkpoint, so there are no unsourced
     /// bytes and no recorded wire checksum is copied into state.
     pub fn populate_replay_rules(rules: &crate::initial::InitialRules, state: &mut SimState) {
-        state.set_direct_channel(Channel::Rules, rules.checksum, rules.walked_bytes, 0);
+        state.set_exact_direct_channel(Channel::Rules, rules.checksum, rules.walked_bytes, 0);
     }
 
     /// Install channel 14 with the state a retail `Game::init` leaves in `ScenarioData`.
@@ -599,7 +624,7 @@ impl SimBridge {
         scenario: &crate::scenario_channel::InitialScenarioChannel,
         state: &mut SimState,
     ) {
-        state.set_direct_channel(
+        state.set_exact_direct_channel(
             Channel::ScenarioData,
             scenario.checksum,
             scenario.bytes_walked,
@@ -626,7 +651,7 @@ impl SimBridge {
         groups: &crate::groups_channel::InitialGroupsChannel,
         state: &mut SimState,
     ) {
-        state.set_direct_channel_elements(
+        state.set_exact_direct_channel_elements(
             Channel::Groups,
             groups.checksum,
             groups.bytes_walked,
@@ -651,7 +676,7 @@ impl SimBridge {
         crate::script_channel::ScriptChannelError,
     > {
         let checksum = crate::script_channel::checksum_program(runtime.program())?;
-        state.set_direct_channel(
+        state.set_exact_direct_channel(
             Channel::ScriptRunTime,
             checksum.checksum,
             checksum.bytes_walked,

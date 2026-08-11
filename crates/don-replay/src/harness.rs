@@ -11,8 +11,10 @@
 //! Two things keep the number honest:
 //!
 //! - A channel we agree on **only because both sides are empty** is reported as
-//!   `trivial`, separately from one where we walked bytes. Both are real
-//!   comparisons; only the second is evidence about our mechanics.
+//!   `trivial`, separately from one where we walked bytes. The historical
+//!   `nontrivial` counter means only that bytes were walked. A match is promoted
+//!   to `substantive` evidence only when an exact producer is installed, every
+//!   walked byte is sourced, and the traversal completed without a missed op.
 //! - A turn where retail's own two clients disagree is excluded from `survived`
 //!   and counted as `retail_disagreed`. The current corpus has zero such
 //!   disagreements when joined on the actual turn serial; retaining the gate
@@ -71,14 +73,27 @@ pub struct ChannelResult {
     /// but "this world did not produce this channel". `walls` surviving 25,442 turns is
     /// entirely this.
     pub unmodelled_matches: u32,
-    /// Compares where our walker touched at least one byte. The only compares
-    /// that are evidence about our mechanics.
+    /// Legacy compares where our walker touched at least one byte. Retained so
+    /// historical reports stay comparable; unlike `substantive_compares`, this
+    /// can include partial generic walks.
     pub nontrivial_compares: u32,
+    /// Compares admitted by all five authority gates: installed producer,
+    /// non-empty walk, zero unsourced bytes, complete walk, and exact producer.
+    pub substantive_compares: u32,
+    /// Equalities among `substantive_compares`. This is the counter that can
+    /// establish checksum compatibility; raw `matches` remains historical wire
+    /// equality and may include empty or partial state.
+    pub substantive_matches: u32,
     /// Bytes our walker handed the visitor on the last compare.
     pub our_bytes_walked: u64,
     /// Of those bytes, the count present only as explicit zero placeholders
     /// because the current reconstruction has no authoritative source.
     pub our_unsourced_walked: u64,
+    /// Last-compare producer evidence, emitted so a zero substantive count is
+    /// diagnosable rather than merely refused.
+    pub our_installed: bool,
+    pub our_walk_complete: bool,
+    pub our_exact_producer: bool,
     /// Compares where *retail's* value was 1 — the engine walked nothing either.
     /// A channel we "survive" for its whole recording while this equals
     /// `compares` was never tested at all.
@@ -88,6 +103,44 @@ pub struct ChannelResult {
     pub retail_first_nonempty_turn: Option<i32>,
     /// Compares excluded because retail's own clients disagreed on this channel.
     pub retail_disagreed: u32,
+}
+
+/// Authority evidence attached to one walked checksum channel at one instant.
+///
+/// `Simulation` defaults the two proof-bearing booleans to false. External or
+/// experimental simulations therefore remain eligible for raw comparison but
+/// cannot become compatibility evidence without explicitly carrying their walk
+/// and ownership proof through the trait.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SimulationChannelEvidence {
+    pub installed: bool,
+    pub bytes_walked: u64,
+    pub unsourced_walked: u64,
+    pub walk_complete: bool,
+    pub exact_producer: bool,
+}
+
+impl SimulationChannelEvidence {
+    /// The sole admission predicate for substantive checksum accounting.
+    pub fn substantive(self) -> bool {
+        self.installed
+            && self.bytes_walked > 0
+            && self.unsourced_walked == 0
+            && self.walk_complete
+            && self.exact_producer
+    }
+}
+
+impl From<&crate::check_all::ChannelReport> for SimulationChannelEvidence {
+    fn from(report: &crate::check_all::ChannelReport) -> Self {
+        Self {
+            installed: report.installed,
+            bytes_walked: report.bytes,
+            unsourced_walked: report.unsourced_walked_bytes,
+            walk_complete: report.complete(),
+            exact_producer: report.exact_producer,
+        }
+    }
 }
 
 /// Whole-run outcome.
@@ -227,6 +280,23 @@ pub trait Simulation {
             crate::check_all::CHANNEL_SOURCE[i] == crate::check_all::ChannelSource::Modelled
         })
     }
+    /// Produce one checksum snapshot together with the proof needed to decide
+    /// whether an equality is substantive. The compatibility default is
+    /// intentionally fail-closed: legacy implementations still compare, but
+    /// must opt in with real completeness and exact-owner evidence.
+    fn check_all_with_evidence(&self) -> (Channels, [SimulationChannelEvidence; NUM_WALKED]) {
+        let (channels, bytes) = self.check_all();
+        let unsourced = self.unsourced_walked();
+        let installed = self.installed_channels();
+        let evidence = std::array::from_fn(|i| SimulationChannelEvidence {
+            installed: installed[i],
+            bytes_walked: bytes[i],
+            unsourced_walked: unsourced[i],
+            walk_complete: false,
+            exact_producer: false,
+        });
+        (channels, evidence)
+    }
 }
 
 /// The null simulation: correct empty state, no mechanics.
@@ -279,6 +349,11 @@ impl Simulation for NullSim {
             dynamic[i]
                 || crate::check_all::CHANNEL_SOURCE[i] == crate::check_all::ChannelSource::Modelled
         })
+    }
+    fn check_all_with_evidence(&self) -> (Channels, [SimulationChannelEvidence; NUM_WALKED]) {
+        let checked = crate::check_all::CheckAll::of_state(&self.state);
+        let evidence = std::array::from_fn(|i| SimulationChannelEvidence::from(&checked.per[i]));
+        (checked.channels, evidence)
     }
 }
 
@@ -446,6 +521,11 @@ impl Simulation for WorldSim {
     fn installed_channels(&self) -> [bool; NUM_WALKED] {
         self.state.installed_channels()
     }
+    fn check_all_with_evidence(&self) -> (Channels, [SimulationChannelEvidence; NUM_WALKED]) {
+        let checked = crate::check_all::CheckAll::of_state(&self.state);
+        let evidence = std::array::from_fn(|i| SimulationChannelEvidence::from(&checked.per[i]));
+        (checked.channels, evidence)
+    }
 }
 
 /// Run one recording through a simulation and produce the divergence profile.
@@ -508,9 +588,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_rules_walked_bytes: rep.initial.rules.map_or(0, |r| r.walked_bytes),
         initial_rules_checksum: rep.initial.rules.map(|r| r.checksum),
         initial_scenario_checksum: initial_scenario.as_ref().ok().map(|s| s.checksum),
-        initial_scenario_walked_bytes: initial_scenario
-            .as_ref()
-            .map_or(0, |s| s.bytes_walked),
+        initial_scenario_walked_bytes: initial_scenario.as_ref().map_or(0, |s| s.bytes_walked),
         initial_scenario_error: initial_scenario.as_ref().err().cloned(),
         initial_groups_checksum: initial_groups.checksum,
         initial_groups_walked_bytes: initial_groups.bytes_walked,
@@ -658,8 +736,12 @@ fn compare_next_checksum<S: Simulation>(
     let Some(rows) = whole.get(&turn) else {
         return;
     };
-    let (ours, bytes) = sim.check_all();
-    let installed = sim.installed_channels();
+    let (ours, evidence) = sim.check_all_with_evidence();
+    // `0x3a` keeps its historical installed/bytes accounting. The primary
+    // `0x39` scoreboard below is the compatibility scoreboard and applies the
+    // stronger substantive predicate.
+    let bytes = std::array::from_fn(|i| evidence[i].bytes_walked);
+    let installed = std::array::from_fn(|i| evidence[i].installed);
     for (ty, value) in rows {
         crate::next_checksum::score_turn(next, *ty, *value, &ours, &bytes, &installed);
     }
@@ -742,9 +824,7 @@ fn compare<S: Simulation>(
     sim: &S,
     rep: &Replay,
 ) {
-    let (ours, bytes) = sim.check_all();
-    let unsourced = sim.unsourced_walked();
-    let installed = sim.installed_channels();
+    let (ours, evidence) = sim.check_all_with_evidence();
 
     // Which channels do retail's own clients disagree on this turn? Those
     // carry no ground truth and are excluded.
@@ -781,24 +861,37 @@ fn compare<S: Simulation>(
         // elements on this turn. Without this the survival numbers cannot be
         // read at all.
         if c < NUM_WALKED {
+            let proof = evidence[c];
             if rec.0[c] == 1 {
                 r.retail_empty_compares += 1;
             } else if r.retail_first_nonempty_turn.is_none() {
                 r.retail_first_nonempty_turn = Some(turn);
             }
-            r.our_bytes_walked = bytes[c];
-            r.our_unsourced_walked = unsourced[c];
-            if bytes[c] > 0 {
+            r.our_bytes_walked = proof.bytes_walked;
+            r.our_unsourced_walked = proof.unsourced_walked;
+            r.our_installed = proof.installed;
+            r.our_walk_complete = proof.walk_complete;
+            r.our_exact_producer = proof.exact_producer;
+            if proof.bytes_walked > 0 {
                 r.nontrivial_compares += 1;
+            }
+            if proof.substantive() {
+                r.substantive_compares += 1;
             }
         }
         let agree = ours.0[c] == rec.0[c];
         if agree {
             r.matches += 1;
-            if c < NUM_WALKED && bytes[c] == 0 {
-                r.trivial_matches += 1;
-                if !installed[c] {
-                    r.unmodelled_matches += 1;
+            if c < NUM_WALKED {
+                let proof = evidence[c];
+                if proof.substantive() {
+                    r.substantive_matches += 1;
+                }
+                if proof.bytes_walked == 0 {
+                    r.trivial_matches += 1;
+                    if !proof.installed {
+                        r.unmodelled_matches += 1;
+                    }
                 }
             }
             if alive[c] {
@@ -906,7 +999,7 @@ pub fn format_table(r: &RunResult) -> String {
         ));
     }
     s.push_str(
-        "  channel          survived  first-div    expected       got  compares  trivial  unmodelled  our-bytes  unsourced  retail-empty  retail-1st\n",
+        "  channel          survived  first-div    expected       got  compares  trivial  unmodelled  our-bytes  unsourced  substantive  proof  retail-empty  retail-1st\n",
     );
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
         let c = &r.channels[i];
@@ -919,7 +1012,7 @@ pub fn format_table(r: &RunResult) -> String {
             .map(|_| format!("{:08x}", c.got))
             .unwrap_or_else(|| "-".into());
         s.push_str(&format!(
-            "  {name:<16} {:7}  {:>9}  {:>10}  {:>9}  {:8}  {:7}  {:10}  {:9}  {:9}  {:12}  {:>10}\n",
+            "  {name:<16} {:7}  {:>9}  {:>10}  {:>9}  {:8}  {:7}  {:10}  {:9}  {:9}  {:>11}  {:<5}  {:12}  {:>10}\n",
             c.survived,
             c.first_divergence_turn
                 .map(|t| t.to_string())
@@ -931,6 +1024,13 @@ pub fn format_table(r: &RunResult) -> String {
             c.unmodelled_matches,
             c.our_bytes_walked,
             c.our_unsourced_walked,
+            format!("{}/{}", c.substantive_matches, c.substantive_compares),
+            format!(
+                "{}{}{}",
+                if c.our_installed { "I" } else { "-" },
+                if c.our_walk_complete { "C" } else { "-" },
+                if c.our_exact_producer { "X" } else { "-" },
+            ),
             c.retail_empty_compares,
             c.retail_first_nonempty_turn
                 .map(|t| t.to_string())
@@ -939,6 +1039,7 @@ pub fn format_table(r: &RunResult) -> String {
     }
     s.push_str(
         "  `unmodelled` = agreements on a channel don-sim has no producer for; those are not evidence.\n  \
+         `substantive` = matches/compares passing installed + non-empty + sourced + complete + exact; proof is I/C/X.\n  \
          `retail-empty` = compares where the ENGINE also walked nothing; `retail-1st` = the turn it stopped.\n",
     );
     s
