@@ -232,6 +232,81 @@ pub struct FormOrderState {
     pub delay: i32,
 }
 
+/// Complete scalar state of the executable `MoveOrder` / `GroupOrder` bases.
+///
+/// The production world historically retained only `x`, `y`, and `tolerance`, while the
+/// command bridge and retail order walker also own the retry state machine, facing/origin
+/// coordinates, and group-order identity.  Keeping this payload on [`Order`] makes the
+/// command, tick, and save owners lossless without forcing a descriptive non-movement order
+/// to acquire meaningless move fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveOrderState {
+    pub angle: i32,
+    pub dest: i32,
+    pub pause: i32,
+    pub retry: i32,
+    pub attempts: i32,
+    pub timer: i32,
+    pub facing: i32,
+    pub dest_x: i32,
+    pub dest_y: i32,
+    pub last_x: i32,
+    pub last_y: i32,
+    pub coll_x: i32,
+    pub coll_y: i32,
+    pub orig_x: i32,
+    pub orig_y: i32,
+    pub off_x: i16,
+    pub off_y: i16,
+    pub group_oxx: i32,
+    pub group_whose: i32,
+    pub group_id: i32,
+    pub group_form_id: i32,
+    pub group_angle: i32,
+    pub in_group: i32,
+}
+
+impl Default for MoveOrderState {
+    fn default() -> Self {
+        Self {
+            angle: 0,
+            dest: 0,
+            pause: 0,
+            retry: 0,
+            attempts: 0,
+            timer: 0,
+            facing: 0,
+            dest_x: 0,
+            dest_y: 0,
+            last_x: -1,
+            last_y: -1,
+            coll_x: 0,
+            coll_y: 0,
+            orig_x: 0,
+            orig_y: 0,
+            off_x: 0,
+            off_y: 0,
+            group_oxx: -1,
+            group_whose: -1,
+            group_id: -1,
+            group_form_id: 0,
+            group_angle: 0,
+            in_group: 0,
+        }
+    }
+}
+
+impl MoveOrderState {
+    /// Constructor image shared by `Unit::add_move_*_order` before action-specific writes.
+    pub fn fresh(dest_x: i32, dest_y: i32) -> Self {
+        Self {
+            dest_x,
+            dest_y,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for SpecialAnimOrderState {
     fn default() -> Self {
         Self {
@@ -392,6 +467,10 @@ pub struct Order {
     pub target_handle: Option<Handle>,
     /// Arrival tolerance in Coord units; `UnitData::tolerance` is the per-unit default.
     pub tolerance: i32,
+    /// Complete executable `MoveOrder`/`GroupOrder` scalar image.  `None` is accepted only
+    /// as a legacy descriptive order; authoritative movement command installation publishes
+    /// `Some` and DoNSave v12 preserves it byte-for-byte.
+    pub move_state: Option<MoveOrderState>,
     /// Concrete payload for order 11. `None` on FOLLOW is malformed legacy state: the
     /// executor must fail closed rather than inventing its fallback identity.
     pub follow: Option<FollowOrderPayload>,
@@ -415,6 +494,7 @@ impl Default for Order {
             target_uid: 0,
             target_handle: None,
             tolerance: 0,
+            move_state: None,
             follow: None,
             special_anim: None,
             form_order: None,
@@ -429,6 +509,7 @@ impl Order {
             x,
             y,
             tolerance,
+            move_state: Some(MoveOrderState::fresh(x, y)),
             ..Order::default()
         }
     }
@@ -497,8 +578,13 @@ impl Order {
 
     /// Construct one exact `FormOrder` payload.
     pub fn change_form(angle: i32, new_form: i32, delay: i32) -> Order {
+        let move_state = MoveOrderState {
+            angle,
+            ..MoveOrderState::default()
+        };
         Order {
             kind: OrderIndex::ChangeForm,
+            move_state: Some(move_state),
             form_order: Some(FormOrderState {
                 angle,
                 new_form,

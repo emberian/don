@@ -16,8 +16,8 @@ use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
 };
 use crate::order::{
-    FollowOrderPayload, FormOrderState, Order, OrderIndex, OrderList, SpecialAnimOrderState,
-    SpecialAnimType,
+    FollowOrderPayload, FormOrderState, MoveOrderState, Order, OrderIndex, OrderList,
+    SpecialAnimOrderState, SpecialAnimType,
 };
 use crate::script_runtime::ScriptRuntime;
 use crate::systems::{
@@ -42,7 +42,9 @@ mod leader_match;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 11;
+const FORMAT_VERSION: u32 = 12;
+/// The last version whose order stream omitted executable MoveOrder/GroupOrder scalars.
+const LEGACY_ORDER_FORMAT_VERSION: u32 = 11;
 /// The last version whose root ended at [`GROUPS`], before [`LEADER_MATCH`] was added.
 const GROUPS_FORMAT_VERSION: u32 = 10;
 /// The last version whose root ended at [`PLAYER_SETUP`], before [`GROUPS`] was added.
@@ -57,6 +59,65 @@ const MAX_BUILDS: usize = crate::objects::BANDED_SLOTS * production::BUILD_POOL_
 const MAX_BUILD_QUEUE_ENTRIES: usize = 4096;
 const MAX_BUILD_MINING_TILES: usize = 1 << 20;
 const MAX_BUILD_GATHER_POINTS: usize = 1 << 16;
+
+/// DoNSave v12's extensible per-order payload tag table.
+///
+/// Every v12 order carries `tag:u8, payload_version:u8, payload...` after the legacy order
+/// image.  Tags 2--10 are reserved by independently recovered concrete-order audits,
+/// but are intentionally not writable/readable until [`Order`] owns their typed payloads:
+/// reserving a number is not permission to serialize opaque placeholder bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DoNSaveOrderPayloadTag {
+    None = 0,
+    Move = 1,
+    Gather = 2,
+    CastSpell = 3,
+    TradeRoute = 4,
+    Guard = 5,
+    AirPatrol = 6,
+    GroupPatrol = 7,
+    Strafe = 8,
+    AttackGround = 9,
+    AirAttackGround = 10,
+}
+
+impl DoNSaveOrderPayloadTag {
+    pub const fn from_raw(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Self::None),
+            1 => Some(Self::Move),
+            2 => Some(Self::Gather),
+            3 => Some(Self::CastSpell),
+            4 => Some(Self::TradeRoute),
+            5 => Some(Self::Guard),
+            6 => Some(Self::AirPatrol),
+            7 => Some(Self::GroupPatrol),
+            8 => Some(Self::Strafe),
+            9 => Some(Self::AttackGround),
+            10 => Some(Self::AirAttackGround),
+            _ => None,
+        }
+    }
+
+    /// Version of the exact field contract reserved for this tag. `None` has no body;
+    /// every concrete payload starts at version 1 and evolves independently of DoNSave.
+    pub const fn wire_version(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Move
+            | Self::Gather
+            | Self::CastSpell
+            | Self::TradeRoute
+            | Self::Guard
+            | Self::AirPatrol
+            | Self::GroupPatrol
+            | Self::Strafe
+            | Self::AttackGround
+            | Self::AirAttackGround => 1,
+        }
+    }
+}
 
 const ROOT: u16 = 0x444e;
 const CORE: u16 = 0x0001;
@@ -85,7 +146,7 @@ const REQUIRED: [u16; 10] = [
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        FORMAT_VERSION => &REQUIRED,
+        LEGACY_ORDER_FORMAT_VERSION..=FORMAT_VERSION => &REQUIRED,
         GROUPS_FORMAT_VERSION => &REQUIRED[..9],
         PLAYER_SETUP_FORMAT_VERSION => &REQUIRED[..8],
         _ => &LEGACY_REQUIRED,
@@ -352,7 +413,37 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn write_order(w: &mut Writer, o: &Order) {
+#[inline]
+const fn order_kind_carries_move_state(kind: OrderIndex) -> bool {
+    matches!(
+        kind,
+        OrderIndex::MoveTo
+            | OrderIndex::AttackTo
+            | OrderIndex::ExploreTo
+            | OrderIndex::FleeTo
+            | OrderIndex::ChangeForm
+            | OrderIndex::GroupMove
+            | OrderIndex::GroupAttackTo
+    )
+}
+
+fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), SaveError> {
+    // Validate the typed envelope before appending any bytes. `save_sim` writes into a local
+    // buffer too, so an invalid public order cannot leak either a partial stream or a
+    // partially normalized replacement order to its caller.
+    if format_version >= FORMAT_VERSION {
+        if o.move_state.is_some() && !order_kind_carries_move_state(o.kind) {
+            return Err(SaveError::Invalid("movement payload on foreign order kind"));
+        }
+        if o.move_state.is_none() && order_kind_carries_move_state(o.kind) {
+            return Err(SaveError::Invalid("missing movement payload"));
+        }
+        if let (Some(move_state), Some(form)) = (o.move_state, o.form_order) {
+            if o.kind == OrderIndex::ChangeForm && move_state.angle != form.angle {
+                return Err(SaveError::Invalid("change-form movement angle mismatch"));
+            }
+        }
+    }
     w.u8(o.kind as u8);
     w.u8(o.flags);
     w.i32(o.x);
@@ -393,9 +484,44 @@ fn write_order(w: &mut Writer, o: &Order) {
         w.i32(follow.whose);
         w.u16(follow.uid2);
     }
+    if format_version >= FORMAT_VERSION {
+        let tag = if o.move_state.is_some() {
+            DoNSaveOrderPayloadTag::Move
+        } else {
+            DoNSaveOrderPayloadTag::None
+        };
+        w.u8(tag as u8);
+        w.u8(tag.wire_version());
+        if let Some(state) = o.move_state {
+            w.i32(state.angle);
+            w.i32(state.dest);
+            w.i32(state.pause);
+            w.i32(state.retry);
+            w.i32(state.attempts);
+            w.i32(state.timer);
+            w.i32(state.facing);
+            w.i32(state.dest_x);
+            w.i32(state.dest_y);
+            w.i32(state.last_x);
+            w.i32(state.last_y);
+            w.i32(state.coll_x);
+            w.i32(state.coll_y);
+            w.i32(state.orig_x);
+            w.i32(state.orig_y);
+            w.i16(state.off_x);
+            w.i16(state.off_y);
+            w.i32(state.group_oxx);
+            w.i32(state.group_whose);
+            w.i32(state.group_id);
+            w.i32(state.group_form_id);
+            w.i32(state.group_angle);
+            w.i32(state.in_group);
+        }
+    }
+    Ok(())
 }
 
-fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
+fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveError> {
     let kind = OrderIndex::from_index(r.u8()? as usize)
         .ok_or(SaveError::Invalid("unknown unit order index"))?;
     let order = Order {
@@ -415,6 +541,7 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
             None
         },
         tolerance: r.i32()?,
+        move_state: None,
         special_anim: None,
         follow: None,
         form_order: None,
@@ -457,10 +584,79 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
     } else {
         None
     };
+    let move_state = if format_version >= FORMAT_VERSION {
+        let tag = DoNSaveOrderPayloadTag::from_raw(r.u8()?).ok_or(SaveError::Invalid(
+            "unknown order payload discriminator/version",
+        ))?;
+        let version = r.u8()?;
+        match (tag, version) {
+            (DoNSaveOrderPayloadTag::None, 0) => {
+                if order_kind_carries_move_state(kind) {
+                    return Err(SaveError::Invalid("missing movement payload"));
+                }
+                None
+            }
+            (DoNSaveOrderPayloadTag::Move, 1) => {
+                if !order_kind_carries_move_state(kind) {
+                    return Err(SaveError::Invalid("movement payload on foreign order kind"));
+                }
+                Some(MoveOrderState {
+                    angle: r.i32()?,
+                    dest: r.i32()?,
+                    pause: r.i32()?,
+                    retry: r.i32()?,
+                    attempts: r.i32()?,
+                    timer: r.i32()?,
+                    facing: r.i32()?,
+                    dest_x: r.i32()?,
+                    dest_y: r.i32()?,
+                    last_x: r.i32()?,
+                    last_y: r.i32()?,
+                    coll_x: r.i32()?,
+                    coll_y: r.i32()?,
+                    orig_x: r.i32()?,
+                    orig_y: r.i32()?,
+                    off_x: r.i16()?,
+                    off_y: r.i16()?,
+                    group_oxx: r.i32()?,
+                    group_whose: r.i32()?,
+                    group_id: r.i32()?,
+                    group_form_id: r.i32()?,
+                    group_angle: r.i32()?,
+                    in_group: r.i32()?,
+                })
+            }
+            (
+                DoNSaveOrderPayloadTag::Gather
+                | DoNSaveOrderPayloadTag::CastSpell
+                | DoNSaveOrderPayloadTag::TradeRoute
+                | DoNSaveOrderPayloadTag::Guard
+                | DoNSaveOrderPayloadTag::AirPatrol
+                | DoNSaveOrderPayloadTag::GroupPatrol
+                | DoNSaveOrderPayloadTag::Strafe
+                | DoNSaveOrderPayloadTag::AttackGround
+                | DoNSaveOrderPayloadTag::AirAttackGround,
+                _,
+            ) => return Err(SaveError::Unsupported("reserved typed order payload")),
+            _ => {
+                return Err(SaveError::Invalid(
+                    "unknown order payload discriminator/version",
+                ))
+            }
+        }
+    } else {
+        None
+    };
+    if let (Some(move_state), Some(form)) = (move_state, form_order) {
+        if kind == OrderIndex::ChangeForm && move_state.angle != form.angle {
+            return Err(SaveError::Invalid("change-form movement angle mismatch"));
+        }
+    }
     Ok(Order {
         special_anim,
         form_order,
         follow,
+        move_state,
         ..order
     })
 }
@@ -639,7 +835,7 @@ fn write_world_state_for_version(
         }
         w.len(list.len(), "orders per unit")?;
         for order in list.iter() {
-            write_order(&mut w, order);
+            write_order(&mut w, order, format_version)?;
         }
     }
     for rows in &state.build_rows {
@@ -750,7 +946,7 @@ fn read_world_state(
         let count = r.len(MAX_ORDERS_PER_UNIT, "orders per unit")?;
         let mut list = OrderList::new();
         for _ in 0..count {
-            list.push(read_order(&mut r)?);
+            list.push(read_order(&mut r, format_version)?);
         }
         unit_orders.push(list);
     }
@@ -2663,6 +2859,31 @@ mod tests {
         }
     }
 
+    /// Re-encode the two version-sensitive leaves while retaining v11's complete root.
+    fn format_eleven_stream(sim: &Sim) -> Vec<u8> {
+        let state = sim.world.export_save_state().unwrap();
+        let current = save_sim(sim).unwrap();
+        let parsed = parse_chunk(&current[MAGIC.len()..]).unwrap();
+        let children = parsed
+            .children
+            .iter()
+            .map(|child| {
+                let mut data = child.data.to_vec();
+                if child.header.id == CORE {
+                    data[..4].copy_from_slice(&LEGACY_ORDER_FORMAT_VERSION.to_le_bytes());
+                } else if child.header.id == OBJECTS {
+                    data =
+                        write_world_state_for_version(&state, LEGACY_ORDER_FORMAT_VERSION).unwrap();
+                }
+                Chunk::leaf(child.header.id, data)
+            })
+            .collect();
+        let root = Chunk::branch(ROOT, children).encode().unwrap();
+        let mut legacy = MAGIC.to_vec();
+        legacy.extend_from_slice(&root);
+        legacy
+    }
+
     fn sim_with_stable_items() -> Sim {
         let mut sim = supported_sim();
         for (wx, wy) in [(0, 0), (1, 1), (2, 2)] {
@@ -2879,8 +3100,40 @@ mod tests {
     }
 
     #[test]
+    fn format_eleven_nonmove_orders_upgrade_but_an_active_move_cannot_be_laundered() {
+        let ordinary = supported_sim();
+        let ordinary_loaded = load_sim(&format_eleven_stream(&ordinary)).unwrap();
+        let upgraded = save_sim(&ordinary_loaded).unwrap();
+        assert_eq!(
+            read_core(&parse_chunk(&upgraded[MAGIC.len()..]).unwrap().children[0].data)
+                .unwrap()
+                .format_version,
+            FORMAT_VERSION
+        );
+
+        let mut active_move = supported_sim();
+        active_move
+            .world
+            .orders_mut(0)
+            .replace(Order::move_to(4_000, 5_000, 17));
+        let legacy = format_eleven_stream(&active_move);
+        let loaded = load_sim(&legacy).unwrap();
+        let decoded = *loaded.world.orders(0).current().unwrap();
+        assert_eq!(decoded.kind, OrderIndex::MoveTo);
+        assert_eq!(decoded.move_state, None);
+        let before = loaded.world.orders(0).clone();
+        assert_eq!(
+            save_sim(&loaded),
+            Err(SaveError::Invalid("missing movement payload"))
+        );
+        assert_eq!(loaded.world.orders(0), &before);
+    }
+
+    #[test]
     fn format_eight_sparse_stream_remains_loadable_without_player_setup_chunk() {
-        let bytes = save_sim(&supported_sim()).unwrap();
+        let original = supported_sim();
+        let state = original.world.export_save_state().unwrap();
+        let bytes = save_sim(&original).unwrap();
         let parsed = parse_chunk(&bytes[MAGIC.len()..]).unwrap();
         let children = parsed
             .children
@@ -2890,6 +3143,9 @@ mod tests {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
                     data[..4].copy_from_slice(&SPARSE_OBJECTS_FORMAT_VERSION.to_le_bytes());
+                } else if child.header.id == OBJECTS {
+                    data = write_world_state_for_version(&state, SPARSE_OBJECTS_FORMAT_VERSION)
+                        .unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })
@@ -2918,6 +3174,7 @@ mod tests {
         original.world.seconds = 0;
         original.vic_match.frame = 0;
         original.vic_match.tick = 0;
+        let state = original.world.export_save_state().unwrap();
         let bytes = save_sim(&original).unwrap();
         let parsed = parse_chunk(&bytes[MAGIC.len()..]).unwrap();
         let children = parsed
@@ -2928,6 +3185,8 @@ mod tests {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {
                     data[..4].copy_from_slice(&GROUPS_FORMAT_VERSION.to_le_bytes());
+                } else if child.header.id == OBJECTS {
+                    data = write_world_state_for_version(&state, GROUPS_FORMAT_VERSION).unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })
@@ -3458,7 +3717,7 @@ mod tests {
         bytes.extend_from_slice(&[0; 4 + 4 + 1 + 2 + 4]);
         let mut reader = Reader::new(&bytes);
         assert_eq!(
-            read_order(&mut reader),
+            read_order(&mut reader, FORMAT_VERSION),
             Err(SaveError::Invalid("unknown unit order index"))
         );
     }
@@ -3469,14 +3728,16 @@ mod tests {
         write_order(
             &mut writer,
             &Order::special_anim(SpecialAnimType::Unit, 0, 0),
-        );
+            FORMAT_VERSION,
+        )
+        .unwrap();
         let mut bytes = writer.0;
         // Fixed v7 prefix: kind/flags, x/y, who/o/uid, absent Handle, tolerance, then the
         // present SPECIAL_ANIM byte. Its discriminator immediately follows at byte 21.
         bytes[21..25].copy_from_slice(&3i32.to_le_bytes());
         let mut reader = Reader::new(&bytes);
         assert_eq!(
-            read_order(&mut reader),
+            read_order(&mut reader, FORMAT_VERSION),
             Err(SaveError::Invalid("unknown special animation type"))
         );
     }
@@ -3485,9 +3746,9 @@ mod tests {
     fn change_form_payload_round_trips_without_losing_the_walked_delay() {
         let order = Order::change_form(0x1020_3040, -7, 1234);
         let mut writer = Writer::default();
-        write_order(&mut writer, &order);
+        write_order(&mut writer, &order, FORMAT_VERSION).unwrap();
         let mut reader = Reader::new(&writer.0);
-        assert_eq!(read_order(&mut reader).unwrap(), order);
+        assert_eq!(read_order(&mut reader, FORMAT_VERSION).unwrap(), order);
         reader.finish().unwrap();
     }
 
@@ -3502,9 +3763,189 @@ mod tests {
             uid2: 0xabcd,
         });
         let mut writer = Writer::default();
-        write_order(&mut writer, &order);
+        write_order(&mut writer, &order, FORMAT_VERSION).unwrap();
         let mut reader = Reader::new(&writer.0);
-        assert_eq!(read_order(&mut reader).unwrap(), order);
+        assert_eq!(read_order(&mut reader, FORMAT_VERSION).unwrap(), order);
         reader.finish().unwrap();
+    }
+
+    #[test]
+    fn versions_seven_through_eleven_keep_the_exact_legacy_order_image() {
+        let order = Order::move_to(0x1020_3040, -0x1020_304, 77);
+        let mut expected = order;
+        expected.move_state = None;
+        let mut reference = None;
+        for version in LEGACY_DENSE_OBJECTS_FORMAT_VERSION..=LEGACY_ORDER_FORMAT_VERSION {
+            let mut writer = Writer::default();
+            write_order(&mut writer, &order, version).unwrap();
+            if let Some(reference) = &reference {
+                assert_eq!(
+                    &writer.0, reference,
+                    "legacy order image changed in v{version}"
+                );
+            } else {
+                reference = Some(writer.0.clone());
+            }
+            let mut reader = Reader::new(&writer.0);
+            assert_eq!(read_order(&mut reader, version).unwrap(), expected);
+            reader.finish().unwrap();
+        }
+    }
+
+    #[test]
+    fn every_move_payload_field_is_independently_serialized_and_restored() {
+        macro_rules! movement_field_mutations {
+            ($($field:ident => $value:expr),+ $(,)?) => {{
+                vec![$({
+                    let mut state = MoveOrderState::default();
+                    state.$field = $value;
+                    (stringify!($field), state)
+                }),+]
+            }};
+        }
+
+        let variants = movement_field_mutations![
+            angle => 11,
+            dest => 12,
+            pause => 13,
+            retry => 14,
+            attempts => 15,
+            timer => 16,
+            facing => 17,
+            dest_x => 18,
+            dest_y => 19,
+            last_x => 20,
+            last_y => 21,
+            coll_x => 22,
+            coll_y => 23,
+            orig_x => 24,
+            orig_y => 25,
+            off_x => 26,
+            off_y => 27,
+            group_oxx => 28,
+            group_whose => 29,
+            group_id => 30,
+            group_form_id => 31,
+            group_angle => 32,
+            in_group => 33,
+        ];
+        let baseline_order = Order {
+            kind: OrderIndex::MoveTo,
+            move_state: Some(MoveOrderState::default()),
+            ..Order::default()
+        };
+        let mut baseline_writer = Writer::default();
+        write_order(&mut baseline_writer, &baseline_order, FORMAT_VERSION).unwrap();
+        let mut images = std::collections::BTreeSet::new();
+
+        for (field, state) in variants {
+            let order = Order {
+                kind: OrderIndex::MoveTo,
+                move_state: Some(state),
+                ..Order::default()
+            };
+            let mut writer = Writer::default();
+            write_order(&mut writer, &order, FORMAT_VERSION).unwrap();
+            assert_ne!(writer.0, baseline_writer.0, "{field} was not serialized");
+            assert!(
+                images.insert(writer.0.clone()),
+                "{field} aliased another field"
+            );
+            let mut reader = Reader::new(&writer.0);
+            assert_eq!(read_order(&mut reader, FORMAT_VERSION).unwrap(), order);
+            reader.finish().unwrap();
+        }
+        assert_eq!(images.len(), 23);
+    }
+
+    #[test]
+    fn v12_typed_order_envelope_rejects_foreign_unknown_and_truncated_payloads() {
+        let missing = Order {
+            kind: OrderIndex::MoveTo,
+            ..Order::default()
+        };
+        let mut writer = Writer::default();
+        assert_eq!(
+            write_order(&mut writer, &missing, FORMAT_VERSION),
+            Err(SaveError::Invalid("missing movement payload"))
+        );
+        assert!(writer.0.is_empty(), "validation must precede every write");
+
+        let foreign = Order {
+            kind: OrderIndex::Attack,
+            move_state: Some(MoveOrderState::default()),
+            ..Order::default()
+        };
+        let mut writer = Writer::default();
+        assert_eq!(
+            write_order(&mut writer, &foreign, FORMAT_VERSION),
+            Err(SaveError::Invalid("movement payload on foreign order kind"))
+        );
+        assert!(writer.0.is_empty(), "validation must precede every write");
+
+        let move_order = Order::move_to(100, 200, 3);
+        let mut writer = Writer::default();
+        write_order(&mut writer, &move_order, FORMAT_VERSION).unwrap();
+        let valid = writer.0;
+
+        let mut foreign_bytes = valid.clone();
+        foreign_bytes[0] = OrderIndex::Attack as u8;
+        assert_eq!(
+            read_order(&mut Reader::new(&foreign_bytes), FORMAT_VERSION),
+            Err(SaveError::Invalid("movement payload on foreign order kind"))
+        );
+
+        let mut missing_bytes = valid.clone();
+        missing_bytes[23] = DoNSaveOrderPayloadTag::None as u8;
+        missing_bytes[24] = DoNSaveOrderPayloadTag::None.wire_version();
+        assert_eq!(
+            read_order(&mut Reader::new(&missing_bytes), FORMAT_VERSION),
+            Err(SaveError::Invalid("missing movement payload"))
+        );
+
+        // No optional legacy payloads are present, so the v12 tag/version are bytes 23/24.
+        let mut unknown = valid.clone();
+        unknown[23] = 0xff;
+        assert_eq!(
+            read_order(&mut Reader::new(&unknown), FORMAT_VERSION),
+            Err(SaveError::Invalid(
+                "unknown order payload discriminator/version"
+            ))
+        );
+        let mut wrong_version = valid.clone();
+        wrong_version[24] = 7;
+        assert_eq!(
+            read_order(&mut Reader::new(&wrong_version), FORMAT_VERSION),
+            Err(SaveError::Invalid(
+                "unknown order payload discriminator/version"
+            ))
+        );
+        let mut truncated = valid;
+        truncated.pop();
+        assert_eq!(
+            read_order(&mut Reader::new(&truncated), FORMAT_VERSION),
+            Err(SaveError::Invalid("truncated payload"))
+        );
+    }
+
+    #[test]
+    fn save_refuses_a_foreign_move_payload_without_mutating_the_sim() {
+        let mut sim = supported_sim();
+        let malformed = Order {
+            kind: OrderIndex::Attack,
+            move_state: Some(MoveOrderState::fresh(123, 456)),
+            ..Order::default()
+        };
+        sim.world.orders_mut(0).replace(malformed);
+        let before = sim.world.orders(0).clone();
+        let frame = sim.world.frame;
+        let random = sim.world.random.state();
+        assert_eq!(
+            save_sim(&sim),
+            Err(SaveError::Invalid("movement payload on foreign order kind"))
+        );
+        assert_eq!(sim.world.orders(0), &before);
+        assert_eq!(sim.world.frame, frame);
+        assert_eq!(sim.world.random.state(), random);
     }
 }

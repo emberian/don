@@ -900,21 +900,44 @@ impl From<Order> for OrderRec {
             }
             _ => TargetedOrderPayload::None,
         };
+        let move_state = o
+            .move_state
+            .unwrap_or_else(|| crate::order::MoveOrderState::fresh(o.x, o.y));
         OrderRec {
             kind: o.kind,
             flags: o.flags,
             x: o.x,
             y: o.y,
-            dest_x: o.x,
-            dest_y: o.y,
+            dest: move_state.dest,
             tolerance: o.tolerance,
+            pause: move_state.pause,
+            retry: move_state.retry,
+            attempts: move_state.attempts,
+            timer: move_state.timer,
+            facing: move_state.facing,
+            dest_x: move_state.dest_x,
+            dest_y: move_state.dest_y,
+            last_x: move_state.last_x,
+            last_y: move_state.last_y,
+            coll_x: move_state.coll_x,
+            coll_y: move_state.coll_y,
+            orig_x: move_state.orig_x,
+            orig_y: move_state.orig_y,
+            off_x: move_state.off_x,
+            off_y: move_state.off_y,
+            group_oxx: move_state.group_oxx,
+            group_whose: move_state.group_whose,
+            group_id: move_state.group_id,
+            group_form_id: move_state.group_form_id,
+            group_angle: move_state.group_angle,
+            in_group: move_state.in_group,
             target_o: follow.map_or(i32::from(o.target_o), |payload| payload.ox),
             target_who: follow.map_or(i32::from(o.target_who), |payload| payload.whom),
             target_uid: follow.map_or(o.target_uid, |payload| payload.uid),
             target_handle: o.target_handle,
             follow,
             special_anim: o.special_anim,
-            angle: o.form_order.map_or(0, |form| form.angle),
+            angle: o.form_order.map_or(move_state.angle, |form| form.angle),
             form_order: o.form_order,
             targeted_payload,
             ..OrderRec::default()
@@ -926,6 +949,41 @@ impl From<OrderRec> for Order {
     /// Narrow back to the descriptive form, for anything that speaks
     /// [`crate::order::OrderList`] (e.g. [`crate::world::World::issue`]).
     fn from(r: OrderRec) -> Order {
+        let move_state = matches!(
+            r.kind,
+            OrderIndex::MoveTo
+                | OrderIndex::AttackTo
+                | OrderIndex::ExploreTo
+                | OrderIndex::FleeTo
+                | OrderIndex::ChangeForm
+                | OrderIndex::GroupMove
+                | OrderIndex::GroupAttackTo
+        )
+        .then_some(crate::order::MoveOrderState {
+            angle: r.angle,
+            dest: r.dest,
+            pause: r.pause,
+            retry: r.retry,
+            attempts: r.attempts,
+            timer: r.timer,
+            facing: r.facing,
+            dest_x: r.dest_x,
+            dest_y: r.dest_y,
+            last_x: r.last_x,
+            last_y: r.last_y,
+            coll_x: r.coll_x,
+            coll_y: r.coll_y,
+            orig_x: r.orig_x,
+            orig_y: r.orig_y,
+            off_x: r.off_x,
+            off_y: r.off_y,
+            group_oxx: r.group_oxx,
+            group_whose: r.group_whose,
+            group_id: r.group_id,
+            group_form_id: r.group_form_id,
+            group_angle: r.group_angle,
+            in_group: r.in_group,
+        });
         Order {
             kind: r.kind,
             flags: r.flags,
@@ -936,6 +994,7 @@ impl From<OrderRec> for Order {
             target_uid: r.target_uid,
             target_handle: r.target_handle,
             tolerance: r.tolerance,
+            move_state,
             follow: r.follow,
             special_anim: r.special_anim,
             form_order: r.form_order,
@@ -5236,12 +5295,13 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 /// today — those belong to the terrain and collision lanes. That gap, not this bridge, is
 /// what stands between this module and `World::step`.
 ///
-/// **Lossy in one direction, stated plainly:** [`crate::order::Order`] has no `timer`, no
-/// `retry`, and no post-construction coordinate-target scratch state, so a round trip through
-/// it drops those fields. Exact target identity is retained by `target_uid` plus
-/// `target_handle`; a legacy target order which lacks a Handle still cannot grow one during
-/// widening. Widening a
-/// newly issued ATTACK_GROUND or
+/// The `MoveOrder`/`GroupMoveOrder` scalar image is lossless through
+/// [`crate::order::MoveOrderState`]. Concrete attack, patrol, guard, and other dynamically
+/// sized payloads are still not part of this narrow bridge; callers must not publish those
+/// classes through this adapter until their typed [`crate::order::Order`] variants land.
+/// Exact target identity is retained by `target_uid` plus `target_handle`; a legacy target
+/// order which lacks a Handle still cannot grow one during widening. Widening a newly issued
+/// ATTACK_GROUND or
 /// AIR_ATTACK_GROUND order does create the correct zero-initialized concrete payload. Keep
 /// [`OrderQueue`] as the owning representation and use this only at the boundary.
 pub fn adopt(list: &crate::order::OrderList) -> OrderQueue {
@@ -7942,6 +8002,68 @@ mod tests {
         assert_eq!(back.len(), 2);
         assert_eq!(back.order_type(), OrderIndex::MoveTo);
         assert_eq!(back.iter().nth(1).unwrap().target_o, 9);
+    }
+
+    #[test]
+    fn the_order_list_bridge_is_lossless_for_every_move_and_group_move_scalar() {
+        let expected = crate::order::MoveOrderState {
+            angle: 101,
+            dest: 102,
+            pause: 103,
+            retry: 104,
+            attempts: 105,
+            timer: 106,
+            facing: 107,
+            dest_x: 108,
+            dest_y: 109,
+            last_x: 110,
+            last_y: 111,
+            coll_x: 112,
+            coll_y: 113,
+            orig_x: 114,
+            orig_y: 115,
+            off_x: 116,
+            off_y: 117,
+            group_oxx: 118,
+            group_whose: 119,
+            group_id: 120,
+            group_form_id: 121,
+            group_angle: 122,
+            in_group: 123,
+        };
+        let order = Order {
+            kind: OrderIndex::GroupMove,
+            flags: ORDER_GROUP,
+            x: 500,
+            y: 600,
+            tolerance: 7,
+            move_state: Some(expected),
+            ..Order::default()
+        };
+        let mut source = crate::order::OrderList::new();
+        source.push(order);
+
+        let executable = adopt(&source);
+        let rec = executable.current().unwrap();
+        assert_eq!(rec.angle, expected.angle);
+        assert_eq!(rec.dest, expected.dest);
+        assert_eq!(rec.pause, expected.pause);
+        assert_eq!(rec.retry, expected.retry);
+        assert_eq!(rec.attempts, expected.attempts);
+        assert_eq!(rec.timer, expected.timer);
+        assert_eq!(rec.facing, expected.facing);
+        assert_eq!((rec.dest_x, rec.dest_y), (expected.dest_x, expected.dest_y));
+        assert_eq!((rec.last_x, rec.last_y), (expected.last_x, expected.last_y));
+        assert_eq!((rec.coll_x, rec.coll_y), (expected.coll_x, expected.coll_y));
+        assert_eq!((rec.orig_x, rec.orig_y), (expected.orig_x, expected.orig_y));
+        assert_eq!((rec.off_x, rec.off_y), (expected.off_x, expected.off_y));
+        assert_eq!((rec.group_oxx, rec.group_whose), (118, 119));
+        assert_eq!((rec.group_id, rec.group_form_id), (120, 121));
+        assert_eq!((rec.group_angle, rec.in_group), (122, 123));
+
+        let mut published = crate::order::OrderList::new();
+        publish(&executable, &mut published);
+        assert_eq!(published.current().unwrap(), &order);
     }
 
     #[test]
