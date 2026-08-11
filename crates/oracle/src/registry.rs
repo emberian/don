@@ -192,6 +192,12 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// Complete call-free `Map::land_dist`, with retail-built circle tables and a
+    /// patterned World/WData arena compared byte-for-byte after every call.
+    LandDist {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -693,6 +699,52 @@ pub static REGISTRY: &[Case] = &[
                            xorshift64 worlds 16..32, 1..16 valid Region coordinates, sparse \
                            or dense WData.land, 0..8 default or optional prior starts, \
                            min_dist 0..24, arbitrary unread argument and RNG seed",
+        },
+    },
+    Case {
+        id: "land_dist",
+        va: 0x0069_D970,
+        abi: "int __thiscall Map::land_dist(WCoord x, WCoord y, int edge_is_land), ret 0x0c. \
+              The PDB marks it virtual; the 351-byte body never reads ECX, and both WCoords \
+              arrive as by-value dwords at [ebp+8] / [ebp+0xc], not as references",
+        model: "don_sim::systems::map_terrain::World::land_dist",
+        subsystem: "world generation / continent and lake spacing",
+        ledger: "docs/mechanics/map-terrain.md §7.2 — executable ring-distance-to-land leaf",
+        derivation: "docs/assembly/map-great-lakes-continents.md §1; \
+                     docs/mechanics/map-terrain.md §7.2; PDB Map::land_dist; \
+                     retail 0x0069d970..0x0069dacc",
+        reachability: "Call-free leaf. It reads only GameAccess::world (xs at +0x00, ys at \
+                       +0x04, wdata at +0x134) and the canonical circle tables at \
+                       0x00cb7e90 / 0x00cbb0e0 / 0x00cbe330, which the fixture fills by \
+                       executing retail circle_init 0x006817f0 rather than installing a \
+                       convenient ring. MapGreatLakes::make_continents applies it as the \
+                       lake-seed spacing test at 0x0069a255",
+        caveat: "Valid generated-map domain: an IN-BOUNDS origin. Retail bounds-checks \
+                 nothing at the origin — it indexes wdata[y*xs + x] directly — so \
+                 out-of-range origins are not generated and no policy is claimed for them. \
+                 Worlds are 1..32 cells per axis in the randomised phase and 140x140 in the \
+                 saturation edges, so both the off-map arm and the pure `d > 0x40 -> 0x41` \
+                 exit execute. This proves the origin is_ocean gate (WATERHALF before the \
+                 land byte), the half-open ring span retail derives from one table read at \
+                 0xcbe32c and 0xcbe330, the octagon ring order, the off-map arm's dependence \
+                 on the third argument, and that the leaf writes nothing. It does NOT \
+                 establish how make_continents chooses candidates, what threshold it \
+                 compares the distance against, or that any generated world reaches this \
+                 leaf: the WData plane is fabricated. The shipped Rust takes a `bool` third \
+                 argument while retail takes an int, so the case supplies arbitrary nonzero \
+                 dwords and reports the branch split rather than assuming they are equivalent.",
+        plan: Plan::LandDist {
+            random: 100_000,
+            distribution: "39 edges (origin is_ocean incl. both WATERHALF halves and \
+                           out-of-enum land bytes; octagon-vs-Euclid ring membership; the \
+                           first and last entry of rings 1, 2, 5, 17 and 64; a WATERHALF \
+                           offset terminating a deep-water cell; six shapes of the third \
+                           argument; interior saturation on a 140x140 world; land at octagon \
+                           distance 65), then xorshift64 worlds 1..32 per axis with all-ocean, \
+                           sparse-land, half-land, uniform-i8 and all-dry planes, WATERHALF \
+                           painted at 0, 1/32 and 1/4 density, uniform random flag words, \
+                           in-bounds origins biased 3:1 onto ocean, and the third argument \
+                           zero one time in four and an arbitrary dword otherwise",
         },
     },
     Case {

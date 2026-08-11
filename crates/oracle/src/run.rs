@@ -214,6 +214,31 @@ unsafe fn call_cdecl0(f: *const u8) {
     std::arch::asm!("call {f}", f = in(reg) f, clobber_abi("C"));
 }
 
+/// `Map::land_dist`: `__thiscall` plus three **by-value** dwords, callee cleans (`ret 0x0C`).
+///
+/// The PDB spells the arguments `WCoord, WCoord, int`, and the body reads them straight out
+/// of `[ebp+8]`, `[ebp+0xc]` and `[ebp+0x10]` as integers — they are not references, unlike
+/// `WorldData::start_city_wcoord`'s. ECX is never read by the 351-byte body; a receiver is
+/// supplied anyway so that a read would land inside the compared arena rather than in
+/// unmapped memory.
+unsafe fn call_land_dist(f: *const u8, this: *mut u8, x: i32, y: i32, edge_is_land: i32) -> i32 {
+    let r: i32;
+    std::arch::asm!(
+        "push {edge:e}",
+        "push {y:e}",
+        "push {x:e}",
+        "call {f}",
+        edge = in(reg) edge_is_land,
+        y = in(reg) y,
+        x = in(reg) x,
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") r,
+        clobber_abi("C"),
+    );
+    r
+}
+
 /// `Map::place_start_in_region`: seven callee-cleaned dword arguments.
 unsafe fn call_place_start_in_region(
     f: *const u8,
@@ -2618,6 +2643,560 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 "preservation",
                 1,
                 "all retail-generated circle table bytes unchanged after every placement call",
+            );
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
+        Plan::LandDist {
+            random,
+            distribution,
+        } => {
+            // 140x140 is the largest world the edge phase needs: it is wider than twice the
+            // 64-ring reach, so the saturation and beyond-the-table cases are reached with no
+            // off-map offset involved at all.
+            const MAX_AXIS: i32 = 140;
+            const O_MAP: usize = 0x000;
+            const O_WORLD: usize = 0x100;
+            const O_WDATA: usize = 0x400;
+            const WDATA_BYTES: usize = 28;
+            const ARENA_BYTES: usize =
+                (O_WDATA + (MAX_AXIS * MAX_AXIS) as usize * WDATA_BYTES).next_multiple_of(PAGE);
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const VA_CIRCLE_INIT: u32 = 0x0068_17F0;
+            const VA_CIRCLE_COUNT: u32 = 0x00CA_B3A8;
+            const VA_CIRCLE_X: u32 = 0x00CB_7E90;
+            const VA_CIRCLE_Y: u32 = 0x00CB_B0E0;
+            const VA_CIRCLE_END: u32 = 0x00CB_E330;
+            const WATERHALF: u16 = 0x0100;
+
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("land-distance fixture scratch mmap failed".into());
+                return a;
+            };
+            let required = [
+                VA_WORLD_PTR,
+                VA_CIRCLE_INIT,
+                VA_CIRCLE_COUNT,
+                VA_CIRCLE_X,
+                VA_CIRCLE_Y,
+                VA_CIRCLE_END,
+            ];
+            let Some(slots) = required
+                .iter()
+                .map(|&va| ctx.at(va))
+                .collect::<Option<Vec<_>>>()
+            else {
+                a.skip = Some("land-distance global/table VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            let [world_slot, circle_init, circle_count, circle_x, circle_y, circle_end]: [*mut u8;
+                6] = slots.try_into().unwrap();
+
+            // The rings this leaf walks are the canonical circle_init spiral. Generate them
+            // with the retail routine rather than installing a convenient ring, and check the
+            // shipped sim table against them before a single distance is measured.
+            let sim_circle = don_sim::systems::combat::circle_table();
+            unsafe { call_cdecl0(circle_init as *const u8) };
+            let retail_count = unsafe { std::ptr::read_unaligned(circle_count as *const i32) };
+            let retail_x =
+                unsafe { std::slice::from_raw_parts(circle_x as *const i8, sim_circle.x.len()) };
+            let retail_y =
+                unsafe { std::slice::from_raw_parts(circle_y as *const i8, sim_circle.y.len()) };
+            let retail_end = unsafe {
+                std::slice::from_raw_parts(circle_end as *const i32, sim_circle.ring_end.len())
+            };
+            a.trials += 1;
+            if retail_count != sim_circle.x.len() as i32
+                || retail_x != sim_circle.x
+                || retail_y != sim_circle.y
+                || retail_end != sim_circle.ring_end
+            {
+                a.mismatches += 1;
+                a.first_detail(format!(
+                    "retail circle_init table differs: count={retail_count} model_count={}",
+                    sim_circle.x.len()
+                ));
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            }
+            a.phase(
+                "retail-table",
+                1,
+                "execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends",
+            );
+
+            let map = unsafe { arena.add(O_MAP) };
+            let world = unsafe { arena.add(O_WORLD) };
+            let wdata = unsafe { arena.add(O_WDATA) };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+            }
+
+            let f = f as *const u8;
+            let mut expected = vec![0u8; ARENA_BYTES];
+            let mut model = don_sim::systems::map_terrain::World::init_default_rules(32, 32);
+            let mut origin_zero = 0u64;
+            let mut saturated = 0u64;
+            let mut reason_land = 0u64;
+            let mut reason_waterhalf = 0u64;
+            let mut reason_offmap = 0u64;
+            let mut edge_true = 0u64;
+            let mut edge_false = 0u64;
+            let mut ring_hist = [0u64; 5];
+
+            // `cells` is `(flags, land)` per world cell, row-major. Everything else in the
+            // 28-byte record — and the whole 372-byte World outside xs/ys/wdata — stays
+            // patterned, so the comparison catches a write as well as a wrong answer.
+            let mut check = |width: i32,
+                             height: i32,
+                             cells: &[(u16, i8)],
+                             x: i32,
+                             y: i32,
+                             edge_arg: i32,
+                             salt: u32,
+                             label: &str,
+                             a: &mut Acc| {
+                debug_assert!((1..=MAX_AXIS).contains(&width));
+                debug_assert!((1..=MAX_AXIS).contains(&height));
+                debug_assert_eq!(cells.len(), (width * height) as usize);
+                debug_assert!(x >= 0 && x < width && y >= 0 && y < height);
+                let used_end = O_WDATA + cells.len() * WDATA_BYTES;
+                debug_assert!(used_end <= ARENA_BYTES);
+
+                for (i, b) in expected[..used_end].iter_mut().enumerate() {
+                    *b = ((i as u32)
+                        .wrapping_mul(0x9d)
+                        .wrapping_add(salt.rotate_left((i & 15) as u32)))
+                        as u8;
+                }
+                expected[O_WORLD..O_WORLD + 4].copy_from_slice(&width.to_le_bytes());
+                expected[O_WORLD + 4..O_WORLD + 8].copy_from_slice(&height.to_le_bytes());
+                expected[O_WORLD + 0x134..O_WORLD + 0x138]
+                    .copy_from_slice(&(wdata as usize as u32).to_le_bytes());
+                for (i, &(flags, land)) in cells.iter().enumerate() {
+                    let o = O_WDATA + i * WDATA_BYTES;
+                    expected[o..o + 2].copy_from_slice(&flags.to_le_bytes());
+                    expected[o + 2] = land as u8;
+                }
+                unsafe { std::ptr::copy_nonoverlapping(expected.as_ptr(), arena, used_end) };
+
+                model.xs = width;
+                model.ys = height;
+                model
+                    .wdata
+                    .resize_with(cells.len(), don_sim::systems::map_terrain::WData::default);
+                for (cell, &(flags, land)) in model.wdata.iter_mut().zip(cells) {
+                    cell.flags = flags;
+                    cell.land = land;
+                }
+                let want = model.land_dist(
+                    &sim_circle,
+                    don_sim::systems::map_terrain::WCoord(x),
+                    don_sim::systems::map_terrain::WCoord(y),
+                    edge_arg != 0,
+                );
+
+                let got = unsafe { call_land_dist(f, map, x, y, edge_arg) };
+                let after = unsafe { std::slice::from_raw_parts(arena, used_end) };
+                a.trials += 1;
+                if got != want || after != &expected[..used_end] {
+                    a.mismatches += 1;
+                    let byte = after
+                        .iter()
+                        .zip(&expected[..used_end])
+                        .position(|(got, want)| got != want);
+                    a.first_detail(one_line(&format!(
+                        "{label} {width}x{height} origin=({x},{y}) edge_arg={edge_arg:#x} \
+                         model={want} retail={got} first_state_byte={byte:?} \
+                         model_byte={:?} retail_byte={:?}",
+                        byte.map(|i| expected[i]),
+                        byte.map(|i| after[i]),
+                    )));
+                }
+
+                if edge_arg != 0 {
+                    edge_true += 1;
+                } else {
+                    edge_false += 1;
+                }
+                // Why the scan stopped, derived by re-walking only the answering ring. This
+                // is reporting, not comparison: it exists so the record shows that all three
+                // termination paths — land byte, WATERHALF, and off-map — are actually hit.
+                if want == 0 {
+                    origin_zero += 1;
+                } else if want as usize > don_sim::systems::combat::CIRCLE_MAX_RING {
+                    saturated += 1;
+                } else {
+                    let d = want as usize;
+                    ring_hist[match d {
+                        1..=4 => 0,
+                        5..=8 => 1,
+                        9..=16 => 2,
+                        17..=32 => 3,
+                        _ => 4,
+                    }] += 1;
+                    for index in
+                        sim_circle.ring_end[d - 1] as usize..sim_circle.ring_end[d] as usize
+                    {
+                        let nx = x + sim_circle.x[index] as i32;
+                        let ny = y + sim_circle.y[index] as i32;
+                        if nx < 0 || ny < 0 || nx >= width || ny >= height {
+                            if edge_arg != 0 {
+                                reason_offmap += 1;
+                                break;
+                            }
+                            continue;
+                        }
+                        let (flags, land) = cells[(ny * width + nx) as usize];
+                        if flags & WATERHALF != 0 {
+                            reason_waterhalf += 1;
+                            break;
+                        }
+                        if land != 1 && land != 2 {
+                            reason_land += 1;
+                            break;
+                        }
+                    }
+                }
+            };
+
+            // ---- edges ------------------------------------------------------------------
+            let ocean_plane = |w: i32, h: i32| vec![(0u16, 2i8); (w * h) as usize];
+            let idx = |w: i32, x: i32, y: i32| (y * w + x) as usize;
+            let mut edges = 0u64;
+
+            // Origin predicate: exactly WorldData::is_ocean, WATERHALF tested first.
+            for (land, flags, label) in [
+                (0i8, 0u16, "origin-dry"),
+                (3, 0, "origin-land-byte-3"),
+                (-1, 0, "origin-land-byte-minus-one"),
+                (2, WATERHALF, "origin-waterhalf-deep"),
+                (1, WATERHALF, "origin-waterhalf-coastal"),
+            ] {
+                let mut cells = ocean_plane(9, 9);
+                cells[idx(9, 4, 4)] = (flags, land);
+                for edge_arg in [0, 1] {
+                    check(9, 9, &cells, 4, 4, edge_arg, 0x0100_0001, label, &mut a);
+                    edges += 1;
+                }
+            }
+            // A coastal origin IS ocean, so it scans rather than returning zero.
+            {
+                let mut cells = ocean_plane(9, 9);
+                cells[idx(9, 4, 4)] = (0, 1);
+                cells[idx(9, 5, 4)] = (0, 0);
+                check(
+                    9,
+                    9,
+                    &cells,
+                    4,
+                    4,
+                    0,
+                    0x0100_0002,
+                    "origin-coastal-scans",
+                    &mut a,
+                );
+                edges += 1;
+            }
+
+            // The metric is the engine's truncating octagon, not Euclid: vector_dist(1,1)=1,
+            // (2,1)=2, (3,0)=3 and (2,2)=3.
+            for (dx, dy, ring, label) in [
+                (1i32, 1i32, 1i32, "octagon-1-1-is-ring-1"),
+                (2, 1, 2, "octagon-2-1-is-ring-2"),
+                (3, 0, 3, "octagon-3-0-is-ring-3"),
+                (2, 2, 3, "octagon-2-2-is-ring-3"),
+                (0, 4, 4, "octagon-0-4-is-ring-4"),
+            ] {
+                let mut cells = ocean_plane(21, 21);
+                cells[idx(21, 10 + dx, 10 + dy)] = (0, 0);
+                debug_assert_eq!(
+                    don_sim::systems::combat::vector_dist(dx, dy),
+                    ring,
+                    "edge case ring expectation"
+                );
+                check(21, 21, &cells, 10, 10, 0, 0x0100_0003, label, &mut a);
+                edges += 1;
+            }
+
+            // Ring-span arithmetic: retail reads ring d as [ring_end[d-1], ring_end[d]) by
+            // indexing one table at 0xcbe32c and 0xcbe330. Land at either end of a ring must
+            // answer d, and land one entry earlier must answer d-1.
+            for d in [1usize, 2, 5, 17] {
+                for (offset, label) in [
+                    (sim_circle.ring_end[d - 1] as usize, "ring-span-first"),
+                    (sim_circle.ring_end[d] as usize - 1, "ring-span-last"),
+                ] {
+                    let mut cells = ocean_plane(101, 101);
+                    let cx = 50 + sim_circle.x[offset] as i32;
+                    let cy = 50 + sim_circle.y[offset] as i32;
+                    cells[idx(101, cx, cy)] = (0, 0);
+                    check(101, 101, &cells, 50, 50, 0, 0x0100_0004, label, &mut a);
+                    edges += 1;
+                }
+            }
+
+            // WATERHALF at an OFFSET terminates the scan even though its land byte still
+            // reads deep water. A model that tested `land` before the flag word would keep
+            // scanning past this cell.
+            {
+                let target = sim_circle.ring_end[3] as usize;
+                let mut cells = ocean_plane(101, 101);
+                cells[idx(
+                    101,
+                    50 + sim_circle.x[target] as i32,
+                    50 + sim_circle.y[target] as i32,
+                )] = (WATERHALF, 2);
+                check(
+                    101,
+                    101,
+                    &cells,
+                    50,
+                    50,
+                    0,
+                    0x0100_0005,
+                    "waterhalf-offset-terminates",
+                    &mut a,
+                );
+                edges += 1;
+            }
+
+            // The third argument, and the shape of "nonzero".
+            for edge_arg in [0i32, 1, -1, i32::MIN, i32::MAX, 0x0001_0000] {
+                let cells = ocean_plane(1, 1);
+                check(
+                    1,
+                    1,
+                    &cells,
+                    0,
+                    0,
+                    edge_arg,
+                    0x0100_0006,
+                    "single-cell-edge-arg",
+                    &mut a,
+                );
+                edges += 1;
+            }
+            {
+                let cells = ocean_plane(9, 9);
+                check(
+                    9,
+                    9,
+                    &cells,
+                    4,
+                    4,
+                    1,
+                    0x0100_0007,
+                    "all-ocean-edge-is-land",
+                    &mut a,
+                );
+                check(
+                    9,
+                    9,
+                    &cells,
+                    0,
+                    0,
+                    1,
+                    0x0100_0008,
+                    "corner-edge-is-land",
+                    &mut a,
+                );
+                check(
+                    9,
+                    9,
+                    &cells,
+                    4,
+                    4,
+                    0,
+                    0x0100_0009,
+                    "all-ocean-saturates",
+                    &mut a,
+                );
+                edges += 3;
+            }
+
+            // Saturation with NO off-map offset anywhere in the 64 rings: 140x140 is wider
+            // than twice the table's reach, so this is the pure `d > 0x40 -> 0x41` exit.
+            {
+                let cells = ocean_plane(MAX_AXIS, MAX_AXIS);
+                check(
+                    MAX_AXIS,
+                    MAX_AXIS,
+                    &cells,
+                    70,
+                    70,
+                    0,
+                    0x0100_000a,
+                    "interior-saturation",
+                    &mut a,
+                );
+                check(
+                    MAX_AXIS,
+                    MAX_AXIS,
+                    &cells,
+                    70,
+                    70,
+                    1,
+                    0x0100_000b,
+                    "interior-saturation-edge-is-land",
+                    &mut a,
+                );
+                edges += 2;
+            }
+            for (offset, label) in [
+                (sim_circle.ring_end[63] as usize, "ring-64-first"),
+                (sim_circle.ring_end[64] as usize - 1, "ring-64-last"),
+            ] {
+                let mut cells = ocean_plane(MAX_AXIS, MAX_AXIS);
+                cells[idx(
+                    MAX_AXIS,
+                    70 + sim_circle.x[offset] as i32,
+                    70 + sim_circle.y[offset] as i32,
+                )] = (0, 0);
+                check(
+                    MAX_AXIS,
+                    MAX_AXIS,
+                    &cells,
+                    70,
+                    70,
+                    0,
+                    0x0100_000c,
+                    label,
+                    &mut a,
+                );
+                edges += 1;
+            }
+            {
+                // Land at octagon distance 65 — outside every ring the table holds.
+                let mut cells = ocean_plane(MAX_AXIS, MAX_AXIS);
+                cells[idx(MAX_AXIS, 70 + 65, 70)] = (0, 0);
+                debug_assert_eq!(don_sim::systems::combat::vector_dist(65, 0), 65);
+                check(
+                    MAX_AXIS,
+                    MAX_AXIS,
+                    &cells,
+                    70,
+                    70,
+                    0,
+                    0x0100_000d,
+                    "land-past-ring-64",
+                    &mut a,
+                );
+                edges += 1;
+            }
+            a.phase(
+                "edges",
+                edges,
+                "origin is_ocean including both WATERHALF halves and out-of-enum land bytes; \
+                 octagon-vs-Euclid ring membership; first/last entry of rings 1, 2, 5 and 17; \
+                 a WATERHALF offset terminating a deep-water cell; six shapes of the third \
+                 argument; interior saturation with no off-map offset on a 140x140 world; \
+                 both ends of ring 64; and land at octagon distance 65",
+            );
+
+            // ---- randomised -------------------------------------------------------------
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x4c41_4e44_4449_5354);
+            let mut cells: Vec<(u16, i8)> = Vec::with_capacity(1024);
+            for _ in 0..n {
+                let width = 1 + (rng.next() % 32) as i32;
+                let height = 1 + (rng.next() % 32) as i32;
+                let land_mode = rng.next() % 5;
+                let half_mode = rng.next() % 3;
+                cells.clear();
+                for _ in 0..width * height {
+                    let r = rng.next();
+                    let land = match land_mode {
+                        0 => 1 + (r as i8 & 1),
+                        1 => {
+                            if r & 15 == 0 {
+                                0
+                            } else {
+                                1 + ((r >> 4) as i8 & 1)
+                            }
+                        }
+                        2 => {
+                            if r & 1 == 0 {
+                                0
+                            } else {
+                                1 + ((r >> 1) as i8 & 1)
+                            }
+                        }
+                        3 => (r >> 8) as i8,
+                        _ => 0,
+                    };
+                    let mut flags = (r >> 32) as u16;
+                    let half = match half_mode {
+                        0 => false,
+                        1 => rng.next() & 31 == 0,
+                        _ => rng.next() & 3 == 0,
+                    };
+                    flags = (flags & !WATERHALF) | if half { WATERHALF } else { 0 };
+                    cells.push((flags, land));
+                }
+                let x = (rng.next() % width as u64) as i32;
+                let y = (rng.next() % height as u64) as i32;
+                // Bias the origin onto the ocean side, or the scan almost never runs.
+                if rng.next() % 4 != 0 {
+                    cells[idx(width, x, y)] = (0, 1 + (rng.next() as i8 & 1));
+                }
+                let edge_arg = if rng.next() % 4 == 0 {
+                    0
+                } else {
+                    rng.next() as i32
+                };
+                let salt = rng.next() as u32;
+                check(
+                    width, height, &cells, x, y, edge_arg, salt, "random", &mut a,
+                );
+            }
+            a.phase("random", n as u64, distribution);
+
+            a.extras.push((
+                "answer_distribution".into(),
+                format!(
+                    "origin_not_ocean={origin_zero} ring_1_4={} ring_5_8={} ring_9_16={} \
+                     ring_17_32={} ring_33_64={} saturated_0x41={saturated}",
+                    ring_hist[0], ring_hist[1], ring_hist[2], ring_hist[3], ring_hist[4],
+                ),
+            ));
+            a.extras.push((
+                "termination_reason".into(),
+                format!(
+                    "land_byte={reason_land} waterhalf={reason_waterhalf} off_map={reason_offmap}"
+                ),
+            ));
+            a.extras.push((
+                "edge_is_land_arg".into(),
+                format!("nonzero={edge_true} zero={edge_false}"),
+            ));
+            a.extras.push((
+                "compared_state".into(),
+                "the returned ring plus every patterned byte of the Map receiver, the complete \
+                 372-byte World and all 28-byte WData records — land_dist must write nothing"
+                    .into(),
+            ));
+
+            a.trials += 1;
+            let preserved = unsafe {
+                std::slice::from_raw_parts(circle_x as *const i8, sim_circle.x.len())
+                    == sim_circle.x
+                    && std::slice::from_raw_parts(circle_y as *const i8, sim_circle.y.len())
+                        == sim_circle.y
+                    && std::slice::from_raw_parts(
+                        circle_end as *const i32,
+                        sim_circle.ring_end.len(),
+                    ) == sim_circle.ring_end
+            };
+            if !preserved {
+                a.mismatches += 1;
+                a.first_detail("land_dist mutated the canonical circle tables".into());
+            }
+            a.phase(
+                "preservation",
+                1,
+                "all retail-generated circle table bytes unchanged after every distance call",
             );
             unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }

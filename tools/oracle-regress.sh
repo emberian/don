@@ -135,7 +135,31 @@ fi
 echo "oracle-regress: syncing sources"
 ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $REMOTE/crates" || unreachable "cannot create $REMOTE/crates"
 # One crate at a time, so a failure names the crate that failed.
-for c in oracle don-pe don-sim don-rules; do
+SYNC_CRATES=(oracle don-pe don-sim don-rules don-bhs don-bhs-cc)
+
+# A path dependency added to any synced crate but not listed above makes a CLEAN remote fail
+# at manifest load, before a single case runs — which is how `don-bhs`/`don-bhs-cc` sat broken
+# from 2026-08-09 until an oracle lane hit it. Refuse up front and name the missing crate
+# instead of shipping a tree that cannot resolve.
+missing=()
+for c in "${SYNC_CRATES[@]}"; do
+  manifest="$REPO/crates/$c/Cargo.toml"
+  [[ -f "$manifest" ]] || unreachable "crates/$c has no Cargo.toml"
+  while read -r dep; do
+    [[ -n "$dep" ]] || continue
+    for known in "${SYNC_CRATES[@]}"; do
+      [[ "$dep" == "$known" ]] && continue 2
+    done
+    missing+=("$dep (required by $c)")
+  done < <(sed -n 's#.*path *= *"\.\./\([A-Za-z0-9_-]*\)".*#\1#p' "$manifest" | sort -u)
+done
+if ((${#missing[@]})); then
+  printf 'oracle-regress: path dependencies missing from SYNC_CRATES:\n' >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  unreachable "add them to SYNC_CRATES so the remote workspace resolves"
+fi
+
+for c in "${SYNC_CRATES[@]}"; do
   rsync -a --delete --exclude 'target/' -e "ssh ${SSH_OPTS[*]}" \
     "$REPO/crates/$c/" "$HOST:$REMOTE/crates/$c/" \
     || unreachable "rsync of crates/$c failed"
