@@ -11,7 +11,9 @@ proof-assistant sense; see `docs/CHARTER.md`.
 
 **The loop exists and runs.** A real `.rcx` lockstep command stream is stepped
 turn by turn, our fifteen `DataWalk` checksum channels are computed over our
-state with a traversal *generated* from `schema/state-schema.json`, and each is
+state with a traversal *generated* from `schema/state-schema.json` — except
+`scenario_data` and `script_run_time`, whose walkers the extractor cannot reach and which
+are hand-derived from the instruction stream — and each is
 compared against the `CheckSumsCommand` the retail client recorded on that turn.
 The first diverging turn and the diverging channel are reported per channel, per
 file, and rolled up into `schema/replay-validation.json`.
@@ -19,21 +21,23 @@ file, and rolled up into `schema/replay-validation.json`.
 Over the whole corpus — 61 files, 21 with checksums, **585,152 turns**,
 **488,557 checksum packets**, 30 seconds wall clock:
 
-| channel | best survival (turns) | matches / compares | trivial matches | non-trivial compares |
-|---|---:|---:|---:|---:|
-| `walls` | **25,442** | 222,938 / 222,938 | 222,938 | 0 |
-| `deaths` | **5,734** | 82,943 / 222,938 | 82,943 | 0 |
-| `ammo` | **3,696** | 106,634 / 222,938 | 106,634 | 0 |
-| `items` | 0 | 107,882 / 222,938 | 107,882 | 0 |
-| **`rules`** | **25,442** | **222,938 / 222,938** | **0** | **222,938** |
-| **`world`** | 0 | 0 / 222,938 | 0 | **222,938** |
-| every other channel | 0 | 0 / 222,938 | 0 | 0 |
+| channel | best survival (turns) | matches / compares | trivial matches | unmodelled | non-trivial compares |
+|---|---:|---:|---:|---:|---:|
+| `walls` | **25,442** | 222,938 / 222,938 | 222,938 | 222,938 | 0 |
+| `deaths` | **5,734** | 82,943 / 222,938 | 82,943 | 82,943 | 0 |
+| `ammo` | **3,696** | 106,634 / 222,938 | 106,634 | 106,634 | 0 |
+| `items` | 0 | 107,882 / 222,938 | 107,882 | 107,882 | 0 |
+| **`rules`** | **25,442** | **222,938 / 222,938** | **0** | **0** | **222,938** |
+| **`script_run_time`** | **18,069** | **60,342 / 222,938** | **0** | **0** | **222,938** |
+| **`world`** | 0 | 0 / 222,938 | 0 | 0 | **222,938** |
+| every other channel | 0 | 0 / 222,938 | 0 | 0 | 0 |
 
 `survived` = consecutive agreeing turns from the recording's first checksummed
-turn. **The honest headline is now 25,442 substantive turns on `rules`.** The
+turn. **The honest headline is still 25,442 substantive turns on `rules`.** The
 replay's static Rules SaveGame section is independently parsed and projected through the
 retail checksum traversal; all 222,938 comparisons walk 997,846 bytes and agree. The
-scoreboard now has 445,876 substantive comparisons: `rules` agrees throughout, while every
+scoreboard now has 668,814 comparisons in which our walker touched a byte: `rules` agrees
+throughout, `script_run_time` agrees on seven recordings and diverges on fourteen, and every
 `world` comparison walks real prefix-derived state and exposes the first dynamic divergence.
 
 The previous 25,442-turn `walls` headline remains a weak empty-state result: `walls` was
@@ -44,14 +48,67 @@ exactly that case.
 until retail creates the first projectile or corpse. Their measured deadlines
 remain useful, but those matches are explicitly labelled `unmodelled`.
 
-`units`, `builds`, `leaders`, `cities`, `goods`,
-`scenario_data`, `script_run_time`, `groups`, `guys` diverge on the **first**
-checksummed turn, because those are non-empty from game start and we hold none
-of them. `world` also diverges on the first checksummed turn, for a better
+`units`, `builds`, `leaders`, `cities`, `goods`, `scenario_data`, `groups`, `guys` diverge
+on the **first** checksummed turn, because those are non-empty from game start and we hold
+none of them. `world` also diverges on the first checksummed turn, for a better
 reason: it now hashes 280,968–780,168 bytes per comparison (map-size dependent)
 through the exact `World::walk_data` traversal. Only 52–76 of those bytes are
 currently sourced from the prefix; generated terrain, resources, start arrays,
 fog and collision remain explicitly unsourced.
+
+### `script_run_time` now has a producer — and it is four bytes wide
+
+Channel 15's walker is `RunTimeEnv::walk_data` `0x009c41a0`. Read off the instruction
+stream, it emits a `walk_tag` (a no-op for `CheckSum`), calls `RunTimeEnv::close`
+`0x009c40a0` (which frees transient interpreter state and hashes nothing), then
+**unconditionally** walks the signed 32-bit element count of the global
+`ScriptFile::script_files` array at `0x00c8cba0`, then one `ScriptFile::walk_data`
+`0x009c63b0` per entry. So a runtime with no loaded script file is
+`adler32(1, [0,0,0,0]) = 0x00040001` — **not** the adler-of-nothing `1`.
+
+`SimBridge::populate` now installs exactly that. Our `don_sim::World` owns no `ScriptFile`
+registry, so its count is zero; `SimBridge::populate_script_runtime` replaces the value
+whenever an authoritative `don-sim` `ScriptRuntime` with a complete retail walk sidecar
+exists.
+
+The result, per recording:
+
+- **7 of 21** recordings carry `0x00040001` on every checksummed turn and never diverge:
+  18,069 / 12,728 / 9,789 / 9,511 / 9,097 / 1,111 / 37 turns, 60,342 agreements.
+- **14 of 21** diverge on the **first** checksummed turn (turn 2), with expected values
+  `0x6a91bf5d` (×7), `0x9f0fbf5d` (×4), `0xabbd5707` (×2) and `0x05857aba` (×1) against our
+  `0x00040001`. Those games loaded script files and we hold none of their program state.
+
+**State this at its real size.** The channel is not `trivial` and not `unmodelled` —
+retail's own value is never `1` here, so `retail_empty_compares` is 0 and every one of the
+222,938 compares walked a byte. But the byte content is a container header: what agrees is
+the *shape* of the `RunTimeEnv` walk plus the claim that those seven recordings loaded no
+BHS program. It is evidence about the traversal and about those recordings; it is **no**
+evidence about BHS program semantics, and the fourteen divergences are the honest measure of
+how much program state is still missing. `agreements_are_unmodelled_except_the_empty_script_file_count`
+in `tests/corpus.rs` fails the moment any other channel starts agreeing without a producer.
+
+### `scenario_data` is derived except for two shipped-data strings
+
+Channel 14 reads `0x09922b90` on the first checksummed turn of **21 of 21** recordings —
+five engine builds, six map styles, every team layout — so retail's initial `ScenarioData`
+does not depend on the game setup and is therefore derivable from the binary.
+
+`ScenarioFuncSet::init` `0x00a03c30` (sole caller `Game::init`; `ScenarioFuncSet::close`
+`0x00a03650` is the end-of-game path and writes a *different* state) is now fully read:
+every scalar, both 8×N counter tables, all 14 policy flags, the three colour constants, the
+`BitMask<8>`, and every empty container. It is implemented as
+`scenario_channel::RetailInitialScenario` and pinned by test. See
+[`docs/assembly/scenario-initial-state.md`](../assembly/scenario-initial-state.md) for the
+address-by-address table.
+
+Two of the six checksummed `String`s are assigned from the runtime `StringTable`
+`int_str_array` (`0x00c06378`) at ordinals **5958** (`general_powers_script_file`) and
+**5959** (`temp_save`), i.e. from shipped `internal_strings.xml`, which is **not** in the
+local `ron-data/` extraction. With both empty the derived state walks 8,321 bytes and
+produces `0xba9c1111`, so those two strings are non-empty and carry roughly 6,783 of byte
+weight. No attempt was made to guess them: two free strings against one 32-bit target is
+curve-fitting, not confirmation. Extracting one XML file closes the channel.
 
 ### Replay-carried Rules and initial-world slices now on the scoreboard
 
@@ -89,13 +146,43 @@ decoded save snapshot. Until the map-style generator supplies the actual
 coordinates for a replay seed, invoking the exact writer would still require
 invented inputs and is therefore deliberately not done.
 
-The first common post-continent terrain writer is now exact too.
-`Map::fix_diag_land` executes the complete shipped 536-byte routine after checking the
-retail NW/NE/SE/SW corner tables, and compares the full patterned World/WData arena after
-each call. Its X-major scan and 16-bit `land = 2, land_sub = 0` write agreed over 100,009
-trials. This does not reduce the replay's unsourced terrain count: `.rcx` contains no
-generated WData land plane on which to run the exact repair, and using a fabricated plane
-would still be fabricated initial state.
+### CORRECTION (2026-08-10): the map generator is no longer unported
+
+This document previously said the map generator was unported for every style and that
+`.rcx` "contains no generated WData land plane on which to run the exact repair". **Both
+statements are now false**, and the sentences above about `Map::fix_diag_land` are kept only
+as the record of how the oracle case was earned.
+
+The generator is executed from the replay's own pinned seed. `SimBridge`'s replay path runs
+`InitialItemReconstruction::advance_continent_prefix_with_tilesets` against the
+reconstructed `World`, and `schema/replay-validation.json` now records, per file, the exact
+retail VA at which that execution stops. Measured over the current corpus:
+
+| first unavailable primitive | files | of which checksum-bearing |
+|---|---:|---:|
+| `TerrainGroups::fill_fertile` `0x006a6f90` | 21 | **18** |
+| `Map::team_continent_partition` (style 19) | 6 | 2 |
+| `Map::east_indies_nonplayer_islands` (style 18) | 1 | 1 |
+| static Rules only (non-checksummed / older builds) | 24 | 0 |
+| prior seed state, custom scenario state | 9 | 0 |
+
+So map styles **6, 9, 12 and 14** — Great Lakes among them — execute their **complete**
+`make_continents`, including `Map::fix_diag_land`, `Map::make_coastlines`, pool elimination,
+player-land and player-forest checks, resource scheduling and nubify, and stop at
+`TerrainGroups::fill_fertile` `0x006a6f90`. That covers 18 of the 21 checksum-bearing
+recordings; styles 18 and 19 stop earlier, at their own style-specific partition leaves.
+
+Two things follow, and neither is optimism:
+
+1. The `world` channel's unsourced-byte count is now a *shrinking* measured quantity rather
+   than "everything after the dimensions". It is reported per compare as
+   `our_unsourced_walked` against `our_bytes_walked`.
+2. On this machine `fill_fertile` cannot run at all for **21 of 21** checksum-bearing
+   recordings, and the reason is not a port gap: it is
+   `ron-data/tilesets.xml: No such file or directory`. The fertility input is a shipped data
+   file that has not been extracted. That is the same class of blocker as
+   `internal_strings.xml` for channel 14, and it is cheaper to clear than any porting work
+   in this document.
 
 The next two start-placement leaves are now exact without changing that source boundary.
 `WorldData::start_city_rad_wcoord` scans the writer's footprint arrays using retail's
@@ -172,7 +259,7 @@ cargo run --release -p don-replay -- scan --corpus           # decode only
 cargo run --release -p don-replay -- crossplay --corpus      # the control experiment
 cargo run --release -p don-replay -- walkers                 # generated-table coverage
 
-cargo test --release -p don-replay --all-targets             # 54 lib + 8 corpus + 6 integration tests
+cargo test --release -p don-replay --all-targets             # 73 lib + 8 corpus + integration tests
 ```
 
 Exit codes mirror `tools/oracle-regress.sh`: `0` ran, `2` corpus missing
@@ -183,11 +270,17 @@ Representative current output (`Playback___2018.11.17_13_21_42__Sat_.rcx`):
 ```
 channel           survived first-div   expected        got  matches   bytes  unsourced
 world                    0         2 0xd63a3a53 0x1389cbbb        0  780168     780092
+rules                18069         - 0x12ba3104          -    18069  997846          0
+script_run_time      18069         - 0x00040001          -    18069       4          0
+scenario_data            0         2 0x09922b90 0x00000001        0       0          0
 ```
 
 That world row is deliberately not credited as agreement. The initial prefix
-sources 76 walked bytes; the remaining 780,092 generated terrain bytes are
-reported as unsourced until the complete retail `Map::make` path is reproduced.
+sources 76 walked bytes; the remaining generated terrain bytes are reported as
+unsourced until `TerrainGroups::fill_fertile` and the rest of `Map::make` run.
+The `script_run_time` row is credited, but read the caveat under *Honest limits*
+before quoting it: it is four bytes, and it is wrong on 14 of the 21 recordings.
+The `scenario_data` row shows the target this lane derived but could not source.
 
 ---
 
@@ -201,7 +294,9 @@ reported as unsourced until the complete retail `Map::make` path is reproduced.
 | `src/checksum.rs` | `adler32` mirroring `0x00a46830` including the `NMAX = 5552` chunk boundary; the two-method `DataWalk` trait; `CheckSum` with `+0x0c` mask, `+0x10` adler, `+0x14` byte counter; `Channel`, `Channels`, `computed_total` |
 | `src/walk.rs` + `src/walk_gen.rs` | **generated** traversal: 278 classes, all 1,421 ordered ops from `schema/state-schema.json`, run table-driven over object byte images |
 | `src/initial.rs` | exact `Game`/`GameInfo`/Player prefix parser; map-size and seed reconstruction; sourced/unsourced accounting |
-| `src/state.rs` | per-channel object lists plus direct dynamic walkers; `units` image bridge and exact `world` checksum bridge |
+| `src/state.rs` | per-channel object lists plus direct dynamic walkers; `units` image bridge, exact `world` checksum bridge, and the empty-`RunTimeEnv` channel-15 install |
+| `src/script_channel.rs` | `RunTimeEnv::walk_data` `0x009c41a0` / `ScriptFile::walk_data` `0x009c63b0`; `checksum_empty_runtime` is the four-byte empty-registry case, `checksum_program` the live `don-bhs` adapter |
+| `src/scenario_channel.rs` | `ScenarioData::walk_data` `0x00997ad0` traversal plus `RetailInitialScenario`, the instruction-derived `ScenarioFuncSet::init` `0x00a03c30` state; blocked on two `internal_strings.xml` ordinals |
 | `src/wire.rs` + `src/wire_gen.rs` | **generated** field table for all 82 `*Command` structs; typed field reads; `Order`; `CommandClass` |
 | `src/replay.rs` | `.rcx` → authoritative initial setup + turns: framing, XOR/pad recovery, commands/checksums, both crossplay joins |
 | `src/harness.rs` | the loop, `WorldSim::from_replay`, cached initial-world walk, and the divergence profile |
@@ -266,12 +361,15 @@ order-application layer, `QueueUpCommand`, `BuildCommand`, `MoveToCommand` and
 unread here, and over-reporting the worklist is the safe direction. Settling
 them is cheap and would move a million commands out of the sim set.
 
-**Two channel walkers have no derived traversal.** `ScenarioData::walk_data`
+**Two channel walkers have no *generated* traversal.** `ScenarioData::walk_data`
 (`0x00997ad0`) is `static __cdecl`, so `schema/state-schema.json`'s `this`-taint
 never fires on it, and `RunTimeEnv::walk_data` (`0x009c41a0`) is likewise absent
 from the 278 resolved classes. `don-replay walkers` prints this, and
 `state::tests::channel_walker_resolution_is_thirteen_of_fifteen` fails if the
-count changes in either direction.
+count changes in either direction. Both now have **hand-derived** traversals instead, in
+`src/scenario_channel.rs` and `src/script_channel.rs` — read off the instruction stream and
+tested field by field, but outside the generator's guarantee. That is a real difference in
+kind and the reason those two modules carry their addresses in every doc comment.
 
 ---
 
@@ -286,6 +384,12 @@ count changes in either direction.
   comparisons and agrees. The `world` producer also walks bytes on every comparison but
   disagrees on the first checksummed turn. The remaining empty-channel agreements are not
   evidence about mechanics.
+- **`script_run_time`'s 18,069 turns are four bytes wide.** Retail's value there is never
+  `1`, so the harness cannot classify the agreement as `trivial`, and it is genuinely
+  falsifiable — it is false on 14 of 21 recordings. But what agrees is the count word of an
+  empty `ScriptFile::script_files` array. Do not read it as BHS fidelity, and do not let it
+  displace `rules` as the headline: `rules` walks 997,846 bytes per compare and this walks
+  four.
 - **The checksum phase is a parameter, not a finding.** The sender builds its
   package during `PROCESS_TURN` and appends the tuple to the same package that
   carries that turn's new commands, but lockstep executes a turn's commands some
@@ -321,10 +425,11 @@ count changes in either direction.
   offset. `WalkOutcome` counts every op it could not execute
   (`ops_unresolved`, `ops_global`, `ops_virtual`, `ops_sub_unknown`,
   `ops_out_of_range`) so a partial walk can never be mistaken for a complete one.
-- **`SimBridge` produces three real channels, not a full initial save.** `units`
+- **`SimBridge` produces four real channels, not a full initial save.** `units`
   images generated PDB columns. `world` executes `map_terrain::World::walk_data`
   directly because its dynamic arrays cannot be represented by a 372-byte flat
-  image. `rules` uses the separately admitted replay-carried static projection. The prefix
+  image. `rules` uses the separately admitted replay-carried static projection.
+  `script_run_time` produces the empty `ScriptFile::script_files` count word. The prefix
   proves world dimensions and seed, not generated contents; their walked zeros are counted as
   unsourced and the channel is expected to diverge.
 
@@ -332,16 +437,36 @@ count changes in either direction.
 
 ## The next three moves, in order
 
-1. **Port the retail map generator from the pinned seed.** The replay now feeds
-   its exact generation tuple and exact checksum owner. The first divergence is
-   therefore localized to the missing `Map::make` body/start-placement writers,
-   rather than hidden behind an empty channel.
-2. **Use the admitted `rules` projection to build an independent rules loader.** The replay
-   channel proves the serialized bytes and traversal, but a standalone game still must load
-   the same state from user-owned inputs without depending on a recording.
-3. **Then `deaths` and `ammo`**, because their divergence turn (847 / 1,584 in
-   the 2025 game) is the first place a real mechanic has to be right, and both
-   channels start from a state we already reproduce.
+Both of the first two are **shipped-data extraction, not porting.** That is the finding of
+this pass: two of the three cheapest remaining channels are blocked on files that exist in
+the owned install and not in `ron-data/`. Neither needs a line of new engine code, and
+neither should be closed by guessing a value that makes a checksum agree.
+
+1. **Extract `ron-data/internal_strings.xml` and close `scenario_data`.** Every scalar,
+   table, flag, colour and container of retail's initial `ScenarioData` is derived from
+   `ScenarioFuncSet::init` `0x00a03c30` and implemented in
+   `scenario_channel::RetailInitialScenario`. The only unknowns are ordinals **5958**
+   (`general_powers_script_file`) and **5959** (`temp_save`) of the shipped internal string
+   table. Supply them, compute one checksum, compare against `0x09922b90` — a single
+   pre-registered 32-bit test over 21 recordings, and if it passes the channel holds until
+   the recording's first kill. Details and the exact procedure:
+   [`docs/assembly/scenario-initial-state.md`](../assembly/scenario-initial-state.md).
+2. **Extract `ron-data/tilesets.xml` and run `TerrainGroups::fill_fertile` `0x006a6f90`.**
+   Eighteen of the 21 checksum-bearing recordings already execute their complete
+   `make_continents` from the pinned seed and stop precisely there, and all 21 report the
+   same missing-file error. This is the next real byte reduction on `world`, which is the
+   only channel where a large fraction of a 280,968–780,168-byte walk is at stake.
+3. **Measure the checksum latency, which is still a parameter and not a finding.**
+   `script_run_time` is the first channel that both walks bytes and *changes* across a
+   recording (2,458 distinct `scenario_data` values and non-constant script values exist in
+   the corpus), so a producer for one of them finally makes `--phase` and `--latency`
+   distinguishable instead of invisible. Settle it before any dynamic channel is credited
+   with survival.
+
+Deferred, and deliberately: **`deaths` and `ammo`**. Their divergence turns (847 / 1,584 in
+the 2025 game) are still the first place a real mechanic has to be right, but both start
+from initial object state we do not yet reproduce, so they cannot be attempted before the
+`world`/`units` initial state exists.
 
 ### Hazards the next lane will hit, from sibling lanes
 
@@ -376,6 +501,10 @@ count changes in either direction.
 | Replay-carried Rules independently project the retail checksum traversal | `crates/don-replay`, corpus | **C [measured]** | 1,024,221 serialized bytes admitted by three intermediate checkpoints plus final `0x12ba3104`; 997,846 bytes walked; 222,938/222,938 non-trivial matches |
 | A multiplayer lockstep turn spans **2, 4, 6 or 8 simulation frames**, per recording | `stamp`/`group` deltas | **C [measured]** | current corpus distribution: 1 / 6 / 37 / 16 files; the solo recording measures 1.0; 6.0 for the 00.2024.06.20 recording |
 | Prefix-derived world reconstruction enters the checksum scoreboard | `tools/replay-validate.sh` | **C [measured]** | all 61 initial prefixes parsed; 222,938/222,938 `world` comparisons non-trivial; first divergence is the first checksummed turn; 280,968–780,168 bytes walked by map size, with generated bytes explicitly unsourced |
+| `RunTimeEnv::walk_data` unconditionally hashes the four-byte `ScriptFile::script_files` count, so an empty script runtime is `0x00040001` and never `1` | `0x009c41a0`, `0x009c40a0`, `0x00c8cba0` | **C [measured]** | 222,938/222,938 `script_run_time` comparisons non-trivial and none `retail_empty`; 7 recordings agree for their whole length (60,342 turns, best 18,069); 14 diverge on the first checksummed turn |
+| Retail's initial `ScenarioData` is game-setup-independent | corpus | **C [measured]** | channel 14 = `0x09922b90` on the first checksummed turn of 21/21 recordings across five engine builds, six map styles and every team layout |
+| The complete checksum-visible initial `ScenarioData`, minus two shipped-data strings | `ScenarioFuncSet::init` `0x00a03c30`, sole caller `Game::init` | **C [measured]** | every field read off the instruction stream; derived state walks 8,321 bytes to `0xba9c1111`; blocked only on `internal_strings.xml` ordinals 5958/5959 |
+| Map styles 6, 9, 12 and 14 execute their complete `make_continents` from the replay's pinned seed | `schema/replay-validation.json` | **C [measured]** | 18 of 21 checksum-bearing recordings stop at `TerrainGroups::fill_fertile` `0x006a6f90`; 2 at `Map::team_continent_partition`, 1 at `Map::east_indies_nonplayer_islands`; all 21 then blocked by a missing `ron-data/tilesets.xml` rather than by a port gap |
 
 And **correct** in `docs/tracks/headless-client.md` claim 7: the 21 cross-player
 disagreements are not simulation drift. Under the correct join key the corpus

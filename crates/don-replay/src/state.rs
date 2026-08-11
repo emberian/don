@@ -11,10 +11,12 @@
 //! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
 //! goods and scenario — has no producer in `don-sim` at all. Items are projected from
 //! the optional authoritative `World::item_runtime`; unavailable and initialized-empty
-//! are distinct bridge states. Script state has
-//! an explicit optional producer from `don-sim::script_runtime::ScriptRuntime`; it
-//! installs channel 15 only when the compiled program carries a complete retail walk
-//! sidecar, and otherwise fails closed.
+//! are distinct bridge states. Channel 15 has two producers: every `populate` installs
+//! the exact traversal `RunTimeEnv::walk_data` `0x009c41a0` performs over an empty
+//! `ScriptFile::script_files` array — four bytes of a zero count, not zero bytes — and
+//! `populate_script_runtime` replaces it from `don-sim::script_runtime::ScriptRuntime`
+//! when the compiled program carries a complete retail walk sidecar, failing closed
+//! otherwise.
 //! Static rules are the one replay-specific exception: an admitted recording
 //! can install its complete checksum-visible SaveGame projection, while an
 //! independently constructed `don-sim` world still has no rules producer.
@@ -359,10 +361,15 @@ impl SimBridge {
     /// Channels this bridge produces. Everything else is
     /// `ChannelSource::Absent`: not "we think it is empty", but "nothing in
     /// `don-sim` can say".
-    pub const PRODUCES: &'static [Channel] = &[Channel::Units, Channel::Items, Channel::World];
+    pub const PRODUCES: &'static [Channel] = &[
+        Channel::Units,
+        Channel::Items,
+        Channel::World,
+        Channel::ScriptRunTime,
+    ];
 
     /// What the engine's checksum walks that `don-sim` has no producer for.
-    /// This is the worklist, and it is the reason twelve of fifteen channels
+    /// This is the worklist, and it is the reason eleven of fifteen channels
     /// still agree with retail only by walking nothing.
     pub const MISSING: &'static [&'static str] = &[
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
@@ -374,8 +381,8 @@ impl SimBridge {
         "City records (cities)",
         "Good flat list (goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
-        "ScenarioData (scenario_data) — no derived walker either",
-        "RunTimeEnv / BHS (script_run_time) — runtime exists; retail container/value walk metadata is not yet produced for shipped programs",
+        "ScenarioData (scenario_data) — the initial global state is derived from ScenarioFuncSet::init 0x00a03c30, but two internal_strings.xml ordinals (5958, 5959) it assigns are not extracted locally; see docs/assembly/scenario-initial-state.md",
+        "ScriptFile records (script_run_time) — only the empty ScriptFile::script_files count is produced; shipped programs still need their retail container/value walk metadata",
     ];
 
     /// Populate a `SimState` from a `don-sim` world.
@@ -435,7 +442,32 @@ impl SimBridge {
         rep.unsourced_walked[ui] = rep.elements[ui] as u64 * per_unit_unsourced;
         state.unsourced_walked[ui] = rep.unsourced_walked[ui];
         Self::populate_items(world, state, &mut rep);
+        Self::populate_empty_script_runtime(state, &mut rep);
         rep
+    }
+
+    /// Install channel 15 for a world holding **no** BHS program.
+    ///
+    /// `RunTimeEnv::walk_data` `0x009c41a0` walks the signed 32-bit element count of the
+    /// global `ScriptFile::script_files` (`0x00c8cba0`) unconditionally, then one
+    /// `ScriptFile::walk_data` per entry. A `don_sim::World` on its own owns no
+    /// `ScriptFile` registry, so its count is zero and the traversal is complete at four
+    /// bytes — sourced, not padded.
+    ///
+    /// This is a real and frequently wrong claim: any recording whose engine had loaded
+    /// script files disagrees immediately. [`SimBridge::populate_script_runtime`]
+    /// replaces it whenever an authoritative `ScriptRuntime` exists, and must therefore
+    /// be called after `populate`.
+    fn populate_empty_script_runtime(state: &mut SimState, rep: &mut BridgeReport) {
+        let empty = crate::script_channel::checksum_empty_runtime();
+        state.set_direct_channel_elements(
+            Channel::ScriptRunTime,
+            empty.checksum,
+            empty.bytes_walked,
+            0,
+            0,
+        );
+        rep.elements[Channel::ScriptRunTime as usize] = 0;
     }
 
     fn populate_items(world: &don_sim::World, state: &mut SimState, rep: &mut BridgeReport) {

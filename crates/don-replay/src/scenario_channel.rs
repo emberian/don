@@ -667,6 +667,164 @@ pub fn scenario_checksum(
     Ok(adler.finish())
 }
 
+// ---------------------------------------------------------------------------
+// The state retail actually starts a game in
+// ---------------------------------------------------------------------------
+//
+// `ScenarioFuncSet::init` `0x00a03c30` is the whole initializer, and its only caller is
+// `Game::init` (`ScenarioFuncSet::close` `0x00a03650` is the end-of-game path and writes
+// a *different* state — zeroed cameras, for one). Every constant below was read off the
+// instruction stream, not the decompiler's reconstruction; see
+// `docs/assembly/scenario-initial-state.md` for the address-by-address table.
+//
+// Two of the six checksum-visible `String`s are assigned from the runtime `StringTable`
+// `int_str_array` (`0x00c06378`) by fixed byte offset into its 20-byte `String` array:
+//
+//     0x00a04022  mov ecx, 0xe8d46c        ; ScenarioData::general_powers_script_file
+//     0x00a04027  call String::operator=   ; = int_str_array[0x1d178 / 0x14 = 5958]
+//     0x00a0423a  call String::operator=   ; temp_save = int_str_array[0x1d18c/0x14 = 5959]
+//
+// Those two values live in shipped `internal_strings.xml`, which is **not** in the local
+// `ron-data/` extraction, so this module cannot produce the channel on its own. It takes
+// them as inputs and refuses to guess.
+
+/// `ScenarioData::msg_color` source constant at `0x00c8d260`, ten bytes.
+/// `0x00a03dfd movq [0xe8fe34], xmm0` plus `0x00a03e31 mov [0xe8fe3c], eax`.
+pub const RETAIL_INIT_MSG_COLOR: Color = [0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
+
+/// `ScenarioData::game_msg_color` and `objective_color` share one source constant at
+/// `0x00c8d26c` (`0x00a03e29`/`0x00a03e36` store the same `xmm1`, `0x00a03e0c`/`0x00a03e12`
+/// the same `ecx`).
+pub const RETAIL_INIT_OBJECTIVE_COLOR: Color =
+    [0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0xff, 0xff, 0x02, 0x00];
+
+/// `int_str_array` ordinal assigned to `general_powers_script_file` (`+0x1d178`, 20-byte
+/// `String` stride).
+pub const INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE: u32 = 0x1d178 / 0x14;
+/// `int_str_array` ordinal assigned to `temp_save` (`+0x1d18c`).
+pub const INTERNAL_STRING_ORDINAL_TEMP_SAVE: u32 = 0x1d18c / 0x14;
+
+/// The two shipped-data strings `ScenarioFuncSet::init` installs. Both are required:
+/// leaving one out is a different state, not a smaller one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScenarioInitialStrings<'a> {
+    /// `int_str_array[5958]`.
+    pub general_powers_script_file: Utf16String<'a>,
+    /// `int_str_array[5959]`.
+    pub temp_save: Utf16String<'a>,
+}
+
+/// Owner for the two large zero tables `ScenarioFuncSet::init` clears, so the borrowed
+/// [`ScenarioState`] can be built without allocating them at every call site.
+///
+/// `0x00a04194 rep stosd` with `ecx = 0xb0` clears 704 bytes of `units_killed` per player
+/// (`0x00a041b0 add [ebp-0x18], 0x2c0`), and `ecx = 0x40` plus a trailing `stosw` clears
+/// 258 bytes of `builds_destroyed` per player (`add [ebp-0x1c], 0x102`).
+#[derive(Debug, Clone)]
+pub struct RetailInitialScenario {
+    units_killed: [i16; UNITS_KILLED_COUNT],
+    builds_destroyed: [i16; BUILDS_DESTROYED_COUNT],
+    /// `memset(&city_lost.payload, 0, (bits + 7) >> 3)` at `0x00a041fd`, with
+    /// `BitMask<8>` giving `bits = 8` and `size = 1`.
+    city_lost_payload: [u8; 1],
+}
+
+impl Default for RetailInitialScenario {
+    fn default() -> Self {
+        RetailInitialScenario {
+            units_killed: [0; UNITS_KILLED_COUNT],
+            builds_destroyed: [0; BUILDS_DESTROYED_COUNT],
+            city_lost_payload: [0],
+        }
+    }
+}
+
+impl RetailInitialScenario {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The complete checksum-visible `ScenarioData` a retail `Game::init` leaves behind.
+    ///
+    /// `load_scenario_script` and `custom_time_limit` are the two scalars `init` does not
+    /// write; they are zero-initialized data (`.data` beyond the raw size, so BSS) and
+    /// `ScenarioFuncSet::close` `0x00a03aec`/its `[0xcc21b0] = 0` writes them back to zero
+    /// between games, so zero is their value at the first `Game::init` and after every
+    /// completed game. `scenario_name`, `victory_message` and `defeat_message` are
+    /// likewise untouched by `init` and cleared to `EMPTY_STRING` by `close`.
+    pub fn state<'a>(&'a self, strings: ScenarioInitialStrings<'a>) -> ScenarioState<'a> {
+        ScenarioState {
+            direct: ScenarioDirect {
+                load_scenario_script: 0,
+                msg_time: 200,           // 0x00a03e48 mov [0xcc21ec], 0xc8
+                game_msg_time: 12_000,   // 0x00a03e3e mov [0xcc2290], 0x2ee0
+                hilite_option: -1,       // 0x00a03e52
+                hilite_object: -1,       // 0x00a03e5c
+                highlight_x: -1,         // [0xcc02fc]
+                highlight_y: -1,         // [0xcc2188]
+                involved_who: -1,        // 0x00a04243 mov [0xcc228c], 0xffffffff
+                camera_init_x: [-1; PLAYER_COUNT],
+                camera_init_y: [-1; PLAYER_COUNT],
+                camera_init_zoom: [5; PLAYER_COUNT], // 0x00a03f2c mov [0xcc21c0], 5
+                custom_time_limit: 0,
+                // 0x00a03ed5..0x00a03f0e: seven `movaps` of the all-ones .rdata constant
+                // at 0x00b69d40, one `movq`, one `mov dword`, covering 0xcc2210..0xcc228c.
+                find_counters: [-1; FIND_COUNTER_COUNT],
+                last_razed: [-1; PLAYER_COUNT], // 0x00a041ca [esi*4 + 0xcc2190]
+                city_lost_to: [-1; PLAYER_COUNT], // 0x00a0410d mov [esi*2+0xcc0320], ax=0xffff
+                units_killed: &self.units_killed,
+                builds_destroyed: &self.builds_destroyed,
+                reinforcements_arrived: [0; PLAYER_COUNT], // 0x00a041be
+                war_blocked: [0; PLAYER_COUNT * PLAYER_COUNT], // 0x00a0419e movq [eax], 0
+                ally_mask: [0; PLAYER_COUNT],                  // 0x00a04141
+                diplomacy_setting: [0; PLAYER_COUNT],          // 0x00a0413a
+                plunder: 1,                 // 0x00cb195a
+                building_unit_bonus: 1,     // 0x00cb195b
+                building_resource_bonus: 1, // 0x00cb4ba9
+                buildings_free: 0,          // 0x00cb4bab
+                buildings_gather: 1,        // 0x00cbe329
+                units_free: 0,              // 0x00cb7df9
+                techs_free: 0,              // 0x00cb4baa
+                speed_control_disabled: 0,  // 0x00cbe32b
+                pause_disabled: 0,          // 0x00cbe5af
+                mouse_selection_disabled: 0,   // 0x00cb7dfb
+                hotkey_selection_disabled: 0,  // 0x00cb7dfa
+                display_bubble_text: 1,     // 0x00a04008 mov [0xcbb0d9], 1
+                highlight_visible: 0,       // 0x00cbb0da
+                highlight_active: 0,        // 0x00cbb0db
+            },
+            strings: ScenarioStrings {
+                scenario_name: Utf16String(&[]),
+                temp_save: strings.temp_save,
+                victory_message: Utf16String(&[]),
+                defeat_message: Utf16String(&[]),
+                // 0x00a03e18 mov ecx, 0xe8d41c ; = EMPTY_STRING (0x00eb437c)
+                general_powers_script: Utf16String(&[]),
+                general_powers_script_file: strings.general_powers_script_file,
+            },
+            msg_color: RETAIL_INIT_MSG_COLOR,
+            game_msg_color: RETAIL_INIT_OBJECTIVE_COLOR,
+            objective_color: RETAIL_INIT_OBJECTIVE_COLOR,
+            timers: &[],
+            components: RetailArray::empty(),
+            messages: &[],
+            extra_starting_locs: RetailArray::empty(),
+            city_lost: BitMask {
+                bits: 8,
+                size: 1,
+                payload: &self.city_lost_payload,
+            },
+            objectives: [&[]; PLAYER_COUNT],
+            scenario_groups: RetailArray::empty(),
+            involved_objects: &[],
+            reveal_points: [RetailArray::empty(); PLAYER_COUNT],
+            attrition_free_points: [RetailArray::empty(); PLAYER_COUNT],
+            objects_ignoring_orders: [RetailArray::empty(); PLAYER_COUNT],
+            ignore_orders: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,6 +1031,68 @@ mod tests {
                 actual: UNITS_KILLED_COUNT - 1,
             })
         );
+    }
+
+    /// The instruction-derived `ScenarioFuncSet::init` state, pinned. Every one of these
+    /// numbers comes from a named store in `0x00a03c30`; if someone edits a field the
+    /// byte count or the value moves and this fails.
+    #[test]
+    fn the_retail_initial_state_is_the_derived_byte_image() {
+        let owner = RetailInitialScenario::new();
+        let state = owner.state(ScenarioInitialStrings::default());
+        let mut bytes = Bytes::default();
+        walk_state(&mut bytes, &state);
+
+        // Fixed block: 8,102 bytes, then six String headers, three colors, and the
+        // fifteen empty containers plus the `BitMask<8>`.
+        assert_eq!(bytes.0.len(), 8_321);
+        assert_eq!(
+            &bytes.0[..16],
+            &[
+                0, 0, 0, 0, // load_scenario_script
+                0xc8, 0, 0, 0, // msg_time = 200
+                0xe0, 0x2e, 0, 0, // game_msg_time = 12000
+                0xff, 0xff, 0xff, 0xff, // hilite_option = -1
+            ]
+        );
+        let checksum = scenario_checksum(&state).unwrap();
+        assert_eq!(checksum.bytes_walked, 8_321);
+        assert_eq!(checksum.checksum, 0xba9c_1111);
+    }
+
+    /// The open boundary, stated as a test rather than as prose so it cannot rot.
+    ///
+    /// Every scalar, table, colour and container in `ScenarioFuncSet::init` is derived.
+    /// The two `int_str_array` strings are not available in the local shipped-data
+    /// extraction, and with them empty the derived state does **not** reproduce the value
+    /// all 21 checksum-bearing recordings carry. That is the measurement: those two
+    /// internal strings are non-empty, and the channel is not installable until
+    /// `internal_strings.xml` ordinals 5958 and 5959 are extracted.
+    #[test]
+    fn the_two_unsourced_internal_strings_are_what_still_blocks_the_channel() {
+        assert_eq!(INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE, 5958);
+        assert_eq!(INTERNAL_STRING_ORDINAL_TEMP_SAVE, 5959);
+
+        let owner = RetailInitialScenario::new();
+        let empty_strings = scenario_checksum(&owner.state(ScenarioInitialStrings::default()))
+            .unwrap()
+            .checksum;
+        assert_ne!(
+            empty_strings, CORPUS_INITIAL_SCENARIO_CHANNEL,
+            "if this ever passes, the two internal strings are empty and the channel \
+             can be installed directly"
+        );
+
+        // And the strings really do reach the checksum, so supplying them is the whole
+        // remaining gap rather than a decoration.
+        let name: Vec<u16> = "general_powers".encode_utf16().collect();
+        let moved = scenario_checksum(&owner.state(ScenarioInitialStrings {
+            general_powers_script_file: Utf16String(&name),
+            temp_save: Utf16String(&[]),
+        }))
+        .unwrap();
+        assert_ne!(moved.checksum, empty_strings);
+        assert_eq!(moved.bytes_walked, 8_321 + 2 * name.len() as u64);
     }
 
     #[test]

@@ -326,17 +326,23 @@ fn the_bridge_makes_the_units_channel_non_trivial_against_a_recording() {
     assert!(seeded.frames > 0, "the world was actually stepped");
 }
 
-/// Every agreement in the corpus today is on a channel `don-sim` has no producer
-/// for. That is the honest reading of the scoreboard, and it is asserted rather
-/// than written in prose so it stops being true the moment a producer lands.
+/// Every agreement in the corpus on a channel `don-sim` has no producer for must be
+/// *counted* as producerless, and the only agreements that are not are the ones a
+/// producer really earned. Today exactly one channel earns any: `script_run_time`,
+/// where retail's own value is `0x00040001` — the four-byte empty
+/// `ScriptFile::script_files` count, not the adler-of-nothing 1 — so an agreement there
+/// is a real comparison of four bytes against four bytes. Asserted rather than written
+/// in prose so it stops being true the moment another producer lands.
 #[test]
-fn todays_agreements_are_all_unmodelled() {
+fn agreements_are_unmodelled_except_the_empty_script_file_count() {
     let reps = mp_replays();
     if reps.is_empty() {
         skip_banner();
         return;
     }
+    let script = Channel::ScriptRunTime as usize;
     let mut modelled_matches = 0u32;
+    let mut script_matches = 0u32;
     for rep in reps.iter().take(3) {
         let mut sim = NullSim::new();
         let run = harness::run(rep, &mut sim, Phase::BeforeCommands, 0);
@@ -347,7 +353,16 @@ fn todays_agreements_are_all_unmodelled() {
             if don_replay::check_all::CHANNEL_SOURCE[c]
                 == don_replay::check_all::ChannelSource::Modelled
             {
-                modelled_matches += r.matches;
+                if c == script {
+                    // Never trivial: our walker hands the visitor four bytes on every
+                    // compare, so an agreement cannot be the empty-vs-empty coincidence.
+                    assert_eq!(r.nontrivial_compares, r.compares);
+                    assert_eq!(r.trivial_matches, 0);
+                    assert_eq!(r.retail_empty_compares, 0, "retail never read 1 here");
+                    script_matches += r.matches;
+                } else {
+                    modelled_matches += r.matches;
+                }
             } else {
                 assert_eq!(
                     r.matches,
@@ -358,10 +373,13 @@ fn todays_agreements_are_all_unmodelled() {
             }
         }
     }
-    eprintln!("  matches on channels we actually model: {modelled_matches}");
+    eprintln!(
+        "  matches on channels we model, excluding script_run_time: {modelled_matches}; \
+         script_run_time: {script_matches}"
+    );
     assert_eq!(
         modelled_matches, 0,
-        "the units channel started matching retail — update this test, it is good news"
+        "the units or world channel started matching retail — update this test, it is good news"
     );
 }
 

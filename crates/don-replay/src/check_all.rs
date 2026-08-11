@@ -249,7 +249,10 @@ pub const CHANNEL_SOURCE: [ChannelSource; NUM_WALKED] = [
     ChannelSource::Modelled,    // world   — exact dynamic World::walk_data bridge
     ChannelSource::Absent,      // rules
     ChannelSource::Absent,      // scenario_data
-    ChannelSource::Absent,      // script_run_time
+    // script_run_time — the bridge produces the empty `ScriptFile::script_files` count
+    // that `RunTimeEnv::walk_data` 0x009c41a0 always hashes, so "no scripts loaded" is a
+    // claim that can be (and usually is) wrong rather than a vacuous 1.
+    ChannelSource::Modelled,
 ];
 
 /// One channel's result, with everything needed to judge it.
@@ -502,17 +505,33 @@ mod tests {
         assert_ne!(ca.returns(), ca.total());
     }
 
-    /// An empty world produces the all-ones tuple, and says so honestly: zero
-    /// bytes walked. This entry point has no replay map; the map-aware bridge
-    /// is exercised separately.
+    /// An empty world walks nothing on the fourteen object/state channels and says so
+    /// honestly. Channel 15 is the one exception and deliberately so: retail's
+    /// `RunTimeEnv::walk_data` `0x009c41a0` always hashes the four-byte
+    /// `ScriptFile::script_files` count, so an empty script registry is
+    /// `adler32(1, [0;4])`, not the adler-of-nothing 1. This entry point has no replay
+    /// map; the map-aware bridge is exercised separately.
     #[test]
-    fn an_empty_world_is_the_all_ones_tuple_and_walks_nothing() {
+    fn an_empty_world_is_all_ones_except_the_empty_script_file_count() {
         let w = don_sim::World::with_capacity(8, 1);
         let ca = check_all(&w);
-        assert_eq!(ca.channels, Channels::empty_state());
-        assert_eq!(ca.bytes_walked(), 0);
-        assert!(ca.non_trivial().is_empty());
-        assert_eq!(ca.total(), 15);
+        let script = Channel::ScriptRunTime as usize;
+        for i in 0..NUM_WALKED {
+            if i == script {
+                continue;
+            }
+            assert_eq!(ca.channels.0[i], 1, "{} walked something", CHANNEL_NAMES[i]);
+        }
+        assert_eq!(
+            ca.channels.get(Channel::ScriptRunTime),
+            crate::script_channel::EMPTY_RUNTIME_CHANNEL
+        );
+        assert_eq!(ca.bytes_walked(), 4);
+        assert_eq!(ca.non_trivial(), vec!["script_run_time"]);
+        assert_eq!(
+            ca.total(),
+            14 + crate::script_channel::EMPTY_RUNTIME_CHANNEL
+        );
         assert!(ca.record().total_is_consistent());
     }
 
@@ -531,7 +550,7 @@ mod tests {
         );
         assert_ne!(ca.channels.get(Channel::Units), 1);
         assert_eq!(ca.channels.get(Channel::Walls), 1, "walls untouched");
-        assert_eq!(ca.non_trivial(), vec!["units"]);
+        assert_eq!(ca.non_trivial(), vec!["units", "script_run_time"]);
         assert!(ca.record().total_is_consistent());
     }
 

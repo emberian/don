@@ -882,6 +882,47 @@ fn walk_bhs_file<S: WalkSink>(
     Ok(())
 }
 
+/// Channel 15 for a simulation that has loaded **no** `ScriptFile`.
+///
+/// This is not a fallback and not an "assume empty": it is the complete retail
+/// traversal for a state whose `ScriptFile::script_files` array is empty, read off the
+/// instruction stream of `RunTimeEnv::walk_data` `0x009c41a0`:
+///
+/// ```text
+/// walk_tag(int_str_array[0x231b8 / 0x14])      ; no-op for CheckSum
+/// RunTimeEnv::close()                          ; frees transient interpreter state,
+///                                              ; emits nothing
+/// if (DataWalk+0x04 == 0):                     ; the write/checksum direction
+///     local = ScriptFile::script_files.length  ; signed 32-bit at 0x00c8cba4
+///     walk(&local, &local + 4)                 ; four bytes, always
+///     for i in 0..local: ScriptFile::walk_data ; 0x009c63b0, none when local == 0
+/// ```
+///
+/// So the walk is unconditionally four bytes of the element count, and every further
+/// byte is per-`ScriptFile`. `PtrArray` capacity/grow/flags are **not** hashed here —
+/// only the `int` count is — which is why an empty runtime is exactly
+/// `adler32(1, [0,0,0,0])`.
+///
+/// The claim this producer makes is falsifiable and routinely false: a recording whose
+/// engine did load script files disagrees on its first checksummed turn. It carries no
+/// evidence about BHS program *semantics*; it is a statement about the container header
+/// and about our world holding no programs.
+pub fn checksum_empty_runtime() -> ScriptChannelChecksum {
+    let mut adler = Adler32::new();
+    walk_i32(&mut adler, 0);
+    ScriptChannelChecksum {
+        checksum: adler.value(),
+        bytes_walked: adler.bytes,
+        script_files: 0,
+    }
+}
+
+/// The value [`checksum_empty_runtime`] produces, and the value 7 of the 21
+/// checksum-bearing corpus recordings carry on **every** checksummed turn. Recorded
+/// independently of this code as `channels.script_run_time.expected` in
+/// `schema/replay-validation.json` before any producer existed.
+pub const EMPTY_RUNTIME_CHANNEL: u32 = 0x0004_0001;
+
 /// Project the authoritative `don-bhs` program state onto retail checksum channel 15.
 ///
 /// Logical payloads come from the live VM-owned [`BhsProgram`]. Container headers and
@@ -930,6 +971,44 @@ mod tests {
         fn walk(&mut self, bytes: &[u8]) {
             self.0.extend_from_slice(bytes);
         }
+    }
+
+    /// The empty-runtime walk is exactly four zero bytes, and the value it produces
+    /// is the one the corpus carries. Any extra header byte, or a count that is not
+    /// walked at all, changes it.
+    #[test]
+    fn the_empty_run_time_env_walks_exactly_the_four_count_bytes() {
+        let empty = checksum_empty_runtime();
+        assert_eq!(empty.bytes_walked, 4);
+        assert_eq!(empty.script_files, 0);
+        assert_eq!(empty.checksum, EMPTY_RUNTIME_CHANNEL);
+        assert_eq!(empty.checksum, crate::checksum::adler32(1, &[0, 0, 0, 0]));
+
+        // The two adjacent mistakes this pins against: walking nothing (which is what
+        // an absent producer does, and reads 1), and walking the `PtrArray` header.
+        assert_ne!(empty.checksum, 1);
+        assert_ne!(
+            empty.checksum,
+            crate::checksum::adler32(1, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+    }
+
+    /// A single loaded file must move the channel; otherwise the count is not really
+    /// being hashed and the empty agreement would be vacuous.
+    #[test]
+    fn one_loaded_script_file_moves_the_channel() {
+        let mut program = captured_empty_main_program();
+        let loaded = checksum_program(&program).expect("captured program walks");
+        assert_ne!(loaded.checksum, checksum_empty_runtime().checksum);
+        assert!(loaded.bytes_walked > 4);
+        program.files.clear();
+        if let Some(meta) = program.walk_meta_mut() {
+            meta.files.clear();
+        }
+        assert_eq!(
+            checksum_program(&program).expect("empty file list walks"),
+            checksum_empty_runtime()
+        );
     }
 
     const EMPTY_SHAPE: ArrayShape = ArrayShape {
