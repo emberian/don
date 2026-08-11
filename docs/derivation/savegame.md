@@ -519,9 +519,12 @@ Honest limits [measured that they exist]:
   as a `virtual` op, not resolved per receiver.
 - The ranges are the **SaveGame/LoadGame** path. `CheckSum` takes different branches
   (`walker+0x08 != 0`) and is further gated by the section mask at `walker+0x0c`.
-- The parser decodes the *prefix* of a save: magic, version, `GameInfo`, `Console`, and for
-  a recording the whole `Game::walk_data` header. It does **not** parse the ~1 MB body; that
-  needs the container element walks and the virtual dispatches resolved.
+- The parser decodes the *prefix* of a save: magic, version, the outer `GameInfo`, `Console`,
+  `obj_base[3]`/`obj_end[3]`, and the complete nested `Game::walk_data`. The Console virtual
+  call at `0x005a2473` receives no `DataWalk` and consumes no bytes; the parser now stops at
+  the following `ObjectArray<Tribe>` boundary instead of falsely attributing the remainder
+  to Console. Recordings still begin directly with the same complete `Game::walk_data`.
+  The remaining ~1 MB body needs the container element walks and virtual dispatches resolved.
 
 Nothing here is Tier A or Tier B. There is no SMT proof and no differential test against the
 retail reader. Getting to Tier B means calling `LoadGame::walk_function` on hbox against a

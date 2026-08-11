@@ -419,7 +419,10 @@ def parse(buf: bytes) -> Tree:
             root.end = r.p
             return root
         # WalkDataGame::walk_data (FUN_005a2360) opens with GameInfo::walk_data
-        # on game+0x0c, then Console state, then ... then Game::walk_data.
+        # on game+0x0c, then Console state.  The virtual call at 0x005a2473
+        # receives only Console as `this`; it does not receive DataWalk and therefore
+        # consumes no stream bytes.  The next writes are the three Objects band bounds,
+        # followed immediately by the nested Game::walk_data call at 0x005a2945.
         wdg = Tree("WalkDataGame::walk_data", r.p, "FUN_005a2360")
         root.kid(wdg)
         parse_gameinfo(r, ver, wdg)
@@ -431,9 +434,22 @@ def parse(buf: bytes) -> Tree:
             con.f("console+0x%03x..0x%03x" % (a, b), r.raw(b - a), o, b - a,
                   "unsigned char[%d]" % (b - a))
         con.end = r.p
+
+        bands = Tree("Objects band bounds", r.p,
+                     "0x005a2926 obj_base[3], 0x005a2937 obj_end[3]")
+        wdg.kid(bands)
+        for name in ("unit", "build", "wall"):
+            o = r.p
+            bands.f("obj_base.%s" % name, r.i32(), o, 4, "int")
+        for name in ("unit", "build", "wall"):
+            o = r.p
+            bands.f("obj_end.%s" % name, r.i32(), o, 4, "int")
+        bands.end = r.p
+
+        parse_game(r, ver, wdg)
         wdg.end = r.p
-        wdg.note = ("continues with Console::vt[0x1c], then the world/object "
-                    "pool, then Game::walk_data at 0x005a2945 -- not decoded here")
+        wdg.note = ("decoded through nested Game::walk_data at 0x005a2945; next is "
+                    "Tribes::walk_data at stream offset %#x" % r.p)
     else:
         root.note = "recorded game (.rcx): no magic, no version word"
         parse_game(r, None, root)
@@ -544,6 +560,14 @@ def verify(paths):
             blk = find(g, "Game +0x550")
             checks.append(("Game::frame_to_break == -1",
                            fld(blk, "frame_to_break") == -1))
+        bands = find(t, "Objects band bounds")
+        if bands:
+            bases = [fld(bands, "obj_base.%s" % name)
+                     for name in ("unit", "build", "wall")]
+            ends = [fld(bands, "obj_end.%s" % name)
+                    for name in ("unit", "build", "wall")]
+            checks.append(("Objects bands are [0,2000), [2000,3000), [3000,3000)",
+                           bases == [0, 2000, 3000] and ends == [2000, 3000, 3000]))
         byver.setdefault(vs, set()).add(fld(gi, "version"))
         rows.append((os.path.basename(path),
                      "%s  players=%d used  prefix=0x%x"
