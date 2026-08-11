@@ -1,0 +1,18 @@
+[package]
+name = "don-crossplay"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Checked ABI for CrossplayProxy.dll: the shipped ICrossPlayService vtable, ICrossplayLogger, and the Lobby/Matchmaking DTO layouts. Interface only, no behaviour."
+
+# Library only, and deliberately excluded from the root workspace (see
+# ../../Cargo.toml) exactly like netsys-shim: the ABI it describes is
+# i686-pc-windows-msvc, and `extern "thiscall"` only exists on x86. The layout
+# and slot-order assertions are written so they are also checkable on the arm64
+# host, so `cargo check -p don-crossplay --lib` is meaningful there too.
+
+[lib]
+name = "don_crossplay"
+path = "src/lib.rs"
+
+[dependencies]

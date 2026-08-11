@@ -18,7 +18,8 @@ members = [
 # oracle: 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
 # donscan: Windows-only (kernel32 FFI); cross-built with cargo-xwin. See crates/donscan/README.md.
 # netsys-shim: i686-pc-windows-msvc cdylib loaded by the retail game. See crates/netsys-shim/README.md.
-exclude = ["crates/oracle", "crates/donscan", "crates/netsys-shim"]
+# don-crossplay: CrossplayProxy.dll ABI; `extern "thiscall"` only exists on x86. See crates/don-crossplay/README.md.
+exclude = ["crates/oracle", "crates/donscan", "crates/netsys-shim", "crates/don-crossplay"]
 
 [workspace.package]
 edition = "2021"
