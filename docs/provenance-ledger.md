@@ -1038,9 +1038,18 @@ Recorded as a discrepancy rather than explained away; it wants one look at the c
 - **The units of `x` in the rate ramp** (`UnitType` vtable `+0x6C`/`+0x70`), which is why
   `ramped_rate` must not be wired to a build queue even though the PDB calls the containing
   function `train_time`.
-- **The construction of the attrition level at `player + 0x7F0`** and the **scale** of the float
-  multiplier at `player + 0x7F4` (built at `Leader::calc_anti_attrition` `0x006CDCC0`).
-  `ATTRITION_IMPROVED[] = 1,2,4,8` is a plausible source for the former and stays a hypothesis.
+- ~~**The construction of the attrition level at `player + 0x7F0`**~~ — **closed 2026-08-10.**
+  `Leader::calc_attrition` `0x006CDEA0` is disassembled and ported in
+  `crates/don-sim/src/systems/borders_fog.rs::calc_attrition`;
+  `ATTRITION_IMPROVED[] = 1,2,4,8` (`Constants +0x1D8`) is confirmed as the source, indexed by
+  the length of the satisfied prefix of `has_preq(0x2DD..=0x2E0)`, then scaled in order by
+  `colosseum_attrition +0x470`, `russian_attrition +0x74C`, `ctw_attrition +0xA0C` and
+  `kremlin_attrition +0x510` with a `cmove` floor that turns a zero product into one.
+  `docs/mechanics/attrition-rate-graph.md` §3. **Still open:** the `has_preq` / `has_wonder` /
+  `has_tribe_bonus` predicates themselves, which are function inputs, not derivations. The
+  **scale** of the float multiplier at `player + 0x7F4` (built at
+  `Leader::calc_anti_attrition` `0x006CDCC0`) is the `0x43800000` = `256.0f` seed, recorded in
+  `docs/mechanics/borders-fog.md` §6.2.
 - **`peace_attrition` at `0x00822D6D`** — the constant is in `EconomyRules` and the arithmetic
   shape is `[reported]` as the same as the assassin path; that site was never disassembled.
 - **Territory ownership.** The radius contribution `(TERRITORY_NUM + MULTIPLIER * bonuses) /

@@ -3346,14 +3346,10 @@ pub fn execute_attrition_recompute<H: ArenaAttritionSelectionHost>(
             territory_owner,
         );
     };
-    // `UnitData::get_attrition`: on the non-militia path an idle unit whose owner holds the first
-    // attrition-reduction upgrade returns zero before any of the type divisors.
-    if !state.militia && rate.victim_upgrade_0x2fe && facts.is_idle {
-        return Ok(AttritionRecomputeTransaction::NoAttritionRate {
-            territory_owner,
-            prefix,
-        });
-    }
+    // The non-militia idle-upgrade return used to be applied here, ahead of the kernel.
+    // `borders_fog::get_attrition` now owns it, at its retail position inside the callee, so
+    // the Arena passes the two operands instead of pre-deciding the answer. Both produce the
+    // same `NoAttritionRate` receipt; keeping one authority is the point.
     let scalar = borders_fog::get_attrition(
         &AttritionInput {
             attacker_attrition: rate.att,
@@ -3361,7 +3357,9 @@ pub fn execute_attrition_recompute<H: ArenaAttritionSelectionHost>(
             siege_class: facts.is_siege,
             militia: state.militia,
             type_id: state.type_id,
-            type_class: facts.domain,
+            domain: facts.domain,
+            owner_has_preq_0x2fe: rate.victim_upgrade_0x2fe,
+            unit_is_idle: facts.is_idle,
             age_diff: rate.age_diff,
         },
         &rules,
@@ -4072,7 +4070,9 @@ mod tests {
             siege_class: false,
             militia: false,
             type_id: 50,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: 0,
         };
         assert_eq!(

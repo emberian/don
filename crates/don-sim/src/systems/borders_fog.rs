@@ -52,7 +52,9 @@
 //! | `0x006B55C0`/`53F0`/`42C0`/`48C0` | `WorldData::is_seen`/`was_seen`/`is_really_seen`/`is_detected` | the queries |
 //! | `0x006B4700`/`2510`/`2490` | `WorldData::get_who`/`get_who2`/`is_enemy_territory` | territory ownership |
 //! | `0x005E11A0` | `Unit::process_attrition()` | attrition period selection |
-//! | `0x00608FD0` | `UnitData::get_attrition(int)` | attrition rate |
+//! | `0x00608FD0` | `UnitData::get_attrition(int)` | attrition rate, **all five returns** |
+//! | `0x006CDEA0` | `Leader::calc_attrition()` | `LeaderData::att +0x7F0` |
+//! | `0x006CDCC0` | `Leader::calc_anti_attrition()` | `LeaderData::anti_att +0x7F4` |
 //! | `0x005E1A10` | `Unit::suffer_attrition(int)` | attrition damage |
 //! | `0x005E0560` | `Unit::process_supply()` | supply predicate |
 //!
@@ -66,6 +68,15 @@
 //!   supplier set as an argument instead.
 //! * The out-of-supply reload multipliers are exposed as constants; the call site that
 //!   applies them was not located.
+//! * `LeaderData::has_preq` `0x006DB810`, `has_wonder` `0x006EBC10` and `has_tribe_bonus`
+//!   `0x006E1370` are **not** ported. [`calc_attrition`] and [`calc_anti_attrition`] take
+//!   their answers as booleans, because the BonusType prerequisite graph they walk is built
+//!   by the executable and is not shipped in `ron-data/`. Passing `false` for all of them
+//!   is not a default — it asserts that no nation in the game has attrition research.
+//! * `Unit::process_attrition`'s unowned-territory arm does not return, and the read it
+//!   falls into is out of bounds. See [`UnownedTerritoryFallthrough`] and
+//!   `docs/assembly/attrition-unowned-territory-fallthrough.md`. Nothing here reproduces
+//!   the read.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -1196,6 +1207,21 @@ pub struct AttritionRules {
     pub attrition_upgrade: [i32; 4],
     /// `+0x1D8`, 4 entries — attrition-dealt ladder. `{1, 2, 4, 8}`
     pub attrition_improved: [i32; 4],
+    /// `+0x470` `colosseum_attrition` — percent increase to attrition *caused*, applied by
+    /// [`calc_attrition`] under `LeaderData::has_wonder(0x212)`. Shipped `50`
+    /// (`"50% increase to attrition caused"`).
+    pub colosseum_attrition: i32,
+    /// `+0x74C` `russian_attrition` — percent increase to attrition caused under
+    /// `LeaderData::has_tribe_bonus(0xD)`. Shipped `100` (`"100% bonus"`).
+    pub russian_attrition: i32,
+    /// `+0xA0C` `ctw_attrition` — percent increase to attrition caused under the
+    /// Conquer-the-World bonus (`Game +0x822 & 2` and `LeaderData +0x6900 != 0`).
+    /// Shipped `50` (`"50% bonus"`).
+    pub ctw_attrition: i32,
+    /// `+0x510` `kremlin_attrition` — percent increase to attrition caused under
+    /// `LeaderData::has_wonder(0x21A)`. Shipped `100`
+    /// (`"100% increase to attrition caused"`).
+    pub kremlin_attrition: i32,
 }
 
 impl Default for AttritionRules {
@@ -1215,6 +1241,10 @@ impl Default for AttritionRules {
             attrition_aged_up: 25,
             attrition_upgrade: [25, 50, 75, 100],
             attrition_improved: [1, 2, 4, 8],
+            colosseum_attrition: 50,
+            russian_attrition: 100,
+            ctw_attrition: 50,
+            kremlin_attrition: 100,
         }
     }
 }
@@ -1235,18 +1265,149 @@ pub struct AttritionInput {
     pub siege_class: bool,
     /// The object answers `get_bonus(0x42)` — the militia class.
     pub militia: bool,
-    /// `ObjectType +0x04` — the type id. `0x3D`, `0x3E` and `400` halve the result.
+    /// `ObjectTypeData +0x04` — the type index, read at `0x00609082`. `0x3D`, `0x3E` and
+    /// `0x190` (400) halve the result, and that is exactly the set
+    /// `ObjectData::is_merchant` `0x0046D370` accepts — the halving is the *merchant*
+    /// discount, not an unnamed type triple.
     pub type_id: i32,
-    /// `ObjectType +0x218`. `2` halves the result again; `1` suppresses attrition; `0` is
-    /// the normal unit path.
-    pub type_class: i32,
+    /// `ObjectTypeData::domain +0x218`, the field `schema/types.json` names `domain`,
+    /// compared against `2` at `0x0060909F`.
+    ///
+    /// **This is the movement domain, so the values have names:** `0` land, `1` sea, `2`
+    /// air. Only `2` is read here, and it halves the rate — i.e. air units take half
+    /// attrition.
+    ///
+    /// `1` does **not** suppress attrition *in this function*: the sea return lives in the
+    /// caller, `Unit::process_attrition` at `0x005E1456`, which returns before ever
+    /// reaching the rate tail (`0x005E18F1` re-tests the domain for the land path). An
+    /// earlier revision of this file documented `+0x218` as an unnamed "type class" with
+    /// "1 suppresses attrition", which put the caller's control flow inside the kernel's
+    /// contract; it never affected a value because nothing here reads `1`.
+    pub domain: i32,
     /// `attacker.age - victim.age`, clamped at the call site to `>= 0` before use.
     pub age_diff: i32,
+    /// `LeaderData::has_preq(0x2FE)` `0x006DB810` on **the unit's own owner** —
+    /// `leaders.list[UnitData +0x09]`, the `this` pointer materialised at `0x00609138`
+    /// (`add ecx, [GameAccessConst::leadersc]`) and reused from the `anti_att` load.
+    ///
+    /// `0x2FE` is the first of the three consecutive anti-attrition BonusTypes
+    /// `0x2FE..=0x300` that [`calc_anti_attrition`] turns into
+    /// [`AttritionRules::attrition_upgrade`] indices `0`, `1`, `2`; index `0` ships as
+    /// `"25% (decrease from Forage)"`, so `0x2FE` is the Forage-tier bonus.
+    pub owner_has_preq_0x2fe: bool,
+    /// `UnitData::is_idle` `0x0046FA40` on the unit itself (`mov ecx, esi` at
+    /// `0x0060915F`): true when the `OrderList` current-action pointer (`UnitData +0xCC`,
+    /// inside the `orderlist` at `+0xC8`) is null.
+    ///
+    /// **Retail short-circuits: `is_idle` is called only when `owner_has_preq_0x2fe`
+    /// holds** (`0x00609159` jumps past it otherwise). That matters to a host, because
+    /// `is_idle` is `const` in the PDB signature yet writes three cached `OrderList` words
+    /// (`+0xD4`, `+0xCC`, `+0xD0` at `0x0046FA60..0x0046FA78`). A host that models those
+    /// writes must not perform them when `owner_has_preq_0x2fe` is false.
+    pub unit_is_idle: bool,
 }
 
 /// The `anti_att` value meaning "no anti-attrition at all": the immediate
 /// `0x43800000` = `256.0f` that `Leader::calc_anti_attrition` `0x006CDCC0` starts from.
 pub const ANTI_ATT_BASE: f32 = 256.0;
+
+/// The territory owner's `att`, `Leader::calc_attrition` `0x006CDEA0`.
+///
+/// This is the other half of [`get_attrition`]'s input pair: `LeaderData::att +0x7F0` of
+/// the leader who *owns the territory*, where [`calc_anti_attrition`] produces
+/// `anti_att +0x7F4` of the unit's owner. `get_attrition` divides by it and returns `0`
+/// when it is zero, so **a zero `att` is the reason attrition never fires**, and this
+/// function is exactly the set of ways it becomes non-zero.
+///
+/// `[measured]` from the instruction stream `0x006CDEA0..0x006CDFE4`; every `Constants`
+/// offset resolved through `docs/derivation/rules-constants.json` by the byte offset the
+/// code actually loads.
+///
+/// ```text
+/// if give_att_disabled != 0                       -> att = 0                 0x006CDEA6
+/// n = length of the satisfied prefix of has_preq(0x2DD), (0x2DE), (0x2DF), (0x2E0)
+/// att = if n == 0 { 0 } else { attrition_improved[n - 1] }                   0x006CDEEC
+/// each of, in this order:
+///     has_wonder(0x212)      Colosseum   colosseum_attrition  +0x470        0x006CDEFA
+///     has_tribe_bonus(0xD)   Russians    russian_attrition    +0x74C        0x006CDF32
+///     CTW bonus              (see below) ctw_attrition        +0xA0C        0x006CDF65
+///     has_wonder(0x21A)      Kremlin     kremlin_attrition    +0x510        0x006CDFAC
+///   att = ((pct + 100) * att) / 100;  if att == 0 { att = 1 }
+/// ```
+///
+/// Two things fall out of the instruction stream that the shape above hides:
+///
+/// * **The `if att == 0 { att = 1 }` floor is a `cmove`, and it fires on the *product*.**
+///   `imul ecx, edi` with `edi == 0` is zero, so the `cmove edi, 1` at `0x006CDF2B` (and
+///   its three siblings) turns a rate of zero into one. A nation with **no** attrition
+///   research at all but with the Colosseum, or the Russian tribe bonus, or the Kremlin,
+///   or the Conquer-the-World bonus, therefore deals `att = 1` — enough for
+///   [`get_attrition`] to return non-zero and for attrition to fire. That is the opposite
+///   of what "a percentage increase" suggests and it is the single most load-bearing
+///   detail here.
+/// * **The `/100` is MSVC's truncating signed magic-number divide** (`imul 0x51EB851F`,
+///   `sar edx, 5`), so the four multipliers do not commute: at `att = 1` the shipped order
+///   gives `1 → 1 → 2 → 3 → 6`, while applying the Kremlin first would give `9`.
+///
+/// The `cmp esi, 0x2AD` / `has_tribe_bonus(4)` arm at `0x006CDEB8..0x006CDECB` is
+/// **unreachable**: the loop counter starts at `0x2DD` and only increments, so it can
+/// never equal `0x2AD`. It is not modelled, and modelling it would be inventing a branch
+/// retail cannot take.
+///
+/// # What this does not do
+///
+/// It takes the four `has_preq` answers as booleans. `LeaderData::has_preq` `0x006DB810`
+/// is a recursive walk over each BonusType's own prerequisite list, those lists are built
+/// by the executable rather than shipped in `ron-data/`, and no lane has recovered that
+/// graph — so a host that cannot answer them must say so rather than pass `[false; 4]`,
+/// which would assert that no nation in the game has attrition research.
+///
+/// * `give_att_disabled` — `LeaderData +0x7F8`, tested at `0x006CDEA6`.
+/// * `preq_chain` — `has_preq(0x2DD)`, `(0x2DE)`, `(0x2DF)`, `(0x2E0)` in that order; the
+///   loop stops at the first `false`, so `[true, false, true, true]` counts as one level.
+/// * `ctw_bonus` — `Game +0x822 & 2` **and** `LeaderData +0x6900 != 0`
+///   (`num_bonus_cards[10]`, `LeaderData::num_bonus_cards` is `unsigned char[38]` at
+///   `+0x68F6`), both read at `0x006CDF60..0x006CDF77`.
+pub fn calc_attrition(
+    give_att_disabled: bool,
+    preq_chain: [bool; 4],
+    wonder_colosseum: bool,
+    tribe_russian: bool,
+    ctw_bonus: bool,
+    wonder_kremlin: bool,
+    c: &AttritionRules,
+) -> i32 {
+    if give_att_disabled {
+        return 0;
+    }
+    let levels = preq_chain.iter().take_while(|held| **held).count();
+    let mut att = if levels == 0 {
+        0
+    } else {
+        c.attrition_improved[levels - 1]
+    };
+    // `((pct + 100) * att) / 100`, then the `cmove` floor at zero. Truncating signed
+    // division, applied in the shipped order.
+    let scale_by = |pct: i32, att: &mut i32| {
+        *att = ((pct + 100) * *att) / 100;
+        if *att == 0 {
+            *att = 1;
+        }
+    };
+    if wonder_colosseum {
+        scale_by(c.colosseum_attrition, &mut att);
+    }
+    if tribe_russian {
+        scale_by(c.russian_attrition, &mut att);
+    }
+    if ctw_bonus {
+        scale_by(c.ctw_attrition, &mut att);
+    }
+    if wonder_kremlin {
+        scale_by(c.kremlin_attrition, &mut att);
+    }
+    att
+}
 
 /// The unit's `anti_att`, `Leader::calc_anti_attrition` `0x006CDCC0`.
 ///
@@ -1314,6 +1475,40 @@ pub fn calc_anti_attrition(
 /// that association order. Since `anti_att` is itself 256-scaled, the two 256s cancel and a
 /// baseline unit gets `v = scale = 256`. Kept in `f32` deliberately: `anti_att` is float in
 /// the engine's own walked state, so rounding it away here would be a silent fidelity loss.
+///
+/// # The idle exemption, `0x00609152`/`0x00609161`
+///
+/// The non-militia branch has a **fifth return** that this port was missing until
+/// 2026-08-10, and it is not a rounding detail — it is a whole exemption:
+///
+/// ```asm
+/// 00609146  mulss  xmm0, dword ptr [0xb69430]   ; v = scale * anti_att / 256
+/// 0060914e  cvttss2si edi, xmm0
+/// 00609152  call   0x6db810                     ; leaders.list[unit.owner].has_preq(0x2FE)
+/// 00609157  test   eax, eax
+/// 00609159  je     0x60907f                     ; no bonus -> the type divisors
+/// 0060915f  mov    ecx, esi
+/// 00609161  call   0x46fa40                     ; UnitData::is_idle()
+/// 00609166  test   eax, eax
+/// 00609168  je     0x60907f                     ; moving -> the type divisors
+/// 0060916e  xor    eax, eax                     ; idle + Forage -> no attrition at all
+/// ```
+///
+/// So an **idle** unit whose owner holds the Forage-tier attrition bonus takes no
+/// attrition, on the non-militia path only: the militia branch at `0x00609069` jumps
+/// straight to `0x0060907F` and never reaches either call. The `push 0x2FE` at
+/// `0x00609133` sits between the `cvtdq2ps` and the `mulss`, so the two calls happen after
+/// the float step and before the merchant/air divisors — unobservable in the return value,
+/// which is zero either way, but it is why [`AttritionInput::unit_is_idle`] documents its
+/// short-circuit.
+///
+/// # A named, unclaimed divergence
+///
+/// `cvttss2si` yields the x86 *integer indefinite* value `0x8000_0000` when the converted
+/// float does not fit in an `i32`, where Rust's `as i32` saturates to `i32::MAX`. With
+/// shipped rules `v` never approaches that; with modded `attrition_upgrade` percentages
+/// near `99` it can. Recorded, not silently "fixed": choosing a behaviour here needs the
+/// oracle, not a plausible edit.
 pub fn get_attrition(inp: &AttritionInput, c: &AttritionRules) -> i32 {
     let mut att = inp.attacker_attrition;
     if att == 0 || c.attrition == 0 {
@@ -1327,14 +1522,19 @@ pub fn get_attrition(inp: &AttritionInput, c: &AttritionRules) -> i32 {
         scale = 25_600 / (100 - c.siege_attrition);
     }
     let mut v = if !inp.militia {
-        (scale as f32 * inp.victim_anti_att * 0.003_906_25f32) as i32
+        let v = (scale as f32 * inp.victim_anti_att * 0.003_906_25f32) as i32;
+        // `0x00609152` / `0x00609161`, non-militia only, short-circuited in this order.
+        if inp.owner_has_preq_0x2fe && inp.unit_is_idle {
+            return 0;
+        }
+        v
     } else {
         (scale * 100) / (c.militia_attrition + 100)
     };
     if inp.type_id == 0x3D || inp.type_id == 0x3E || inp.type_id == 400 {
         v /= 2;
     }
-    if inp.type_class == 2 {
+    if inp.domain == 2 {
         v /= 2;
     }
     if inp.age_diff >= 0 {
@@ -1365,13 +1565,143 @@ pub fn attrition_period(v: i32, c: &AttritionRules) -> Option<i16> {
 
 /// `Unit::process_attrition` also writes a fixed period for the two special sources:
 /// `assassin_attrition` (8) and, at peace, `peace_attrition` (8) — halved when
-/// `ObjectType +0x218 == 2`.
+/// `ObjectTypeData::domain +0x218 == 2`, i.e. **for air units**, the same field and the
+/// same single value [`get_attrition`] tests. Sea (`1`) has already returned from
+/// `Unit::process_attrition` at `0x005E1456` by the time either trespass arm can run, so
+/// only `0` and `2` ever reach here.
 #[inline]
-pub fn special_attrition_period(base_frames: i32, type_class: i32) -> i16 {
-    if type_class == 2 {
+pub fn special_attrition_period(base_frames: i32, domain: i32) -> i16 {
+    if domain == 2 {
         (base_frames / 2) as i16
     } else {
         base_frames as i16
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6b. `Unit::process_attrition`'s unowned-territory fall-through
+// ---------------------------------------------------------------------------
+
+/// `class Leaders leaders`, preferred VA. `[measured]` two ways that agree: the PDB public
+/// `?leaders@@3VLeaders@@A`, and the immediate `add ecx, 0xE3A390` that
+/// `Leader::calc_anti_attrition` materialises five times (`0x006CDCF6`, `0x006CDD1B`,
+/// `0x006CDD3D`, `0x006CDDA2`, `0x006CDE03`).
+pub const LEADERS_VA: u32 = 0x00E3_A390;
+
+/// `sizeof(Leader)`, the stride every `leaders.list[i]` computation uses (`imul … 0x6EEC`).
+/// `Leaders::list` is `Leader[10]` **at offset 0** of the `Leaders` object, which is why
+/// `leaders + i * 0x6EEC` addresses `list[i]` directly and why `i == -1` addresses memory
+/// *before* the object. `10 * 0x6EEC == 0x45538`, exactly the offset of the next member
+/// (`Leaders::prod_script_path`), so the array is contiguous with no header.
+pub const LEADER_STRIDE: u32 = 0x6EEC;
+
+/// `public: static unsigned char *Window::key_states`, preferred VA — despite the pointer
+/// decoration it is a **256-byte array**: `Window::get_key_state` `0x0051AEB0` indexes it
+/// as `byte ptr [eax + 0xE333C0]` with `eax` a `movzx`-ed byte, and the next static
+/// (`code_buffer`) begins exactly `0x100` later.
+pub const WINDOW_KEY_STATES_VA: u32 = 0x00E3_33C0;
+
+/// Length of [`WINDOW_KEY_STATES_VA`]'s buffer. `Window::update_key_states` `0x00A4DC00`
+/// fills it by passing that address to `USER32!GetKeyboardState`
+/// (import thunk `0x00AC53E4`).
+pub const WINDOW_KEY_STATES_LEN: u32 = 0x100;
+
+/// What `Unit::process_attrition` actually reads at `0x005E12D3` when the territory owner
+/// is negative.
+///
+/// # The finding
+///
+/// `re/decomp-all/005e11a0.c` reads as if the unowned-territory arm returns after storing
+/// `LeaderData::neutral_attrition`. **It does not.** `0x005E1294..0x005E12E3`:
+///
+/// ```asm
+/// 005e11fe  movsx edi, byte ptr [ecx + esi*4 + 0xf]  ; WData::who, a *signed* char
+/// ...
+/// 005e1294  test  edi, edi
+/// 005e1296  jns   0x5e12c5                  ; owned -> the owned chain
+/// 005e1298  imul  ecx, esi, 0x6eec          ; leaders.list[unit owner]
+/// 005e129e  cmp   dword ptr [ecx + 0xe3ab90], 0     ; neutral_attrition (+0x800)
+/// 005e12a5  je    0x5e19c6                  ; zero -> return
+/// 005e12ae  cmp   dword ptr [eax + 0x218], 1       ; domain == 1 (sea) -> skip the write
+/// 005e12b7  mov   ax, word ptr [ecx + 0xe3ab90]
+/// 005e12be  mov   word ptr [ebx + 0x9e], ax        ; the period write
+/// 005e12c5  cmp   edi, esi                  ; <- FALL-THROUGH, edi still negative
+/// 005e12c7  je    0x5e19c6
+/// 005e12cd  imul  edx, edi, 0x6eec
+/// 005e12d3  mov   eax, dword ptr [edx + 0xe3a390]  ; leaders.list[-1].leader_flags
+/// 005e12d9  test  al, 1
+/// 005e12db  je    0x5e19c6
+/// 005e12e1  test  al, 2
+/// 005e12e3  je    0x5e19c6
+/// ```
+///
+/// `WData::who` is `char` (`schema/types.json`, `WData +0x0F`), so the index is `-1`
+/// (unowned) or `-2` (`World::compute_reg_territory` writes the immediate `0xFFFFFFFE` at
+/// `0x006B14E8`/`0x006B1515` for a claim whose `City +0x5F` disagrees with its slot, and
+/// stores it through `mov byte ptr [eax + ecx*4 + 0xf], dl` at `0x006B1731`).
+///
+/// Neither index is a hidden neutral slot: [`LEADERS_VA`] + `-1 * ` [`LEADER_STRIDE`] is
+/// `0x00E334A4`, which is **inside `Window::key_states`** — the Win32 keyboard-state buffer,
+/// at virtual-key `0xE4`. The whole `.data` tail past file offset `0xA4000` (VA
+/// `0x00CAA000`) is zero-initialised, so this is a live read of unrelated global state, not
+/// a fault.
+///
+/// This type records that. It deliberately does **not** reproduce the read: DoN must never
+/// make a simulation decision out of a keyboard buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnownedTerritoryFallthrough {
+    /// `who >= 0`. Not the fall-through at all — `0x005E12D3` reads a real
+    /// `leaders.list[who].leader_flags`.
+    Owned { slot: i32 },
+    /// `who == -1`. The read aliases `Window::key_states[vkey]` at `va`.
+    KeyboardState { va: u32, vkey: u8 },
+    /// `who <= -2`. The read lands in zero-initialised `.data` for which the shipped PDB
+    /// carries no symbol at all — the whole span `[0x00CC4BDC, 0x00E32F38)` is unnamed —
+    /// so what occupies it, and therefore what retail does next, is **not derived**.
+    UnnamedStatic { va: u32 },
+}
+
+impl UnownedTerritoryFallthrough {
+    /// Can retail's two `leader_flags` gates at `0x005E12D9` / `0x005E12E1` admit this
+    /// territory index, i.e. does `process_attrition` continue past `0x005E12E3`?
+    ///
+    /// * [`Self::KeyboardState`] → `Some(false)`, and the argument is short: both `test`s
+    ///   read the **same byte**, `AL`. `GetKeyboardState` defines only bit `0x80` (down)
+    ///   and bit `0x01` (toggled) of a key-state byte; bit `0x02` is not one it sets. So
+    ///   `test al, 2` at `0x005E12E1` cannot be true and retail always takes the `je` back
+    ///   to `0x005E19C6`. Observable behaviour is therefore "write the neutral period, then
+    ///   return" — but by a keyboard byte, not by a `ret`, and the distinction is the whole
+    ///   point of recording it.
+    /// * [`Self::UnnamedStatic`] → `None`. Underived, and a guess here would be exactly the
+    ///   plausible substitution the charter forbids.
+    /// * [`Self::Owned`] → `None`. The answer is the leader's real flags, not a static fact.
+    pub fn admits_attrition(self) -> Option<bool> {
+        match self {
+            UnownedTerritoryFallthrough::KeyboardState { .. } => Some(false),
+            UnownedTerritoryFallthrough::UnnamedStatic { .. }
+            | UnownedTerritoryFallthrough::Owned { .. } => None,
+        }
+    }
+}
+
+/// Resolve `0x005E12D3`'s `leaders.list[territory_owner].leader_flags` address for a
+/// `WData::who` value. See [`UnownedTerritoryFallthrough`].
+pub fn unowned_territory_fallthrough(territory_owner: i32) -> UnownedTerritoryFallthrough {
+    if territory_owner >= 0 {
+        return UnownedTerritoryFallthrough::Owned {
+            slot: territory_owner,
+        };
+    }
+    // `imul edx, edi, 0x6eec` then `[edx + 0xE3A390]`, in wrapping 32-bit arithmetic.
+    let va = LEADERS_VA.wrapping_add((territory_owner as u32).wrapping_mul(LEADER_STRIDE));
+    let key_end = WINDOW_KEY_STATES_VA + WINDOW_KEY_STATES_LEN;
+    if (WINDOW_KEY_STATES_VA..key_end).contains(&va) {
+        UnownedTerritoryFallthrough::KeyboardState {
+            va,
+            vkey: (va - WINDOW_KEY_STATES_VA) as u8,
+        }
+    } else {
+        UnownedTerritoryFallthrough::UnnamedStatic { va }
     }
 }
 
@@ -2219,7 +2549,9 @@ mod tests {
                 siege_class: false,
                 militia: false,
                 type_id: 0,
-                type_class: 0,
+                domain: 0,
+                owner_has_preq_0x2fe: false,
+                unit_is_idle: false,
                 age_diff: -1,
             },
             &c,
@@ -2237,7 +2569,9 @@ mod tests {
             siege_class: false,
             militia: false,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: -1,
         };
         let plain = attrition_period(get_attrition(&mk(ANTI_ATT_BASE), &c), &c).unwrap();
@@ -2257,7 +2591,9 @@ mod tests {
                 siege_class: false,
                 militia: false,
                 type_id: 0,
-                type_class: 0,
+                domain: 0,
+                owner_has_preq_0x2fe: false,
+                unit_is_idle: false,
                 age_diff: -1,
             },
             &c,
@@ -2275,7 +2611,9 @@ mod tests {
             siege_class: false,
             militia: false,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: -1,
         };
         let p1 = attrition_period(get_attrition(&mk(1), &c), &c).unwrap();
@@ -2293,7 +2631,9 @@ mod tests {
             siege_class: false,
             militia: false,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: -1,
         };
         let p = |a| attrition_period(get_attrition(&mk(a), &c), &c).unwrap();
@@ -2312,7 +2652,9 @@ mod tests {
                 siege_class: false,
                 militia: false,
                 type_id: 0,
-                type_class: 0,
+                domain: 0,
+                owner_has_preq_0x2fe: false,
+                unit_is_idle: false,
                 age_diff: 0,
             },
             &c,
@@ -2330,7 +2672,9 @@ mod tests {
             siege_class: false,
             militia: false,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: diff,
         };
         // age_diff < 0 leaves att alone; >= 0 scales it by (25*diff + 100)%
@@ -2348,7 +2692,9 @@ mod tests {
             siege_class: siege,
             militia: false,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: -1,
         };
         // scale becomes 25600/(100-50) = 512, i.e. the period doubles
@@ -2365,7 +2711,9 @@ mod tests {
             siege_class: false,
             militia: m,
             type_id: 0,
-            type_class: 0,
+            domain: 0,
+            owner_has_preq_0x2fe: false,
+            unit_is_idle: false,
             age_diff: -1,
         };
         // (256*100)/(300+100) = 64  -> period 12 instead of 48

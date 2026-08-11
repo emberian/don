@@ -325,6 +325,15 @@ period = max(1, (Constants::attrition * v) >> 8)          attrition = 48 frames
 `v` is built from a fixed-point `scale` (0x100 normally, `25600/(100 - siege_attrition)` for
 the siege class) times the victim's `anti_att` times the `binary32` at `0x00B69430`.
 
+**Corrected 2026-08-10 — see [`attrition-rate-graph.md`](attrition-rate-graph.md).** The port
+of `get_attrition` was missing its fifth return (`0x00609152`/`0x00609161`: an idle unit
+whose owner holds `has_preq(0x2FE)` takes no attrition, on the non-militia path only), and
+`AttritionInput::type_class` was an unnamed field: it is `ObjectTypeData::domain +0x218`, so
+the `== 2` halving is the **air** discount and the sea (`1`) return belongs to the caller
+`Unit::process_attrition` `0x005E1456`, not here. The field is now `domain`, and
+`Leader::calc_attrition` `0x006CDEA0` — the producer of the `att` scalar this whole chain
+divides by — is ported alongside `calc_anti_attrition`.
+
 That constant is `0x3B800000` = **1/256**, read from the image, and the instruction sequence
 is `cvtdq2ps / mulss [leader+0x7F4] / mulss [0xB69430] / cvttss2si` — so the association
 order is not a Ghidra reordering artefact. The two 256s cancel **because `anti_att` is
@@ -513,6 +522,17 @@ still useful but the combination is not.
    difference, but Conquer-the-World presumably diverges them.
 9. `WData` fields outside this lane (`land`, `region`, `blocked`, `val`, …) are carried as
    inert state so the checksum stream is byte-exact, but are written by worldgen, not here.
+10. **The BonusType prerequisite graph is not recovered.** `LeaderData::has_preq`
+    `0x006DB810`, `has_wonder` `0x006EBC10` and `has_tribe_bonus` `0x006E1370` are not
+    ported; `calc_attrition` and `calc_anti_attrition` take their answers as booleans.
+    Passing `false` for all of them is not a default — it asserts no nation has attrition
+    research. See [`attrition-rate-graph.md`](attrition-rate-graph.md) §4.
+11. **`Unit::process_attrition`'s unowned-territory arm does not return**, and the read it
+    falls into is out of bounds — `leaders.list[-1]` is `Window::key_states[0xE4]`. Derived
+    and recorded in
+    [`../assembly/attrition-unowned-territory-fallthrough.md`](../assembly/attrition-unowned-territory-fallthrough.md);
+    `UnownedTerritoryFallthrough` records it without reproducing the read. The `who == -2`
+    case is still underived.
 
 ---
 
@@ -563,9 +583,10 @@ that do not exist yet. If the tree does not build, this module is not the reason
 | `0x006B4D80` | `WorldData::get_whose` | ✔ (identical to `get_who`) |
 | `0x006B2490` | `WorldData::is_enemy_territory` | ✔ |
 | `0x0063ECA0` | `WallData::in_unfriendly_territory` | ✔ (same predicate) |
-| `0x005E11A0` | `Unit::process_attrition` | period selection |
-| `0x00608FD0` | `UnitData::get_attrition` | ✔ |
-| `0x006CDCC0` | `Leader::calc_anti_attrition` | ✔ |
+| `0x005E11A0` | `Unit::process_attrition` | period selection; the unowned fall-through is recorded, not reproduced |
+| `0x00608FD0` | `UnitData::get_attrition` | ✔ all five returns |
+| `0x006CDEA0` | `Leader::calc_attrition` | ✔ (predicates are inputs) |
+| `0x006CDCC0` | `Leader::calc_anti_attrition` | ✔ (predicates are inputs) |
 | `0x005E1A10` | `Unit::suffer_attrition` | damage shape |
 | `0x005E0560` | `Unit::process_supply` | predicate structure |
 | `0x005E0670` | `Unit::process_healing` | supply arm integrated in Arena |
