@@ -62,3 +62,18 @@ and fail-closed incomplete host state.
 
 Those are still visible in coverage at each reached retail boundary. The step-11
 dispatcher and exploration prefix are no longer represented as absent.
+
+## Superseded in part — see `leader-production-ai-step11.md`
+
+Two statements above are now out of date and the newer document owns them.
+
+- "one active leader reaches four calls … and charges one planner plus one diplomacy gap"
+  described the *old* charging rule. `Leader::plan_strategy`'s entry and dispatch skeleton
+  and the whole of `Leader::production_ai` `0x006C1960` now execute, as does
+  `Leader::diplomacy`'s three-condition entry gate, and a gap is charged only where retail
+  entered code the port does not run. At `ai_speed = 1` that is 7 planner calls per 200
+  frames per leader instead of 200.
+- "Remaining red" is still true of both bodies, but the boundary is much further in: the
+  planner's red starts at `0x006B96F9` (or at `Leader::can_pay` `0x006C9B90` on the
+  `MakeList` fast lane), the production machine's red is its eight stage functions, and
+  diplomacy's red starts at `0x006BC96E`, past the gate.

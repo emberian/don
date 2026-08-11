@@ -875,8 +875,10 @@ mod tests {
 
     #[test]
     fn the_tech_window_is_the_unsigned_compare_at_0x006b96a6() {
-        let mut st = ProductionState::default();
-        st.make_list_head = Some(0x21f);
+        let mut st = ProductionState {
+            make_list_head: Some(0x21f),
+            ..ProductionState::default()
+        };
         let trace = plan_strategy(&mut st, 0, 0, env(30));
         assert_eq!(trace.arm, PlanArm::TechQueueHeadRejected { head: 0x21f });
         assert!(!trace.charges());
@@ -904,10 +906,12 @@ mod tests {
 
     #[test]
     fn a_running_cycle_ignores_the_phase_entirely() {
-        let mut st = ProductionState::default();
-        st.production_step = 2;
-        st.queued_units = Some(4);
-        st.control = 10;
+        let mut st = ProductionState {
+            production_step: 2,
+            queued_units: Some(4),
+            control: 10,
+            ..ProductionState::default()
+        };
         // frame 7 is a sub-phase miss; the production arm must run anyway.
         let trace = plan_strategy(&mut st, 0, 0, env(7));
         assert_eq!(trace.phase, Some(7));

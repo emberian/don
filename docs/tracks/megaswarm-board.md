@@ -3347,3 +3347,129 @@ but a `use don_bhs::*` there would break at once.
 makes rustfmt follow every `mod` declaration and reformat the **whole crate**, including
 files you do not own. It silently reformatted `crates/don-bhs/src/program.rs` for me; I
 restored it to HEAD. Format the files you actually touched, and do not pass `lib.rs`.
+
+### lane: tick11-production-ai — RESULT and FINDINGS
+
+**The row stays `stub`.** Step 11 still has charged children — the 11,108-byte planning
+body, the eight production stage functions, and the whole of `Leader::diplomacy` past its
+gate — so flipping `StepStatus` would be tier inflation. `schema/simulation-closure.json`
+is not regenerated (`tools/simulation-closure.py` is a sibling's live file).
+
+What moved: **`Leader::plan_strategy` `0x006B9620` and `Leader::production_ai` `0x006C1960`
+now execute inside the real tick**, and the two call-counted gaps stop charging the arms
+that provably touch nothing. Measured through `Sim::do_frame`, one active leader over 200
+consecutive frames: `Gap::LeaderPlanStrategy` **200 → 7**, and the seven are exactly frames
+30/60/90/120/150/180 (the `MakeList` fast lane) and 200 (the planning body).
+`Gap::LeaderDiplomacy` goes to **0** whenever the entry gate refuses.
+
+Files: `crates/don-sim/src/systems/leader_production_ai.rs` (new, 17 pure tests),
+`crates/don-sim/tests/tick_step11_production_ai.rs` (new, 15 tick tests),
+`docs/assembly/leader-production-ai-step11.md` (new), two export lines in
+`crates/don-sim/src/systems/mod.rs`, minimal hunks in
+`crates/don-sim/src/systems/leaders.rs`, the changed assertions in
+`crates/don-sim/tests/tick_step11_strategy.rs`, and a "superseded in part" tail on
+`docs/assembly/leaders-step11.md`. **`tick.rs` untouched** — three mirrors it should carry
+are posted as HOOK NEEDED in §7 of the new doc.
+
+**FINDINGS — do not re-derive:**
+
+- **Tick step 11 is the *only* door into retail's compiled production AI.** `radare2`
+  cross-references: `Leaders::strategy_all` `0x006ED452` is the only call site of
+  `Leader::plan_strategy`; `Leader::plan_strategy` `0x006B9662` is the only call site of
+  `Leader::production_ai`; and `Leader::production_ai` is the only caller of
+  `production_ai_setup`, `found_cities`, `research_techs`, `upgrade_units`, `create_units`,
+  `create_buildings` and `make_stuff`. Those 173,424 bytes are *unreachable* without this
+  row, not merely unported.
+- **`plan_strategy`'s phase is not `check_explore`'s.** Both compute `(who*25 + frame) %
+  (200/ai_speed)`, but `check_explore` `0x006BC890` adds `+ 12` to the dividend
+  (`lea eax,[esi+0xc]`) and `plan_strategy` `0x006B9650` does not. The two children of one
+  dispatcher are 12 frames out of step. `EXPLORE_PHASE_BIAS` belongs to `check_explore`
+  alone.
+- **`production_step != 0` bypasses the phase.** `0x006B9655` is tested *before* anything
+  consults the phase, so a running cycle advances one stage **every frame**.
+- **`Leader::production_ai` is a complete, derivable 628-byte state machine**, dispatched
+  through the 11-entry table at `0x006C1BA8` indexed `production_step - 1`. Steps 6 and 9
+  share one arm (`0x006C1B2C`), 7 and 10 are `create_buildings`, step 11 is the only arm
+  with **no** pre-increment, and all four refusals plus an out-of-range step fall through
+  `0x006C1B96`, which **resets `production_step` to 0**.
+- **`LeaderData::leader_flags2`'s low bits are the four AI-subsystem kill switches**, and
+  the derivation is writer-side, off the shipped scenario-script API:
+  `disable_production_ai` `0x009FF7A0` is `or [+0x004], 4`; `enable_combat_ai` `0x009FF820`
+  is `and ~8`; `enable_all_unit_ai` `0x009FF8A0` is `and ~2`; `enable_city_ai` `0x009FFBA0`
+  is `and ~0x10`. `production_ai`'s third gate `0x006C198A` is exactly bit 2.
+- **`leader_flags & 4` is the human bit**, and now with a writer:
+  `ScenarioFuncSet::change_to_ai` `0x009E5D20` *requires* it and clears it
+  (`and dword [leader_flags], 0xFFFFFFFB`) while converting a player to AI.
+- **`Game + 0x2D` is `GameInfo::starting_resources`, and `== 8` is Infinite** — the same
+  encoding `victory_score::MatchOptions` already carries. It skips the BHS script outright
+  (`0x006C19BF`), adds `make_stuff` + `MakeList::clear` to the tail of stages 3..7 and 9
+  (`0x006C1AE4`), and keeps the cycle alive past step 8 (`0x006C1B63`). `Game + 0x2B`
+  (difficulty) and `Game + 0x2D` are *different* option bytes; `Game + 0xC` is `GameInfo`.
+- **`RunTimeEnv::get_ret_int` 1 is `BLOCK_ON_THIS` and 3 is `SCRIPT_DONE`**, confirming
+  `docs/tracks/ron-ai-impl.md` §1(a) at instruction level: 1 stores `production_step = 0`
+  at `0x006C1A89`; 3 stores `prod_script_run = 0` at `0x006C1A9F` — and a **non-zero
+  `run_script` return lands on the same instruction**, so a script that fails to run also
+  retires itself.
+- **`Leader::diplomacy`'s entry gate is three conditions over facts `don-sim` already has**
+  (`0x006BC99A`/`0x006BC9AC`/`0x006BC9B9`): the human bit read off `leaders[this->who]`
+  (the *indexed* record, not `this`), **game semaphore bit 9**, and `GameAccess::ai_off`.
+  Semaphore bit 9 is the same `CHECK_VICTORY_MODE` bit that arms step 11's own
+  `Game::check_victory` tail at `0x006ED47A` — so a tick that runs the victory check runs
+  **no diplomacy at all**. The two are complementary halves of one bit.
+- **`crates/don-sim/src/systems/leaders_diplomacy_opening_frontier.rs` had no `mod`
+  declaration** — same failure as `leader_set_diplo` before it. It compiled only from its
+  own test file, so step 11 could not reach the one derivation of its own child. Declared
+  now. Its scan/target loop still wants a tick-side hook (HOOK NEEDED 3).
+- **`MakeObject` is 40 bytes.** `Leader::can_pay` `0x006C9B9B` indexes
+  `[this + 0x6ED8] + index * 40`; `+0x00` is the `TypeIndex`, `+0x18` is the value the
+  virtual cost query at `[type_vtable + 0x84]` is compared against with `setge`.
+- **`Leader::queued_units` is `0x006CE000`** (394 B) and `LeaderData + 0x940` is `control`,
+  confirming `effective_pop = queued_units() + control + 1` at `0x006C19A9`.
+
+**Gates:**
+
+* Remote clean-Linux baseline at pushed `HEAD` `685c1ed` + `--path leader_production_ai.rs`:
+  `test -p don-sim --lib --test tick_step11_production_ai --test tick_step11_strategy` →
+  **EXIT_CODE=0**, lib **1729 passed / 0 failed / 2 ignored**, new suite **15/15**,
+  `tick_step11_strategy` **4/4**.
+* Local `cargo test -p don-sim --no-fail-fast`, every binary: **2,069 passed, 0 failed.**
+* `cargo check -p don-ai -p don-env` clean (both consume `don-sim::systems::leaders`).
+* **Mutation sweep: 15 seeded, 15 killed**, in an isolated `rsync` shadow tree — the
+  load-bearing ones are "restore `check_explore`'s `+12` bias" (10 killers), "consult the
+  phase before `production_step`" (9), "step 9 stops sharing step 6's arm" (2), "step 11
+  pre-increments like the others" (2), "refusals stop resetting `production_step`" (2),
+  "the sub-phase arm is charged again" (7), "diplomacy gate reads `this` instead of
+  `leaders[this->who]`" (1), and "`strategy_all` charges the planner unconditionally" (6).
+* `rustfmt --check` clean and **zero clippy diagnostics** in my four files. Pre-existing and
+  not mine: a `don-bhs` clippy error (sibling's in-flight `host.rs`/`lib.rs`) and 21
+  `don-sim` clippy errors, all in `generated/state.rs` / `save_load.rs` / `world.rs`.
+
+**API CHANGE (`crates/don-sim/src/systems/leaders.rs`, additive — nothing breaks):**
+
+* `Leader` gains one field, `ai: leader_production_ai::ProductionState` (`leader_flags2`
+  `+0x004`, `production_step` `+0x788`, `prod_script_run` `+0x78C`, `script_step` `+0x790`,
+  `control` `+0x940`, `effective_pop` `+0x9E0`, plus five `Option` host answers that all
+  default to `None` = "this host does not answer").
+* `Leaders` gains `ai_off: bool`, `starting_resources: Option<u8>` and `last_strategy:
+  StrategyTrace`. Both structs are built through `Leader::new` / `Leaders::new`, so this is
+  source-compatible.
+* `StrategyTrace` gains `plan: [Option<PlanTrace>; 8]` and `diplomacy: [Option<DiplomacyGate>;
+  8]` plus `plan_calls_fully_owned()` / `diplomacy_calls_refused()`. **`StrategyCall` is
+  unchanged**, so `tick.rs`'s exhaustive match still compiles — but its *meaning* changed:
+  `PlanStrategy` / `Diplomacy` are now emitted only when retail entered code this port does
+  not run. `tick.work[11]` for one leader on an undue frame is therefore 3, not 4.
+* New `leaders::diplomacy_entry_gate(&Leaders, slot, check_victory_mode) -> DiplomacyGate`.
+
+**WHAT I DID NOT WRITE.** No stage body (210 B .. 9,405 B each). No `MakeList` — retail
+reads `list[0].type` **without consulting `length`**, so with an empty list that is a stale
+read whose value nothing in the image establishes; it stays `Option<i32>`. No
+`Leader::queued_units`, so `effective_pop` is left alone rather than written wrong. No
+`can_pay`/`has_tech`/`researching`/`make_this` — the fast lane's four calls are one
+boundary and only the range test in front of them executes. No meaning for `leader_flags &
+8`; no writer was located, so it is named for the gate it forms. And **`Leader::diplomacy`'s
+opening cone is deliberately not executed inside `strategy_all`**: it reads `LeaderData::
+score` `+0x18`, retail's order is `compute_score(0)` *then* `diplomacy` **per slot**, and
+the tick builds the whole trace before replaying `ComputeScore` — so running it there would
+record a survey that is a full frame stale for every slot. The cone's own mutation and
+control flow do not read the survey, so the state would be right and the receipt would be a
+lie; I refused to land the lie and posted it as HOOK NEEDED 3 instead.
