@@ -56,6 +56,8 @@ const CHROME = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev',
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -365,12 +367,12 @@ try {
     ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
     ['team layout is frame-zero mutable while victory remains read-only',
       out.ui.sessionTeamEnabled && out.ui.sessionVictoryReadOnly],
-    ['the local lobby surface exposes the bounded empty-input native turn barrier',
+    ['the local lobby surface exposes the bounded canonical HaltCommand barrier',
       out.ui.localMatchProtocol === 'don.local-match-handoff.v1' && out.ui.localMatchControls &&
-      out.ui.localMatchTurnRelay === 'empty-turn-barrier' &&
-      out.ui.localMatchBoundary.includes('same ordered TurnPackage') &&
-      out.ui.localMatchBoundary.includes('Gameplay commands') &&
-      out.ui.localMatchBoundary.includes('free-running multiplayer remains unavailable')],
+      out.ui.localMatchTurnRelay === 'canonical-halt-v1' &&
+      out.ui.localMatchBoundary.includes('HaltCommand') &&
+      out.ui.localMatchBoundary.includes('0x0c') &&
+      out.ui.localMatchBoundary.includes('submit in player order')],
     ['the configured local MatchStart service is available for this smoke',
       !LOCAL_MATCH || out.ui.localMatchAvailable],
     ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
@@ -1758,10 +1760,10 @@ try {
     }
   }
 
-  // ---- 4c. two browser seats consume MatchStart and one native empty-input turn --------
+  // ---- 4c. two browser seats consume MatchStart and one native HaltCommand turn --------
   //
   // The local gateway invokes the existing Rust two-process lifecycle. It exposes no seed,
-  // epoch, or roster until both native peers agree. They then submit one empty turn each;
+  // epoch, or roster until both native peers agree. They then submit one canonical Halt each;
   // neither paused Sim advances until both native peers expose an identical package set.
   if (LOCAL_MATCH) {
     const cleanSecondUrl = `http://127.0.0.1:${PORT}/play.html?seed=0x2468ace0&player=1`;
@@ -1798,7 +1800,7 @@ try {
     await c.eval(`window.don.localMatch.ready().then(JSON.stringify)`);
     await c2.eval(`window.don.localMatch.ready().then(JSON.stringify)`);
 
-    for (let attempt = 0; attempt < 150; attempt++) {
+    for (let attempt = 0; attempt < 600; attempt++) {
       const phases = await Promise.all([
         c.eval('window.don.localMatch.snapshot().phase'),
         c2.eval('window.don.localMatch.snapshot().phase'),
@@ -1815,19 +1817,24 @@ try {
         ]);
         throw new Error(`local MatchStart failed: ${failures.join(' | ')}`);
       }
-      if (attempt === 149) throw new Error(`local MatchStart did not reach both tabs`);
+      if (attempt === 599) throw new Error(`local MatchStart did not reach both tabs`);
       await sleep(100);
     }
 
     const frameZero = await Promise.all([c, c2].map((client) => client.eval(`(() => {
-      const m = window.don.state.mod;
-      return JSON.stringify({ frame: m.frame, digest: m.digest(), rngState: m.rngState });
+      const d = window.don, m = d.state.mod, before = m.transport();
+      const refused = m.halt(d.state.who);
+      const step = d.replay.step();
+      return JSON.stringify({
+        frame: m.frame, digest: m.digest(), rngState: m.rngState,
+        gate: { refused: refused === null, before, after: m.transport(), stepFrame: step.frame },
+      });
     })()`).then(JSON.parse)));
     await Promise.all([
       c.eval('window.don.localMatch.turn().then(JSON.stringify)'),
       c2.eval('window.don.localMatch.turn().then(JSON.stringify)'),
     ]);
-    for (let attempt = 0; attempt < 150; attempt++) {
+    for (let attempt = 0; attempt < 600; attempt++) {
       const facts = await Promise.all([c, c2].map((client) => client.eval(`(() => {
         const d = window.don, local = d.localMatch.snapshot();
         return JSON.stringify({
@@ -1840,7 +1847,7 @@ try {
       if (facts.some((fact) => fact.phase === 'failed')) {
         throw new Error(`local turn barrier failed: ${facts.map((fact) => fact.error).join(' | ')}`);
       }
-      if (attempt === 149) throw new Error(`local turn barrier did not confirm in both tabs`);
+      if (attempt === 599) throw new Error(`local turn barrier did not confirm in both tabs`);
       await sleep(100);
     }
 
@@ -1857,6 +1864,7 @@ try {
         activePlayers: mod.activePlayers(),
         leaders: [mod.leader(0), mod.leader(1)],
         match: mod.match(),
+        commands: d.commands.snapshot(),
         paused: d.state.paused,
         beforeResume,
         status: document.getElementById('local-match-status').textContent,
@@ -1884,14 +1892,23 @@ try {
       ['browser perspective is seat-specific without becoming a second roster authority',
         hostBrowser.setup.player === 0 && peerBrowser.setup.player === 1 &&
         hostBrowser.setup.slots === 2 && peerBrowser.setup.slots === 2],
-      ['one strict native package barrier advances both paused Sims to identical frame-one state',
+      ['pause lock refuses direct command submission and local replay stepping before agreement',
+        frameZero.every((fact) => fact.gate.refused && fact.gate.stepFrame === 0 &&
+          JSON.stringify(fact.gate.before) === JSON.stringify(fact.gate.after))],
+      ['one strict native package barrier applies P0/P1 Halt packets in order and reaches equal frame one',
         hostBrowser.frame === 1 && peerBrowser.frame === 1 &&
         hostBrowser.digest === peerBrowser.digest && hostBrowser.rngState === peerBrowser.rngState &&
         hostBrowser.local.lastConfirmed.stamp === 0 && peerBrowser.local.lastConfirmed.stamp === 0 &&
         hostBrowser.local.lastConfirmed.hash === peerBrowser.local.lastConfirmed.hash &&
         hostBrowser.local.turn.stamp === 1 && peerBrowser.local.turn.stamp === 1 &&
-        hostBrowser.local.turnRelay === 'empty-turn-barrier' &&
-        peerBrowser.local.turnRelay === 'empty-turn-barrier'],
+        hostBrowser.local.turnRelay === 'canonical-halt-v1' &&
+        peerBrowser.local.turnRelay === 'canonical-halt-v1' &&
+        [hostBrowser, peerBrowser].every((browser) => {
+          const relayed = browser.commands.entries.filter((entry) =>
+            entry.source === 'native Halt turn relay');
+          return relayed.length === 2 && relayed[0].who === 0 && relayed[1].who === 1 &&
+            relayed.every((entry) => entry.op === 0x0c && entry.hex === '0c');
+        })],
       ['both clients remain paused and refuse free-running resume after the agreed turn',
         hostBrowser.paused && peerBrowser.paused &&
         hostBrowser.beforeResume.paused && peerBrowser.beforeResume.paused &&

@@ -187,11 +187,13 @@ bounded same-origin JSON API and invokes the configured native `service-match-pe
 returns seed, epoch, or roster until the independent host and joining processes agree on
 Crossplay StartGame and the `don-net` MatchStart. Each browser then reconstructs the exact
 two-player Sim setup from that handoff. The opt-in native `--relay` mode keeps both `ServiceMatch`
-owners alive. A browser may ready only the fixed empty-input package for the next stamp; the
-server exposes it only when both peers return the identical ordered `TurnPackage` set. Both tabs
-then step exactly once and acknowledge frame/digest/RNG, and the next stamp opens only when those
-acknowledgements are equal. The tabs remain pause-locked throughout. Browser gameplay commands
-and free-running multiplayer are still refused rather than being presented as synchronized.
+owners alive. Each browser independently generates the one-byte retail-layout `HaltCommand`
+(`0x0c`). The native peer validates that exact command boundary with `don-net::decode_commands`,
+and the server exposes it only when both peers return the identical ordered `TurnPackage` set.
+Both tabs independently decode and re-encode the bytes, submit P0 then P1 to Wasm, step exactly
+once, and acknowledge frame/digest/RNG. The next stamp opens only when those acknowledgements are
+equal. The tabs remain pause-locked throughout; every other command and free-running multiplayer
+remain refused rather than being presented as synchronized.
 
 Build the native seam and run the Web server with its explicit path:
 

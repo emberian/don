@@ -12,7 +12,7 @@
 import { GameModule, RES_NAMES, GAP_NAMES, COMMANDS, OP, TAG } from './wasmgame.js';
 import { makeRenderer } from './gfx.js';
 import { REPLAY_EVIDENCE } from './readiness.gen.js';
-import { decode } from '../wire.gen.js';
+import { decode, encode } from '../wire.gen.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -117,7 +117,7 @@ const state = {
     available: false, code: '', token: '', seat: null, phase: 'offline',
     members: [], error: null, handoff: null, applied: false, polling: null,
     pauseLocked: false, turn: null, lastConfirmed: null, lastAppliedStamp: -1,
-    applyingTurn: false, pendingAck: null,
+    applyingTurn: false, applyingPackages: false, pendingAck: null,
   },
 };
 
@@ -137,6 +137,14 @@ async function boot() {
 
   const mod = await GameModule.load('./wasm/don_web.wasm');
   state.mod = mod;
+  mod.gateCommands(() => {
+    const local = state.localMatch;
+    if (!local.pauseLocked || local.applyingPackages) return true;
+    local.error = 'local command refused — submit the synchronized Halt turn instead';
+    renderLocalMatchPanel();
+    say(local.error, 'warn');
+    return false;
+  });
 
   const [gamedata, playdata, playjson] = await Promise.all([
     fetchBytes('./data/gamedata.bin'),
@@ -1300,8 +1308,8 @@ function initializeSessionPanel() {
 }
 
 const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
-const LOCAL_MATCH_TURN_RELAY = 'empty-turn-barrier';
-const EMPTY_BROWSER_TURN_HEX = '444f4e420100';
+const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
+const HALT_COMMAND_HEX = '0c';
 
 async function localMatchRequest(path, method = 'GET', body = null) {
   const init = { method, headers: {} };
@@ -1361,10 +1369,12 @@ function renderLocalMatchPanel() {
     local.turn.stamp === state.mod.frame && !local.turn.submitted[local.seat];
   $('local-match-turn').disabled = !turnOpen;
   $('local-match-turn').textContent = local.turn
-    ? `ready turn ${local.turn.stamp}` : 'ready next empty turn';
+    ? `submit Halt turn ${local.turn.stamp}` : 'submit next Halt turn';
   $('local-match-leave').disabled = !joined || local.phase === 'starting';
   $('session-new').disabled = local.pauseLocked;
   $('session-activate').disabled = local.pauseLocked;
+  if ($('core-load') && state.mod) $('core-load').disabled = local.pauseLocked || !state.mod.supports('load');
+  renderActionDock();
   if (local.code) $('local-match-code').value = local.code;
   $('local-match-roster').textContent = local.members.length
     ? local.members.map((member) =>
@@ -1384,7 +1394,7 @@ function renderLocalMatchPanel() {
     const turnStatus = local.turn?.phase === 'waiting'
       ? `turn ${local.turn.stamp} waiting for both seats`
       : local.turn?.phase === 'agreeing'
-        ? `turn ${local.turn.stamp} converging through native TurnPackage relay…`
+        ? `Halt turn ${local.turn.stamp} converging through native TurnPackage relay…`
         : `turn ${local.turn?.stamp ?? '?'} agreed · applying and checking browser state…`;
     status = `MatchStart confirmed · epoch ${local.handoff.epoch} · ` +
       `${formatSeed(local.handoff.seed)} · paused frame ${state.mod.frame} · ${turnStatus}`;
@@ -1449,11 +1459,15 @@ async function readyLocalTurn() {
     throw new Error('no applied local MatchStart is ready for a turn');
   }
   if (!local.turn || local.turn.phase !== 'waiting' || local.turn.stamp !== state.mod.frame) {
-    throw new Error('the next empty-input turn barrier is not open at this frame');
+    throw new Error('the next HaltCommand turn barrier is not open at this frame');
+  }
+  const command = encode(OP.HALT, {});
+  if (command.length !== 1 || command[0] !== OP.HALT || bytesToHex(command) !== HALT_COMMAND_HEX) {
+    throw new Error('generated codec did not reconstruct canonical one-byte HaltCommand 0x0c');
   }
   const result = await localMatchRequest(
     `/api/local-match/lobbies/${local.code}/turn`, 'POST', {
-      token: local.token, stamp: local.turn.stamp,
+      token: local.token, stamp: local.turn.stamp, commandHex: bytesToHex(command),
     });
   adoptLocalLobby(result);
   await maybeApplyLocalTurn();
@@ -1468,13 +1482,23 @@ function validateAgreedLocalTurn(turn) {
       !Array.isArray(turn.agreement.packages) || turn.agreement.packages.length !== 2) {
     throw new Error('native turn relay exposed a malformed package agreement');
   }
+  const packets = [];
   for (let play = 0; play < 2; play++) {
     const package_ = turn.agreement.packages[play];
-    if (package_?.stamp !== turn.stamp || package_?.play !== play ||
-        package_?.payload !== EMPTY_BROWSER_TURN_HEX) {
-      throw new Error('native turn relay exposed nonempty or misordered browser input');
+    if (package_?.stamp !== turn.stamp || package_?.play !== play) {
+      throw new Error('native turn relay exposed a misordered browser command package');
     }
+    const bytes = hexToBytes(package_.payload);
+    const decoded = decode(bytes);
+    const reconstructed = decoded.op === OP.HALT ? encode(OP.HALT, {}) : null;
+    if (!reconstructed || bytes.length !== COMMANDS[OP.HALT].size ||
+        bytesToHex(bytes) !== HALT_COMMAND_HEX ||
+        bytesToHex(reconstructed) !== package_.payload) {
+      throw new Error('native turn relay exposed a noncanonical HaltCommand payload');
+    }
+    packets.push({ play, bytes });
   }
+  return packets;
 }
 
 async function maybeApplyLocalTurn() {
@@ -1484,12 +1508,24 @@ async function maybeApplyLocalTurn() {
   local.applyingTurn = true;
   try {
     const turn = local.turn;
-    validateAgreedLocalTurn(turn);
+    const packets = validateAgreedLocalTurn(turn);
     if (local.lastAppliedStamp < turn.stamp) {
       if (state.mod.frame !== turn.stamp) {
         throw new Error(`paused Sim frame ${state.mod.frame} does not match agreed turn ${turn.stamp}`);
       }
-      advanceSimulationFrame();
+      local.applyingPackages = true;
+      try {
+        for (const packet of packets) {
+          if (!state.mod.submit(packet.play, packet.bytes)) {
+            throw new Error(`Wasm command gate refused agreed P${packet.play} HaltCommand`);
+          }
+        }
+      } finally {
+        local.applyingPackages = false;
+      }
+      if (!advanceSimulationFrame(true)) {
+        throw new Error(`paused Sim refused agreed Halt turn ${turn.stamp}`);
+      }
       local.lastAppliedStamp = turn.stamp;
       local.pendingAck = {
         stamp: turn.stamp,
@@ -1559,6 +1595,7 @@ async function leaveLocalMatch() {
     handoff: null, applied: false, pauseLocked: false,
     turn: null, lastConfirmed: null, lastAppliedStamp: -1,
     applyingTurn: false, pendingAck: null,
+    applyingPackages: false,
   });
   if (resetWorld) {
     if (!state.mod.restart(seed)) throw new Error('could not leave the local MatchStart world');
@@ -1597,7 +1634,7 @@ function applyLocalMatchHandoff(handoff) {
   }
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
-    'core save/load ready — local MatchStart roster is authoritative; empty turns use native lockstep';
+    'core save/load ready — local MatchStart roster is authoritative; Halt turns use native lockstep';
   $('core-save-status').textContent = state.coreSaveStatus;
   startReplayJournal();
   local.applied = true;
@@ -1611,7 +1648,7 @@ function applyLocalMatchHandoff(handoff) {
   renderObjectivesPanel();
   renderLocalMatchPanel();
   say(`local MatchStart confirmed at epoch ${handoff.epoch}; both browser clients are paused ` +
-    'at frame 0 and may advance only through equal native empty-turn barriers', 'ok');
+    'at frame 0 and may advance only through equal native HaltCommand barriers', 'ok');
   return localMatchPublicSnapshot();
 }
 
@@ -2317,7 +2354,9 @@ function startReplayJournal({ nativeBaseline = null } = {}) {
     ? `recording exact browser command packets from loaded DoNSave frame ${state.replay.baseFrame}`
     : 'recording exact browser command packets from this new-session baseline';
   state.mod.observeCommands(({ frame: at, who, bytes }) => {
-    recordCommandIssued({ frame: at, who, bytes }, state.replay.applying ? 'journal replay' : 'player');
+    const source = state.localMatch.applyingPackages
+      ? 'native Halt turn relay' : state.replay.applying ? 'journal replay' : 'player';
+    recordCommandIssued({ frame: at, who, bytes }, source);
     if (state.replay.applying) return;
     recordReplayEvent({
       frame: at,
@@ -2564,6 +2603,9 @@ function applyReplayEventsAt(frame) {
 }
 
 async function restoreReplayFrame(targetFrame) {
+  if (state.localMatch.pauseLocked) {
+    throw new Error('journal seek refused while the native Halt turn relay owns frame advance');
+  }
   const target = Number(targetFrame);
   if (state.replay.restoring) throw new Error('a journal restore is already running');
   if (!Number.isInteger(target) || target < state.replay.baseFrame || target > state.replay.headFrame) {
@@ -2676,7 +2718,11 @@ async function importReplayJournal(input) {
   }
 }
 
-function advanceSimulationFrame() {
+function advanceSimulationFrame(localMatchAuthorized = false) {
+  if (state.localMatch.pauseLocked && !localMatchAuthorized) {
+    say('local frame step refused — only an agreed native Halt turn may advance the Sim', 'warn');
+    return false;
+  }
   if (state.replay.playback) {
     state.replay.applying = true;
     try { applyReplayEventsAt(state.mod.frame); } finally { state.replay.applying = false; }
@@ -2690,6 +2736,7 @@ function advanceSimulationFrame() {
   } else if (!state.replay.playback) {
     state.replay.headFrame = Math.max(state.replay.headFrame, state.mod.frame);
   }
+  return true;
 }
 
 function replaySnapshot() {
@@ -2717,7 +2764,8 @@ function renderReplayPanel() {
   timeline.min = String(state.replay.baseFrame);
   timeline.max = String(state.replay.headFrame);
   timeline.value = String(Math.min(frame, state.replay.headFrame));
-  timeline.disabled = state.replay.restoring;
+  const localLocked = state.localMatch.pauseLocked;
+  timeline.disabled = state.replay.restoring || localLocked;
   $('replay-frame').textContent = `frame ${frame}`;
   $('replay-head').textContent = `head ${state.replay.headFrame} · ${state.replay.events.length} events`;
   $('replay-status').textContent = state.replay.nativeBaseline
@@ -2725,9 +2773,9 @@ function renderReplayPanel() {
     : `${state.replay.status}. This is a command journal, not a native save-state.`;
   $('replay-play').textContent = state.paused
     ? (state.replay.playback ? 'play journal' : 'resume') : 'pause';
-  $('replay-step').disabled = state.replay.restoring;
-  $('replay-live').disabled = state.replay.restoring || frame === state.replay.headFrame;
-  $('replay-import').disabled = state.replay.restoring;
+  $('replay-step').disabled = state.replay.restoring || localLocked;
+  $('replay-live').disabled = state.replay.restoring || localLocked || frame === state.replay.headFrame;
+  $('replay-import').disabled = state.replay.restoring || localLocked;
   $('replay-export').disabled = state.replay.restoring || !!state.replay.nativeBaseline;
   $('replay-speed').value = String(state.speed);
 }
@@ -2793,6 +2841,9 @@ function downloadCoreSave() {
 }
 
 function importCoreSave(input) {
+  if (state.localMatch.pauseLocked) {
+    throw new Error('core load refused while the native Halt turn relay owns frame advance');
+  }
   try {
     const baseline = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
     const result = state.mod.loadCore(baseline);
@@ -3412,6 +3463,7 @@ function renderSelection() {
 
 function renderActionDock() {
   const selected = state.selection.length;
+  const localLocked = state.localMatch.pauseLocked;
   for (const mode of ['move', 'attack', 'gather']) {
     const el = $(`cmd-${mode}`);
     if (!el) continue;
@@ -3419,10 +3471,10 @@ function renderActionDock() {
     el.classList.toggle('active', active);
     el.setAttribute('aria-pressed', String(active));
     const supported = mode !== 'gather' && state.mod.supports(mode);
-    el.disabled = selected === 0 || !supported;
+    el.disabled = localLocked || selected === 0 || !supported;
     if (!supported) el.title = `${mode} unavailable in the authoritative don_sim adapter`;
   }
-  for (const id of ['cmd-halt']) if ($(id)) $(id).disabled = selected === 0;
+  for (const id of ['cmd-halt']) if ($(id)) $(id).disabled = localLocked || selected === 0;
   const build = $('cmd-build');
   if (build) {
     const active = state.buildType !== null;
@@ -3431,7 +3483,7 @@ function renderActionDock() {
     const workers = selectedPaletteContext().mobiles
       .filter((info) => info.typeId === 50 || info.typeId === 51);
     const supported = state.mod.supports('build');
-    build.disabled = !supported || workers.length === 0;
+    build.disabled = localLocked || !supported || workers.length === 0;
     build.title = supported
       ? (workers.length
         ? 'Open building catalog; only authoritative Library construction is enabled'
@@ -3442,7 +3494,7 @@ function renderActionDock() {
   if (train) {
     const producers = selectedPaletteContext().producers;
     const supported = state.mod.supports('train');
-    train.disabled = !supported || producers.length === 0;
+    train.disabled = localLocked || !supported || producers.length === 0;
     train.title = supported
       ? (producers.length
         ? 'Open authoritative training actions for the selected producer'

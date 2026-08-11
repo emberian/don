@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   LOCAL_MATCH_PROTOCOL, LOCAL_MATCH_TURN_RELAY, LocalMatchGateway, runServiceMatch,
-  startServiceMatchRelay, validateEmptyTurnRequest,
+  startServiceMatchRelay, validateHaltTurnRequest,
 } from '../local-match.mjs';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-service-match-peer.mjs', import.meta.url));
@@ -24,33 +24,36 @@ test('native lifecycle facts are admitted only after both peers agree', async ()
   assert.equal(handoff.turnRelay, 'unavailable');
 });
 
-test('empty turn request schema refuses every browser command field', () => {
-  assert.deepEqual(validateEmptyTurnRequest({ token: 'seat', stamp: 0 }), {
-    token: 'seat', stamp: 0,
+test('Halt turn schema admits only the exact reconstructed one-byte command', () => {
+  assert.deepEqual(validateHaltTurnRequest({ token: 'seat', stamp: 0, commandHex: '0c' }), {
+    token: 'seat', stamp: 0, commandHex: '0c',
   });
   for (const body of [
-    { token: 'seat', stamp: 0, commands: [] },
-    { token: 'seat', stamp: 0, payload: '' },
-    { token: 'seat', stamp: 0, bytes: '00' },
+    { token: 'seat', stamp: 0 },
+    { token: 'seat', stamp: 0, commandHex: '0C' },
+    { token: 'seat', stamp: 0, commandHex: '0c00' },
+    { token: 'seat', stamp: 0, commandHex: '0c', commands: [] },
   ]) {
-    assert.throws(() => validateEmptyTurnRequest(body), /refuses browser command input/);
+    assert.throws(() => validateHaltTurnRequest(body), /Halt|unsupported/);
   }
 });
 
-test('long-lived native peers admit only identical ordered empty turn packages', async () => {
+test('long-lived native peers admit only identical ordered HaltCommand packages', async () => {
   const started = await startServiceMatchRelay('/unused/service-match-peer', 0x89abcdef, {
     spawn: fixtureSpawn,
     timeoutMs: 2_000,
   });
   try {
     assert.equal(started.handoff.turnRelay, LOCAL_MATCH_TURN_RELAY);
-    const turn = await started.relay.completeTurn(0);
+    await assert.rejects(
+      () => started.relay.completeTurn(0, ['00', '0c']), /HaltCommand/);
+    const turn = await started.relay.completeTurn(0, ['0c', '0c']);
     assert.equal(turn.stamp, 0);
     assert.deepEqual(turn.packages.map(({ play, payload }) => ({ play, payload })), [
-      { play: 0, payload: '444f4e420100' },
-      { play: 1, payload: '444f4e420100' },
+      { play: 0, payload: '0c' },
+      { play: 1, payload: '0c' },
     ]);
-    await assert.rejects(() => started.relay.completeTurn(0), /expected stamp 1/);
+    await assert.rejects(() => started.relay.completeTurn(0, ['0c', '0c']), /expected stamp 1/);
   } finally {
     started.relay.close();
   }
@@ -86,8 +89,8 @@ test('two browser seats cannot see a handoff until both are ready', async () => 
   assert.equal(hostView.handoff.seed, joinView.handoff.seed);
   assert.equal(hostView.turnRelay, LOCAL_MATCH_TURN_RELAY);
 
-  assert.equal(gateway.submitTurn(host.lobby.code, host.token, 0).turn.phase, 'waiting');
-  assert.equal(gateway.submitTurn(host.lobby.code, join.token, 0).turn.phase, 'agreeing');
+  assert.equal(gateway.submitTurn(host.lobby.code, host.token, 0, '0c').turn.phase, 'waiting');
+  assert.equal(gateway.submitTurn(host.lobby.code, join.token, 0, '0c').turn.phase, 'agreeing');
   for (let attempt = 0; attempt < 100; attempt++) {
     hostView = gateway.snapshot(host.lobby.code, host.token);
     if (hostView.turn.phase !== 'agreeing') break;
@@ -130,8 +133,9 @@ test('browser state disagreement fails closed and closes the relay', async () =>
     if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  gateway.submitTurn(host.lobby.code, host.token, 0);
-  gateway.submitTurn(host.lobby.code, join.token, 0);
+  assert.throws(() => gateway.submitTurn(host.lobby.code, host.token, 0, '00'), /HaltCommand/);
+  gateway.submitTurn(host.lobby.code, host.token, 0, '0c');
+  gateway.submitTurn(host.lobby.code, join.token, 0, '0c');
   for (let attempt = 0; attempt < 100; attempt++) {
     if (gateway.snapshot(host.lobby.code, host.token).turn?.phase === 'agreed') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -171,7 +175,8 @@ test('peer disagreement and stalled processes expose no handoff', async () => {
   const mismatched = await startServiceMatchRelay('/unused/service-match-peer', 0x89abcdef, {
     spawn: turnMismatchSpawn, timeoutMs: 2_000,
   });
-  await assert.rejects(() => mismatched.relay.completeTurn(0), /disagreed on ordered package set/);
+  await assert.rejects(
+    () => mismatched.relay.completeTurn(0, ['0c', '0c']), /disagreed on ordered package set/);
   mismatched.relay.close();
 
   const stalledSpawn = (_command, _args, options) => spawn(

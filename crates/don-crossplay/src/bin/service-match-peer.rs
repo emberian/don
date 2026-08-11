@@ -14,7 +14,9 @@ use don_crossplay::match_bridge::{
     ServiceMatch, DON_MATCH_ENDPOINT_ATTRIBUTE, GAME_SEED_ATTRIBUTE,
 };
 use don_crossplay::{AsyncDirectory, Attributes, Backend, Emission, Lobby, Outcome, ReqId};
-use don_net::{LocalMatch, Role, Session, TcpTransport};
+use don_net::{
+    decode_commands, encode_commands, LocalMatch, Obfuscation, Role, Session, TcpTransport,
+};
 
 const HOST_ID: i32 = 101;
 const CLIENT_ID: i32 = 202;
@@ -22,7 +24,7 @@ const DEFAULT_GAME_SEED: u32 = 3_134_984_190;
 const MATCH_TIMEOUT: Duration = Duration::from_secs(15);
 const RELAY_LIFETIME: Duration = Duration::from_secs(10 * 60);
 const MAX_RELAY_LINE_BYTES: usize = 128;
-const EMPTY_BROWSER_TURN: &[u8] = b"DONB\x01\x00";
+const HALT_COMMAND: u8 = 0x0c;
 
 fn main() {
     if let Err(error) = run() {
@@ -337,9 +339,9 @@ fn send_fixture_turn(match_: &mut ServiceMatch<TcpTransport>) -> Result<(), Stri
         .map_err(|error| format!("submit turn: {error}"))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum RelayCommand {
-    Turn(u32),
+    Turn(u32, Vec<u8>),
     Quit,
 }
 
@@ -352,7 +354,7 @@ fn relay_input() -> Receiver<Result<RelayCommand, String>> {
                 .and_then(|line| parse_relay_command(&line));
             let stop = result
                 .as_ref()
-                .is_ok_and(|command| *command == RelayCommand::Quit)
+                .is_ok_and(|command| matches!(command, RelayCommand::Quit))
                 || result.is_err();
             if send.send(result).is_err() || stop {
                 return;
@@ -370,12 +372,25 @@ fn parse_relay_command(line: &str) -> Result<RelayCommand, String> {
     if line == "QUIT" {
         return Ok(RelayCommand::Quit);
     }
-    let stamp = line
-        .strip_prefix("TURN ")
-        .ok_or_else(|| "relay input must be TURN U32 or QUIT".to_string())?
+    let mut fields = line.split(' ');
+    if fields.next() != Some("TURN") {
+        return Err("relay input must be TURN U32 HEX or QUIT".to_string());
+    }
+    let stamp = fields
+        .next()
+        .ok_or_else(|| "relay TURN is missing its stamp".to_string())?
         .parse::<u32>()
         .map_err(|_| "relay TURN stamp must be a u32".to_string())?;
-    Ok(RelayCommand::Turn(stamp))
+    let payload = decode_hex(
+        fields
+            .next()
+            .ok_or_else(|| "relay TURN is missing its command payload".to_string())?,
+    )?;
+    if fields.next().is_some() {
+        return Err("relay TURN has trailing fields".to_string());
+    }
+    validate_browser_turn(&payload)?;
+    Ok(RelayCommand::Turn(stamp, payload))
 }
 
 fn run_relay(
@@ -403,13 +418,13 @@ fn run_relay(
 
         match input.try_recv() {
             Ok(Ok(RelayCommand::Quit)) => return Ok(()),
-            Ok(Ok(RelayCommand::Turn(stamp))) => {
+            Ok(Ok(RelayCommand::Turn(stamp, payload))) => {
                 if submitted || stamp != expected_stamp {
                     return Err(format!(
                         "relay refused TURN {stamp}; expected {expected_stamp} with no pending turn"
                     ));
                 }
-                send_browser_turn(match_, stamp)?;
+                send_browser_turn(match_, stamp, &payload)?;
                 submitted = true;
             }
             Ok(Err(error)) => return Err(error),
@@ -432,7 +447,11 @@ fn run_relay(
     }
 }
 
-fn send_browser_turn(match_: &mut ServiceMatch<TcpTransport>, stamp: u32) -> Result<(), String> {
+fn send_browser_turn(
+    match_: &mut ServiceMatch<TcpTransport>,
+    stamp: u32,
+    payload: &[u8],
+) -> Result<(), String> {
     let slot = match_
         .players()
         .iter()
@@ -440,8 +459,38 @@ fn send_browser_turn(match_: &mut ServiceMatch<TcpTransport>, stamp: u32) -> Res
         .ok_or_else(|| "local player is absent from don-net roster".to_string())?
         as i8;
     match_
-        .send_turn(stamp, slot, EMPTY_BROWSER_TURN)
-        .map_err(|error| format!("submit empty browser turn {stamp}: {error}"))
+        .send_turn(stamp, slot, payload)
+        .map_err(|error| format!("submit browser command turn {stamp}: {error}"))
+}
+
+fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
+    if text.is_empty() || text.len() % 2 != 0 || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("relay TURN payload must be nonempty even-length hexadecimal".to_string());
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|offset| {
+            u8::from_str_radix(&text[offset..offset + 2], 16)
+                .map_err(|_| "relay TURN payload is not hexadecimal".to_string())
+        })
+        .collect()
+}
+
+fn validate_browser_turn(payload: &[u8]) -> Result<(), String> {
+    let mut obfuscation = Obfuscation::none();
+    let commands = decode_commands(payload, &mut obfuscation)
+        .map_err(|error| format!("relay TURN command payload is malformed: {error}"))?;
+    let mut canonical = Vec::with_capacity(payload.len());
+    encode_commands(&commands, &mut Obfuscation::none(), &mut canonical);
+    if commands.len() != 1
+        || commands[0].opcode != HALT_COMMAND
+        || commands[0].bytes != [HALT_COMMAND]
+        || canonical != payload
+    {
+        return Err("relay TURN admits exactly one canonical HaltCommand (0x0c)".to_string());
+    }
+    Ok(())
 }
 
 fn report_start(event: &str, start: &don_crossplay::match_bridge::ServiceStart) {

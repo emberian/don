@@ -34,14 +34,14 @@ if (!args.includes('--relay')) {
       input.close();
       return;
     }
-    if (line !== `TURN ${nextStamp}`) {
+    if (line !== `TURN ${nextStamp} 0c`) {
       console.error(`unexpected fake relay input ${JSON.stringify(line)}`);
       process.exitCode = 2;
       input.close();
       return;
     }
     const ordered = [0, 1].map((play) => ({
-      stamp: nextStamp, play, payload: '444f4e420100',
+      stamp: nextStamp, play, payload: '0c',
     }));
     const hash = mode === 'join' && process.env.DON_FAKE_TURN_MISMATCH === '1'
       ? 'fedcba9876543210' : '0123456789abcdef';

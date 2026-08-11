@@ -266,8 +266,8 @@ cd crates/don-crossplay && cargo test --features local-match --test service_matc
 # authoritative MatchStart -> a complete two-package turn
 # service-match-peer host --seed U32 lets a bounded caller choose the exact lobby seed;
 # omitting it preserves the historical process-fixture seed
-# adding --relay keeps each peer alive for strict `TURN U32` stdin barriers; the peer itself
-# submits the fixed empty browser package through ServiceMatch and reports the ordered package set
+# adding --relay keeps each peer alive for strict `TURN U32 HEX` stdin barriers; don-net's
+# command decoder admits exactly one canonical HaltCommand (0x0c) before ServiceMatch submission
 
 cd crates/don-crossplay && cargo check --lib --target i686-pc-windows-msvc
 cd crates/don-crossplay && cargo check --lib --no-default-features --target i686-pc-windows-msvc

@@ -63,6 +63,7 @@ export class GameModule {
     this.capabilityBits = this.x.game_capabilities() >>> 0;
     this._submitted = 0;
     this._commandObserver = null;
+    this._commandGate = null;
     this._readiness = this._loadReadiness();
   }
 
@@ -396,6 +397,11 @@ export class GameModule {
     this._commandObserver = typeof observer === 'function' ? observer : null;
   }
 
+  /** Refuse locally-originated packets while an external lockstep owner holds the frame gate. */
+  gateCommands(gate) {
+    this._commandGate = typeof gate === 'function' ? gate : null;
+  }
+
   // ---- commands ------------------------------------------------------------------------
 
   /**
@@ -403,18 +409,22 @@ export class GameModule {
    * rest the struct's own layout at the offsets `schema/command-wire.json` gives.
    */
   submit(who, bytes) {
+    const packet = new Uint8Array(bytes);
+    if (this._commandGate && this._commandGate({ who: who >>> 0, bytes: packet }) !== true) {
+      return null;
+    }
     const v = this.views();
-    v.cmd.set(bytes, 0);
-    this.x.game_submit(this.g, who, bytes.length);
+    v.cmd.set(packet, 0);
+    this.x.game_submit(this.g, who, packet.length);
     this._submitted++;
     if (this._commandObserver) {
       this._commandObserver({
         frame: this.frame,
         who: who >>> 0,
-        bytes: new Uint8Array(bytes),
+        bytes: packet,
       });
     }
-    return bytes;
+    return packet;
   }
 
   group(who, ids) { return this.submit(who, encodeGroup(who, ids)); }

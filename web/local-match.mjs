@@ -2,7 +2,7 @@
 //
 // The two browser clients receive an exact seed/epoch/roster only after the configured
 // native peers prove Create/Find/Join/ready/StartGame -> MatchStart agreement. An opt-in,
-// empty-input turn barrier then keeps those peers alive: a browser frame advances only
+// one-HaltCommand turn barrier then keeps those peers alive: a browser frame advances only
 // after both native ServiceMatch owners return the same ordered TurnPackage set, and the
 // next stamp stays closed until both paused browser Sims acknowledge equal state.
 
@@ -12,13 +12,13 @@ import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
 
 export const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
-export const LOCAL_MATCH_TURN_RELAY = 'empty-turn-barrier';
+export const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
 export const LOCAL_MATCH_PLAYERS = 2;
 export const MAX_LOCAL_MATCH_LOBBIES = 16;
 export const MAX_LOCAL_MATCH_BODY_BYTES = 16 * 1024;
 export const MAX_LOCAL_MATCH_OUTPUT_BYTES = 256 * 1024;
-export const DEFAULT_LOCAL_MATCH_TIMEOUT_MS = 25_000;
-export const EMPTY_BROWSER_TURN_HEX = '444f4e420100';
+export const DEFAULT_LOCAL_MATCH_TIMEOUT_MS = 60_000;
+export const HALT_COMMAND_HEX = '0c';
 
 function boundedName(value) {
   if (typeof value !== 'string') throw new Error('player name must be text');
@@ -41,15 +41,16 @@ function exactCode(value) {
   return value;
 }
 
-export function validateEmptyTurnRequest(value) {
+export function validateHaltTurnRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).some((key) => !['token', 'stamp'].includes(key))) {
-    throw new Error('empty turn barrier refuses browser command input');
+      Object.keys(value).some((key) => !['token', 'stamp', 'commandHex'].includes(key))) {
+    throw new Error('Halt turn request contains unsupported browser input');
   }
-  if (typeof value.token !== 'string' || !Number.isInteger(value.stamp)) {
-    throw new Error('empty turn barrier requires a token and integer stamp');
+  if (typeof value.token !== 'string' || !Number.isInteger(value.stamp) ||
+      value.commandHex !== HALT_COMMAND_HEX) {
+    throw new Error('turn relay admits exactly canonical one-byte HaltCommand 0x0c');
   }
-  return { token: value.token, stamp: value.stamp };
+  return { token: value.token, stamp: value.stamp, commandHex: value.commandHex };
 }
 
 function processLine(line) {
@@ -352,8 +353,8 @@ function validateRelayTurn(value, stamp, side) {
   for (let play = 0; play < LOCAL_MATCH_PLAYERS; play++) {
     const package_ = value.ordered[play];
     if (package_?.stamp !== stamp || package_?.play !== play ||
-        package_?.payload !== EMPTY_BROWSER_TURN_HEX) {
-      throw new Error(`${side} peer returned a nonempty or misordered turn ${stamp}`);
+        package_?.payload !== HALT_COMMAND_HEX) {
+      throw new Error(`${side} peer returned a noncanonical or misordered Halt turn ${stamp}`);
     }
   }
   return value;
@@ -368,16 +369,22 @@ class NativeTurnRelay {
     this.closed = false;
   }
 
-  async completeTurn(stamp) {
+  async completeTurn(stamp, payloads) {
     if (this.closed) throw new Error('native turn relay is closed');
     if (stamp !== this.nextStamp) {
       throw new Error(`native turn relay expected stamp ${this.nextStamp}, got ${stamp}`);
     }
-    const waits = [this.host, this.client].map((peer) =>
+    if (!Array.isArray(payloads) || payloads.length !== LOCAL_MATCH_PLAYERS ||
+        payloads.some((payload) => payload !== HALT_COMMAND_HEX)) {
+      throw new Error('native turn relay admits exactly one canonical HaltCommand per seat');
+    }
+    const peers = [this.host, this.client];
+    const waits = peers.map((peer) =>
       waitPeerEvent(peer, 'turn', this.timeoutMs, (value) => value.stamp === stamp));
-    for (const peer of [this.host, this.client]) {
+    for (let play = 0; play < peers.length; play++) {
+      const peer = peers[play];
       if (!peer.child.stdin.writable) throw new Error(`${peer.side} relay input is closed`);
-      peer.child.stdin.write(`TURN ${stamp}\n`);
+      peer.child.stdin.write(`TURN ${stamp} ${payloads[play]}\n`);
     }
     const [hostTurn, clientTurn] = await Promise.all(waits);
     validateRelayTurn(hostTurn, stamp, 'host');
@@ -577,7 +584,7 @@ export class LocalMatchGateway {
     return true;
   }
 
-  submitTurn(code, token, stamp) {
+  submitTurn(code, token, stamp, commandHex) {
     const { lobby, member } = this.#startedMember(code, token);
     if (!Number.isInteger(stamp) || stamp < 0 || stamp > 0xffff_ffff) {
       throw new Error('turn stamp must be a u32');
@@ -585,8 +592,12 @@ export class LocalMatchGateway {
     if (!lobby.turn || lobby.turn.stamp !== stamp || lobby.turn.phase !== 'waiting') {
       throw new Error(`turn ${stamp} is not the open native barrier`);
     }
+    if (commandHex !== HALT_COMMAND_HEX) {
+      throw new Error('turn relay admits exactly canonical one-byte HaltCommand 0x0c');
+    }
     if (lobby.turn.submitted[member.seat]) return publicLobby(lobby, token);
     lobby.turn.submitted[member.seat] = true;
+    lobby.turn.payloads[member.seat] = commandHex;
     this.#armTimeout(lobby, `turn ${stamp} timed out waiting for both browser seats`);
     if (lobby.turn.submitted.every(Boolean)) {
       lobby.turn.phase = 'agreeing';
@@ -651,7 +662,7 @@ export class LocalMatchGateway {
 
   async #completeTurn(lobby, stamp) {
     try {
-      const agreement = await lobby.relay.completeTurn(stamp);
+      const agreement = await lobby.relay.completeTurn(stamp, lobby.turn.payloads.slice());
       if (lobby.phase !== 'started' || lobby.turn?.stamp !== stamp ||
           lobby.turn.phase !== 'agreeing') {
         throw new Error(`turn ${stamp} completed outside its open browser barrier`);
@@ -681,7 +692,10 @@ export class LocalMatchGateway {
     if (!Number.isSafeInteger(stamp) || stamp > 0xffff_ffff) {
       throw new Error('local turn stamp space exhausted');
     }
-    return { stamp, phase: 'waiting', submitted: [false, false], agreement: null, acks: null };
+    return {
+      stamp, phase: 'waiting', submitted: [false, false], payloads: [null, null],
+      agreement: null, acks: null,
+    };
   }
 
   #armTimeout(lobby, message) {
