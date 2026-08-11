@@ -247,6 +247,15 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         installs: &[OrderIndex::AirPatrol],
         delegates: &[],
         port: Port::Orders,
+        // The recovered body orders the aircraft each selected object *contains*
+        // (`ObjectData::inside_down` `+0x28` / `inside_down_who` `+0x3E`), not the members;
+        // all six wire dwords reach it; and without the launch-all arm exactly one order is
+        // installed, on the cheapest candidate. See
+        // `docs/mechanics/group-air-launch-receivers.md`. `installs` under-reports: the only
+        // `OrdersMemManager::get_obj` immediate inside this body is `1` (`MOVE_TO`, the
+        // inlined `add_move_facing_order` arm at `0x0070395D`/`0x00703B5E`); `AIR_PATROL`
+        // comes from `Unit::add_air_patrol_order`. §9 of that doc; the file is generated, so
+        // the data is left alone.
     },
     ActionDef {
         name: "air_attack_ground",
@@ -398,6 +407,11 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         installs: &[OrderIndex::AirPatrol],
         delegates: &[],
         port: Port::Orders,
+        // Same containment walk as `launch_patrol`, patrolling each contained aircraft over
+        // its own container's Coord; the packet is one byte, so there is no commanded point.
+        // No `Group::action_begin` — vtable `+0x14` never appears in the body — so a scramble
+        // does not clear `GroupData::disband`. `installs` under-reports the inline `MOVE_TO`
+        // for the same reason as the row above.
     },
     ActionDef {
         name: "attack",

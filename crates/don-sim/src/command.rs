@@ -108,7 +108,9 @@
 //! wire/group installation side and writes the same executable queue shape, including the
 //! dynamic patrol payloads that cannot be represented by a flat order tag.
 
-use crate::order::{FollowOrderPayload, Order, OrderIndex, ORDER_GROUP};
+use crate::order::{
+    FollowOrderPayload, Order, OrderIndex, ORDER_DISEMBARK, ORDER_GROUP, ORDER_PATHED,
+};
 use crate::systems::groups_guys::{
     plan_action_buildmask, plan_action_disband, plan_action_halt, plan_action_set_transport,
     plan_action_stance, plan_action_unitmask, resolve_form, vector_dist, BuildMaskMemberFacts,
@@ -132,6 +134,8 @@ use crate::systems::order_dispatch::{
 // world systems.
 #[path = "systems/air_containment_host.rs"]
 pub mod air_containment_host;
+#[path = "systems/air_launch_receivers.rs"]
+pub mod air_launch_receivers;
 #[path = "systems/diplomacy_command_plans.rs"]
 pub mod diplomacy_command_plans;
 #[path = "systems/direct_entity_command_integration.rs"]
@@ -176,7 +180,7 @@ use self::follow_action::{
 };
 use self::group_action_entry::{
     dispatch_program, evaluate as evaluate_group_action_entry, formation_order_destination,
-    EntryDecision, EntryEffects, EntryFacts,
+    EntryDecision, EntryEffects, EntryFacts, COORD_PER_TILE,
 };
 use self::group_action_frontier::{
     plan_stop_spell, GroupActionTransactionStatus, OpenGroupActionCommand, StopSpellMemberFacts,
@@ -203,6 +207,13 @@ use self::unimplemented_group_command_plans::{
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
+
+/// Cap on one `ObjectData::inside_down` chain walk.
+///
+/// Retail has no cap — `Group::action_scramble`'s loop is `while (inside_down >= 0)` and a
+/// cyclic link hangs the engine — so this is this port's guard against a corrupt table, not
+/// a recovered bound. Nothing shipped nests containment anywhere near this deep.
+pub const AIR_LAUNCH_CHAIN_CAP: usize = 256;
 
 /// `sizeof(Group)` — the stride every `groups.list[i]` computation uses [measured,
 /// `imul ecx, eax, 0x9d4`].
@@ -1098,6 +1109,30 @@ pub trait Fleet {
     fn unit_type_flags(&self, _who: u8, _o: i16) -> u32 {
         0
     }
+
+    // -----------------------------------------------------------------------
+    // `Group::action_scramble` `0x007111C0` / `Group::action_launch_patrol` `0x00703580`
+    // read three columns nothing else in this bridge held. Each default is "this host does
+    // not answer", which makes `air_launch_receivers` refuse the command rather than launch
+    // a guessed set of aircraft. See `systems/air_launch_receivers.rs`.
+    // -----------------------------------------------------------------------
+
+    /// `ObjectData::inside_down` `+0x28` / `inside_down_who` `+0x3E` — the head of the
+    /// chain of objects contained by this one. Outer `None` is "this host does not model
+    /// containment"; inner `None` is retail's negative link, i.e. nothing inside.
+    fn inside_down(&self, _who: u8, _o: i16) -> Option<Option<(i16, u8)>> {
+        None
+    }
+    /// `ObjectTypeData::obj_masks` `+0x1E4`. Bit `0x08000000` disqualifies a contained
+    /// object from being launched.
+    fn object_type_masks(&self, _who: u8, _o: i16) -> Option<u32> {
+        None
+    }
+    /// `UnitData::mana_burn`, the `short` at `+0x96`. Both launch receivers refuse an
+    /// aircraft whose value is non-zero.
+    fn mana_burn(&self, _who: u8, _o: i16) -> Option<i16> {
+        None
+    }
     /// `UnitData::o_up` `+0x8E` — the captain `Group::add(o, who, 0, 0)` substitutes for a
     /// non-captain member. A host that reports [`Fleet::is_captain`] needs no override;
     /// `None` for a non-captain makes the split `Unanswered`.
@@ -1528,6 +1563,10 @@ pub struct Slot {
     pub type_index: i32,
     /// Unit word at `+0x98`, cleared by `action_stop_spell`.
     pub spell_word_0x98: u16,
+    /// `ObjectTypeData::obj_masks` `+0x1E4`, read by the two air launch receivers.
+    pub object_type_masks: Option<u32>,
+    /// `UnitData::mana_burn`, the `short` at `+0x96`, read by the two air launch receivers.
+    pub mana_burn: Option<i16>,
     pub build_active: bool,
     pub can_make_disband: bool,
     pub can_make_depopulate: bool,
@@ -1842,6 +1881,22 @@ impl Fleet for ObjectTable {
     }
     fn unit_type_flags(&self, who: u8, o: i16) -> u32 {
         self.get(who, o).map_or(0, |s| s.unit_flags)
+    }
+    fn inside_down(&self, who: u8, o: i16) -> Option<Option<(i16, u8)>> {
+        // `Slot::follow_inside_down` is already this engine pair — `add_follow_order`
+        // captures `ObjectData::inside_down`/`inside_down_who` — so the two receivers read
+        // the same column rather than a second copy of one field.
+        let slot = self.get(who, o)?;
+        Some(
+            slot.follow_inside_down
+                .map(|(down_o, down_who)| (down_o as i16, down_who as u8)),
+        )
+    }
+    fn object_type_masks(&self, who: u8, o: i16) -> Option<u32> {
+        self.get(who, o)?.object_type_masks
+    }
+    fn mana_burn(&self, who: u8, o: i16) -> Option<i16> {
+        self.get(who, o)?.mana_burn
     }
     fn captain_of(&self, who: u8, o: i16) -> Option<i16> {
         let slot = self.get(who, o)?;
@@ -4892,21 +4947,24 @@ impl Action<'_> {
                 self.action_patrol(ex, ey, q, false, f);
             }
             "launch_patrol" => {
+                // LaunchPatrolCommand is 25 bytes, and all six dwords reach
+                // `Group::action_launch_patrol` — `process_launch_patrol` `0x00949230`
+                // logs them as `<int&,int&,enum QueuePos&,int&,int&,int&>` and pushes
+                // exactly those six at `0x00949335..0x0094936A`.
                 let (Some(_), Some(_)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
-                let q = QueuePos::from_i64(i32_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_patrol(ex, ey, q, true, f);
+                let request = air_launch_receivers::LaunchPatrolRequest {
+                    to_x: ex,
+                    to_y: ey,
+                    queue: i32_at(cmd, 9).unwrap_or(0),
+                    force_all: i32_at(cmd, 13).unwrap_or(0),
+                    bombers_only: i32_at(cmd, 17).unwrap_or(0),
+                    fighters_only: i32_at(cmd, 21).unwrap_or(0),
+                };
+                self.action_launch_patrol(&request, f);
             }
-            "scramble" => {
-                let (who, list) = self.members();
-                for o in list {
-                    if f.alive(who, o) && f.can_move(who, o) && f.is_plane(who, o) {
-                        let (x, y) = f.pos(who, o);
-                        self.install_air_patrol_member(who, o, x, y, QueuePos::New, f);
-                    }
-                }
-            }
+            "scramble" => self.action_scramble(f),
             "disband" => {
                 let all = i32_at(cmd, 1).unwrap_or(0);
                 let _ = self.action_disband(all != 0, f);
@@ -6204,6 +6262,216 @@ impl Action<'_> {
         self.record_patrol_install(result, before, OrderIndex::AirPatrol);
     }
 
+    /// `Group::action_scramble` `0x007111C0`.
+    ///
+    /// The receiver's own entry prefix is [`air_launch_receivers::SCRAMBLE_ENTRY`] — the
+    /// scenario prune and `num > 0`, and **no** `Group::action_begin`, so a scramble does
+    /// not clear `GroupData::disband`. `scramble` is absent from
+    /// [`group_action_entry::ENTRY_PROGRAMS`] on purpose: that table is the nine
+    /// movement/attack rows, and this row is evaluated against the same gate alphabet here.
+    fn action_scramble(&mut self, f: &mut dyn Fleet) {
+        let (num, buildings) = self
+            .groups
+            .get(self.slot)
+            .map_or((0, false), |g| (g.num, g.buildings != 0));
+        let facts = group_action_entry::EntryFacts {
+            on_map: self.group_is_on_map(f),
+            num,
+            buildings,
+            target: None,
+            destination: None,
+            map_tiles: f.map_tiles(),
+            ignore_orders: f.scenario_ignore_orders(),
+            ignore_orders_prune_committed: f.scenario_ignore_orders_prune_committed(),
+        };
+        let (effects, proceed) =
+            match group_action_entry::evaluate(&air_launch_receivers::SCRAMBLE_ENTRY, facts) {
+                group_action_entry::EntryDecision::Unavailable => {
+                    self.stats.unported += 1;
+                    return;
+                }
+                group_action_entry::EntryDecision::Refuse(effects) => (effects, false),
+                group_action_entry::EntryDecision::Proceed(effects) => (effects, true),
+            };
+        if effects.action_begin || effects.clear_form {
+            if let Some(group) = self.groups.get_mut(self.slot) {
+                if effects.action_begin {
+                    group.disband = 0;
+                }
+                if effects.clear_form {
+                    group.form = -1;
+                }
+            }
+        }
+        if !proceed {
+            return;
+        }
+        let facts = self.air_launch_facts(f);
+        match air_launch_receivers::plan_scramble(&facts) {
+            Ok(plan) => self.apply_air_launch_installs(&plan.installs, f),
+            Err(_) => {
+                self.stats.unported += 1;
+                self.stats.open_group_action_tails += 1;
+            }
+        }
+    }
+
+    /// `Group::action_launch_patrol` `0x00703580`.
+    ///
+    /// The entry prefix is already `group_action_entry`'s `launch_patrol` row, run by
+    /// [`Self::run`]; this is the body from the `num > 0` test onwards.
+    fn action_launch_patrol(
+        &mut self,
+        request: &air_launch_receivers::LaunchPatrolRequest,
+        f: &mut dyn Fleet,
+    ) {
+        let facts = self.air_launch_facts(f);
+        match air_launch_receivers::plan_launch_patrol(request, &facts) {
+            Ok(plan) => self.apply_air_launch_installs(&plan.installs, f),
+            Err(_) => {
+                self.stats.unported += 1;
+                self.stats.open_group_action_tails += 1;
+            }
+        }
+    }
+
+    /// Capture the facts both air launch receivers read, by walking every group member's
+    /// `ObjectData::inside_down` `+0x28` / `inside_down_who` `+0x3E` chain.
+    fn air_launch_facts(&self, f: &dyn Fleet) -> air_launch_receivers::AirLaunchFacts {
+        use air_launch_receivers::{
+            AirLaunchFacts, ContainedFacts, MemberFacts, TYPE_BIPLANE, TYPE_BOMBER, TYPE_HELICOPTER,
+        };
+        let (who, list) = self.members();
+        let mut members = Vec::with_capacity(list.len());
+        for member in list {
+            let mut contained = Vec::new();
+            let mut containment_answered = true;
+            let mut link = match f.inside_down(who, member) {
+                Some(head) => head,
+                None => {
+                    containment_answered = false;
+                    None
+                }
+            };
+            let mut walked = 0usize;
+            while let Some((o, w)) = link {
+                if walked >= AIR_LAUNCH_CHAIN_CAP {
+                    break;
+                }
+                walked += 1;
+                contained.push(ContainedFacts {
+                    object: (w, o),
+                    is_unit: f.is_unit(w, o),
+                    domain: f.domain(w, o),
+                    busy: f.is_busy(w, o),
+                    object_masks: f.object_type_masks(w, o),
+                    unit_flags: f.unit_type_flags(w, o),
+                    mana_burn: f.mana_burn(w, o),
+                    inside: f.inside_of(w, o),
+                    is_biplane: f.object_type_is(w, o, TYPE_BIPLANE),
+                    is_bomber: f.object_type_is(w, o, TYPE_BOMBER),
+                    is_helicopter: f.object_type_is(w, o, TYPE_HELICOPTER),
+                    pos: f.pos(w, o),
+                    busy_order: f
+                        .orders(w, o)
+                        .and_then(OrderQueue::current)
+                        .is_some_and(|order| order.kind != OrderIndex::None),
+                });
+                link = match f.inside_down(w, o) {
+                    Some(next) => next,
+                    None => {
+                        containment_answered = false;
+                        break;
+                    }
+                };
+            }
+            members.push(MemberFacts {
+                object: (who, member),
+                pos: f.pos(who, member),
+                contained,
+                containment_answered,
+            });
+        }
+        AirLaunchFacts { who, members }
+    }
+
+    /// Apply the planned installs in plan order.
+    fn apply_air_launch_installs(
+        &mut self,
+        installs: &[air_launch_receivers::AirLaunchInstall],
+        f: &mut dyn Fleet,
+    ) {
+        for install in installs {
+            match *install {
+                air_launch_receivers::AirLaunchInstall::AirPatrol {
+                    plane: (w, o),
+                    x,
+                    y,
+                    home,
+                    group_flag,
+                } => {
+                    let (home_o, home_who, home_pos) = match home {
+                        Some((ho, hw)) => (i32::from(ho), i32::from(hw), Some(f.pos(hw, ho))),
+                        None => (-1, -1, None),
+                    };
+                    let (ux, uy) = f.pos(w, o);
+                    let Some(queue) = f.orders_mut(w, o) else {
+                        continue;
+                    };
+                    let before = queue.len();
+                    let mut unit = UnitWork::at(w, o, ux, uy);
+                    unit.orders = std::mem::take(queue);
+                    // `Unit::add_air_patrol_order`'s sixth argument is never read, so the
+                    // installer's `QueuePos` is the unconditional `close_orders(0)` one.
+                    let result = install_air_patrol(
+                        &mut unit,
+                        x,
+                        y,
+                        home_o,
+                        home_who,
+                        home_pos,
+                        group_flag,
+                        QueuePos::New,
+                    );
+                    *queue = unit.orders;
+                    self.record_patrol_install(result, before, OrderIndex::AirPatrol);
+                }
+                air_launch_receivers::AirLaunchInstall::MoveFacing {
+                    plane: (w, o),
+                    stored,
+                    angle,
+                    clear_unit_mask,
+                    ..
+                } => {
+                    let masks = f.unit_masks(w, o);
+                    f.set_unit_masks(w, o, masks & !clear_unit_mask);
+                    let mut order = OrderRec {
+                        kind: OrderIndex::MoveTo,
+                        x: stored.0,
+                        y: stored.1,
+                        angle,
+                        dest: 0,
+                        dest_x: stored.0,
+                        dest_y: stored.1,
+                        last_x: -1,
+                        last_y: -1,
+                        pause: 0,
+                        retry: 0,
+                        timer: 0,
+                        facing: -1,
+                        orig_x: -1,
+                        orig_y: -1,
+                        off_x: (stored.0 % COORD_PER_TILE) as i16,
+                        off_y: (stored.1 % COORD_PER_TILE) as i16,
+                        ..OrderRec::default()
+                    };
+                    order.flags = (order.flags & !ORDER_PATHED & !ORDER_DISEMBARK) | ORDER_GROUP;
+                    self.install_rec(w, o, order, QueuePos::New, f);
+                }
+            }
+        }
+    }
+
     fn record_patrol_install(&mut self, result: PatrolInstall, before: usize, kind: OrderIndex) {
         match result {
             PatrolInstall::ExtendedWaypoints => {}
@@ -6403,14 +6671,37 @@ pub mod build {
         v
     }
 
-    /// `LaunchPatrolCommand` (11), 25 bytes.
+    /// `LaunchPatrolCommand` (11), 25 bytes, with the three tail dwords zero.
     pub fn launch_patrol(x: i32, y: i32, q: QueuePos) -> Vec<u8> {
+        launch_patrol_full(x, y, q as i32, 0, 0, 0)
+    }
+
+    /// `LaunchPatrolCommand` (11) with all six wire fields.
+    ///
+    /// `process_launch_patrol` `0x00949230` reads `cmd+1/+5/+9/+0xD/+0x11/+0x15` and
+    /// forwards every one to `Group::action_launch_patrol`; the `SyncLogger::logToMemory`
+    /// instantiation at `0x009492A6` is `<int&,int&,enum QueuePos&,int&,int&,int&>`, which
+    /// is how the third field is known to be the `QueuePos`. The tail three are
+    /// `force_all` / `bombers_only` / `fighters_only` — see
+    /// [`super::air_launch_receivers::LaunchPatrolRequest`].
+    pub fn launch_patrol_full(
+        x: i32,
+        y: i32,
+        queue: i32,
+        force_all: i32,
+        bombers_only: i32,
+        fighters_only: i32,
+    ) -> Vec<u8> {
         let mut v = vec![11u8];
-        v.extend_from_slice(&x.to_le_bytes());
-        v.extend_from_slice(&y.to_le_bytes());
-        v.extend_from_slice(&(q as i32).to_le_bytes());
-        v.extend_from_slice(&[0u8; 12]); // shift, ctrl, alt
+        for field in [x, y, queue, force_all, bombers_only, fighters_only] {
+            v.extend_from_slice(&field.to_le_bytes());
+        }
         v
+    }
+
+    /// `ScrambleCommand` (36), 1 byte: the opcode and nothing else.
+    pub fn scramble() -> Vec<u8> {
+        vec![36u8]
     }
 
     /// `HaltCommand` (12), 1 byte.
@@ -6798,7 +7089,8 @@ mod tests {
             .unwrap();
         assert!(
             f.orders(1, 2).unwrap().is_empty(),
-            "launch-patrol filters a non-plane member"
+            "launch_patrol orders the aircraft a member contains, and this member \
+             contains none"
         );
     }
 
