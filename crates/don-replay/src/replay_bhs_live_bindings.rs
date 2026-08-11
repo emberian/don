@@ -95,8 +95,12 @@ pub fn bind_production_call(
 pub struct ProductionCityImage {
     /// `CityData::flags & 1`.
     pub active: bool,
+    /// `CityData::o` at `+0x08`, returned by `find_city_id` after sign extension.
+    pub object_id: i16,
     /// `CityData+0x90`, returned by `find_city_with_num`.
     pub name: String,
+    /// `CityData::id` at `+0xa4`, tested before `name` by `find_city_id`.
+    pub identity: String,
     /// `CityData+0x14`, read by `was_city_attacked`.
     pub last_attacked: i32,
     /// `CityData+0x18`, read by `was_city_raided`.
@@ -265,8 +269,8 @@ pub struct ProductionBuiltinCall {
 }
 
 /// Exact builtin indices owned by this prefix.
-pub const PRODUCTION_PREFIX_BUILTINS: [u32; 11] =
-    [81, 147, 248, 254, 255, 258, 323, 358, 383, 712, 713];
+pub const PRODUCTION_PREFIX_BUILTINS: [u32; 12] =
+    [81, 147, 248, 254, 255, 258, 323, 358, 377, 383, 712, 713];
 
 /// A strict host for the first stock-economic prefix.
 pub struct ReplayProductionBuiltinHost<'a> {
@@ -344,6 +348,16 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
             }
         }
         Ok(Value::Int(0))
+    }
+
+    fn city_string_eq(left: &str, right: &str) -> Result<bool, HostError> {
+        // The reached installed city identifiers are ASCII. Retail's comparison is
+        // `String::ignore(..., -1)` -> `_wcsicmp`; stay red instead of claiming a
+        // Unicode/locale emulation that Rust's ASCII predicate does not provide.
+        if !left.is_ascii() || !right.is_ascii() {
+            return Err(HostError::Unimplemented);
+        }
+        Ok(left.eq_ignore_ascii_case(right))
     }
 
     fn dispatch(&self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
@@ -448,6 +462,26 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                 Ok(Value::Int(
                     self.image.techs_per_age[age].ok_or(HostError::Unimplemented)?,
                 ))
+            }
+            // find_city_id(city_name), `0x009ef580`: scan each in-game leader and
+            // active City row, compare City::id then City::name case-insensitively,
+            // and sign-extend City::o at +0x08. The process bit is not required.
+            377 => {
+                let query = Self::str_arg(args, 0)?;
+                for leader in &self.image.leaders {
+                    if leader.flags & 1 == 0 {
+                        continue;
+                    }
+                    for city in &leader.cities {
+                        if city.active
+                            && (Self::city_string_eq(&city.identity, query)?
+                                || Self::city_string_eq(&city.name, query)?)
+                        {
+                            return Ok(Value::Int(i32::from(city.object_id)));
+                        }
+                    }
+                }
+                Ok(Value::Int(-1))
             }
             // find_city_with_num(who, city_num), `0x009eff00`.
             383 => {

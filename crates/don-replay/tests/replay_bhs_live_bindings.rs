@@ -155,7 +155,56 @@ fn canonical_prefix_guards_and_city_lookup_do_not_use_a_search_cursor() {
     );
     assert_eq!(
         replay_bhs_live_bindings::PRODUCTION_PREFIX_BUILTINS,
-        [81, 147, 248, 254, 255, 258, 323, 358, 383, 712, 713]
+        [81, 147, 248, 254, 255, 258, 323, 358, 377, 383, 712, 713]
+    );
+}
+
+#[test]
+fn find_city_id_scans_city_identity_then_name_and_returns_signed_object_id() {
+    let image = ProductionBuiltinImage {
+        leaders: std::array::from_fn(|who0| match who0 {
+            0 => ProductionLeaderImage {
+                flags: 1,
+                cities: vec![ProductionCityImage {
+                    active: true,
+                    object_id: -123,
+                    name: "Athens".into(),
+                    identity: "capital_0".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            1 => ProductionLeaderImage {
+                flags: 1,
+                cities: vec![ProductionCityImage {
+                    active: true,
+                    object_id: 32_767,
+                    name: "Sparta".into(),
+                    identity: String::new(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            _ => ProductionLeaderImage::default(),
+        }),
+        ..Default::default()
+    };
+    let builtin = find_builtin("find_city_id").unwrap();
+    let mut host = ReplayProductionBuiltinHost::new(&image);
+    assert_eq!(
+        host.call(builtin, &[Value::str("CAPITAL_0")]),
+        Ok(Value::Int(-123)),
+        "City::id is compared first and City::o is sign-extended"
+    );
+    assert_eq!(
+        host.call(builtin, &[Value::str("aThEnS")]),
+        Ok(Value::Int(-123)),
+        "City::name uses the same case-insensitive comparison"
+    );
+    assert_eq!(
+        host.call(builtin, &[Value::str("")]),
+        Ok(Value::Int(32_767)),
+        "retail String::ignore treats two empty strings as equal"
     );
 }
 
@@ -299,7 +348,7 @@ fn successful_four_argument_call_commits_only_the_ref_parameter() {
 }
 
 #[test]
-fn strict_economic_prefix_reaches_find_city_id_and_rolls_back() {
+fn strict_economic_prefix_reaches_three_city_ids_then_type_count_and_rolls_back() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         skip("ron-data/bhs-corpus is absent.");
@@ -346,7 +395,9 @@ fn strict_economic_prefix_reaches_find_city_id_and_rolls_back() {
                     age: 0,
                     cities: vec![ProductionCityImage {
                         active: true,
+                        object_id: 100,
                         name: "Athens".into(),
+                        identity: "capital_0".into(),
                         last_attacked: 0,
                         last_raided: 0,
                     }],
@@ -363,8 +414,8 @@ fn strict_economic_prefix_reaches_find_city_id_and_rolls_back() {
     assert!(matches!(
         error.failure,
         ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 377,
-            name: "find_city_id"
+            index: 261,
+            name: "num_type_with_queued"
         })
     ));
     assert!(error.bytecodes_executed > 0);
@@ -397,6 +448,9 @@ fn strict_economic_prefix_reaches_find_city_id_and_rolls_back() {
             "find_city_with_num",
             "find_city_with_num",
             "find_city_with_num",
+            "find_city_id",
+            "find_city_id",
+            "find_city_id",
         ]
     );
     assert_eq!(

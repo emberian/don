@@ -6,7 +6,8 @@ The stock `economic.bhs` Program image can now be entered through the exact
 four-argument `Leader::production_ai` boundary. The replay adapter owns eleven
 ScenarioFuncSet handlers on the smallest reached subdomain. Installed `rules.xml`
 owns `get_mapstyle`; replay setup owns the reached conquest and starting-option gates.
-Execution now stops strictly at dynamic builtin 377, `find_city_id`.
+Execution now owns dynamic builtin 377, `find_city_id`, and stops strictly at the
+current-upgrade type-counter builtin 261, `num_type_with_queued`.
 
 No replay checksum match is claimed. The adapter is not registered in the default
 harness, and a failed prefix atomically rolls back both BHS static-variable writes and
@@ -76,7 +77,11 @@ followed by:
 5. `383 find_city_with_num(who, 1)`
 6. `383 find_city_with_num(who, 2)`
 7. `383 find_city_with_num(who, 3)`
-8. `377 find_city_id(capital_name)` — the next unsupported boundary
+8. `377 find_city_id(capital_name)`
+
+The helper immediately repeats builtin 377 for the second- and third-city names even
+when those ordinal reads returned empty strings. Only then does it reach builtin 261,
+`num_type_with_queued(who, "Citizen")`, the next unsupported boundary.
 
 That path uses replay settings `starting_resources=1`, `starting_town=2`, no conquest
 or scenario semaphore bit, one live city, and a sea map. It changes `step` from 1 to 6,
@@ -118,20 +123,45 @@ The process-global cursor at `0x00cc2214` belongs to builtin 311, `find_unit`
 `0x009ebe10`. The earlier replay-runtime note attached that cursor to builtin 383 and
 has been corrected.
 
+## City ID owner
+
+The shipped PDB identifies `0x009ef580` as
+`ScenarioFuncSet::find_city_id(String const&)`. Capstone over the pinned PE establishes a
+single stack argument and `ret 4`, then the complete ordered scan:
+
+1. all eight Leader slots, accepting `leader_flags & 1` without requiring the process bit;
+2. every entry in that owner's `Cities::lists[who0]` pointer array;
+3. only City rows whose `city_flags & 1` is set;
+4. `CityData::id` at +0xa4 first, then `CityData::name` at +0x90, both through
+   `String::ignore(..., -1)` and therefore `_wcsicmp` after the insensitive-hash prefilter;
+5. sign-extended `CityData::o` at +0x08 on the first match, otherwise -1.
+
+The PDB independently gives `CityData::o` as a signed short and the two complete String
+layouts at those offsets. An empty query can therefore match an active City with an empty
+`id`; this is pinned rather than silently special-cased. The adapter admits ASCII City
+identifiers, which covers the reached installed names, and fails closed for Unicode/locale
+comparison instead of claiming to emulate Windows `_wcsicmp`.
+
 ## Exact next boundary
 
-Builtin 377 needs the global live object registry and the exact case-insensitive City
-name lookup/ID result. Do not infer it from the ordinal City row alone. The Program must
-ultimately share one owner with the step-4 game/general-powers runtime; duplicating the
-Program would split its checksummed static state.
+Builtin 261 is not a simple object scan. The PE resolves the script String across all 806
+Type entries, calls `LeaderData::current_upgrade`, then `LeaderData::get_graft`, dispatches
+the resolved Type virtually as Build/Unit/resource, and reads the corresponding live
+unsigned-short active and queued counters (or XOR-obfuscated resource stockpile). Those
+type-registry, upgrade/graft, and counter owners must be attached together; a hand-entered
+`Citizen` count would be an isolated stub. The Program must ultimately share one owner
+with the step-4 game/general-powers runtime; duplicating the Program would split its
+checksummed static state.
 
 ## Validation
 
-The focused local suite passes 7/7 against the installed BHS, ordered map-style catalog,
-and all 21 checksum-bearing recordings. Persvati overlay job
-`replay-bhs-live-bindings-v2-20260811T171116Z-76750-31116-7245c2afc2de` passes the four
+All eight focused tests pass in split gates. The three local content tests cover the
+installed BHS, ordered map-style catalog, and all 21 checksum-bearing recordings.
+Persvati overlay job
+`replay-bhs-city-id-tranche-20260811T172824Z-19296-8416-d1806561a17b` passes the five
 content-independent adapter tests; the three installed-content/corpus tests were
-explicitly filtered rather than reported as remote passes.
+explicitly filtered rather than reported as remote passes. A later aggregate local launch
+was stopped after macOS remained parked in `_dyld_start`; it is not counted as a test result.
 
 Fidelity remains Tier C: instruction-level static recovery plus corpus shape. No live
 retail execution or VM attachment was used in this tranche.
