@@ -76,6 +76,7 @@ pub mod nubify_forest_frontier;
 pub mod place_all_advance;
 pub mod place_all_boundary;
 pub mod place_all_facts;
+pub mod place_player_resource_body_frontier;
 pub mod place_resources_bonus_mutation_frontier;
 pub mod place_resources_bonus_rows_mutation_frontier;
 pub mod place_resources_category_frontier;
