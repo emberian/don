@@ -66,6 +66,9 @@ fn plan() -> InitialItemReconstruction {
         fertility: None,
         fertility_error: None,
         fill_fertile: Some(FillFertileReceipt::default()),
+        place_all_advance: None,
+        place_all_advance_error: None,
+        mountain_range_error: None,
         boundary: InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable {
             next_va: TERRAIN_GROUPS_PLACE_ALL_VA,
         },

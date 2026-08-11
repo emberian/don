@@ -284,8 +284,54 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             .initial_fill_fertile_cells
             .map(|cells| cells.to_string())
             .unwrap_or_else(|| "null".into());
+        let place_all = r
+            .initial_place_all
+            .as_ref()
+            .map(|advance| {
+                let arms = advance
+                    .selected_groups
+                    .iter()
+                    .map(|row| {
+                        format!(
+                            "{{ \"group\": {}, \"type\": {}, \"pattern\": {}, \"clumps\": {} }}",
+                            row.group_index, row.group_type, row.pattern, row.clumps
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{{ \"entry\": \"0x{:08x}\", \"stop\": \"{}\", \"primitive\": \"0x{:08x}\", \"stop_group\": {}, \"completed_groups\": {}, \"catalog_groups\": {}, \"rng_at_entry\": \"0x{:08x}\", \"oil_good_policy\": \"{:?}\", \"mountain_range_lengths\": {}, \"mountain_randomize_draws\": {}, \"selected_groups\": [{}], \"committed_world_bytes\": 0 }}",
+                    advance.entry_va,
+                    advance.stop.name(),
+                    advance.stop.primitive_va(),
+                    advance
+                        .stop
+                        .group_index()
+                        .map(|index| index.to_string())
+                        .unwrap_or_else(|| "null".into()),
+                    advance.completed_groups.len(),
+                    advance.catalog_groups,
+                    advance.random_state_at_entry as u32,
+                    advance.oil_good_policy,
+                    advance
+                        .mountain_range_lengths
+                        .map(|lengths| format!("[{}, {}, {}]", lengths[0], lengths[1], lengths[2]))
+                        .unwrap_or_else(|| "null".into()),
+                    advance
+                        .mountain_randomize_draws
+                        .map(|draws| draws.to_string())
+                        .unwrap_or_else(|| "null".into()),
+                    arms,
+                )
+            })
+            .unwrap_or_else(|| {
+                r.initial_place_all_error
+                    .as_ref()
+                    .map(|error| format!("{{ \"error\": \"{}\" }}", esc(error)))
+                    .unwrap_or_else(|| "null".into())
+            });
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"tile_selection\": {}, \"fertility\": {{ \"fill_fertile_cells\": {}, \"error\": {} }}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"tile_selection\": {}, \"fertility\": {{ \"fill_fertile_cells\": {}, \"error\": {} }}, \"place_all\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -300,6 +346,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             tile_selection,
             fill_fertile_cells,
             fertility_error,
+            place_all,
             r.initial_rules_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_rules_serialized_bytes,
             r.initial_rules_walked_bytes,

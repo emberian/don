@@ -431,6 +431,18 @@ pub enum InitialItemBoundary {
     /// next enters `TerrainGroups::place_all` with terrain-group tables whose
     /// expression-resolved runtime representation remains upstream.
     MapTerrainGroupsPlaceAllUnavailable { next_va: u32 },
+    /// `TerrainGroups::place_all` `0x006a70d0` was entered and executed from the
+    /// replay-owned World and RNG until an exact retail primitive inside it
+    /// could not be run. `boundary` is stable report vocabulary; `primitive_va`
+    /// distinguishes which callee, and `group_index` which terrain-group arm
+    /// reached it. Nothing is committed — see `crate::place_all_advance`.
+    MapTerrainGroupsPlaceAllPrimitiveUnavailable {
+        boundary: &'static str,
+        place_all_va: u32,
+        primitive_va: u32,
+        group_index: Option<usize>,
+        completed_groups: usize,
+    },
 }
 
 impl InitialItemBoundary {
@@ -445,6 +457,7 @@ impl InitialItemBoundary {
             Self::MapContinentPrimitiveUnavailable { boundary, .. } => boundary,
             Self::MapTerrainGroupsUnavailable { .. } => "terrain_groups_fill_fertile",
             Self::MapTerrainGroupsPlaceAllUnavailable { .. } => "terrain_groups_place_all",
+            Self::MapTerrainGroupsPlaceAllPrimitiveUnavailable { boundary, .. } => boundary,
         }
     }
 }
@@ -473,6 +486,16 @@ pub struct InitialItemReconstruction {
     /// independent continent work can still advance from `tile_selection`.
     pub fertility_error: Option<crate::fractal_boundary::FractalBoundaryError>,
     pub fill_fertile: Option<don_sim::systems::terrain_groups::FillFertileReceipt>,
+    /// Executed `TerrainGroups::place_all` `0x006a70d0` survey: which group arms
+    /// the transaction reached and the exact primitive it stopped at. Present
+    /// only once `fill_fertile` has run; it commits no world state.
+    pub place_all_advance: Option<crate::place_all_advance::PlaceAllAdvanceReceipt>,
+    /// Why the executed survey could not be produced, if it could not.
+    pub place_all_advance_error: Option<crate::place_all_advance::PlaceAllAdvanceError>,
+    /// Why the shipped `MOUNTAINS` section could not be read, if it could not.
+    /// `None` with a `place_all_advance` present means the three range lists
+    /// were derived and the survey ran with them installed.
+    pub mountain_range_error: Option<crate::place_all_advance::MountainRangeSourceError>,
     pub boundary: InitialItemBoundary,
 }
 
@@ -683,6 +706,7 @@ impl InitialItemReconstruction {
                 | InitialItemBoundary::MapContinentPrimitiveUnavailable { .. }
                 | InitialItemBoundary::MapTerrainGroupsUnavailable { .. }
                 | InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable { .. }
+                | InitialItemBoundary::MapTerrainGroupsPlaceAllPrimitiveUnavailable { .. }
         ) {
             return Err(InitialItemReconstructionError::Blocked(self.boundary));
         }
@@ -877,6 +901,62 @@ impl InitialItemReconstruction {
         self.fertility_error = fertility_error;
         self.fill_fertile = fill_fertile;
         self.boundary = boundary;
+        // Enter `TerrainGroups::place_all` 0x006a70d0 and replace its entry
+        // address with the exact primitive inside it that cannot be executed.
+        // The call is fail-closed in don-sim, so this reads state and commits
+        // none: `map.world` is byte-identical afterwards either way.
+        let mountain_source = tilesets_xml.and_then(Path::parent).map(|data_dir| {
+            data_dir.join(crate::place_all_advance::MOUNTAIN_RANGE_SOURCE_FILE)
+        });
+        let mut mountain_error = None;
+        if matches!(
+            self.boundary,
+            InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable { .. }
+        ) {
+            // The three `Mountains` range lists survive `World::wipe`'s
+            // `Mountains::clear` call at 0x006b2d97 and are built by
+            // `Mountains::init` 0x0089ad70 from the shipped MOUNTAINS section,
+            // which sits beside tilesets.xml in the same installed Data
+            // directory. Their lengths decide how many words
+            // `randomize_mountains` draws from the main stream.
+            let mountains = mountain_source.and_then(|path| {
+                match crate::place_all_advance::resolve_mountain_ranges(&path) {
+                    Ok(mountains) => Some(mountains),
+                    Err(error) => {
+                        mountain_error = Some(error);
+                        None
+                    }
+                }
+            });
+            let facts = crate::place_all_advance::PlaceAllAdvanceFacts {
+                mountains,
+                helping: Some(crate::place_all_advance::initial_region_helping_state(
+                    &map.world,
+                )),
+                doober_rules: self.fertility.as_ref().map(|f| f.doober_rules),
+                // The reporting tail reads `player_scores` after
+                // `place_region_group` has accumulated into it; the shipped
+                // port does not model that accumulation yet.
+                reporting: None,
+                progress: crate::place_all_advance::RETAIL_GAME_START_PROGRESS,
+                oil_good_policy: crate::place_all_advance::OilGoodPolicy::Stop,
+            };
+            match crate::place_all_advance::advance_place_all_boundary(self, map, &receipt, &facts) {
+                Ok(advance) => {
+                    self.boundary =
+                        InitialItemBoundary::MapTerrainGroupsPlaceAllPrimitiveUnavailable {
+                            boundary: advance.stop.name(),
+                            place_all_va: advance.entry_va,
+                            primitive_va: advance.stop.primitive_va(),
+                            group_index: advance.stop.group_index(),
+                            completed_groups: advance.completed_groups.len(),
+                        };
+                    self.place_all_advance = Some(advance);
+                }
+                Err(error) => self.place_all_advance_error = Some(error),
+            }
+        }
+        self.mountain_range_error = mountain_error;
         Ok(receipt)
     }
 }
@@ -970,6 +1050,9 @@ impl InitialState {
             fertility: None,
             fertility_error: None,
             fill_fertile: None,
+            place_all_advance: None,
+            place_all_advance_error: None,
+            mountain_range_error: None,
             boundary,
         }
     }

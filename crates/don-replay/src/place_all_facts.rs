@@ -704,26 +704,62 @@ fn push_all_live_unavailable(unavailable: &mut Vec<UnavailablePlaceAllFact>) {
 fn missing_subtype_freqs() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::TerrainSubtypeFrequencies,
+        // CORRECTION (place_all boundary lane): these rows are neither read nor
+        // written anywhere in place_all. A full Capstone pass over
+        // 0x006a70d0..0x006a93a3 finds every `this` dereference to be
+        // [this+0x10] (the group pointer array), [this+0x04] (its count) or the
+        // single [this+0x78] write; nothing touches +0x24/+0x40/+0x5c. Their
+        // only consumer is the CDF at +0xf8 that fill_fertile 0x006a6f90 walks,
+        // which Map::make runs at 0x0068bfb8, before place_all at 0x0068c010.
+        // They are also pure shipped data: init_tileset_data 0x006a61f0 fills
+        // row N (0 BASELAND, 1 SANDY, 2 OCEAN, per Lands::init 0x0067e730 and
+        // the land_key literals at 0x00ecda20) from the map style's
+        // TILESET_DATA/<tileset>/LANDKEY[name]/frequency_<i> attributes.
         required_source:
-            "three Array<int> rows at (*game_map + 0x140) + 0x24 after init_tileset_data",
-        addresses: vec![GAME_MAP_POINTER_VA, TERRAIN_GROUPS_PLACE_ALL_VA],
+            "not read by place_all; otherwise mapstyle TILESET_DATA/LANDKEY frequency_N",
+        addresses: vec![GAME_MAP_POINTER_VA, crate::fractal_boundary::TERRAIN_GROUPS_INIT_TILESET_DATA_VA],
     }
 }
 
 fn missing_console_info() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::TerrainConsoleInfo,
-        required_source: "TerrainGroups::console_info at (*game_map + 0x140) + 0x78",
-        addresses: vec![GAME_MAP_POINTER_VA, TERRAIN_GROUPS_PLACE_ALL_VA],
+        // CORRECTION (place_all boundary lane): +0x78 has exactly one writer in
+        // the whole image -- place_all at 0x006a91b5, which stores 0 -- and no
+        // reader anywhere. It gates no branch, so it cannot reach World, the
+        // main RNG, or even the reporting tail, which is unconditional. The
+        // TerrainGroups constructor 0x0047a9c0 skips +0x78 and +0x7c entirely,
+        // so before the first place_all it is allocator residue.
+        required_source: "gates nothing; place_all 0x006a91b5 is its only writer and stores 0",
+        addresses: vec![GAME_MAP_POINTER_VA, 0x006a_91b5],
     }
 }
 
 fn missing_mountains() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::MountainRangeListsAndCursors,
+        // SHARPENED (place_all boundary lane): the four per-game placement
+        // arrays are NOT part of this fact. All 21 map-style make_continents
+        // overrides call World::wipe 0x006b2c00 on their straight-line path,
+        // and World::wipe calls Mountains::clear 0x0089bec0 at 0x006b2d97,
+        // which zeroes mountain_locs/mountain_types/mountain_loc_wcoords_x/_y.
+        // Mountains::add_mountain 0x0089c2e0 is only reachable from inside
+        // place_all, so they are provably empty at entry. What remains is the
+        // three MountainsData LinkList<int,u8> range lists at 0x00e860d4 /
+        // 0x00e860ec / 0x00e86104, which Mountains::clear does not touch and
+        // which Mountains::init 0x0089ad70 / add_range 0x008992b0 build from
+        // the loaded tileset. Their LENGTHS are the load-bearing part:
+        // randomize_mountains draws one main-RNG word per list of length > 1,
+        // so a wrong length corrupts every draw in the remaining call.
+        // RESOLVED (place_all boundary lane): the lists are shipped data.
+        // Mountains::init parses the single <MOUNTAINS> block of
+        // Data/effects_graphics.xml -- 16 <MOUNTAIN> elements, area lg x7,
+        // med x8, sm x1 -- so the lengths are 1/8/7 and randomize_mountains
+        // consumes exactly two main-stream words. crate::place_all_advance::
+        // resolve_mountain_ranges builds them.
         required_source:
-            "three MountainsData LinkList<int,u8> payload/cursor states before randomize_mountains",
-        addresses: vec![MOUNTAINS_GLOBAL_VA, 0x0089_ca70],
+            "shipped Data/effects_graphics.xml <MOUNTAINS>; lengths 1/8/7 set the randomize_mountains draw count",
+        addresses: vec![MOUNTAINS_GLOBAL_VA, 0x0089_ca70, 0x0089_ad70, 0x0089_92b0],
     }
 }
 
@@ -739,7 +775,14 @@ fn missing_tdata() -> UnavailablePlaceAllFact {
 fn missing_doober_rules() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::DooberTilesetRules,
-        required_source: "TileSet.cur_tileset +0x20 -> TileSetData.group_data +0x614, fields +0x14 and +0x20..+0x3c",
+        // CORRECTION (place_all boundary lane): shipped data. TileSetGroupData
+        // is sixteen ints at offsets 0..60 in the PDB, and the selected
+        // TILESET/TERRAINGROUP element in Data/tilesets.xml declares exactly
+        // sixteen <NAME value="N"/> children matching those field names in
+        // offset order. crate::fractal_boundary::FertilityBoundary::doober_rules
+        // now reads them from the same element it already read CLUMP_FACTOR
+        // (field 0) from.
+        required_source: "shipped Data/tilesets.xml TILESET[selected]/TERRAINGROUP; TileSetData.group_data +0x614 fields +0x14 and +0x20..+0x3c",
         addresses: vec![TILESETS_GLOBAL_VA, TERRAIN_GROUPS_PLACE_ALL_VA],
     }
 }
@@ -747,23 +790,48 @@ fn missing_doober_rules() -> UnavailablePlaceAllFact {
 fn missing_progress() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::ProgressArgument,
-        required_source: "first stack argument to TerrainGroups::place_all, forwarded from Map::make argument three",
-        addresses: vec![0x0068_c009, TERRAIN_GROUPS_PLACE_ALL_VA],
+        // CORRECTION (place_all boundary lane): derived, and irrelevant either
+        // way. Map::make forwards its third parameter with `push esi` at
+        // 0x0068c009; Setup::build_game dispatches Map::make at 0x005ac657 with
+        // its own first argument, which Game::init computes as
+        // `sete al` on (param_3 == 0) at 0x0058cab9..0x0058cac2 and pushes at
+        // 0x0058d1b0. Both Game::run dispatches (0x00584b52, 0x00584db6) pass
+        // param_3 = 0, so a normal game start is place_all(1, 1). The argument
+        // is tested only at 0x006a79f1 / 0x006a86f1 / 0x006a8a61, each guarding
+        // a splash-caption block with no RNG draw and no simulation write.
+        required_source: "derived: 1 in a normal game start; gates only splash-caption blocks",
+        addresses: vec![0x0068_c009, 0x0058_d1b0, 0x0058_cab9],
     }
 }
 
 fn missing_helping() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::HelpingGlobals,
-        required_source: "is_helping plus lowest_player[5] and entry player_scores[8][5]",
-        addresses: vec![IS_HELPING_VA, LOWEST_PLAYER_VA, PLAYER_SCORES_VA],
+        // CORRECTION (place_all boundary lane): place_all initialises all of
+        // these itself, before its own first read. num_players 0x00cae70c is
+        // world.start_x.length, written at 0x006a72eb..0x006a72fb;
+        // lowest_player[5] is zeroed at 0x006a75ab/0x006a75b4 and never read by
+        // place_all; player_scores rows [0, num_players) are zeroed at
+        // 0x006a75ee..0x006a760c; is_helping is set to 0 at 0x006a7618, before
+        // its first read at 0x006a82d0, and is thereafter recomputed from
+        // help_lowest_index[5] 0x00cbe460, which place_all also builds. It is a
+        // placement-loop flag, not a game-setup option.
+        // crate::place_all_advance::initial_region_helping_state builds it.
+        required_source: "derived: place_all initialises is_helping/lowest_player/player_scores before reading them",
+        addresses: vec![0x006a_7618, 0x006a_75ab, 0x006a_75ee, 0x006a_72eb],
     }
 }
 
 fn missing_reporting_scores() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::ReportingScores,
-        required_source: "player_scores[8][5] at the post-placement reporting anchor; num_players is replay-derived",
+        // CORRECTION (place_all boundary lane): this is a port gap, not a
+        // capture requirement. player_scores[8][5] is zeroed by place_all and
+        // then accumulated inside the same call by place_region_group
+        // 0x006a2f60, which adds each successful tile's octagonal distance to
+        // every participating player. The reporting tail at 0x006a8f12 reads
+        // the result. Nothing outside place_all supplies it.
+        required_source: "produced inside place_all by place_region_group 0x006a2f60; the port does not yet accumulate it",
         addresses: vec![NUM_PLAYERS_VA, PLAYER_SCORES_VA, TERRAIN_GROUPS_REPORTING_VA],
     }
 }

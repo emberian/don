@@ -746,6 +746,20 @@ not promote adjacent uncased behavior. Specifically:
    test, differentially compared over 100,041 trials with zero mismatches against retail's
    own `circle_init 0x006817f0` tables (`schema/oracle-regression.json`, case
    `land_dist`). That covers the leaf, not the virtuals that call it.
+
+   The common stage after `fill_fertile` is now *entered* rather than merely named. The
+   replay reconstruction executes `TerrainGroups::place_all` `0x006a70d0` from its own World
+   and RNG. Its first call, `Mountains::randomize_mountains` `0x0089ca70` at `0x006a7330`,
+   needs the three `MountainsData` range lists, which `World::wipe`'s `Mountains::clear` call
+   at `0x006b2d97` does **not** clear; those are shipped data — `ron-data/effects_graphics.xml`
+   `<MOUNTAINS>` holds 16 `<MOUNTAIN>` elements, `area` `lg`×7 / `med`×8 / `sm`×1, so the
+   lengths are `1 / 8 / 7` and the call costs exactly **two** main-stream draws. With them
+   derived, the recorded boundary is now **`Mountains::add_mountain` `0x0089c2e0`** for map
+   style 12 and **`World::set_oil_at` `0x006b2a10`** for style 14. Nothing is committed —
+   `place_all` is fail-closed and the `world` channel is unchanged. See
+   [`docs/assembly/replay-place-all-boundary.md`](../assembly/replay-place-all-boundary.md),
+   which also retires eight of the nine producers that
+   `crates/don-replay/src/place_all_facts.rs` claimed require a live capture.
 9. **`land` values 0/1/2 are named from behaviour**, not from a definition. `is_ocean`
    accepts 1 and 2, `wipe` and `offmap_world` use 2. The PDB's `TileSetLandTypes`
    (`eTILE_FERTILE=0, eTILE_COASTAL=1, eTILE_OCEAN=2`) is a *tileset* enum and is only a

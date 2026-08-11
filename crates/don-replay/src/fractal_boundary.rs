@@ -84,7 +84,44 @@ pub struct FertilityBoundary {
     pub partitions: Vec<u8>,
     pub clump_factor: i32,
     pub plane: RetailFractalPlane,
+    /// The eight doober fields plus `mnt_fringe_tree_prob` of the selected
+    /// tileset's `TileSetGroupData`, read from the same `TERRAINGROUP` element
+    /// that supplies `clump_factor`.
+    ///
+    /// The PDB gives `TileSetGroupData` as sixteen `int`s at offsets 0..60
+    /// (`clump_factor`, `forest_base`, `forest_growth_prob`, `mountain_base`,
+    /// `mountain_growth_prob`, `mnt_fringe_tree_prob`, `coast_base`,
+    /// `coast_growth_prob`, `bush_clump_prob`, `bush_spacing`, `bush_min`,
+    /// `bush_max`, `mnt_rock_clump_prob`, `mnt_rock_spacing`, `mnt_rock_min`,
+    /// `mnt_rock_max`). Each shipped `TILESET/TERRAINGROUP` declares exactly
+    /// sixteen `<NAME value="N"/>` children whose names and declaration order
+    /// match those fields one for one, and `CLUMP_FACTOR` — field 0 — was
+    /// already independently confirmed as this element's `value` attribute by
+    /// the fertility partition path. The `TileSetData` XML parser body itself
+    /// was not read; that is this binding's stated evidence boundary.
+    pub doober_rules: don_sim::systems::terrain_doobers::DooberTilesetRules,
 }
+
+/// The sixteen `TileSetGroupData` fields in PDB offset order, as the shipped
+/// `TILESET/TERRAINGROUP` element names them.
+pub const TILESET_GROUP_DATA_ELEMENTS: [&str; 16] = [
+    "CLUMP_FACTOR",
+    "FOREST_BASE",
+    "FOREST_GROWTH_PROB",
+    "MOUNTAIN_BASE",
+    "MOUNTAIN_GROWTH_PROB",
+    "MOUNTAIN_FRINGE_TREE_PROB",
+    "COAST_BASE",
+    "COAST_GROWTH_PROB",
+    "BUSH_CLUMP_PROB",
+    "BUSH_SPACING",
+    "BUSH_MIN",
+    "BUSH_MAX",
+    "MOUNTAIN_ROCK_CLUMP_PROB",
+    "MOUNTAIN_ROCK_SPACING",
+    "MOUNTAIN_ROCK_MIN",
+    "MOUNTAIN_ROCK_MAX",
+];
 
 impl FertilityBoundary {
     pub fn tile_selection(&self) -> TileSelectionBoundary {
@@ -405,6 +442,19 @@ pub fn resolve_fertility_boundary_xml(
             }
         })?;
     let clump_factor = element_i32(&clump, "value", "tilesets")?;
+    let group_data = tileset_group_data(&terrain_group.body, &tileset)?;
+    debug_assert_eq!(group_data[0], clump_factor);
+    let doober_rules = don_sim::systems::terrain_doobers::DooberTilesetRules {
+        mountain_fringe_tree_prob: group_data[5],
+        bush_clump_prob: group_data[8],
+        bush_spacing: group_data[9],
+        bush_min: group_data[10],
+        bush_max: group_data[11],
+        mountain_rock_clump_prob: group_data[12],
+        mountain_rock_spacing: group_data[13],
+        mountain_rock_min: group_data[14],
+        mountain_rock_max: group_data[15],
+    };
 
     let baseland_frequencies =
         effective_baseland_frequencies(&default, &selected, &tileset, base_count)?;
@@ -423,7 +473,28 @@ pub fn resolve_fertility_boundary_xml(
         partitions,
         clump_factor,
         plane,
+        doober_rules,
     })
+}
+
+/// Read all sixteen `TileSetGroupData` fields from one `TERRAINGROUP` element.
+///
+/// Every field is required. A shipped tileset that omits one is a real finding,
+/// not a place to substitute zero: `bush_min`/`bush_max` and
+/// `mnt_rock_min`/`mnt_rock_max` bound clump-count draws that `add_doobers`
+/// takes from the main RNG stream.
+fn tileset_group_data(body: &str, tileset: &str) -> Result<[i32; 16], FractalBoundaryError> {
+    let mut values = [0i32; 16];
+    for (slot, name) in TILESET_GROUP_DATA_ELEMENTS.iter().enumerate() {
+        let element = unique_element(body, name, "tilesets")?.ok_or_else(|| {
+            FractalBoundaryError::MissingElement {
+                context: "tilesets",
+                element: format!("TILESET[{tileset}]/TERRAINGROUP/{name}"),
+            }
+        })?;
+        values[slot] = element_i32(&element, "value", "tilesets")?;
+    }
+    Ok(values)
 }
 
 /// `TerrainGroups::init_tileset_data` `0x006a6474..0x006a64c6`.

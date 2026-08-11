@@ -137,10 +137,11 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     assert_eq!(executed.style, plan.style);
     assert_eq!(
         executed.boundary.name(),
-        // `ron-data/tilesets.xml` is now extracted, so the tileset stage no longer aborts on
-        // a missing file and the generator runs a whole stage further: `fill_fertile`
-        // 0x006a6f90 -> `place_all` 0x006a70d0, on all 21 checksum-bearing recordings.
-        "terrain_groups_place_all",
+        // `ron-data/tilesets.xml` and `ron-data/effects_graphics.xml` are extracted, so the
+        // generator now runs INTO `place_all` 0x006a70d0. Mediterranean's group 0 is
+        // `pattern="nonplayer"`, so it enters `place_region_group` 0x006a2f60 and stops at
+        // `Mountains::add_mountain` 0x0089c2e0 -- the first genuinely unported retail leaf.
+        "place_all_mountains_add_mountain",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -283,10 +284,12 @@ fn checksum_bearing_great_lakes_replay_runs_its_whole_style_virtual() {
     let executed = sim.initial_items.as_ref().unwrap();
     assert_eq!(
         executed.boundary.name(),
-        // `ron-data/tilesets.xml` is now extracted, so the tileset stage no longer aborts on
-        // a missing file and the generator runs a whole stage further: `fill_fertile`
-        // 0x006a6f90 -> `place_all` 0x006a70d0, on all 21 checksum-bearing recordings.
-        "terrain_groups_place_all",
+        // `ron-data/tilesets.xml` and `ron-data/effects_graphics.xml` are extracted, so the
+        // generator now runs INTO `place_all` 0x006a70d0. Great Lakes' group 0 is
+        // `type="trees" pattern="player"`, whose growth tail calls `World::set_oil_at`
+        // 0x006b2a10; its Good-object create/close belongs to the unmodelled `goods`
+        // channel, so the strict oil policy stops there.
+        "place_all_world_set_oil_at",
         "continent execution error: {:?}",
         sim.initial_item_error
     );

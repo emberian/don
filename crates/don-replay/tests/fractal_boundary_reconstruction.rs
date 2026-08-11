@@ -38,12 +38,46 @@ const SELECTED_WITHOUT_TILESET: &str = r#"
 const TILESETS_XML: &str = r#"
 <TILESETS>
   <TILESET name="Dirty">
-    <TERRAINGROUP><CLUMP_FACTOR value="2"/></TERRAINGROUP>
+    <TERRAINGROUP>
+      <CLUMP_FACTOR value="2"/>
+      <FOREST_BASE value="21"/>
+      <FOREST_GROWTH_PROB value="22"/>
+      <MOUNTAIN_BASE value="23"/>
+      <MOUNTAIN_GROWTH_PROB value="24"/>
+      <MOUNTAIN_FRINGE_TREE_PROB value="25"/>
+      <COAST_BASE value="26"/>
+      <COAST_GROWTH_PROB value="27"/>
+      <BUSH_CLUMP_PROB value="28"/>
+      <BUSH_SPACING value="29"/>
+      <BUSH_MIN value="30"/>
+      <BUSH_MAX value="31"/>
+      <MOUNTAIN_ROCK_CLUMP_PROB value="32"/>
+      <MOUNTAIN_ROCK_SPACING value="33"/>
+      <MOUNTAIN_ROCK_MIN value="34"/>
+      <MOUNTAIN_ROCK_MAX value="35"/>
+    </TERRAINGROUP>
     <BASELAND><BASE/><BASE/><BASE/><BASE/></BASELAND>
     <COASTAL><BASE/><BASE/></COASTAL>
   </TILESET>
   <TILESET name="Snowy">
-    <TERRAINGROUP><CLUMP_FACTOR value="3"/></TERRAINGROUP>
+    <TERRAINGROUP>
+      <CLUMP_FACTOR value="3"/>
+      <FOREST_BASE value="41"/>
+      <FOREST_GROWTH_PROB value="42"/>
+      <MOUNTAIN_BASE value="43"/>
+      <MOUNTAIN_GROWTH_PROB value="44"/>
+      <MOUNTAIN_FRINGE_TREE_PROB value="45"/>
+      <COAST_BASE value="46"/>
+      <COAST_GROWTH_PROB value="47"/>
+      <BUSH_CLUMP_PROB value="48"/>
+      <BUSH_SPACING value="49"/>
+      <BUSH_MIN value="50"/>
+      <BUSH_MAX value="51"/>
+      <MOUNTAIN_ROCK_CLUMP_PROB value="52"/>
+      <MOUNTAIN_ROCK_SPACING value="53"/>
+      <MOUNTAIN_ROCK_MIN value="54"/>
+      <MOUNTAIN_ROCK_MAX value="55"/>
+    </TERRAINGROUP>
     <BASELAND><BASE/><BASE/><BASE/><BASE/></BASELAND>
   </TILESET>
 </TILESETS>
@@ -185,5 +219,51 @@ fn unresolved_installed_content_and_incomplete_frequency_rows_fail_closed() {
             tileset,
             index: 3,
         }) if tileset == "Dirty"
+    ));
+}
+
+/// The nine `TileSetGroupData` doober fields bind to the right XML elements.
+///
+/// The PDB gives `TileSetGroupData` as sixteen `int`s at offsets 0..60 and each
+/// shipped `TILESET/TERRAINGROUP` declares exactly sixteen `<NAME value="N"/>`
+/// children with those names in that order. The fixture gives every field a
+/// distinct value, so a shuffled field-to-element binding cannot pass — which is
+/// the whole risk in a sixteen-int struct read positionally.
+#[test]
+fn doober_tileset_rules_bind_to_their_named_terraingroup_elements() {
+    let boundary = resolve_fertility_boundary_xml(
+        inputs(),
+        DEFAULT_XML,
+        SELECTED_WITHOUT_TILESET,
+        TILESETS_XML,
+    )
+    .unwrap();
+    assert_eq!(boundary.tileset, "Dirty");
+    assert_eq!(boundary.clump_factor, 2);
+    let rules = boundary.doober_rules;
+    // Offsets 20, 32, 36, 40, 44, 48, 52, 56, 60 of TileSetGroupData.
+    assert_eq!(rules.mountain_fringe_tree_prob, 25);
+    assert_eq!(rules.bush_clump_prob, 28);
+    assert_eq!(rules.bush_spacing, 29);
+    assert_eq!(rules.bush_min, 30);
+    assert_eq!(rules.bush_max, 31);
+    assert_eq!(rules.mountain_rock_clump_prob, 32);
+    assert_eq!(rules.mountain_rock_spacing, 33);
+    assert_eq!(rules.mountain_rock_min, 34);
+    assert_eq!(rules.mountain_rock_max, 35);
+}
+
+/// A `TERRAINGROUP` missing one of the sixteen fields must fail closed.
+///
+/// `bush_min`/`bush_max` and `mnt_rock_min`/`mnt_rock_max` bound clump-count
+/// draws that `add_doobers` takes from the main RNG stream, so a substituted
+/// zero would be an invented draw count, not a harmless default.
+#[test]
+fn an_incomplete_terraingroup_fails_closed() {
+    let missing = TILESETS_XML.replace("      <BUSH_MAX value=\"31\"/>\n", "");
+    assert!(matches!(
+        resolve_fertility_boundary_xml(inputs(), DEFAULT_XML, SELECTED_WITHOUT_TILESET, &missing),
+        Err(FractalBoundaryError::MissingElement { element, .. })
+            if element == "TILESET[Dirty]/TERRAINGROUP/BUSH_MAX"
     ));
 }

@@ -45,11 +45,45 @@ const SELECTED_XML: &str = "<ROOT><MAP><SEA_MAP value=\"0\"/></MAP></ROOT>";
 const TILESETS_XML: &str = r#"
 <TILESETS>
   <TILESET name="Dirty">
-    <TERRAINGROUP><CLUMP_FACTOR value="2"/></TERRAINGROUP>
+    <TERRAINGROUP>
+      <CLUMP_FACTOR value="2"/>
+      <FOREST_BASE value="21"/>
+      <FOREST_GROWTH_PROB value="22"/>
+      <MOUNTAIN_BASE value="23"/>
+      <MOUNTAIN_GROWTH_PROB value="24"/>
+      <MOUNTAIN_FRINGE_TREE_PROB value="25"/>
+      <COAST_BASE value="26"/>
+      <COAST_GROWTH_PROB value="27"/>
+      <BUSH_CLUMP_PROB value="28"/>
+      <BUSH_SPACING value="29"/>
+      <BUSH_MIN value="30"/>
+      <BUSH_MAX value="31"/>
+      <MOUNTAIN_ROCK_CLUMP_PROB value="32"/>
+      <MOUNTAIN_ROCK_SPACING value="33"/>
+      <MOUNTAIN_ROCK_MIN value="34"/>
+      <MOUNTAIN_ROCK_MAX value="35"/>
+    </TERRAINGROUP>
     <BASELAND><BASE/><BASE/><BASE/><BASE/></BASELAND>
   </TILESET>
   <TILESET name="Snowy">
-    <TERRAINGROUP><CLUMP_FACTOR value="3"/></TERRAINGROUP>
+    <TERRAINGROUP>
+      <CLUMP_FACTOR value="3"/>
+      <FOREST_BASE value="41"/>
+      <FOREST_GROWTH_PROB value="42"/>
+      <MOUNTAIN_BASE value="43"/>
+      <MOUNTAIN_GROWTH_PROB value="44"/>
+      <MOUNTAIN_FRINGE_TREE_PROB value="45"/>
+      <COAST_BASE value="46"/>
+      <COAST_GROWTH_PROB value="47"/>
+      <BUSH_CLUMP_PROB value="48"/>
+      <BUSH_SPACING value="49"/>
+      <BUSH_MIN value="50"/>
+      <BUSH_MAX value="51"/>
+      <MOUNTAIN_ROCK_CLUMP_PROB value="52"/>
+      <MOUNTAIN_ROCK_SPACING value="53"/>
+      <MOUNTAIN_ROCK_MIN value="54"/>
+      <MOUNTAIN_ROCK_MAX value="55"/>
+    </TERRAINGROUP>
     <BASELAND><BASE/><BASE/><BASE/><BASE/></BASELAND>
   </TILESET>
 </TILESETS>
@@ -184,6 +218,9 @@ fn plan(fixture: &Fixture) -> InitialItemReconstruction {
         fertility: None,
         fertility_error: None,
         fill_fertile: None,
+        place_all_advance: None,
+        place_all_advance_error: None,
+        mountain_range_error: None,
         boundary: InitialItemBoundary::MapContinentGenerationUnavailable {
             map_style: 6,
             make_continents_va: SHIPPED_MAP_STYLE_CATALOG[6].make_continents_va.unwrap(),
@@ -216,12 +253,21 @@ fn admitted_install_data_reaches_place_all_with_correct_rng_handoff_and_land_sub
 
     let post = plan.post_continent.as_ref().unwrap();
     assert_eq!(post.next_va, TERRAIN_GROUPS_FILL_FERTILE_VA);
+    // fill_fertile now runs and the plan enters `TerrainGroups::place_all`
+    // 0x006a70d0 itself. This fixture's tilesets path has no sibling
+    // effects_graphics.xml, so the survey stops at the first call in the body,
+    // Mountains::randomize_mountains 0x0089ca70, and names it.
     assert_eq!(
         plan.boundary,
-        InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable {
-            next_va: TERRAIN_GROUPS_PLACE_ALL_VA,
+        InitialItemBoundary::MapTerrainGroupsPlaceAllPrimitiveUnavailable {
+            boundary: "place_all_mountain_range_lists",
+            place_all_va: TERRAIN_GROUPS_PLACE_ALL_VA,
+            primitive_va: don_replay::MOUNTAINS_RANDOMIZE_MOUNTAINS_VA,
+            group_index: None,
+            completed_groups: 0,
         }
     );
+    assert!(plan.mountain_range_error.is_some());
     assert!(plan.fertility_error.is_none());
 
     let fertility = plan.fertility.as_ref().unwrap();

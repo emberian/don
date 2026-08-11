@@ -127,6 +127,11 @@ pub struct RunResult {
     pub initial_tile_selection: Option<crate::fractal_boundary::TileSelectionBoundary>,
     pub initial_fertility_error: Option<String>,
     pub initial_fill_fertile_cells: Option<i32>,
+    /// Executed `TerrainGroups::place_all` `0x006a70d0` survey. It commits no
+    /// world state; it names the first primitive inside the call that the
+    /// reconstruction cannot run and how far the group dispatcher got.
+    pub initial_place_all: Option<crate::place_all_advance::PlaceAllAdvanceReceipt>,
+    pub initial_place_all_error: Option<String>,
     /// Distinct `.rcx` bytes carrying the known scalar worldgen tuple.
     pub initial_item_scalar_source_bytes: usize,
     pub initial_rules_offset: Option<usize>,
@@ -452,6 +457,11 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_fill_fertile_cells: initial_items
             .fill_fertile
             .map(|receipt| receipt.fertile_cells),
+        initial_place_all: initial_items.place_all_advance.clone(),
+        initial_place_all_error: initial_items
+            .place_all_advance_error
+            .as_ref()
+            .map(|error| format!("{error:?}")),
         initial_item_scalar_source_bytes: initial_items.scalar_source_bytes(),
         initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
         initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),

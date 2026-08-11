@@ -145,9 +145,13 @@ fn plan(edge: i32) -> InitialItemReconstruction {
                 random_draws: 0,
                 random_state_after: 17,
             },
+            doober_rules: don_sim::systems::terrain_doobers::DooberTilesetRules::default(),
         }),
         fertility_error: None,
         fill_fertile: Some(FillFertileReceipt::default()),
+        place_all_advance: None,
+        place_all_advance_error: None,
+        mountain_range_error: None,
         boundary: InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable {
             next_va: TERRAIN_GROUPS_PLACE_ALL_VA,
         },

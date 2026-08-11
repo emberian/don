@@ -57,6 +57,7 @@ pub mod map_make_resource_caller_gap_frontier;
 pub mod map_make_resource_schedule_integration;
 pub mod map_style;
 pub mod nubify_forest_frontier;
+pub mod place_all_advance;
 pub mod place_all_boundary;
 pub mod place_all_facts;
 pub mod place_resources_bonus_mutation_frontier;
@@ -124,6 +125,15 @@ pub use map_style::{
 pub use nubify_forest_frontier::{
     execute_nubify_forest_frontier, EdgeOfRegionHost, EdgeOfRegionProvenance, EdgeOfRegionReceipt,
     EdgeOfRegionRequest, NubifyForestError, NubifyForestReceipt,
+};
+pub use place_all_advance::{
+    advance_place_all_boundary, OilGoodPolicy, PlaceAllAdvanceError, PlaceAllAdvanceFacts,
+    PlaceAllAdvanceReceipt, PlaceAllStop, SelectedGroupRow, CLIFFS_POSITION_CLIFF_VA,
+    CLIFFS_VERIFY_DEFENSIVE_POSITION_VA, MOUNTAINS_ADD_MOUNTAIN_VA,
+    MOUNTAINS_RANDOMIZE_CALL_VA, MOUNTAINS_RANDOMIZE_MOUNTAINS_VA,
+    TERRAIN_GROUPS_ADD_DOOBERS_VA, TERRAIN_GROUPS_TREEIFY_MOUNTAINS_VA,
+    TERRAIN_GROUP_PLACE_PLAYER_GROUP_VA, TERRAIN_GROUP_PLACE_REGION_GROUP_VA,
+    WORLD_SET_OIL_AT_VA,
 };
 pub use place_all_boundary::{
     execute_replay_place_all, ReplayPlaceAllError, ReplayPlaceAllFacts, ReplayPlaceAllHostFacts,
