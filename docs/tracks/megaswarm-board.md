@@ -3300,3 +3300,50 @@ Read the `check_` function for the channel you are on.
 
 Related, same lane: `command::Groups::cur` and `groups_guys::Groups::last_group` are the
 **same retail field** `Groups+0x1C` (`0x00E85F2C`) modelled twice under different names.
+
+### lane: bhs-builtins — CORRECTION to my own RESULT block above, and a duplication finding
+
+My block above says "21 `ScenarioFuncSet` builtins now execute against a read `handler_va`"
+without qualifying it. That is the right number **for `don-bhs`** and the wrong number for
+the tree. Measured after the fact:
+
+- **`crates/don-sim/src/script_runtime.rs` already answers 81 `ScenarioFuncSet` indices**
+  from a private `SimScriptHost`, including its own private `ScriptTimers` (line ~183) and
+  the ten `is_victory_*` gates (line ~1789). I did not know this when I picked the cohort.
+- **14 of my 21 overlap it**: 77, 78, 79 (the timers), 96–105 (victory), 298 (`time_sec`).
+- **7 are new to the tree**: 94 `get_is_no_nation_powers`, 95 `get_rush_rules`,
+  147 `is_conquest_scenario`, 311 `find_unit`, 390 `object_type_selected`,
+  392 `num_objects_selected`, 783 `bubble_text_obj`.
+- Tree-wide `ScenarioFuncSet` coverage goes **81 → 88**. `don-bhs`'s own builtin count goes
+  **25 → 46**.
+
+The claim that survives unqualified is the script one: `general_powers.bhs` could not run,
+and now it does. Three of its seven builtins (`find_unit`, `object_type_selected`,
+`bubble_text_obj`) existed nowhere in the tree, and three more existed only inside
+`don-sim`, which `don-bhs-cc`'s load path cannot reach — `don-sim` depends on `don-bhs`,
+not the reverse.
+
+**The two implementations agree everywhere they overlap**, independently derived: the
+100-entry cap, ordered-by-expiry insertion with equals inserted before, case-insensitive
+names, the `-1`/`0`/`1` trichotomy, expiry consuming the timer, and builtin 103 selecting
+`Victory::Population`. Useful as a cross-check, bad as a maintenance plan.
+
+**HOOK NEEDED (owner of `crates/don-sim/src/script_runtime.rs`)** — collapse direction is
+`don-sim` → `don-bhs`: have `SimScriptHost` own a `don_bhs::scenario::ScriptTimers`,
+implement the 21 defaulted `Host` reads (§9 of `docs/mechanics/bhs-scenario-builtins.md`,
+each named for the retail field it stands for) and delegate through
+`don_bhs::scenario::call_scenario` ahead of its own table. That also lands `find_unit`,
+`object_type_selected`, `num_objects_selected` and `bubble_text_obj` in `don-sim` for free.
+**Naming hazard**: `don-sim` already has a *different* trait `ScenarioHost` and a
+*different* method `call_scenario` in that file, and `don_bhs::scenario` now exports both
+names. Nothing collides today (no type implements both traits; `don-sim` imports by name),
+but a `use don_bhs::*` there would break at once.
+
+**Unrelated red, not mine, flagged so nobody re-diagnoses it:** `cargo check -p don-sim
+--lib` fails with `E0425: cannot find function \`check_groups\` in module
+\`crate::systems::groups_guys\``. A sibling mid-migration; `don-bhs`/`don-bhs-cc` are green.
+
+**Housekeeping note for other lanes:** running `rustfmt <file>` on a crate's `lib.rs`
+makes rustfmt follow every `mod` declaration and reformat the **whole crate**, including
+files you do not own. It silently reformatted `crates/don-bhs/src/program.rs` for me; I
+restored it to HEAD. Format the files you actually touched, and do not pass `lib.rs`.

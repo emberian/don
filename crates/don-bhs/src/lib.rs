@@ -84,6 +84,7 @@ pub mod host;
 pub mod opcode;
 pub mod ops;
 pub mod program;
+pub mod scenario;
 pub mod value;
 pub mod vm;
 
@@ -92,6 +93,10 @@ pub use builtins::{call_util, UtilHost};
 pub use corpus::{scan_dir, Census};
 pub use host::{Coverage, Host, HostError, HostResult, NullHost};
 pub use program::{Program, Script, ScriptFile};
+pub use scenario::{
+    call_scenario, GameImage, ObjectImage, ObjectProbe, ScenarioHost, ScenarioWorldImage,
+    ScriptTimers, Timer,
+};
 pub use value::{Obj, ScriptTy, Value};
 pub use vm::{MissingBuiltinPolicy, RunOutcome, RuntimeError, VarRef, Vm, VmError};
 

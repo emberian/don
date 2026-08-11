@@ -93,6 +93,160 @@ pub trait Host {
     fn script_print(&mut self, _s: &str, _newline: bool) -> Result<(), HostError> {
         Err(HostError::Unimplemented)
     }
+
+    // -----------------------------------------------------------------------
+    // `ScenarioFuncSet` reads. See [`crate::scenario`] for the handlers that use
+    // them; every one names the exact retail address and field it stands for, and
+    // every default refuses rather than answering.
+    // -----------------------------------------------------------------------
+
+    /// `Game::tick` (`Game+0x560`), which counts **game seconds**. `time_sec`
+    /// (`0x009ead40`) is twelve bytes that return it verbatim, and `set_timer`
+    /// (`0x009e4bc0`) adds its `seconds` argument to it.
+    fn game_seconds(&mut self) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `GameInfo::flags` (`Game+0x20`, i.e. `GameInfo+0x14`).
+    /// `get_is_no_nation_powers` (`0x009e5230`) reads bit 2 of its low byte.
+    fn game_info_flags(&mut self) -> Result<u32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `GameInfo::rush_rules` (`Game+0x32`), a `RushRulesIndex`.
+    fn game_info_rush_rules(&mut self) -> Result<u8, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `GameInfo::victory` (`Game+0x38`), a `VictoryIndex`. All ten `is_victory_*`
+    /// builtins are a `cmp`/`sete` against a constant on this one byte.
+    fn game_info_victory(&mut self) -> Result<u8, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `Game::semaphore` (`BitMask<256>` at `Game+0x814`; the bit bytes start at
+    /// `Game+0x820`).
+    fn game_semaphore_bit(&mut self, _bit: u32) -> Result<bool, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `ScenarioData::timers` (`0x00ed6650`) — script-engine state, so the container
+    /// itself is implemented in [`crate::scenario::ScriptTimers`] and a host only has
+    /// to own one.
+    fn script_timers(&mut self) -> Result<&mut crate::scenario::ScriptTimers, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `[0x00cc2214]`, the file-static object cursor `find_unit` (`0x009ebe10`) reads,
+    /// clamps at zero and writes back on every hit.
+    fn find_unit_cursor(&mut self) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    fn set_find_unit_cursor(&mut self, _v: i32) -> Result<(), HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// The first dword of `Leaders[who0]` (`0x00e3a390`, stride `0x6eec`).
+    /// See [`crate::scenario::leader_flag`].
+    fn leader_flags(&mut self, _who0: i32) -> Result<u32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `ScenarioFuncSet::get_type_index(name, 0)` (`0x00a03480`): the index of the first
+    /// of the 806 type records whose `TypeData+0x60` name matches, or `-1`.
+    fn type_index_by_name(&mut self, _name: &str) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `TypeData::is_unit_type`, which `find_unit` reaches through the type vtable at
+    /// `+0x0c` and which the compiler devirtualises at `0x009ebe5d` into
+    /// `0x32 <= TypeData+4 < 0x19e`.
+    fn type_is_unit_type(&mut self, _type_index: i32) -> Result<bool, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `Objects+0x15c+who0*4` — the high-water count of the owner's `Units::lists` band
+    /// (`0x00c0aec0`), which is what `0x009e2850` wraps against.
+    fn unit_band_count(&mut self, _who0: i32) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// One slot of `Units::lists[who0]`, by band index rather than by object handle.
+    fn unit_band_probe(
+        &mut self,
+        _who0: i32,
+        _idx: i32,
+    ) -> Result<crate::scenario::ObjectProbe, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `SubObject::is(type_index, 0)` (vtable `+0xb8`) on a `Units::lists` slot.
+    fn unit_band_is_type(
+        &mut self,
+        _who0: i32,
+        _idx: i32,
+        _type_index: i32,
+    ) -> Result<bool, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// One slot of `Objects::lists[who0]` (`Objects+0x14`, stride `0x1c`), by handle.
+    fn object_band_probe(
+        &mut self,
+        _who0: i32,
+        _o: i32,
+    ) -> Result<crate::scenario::ObjectProbe, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `SubObject::is(type_index, 0)` on an `Objects::lists` handle.
+    fn object_band_is_type(
+        &mut self,
+        _who0: i32,
+        _o: i32,
+        _type_index: i32,
+    ) -> Result<bool, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `SubObjectData::x_internal` / `y_internal` **as stored**, i.e. still XORed with
+    /// `0x00063637`. `bubble_text_obj` (`0x009ff58b`) un-XORs them itself.
+    fn object_band_position_internal(
+        &mut self,
+        _who0: i32,
+        _o: i32,
+    ) -> Result<(i32, i32), HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `GroupData+0x4a` of the local console's select group
+    /// (`[0x00e8d444] + Console+0x2a0 * 0x9f0`), zero-based.
+    fn selection_group_owner(&mut self) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// The `short[]` member handles at `GroupData+0x8cc`, `GroupData+0xc` of them.
+    fn selection_group_members(&mut self) -> Result<Vec<i32>, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `Console+0x298`, the local display player.
+    fn local_display_player(&mut self) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
+    }
+
+    /// `MessageWin::add_bubble_message` (`0x007e7e20`). Presentation: a receipt, not
+    /// simulation state.
+    fn add_bubble_message(
+        &mut self,
+        _text: &str,
+        _x: i32,
+        _y: i32,
+        _who: i32,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unimplemented)
+    }
 }
 
 /// Per-builtin call accounting, so "which builtins do we still owe?" is a
