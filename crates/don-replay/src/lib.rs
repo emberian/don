@@ -101,6 +101,7 @@ pub mod state;
 pub mod setup_units_producer;
 pub mod starting_village_suffix;
 pub mod units_runtime;
+pub mod unit_init_location_deep_re;
 pub mod walk;
 pub mod wire;
 pub mod world_owner_frontier;
