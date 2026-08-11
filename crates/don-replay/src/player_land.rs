@@ -7,6 +7,7 @@
 //! region, then grows the selected region through the canonical combat-circle
 //! order.  The shipped body consumes no RNG.
 
+use don_sim::systems::collision::{RING_COUNT, RING_X, RING_Y};
 use don_sim::systems::combat::{circle_table, CIRCLE_MAX_RING};
 use don_sim::systems::map_terrain::{land, wflag, World};
 use don_sim::systems::regions::{Regions, REGION_COUNT};
@@ -190,13 +191,11 @@ fn check_player_land_body(
     call: CheckPlayerLandCall,
     effective_radius: i32,
 ) -> Result<CheckPlayerLandReceipt, CheckPlayerLandError> {
-    let spiral = square_spiral(10);
-    debug_assert_eq!(spiral.len(), 441);
     let circle = circle_table();
     let outer_end = circle.ring_end[effective_radius as usize] as usize;
     let effective_avoid_continent = (call.enabled != 0).then(|| call.avoid_continent.min(10));
     let exclusion_end = effective_avoid_continent
-        .map(|radius| ((radius * 2 + 1) * (radius * 2 + 1)) as usize)
+        .map(|radius| RING_COUNT[radius as usize] as usize)
         .unwrap_or(1);
 
     let starts: Vec<(i32, i32)> = world
@@ -230,7 +229,9 @@ fn check_player_land_body(
             // The assembly addresses move_x/y at base+4 and performs 48
             // iterations: the complete radii-one-through-three perimeter,
             // excluding the centre at index zero.
-            let target = spiral[1..49].iter().find_map(|&(dx, dy)| {
+            let target = (1..49).find_map(|index| {
+                let dx = RING_X[index];
+                let dy = RING_Y[index];
                 let x = start_x.wrapping_add(dx);
                 let y = start_y.wrapping_add(dy);
                 world
@@ -240,7 +241,9 @@ fn check_player_land_body(
             });
             if let Some(target) = target {
                 receipt.target_regions_found += 1;
-                for &(dx, dy) in &spiral[..9] {
+                for index in 0..9 {
+                    let dx = RING_X[index];
+                    let dy = RING_Y[index];
                     let x = start_x.wrapping_add(dx);
                     let y = start_y.wrapping_add(dy);
                     if !world.valid_w(x, y) {
@@ -288,7 +291,9 @@ fn check_player_land_body(
             }
             receipt.outer_candidates += 1;
             let rejected = if call.enabled != 0 {
-                spiral[1..exclusion_end].iter().any(|&(dx, dy)| {
+                (1..exclusion_end).any(|index| {
+                    let dx = RING_X[index];
+                    let dy = RING_Y[index];
                     let nx = x.wrapping_add(dx);
                     let ny = y.wrapping_add(dy);
                     if !world.valid_w(nx, ny) {
@@ -326,28 +331,6 @@ fn check_player_land_body(
     }
 
     Ok(receipt)
-}
-
-/// `move_x/move_y`: centre followed by each square perimeter clockwise from
-/// its north-west corner. Radius ten is the largest one read by this helper.
-fn square_spiral(max_radius: i32) -> Vec<(i32, i32)> {
-    let mut offsets = Vec::with_capacity(((max_radius * 2 + 1).pow(2)) as usize);
-    offsets.push((0, 0));
-    for radius in 1..=max_radius {
-        for x in -radius..=radius {
-            offsets.push((x, -radius));
-        }
-        for y in (-radius + 1)..=radius {
-            offsets.push((radius, y));
-        }
-        for x in (-radius..=(radius - 1)).rev() {
-            offsets.push((x, radius));
-        }
-        for y in ((-radius + 1)..=(radius - 1)).rev() {
-            offsets.push((-radius, y));
-        }
-    }
-    offsets
 }
 
 fn validate_coord_storage(
