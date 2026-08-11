@@ -74,6 +74,7 @@ pub mod pools;
 pub mod post_continent;
 pub mod post_nubify_transition_frontier;
 pub mod replay;
+pub mod replay_bhs_runtime;
 pub mod replay_goods_initial;
 pub mod report;
 pub mod resource_divvy_pool_selection_frontier;

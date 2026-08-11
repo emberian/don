@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use don_bhs::scenario::ScriptTimers;
 use don_bhs::{
     call_util, BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
 };
@@ -172,91 +173,6 @@ pub trait ScenarioHost: CreateUnitLiveHost {
     /// Apply the immediate cache tail of an admitted BHS type-stat mutation before control
     /// returns to the running VM.
     fn apply_type_stat_recalcs(&mut self, state: &TypeBuiltinState, calls: &[LeaderStatRecalcCall]);
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ScriptTimer {
-    name: String,
-    expires_at: i32,
-}
-
-/// `ScenarioData::timers`, a `ScriptTimers : LinkList<String,int>` with at most 100
-/// entries. `ordered_insert` sorts by the expiry value and inserts before equal values.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ScriptTimers {
-    entries: Vec<ScriptTimer>,
-}
-
-impl ScriptTimers {
-    fn position(&self, name: &str) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|timer| timer.name.eq_ignore_ascii_case(name))
-    }
-
-    /// `ScenarioFuncSet::set_timer` `0x009e4bc0` ->
-    /// `ScriptTimers::add_timer` `0x00a049e0`.
-    fn set(&mut self, name: &str, duration: i32, now: i32) -> Result<i32, HostError> {
-        if !name.is_ascii() {
-            // Retail uses locale-sensitive `_wcsicmp`. The shipped reachable timer IDs
-            // are ASCII; do not invent a Unicode case-fold for the unresolved domain.
-            return Err(HostError::Unimplemented);
-        }
-        if duration <= 0 || name.is_empty() {
-            return Ok(-1);
-        }
-        // The count gate precedes the seek/remove sequence in the shipped function, so
-        // even replacement fails when the list already contains 100 timers.
-        if self.entries.len() >= 100 {
-            return Ok(-1);
-        }
-        if let Some(index) = self.position(name) {
-            self.entries.remove(index);
-        }
-        let expires_at = now.wrapping_add(duration);
-        let insert_at = self
-            .entries
-            .iter()
-            .position(|timer| timer.expires_at >= expires_at)
-            .unwrap_or(self.entries.len());
-        self.entries.insert(
-            insert_at,
-            ScriptTimer {
-                name: name.to_string(),
-                expires_at,
-            },
-        );
-        Ok(1)
-    }
-
-    /// `ScriptTimers::remove_timer` `0x00a04b20`.
-    fn stop(&mut self, name: &str) -> Result<i32, HostError> {
-        if !name.is_ascii() {
-            return Err(HostError::Unimplemented);
-        }
-        let Some(index) = self.position(name) else {
-            return Ok(-1);
-        };
-        self.entries.remove(index);
-        Ok(1)
-    }
-
-    /// `ScriptTimers::check` `0x00a04b80`. An expired timer is removed before the
-    /// function returns 1; a live timer remains and returns 0; absence returns -1.
-    fn expired(&mut self, name: &str, now: i32) -> Result<i32, HostError> {
-        if !name.is_ascii() {
-            return Err(HostError::Unimplemented);
-        }
-        let Some(index) = self.position(name) else {
-            return Ok(-1);
-        };
-        if self.entries[index].expires_at <= now {
-            self.entries.remove(index);
-            Ok(1)
-        } else {
-            Ok(0)
-        }
-    }
 }
 
 /// Persistent compiled code plus its cross-frame statics and trigger bits.
@@ -536,18 +452,11 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
     fn call(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match call_util(self, decl, args) {
             Some(result) => result,
+            None if matches!(decl.index, 77..=79 | 298) => {
+                don_bhs::scenario::call_scenario(self, decl, args)
+                    .expect("canonical ScenarioFuncSet overlap index")
+            }
             None => match decl.index {
-                // `ScenarioFuncSet::{set,stop}_timer/timer_expired`, indices 77..79.
-                77 => Ok(Value::Int(self.timers.set(
-                    string_arg(args, 0)?,
-                    args[1].as_int(),
-                    self.scenario.game_seconds(),
-                )?)),
-                78 => Ok(Value::Int(self.timers.stop(string_arg(args, 0)?)?)),
-                79 => Ok(Value::Int(
-                    self.timers
-                        .expired(string_arg(args, 0)?, self.scenario.game_seconds())?,
-                )),
                 // `get_map_size` `0x009e4cb0`: `WorldData::xs << 2`.
                 80 => Ok(Value::Int(self.scenario.map_size())),
                 // `world_{x,y}_size` `0x009e4ee0` / `0x009e4ef0`: direct reads of
@@ -555,9 +464,8 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                 86 => Ok(Value::Int(self.scenario.map_tile_width())),
                 87 => Ok(Value::Int(self.scenario.map_tile_height())),
                 // `time` and `time_min` are instruction-identical signed divisions of
-                // `Game::seconds` by 60. `time_sec` returns that field unmodified.
+                // `Game::seconds` by 60.
                 296 | 297 => Ok(Value::Int(self.scenario.game_seconds() / 60)),
-                298 => Ok(Value::Int(self.scenario.game_seconds())),
                 // `time_later_than` `0x009ee120`: Game::seconds / 60 >= argument.
                 351 => Ok(Value::Int(
                     (self.scenario.game_seconds() / 60 >= args[0].as_int()) as i32,
@@ -617,6 +525,14 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                 }
             },
         }
+    }
+
+    fn game_seconds(&mut self) -> Result<i32, HostError> {
+        Ok(self.scenario.game_seconds())
+    }
+
+    fn script_timers(&mut self) -> Result<&mut ScriptTimers, HostError> {
+        Ok(self.timers)
     }
 
     fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError> {
@@ -2286,24 +2202,25 @@ mod tests {
     fn timer_capacity_gate_precedes_replacement_and_expiry_consumes() {
         let mut timers = ScriptTimers::default();
         for i in 0..100 {
-            assert_eq!(timers.set(&format!("timer-{i}"), 100 - i, 0).unwrap(), 1);
+            assert_eq!(timers.add_timer(&format!("timer-{i}"), 100 - i).unwrap(), 1);
         }
         assert!(
             timers
-                .entries
+                .iter()
+                .collect::<Vec<_>>()
                 .windows(2)
                 .all(|pair| pair[0].expires_at <= pair[1].expires_at),
             "ordered_insert must retain expiry ordering"
         );
 
         // Retail checks count == 100 before seeking and removing a duplicate.
-        assert_eq!(timers.set("TIMER-0", 1, 0).unwrap(), -1);
-        assert_eq!(timers.expired("timer-0", 99).unwrap(), 0);
-        assert_eq!(timers.expired("TIMER-0", 100).unwrap(), 1);
-        assert_eq!(timers.expired("timer-0", 100).unwrap(), -1);
+        assert_eq!(timers.add_timer("TIMER-0", 1).unwrap(), -1);
+        assert_eq!(timers.check("timer-0", 99).unwrap(), 0);
+        assert_eq!(timers.check("TIMER-0", 100).unwrap(), 1);
+        assert_eq!(timers.check("timer-0", 100).unwrap(), -1);
 
         // Once expiry consumed the old entry, replacement has capacity again.
-        assert_eq!(timers.set("timer-0", 1, 100).unwrap(), 1);
-        assert_eq!(timers.expired("timer-0", 101).unwrap(), 1);
+        assert_eq!(timers.add_timer("timer-0", 101).unwrap(), 1);
+        assert_eq!(timers.check("timer-0", 101).unwrap(), 1);
     }
 }

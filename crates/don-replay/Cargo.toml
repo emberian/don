@@ -12,12 +12,10 @@ description = "Replay-driven validation harness: feed a real .rcx command stream
 # `StringTable` binder rather than growing a second XML parser here.
 [dependencies]
 don-bhs = { path = "../don-bhs" }
+don-bhs-cc = { path = "../don-bhs-cc" }
 don-content = { path = "../don-content" }
 don-net = { path = "../don-net" }
 don-sim = { path = "../don-sim" }
-
-[dev-dependencies]
-don-bhs-cc = { path = "../don-bhs-cc" }
 
 [[bin]]
 name = "don-replay"
