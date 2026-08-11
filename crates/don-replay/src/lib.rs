@@ -46,6 +46,7 @@
 
 pub mod check_all;
 pub mod check_player_forest;
+pub mod builds_runtime;
 pub mod checksum;
 pub mod continent;
 pub mod fractal_boundary;
@@ -54,6 +55,7 @@ pub mod growth;
 pub mod harness;
 pub mod image;
 pub mod initial;
+pub mod leader_initial_prefix;
 pub mod map_make_resource_caller_gap_frontier;
 pub mod map_make_resource_schedule_integration;
 pub mod map_style;
