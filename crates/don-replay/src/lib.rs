@@ -57,6 +57,7 @@ pub mod initial;
 pub mod map_make_resource_caller_gap_frontier;
 pub mod map_make_resource_schedule_integration;
 pub mod map_style;
+pub mod next_checksum;
 pub mod nubify_forest_frontier;
 pub mod place_all_advance;
 pub mod place_all_boundary;

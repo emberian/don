@@ -181,6 +181,10 @@ pub struct RunResult {
     pub typed_orders: usize,
     /// Orders applied to the simulation. Zero until `don-sim` can act on one.
     pub orders_applied: usize,
+    /// The `NextCheckSumCommand` `0x3a` stream, which 39 of the 61 recordings
+    /// carry *instead* of `CheckSumsCommand`. Kept in its own structure so its
+    /// comparisons can never be added to the `0x39` scoreboard by accident.
+    pub next_checksum: crate::next_checksum::NextCheckSumResult,
     pub anomalies: Vec<String>,
 }
 
@@ -538,6 +542,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         presentation_commands: 0,
         typed_orders: 0,
         orders_applied: 0,
+        next_checksum: crate::next_checksum::NextCheckSumResult::default(),
         anomalies: rep.anomalies.clone(),
     };
 
@@ -562,6 +567,16 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
                 res.rules_constant = Some(first);
             }
         }
+    }
+
+    // The second checksum stream. Its records are emitted by the same
+    // `CommandPackage` machinery as `0x39`, so it is compared at the same phase
+    // point — but only on the turns whose sweep run is one turn long, where the
+    // single record is the whole channel rather than one element of it.
+    let (next_records, next_runs, mut next_res) = crate::next_checksum::prepare(rep);
+    let mut next_whole: BTreeMap<i32, Vec<(u8, Option<u32>)>> = BTreeMap::new();
+    for (turn, ty, value) in crate::next_checksum::whole_channel_turns(&next_records, &next_runs) {
+        next_whole.entry(turn).or_default().push((ty, value));
     }
 
     // Per-channel "still agreeing" flags; a channel stops accumulating
@@ -604,6 +619,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
             if let Some((_, rec)) = recorded {
                 compare(&mut res, &mut alive, t.turn, rec, sim, rep);
             }
+            compare_next_checksum(&mut next_res, &next_whole, t.turn, sim);
         }
 
         // ---- apply this turn's due orders, then step ----
@@ -621,9 +637,32 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
             if let Some((_, rec)) = recorded {
                 compare(&mut res, &mut alive, t.turn, rec, sim, rep);
             }
+            compare_next_checksum(&mut next_res, &next_whole, t.turn, sim);
         }
     }
+    crate::next_checksum::finish(&mut next_res, &next_records, &next_runs);
+    res.next_checksum = next_res;
     res
+}
+
+/// Score this turn's whole-channel `0x3a` records, if any.
+///
+/// Reads the same `check_all` the `0x39` path reads, so the second stream can
+/// never see a state the first cannot.
+fn compare_next_checksum<S: Simulation>(
+    next: &mut crate::next_checksum::NextCheckSumResult,
+    whole: &BTreeMap<i32, Vec<(u8, Option<u32>)>>,
+    turn: i32,
+    sim: &S,
+) {
+    let Some(rows) = whole.get(&turn) else {
+        return;
+    };
+    let (ours, bytes) = sim.check_all();
+    let installed = sim.installed_channels();
+    for (ty, value) in rows {
+        crate::next_checksum::score_turn(next, *ty, *value, &ours, &bytes, &installed);
+    }
 }
 
 /// Derive the retail `Game::init` `ScenarioData` state for a recording.

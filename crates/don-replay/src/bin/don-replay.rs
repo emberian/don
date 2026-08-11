@@ -501,42 +501,93 @@ fn seeded(args: &Args) {
 /// prints the type distribution so the next lane can decide whether it is a
 /// usable oracle.
 fn nextsum(args: &Args) {
-    use don_replay::wire::CommandView;
+    use don_replay::next_checksum as ncs;
     let reps = open_all(&args.files, args.quiet);
-    let mut by_type: std::collections::BTreeMap<i64, usize> = Default::default();
-    let mut values_per_type: std::collections::BTreeMap<i64, std::collections::BTreeSet<u32>> =
+    let mut total = 0u64;
+    let mut files = 0usize;
+    let mut xcmp = 0usize;
+    let mut xsame = 0usize;
+    let mut disagreements: Vec<(String, ncs::NextCheckSumDisagreement)> = Vec::new();
+    let mut runlen: std::collections::BTreeMap<u8, std::collections::BTreeMap<usize, usize>> =
         Default::default();
-    let mut total = 0usize;
+    let mut nonmonotone: Vec<String> = Vec::new();
+    let mut noncontiguous: Vec<String> = Vec::new();
+
     for r in &reps {
-        for t in &r.turns {
-            for p in &t.players {
-                for c in &p.commands {
-                    if c.opcode != 0x3a {
-                        continue;
-                    }
-                    total += 1;
-                    let v = CommandView::new(c.opcode, &c.bytes);
-                    let ty = v.get("checksum_type").unwrap_or(-1);
-                    *by_type.entry(ty).or_insert(0) += 1;
-                    if let Some(cs) = v.get("checksum") {
-                        let e = values_per_type.entry(ty).or_default();
-                        if e.len() < 4096 {
-                            e.insert(cs as u32);
-                        }
-                    }
-                }
+        let recs = ncs::records(r);
+        if recs.is_empty() {
+            continue;
+        }
+        files += 1;
+        total += recs.len() as u64;
+        let runs = ncs::sweep_runs(&recs);
+        let name = r
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if runs.windows(2).any(|w| w[1].ty < w[0].ty) {
+            nonmonotone.push(name.clone());
+        }
+        if runs
+            .windows(2)
+            .any(|w| w[1].first_turn != w[0].last_turn + 1)
+        {
+            noncontiguous.push(name.clone());
+        }
+        for run in &runs {
+            if run.truncated {
+                continue;
             }
+            *runlen
+                .entry(run.ty)
+                .or_default()
+                .entry(run.turns)
+                .or_insert(0) += 1;
+        }
+        let xp = ncs::crossplay(r, &recs);
+        xcmp += xp.comparisons;
+        xsame += xp.identical;
+        for d in xp.disagreements {
+            disagreements.push((name.clone(), d));
         }
     }
+
     println!(
-        "NextCheckSumCommand 0x3a: {total} records over {} files",
+        "NextCheckSumCommand 0x3a: {total} records over {files} of {} files",
         reps.len()
     );
-    println!("  checksum_type   count      distinct checksums (capped at 4096)");
-    for (ty, n) in &by_type {
+    println!(
+        "  crossplay: {xcmp} comparisons, {xsame} identical, {} disagreements",
+        disagreements.len()
+    );
+    for (f, d) in &disagreements {
         println!(
-            "  {ty:>13}  {n:>9}      {}",
-            values_per_type.get(ty).map(|s| s.len()).unwrap_or(0)
+            "    {f} turn {} type {} ({}) p{}=0x{:08x} p{}=0x{:08x}  [{} turns before the last turn]",
+            d.turn,
+            d.ty,
+            ncs::type_channel_name(d.ty),
+            d.a_play,
+            d.a_value,
+            d.b_play,
+            d.b_value,
+            d.turns_before_end
         );
     }
+    println!("  sweep non-monotone in: {nonmonotone:?}");
+    println!("  sweep turn steps non-contiguous in: {noncontiguous:?}");
+    println!(
+        "\n  type  channel          run lengths in turns (length x files), terminal runs excluded"
+    );
+    for (ty, hist) in &runlen {
+        let s: Vec<String> = hist.iter().map(|(len, n)| format!("{len}x{n}")).collect();
+        println!(
+            "  {ty:>4}  {:<16} {}",
+            ncs::type_channel_name(*ty),
+            s.join(" ")
+        );
+    }
+    println!(
+        "\n  A one-turn run has no per-element record in it, so its single record is the whole\n  channel. `don-replay validate` compares exactly those, and only where a producer is\n  installed; everything else is reported as no_producer or per_element_records."
+    );
 }

@@ -200,6 +200,75 @@ elements only, so the standing "`Array<T>` capacity and growth metadata are chec
 hazard, which is real for `Groups::walk_data`'s SaveGame path, **does not apply to this
 channel**.
 
+### The corpus has a **second** checksum stream, and 39 recordings were carrying it
+
+`CheckSumsCommand` `0x39` is not the only lockstep checksum in the corpus.
+`NextCheckSumCommand` `0x3a` — six bytes, a `CheckSumTypes` index and one subsystem's
+checksum — appears in **39 of the 61 recordings**, 796,957 records, and in **no** recording
+that carries a `0x39` tuple. The two are disjoint by engine build: `0x3a` is the
+`03.02.03.2905` / `00.2014.07.1000` / `00.2014.10.0200` recorders, `0x39` is
+`00.2017.11.2900` / `00.2024.06.2000`. So "61 files, 21 with checksums" was true of `0x39`
+and wrong about the corpus: **60 of 61 recordings carry lockstep checksums**, in one of two
+formats. Full derivation:
+[`docs/assembly/next-checksum-stream.md`](../assembly/next-checksum-stream.md).
+
+The shipped `riseofnations.exe` still *processes* `0x3a`
+(`CommandPackage::process_next_check_sum` `0x00945e20`, which stores the value into
+`[0x00cbee90]` indexed by the package's player) but never *issues* one: none of the 102 call
+sites of the package-append helper `0x0094bae0` appends six bytes.
+
+Each recording emits one record per player per turn from turn 2, sweeping the types in
+`CheckSumTypes` order — 0 non-contiguous turn steps across 440 runs, non-decreasing in 38 of
+39 files. A type's run of turns is `elements + 1`, pinned twice: `walls`, empty in every
+recorded game, runs exactly **1** turn in 30 of 30 files, and `leaders` runs exactly **9** in
+25 of 25 while `CheckSums::check_leaders` `0x009375a0` iterates exactly **8** slots. So a
+**one-turn run carries the whole channel**, and only those are compared. The other 796,489
+records sit inside longer runs whose per-element meaning is deliberately left uninterpreted.
+
+What that scores, kept in its own `totals.next_checksum` section so it can never be added to
+the numbers above:
+
+| channel | whole-channel turns | compares | matches | what it means |
+|---|---:|---:|---:|---|
+| `rules` | 38 | **5** | **5** | 997,846 bytes walked per compare |
+| `groups` | 27 | 27 | 0 | frozen `Game::init` image against a turn-300+ record |
+| `world` | 25 | 18 | 0 | retail reads `1` here; we walk 780k bytes |
+| `walls` / `ammo` / `deaths` | 76 | 0 | 0 | **no producer — not scored** |
+
+That last row is the point. All 76 would have agreed (`1 == 1`), and every one of them is
+vacuous, so they are counted as `no_producer` rather than as matches;
+`an_absent_producer_is_never_credited_with_a_match` fails if that changes.
+
+The five `rules` agreements are substantive but small. **The falsifiable half is the
+refusals**: the `0x3a` recordings carry **nine distinct rulesets** where the `0x39` corpus
+carries one, and our producer admitted the carried Rules section in exactly the recordings
+whose own client reported the shipped `0x12ba3104` — 29 chances to admit a foreign ruleset,
+none taken, and zero disagreements where it did admit. It also found a gap: **3 recordings
+report `0x12ba3104` on the wire while `Replay::open` locates no Rules section in them**, so
+the locator misses a container layout the older recorder uses.
+
+### CORRECTION (2026-08-11): the corpus does contain retail desyncs — on the other stream
+
+The `0x39` cross-player result below stands exactly as written: 265,619 of 265,619 identical
+under the `group` join. It is a statement about **21** recordings. The same control
+experiment on the `0x3a` stream, over the other 39, does not come out clean:
+
+```
+445,347 comparisons, 445,332 identical, 15 disagreements
+```
+
+Every one of the 15 is within **two turns of its recording's last turn** — the client
+detects the divergence and the recording stops. Two of them are the same story told twice:
+`Playback___2017.07.14_23_34_08` and `playback___2014.04.26_16_11_55` disagree on
+**`rules` at turn 3** and are over by turn 4 and turn 3. Two more
+(`…23_35_56`, `…23_37_35`) disagree on `units` at turns 31 and 37 and end at 33 and 39. The
+remaining five are `script_run_time` records on the recording's own final turn.
+
+So "there is no retail desync in this corpus at all" must be read as "in the 21
+`CheckSumsCommand` recordings". On the other 39 there are four games that ended in one — and
+none of them involves our simulation, so it is still true that any mismatch **we** produce is
+ours.
+
 ### Replay-carried Rules and initial-world slices now on the scoreboard
 
 Supported recordings carry an exact 1,024,221-byte static Rules SaveGame section immediately
@@ -347,6 +416,7 @@ tools/replay-validate.sh --limit 5       # quick pass
 cargo run --release -p don-replay -- validate <file.rcx>     # one recording, full table
 cargo run --release -p don-replay -- scan --corpus           # decode only
 cargo run --release -p don-replay -- crossplay --corpus      # the control experiment
+cargo run --release -p don-replay -- nextsum --corpus        # the 0x3a stream + its desyncs
 cargo run --release -p don-replay -- walkers                 # generated-table coverage
 
 cargo test --release -p don-replay --all-targets             # 73 lib + 8 corpus + integration tests
@@ -396,6 +466,7 @@ have been a second chance to be off by the eight self-closing `<STRING/>` entrie
 | `src/script_channel.rs` | `RunTimeEnv::walk_data` `0x009c41a0` / `ScriptFile::walk_data` `0x009c63b0`; `checksum_empty_runtime` is the four-byte empty-registry case, `checksum_program` the live `don-bhs` adapter |
 | `src/groups_channel.rs` | `CheckSums::check_groups` `0x00937530` / `Group::walk_data` `0x00708400`, including the six `num`-gated member arrays the generated table leaves `Unresolved`; `RetailInitialGroups` is the 512-slot state `Groups::clear` `0x00713f20` + `Group::clear` `0x00713e80` leave at `Game::init`, and `InitialGroupsChannel` walks it |
 | `src/scenario_channel.rs` | `ScenarioData::walk_data` `0x00997ad0` traversal, `RetailInitialScenario` (the instruction-derived `ScenarioFuncSet::init` `0x00a03c30` state), and `InitialScenarioChannel`, which binds `internal_strings.xml` ordinals 5958/5959 through `don-content`'s retail `StringTable` parser and fails closed when the shipped table is absent |
+| `src/next_checksum.rs` | `NextCheckSumCommand` `0x3a`: the `CheckSumTypes` → channel binding, the sweep-run reconstruction, the `0x3a` cross-player experiment, and a scorer that compares **only** one-turn runs and **only** where a producer is installed |
 | `src/wire.rs` + `src/wire_gen.rs` | **generated** field table for all 82 `*Command` structs; typed field reads; `Order`; `CommandClass` |
 | `src/replay.rs` | `.rcx` → authoritative initial setup + turns: framing, XOR/pad recovery, commands/checksums, both crossplay joins |
 | `src/harness.rs` | the loop, `WorldSim::from_replay`, cached initial-world walk, and the divergence profile |
@@ -503,6 +574,13 @@ slot, so today only op 0 executes; the other six are written, tested and dormant
   both 0, and the channel is falsifiable and false on 14 of 21 recordings. The length makes
   it small: 140 matches out of 222,938 compares. Both numbers are the result. Do not quote
   the byte count without the match count, and do not let it displace `rules`.
+- **The `0x3a` stream adds 50 comparisons, not 796,957.** 39 recordings carry it, but only
+  one-turn runs are interpretable and only three channels have a producer that reaches one:
+  `rules` 5, `groups` 27, `world` 18. The other 796,489 records are inside longer runs whose
+  per-element meaning is deliberately not modelled — reading one of those as a whole-channel
+  value would compare a single element's walk against a channel. `CHECKSUM_ALL`'s 39 records
+  are likewise uninterpreted: `check_all` `0x00936560` *returns* channel 15 while the `0x39`
+  tuple's sixteenth word is the **sum**, and which one the older builds recorded is unsettled.
 - **The checksum phase is a parameter, not a finding.** The sender builds its
   package during `PROCESS_TURN` and appends the tuple to the same package that
   carries that turn's new commands, but lockstep executes a turn's commands some
@@ -635,6 +713,14 @@ from initial object state we do not yet reproduce, so they cannot be attempted b
 | `CheckSums::check_groups`' 32-byte tail bypasses `CheckSum::walk_function`, so retail's own byte counter under-reports the channel by 32 | `0x00937530`, `adler32` `0x005089d0` | **C [measured]** | the tail loop reads and writes only `CheckSum+0x10`, never `+0x14`; the binary carries two byte-identical `adler32` copies (`0x005089d0`, `0x00a46830`) |
 | Map styles 6, 9, 12 and 14 execute their complete `make_continents` from the replay's pinned seed | `schema/replay-validation.json` | **C [measured]** | 18 of 21 checksum-bearing recordings stop at `TerrainGroups::fill_fertile` `0x006a6f90`; 2 at `Map::team_continent_partition`, 1 at `Map::east_indies_nonplayer_islands`; all 21 then blocked by a missing `ron-data/tilesets.xml` rather than by a port gap |
 
+| `NextCheckSumCommand` `0x3a` is a **second, per-subsystem lockstep checksum stream** carried by 39 of the 61 recordings and by none that carries `0x39` | `crates/don-replay/src/next_checksum.rs`, corpus | **C [measured]** | 796,957 records over 39 files, all with `checksum_packets == 0`; `checksum_type` ∈ `0..=14` = `CheckSumTypes` (`schema/types.json`); the shipped binary processes it at `0x00945e20` and has no six-byte `0x0094bae0` append, so it never issues one |
+| The `0x3a` sweep spends `elements + 1` turns per subsystem, so a **one-turn run carries the whole channel** | corpus + `CheckSums::check_leaders` `0x009375a0` | **C [measured]** | one record per player per turn from turn 2, 0 non-contiguous steps over 440 runs, non-decreasing in 38/39; `walls` (empty in every recorded game) runs 1 turn in 30/30 and `leaders` runs 9 in 25/25 while `check_leaders` iterates `(0xe71af0−0xe3a390)/0x6eec = 8` slots |
+| The replay-carried Rules producer is **fail-closed correct across nine rulesets** | `crates/don-replay/src/rules_channel.rs` vs the `0x3a` stream | **C [measured]** | 5 whole-channel turns admitted and equal to the wire value; 29 refused where the wire value is not `0x12ba3104`; 0 admitted with a foreign ruleset; 3 refused although the wire says shipped, a named gap in `Replay::open`'s section locator |
+| **The corpus contains retail desyncs**, on the `0x3a` stream, and each recording ends at one | corpus | **C [measured]** | 445,347 cross-player comparisons, 445,332 identical, 15 disagreements, all within 2 turns of their recording's last turn; two are `rules` mismatches on turn 3 in games that end on turns 3 and 4; two are `units` mismatches at turns 31 and 37 in games that end at 33 and 39 |
+| The `world` channel reads `1` on every `0x3a` recording that reaches it, while never reading `1` on `0x39` | corpus, `issue_check_sums` `0x00940770` | **C [measured]** | 25 of 25 whole-channel `world` records are `1`; the world walk is the one channel behind a guard, `if ([[0x00c06188] + 0x134] != 0)`, so the channel can keep its initial `1` without the world being empty |
+
 And **correct** in `docs/tracks/headless-client.md` claim 7: the 21 cross-player
 disagreements are not simulation drift. Under the correct join key the corpus
-shows no desync at all.
+shows no desync at all **on the `CheckSumsCommand` stream**. On the
+`NextCheckSumCommand` stream, over a disjoint 39 recordings, there are four games that ended
+in a real one — see the 2026-08-11 correction above.

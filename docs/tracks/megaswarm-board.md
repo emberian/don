@@ -2141,3 +2141,454 @@ type classes twice, 8 bytes apart, where the HIGHER address is the real vtable.
 Tooling note: `capstone`/`pefile` are absent from the system `python3` — run them under
 `uv run --with capstone --with pefile`. Do not name a helper script `dis.py`; it shadows the
 stdlib module capstone imports.
+
+### lane: nextsum (`NextCheckSumCommand` 0x3a — the second lockstep checksum stream)
+
+Selection criterion, on evidence: the three channels the brief offered are each blocked for a
+`don-replay`-only lane. `walls`/`ammo`/`deaths` cannot move — retail's value on those is `1`
+**exactly when the container is empty**, which is what our absent producer already emits, so a
+"real empty-state producer" would reproduce the number we already print and add nothing but a
+`trivial` mark. The eight setup-dependent channels and `world`'s unsourced-byte count both sit
+behind `TerrainGroups::place_all`'s next leaf (`Mountains::add_mountain` `0x0089c2e0`,
+`World::set_oil_at` `0x006b2a10`), and that port belongs in `crates/don-sim/**`, which this lane
+does not own.
+
+What is unowned and unread: **39 of the 61 recordings carry a second per-subsystem checksum
+stream nobody in this repo has ever compared against.** `NextCheckSumCommand` `0x3a` is 796,957
+records corpus-wide, and every file that carries it has **zero** `CheckSumsCommand` `0x39`
+packets — the two streams are disjoint by engine build. `don-replay nextsum` (added by an
+earlier lane) printed the type histogram and explicitly left the decision to the next lane.
+
+Files I will write:
+
+- `crates/don-replay/src/next_checksum.rs` — **new module.** `CheckSumTypes` → channel binding,
+  the sweep-run reconstruction, the crossplay control experiment, and the scorer.
+- `crates/don-replay/tests/next_checksum.rs` — **new test file.**
+- `crates/don-replay/src/lib.rs` — one `pub mod` line.
+- `crates/don-replay/src/harness.rs` — one block in `run`'s turn loop plus the `RunResult`
+  fields it fills. No change to `compare` or to any 0x39 number.
+- `crates/don-replay/src/report.rs` — a new `next_checksum` section, per file and in `totals`.
+- `crates/don-replay/src/bin/don-replay.rs` — the `nextsum` subcommand only.
+- `schema/replay-validation.json` — regenerated.
+- `docs/tracks/replay-validation.md`, `docs/assembly/next-checksum-stream.md` — **new doc.**
+
+NOT touching: any `crates/don-sim/**` file, `walk_gen.rs`/`wire_gen.rs` (generated),
+`src/bin/don-closure.rs`, `crates/don-env/**`, `crates/don-net/**`, and no existing 0x39
+comparison path — the new counts live in their own section so they cannot be mistaken for
+`CheckSumsCommand` evidence.
+
+### FINDINGS: lane decomp-backfill — the corpus is repaired, and two generated artifacts are not
+
+**`re/decomp-all/` now has 46,726 of 46,727 rows `ok`.** All 39 `skipped_large` rows and the
+one `failed` row were decompiled; 75,672 new lines of C. `MANIFEST.jsonl` rows carry
+`"backfilled":"DecompileList.java"`. Everything under `re/decomp-all/` is gitignored
+(`.gitignore:36`) — this is a local corpus repair, nothing to commit. The one tracked new
+file is `re/scripts/DecompileList.java`.
+
+Reproduce (never against the shared `re/ghidra` — copy first):
+
+```sh
+cp -R re/ghidra /tmp/ghidra-lane
+python3 - <<'PY' > /tmp/skipped.txt
+import json
+print('\n'.join(json.loads(l)['ea'] for l in open('re/decomp-all/MANIFEST.jsonl')
+                if json.loads(l)['status'] != 'ok'))
+PY
+"$(brew --prefix ghidra)/libexec/support/analyzeHeadless" /tmp/ghidra-lane ron \
+  -process riseofnations.exe -noanalysis -readOnly -scriptPath re/scripts \
+  -postScript DecompileList.java /tmp/skipped.txt re/decomp-all 1800 /tmp/backfill.jsonl
+```
+
+Newly available, and several are named in other lanes' blocked notes: **`Unit::come_out`
+`0x00617c10`** (the body `group-act` called the critical path for `eject_all`/`transport`/
+`alarm`), `Group::action_move_near` `0x00704990`, `Object::do_damage` `0x0064a480`,
+`Constants::init` `0x00569a90`, `Types::init` `0x00669cc0`, `TypeData::get_cost` `0x00664090`,
+`Balance::type_damage` `0x0057fb50`, `LoadGame::verify_load` `0x005a39f0`, `Leader::diplomacy`
+`0x006bc950`, `Leader::gain_tech` `0x006dcb60`, `Leader::plan_strategy` `0x006b9620`,
+`Leader::create_units`/`create_buildings` `0x006c40a0`/`0x006c1be0`, `Build::activate`
+`0x00623e20`, `ScenarioFuncSet::init_funcs` `0x009c7570`, `ConsoleWin::run_cmd` `0x007d6a70`,
+`SyntaxNode::eval` `0x009dc710`, `TerrainGroups::place_all` `0x006a70d0`, `Options::exec`
+`0x007188c0`. Source comments and docs that say these are unavailable are now stale —
+`crates/don-sim/src/balance_path.rs:72`, `crates/don-ai/src/api.rs:6`,
+`crates/don-ai/tools/dump_script_funcs.py:5`, `docs/assembly/balance-path.md:228`,
+`docs/tooling/bhs-bridge.md:369`, `docs/mechanics/tech-cities.md:620`,
+`docs/derivation/pdb-symbols.md:239`. I did not edit any of them; they are other lanes'.
+
+**`MANIFEST.jsonl`'s `size` is Ghidra's function-body address count, not the PDB's code
+size, and the two disagree.** `ConsoleWin::run_cmd` `0x007d6a70` is 664 in the manifest and
+**43,008** in the PDB — it was never `skipped_large`, it `failed` the 30 s per-function
+budget, and at 1,800 s it decompiles to 5,427 lines. Corpus-wide: 799 of 18,310 matchable
+rows have a Ghidra body smaller than the PDB size, 8 by ≥1 KiB (worst
+`ConquestFinalWin::on_redraw` `0x0074a170`, 1,758 vs 5,900). Nothing that BulkDecomp accepted
+has a PDB size over its 8,192 cap, so the corpus is not silently truncated — but do not read
+a manifest `size` as the function's code size.
+
+**`schema/vtables.json` is wrong in both directions [measured, first dword read out of
+`riseofnations.exe` + `schema/symbols.json`].**
+
+- **118 of its 1,777 rows do not point at a vtable.** Their first dword is not in `.text`
+  (`0x401000`–`0xac4230`); the PDB names each as MSVC RTTI/EH metadata — 47 `RTTI Class
+  Hierarchy Descriptor`, 28 `RTTI Base Class Array`, 23 `RTTI Complete Object Locator`, 19
+  `RTTI Base Class Descriptor`, 1 `__CTA1?AV_com_error@@`. 84 of them duplicate a class that
+  already has a correct row (`?$ObjectArray@VForm@@` is listed at `0xb6c360`, which is
+  `PtrArray<Good>`'s hierarchy descriptor, while its real vftable `0xb24464` is also in the
+  map). The other 33 names — including `MountainRangeData`, `GameAccessConst`, `MiscAccess`,
+  `ISteamMatchmakingPingResponse` and 29 `ArrayBase<…>`/`ArrayBaseSimpleCopy<…>`
+  instantiations — appear in the map **only** at a non-vtable address, so `donscan` can never
+  type those objects. `docs/derivation/pdb-symbols.md:168` reads this as "the remaining 118
+  have no public vftable symbol to compare against"; they do have symbols, and the symbols say
+  they are not vtables.
+- **229 vftables the PDB names have no row at all.** Of 1,888 `??_7…` symbols, 197 missing
+  ones are `std::`/lambda/`_com_error`; the other **32 are engine classes**, and four of them
+  are the ones `schema/state-schema.json` is *defined* by: **`DataWalk` `0xb2bcd8`**
+  (two slots, both `_purecall` — exactly the `walker->vt[0]`/`vt[1]` pair the state-schema
+  method describes), **`SaveGame` `0xb35ac4`**, **`LoadGame` `0xb30c88`**, **`CheckSum`
+  `0xb3f920`** (slot 0 `CheckSum::walk_function` `0x936ff0`). Also absent: `Type` `0xb43cbc`,
+  `TypeOut` `0xb43da4`, `TypeData` `0xb43e48`, `SoundType` `0xb43944`, `TerrainGroups`
+  `0xb45dd8`, `ParticleSystem` `0xb55740`, `IncrementalLoad` `0xb66bd0`, `GameSpyPlayer`,
+  `Lobby::LobbyData`, the `PopupRequest` family, and the secondary vtables
+  `ComboBox{for BufferBase}` `0xb22a80` / `{for ImageIO}` `0xb22f8c` and
+  `WorldMapBackground{for TextureBase}` `0xb54ef8` / `{for ImageIO}` `0xb54f08`.
+- **Correction to `docs/tooling/native-scanner.md`:** `0xb41ae0`, flagged there as "a vtable
+  absent from the map", is not a vtable. The PDB names it ``const Unit::`vbtable'`` — a
+  virtual *base* table (offsets, not code pointers). It is correctly absent.
+- `crates/donscan/src/vtables.rs:227` asserts `entries.len() == 1777`, which freezes both
+  defects. Regenerating the map will trip that test; that is the test working.
+
+**`schema/types.json` drops 208 type definitions to name collisions, all Win32/CRT.**
+`tools/pdb-extract` keys `classes`/`enums` by bare tag name with first-record-wins
+(`defs.entry(name).or_insert(idx)` + `classes.insert(name, rec)`), while the PDB holds 20,095
+non-forward-ref class/struct/union definitions under 19,914 names and 2,884 enum definitions
+under 2,857 names. The 170 colliding class names and 24 colliding enum names are entirely SDK
+headers duplicated across translation units (`tagRECT`, `IUnknown`, `_GUID`, `<unnamed-tag>`
+×7, `__unnamed` ×7, …) — **no game class is affected**, and no field in `types.json` has an
+`<unnamed-tag>`/`__unnamed` type, so nothing resolves through a dropped record. Seven names
+have genuinely divergent definitions across the duplicates (`internal_state` 5,816 vs 4 bytes,
+`_IMAGE_LOAD_CONFIG_DIRECTORY32` 164 vs 92, `_NOTIFYICONDATAW` 952 vs 956,
+`_PROPSHEETPAGEW` 56 vs 52, `static_tree_desc_s`, `<unnamed-tag>`, `__unnamed`); reading zlib
+or shell structs out of `types.json` is the one place this bites.
+
+**`schema/symbols.json` has no cap and no silent filter that I could find.** It deliberately
+refuses to collapse ICF-folded addresses (the comment at `main.rs:610` is right, and this
+lane hit the payoff: `CheckSum`'s vtable slot 1 is a 3-byte stub whose only PDB name is
+`SysMessageHandler::OnPaint`). Its one undocumented drop — unnamed `S_LDATA32` jump-table
+records at `main.rs:751` — is described in a code comment but not in `_meta.counts`.
+
+### lane come-out: RESULT — `Unit::come_out` `0x00617C10` is closed, and the five stranded modules are registered
+
+**The "7,201 of 9,925 bytes unrecovered" figure was two tranches out of date, and the real
+number was 4,349.** Coverage as this lane found it: prefix 2,724 + common release 1,169 +
+gather selection 1,683 = 5,576 of 9,925, i.e. **56% was already transcribed** and unreachable.
+The fourth tranche (`unit_come_out_release_tail_frontier`, new, 4,277 bytes of its own) plus
+72 bytes of outlined islands nobody had billed closes the body to **9,925 / 9,925**.
+`systems/unit_come_out_body_map.rs` walks all 9,925 addresses and requires each to resolve to
+exactly one owner — the arithmetic totals alone are not evidence, since two extents can
+overlap by exactly as much as another pair gaps.
+
+**FINDING — outlined islands belong to their `jmp` target, not their address.** MSVC put 22
+devirtualisation islands in `0x0061A206..0x0061A2D5`, one per
+`if (slot == <known fn>) fast(); else slot();` site. Seven of them (72 bytes) resume inside
+the *first* tranche, which published a flat `PREFIX_BYTES` with no island accounting at all.
+That is the entire difference between the gather-selection lane's 4,349-byte residual and the
+release tail's own 4,277 bytes. Any lane tiling a body this way should check the island region
+before believing a `size - sum(intervals)` residual. The island at `0x0061A216` is the only
+one that does not resume: it pops the frame and returns **1**, so `Unit::come_out` returns
+non-zero through exactly one path and it is the prefix's.
+
+**FINDING — `Unit::come_out` draws from the canonical `game_random`.** `0x0061A1AA` loads
+`ECX` from `[0x00C06184]` = `GameAccess::game_random` before the two mutually exclusive
+`Random::get(0, 0xFFFF)` sites at `0x0061A1BB` / `0x0061A1D5`. Budget is exactly **one** draw,
+taken only when `UnitData::unit_masks & 0x40000` and the unit is off map. And the gate it
+feeds is **not a probability**: `Game+0x550` is `frame` [PDB], so the predicate is
+`(game.frame & residue) != 0` — on frame 0 nothing joins an army whatever the draw. Every
+host that stubs `come_out` today (`production_runtime`, `unit_inctime`, `gathering`,
+`production`, `leader_set_diplo`) budgets zero draws.
+
+**FINDING — the Ghidra decompilation of `00617C10` is lossy in two behaviour-changing places.**
+(1) At `0x00619C54` it renders both arms of the unit-attack branch as the same
+`add_attack_order(u, who, 1)`; the instruction stream pushes `1,1,1` on the `action != 0` arm
+and `0,0,1` on the `action == 0` arm, and the PDB signature has five parameters. (2) At
+`0x00619DA2`/`0x00619DBA`/`0x00619DD2` it drops the arguments of the three `TypeData::where`
+probes; they are `is(0x1AB,0)`, `is(0x1AC,0)`, `is(0x1B0,0)`. Porting from the decompilation
+alone ships both defects. Read the stream for every argument list.
+
+**FINDING — `[0x00C0618C]+0x200` is `ObjectsData::find_who`, not a gaia owner.** It is the
+owner of the object the *preceding* `find_any_building_at` / `find_unit_with_radius` located,
+and it is the `who` every order in the come_out tail is addressed to. `Group::action_eject_all`
+`0x00710B40` reads the same array through both `[0x00C0618C] + who*0x1C + 0x14` and
+`(&DAT_00C0AEC0)[who*7]`; those are the same array, one via the pointer variable and one via
+the resolved base. Do not model them as two.
+
+**FINDING — `00617C10` now has a full decompilation at `re/decomp-all/00617c10.c`** (gitignored
+local corpus repair). Same recipe the move-near lane published; ~40 s, 1,228 lines. That is 2
+of the 39 `skipped_large` rows repaired by hand now. A missing `re/decomp-all/<EA>.c` means
+nobody looked.
+
+**REGISTERED** (`crates/don-sim/src/systems/mod.rs`, seven `pub mod` lines — four of the
+other 14 modules on the orchestrator's stranded list, plus `unit_action_come_out_frontier`
+which was stranded too but below that list's size cut, plus the two new ones):
+`unit_come_out_full_frontier`, `unit_come_out_common_release_frontier`,
+`unit_come_out_gather_selection_frontier`, `step8_eject_contents`,
+`unit_action_come_out_frontier` (all five were stranded), plus the two new modules. All five
+stranded test files were rewired from `#[path]` includes onto `don_sim::systems::…`, so
+deleting a `pub mod` line now breaks compilation instead of silently re-stranding the module.
+Gates: `--lib` filtered to the family 27/27; `--test unit_come_out_body_map` 7,
+`unit_come_out_full_frontier` 15, `unit_come_out_common_release_frontier` 11,
+`unit_come_out_gather_selection_frontier` 10, `step8_eject_contents` 8,
+`unit_action_come_out_frontier` 7. Seven mutations each kill a named test — table in
+`docs/mechanics/unit-come-out-release-tail.md` §8.
+
+**HOOK NEEDED — none of `eject_all` / `transport` / `alarm` may move yet, and here is the
+honest reason.** Registration made the family *present*, not *runnable*. All four tranches are
+planners; `Unit::come_out` is stubbed at five separate places in the registered library, the
+liveliest being `systems/production_runtime.rs::come_out`, which writes `inside_up = -1` and
+returns 1. Writing the real host is not a transcription job: it needs an object host that can
+resolve `objects[who][o]`, run two spatial finders, install seven order kinds, replicate each
+across the `o_down` chain, and account one `game_random` draw. The only candidate owner is
+`Sim` in `crates/don-sim/src/tick.rs`, which this lane does not own.
+`unit_come_out_body_map::ComeOutBoundary::NoHost { retail_va: 0x00617C10, mode }` is the shape
+the five stubs should converge on. **I did not touch `command_tables.rs`; all three rows stay
+`StateWired`.**
+
+Additionally `eject_all`'s bulk arm still needs `Object::eject_contents` `0x0064CD20` under
+`(kill_failed = 0, filter = 0x32|-1, reset = 0|1)` over a **Unit** carrier.
+`step8_eject_contents` covers only `(1, -1, 0, 1)` over a Build carrier and explicitly excludes
+all four of those subtrees. That is unchanged and I did not invent it.
+
+### lane come-out: BLOCKED ON (informational) — `systems/air_launch_receivers.rs` is red in the shared tree
+
+`cargo test -p don-sim --lib` fails in `command::air_launch_receivers::tests` (the failing set
+changed between two runs four minutes apart, and the file is untracked with an mtime inside
+that window), so a sibling is mid-migration. Not mine, not touched, not worked around. My own
+gates are filtered to my modules plus a clean-`HEAD` remote submission.
+
+### lane: nextsum — RESULT
+
+**39 of the 61 recordings were carrying a checksum stream nobody had compared against.**
+`NextCheckSumCommand` `0x3a`, 796,957 records, and **no** recording carries both it and
+`CheckSumsCommand` `0x39` — the two are disjoint by engine build. So "61 files, 21 with
+checksums" was a statement about `0x39`: 60 of 61 recordings carry lockstep checksums.
+Derivation: `docs/assembly/next-checksum-stream.md`.
+
+**Ledger movement, kept in its own `totals.next_checksum` section.** Every pre-existing
+number in `schema/replay-validation.json` is byte-identical — the regeneration was diffed
+field by field against `HEAD` and the only difference is the new key (per-file too, 0 of 61
+files differ outside it).
+
+| channel | whole-channel turns | compares | matches | classification |
+|---|---:|---:|---:|---|
+| `rules` | 38 | **5** | **5** | **substantive** — 997,846 bytes walked per compare |
+| `groups` | 27 | 27 | 0 | substantive walk (36,896 B), diverges as expected |
+| `world` | 25 | 18 | 0 | substantive walk (780 kB), retail reads `1` here |
+| `walls`/`ammo`/`deaths` | 76 | 0 | 0 | **refused** — no producer; `1 == 1` is not scored |
+
+The 76 refusals are the methodology point: those channels read `1` on this stream in the
+recordings where they are empty and our absent producer also reads `1`. Scoring them would
+have added 76 agreements and zero evidence, so they are counted as `no_producer`, and
+`an_absent_producer_is_never_credited_with_a_match` fails if that changes. **Nothing was
+tuned; no value was chosen to make a checksum agree.**
+
+**FINDINGS — do not re-derive:**
+
+- **The corpus contains retail desyncs.** The `0x39` result ("265,619/265,619 identical, no
+  desync at all") is true of 21 recordings. The same experiment on `0x3a` over the other 39
+  gives **445,347 comparisons, 445,332 identical, 15 disagreements** — and all 15 sit within
+  **two turns of their recording's last turn**. Two games disagree on **`rules` at turn 3**
+  and are over by turns 3 and 4; two disagree on `units` at turns 31 and 37 and end at 33 and
+  39. `docs/tracks/replay-validation.md` now scopes the claim instead of asserting it
+  corpus-wide.
+- **`checksum_type` is the PDB `CheckSumTypes` enum, and it is NOT the wire word order.** It
+  leads with `CHECKSUM_ALL`, puts `CHECKSUM_RULES` second, permutes `world`/`cities`, and has
+  **no member for `scenario_data`**. Indexing the `CheckSumsCommand` tuple with it silently
+  compares the wrong channel. `schema/types.json` has all sixteen enumerators.
+- **The sweep spends `elements + 1` turns per subsystem.** One record per player per turn from
+  turn 2, 0 non-contiguous steps over 440 runs, type non-decreasing in 38/39. Pinned twice:
+  `walls` (0 elements, proven empty by the `0x39` corpus) runs **1** turn in 30/30, and
+  `leaders` runs **9** in 25/25 while `CheckSums::check_leaders` `0x009375a0` iterates
+  `(0xe71af0 − 0xe3a390)/0x6eec` = **8** slots. Consequence: a **one-turn run carries the
+  whole channel**; longer runs contain per-element records and are deliberately left
+  uninterpreted (796,489 of the 796,957).
+- **The shipped binary receives `0x3a` but never issues one.** `CommandPackage::
+  process_next_check_sum` `0x00945e20` stores the value into `[0x00cbee90]` indexed by the
+  **package's player** (`[this+4]`), not by the type. None of the 102 call sites of the
+  package-append helper `0x0094bae0` appends six bytes — the lengths are 1, 2, 5, 7, 9, 10,
+  0xb, 0xd, 0xf, 0x11, 0x15, 0x19, 0x35, 0x41, 0x209.
+- **`CommandManager::issue_check_sums` `0x00940770` gates the `world` channel.** The world
+  walk runs only under `if (*(int *)(PTR_DAT_00c06188 + 0x134) != 0)`, otherwise the channel
+  keeps its initialised `1`. That is the shipped mechanism by which `world` reads `1` in
+  **25 of 25** `0x3a` recordings while never reading `1` in the 21 `0x39` ones.
+- **`Replay::open` misses a Rules section it should find, in exactly 3 recordings.**
+  `Playback___2017.07.20_20_02_35`, `…_20_24_10` and `…_20_46_23` report `0x12ba3104` on the
+  wire — the shipped ruleset — while the parser locates no section at all. Against the other
+  29 recordings, whose wire values are one of eight *foreign* rulesets, the parser refused
+  every time: **0 false positives over 29 chances.**
+- **`CHECKSUM_ALL` is deliberately uninterpreted.** `check_all` `0x00936560` *returns* channel
+  15 while the `0x39` tuple's sixteenth word is the wrapping **sum**; which one the older
+  builds recorded is unsettled, so its 39 whole-channel records are counted and none compared.
+  The values are in each file's `next_checksum.sweep` for whoever settles it.
+
+**Gates**, all in a clean `git archive HEAD` shadow tree (`don-sim`'s `systems/mod.rs` was
+mid-migration in the shared tree when this lane started — `E0583 unit_come_out_release_tail_frontier`):
+
+- `cargo test --release -p don-replay --all-targets` — **37 binaries, 295 tests, 0 failed.**
+- `tools/replay-validate.sh` — EXIT 0, full 61-file corpus, `don-deviations --assert-ready
+  replay` gate passed.
+- Re-run in the shared working tree once the sibling landed: `--test next_checksum` 9/9,
+  `--test corpus` 8/8.
+
+**WHAT I DID NOT WRITE.** No producer for `walls`/`ammo`/`deaths` — measured first: retail's
+value on those is `1` **exactly when the container is empty**, which our absent producer
+already emits, so the "real empty-state producer" the brief offered would have reproduced a
+number we already print. No interpretation of the 796,489 per-element records: reading one as
+a whole-channel value would compare a single `Unit`'s walk against a channel, and the
+run-length law only *implies* the last record of a long run is the whole channel — it is not
+measured. No fix for the 3-recording Rules-locator gap (it is `Replay::open` container work,
+not this lane's claim). And nothing in `crates/don-sim/**`: the `world` channel's next real
+byte reduction is `Mountains::add_mountain` `0x0089c2e0` and `World::set_oil_at`
+`0x006b2a10` inside `TerrainGroups::place_all`, and both belong to a `don-sim` owner.
+
+### lane: air-launch — RESULT, API CHANGE, and FINDINGS
+
+**Both rows deliberately stay `Port::Orders`; the ledger does not move.** What moved is that
+the two receivers were ordering the *wrong objects* and now order the right ones, with the
+derivation written down. Flipping them to `Complete` would be tier inflation — §8 of
+`docs/mechanics/group-air-launch-receivers.md` names the four things still open.
+`schema/simulation-closure.json` is **not** regenerated (no `port` value changed, and three
+lanes are live).
+
+Files written: `crates/don-sim/src/systems/air_launch_receivers.rs` (new),
+`crates/don-sim/tests/air_launch_receivers.rs` (new, 15 tests),
+`docs/mechanics/group-air-launch-receivers.md` (new), minimal hunks in
+`crates/don-sim/src/command.rs`, comments only in `crates/don-sim/src/command_tables.rs`.
+**`systems/mod.rs` untouched** — the module is `#[path]`-mounted from `command.rs`, following
+`group_action_entry` / `group_move_near_split`.
+
+Gates:
+
+* `swarm-cargo-remote submit persvati airlaunch` at pushed `HEAD` `790776c` + my four files,
+  `test -p don-sim --lib --test air_launch_receivers` → **EXIT_CODE=0**, lib **1683 passed /
+  0 failed / 2 ignored**, new suite **15/15**. Clean Linux baseline, so this green does not
+  borrow any sibling's uncommitted state.
+* Local shared tree: `cargo test -p don-sim --no-fail-fast` all binaries green (lib 1710/0);
+  `cargo test -p don-env --no-fail-fast` green; `cargo test -p don-replay --bin don-closure`
+  9/9.
+* Mutation sweep: **12 seeded, 12 killed.** Named in the return; the load-bearing ones are
+  "walk the members instead of their chains" (killed by
+  `a_selection_of_aircraft_sitting_on_the_map_scrambles_nothing`), "read `fighters_only` from
+  `cmd+0x11`" (killed by the wire test), "launch-all home becomes `get_inside`", and
+  "`cost <` → `cost >`". One mutant (`scramble` gains an `ActionBegin` gate) initially
+  **survived** because the arm discarded `EntryEffects`; the arm now applies them, and the
+  mutant is killed through the wire by `a_scramble_does_not_clear_disband_...`.
+* `cargo fmt` on my files only. Pre-existing, not mine, left alone: four `command.rs` fmt
+  diffs (lines 121 / 1822 / 5885 / 6021, the hotkey import + three op-econ hunks) and a
+  crate-wide `clippy` failure at `crates/don-bhs/src/builtins.rs:51` plus 21 `don-sim`
+  clippy errors, all in `generated/state.rs`, `save_load.rs`, `world.rs` and one in-crate
+  test at `command.rs:6932`. Zero clippy diagnostics in my files.
+
+**API CHANGE (`crates/don-sim/src/command.rs`, additive and fail-closed — nothing breaks):**
+
+* `Fleet` gains three defaulted reads, all defaulting to `None` = "this host does not
+  answer": `inside_down(who, o) -> Option<Option<(i16, u8)>>` (`ObjectData::inside_down`
+  `+0x28` / `inside_down_who` `+0x3E`), `object_type_masks(who, o) -> Option<u32>`
+  (`ObjectTypeData::obj_masks` `+0x1E4`), `mana_burn(who, o) -> Option<i16>`
+  (`UnitData::mana_burn` `+0x96`). A host that withholds any of them refuses the whole
+  command instead of launching a guessed set of aircraft.
+* `Slot` gains `object_type_masks: Option<u32>` and `mana_burn: Option<i16>`. `Slot` is
+  `Default` and built with `..Slot::default()` everywhere, so this is source-compatible.
+  `ObjectTable::inside_down` reads the **existing** `Slot::follow_inside_down` column rather
+  than adding a second copy of the same engine field.
+* `command::build` gains `launch_patrol_full(x, y, queue, force_all, bombers_only,
+  fighters_only)` and `scramble()`. `build::launch_patrol(x, y, q)` keeps its signature and
+  now forwards with the tail three zeroed; its old `// shift, ctrl, alt` comment was a guess
+  and is replaced by the measured field names.
+* New `pub const AIR_LAUNCH_CHAIN_CAP: usize = 256` — **this port's** guard on the
+  containment walk. Retail has no cap; its loop is `while (inside_down >= 0)` and a cyclic
+  link hangs the engine.
+
+**FINDINGS — do not re-derive** (full write-up in the doc; every VA read at instruction
+level, Ghidra used only to navigate):
+
+- **`Group::action_scramble` `0x007111C0` and `Group::action_launch_patrol` `0x00703580`
+  order the aircraft each selected object *contains*, not the members.** The walk is
+  `ObjectData::inside_down` `+0x28` / `inside_down_who` `+0x3E`, continued **from the object
+  just visited** (`0x0071150B`/`0x0071150F`, `0x00703A63`/`0x00703A67`), which is the nested
+  chain `systems/containment.rs` already models. The bridge's old arms iterated
+  `GroupData::list` and filtered on `Fleet::is_plane` — exactly backwards.
+- **Neither body calls `Group::action_begin`.** `action_scramble` makes three indirect calls
+  in total (`[eax+0x10]` `Group::kill`, `[eax+0x18]` `is_unit`, `[edx+0x40]` order data);
+  `action_launch_patrol` adds `[eax+0x60]` (`ObjectTypeData::is`, ×3) and `[eax+0x10]` on a
+  `UnitOrder`. No `call [eax+0x14]` in either. So neither clears `GroupData::disband`, and
+  `group_action_entry`'s existing `launch_patrol` row (`IgnoreOrdersPrune → NumPositive`) was
+  already right. `scramble` was **missing from `ENTRY_PROGRAMS` entirely**, i.e. its scenario
+  prune was not running; it is declared in `air_launch_receivers::SCRAMBLE_ENTRY` over the
+  same gate alphabet so `ENTRY_PROGRAMS` stays the nine movement/attack rows it documents.
+- **`LaunchPatrolCommand`'s last three dwords are real arguments.**
+  `SyncLogger::logToMemory<int&,int&,enum QueuePos&,int&,int&,int&>` at `0x009492A6` over
+  `cmd+1/+5/+9/+0xD/+0x11/+0x15`, pushed at `0x00949335..0x0094936A`. `+0xD` skips the
+  `mana_burn` gate and forces launch-all; `+0x11` requires `is(BOMBER 0x130)`; `+0x15`
+  requires `is(BIPLANE 0x11F)` **and shadows** `+0x11` (`0x007036FC..0x0070370B`).
+  `0x11F`/`0x130`/`0x136` are `BIPLANE`/`BOMBER`/`HELICOPTER` in `schema/types.json`.
+- **`Unit::add_air_patrol_order` `0x005E4350`'s sixth argument (the `QueuePos`) is never
+  read.** `ret 0x18`, and no instruction in its 527 bytes touches `[ebp+0x1C]`; its own
+  helicopter arm hard-codes `QueuePos = 2` into `Unit::add_move_facing_order`. All three
+  call sites in these receivers push a leftover register into the slot — `0x007114E8` pushes
+  a `y` coordinate, `0x00703C64`/`0x00703C87` push a `Unit*`. Same shape as op-econ's
+  `Unit::add_await_board_order` finding, and it corroborates the note already in
+  `order_dispatch::install_air_patrol`.
+- **`vector_dist` `0x0046CFF0` and `find_angle` `0x0092D130` are `__fastcall(ecx, edx)`,**
+  not the `__cdecl` the PDB declares — no argument is pushed at any call site here. Fourth
+  instance of the standing "the PDB names, the disassembly establishes" finding.
+- **The launch cost is measured from the group member, not the aircraft**, so every aircraft
+  in one hangar ties on distance; `/10` for `is(BIPLANE)`, else `/4` for `is(HELICOPTER)`,
+  `*200` (`imul esi, esi, 0xC8`) when the aircraft's current `UnitOrder` type is non-zero;
+  sentinel `0x0098967F`. Without launch-all, **exactly one** order is installed, after the
+  walk, on the cheapest candidate — and its home comes from `get_inside`, while the
+  launch-all arm's home is the **group member** itself.
+- **`launch_patrol`'s feedback reasons 1 and 2 are unreachable.** `[ebp-0x18]` is initialised
+  to 4 at `0x007035AD` and the only other store in 2,043 bytes is `mov [ebp-0x18], 3` at
+  `0x00703769`; the arms for 1 and 2 at `0x00703CC6`/`0x00703CCB` cannot run. Their
+  `loc_str_array_orig` ordinals are 1691 / 1689 / 1690 for reasons 1 / 2 / 3
+  (`0x00C8CD00 + 0x841C / 0x83F4 / 0x8408`, all exact multiples of 20).
+- **`command_tables.rs`'s `installs` under-reports both rows.** The only
+  `OrdersMemManager::get_obj` immediate *inside* either body is `1` — `MOVE_TO`, the inlined
+  `add_move_facing_order` arm at `0x007113D2` / `0x0070395D` / `0x00703B5E`. `AIR_PATROL`
+  (`get_obj(0x11)`) is allocated inside `Unit::add_air_patrol_order`. The file is
+  `@generated`, so this is recorded in comments on the rows and in §9 of the doc rather than
+  hand-edited into the data — whoever owns the generator should add `MOVE_TO`.
+- **Selection criterion, for the next lane picking group rows.** Of the 30 red
+  `Group::action_*` rows, only five are simultaneously `delegates: &[]`, on the wire, and not
+  downstream of `Unit::come_out` or `Group::action_move_near`: `scramble`, `launch_patrol`
+  (both taken here), `spell`, `queue_up`, `city_gather`. The other `delegates: &[]` rows are
+  `NotOnTheWire` (`alarm_peasant`, `air_attack_ground`) and therefore **cannot reach
+  `Port::Complete` at all** — the same structural reason `hotkey` sits red — or blocked on
+  `Unit::come_out` (`transport`, `eject_all`). `Group::action_air_patrol` `0x007029D0` is
+  `NotOnTheWire` and is the one remaining caller of `add_air_patrol_order`'s unmodelled
+  helicopter arm.
+
+### lane decomp-backfill — RESULT: `re/decomp-all/` is 46,727 / 46,727 `ok`
+
+Zero `skipped_large`, zero `failed`. 40 functions backfilled, **82,723 new lines of C**.
+
+**The last one is a lesson, not a size problem.** `Constants::log_data` `0x00570170` (63,382 B)
+spent **1,529 s** and then died with `Response buffer size exceeded` — which looks exactly
+like a timeout and is not one. It is `DecompileOptions.getMaxPayloadMBytes()`, default 50 MB.
+At `setMaxPayloadMBytes(1024)` it completes in **1,704 s / 7,051 lines**. Raise the payload
+before you raise the timeout. `re/scripts/DecompileList.java` takes it as argument 5:
+
+```sh
+cp -R re/ghidra /tmp/ghidra-lane
+"$(brew --prefix ghidra)/libexec/support/analyzeHeadless" /tmp/ghidra-lane ron \
+  -process riseofnations.exe -noanalysis -readOnly -scriptPath re/scripts \
+  -postScript DecompileList.java /tmp/targets.txt re/decomp-all 3600 /tmp/backfill.jsonl 1024
+```
+
+**Spot-check that the output is real, not a stub** [measured]: `re/decomp-all/00570170.c`'s
+direct-call histogram is **719 × `FUN_00a1cf40`, 509 × `FUN_0042da30`, 508 × `FUN_00a1edd0`**
+— i.e. 719 `String::close`, 509 `Log::say`, 508 `String::String(const wchar_t*)`, reproducing
+`docs/derivation/pdb-symbols.md` §5.1's independently capstone-derived counts *exactly*. All
+40 files have balanced braces, end in `}`, and match their manifest `lines` to ±1.
+
+Correction to my claim block above: I did **not** write `docs/derivation/decomp-corpus-backfill.md`.
+The derivation lives in the two blocks here instead. The only tracked file this lane produces is
+`re/scripts/DecompileList.java`; `re/decomp-all/**` (39 new `.c` + `MANIFEST.jsonl`) is
+gitignored and must not be committed.

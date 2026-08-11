@@ -56,6 +56,25 @@ pub struct Totals {
     pub lockstep_commands: usize,
     pub presentation_commands: usize,
     pub opcode_counts: std::collections::BTreeMap<u8, usize>,
+    /// `NextCheckSumCommand` `0x3a`: the second, per-subsystem checksum stream,
+    /// carried by the recordings that carry no `0x39` tuple at all.
+    pub next_files: usize,
+    pub next_records: u64,
+    pub next_crossplay_comparisons: usize,
+    pub next_crossplay_identical: usize,
+    pub next_crossplay_disagreements: usize,
+    /// Disagreements at or within two turns of the recording's last turn.
+    pub next_crossplay_disagreements_at_end: usize,
+    pub next_sweep_monotone_files: usize,
+    pub next_records_per_channel: [u64; NUM_CHANNELS],
+    pub next_whole_channel_turns: [u64; NUM_CHANNELS],
+    pub next_compares: [u64; NUM_CHANNELS],
+    pub next_matches: [u64; NUM_CHANNELS],
+    pub next_nontrivial: [u64; NUM_CHANNELS],
+    pub next_retail_empty: [u64; NUM_CHANNELS],
+    pub next_no_producer: [u64; NUM_CHANNELS],
+    pub next_retail_disagreed: [u64; NUM_CHANNELS],
+    pub next_per_element: [u64; NUM_CHANNELS],
 }
 
 impl Totals {
@@ -84,6 +103,22 @@ impl Totals {
             lockstep_commands: 0,
             presentation_commands: 0,
             opcode_counts: Default::default(),
+            next_files: 0,
+            next_records: 0,
+            next_crossplay_comparisons: 0,
+            next_crossplay_identical: 0,
+            next_crossplay_disagreements: 0,
+            next_crossplay_disagreements_at_end: 0,
+            next_sweep_monotone_files: 0,
+            next_records_per_channel: [0; NUM_CHANNELS],
+            next_whole_channel_turns: [0; NUM_CHANNELS],
+            next_compares: [0; NUM_CHANNELS],
+            next_matches: [0; NUM_CHANNELS],
+            next_nontrivial: [0; NUM_CHANNELS],
+            next_retail_empty: [0; NUM_CHANNELS],
+            next_no_producer: [0; NUM_CHANNELS],
+            next_retail_disagreed: [0; NUM_CHANNELS],
+            next_per_element: [0; NUM_CHANNELS],
         };
         for r in runs {
             t.turns += r.turns_total;
@@ -103,6 +138,33 @@ impl Totals {
             }
             for (op, n) in &r.opcode_counts {
                 *t.opcode_counts.entry(*op).or_insert(0) += n;
+            }
+            let n = &r.next_checksum;
+            if n.present() {
+                t.next_files += 1;
+                t.next_records += n.records;
+                t.next_crossplay_comparisons += n.crossplay_comparisons;
+                t.next_crossplay_identical += n.crossplay_identical;
+                t.next_crossplay_disagreements += n.crossplay_disagreements.len();
+                t.next_crossplay_disagreements_at_end += n
+                    .crossplay_disagreements
+                    .iter()
+                    .filter(|d| d.turns_before_end <= 2)
+                    .count();
+                if n.sweep_monotone {
+                    t.next_sweep_monotone_files += 1;
+                }
+            }
+            for c in 0..NUM_CHANNELS {
+                t.next_records_per_channel[c] += n.per_channel[c].records;
+                t.next_whole_channel_turns[c] += n.per_channel[c].whole_channel_turns;
+                t.next_compares[c] += n.per_channel[c].compares;
+                t.next_matches[c] += n.per_channel[c].matches;
+                t.next_nontrivial[c] += n.per_channel[c].nontrivial_compares;
+                t.next_retail_empty[c] += n.per_channel[c].retail_empty_compares;
+                t.next_no_producer[c] += n.per_channel[c].no_producer;
+                t.next_retail_disagreed[c] += n.per_channel[c].retail_disagreed;
+                t.next_per_element[c] += n.per_channel[c].per_element_records;
             }
             for c in 0..NUM_CHANNELS {
                 t.crossplay_per_channel[c] += r.crossplay_per_channel[c];
@@ -166,6 +228,32 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         ));
     }
     s.push_str("    },\n");
+    s.push_str(&format!(
+        "    \"next_checksum\": {{\n      \"what\": \"NextCheckSumCommand 0x3a, the second lockstep checksum stream. Six bytes: CheckSumTypes index + one subsystem checksum. Emitted only by the pre-2018 engine builds; the shipped riseofnations.exe still processes it (CommandPackage::process_next_check_sum 0x00945e20) but has no six-byte package append, so it never issues one. NO recording carries both streams. Each recording emits one record per player per turn from turn 2, sweeping the types in order; a type's run of turns is `elements + 1`, so a ONE-TURN run carries the whole-channel checksum and a longer run contains per-element records this module does not interpret. Only one-turn runs are compared, and only when our producer for that channel is installed for that recording -- a vacuous 1 == 1 against an absent producer is counted as no_producer, not as a match. These numbers are NOT part of the 0x39 scoreboard above.\",\n      \"files\": {}, \"records\": {}, \"sweep_monotone_files\": {},\n      \"crossplay\": {{ \"comparisons\": {}, \"identical\": {}, \"disagreements\": {}, \"disagreements_within_two_turns_of_the_last_turn\": {} }},\n      \"per_channel\": {{\n",
+        t.next_files,
+        t.next_records,
+        t.next_sweep_monotone_files,
+        t.next_crossplay_comparisons,
+        t.next_crossplay_identical,
+        t.next_crossplay_disagreements,
+        t.next_crossplay_disagreements_at_end
+    ));
+    for (i, name) in CHANNEL_NAMES.iter().enumerate() {
+        s.push_str(&format!(
+            "        \"{name}\": {{ \"records\": {}, \"whole_channel_turns\": {}, \"compares\": {}, \"matches\": {}, \"nontrivial_compares\": {}, \"retail_empty_compares\": {}, \"no_producer\": {}, \"retail_disagreed\": {}, \"per_element_records\": {} }}{}\n",
+            t.next_records_per_channel[i],
+            t.next_whole_channel_turns[i],
+            t.next_compares[i],
+            t.next_matches[i],
+            t.next_nontrivial[i],
+            t.next_retail_empty[i],
+            t.next_no_producer[i],
+            t.next_retail_disagreed[i],
+            t.next_per_element[i],
+            if i + 1 == NUM_CHANNELS { "" } else { "," }
+        ));
+    }
+    s.push_str("      }\n    },\n");
     s.push_str("    \"opcode_counts\": {\n");
     let n = t.opcode_counts.len();
     for (k, (op, cnt)) in t.opcode_counts.iter().enumerate() {
@@ -400,6 +488,69 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             "      \"orders\": {{ \"sim\": {}, \"typed\": {}, \"applied\": {} }},\n",
             r.sim_commands, r.typed_orders, r.orders_applied
         ));
+        let n = &r.next_checksum;
+        if n.present() {
+            let runs: Vec<String> = n
+                .run_turns
+                .iter()
+                .map(|(ty, turns, truncated)| {
+                    format!(
+                        "{{ \"type\": {ty}, \"channel\": \"{}\", \"turns\": {turns}, \"truncated\": {truncated} }}",
+                        crate::next_checksum::type_channel_name(*ty)
+                    )
+                })
+                .collect();
+            let dis: Vec<String> = n
+                .crossplay_disagreements
+                .iter()
+                .map(|d| {
+                    format!(
+                        "{{ \"turn\": {}, \"type\": {}, \"channel\": \"{}\", \"play_a\": {}, \"value_a\": \"0x{:08x}\", \"play_b\": {}, \"value_b\": \"0x{:08x}\", \"turns_before_end\": {} }}",
+                        d.turn,
+                        d.ty,
+                        crate::next_checksum::type_channel_name(d.ty),
+                        d.a_play,
+                        d.a_value,
+                        d.b_play,
+                        d.b_value,
+                        d.turns_before_end
+                    )
+                })
+                .collect();
+            let per: Vec<String> = CHANNEL_NAMES
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| n.per_channel[*i].records > 0)
+                .map(|(i, name)| {
+                    let c = &n.per_channel[i];
+                    format!(
+                        "\"{name}\": {{ \"records\": {}, \"whole_channel_turns\": {}, \"compares\": {}, \"matches\": {}, \"nontrivial_compares\": {}, \"retail_empty_compares\": {}, \"no_producer\": {}, \"retail_disagreed\": {}, \"our_bytes_walked\": {}, \"per_element_records\": {} }}",
+                        c.records,
+                        c.whole_channel_turns,
+                        c.compares,
+                        c.matches,
+                        c.nontrivial_compares,
+                        c.retail_empty_compares,
+                        c.no_producer,
+                        c.retail_disagreed,
+                        c.our_bytes_walked,
+                        c.per_element_records
+                    )
+                })
+                .collect();
+            s.push_str(&format!(
+                "      \"next_checksum\": {{ \"records\": {}, \"runs\": {}, \"sweep_monotone\": {}, \"turns_contiguous\": {}, \"crossplay\": {{ \"comparisons\": {}, \"identical\": {}, \"disagreements\": [{}] }}, \"sweep\": [{}], \"per_channel\": {{ {} }} }},\n",
+                n.records,
+                n.runs,
+                n.sweep_monotone,
+                n.contiguous,
+                n.crossplay_comparisons,
+                n.crossplay_identical,
+                dis.join(", "),
+                runs.join(", "),
+                per.join(", ")
+            ));
+        }
         s.push_str("      \"channels\": {\n");
         for (i, name) in CHANNEL_NAMES.iter().enumerate() {
             let c = &r.channels[i];
