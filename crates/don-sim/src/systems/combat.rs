@@ -70,7 +70,14 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod build_check_capture;
+pub mod cities_capture_local_award_notification;
+pub mod cities_capture_plunder_award;
+pub mod cities_capture_plunder_gate;
 pub mod cities_capture_prefix;
+pub mod cities_capture_residual;
+pub mod cities_capture_sim_owner;
+pub mod cities_capture_swap_fork;
+pub mod cities_capture_transaction;
 /// Deterministic building/stat/event tails surrounding the recursive splash and capture walk.
 pub mod damage_fallthrough;
 /// Typed, fail-closed world mutations after `Object::take_damage` returns to

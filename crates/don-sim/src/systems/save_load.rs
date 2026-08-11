@@ -2240,6 +2240,20 @@ fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
 }
 
 fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
+    if sim
+        .vic_leaders
+        .slots
+        .iter()
+        .any(|leader| leader.cities_captured != 0 || leader.cities_lost != 0)
+    {
+        return Err(SaveError::Unsupported("City capture counters"));
+    }
+    let pristine_cities = crate::systems::tech_cities::CityPool::new();
+    if sim.cities.city_mark != pristine_cities.city_mark
+        || sim.cities.slots != pristine_cities.slots
+    {
+        return Err(SaveError::Unsupported("Cities pool"));
+    }
     if sim.step12_visibility
         != crate::systems::step12_visibility_runtime::Step12VisibilityAuthority::default()
     {

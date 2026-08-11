@@ -451,6 +451,10 @@ fn read_leader(r: &mut Reader<'_>) -> Result<LeaderState, SaveError> {
         take_attrition_disabled,
         neutral_attrition,
         building_attrition_disabled,
+        // Formats through DoNSave v11 predate the canonical city-capture counters.
+        // The writer rejects nonzero values, so zero is the only lossless decode.
+        cities_captured: 0,
+        cities_lost: 0,
         num_buildings,
         num_units,
         num_queued,

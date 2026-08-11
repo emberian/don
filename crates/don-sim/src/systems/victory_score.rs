@@ -839,6 +839,13 @@ pub struct LeaderState {
     /// `+0x804` `disable_building_attrition`.
     pub building_attrition_disabled: i32,
 
+    /// `+0x824` `cities_captured`, incremented by `Cities::capture_city` before the
+    /// center swap is attempted.
+    pub cities_captured: i32,
+    /// `+0x828` `cities_lost`, incremented by `Cities::capture_city` before the center
+    /// swap is attempted.
+    pub cities_lost: i32,
+
     /// `+0x555E` `num_buildings[129]`, indexed by `TypeIndex - 414`.
     pub num_buildings: Vec<u16>,
     /// `+0x5762` `num_units[352]`, indexed by `TypeIndex - 50`.
@@ -912,6 +919,8 @@ impl Default for LeaderState {
             take_attrition_disabled: 0,
             neutral_attrition: 0,
             building_attrition_disabled: 0,
+            cities_captured: 0,
+            cities_lost: 0,
             num_buildings: vec![0; NUM_BUILD_SLOTS],
             num_units: vec![0; NUM_UNIT_SLOTS],
             num_queued: vec![0; NUM_TYPES],
@@ -1017,6 +1026,8 @@ impl LeaderState {
             self.take_attrition_disabled,
             self.neutral_attrition,
             self.building_attrition_disabled,
+            self.cities_captured,
+            self.cities_lost,
             self.territory,
         ] {
             out.extend_from_slice(&v.to_le_bytes());
@@ -2565,19 +2576,23 @@ mod tests {
         leader.take_attrition_disabled = 0x2132_4354;
         leader.neutral_attrition = 0x3142_5364;
         leader.building_attrition_disabled = 0x4152_6374;
+        leader.cities_captured = 0x4556_6778;
+        leader.cities_lost = 0x495A_6B7C;
         leader.territory = 0x5162_7384;
 
         let mut walked = Vec::new();
         leader.walk_bytes(&mut walked);
         // `ally_mask` at +0x6929 is the final currently-owned field, after these
         // +0x7F8..+0x9D8 policy/territory words.
-        let tail = &walked[walked.len() - 21..walked.len() - 1];
+        let tail = &walked[walked.len() - 29..walked.len() - 1];
         let mut expected = Vec::new();
         for value in [
             leader.give_attrition_disabled,
             leader.take_attrition_disabled,
             leader.neutral_attrition,
             leader.building_attrition_disabled,
+            leader.cities_captured,
+            leader.cities_lost,
             leader.territory,
         ] {
             expected.extend_from_slice(&value.to_le_bytes());

@@ -69,7 +69,7 @@ use crate::systems::{
     order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
-    unit_inctime, victory_score, walls, wonders,
+    tech_cities, unit_inctime, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -797,6 +797,10 @@ pub struct Sim {
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
     pub vic_leaders: victory_score::Leaders,
+    /// Checksum-owned `Cities` pool (`0x00C09960`) and the eight authoritative
+    /// `LeaderData::city_mark` high-water marks. Capture, trade, economy, and checksum
+    /// consumers share this one store.
+    pub cities: tech_cities::CityPool,
     /// Live `GameInfo::player[8]` (`Game+0x44`, stride `0x8C`) plus the `Game`/`Console`/
     /// `DropControl` scalars the player-lifecycle command tails read, which
     /// [`victory_score::Match`] does not model.
@@ -826,8 +830,7 @@ pub struct Sim {
     pub step12_visibility: step12_visibility_runtime::Step12VisibilityAuthority,
     /// Most recent scheduled full-refresh refusal. This is diagnostic state, not a retail
     /// walked field; the checksum-visible planes remain unchanged when it is populated.
-    pub step12_visibility_error:
-        Option<step12_visibility_runtime::Step12VisibilityPreflightError>,
+    pub step12_visibility_error: Option<step12_visibility_runtime::Step12VisibilityPreflightError>,
     /// Exclusive persistent cursor/live-world adapter for `process_coll_blocks`.
     /// `game_daemon.empty_colls` mirrors this runtime and is preflighted every pass.
     pub collision_blocks: collision_blocks_live::CollisionBlockRuntime,
@@ -1028,7 +1031,8 @@ impl SimSpecialAnimHost<'_> {
         };
         let offset = object_id
             .checked_sub(band.base())
-            .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)? as usize;
+            .ok_or(order_dispatch::SpecialAnimHostError::Unavailable)?
+            as usize;
         let row = self
             .world
             .objects
@@ -1427,6 +1431,7 @@ impl Sim {
             scenario_data: crate::script_runtime::ScenarioDataState::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
+            cities: tech_cities::CityPool::new(),
             players: None,
             wonders: wonders::Wonders::new(),
             wonder_world: None,
@@ -3168,10 +3173,10 @@ impl Sim {
         };
         let trow = match exact_target_row {
             Some(target_row) => target_row,
-            None => match self.world.unit_row_at(
-                i32::from(ord.target_who),
-                i32::from(ord.target_o),
-            ) {
+            None => match self
+                .world
+                .unit_row_at(i32::from(ord.target_who), i32::from(ord.target_o))
+            {
                 Some(row) => row,
                 None => {
                     self.world.orders_mut(row).kill_current();
@@ -3907,6 +3912,12 @@ impl Sim {
         let mut leader_bytes = Vec::new();
         self.vic_leaders.walk_bytes(&mut leader_bytes);
         mix(adler32(1, &leader_bytes));
+        let city_leaders_active =
+            std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags & 1 != 0);
+        mix(tech_cities::check_cities(
+            &self.cities,
+            &city_leaders_active,
+        ));
         mix(economy::market_adler32(&self.market));
         mix(self.map.world.checksum());
         for w in self.walls.iter() {
@@ -5172,9 +5183,7 @@ mod tests {
         )
         .unwrap();
         sim.activate(0);
-        let unit = sim
-            .spawn_unit(0, UNIT_TYPE_BASE, 6000, 6000, 6)
-            .unwrap();
+        let unit = sim.spawn_unit(0, UNIT_TYPE_BASE, 6000, 6000, 6).unwrap();
         sim.materialize_step12_object_init(unit).unwrap();
         sim.world.frame = 33;
         sim.game_daemon.busy = 7;
@@ -5186,8 +5195,14 @@ mod tests {
 
         let trace = sim.do_frame();
 
-        assert_eq!(trace.steps[12], StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen));
-        assert_eq!(sim.game_daemon.busy, 7, "preflight must precede daemon mutation");
+        assert_eq!(
+            trace.steps[12],
+            StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+        );
+        assert_eq!(
+            sim.game_daemon.busy, 7,
+            "preflight must precede daemon mutation"
+        );
         assert_eq!(
             sim.step12_visibility_error,
             Some(Step12VisibilityPreflightError::IncompleteProducer {
@@ -5204,7 +5219,10 @@ mod tests {
             after.section(WorldSection::WCoordSeen),
             before.section(WorldSection::WCoordSeen)
         );
-        assert_eq!((sim.map.world.seen[3], sim.map.world.seen3[3]), (0x91, 0x84));
+        assert_eq!(
+            (sim.map.world.seen[3], sim.map.world.seen3[3]),
+            (0x91, 0x84)
+        );
     }
 
     #[test]
