@@ -202,6 +202,10 @@ pub struct RunResult {
     pub initial_groups_checksum: u32,
     pub initial_groups_walked_bytes: u64,
     pub initial_groups_slots: u32,
+    /// Exact setup-owned Leader spans. This is a sparse coverage ledger only:
+    /// it is never installed as the complete Leaders checksum producer.
+    pub initial_leader_prefix: Option<crate::leader_prefix_ledger::LeaderPrefixCoverageReport>,
+    pub initial_leader_prefix_error: Option<String>,
     pub phase: Phase,
     pub latency: u32,
     pub turns_total: usize,
@@ -536,6 +540,8 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
     let style = initial_items.style.as_ref();
     let initial_scenario = initial_scenario_for_replay(rep);
     let initial_groups = crate::groups_channel::InitialGroupsChannel::derive();
+    let initial_leader_prefix =
+        crate::leader_prefix_ledger::LeaderPrefixSpanLedger::derive(&rep.initial);
     let mut res = RunResult {
         file: rep
             .path
@@ -593,6 +599,11 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_groups_checksum: initial_groups.checksum,
         initial_groups_walked_bytes: initial_groups.bytes_walked,
         initial_groups_slots: initial_groups.slots,
+        initial_leader_prefix: initial_leader_prefix
+            .as_ref()
+            .ok()
+            .map(|ledger| ledger.coverage()),
+        initial_leader_prefix_error: initial_leader_prefix.err().map(|error| error.to_string()),
         phase,
         latency,
         turns_total: rep.turns.len(),

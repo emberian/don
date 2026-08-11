@@ -192,6 +192,17 @@ impl Totals {
 
 pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     let t = Totals::of(runs);
+    let mut leader_prefix_corpus =
+        crate::leader_prefix_ledger::LeaderPrefixCorpusCoverage::default();
+    for run in runs {
+        if let Some(coverage) = run.initial_leader_prefix {
+            leader_prefix_corpus.observe(
+                run.checksum_packets > 0,
+                run.initial_active_players,
+                coverage,
+            );
+        }
+    }
     let mut s = String::new();
     s.push_str("{\n");
     s.push_str(&format!("  \"generated_by\": \"{}\",\n", esc(generated_by)));
@@ -219,6 +230,23 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     s.push_str(&format!(
         "    \"commands\": {{ \"sim\": {}, \"lockstep\": {}, \"presentation\": {} }},\n",
         t.sim_commands, t.lockstep_commands, t.presentation_commands
+    ));
+    s.push_str(&format!(
+        "    \"sparse_leaders_prefix\": {{ \"what\": \"exact setup-owned checksum spans only; never installed as a complete Leaders channel producer; the player-row projection is not ownership because duplicate Player::who rows collapse\", \"derived_files\": {}, \"refused_files\": {}, \"all_exact_owned_checksum_bytes\": {}, \"checksum_bearing_files\": {}, \"checksum_bearing_exact_owned_checksum_bytes\": {}, \"checksum_bearing_active_leader_rows\": {}, \"checksum_bearing_present_player_rows\": {}, \"checksum_bearing_player_row_projection_bytes\": {}, \"checksum_bearing_duplicate_who_collapsed_rows\": {}, \"checksum_bearing_player_row_projection_overcount_bytes\": {}, \"checksum_bearing_human_only_candidates\": {}, \"checksum_bearing_expired_by_nonhuman\": {}, \"prefix_contributed_substantive_leaders_compares\": {}, \"prefix_contributed_substantive_leaders_matches\": {} }},\n",
+        leader_prefix_corpus.files,
+        runs.len().saturating_sub(leader_prefix_corpus.files),
+        leader_prefix_corpus.all_exact_owned_checksum_bytes,
+        leader_prefix_corpus.checksum_bearing_files,
+        leader_prefix_corpus.checksum_bearing_exact_owned_checksum_bytes,
+        leader_prefix_corpus.checksum_bearing_active_rows,
+        leader_prefix_corpus.checksum_bearing_present_player_rows,
+        leader_prefix_corpus.checksum_bearing_player_row_projection_bytes,
+        leader_prefix_corpus.checksum_bearing_duplicate_who_collapsed_rows,
+        leader_prefix_corpus.checksum_bearing_player_row_projection_overcount_bytes,
+        leader_prefix_corpus.checksum_bearing_human_only_candidates,
+        leader_prefix_corpus.checksum_bearing_expired_by_nonhuman,
+        leader_prefix_corpus.prefix_contributed_substantive_leaders_compares,
+        leader_prefix_corpus.prefix_contributed_substantive_leaders_matches,
     ));
     s.push_str("    \"per_channel\": {\n");
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
@@ -429,8 +457,43 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                     .map(|error| format!("{{ \"error\": \"{}\" }}", esc(error)))
                     .unwrap_or_else(|| "null".into())
             });
+        let leader_prefix = r
+            .initial_leader_prefix
+            .map(|coverage| {
+                format!(
+                    "{{ \"status\": \"sparse_exact_prefix\", \"rows\": {}, \"active_rows\": {}, \"inactive_rows\": {}, \"present_player_rows\": {}, \"duplicate_who_collapsed_rows\": {}, \"player_row_projection_bytes\": {}, \"player_row_projection_overcount_bytes\": {}, \"human_rows\": {}, \"nonhuman_rows\": {}, \"spans\": {}, \"fixed_traversal_bytes\": {}, \"exact_owned_checksum_bytes\": {}, \"unknown_fixed_traversal_bytes\": {}, \"dynamic_children_owned_bytes\": {}, \"human_only_first_checksum_candidate\": {}, \"walk_complete\": {}, \"exact_channel_producer\": {}, \"substantive_scoreboard_eligible\": {}, \"provenance_bytes\": {{ \"init_rules_and_teams_flags\": {}, \"leader_init_identity\": {}, \"leader_init_self_diplomacy\": {}, \"leader_init_diplomacy_reset\": {} }} }}",
+                    coverage.rows,
+                    coverage.active_rows,
+                    coverage.inactive_rows,
+                    r.initial_active_players,
+                    r.initial_active_players.saturating_sub(coverage.active_rows),
+                    8 + 704 * r.initial_active_players,
+                    704 * r.initial_active_players.saturating_sub(coverage.active_rows),
+                    coverage.human_rows,
+                    coverage.nonhuman_rows,
+                    coverage.spans,
+                    coverage.fixed_traversal_bytes,
+                    coverage.exact_owned_checksum_bytes,
+                    coverage.unknown_fixed_traversal_bytes,
+                    coverage.dynamic_children_owned_bytes,
+                    coverage.human_only_first_checksum_candidate,
+                    coverage.walk_complete,
+                    coverage.exact_channel_producer,
+                    coverage.substantive_scoreboard_eligible,
+                    coverage.provenance.init_rules_and_teams_flags,
+                    coverage.provenance.leader_init_identity,
+                    coverage.provenance.leader_init_self_diplomacy,
+                    coverage.provenance.leader_init_diplomacy_reset,
+                )
+            })
+            .unwrap_or_else(|| {
+                r.initial_leader_prefix_error
+                    .as_ref()
+                    .map(|error| format!("{{ \"status\": \"refused\", \"error\": \"{}\" }}", esc(error)))
+                    .unwrap_or_else(|| "null".into())
+            });
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"tile_selection\": {}, \"fertility\": {{ \"fill_fertile_cells\": {}, \"error\": {} }}, \"place_all\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }}, \"scenario\": {{ \"source\": \"ScenarioFuncSet::init 0x00a03c30 + internal_strings.xml ordinals 5958/5959\", \"checksum_walked_bytes\": {}, \"checksum\": {}, \"error\": {} }}, \"groups\": {{ \"source\": \"Groups::clear 0x00713f20 + Group::clear 0x00713e80\", \"slots\": {}, \"checksum_walked_bytes\": {}, \"checksum\": \"0x{:08x}\" }} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"tile_selection\": {}, \"fertility\": {{ \"fill_fertile_cells\": {}, \"error\": {} }}, \"place_all\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }}, \"scenario\": {{ \"source\": \"ScenarioFuncSet::init 0x00a03c30 + internal_strings.xml ordinals 5958/5959\", \"checksum_walked_bytes\": {}, \"checksum\": {}, \"error\": {} }}, \"groups\": {{ \"source\": \"Groups::clear 0x00713f20 + Group::clear 0x00713e80\", \"slots\": {}, \"checksum_walked_bytes\": {}, \"checksum\": \"0x{:08x}\" }}, \"leaders_prefix\": {} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -456,6 +519,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.initial_groups_slots,
             r.initial_groups_walked_bytes,
             r.initial_groups_checksum,
+            leader_prefix,
         ));
         s.push_str(&format!(
             "      \"phase\": \"{}\", \"latency_turns\": {},\n",
