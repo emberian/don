@@ -2270,7 +2270,12 @@ impl Sim {
             .iter()
             .map(|pass| pass.unresolved_calls as u64)
             .sum::<u64>();
-        self.cover.gaps[Gap::LeaderProcessTaunt.index()] += trace.taunts.len() as u64;
+        // Charge unresolved CALLS, not dispatches. `Leader::process_taunt` is now recovered
+        // whole, so a build/rush/need dispatch executes end to end and owes nothing; only a
+        // tribute dispatch still charges, and exactly once, for `Leader::action_respond`
+        // `0x006D03C0`. Counting dispatches kept charging a body that runs.
+        self.cover.gaps[Gap::LeaderProcessTaunt.index()] +=
+            trace.taunt_pass.unresolved_calls as u64;
 
         if n == 0 {
             (StepRun::Vacuous, 0)

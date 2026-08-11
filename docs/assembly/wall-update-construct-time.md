@@ -275,13 +275,17 @@ so a green test is known to be able to go red.
   `ObjectHitInputs::base_hits` and `StatObject::type_los`, i.e. `ObjectTypeData::hits` and
   `ObjectTypeData::los` (`type + 0x21C`), which no checked-in table supplies. That gap
   cannot shrink from inside step 8; it is a rules/type-loading row.
-* **`Leader::process_taunt` `0x006B8CC0` (2,340 B) is still not ported**, and the earlier
-  "it is AI chat" framing understates it: cases 1–5 read the leader's encrypted resource
-  block (`(&DAT_00E41248)[slot*0x1BBB] + res*4 ^ 0x8221`) and, above a threshold of `0x95`,
-  call three functions at `0x006D15E0` / `0x006D1780` / `0x006D03C0` with `amount / 3` —
-  that is a **resource transfer**, i.e. simulation state, interleaved with `MessageWin`,
-  localized `String` and `SoundGlobal` calls. It also writes `+0x354`/`+0x374`, arrays the
-  step-8 dispatcher does not touch. It deserves its own lane, not a footnote.
+* **`Leader::process_taunt` `0x006B8CC0` (2,340 B) has since been ported** by the
+  `taunt-body` lane — [`leader-process-taunt.md`](leader-process-taunt.md). This bullet's
+  correction of "it is AI chat" was right about the important thing (this is simulation
+  state) and wrong about the mechanism in two places, both now checked at the instruction
+  level: the three callees are `Leader::action_clear_all` / `action_offer` / `action_respond`
+  and **`action_offer` moves no resources** — it writes a two-sided `Diplomacy::offers`
+  ledger, and only `action_respond` `0x006D03C0` touches the stockpile — and the threshold
+  compare is `cmp eax, 0x96 ; jge`, i.e. **signed**. It also understated the function:
+  taunt codes 7–16, which this bullet did not mention, rewrite and clamp six AI
+  build-priority scalars at `+0x794..+0x7A8` plus `Personality::raid` on every dispatch.
+  `+0x354`/`+0x374` are `LeaderData::last_taunt` and `LeaderData::taunt_frame`.
 * **`Object::eject_contents`** remains independently red only when the recovered tail
   predicate in `Wall::update_hits` reaches it. Unchanged by this lane.
 * **Step 8's `StepStatus` stays `Stub`.** It has charged children; flipping it would be tier

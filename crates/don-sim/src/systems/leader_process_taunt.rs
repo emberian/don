@@ -491,11 +491,7 @@ pub struct TauntPassCounts {
 impl TauntPassCounts {
     fn record(&mut self, call: &TauntCall) {
         self.dispatched += 1;
-        let sim_short = call
-            .unresolved
-            .iter()
-            .filter(|u| u.is_simulation())
-            .count() as u32;
+        let sim_short = call.unresolved.iter().filter(|u| u.is_simulation()).count() as u32;
         self.unresolved_calls += sim_short;
         self.presentation_unresolved += call.unresolved.len() as u32 - sim_short;
         if sim_short == 0 {
@@ -1439,9 +1435,12 @@ mod tests {
         };
         d.clear_all();
         assert_eq!(d.treaty, -1);
-        assert_eq!(d, Diplomacy {
-            treaty: -1,
-            ..Diplomacy::default()
-        });
+        assert_eq!(
+            d,
+            Diplomacy {
+                treaty: -1,
+                ..Diplomacy::default()
+            }
+        );
     }
 }

@@ -255,13 +255,11 @@ fn presentation_never_reaches_the_simulation_path() {
     }
 
     assert_eq!(
-        quiet.step8.leaders[0].taunt,
-        loud.step8.leaders[0].taunt,
+        quiet.step8.leaders[0].taunt, loud.step8.leaders[0].taunt,
         "presentation state leaked into the leader"
     );
     assert_eq!(
-        quiet.step8.leaders[0].econ,
-        loud.step8.leaders[0].econ,
+        quiet.step8.leaders[0].econ, loud.step8.leaders[0].econ,
         "presentation state leaked into the economy"
     );
     // The strongest form of the claim: `game_random`'s state is untouched by the

@@ -347,13 +347,17 @@ Corrections, two sentences each:
 
 ## 8. Boundaries, stated so they are not mistaken for coverage
 
-* **`Leader::process_taunt` `0x006B8CC0`** (2,340 B) is not ported. Dispatches are recorded
-  with both arguments and the table entry. "The body is AI chat" was this lane's reading and
-  it **understates it**: cases 1–5 read the leader's encrypted resource block and, above a
-  threshold, call `0x006D15E0`/`0x006D1780`/`0x006D03C0` with `amount / 3` — a resource
-  transfer, i.e. simulation state, interleaved with `MessageWin`/`String`/`SoundGlobal`.
-  It also writes `Leader + 0x354`/`+0x374`, two arrays the step-8 dispatcher never touches.
-  It needs its own lane. [`wall-update-construct-time.md`](wall-update-construct-time.md) §6.
+* **`Leader::process_taunt` `0x006B8CC0`** (2,340 B) **is now ported**, by the `taunt-body`
+  lane — [`leader-process-taunt.md`](leader-process-taunt.md). "The body is AI chat" was this
+  lane's reading and it was wrong; the follow-up reading "a resource transfer above a `0x95`
+  threshold" was right that this is simulation state and wrong about the mechanism.
+  `Leader::action_offer` `0x006D1780` moves no resources — it writes a two-sided
+  `Diplomacy::offers` ledger — and codes 7–16, which that reading did not mention at all,
+  rewrite and clamp six AI build-priority scalars at `+0x794..+0x7A8` plus
+  `Personality::raid` on **every** dispatch. The one body still absent below it is
+  `Leader::action_respond` `0x006D03C0` (3,988 B), which is where the stockpile actually
+  moves. The `+0x354`/`+0x374` arrays are `LeaderData::last_taunt`/`taunt_frame` and are
+  written before the jump table, so even an unknown code stamps them.
 * **`Leader::process_elimination`** is not re-ported here on purpose —
   `victory_score::Leaders::process_elimination` already has it, over `Game::retake_capital`
   `0x00594530`. Two copies of one retail function in one tick is the failure mode

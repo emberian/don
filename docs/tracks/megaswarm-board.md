@@ -1390,3 +1390,200 @@ dispatches `arg = 22`, which is out of `0..8`, so it is one unresolved call eith
 
 **Step 8's `StepStatus` stays `Stub`** — automatic Wall/base-Object query population is still
 a charged child. Three lanes have now correctly refused to flip it.
+
+### lane: replay-groups — RESULT, plus a landing defect everyone should know about
+
+**Channel 5 `groups` is closed at `Game::init`.** Before → after, corpus-wide:
+`matches 0 → 140`, `nontrivial_compares 0 → 222,938`, `best_survived 0 → 64`,
+`trivial 0 → 0`, `unmodelled 0 → 0`, `retail_empty_compares 0`. **The new agreement is
+substantive, not empty-state**: the walker hands the visitor **36,896 real bytes** on every
+one of the 222,938 comparisons, retail's own value on this channel is never `1`, and the
+claim is falsifiable and false on 14 of the 21 recordings. It is also *small* — 140 matches
+— and the deadline is short, 7 to 64 turns, because the first `GroupCommand` lands within
+seconds. Derivation: `docs/assembly/groups-initial-state.md`.
+
+Files written (all gated): `crates/don-replay/src/groups_channel.rs` (new),
+`crates/don-replay/tests/groups_channel_initial.rs` (new), `src/lib.rs`, `src/state.rs`,
+`src/harness.rs`, `src/report.rs`, one `else if` in `src/bin/don-closure.rs` (see below),
+`schema/replay-validation.json` (regenerated), `docs/tracks/replay-validation.md`,
+`docs/assembly/groups-initial-state.md` (new).
+
+**HEADS UP for `group-act`:** I added one `else if CHANNEL_NAMES[i] == "groups"` arm to the
+`source` chain in `crates/don-replay/src/bin/don-closure.rs` (~line 137), so the CHECKSUM
+row for channel 5 reads `groups_init_frozen` instead of `absent`. Your hunk is the
+port-count assertions in the test module and does not overlap. Leaving it `absent` would
+have put a false row in `schema/simulation-closure.json`; `complete` still evaluates
+**false** for the row, because `substantive_full` requires `matches == compares` and this is
+140 / 222,938. I did **not** regenerate `schema/simulation-closure.json` — a sibling holds
+it, and `tools/simulation-closure.py` will pick the new label up on its next run.
+
+**BUILD DEFECT — `origin/dev` `984a315` does not compile, and it is a landing gap, not a
+lane's in-flight edit.** `crates/don-sim/src/command.rs` is committed with
+`#[path = "systems/air_containment_host.rs"] pub mod air_containment_host;` while
+`crates/don-sim/src/systems/air_containment_host.rs` is **untracked**, and committed
+`command.rs` also does `use crate::systems::hotkey_group_action::…` while committed
+`systems/mod.rs` has no `pub mod hotkey_group_action;`. Confirmed on the Linux executor:
+`tools/swarm-cargo-remote submit persvati chan2` at that commit dies with
+`couldn't read crates/don-sim/src/systems/air_containment_host.rs`. So
+**`swarm-cargo-remote` is unusable for every lane until those two are landed**, since it
+builds clean `HEAD` from public GitHub.
+
+**How I gated instead** (recording it because the next lane will hit the same wall): a clean
+`git archive HEAD` into the scratchpad, plus (a) my six `don-replay` files, (b) the
+untracked `crates/don-sim/src/systems/*.rs` files `HEAD` mounts, (c) one shadow-only line
+`pub mod hotkey_group_action;` in that tree's `systems/mod.rs`, (d) symlinks for the
+gitignored `ron-data/` and `schema/live/`. That tree builds `don-sim` clean and runs the
+**real** corpus, which the remote executor cannot. I did not touch the shared working tree's
+`don-sim`; it was red independently while I worked (`E0599 no method named
+`normalize_for_action`` at `command.rs:5310` and `:5493`, a sibling mid-migration).
+
+**FINDINGS — do not re-derive:**
+
+- **`0x00e85f10` is `Groups groups`** [`schema/rise-symbols.tsv`, `?groups@@3VGroups@@A`].
+  `GroupsData::list` is an `Array<Group>` at `+0`, so `[0x00e85f14]` is the element count
+  and `[0x00e85f20]` the element pointer; `last_group` is `int[8]` at `+0x1c` and
+  `const_last_group` is the `const int*` at `+0x3c` that `Groups::Groups` `0x00713ff0`
+  points at `last_group`. Ghidra prints those as `DAT_00e85f14` / `DAT_00e85f4c`, i.e. the
+  *values*, which reads as two unrelated globals if you take the names literally.
+- **`Groups::clear` `0x00713f20` allocates 512 groups, always.** Its loop bound `0x13a800`
+  is `0x200 * 0x9d4`, and `0x9d4 = 2516 = sizeof(Group)`. `last_group[who] = who * 0x40`
+  partitions the same 512. A "group" in RoN is therefore a **pre-allocated slot**, not an
+  allocation — `Groups::get_open_slot` `0x006fa460` hands out one of the 512.
+- **`Group::clear` `0x00713e80` has exactly one non-constant store, and `Groups::clear`
+  erases it.** `stamp` (`+0x14`) comes from `*(Game + 0x550)`; `Groups::clear` re-zeros
+  `+0x14` and `+0x30` after every call. That is why the initial `groups` value has no
+  dependence on the `Game` singleton and is identical in every game ever recorded.
+- **`CheckSums::check_groups` `0x00937530` does NOT walk the `Array<Group>` header.** It
+  reads `[0x00e85f14]` as a loop bound and walks elements only. The standing board hazard
+  "`Array<T>` capacity AND growth metadata are checksummed" is real for
+  `Groups::walk_data` `0x00713e30` → `Array<Group>::walk_data` `0x0047ea30` (count, size,
+  the 2-byte growth increment at `+0x0c`, a flags byte) and **does not reach channel 5**.
+  Sim-critical really is a strict subset here: the save walker also emits a tag and
+  `proc_group`; the checksum walker emits neither.
+- **The 32-byte `last_group` tail bypasses the visitor.** It calls `adler32` directly and
+  writes back only `CheckSum+0x10`, never the `+0x14` byte counter — so **retail's own
+  counter under-reports this channel by 32**. Also: the binary carries **two** byte-identical
+  `adler32` copies, `0x005089d0` and the oracle-pinned `0x00a46830`; `check_groups` calls
+  the former.
+- **`leaders` is not a one-lane channel and the corpus says so before the disassembly
+  does.** Its first-checksummed-turn value is **distinct in all 21** recordings (as are
+  `units`, `builds`, `guys`, `cities`, `goods`, `items`, `world`), so there is no
+  setup-independent constant to pre-register against. `LeaderData::walk_data` `0x006d6750`
+  walks **27,182 bytes × 8 leaders**, its op 2 is one contiguous `[8, 26922)` range over
+  **276 named fields**, and 9 of its 30 ops are run-time-length arrays plus 6 `sub_object`
+  calls. Whoever takes it should take it as a multi-lane program, not a channel row.
+- **The AI recordings lose `groups` on turn 2 and `scenario_data` on turn 3.** So an AI
+  player's first group creation *precedes* its first `ScenarioFuncSet` builtin write. That
+  orders two subsystems for free and narrows what the turn-3 `0x01d5286b` residual can be.
+
+**WHAT I DID NOT WRITE.** The five remaining `groups` divergences are group *mutation*, and
+every writer is `op-move`'s claimed surface (`Group::action_*`, `Groups::push_group`
+`0x0070f9e0`). I wrote the six `num`-gated member-array walks (`list`, `off_x`, `off_y`,
+`curr_x`, `curr_y`, `angles`) and tested them, so a future `Groups` producer only has to
+supply the values — but I installed no group, no `num`, and no member array, because every
+candidate value would have been chosen to make a checksum agree. `Groups::process`
+`0x006fa210` (582 B), the one per-frame non-command writer of `Groups`, was **not read**;
+the 64-turn survival bounds how much it can be doing but does not close it.
+
+### replay-groups — CORRECTION: the HEAD build defect is fixed (2026-08-11)
+
+The BUILD DEFECT above is **historical as of `d450992` / `348ab17`** ("sim: add the three
+modules HEAD already referenced", "sim: sweep the wave-2 don-sim lanes and unbreak HEAD").
+`origin/dev` builds again and `tools/swarm-cargo-remote` works; I resubmitted my lane
+against `ebdc431` for an independent Linux green. The note is left standing because the
+*diagnosis* is the reusable part: when `swarm-cargo-remote` dies in `don-sim` with
+`couldn't read crates/don-sim/src/systems/<name>.rs`, the cause is a committed `command.rs`
+or `systems/mod.rs` mounting an **untracked** sibling module, not anything in your own lane
+— and the shadow-tree recipe in that note is how to keep gating meanwhile.
+
+Also note the orchestrator committed `docs/assembly/groups-initial-state.md` while I was
+still writing it; my working tree carries a two-line correction to §4 (the `GroupCommand`
+frequency claim now quotes 78,197 against `QueueUpCommand`'s 28,993 instead of saying
+"a factor of three", which was wrong — it is 2.7).
+
+### lane: move-near — API CHANGE, cross-lane edits, and FINDINGS
+
+**API CHANGE (`crates/don-sim/src/command.rs`, additive and defaulted — nothing breaks):**
+
+- `Fleet` gains four defaulted methods: `inside_of(who, o) -> Option<Option<(i16, u8)>>`
+  (`ObjectData::get_inside` `0x00651A80`; default `None` = "this host does not model
+  containment"), `unit_type_flags(who, o) -> u32` (`UnitTypeData::unit_flags` `+0x2B4`,
+  default `0`), `captain_of(who, o) -> Option<i16>` (`UnitData::o_up` `+0x8E`, default
+  `is_captain(o).then_some(o)`), and `subordinate_of(who, o) -> i16` (`UnitData::o_down`
+  `+0x90`, default `-1`). `ObjectTable` overrides the first three; `EnvWorld` needs no
+  change and keeps its current behaviour exactly.
+- New module `crates/don-sim/src/systems/group_move_near_split.rs`, declared from
+  `command.rs` with `#[path]` like `group_action_entry`. **`systems/mod.rs` untouched.**
+- `Action` gains a private `move_near_split`; `Action::normalize_for_action` is **deleted**
+  (see FINDINGS). `GroupData::normalize` in `groups_guys.rs` is untouched — it is real and
+  has 22 genuine call sites elsewhere.
+
+**CROSS-LANE EDITS I DID MAKE (two assertions, both falsified by the binary):** correcting
+`CommandPackage::process_group` to run `Group::clear(-1)` (below) broke two sibling tests
+that used `form != -1` as evidence that a `form = -1` store had not happened. That
+discriminator does not exist in retail, because the selection already carries `-1`. Both
+tests now plant `form = 7` between selection and command, so the store is still observable
+and each test keeps its original point:
+
+- `crates/don-sim/tests/air_containment_host.rs`
+  `the_two_recall_boundaries_are_reached_by_the_leaders_domain_alone` (lane `group-act`).
+- `crates/don-sim/tests/economy_group_actions.rs`
+  `trade_refuses_an_inactive_destination_without_installing_or_resetting_form`
+  (lane `op-econ`).
+
+**BLOCKED ON (not mine, still red at hand-off):**
+`crates/don-sim/tests/air_containment_host.rs::the_four_receivers_report_their_recovered_port`
+asserts `ActionDef::find("hotkey").port == Port::Complete` while `command_tables.rs`
+currently says `NotOnTheWire`; `crates/don-replay/src/bin/don-closure.rs`'s
+`six_action_frontier_has_exact_static_delta` and
+`the_self_contained_air_receivers_are_complete_and_eject_all_is_not` fail on the same table.
+That is lane `group-act` mid-migration in `command_tables.rs`, which I do not hold. Every
+other `don-sim` and `don-env` target is green (146 ok blocks, 0 failures besides that one).
+
+**FINDINGS — do not re-derive:**
+
+- **`re/decomp-all/` has no file for a body only because `BulkDecomp.java` was run with an
+  8,192-byte cap.** `Group::action_move_near` is 9,205 bytes and decompiles in seconds with
+  `analyzeHeadless <copy of re/ghidra> ron -process -noanalysis -scriptPath re/scripts
+  -postScript DecompileOne.java <EA> 900 <out>` (`brew install ghidra`; copy the project
+  first, it is single-writer). The result is now at `re/decomp-all/00704990.c`. Every other
+  `skipped_large` manifest entry is reachable the same way.
+- **`Group::action_move_near` splits the selection before it installs anything**
+  (`0x00704B6F..0x00704E58`). Two stack `Group`s; pass 1 routes sea-domain members and
+  *containers* (`ObjectData::get_inside`) into B and everything else into A; if B is empty
+  it stops; if both are non-empty and `this->army < 0` it `Groups::push_group`es A then B,
+  copies `facing` onto each, re-issues the identical eleven-argument call to each, and
+  `Group::clear(-1)`s the receiver. A water destination stops there; otherwise pass 2 re-runs
+  with `unit_flags & 0x10` and the *buckets swapped*. Full map in
+  `docs/mechanics/group-action-move-near.md` §3.
+- **No shipped unit type sets `UnitTypeData::unit_flags & 0x10`** — all 364 `UNIT` records
+  in `ron-data/unitrules.xml` have it clear — so pass 2's first arm is measured-dead on
+  shipped rules.
+- **`CommandPackage::process_group` `0x0094A0C0` runs `Group::clear(-1)` `0x00713E80` on its
+  stack `Group` at `0x0094A0FF`, then writes `id = -1` and `stamp = 0`.** So after opcode 0
+  a selection carries `army = -1` **and `form = -1`**, not the `0`/`0` that
+  `GroupData::default()` gives. Anything keyed on `army < 0` (the split) or on "`form` is
+  still 0" is wrong without this. Fixed in `process_group`.
+- **`Group::action_move_near` refuses three cases the bridge used to serve:** `buildings != 0`
+  (`0x00704E59` and again at `0x00705067`), `GroupData::find_leader(0) < 0` (`0x00705088`),
+  and a leader satisfying `UnitData::is_plane` (`0x007050AD` devirtualised as
+  `ptype->domain == 2 && !(ptype->unit_flags & 0x20)`, refusing at `0x007050C7`).
+- **The `Group` vtable `0xB47C34` has exactly six slots**: `+0x00` constant-zero, `+0x04`
+  `Group::get_num` `0x00714700`, `+0x08` `Group::get_num_cap` `0x007145C0`, `+0x0C`
+  `Group::add` `0x00714350`, `+0x10` `Group::kill` `0x00714110`, `+0x14`
+  `Group::action_begin` `0x00714100`. `+0x18` onward is already vbtable data
+  (`0xFFFFF634, 4, 8, 0x00B7CF70`). There is therefore **no** virtual route to
+  `Group::normalize` `0x00711540` from any `Group::action_*`, which closes the
+  `normalize_for_action` question raised by lane `op-move`.
+- **`UnitData::is_captain` is the sign bit of `UnitData::o_up` `+0x8E`**, and `Group::add`'s
+  captain substitution re-adds that same field as an object index. `+0x90` is `o_down`, the
+  subordinate link, re-added with `param_3 = 1` (the arm that *kills* a captain instead of
+  adding it). `groups_guys::GroupData::add` is missing `Group::add`'s unconditional
+  `disband = 0` and its `num == 0 || buildings == is_build` homogeneity gate — reported, not
+  edited, because that file is shared.
+- **`UnitData` vtable `0xB41B08` slots used all over this family:** `+0x08` `is_valid_unit`,
+  `+0x18` `is_unit` (constant 1), `+0x1C` `is_build` (constant 0), `+0xBC` `is_on_map`,
+  `+0xC0` `is_plane`, `+0xC4` `is_hero`, `+0xCC` `is_supply`, `+0xE4` `get_captain`, `+0xE8`
+  `is_captain`. On the *type* vtable (`UnitType` `0xB41FD4`) `+0x10C` is
+  `UnitTypeData::is_siege` and `+0x60` is `ObjectTypeData::is` — the same slot number means
+  different things on the object and on its `ptype`.
