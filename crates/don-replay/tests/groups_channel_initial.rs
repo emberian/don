@@ -45,7 +45,14 @@ fn checksummed_replays() -> &'static [Replay] {
     static CACHE: std::sync::OnceLock<Vec<Replay>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         const SCAN_BUDGET: usize = 22;
-        let want: usize = if cfg!(debug_assertions) { 3 } else { 12 };
+        // Same window in debug and release. This was `if cfg!(debug_assertions) { 3 } else
+        // { 12 }`, which made the test's CONCLUSION depend on the build profile: only 21 of
+        // 61 recordings carry checksums and only 7 of those start channel 5 at the derived
+        // value, so a 3-file window can contain no instance of the split this test exists
+        // to establish. It passed under `--release` and failed under a debug umbrella run.
+        // A cheaper test that can assert something its own sample cannot contain is not
+        // cheaper.
+        let want: usize = 12;
         let mut files: Vec<PathBuf> = corpus(&repo_root());
         files.sort_by_key(|p| {
             let n = p.file_name().unwrap().to_string_lossy().to_string();
