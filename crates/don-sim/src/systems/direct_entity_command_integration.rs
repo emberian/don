@@ -10,6 +10,8 @@
 //! state-writing prefix; the mandatory general `Unit::come_out` transaction remains an explicit
 //! open-tail handoff.
 
+#[path = "build_action_unqueue.rs"]
+pub mod build_action_unqueue;
 #[path = "carrier_implicit_unqueue_frontier.rs"]
 pub mod carrier_implicit_unqueue;
 #[path = "direct_entity_command_plans.rs"]
@@ -17,6 +19,9 @@ pub mod plans;
 #[path = "unit_action_come_out_frontier.rs"]
 pub mod unit_action_come_out;
 
+use self::build_action_unqueue::{
+    BuildActionUnqueueReceipt, BuildActionUnqueueRequest, BuildActionUnqueueStatus,
+};
 use self::carrier_implicit_unqueue::{
     CarrierImplicitUnqueueReceipt, CarrierImplicitUnqueueRequest,
 };
@@ -498,6 +503,11 @@ pub enum DirectEntityDisposition {
         target: DirectEntityIdentity,
         argument: i32,
     },
+    /// The Build receiver reached the complete selector/Library/queue/refund transaction.
+    CompleteBuildActionUnqueue {
+        target: DirectEntityIdentity,
+        selector: i32,
+    },
     OpenTail(DirectEntityOpenTail),
 }
 
@@ -520,8 +530,11 @@ pub struct DirectEntityCommandTransactionReceipt {
     pub presentation: Vec<DirectEntityPresentationReceipt>,
     pub disposition: Option<DirectEntityDisposition>,
     /// Present only when opcode 48's reached Unit receiver completed the exact Carrier
-    /// implicit-queue transaction.  Build unqueue and both come-out receivers remain open.
+    /// implicit-queue transaction. Both come-out receiver tails remain open.
     pub unit_unqueue: Option<CarrierImplicitUnqueueReceipt>,
+    /// Present only when opcode 48's reached Build receiver completed the recomputable
+    /// `Build::action_unqueue` transaction.
+    pub build_unqueue: Option<BuildActionUnqueueReceipt>,
     /// Present only after opcode 49's complete `Unit::action_come_out` wrapper has been
     /// recomputed and bound to the addressed Unit identity. This is a preflight receipt, not
     /// permission to publish its writes before the general `Unit::come_out` tail succeeds.
@@ -540,6 +553,7 @@ impl DirectEntityCommandTransactionReceipt {
             presentation: Vec::new(),
             disposition: None,
             unit_unqueue: None,
+            build_unqueue: None,
             unit_action_come_out: None,
         }
     }
@@ -557,6 +571,7 @@ impl DirectEntityCommandTransactionReceipt {
                     && self.presentation.is_empty()
                     && self.disposition.is_none()
                     && self.unit_unqueue.is_none()
+                    && self.build_unqueue.is_none()
                     && self.unit_action_come_out.is_none()
             }
             DirectEntityTransactionStatus::Complete | DirectEntityTransactionStatus::OpenTail => {
@@ -565,29 +580,39 @@ impl DirectEntityCommandTransactionReceipt {
                 };
                 let recomputed = match (
                     self.unit_unqueue.as_ref(),
+                    self.build_unqueue.as_ref(),
                     self.unit_action_come_out.as_ref(),
                 ) {
-                    (Some(receiver), None) => complete_carrier_unit_unqueue_command(
+                    (Some(receiver), None, None) => complete_carrier_unit_unqueue_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                         receiver.clone(),
                     ),
-                    (None, Some(preflight)) => preflight_opcode49_unit_action_come_out_command(
+                    (None, Some(receiver), None) => complete_build_action_unqueue_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
-                        preflight.clone(),
+                        receiver.clone(),
                     ),
-                    (None, None) => classify_direct_entity_command(
+                    (None, None, Some(preflight)) => {
+                        preflight_opcode49_unit_action_come_out_command(
+                            expected,
+                            frame,
+                            Some(target),
+                            self.type_facts,
+                            preflight.clone(),
+                        )
+                    }
+                    (None, None, None) => classify_direct_entity_command(
                         expected,
                         frame,
                         Some(target),
                         self.type_facts,
                     ),
-                    (Some(_), Some(_)) => return false,
+                    _ => return false,
                 };
                 &recomputed == self
             }
@@ -648,6 +673,7 @@ pub fn classify_direct_entity_command(
             presentation,
             disposition: Some(DirectEntityDisposition::CompleteNoOp),
             unit_unqueue: None,
+            build_unqueue: None,
             unit_action_come_out: None,
         };
     }
@@ -699,7 +725,49 @@ pub fn classify_direct_entity_command(
         presentation,
         disposition: Some(DirectEntityDisposition::OpenTail(tail)),
         unit_unqueue: None,
+        build_unqueue: None,
         unit_action_come_out: None,
+    }
+}
+
+/// Close opcode 48's reached Build receiver with the complete action transaction.
+///
+/// The canonical production owner commits the live state only after this adapter binds the
+/// recomputable receiver proof to the decoded object identity and exact signed selector.
+pub fn complete_build_action_unqueue_command(
+    request: DirectEntityCommandRequest,
+    frame: i32,
+    target: Option<DirectEntityTargetFacts>,
+    type_facts: Option<DirectEntityTypeFacts>,
+    receiver: BuildActionUnqueueReceipt,
+) -> DirectEntityCommandTransactionReceipt {
+    let prefix = classify_direct_entity_command(request, frame, target, type_facts);
+    let Some(DirectEntityDisposition::OpenTail(
+        DirectEntityOpenTail::ProductionBuildActionUnqueue { target, selector },
+    )) = prefix.disposition
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let receiver_request = BuildActionUnqueueRequest {
+        object_index: target.object_index,
+        selector,
+    };
+    if receiver.status != BuildActionUnqueueStatus::Complete
+        || receiver.request != receiver_request
+        || !receiver.validates(receiver_request)
+        || receiver
+            .before
+            .as_ref()
+            .is_none_or(|before| before.owner != target.who)
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+
+    DirectEntityCommandTransactionReceipt {
+        status: DirectEntityTransactionStatus::Complete,
+        disposition: Some(DirectEntityDisposition::CompleteBuildActionUnqueue { target, selector }),
+        build_unqueue: Some(receiver),
+        ..prefix
     }
 }
 

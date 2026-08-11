@@ -1,6 +1,6 @@
 # Command rows 46–49: atomic adapter boundary
 
-Status: **46/47 deterministic tails hostable; 48 Unit receiver complete; 49 action wrapper
+Status: **46/47 deterministic tails hostable; 48 Unit and Build receivers complete; 49 action wrapper
 preflight integrated with the general release explicitly open.**
 
 This note covers the exclusive adapter in
@@ -15,7 +15,7 @@ did not edit the dispatcher.  The subsequent executable wiring is recorded separ
 |---:|---|---|---|
 | 46 buy | exact gate/embargo plan plus the complete bounded `economy::do_buy` loop | selected leader, signed resource bounds, rules, market, leader economy, demand counter, `MarketPriceGates` | `Applied` |
 | 47 sell | exact lazy gate/embargo plan plus the complete bounded `economy::do_sell` loop | selected leader, signed resource bounds, rules, market, leader economy, supply counter, `MarketPriceGates` | `Applied` |
-| 48 unqueue | signed address validation, concrete Unit/Build class, active/UID guard, target type, exact delegate arguments; complete Carrier implicit-queue Unit receiver | safe owner/object resolution, concrete entity/type fact, installed current-upgrade ObjectType and refund facts, canonical counters/resources/scratch | inactive/stale and active Unit `Complete`; reached Build `OpenTail` |
+| 48 unqueue | signed address validation, concrete Unit/Build class, active/UID guard, target type, exact delegate arguments; complete Carrier implicit-queue Unit receiver and complete Build selector/Library/refund receiver | safe owner/object resolution, concrete entity/type fact, installed current-upgrade/ObjectType/Library/assimilation facts, canonical queues/counters/resources/scratch | inactive/stale, active Unit, and active Build `Complete` |
 | 49 come out | signed address validation, Unit-only ABI, active/UID guard, target type, complete 532-byte `Unit::action_come_out` plan, and all five authoritative epochs | safe unit resolution, concrete entity/type fact, exact wrapper facts and recomputable plan | inactive/stale `Complete`; preflighted wrapper still `OpenTail` at `Unit::come_out(0)` |
 
 `Unavailable` is empty by construction: no plan, facts, presentation receipt, or state receipt
@@ -47,12 +47,12 @@ The ordered non-state effects are emitted as `DirectEntityPresentationReceipt`. 
 embargo UI, and sound requests are therefore visible without borrowing the sound RNG in the
 simulation adapter.  A product layer may deliver the receipts after the state transaction.
 
-## Why the remaining row 48/49 branches stay open
+## Why the remaining row 49 branch stays open
 
 The available subsystem work is narrower than the command action bodies:
 
-- production owns queue compaction/refund primitives, including routed Library unqueue, but
-  `Build::action_unqueue(type)` also owns repeat-latch presentation and selector/count routing;
+- production now owns the complete selector, repeat-latch presentation, Library routing,
+  compaction, counter, and refund transaction for `Build::action_unqueue(type)`;
 - the complete Carrier `Unit::action_unqueue(1)` receiver is now composed into this receipt and
   committed by the canonical Sim production adapter;
 - the complete 532-byte `Unit::action_come_out()` wrapper is now bound to the opcode-49
@@ -60,9 +60,8 @@ The available subsystem work is narrower than the command action bodies:
   Scholar/University animation-chain repair, but it unconditionally finishes through the
   unrecovered general `Unit::come_out(0)` transaction.
 
-Consequently the adapter completes the Unit-unqueue tail and retains typed open tails:
+Consequently the adapter completes both unqueue tails and retains only come-out open tails:
 
-- `ProductionBuildActionUnqueue { selector: wire_type }`;
 - `ContainmentScholarActionComeOut` / `ContainmentGeneralActionComeOut` before wrapper facts
   have been supplied;
 - `GeneralUnitComeOutTransaction { argument: 0 }` after the complete wrapper preflight has
@@ -95,11 +94,11 @@ delegates to the recomputable transaction receipt.
 Dispatcher treatment is deliberately narrow:
 
 - rows 46/47 may count as applied only for a validating `MarketTransactionStatus::Applied`;
-- row 48's reached Unit path may count as complete only when the nested Carrier receiver proof
-  validates and the canonical host atomically committed it;
+- row 48's reached Unit or Build path may count as complete only when its nested receiver proof
+  validates and the canonical production host atomically committed it;
 - rows 48/49 inactive/stale paths remain validating complete no-ops;
-- Build-unqueue remains unported; opcode 49's complete wrapper preflight is routable, but its
-  general release remains an `OpenTail` and authorizes no prefix-only mutation;
+- opcode 49's complete wrapper preflight is routable, but its general release remains an
+  `OpenTail` and authorizes no prefix-only mutation;
 - `Unavailable` or any invalid receipt performs no bridge-side success transition.
 
 The method was copied directly onto the existing `Fleet` trait rather than making `Fleet`

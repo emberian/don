@@ -208,8 +208,8 @@ mod tests {
     #[test]
     fn recovered_inline_commands_are_complete() {
         for op in [
-            34, 37, 39, 40, 42, 43, 44, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
-            62, 63, 64, 65, 66, 67, 68, 69, 72, 74, 75, 76, 77, 79, 81,
+            34, 37, 39, 40, 42, 43, 44, 45, 46, 47, 48, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+            61, 62, 63, 64, 65, 66, 67, 68, 69, 72, 74, 75, 76, 77, 79, 81,
         ] {
             assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
         }
@@ -226,13 +226,11 @@ mod tests {
     }
 
     #[test]
-    fn addressed_entity_rows_with_open_action_tails_stay_red() {
-        for op in [48, 49] {
-            assert_eq!(
-                inline_status(InlineDef::find(op).unwrap().port),
-                "state_wired"
-            );
-        }
+    fn addressed_entity_row_with_open_action_tail_stays_red() {
+        assert_eq!(
+            inline_status(InlineDef::find(49).unwrap().port),
+            "state_wired"
+        );
     }
 
     #[test]

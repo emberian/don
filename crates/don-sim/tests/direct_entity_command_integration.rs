@@ -13,6 +13,9 @@ mod systems {
     pub mod economy {
         pub use don_sim::systems::economy::*;
     }
+    pub mod production {
+        pub use don_sim::systems::production::*;
+    }
 }
 
 #[path = "../src/systems/direct_entity_command_integration.rs"]

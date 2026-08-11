@@ -457,7 +457,7 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 45, name: "propose_attack", port: InlinePort::Complete },
     InlineDef { op: 46, name: "buy", port: InlinePort::Complete },
     InlineDef { op: 47, name: "sell", port: InlinePort::Complete },
-    InlineDef { op: 48, name: "unqueue", port: InlinePort::StateWired },
+    InlineDef { op: 48, name: "unqueue", port: InlinePort::Complete },
     InlineDef { op: 49, name: "come_out", port: InlinePort::StateWired },
     InlineDef { op: 50, name: "ping", port: InlinePort::Complete },
     InlineDef { op: 51, name: "spline", port: InlinePort::Complete },

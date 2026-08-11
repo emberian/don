@@ -1,21 +1,21 @@
-//! Opcode 48 Unit-receiver convergence through the production runtime and Fleet receipt.
+//! Opcode 48 Unit/Build receiver convergence through the production runtime and Fleet receipt.
 
 use don_sim::command::direct_entity_command_integration::carrier_implicit_unqueue::{
     TrainingQueueCounters, TRAIN_AT_FACTORY,
 };
 use don_sim::command::direct_entity_command_integration::{
     DirectEntityDisposition, DirectEntityFleetReceipt, DirectEntityFleetRequest,
-    DirectEntityOpenTail, DirectEntityTransactionStatus,
+    DirectEntityTransactionStatus,
 };
 use don_sim::command::{Bridge, Fleet, InlineDef, InlinePort, Package};
 use don_sim::objects::Band;
 use don_sim::systems::order_dispatch::OrderQueue;
 use don_sim::systems::production::runtime::{
-    apply_sim_carrier_unqueue_fleet_transaction, process_sim_carrier_unqueue_command,
+    apply_sim_unqueue_fleet_transaction, process_sim_carrier_unqueue_command,
     LiveCarrierUnqueueObjectFacts, LiveCarrierUnqueueTypeFacts, LiveProductionRuntime,
     LiveProductionType,
 };
-use don_sim::systems::production::{flag, BuildData};
+use don_sim::systems::production::{flag, BuildData, BuildQueue, BuildQueueEntry};
 use don_sim::tick::Sim;
 
 const OWNER: u8 = 2;
@@ -71,7 +71,7 @@ impl Fleet for CarrierFleet {
         &mut self,
         envelope: DirectEntityFleetRequest,
     ) -> DirectEntityFleetReceipt {
-        apply_sim_carrier_unqueue_fleet_transaction(&mut self.sim, &mut self.runtime, envelope)
+        apply_sim_unqueue_fleet_transaction(&mut self.sim, &mut self.runtime, envelope)
     }
 }
 
@@ -180,7 +180,7 @@ fn bridge_opcode48_commits_the_complete_carrier_receiver_through_fleet() {
     assert_eq!(leader.carrier_training_queued.combat, 10);
     assert_eq!(leader.resources, [101, 202, 303, 404, 505, 606]);
     assert_eq!(fleet.runtime.carrier_resource_scratch, 606);
-    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::StateWired);
+    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::Complete);
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn canonical_no_costs_projection_skips_only_the_refund_loop() {
 }
 
 #[test]
-fn active_build_receiver_stays_an_explicit_open_tail() {
+fn bridge_opcode48_commits_the_complete_build_receiver_through_fleet() {
     let mut fleet = carrier_fleet(0, false);
     let build_o = fleet
         .sim
@@ -301,10 +301,28 @@ fn active_build_receiver_stays_an_explicit_open_tail() {
             flags: flag::VALID | flag::ACTIVE,
             who: OWNER,
             uid: 88,
+            queue: BuildQueue {
+                queued: 1,
+                entries: vec![BuildQueueEntry {
+                    elapsed: 77,
+                    type_index: PAYLOAD_TYPE as i16,
+                    res: [0, -1, -1],
+                    amt: [25, 0, 0],
+                    ..BuildQueueEntry::default()
+                }],
+            },
             ..BuildData::default()
         },
     );
     fleet.runtime.register_build(build_row, 430);
+    fleet
+        .runtime
+        .install_type(LiveProductionType::in_place_building(430, 1));
+    fleet.runtime.leaders[OWNER as usize].queued_counts[PAYLOAD_TYPE as usize] = 1;
+    let resources = [100, 200, 300, 400, 500, 600];
+    fleet.runtime.leaders[OWNER as usize].resources = resources;
+    fleet.sim.leaders[OWNER as usize].econ.stockpile = resources;
+    fleet.sim.step8.leaders[OWNER as usize].econ.stockpile = resources;
     let build_uid = fleet.sim.builds[build_row].uid;
     let mut bridge = Bridge::new();
     bridge.frame = 12;
@@ -312,7 +330,7 @@ fn active_build_receiver_stays_an_explicit_open_tail() {
     bridge
         .process_all(
             &mut Package::new(0, 0),
-            &unqueue_wire(build_o as i32, 777, build_uid as i16),
+            &unqueue_wire(build_o as i32, 0, build_uid as i16),
             &mut fleet,
         )
         .unwrap();
@@ -323,13 +341,21 @@ fn active_build_receiver_stays_an_explicit_open_tail() {
     let DirectEntityFleetReceipt::Entity(receipt) = &receipts[0].observed else {
         panic!("opcode 48 returned a market receipt");
     };
-    assert_eq!(receipt.status, DirectEntityTransactionStatus::OpenTail);
+    assert_eq!(receipt.status, DirectEntityTransactionStatus::Complete);
     assert!(matches!(
         receipt.disposition,
-        Some(DirectEntityDisposition::OpenTail(
-            DirectEntityOpenTail::ProductionBuildActionUnqueue { selector: 777, .. }
-        ))
+        Some(DirectEntityDisposition::CompleteBuildActionUnqueue { selector: 0, .. })
     ));
     assert!(receipt.unit_unqueue.is_none());
-    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::StateWired);
+    assert!(receipt.build_unqueue.is_some());
+    assert_eq!(fleet.sim.builds[build_row].queue.queued, 0);
+    assert_eq!(fleet.sim.builds[build_row].queue.entries[0].elapsed, 0);
+    assert_eq!(
+        fleet.runtime.leaders[OWNER as usize].queued_counts[PAYLOAD_TYPE as usize],
+        0
+    );
+    assert_eq!(fleet.runtime.leaders[OWNER as usize].resources[0], 125);
+    assert_eq!(fleet.sim.leaders[OWNER as usize].econ.stockpile[0], 125);
+    assert!(fleet.runtime.leaders[OWNER as usize].queue_dirty);
+    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::Complete);
 }

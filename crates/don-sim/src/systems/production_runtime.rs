@@ -5,6 +5,11 @@
 //! tick only needs to invoke the phase once from `Build::process`.
 
 use super::*;
+use crate::command::direct_entity_command_integration::build_action_unqueue::{
+    plan_build_action_unqueue, BuildActionObjectFacts, BuildActionObjectState, BuildActionQueue,
+    BuildActionUnqueueFacts, BuildActionUnqueueReceipt, BuildActionUnqueueRequest,
+    BuildActionUnqueueState, BuildActionUnqueueStatus, BuildQueuedTypeFacts,
+};
 use crate::command::direct_entity_command_integration::carrier_implicit_unqueue::{
     plan_carrier_implicit_unqueue, ArmedUnitQueueFacts, CarrierImplicitQueueFacts,
     CarrierImplicitQueueState, CarrierImplicitUnqueueReceipt, CarrierImplicitUnqueueRequest,
@@ -16,9 +21,10 @@ use crate::command::direct_entity_command_integration::plans::{
     DirectEntityCommandRequest, DirectEntityKind, DirectEntityTargetFacts,
 };
 use crate::command::direct_entity_command_integration::{
-    classify_direct_entity_command, complete_carrier_unit_unqueue_command,
-    DirectEntityCommandTransactionReceipt, DirectEntityFleetReceipt, DirectEntityFleetRequest,
-    DirectEntityTransactionStatus, DirectEntityTypeFacts,
+    classify_direct_entity_command, complete_build_action_unqueue_command,
+    complete_carrier_unit_unqueue_command, DirectEntityCommandTransactionReceipt,
+    DirectEntityFleetReceipt, DirectEntityFleetRequest, DirectEntityTransactionStatus,
+    DirectEntityTypeFacts,
 };
 use crate::objects::{Band, BUILD_BAND_BASE};
 use crate::order::{Order, OrderIndex};
@@ -131,6 +137,10 @@ pub struct LiveProductionType {
     pub is_capitol: bool,
     pub holds_air: bool,
     pub is_university: bool,
+    /// Exact non-strict `ObjectData::is(LIBRARY=0x1B3, 0)` answer used by shared Library
+    /// queues. This is not inferred from the concrete type index because the type tree may
+    /// admit related rows.
+    pub is_library: bool,
     pub gather_inside: bool,
     pub garrison_limit: i32,
     pub is_aircraft_carrier: bool,
@@ -167,6 +177,7 @@ impl LiveProductionType {
             is_capitol: false,
             holds_air: false,
             is_university: false,
+            is_library: false,
             gather_inside: false,
             garrison_limit: 10,
             is_aircraft_carrier: false,
@@ -255,6 +266,9 @@ pub struct LiveProductionLeader {
     /// The six named queued-family dwords at `LeaderData+0xA10..+0xA24`, owned by the
     /// Carrier implicit-queue transaction as well as ordinary production.
     pub carrier_training_queued: TrainingQueueCounters,
+    /// PDB `LeaderData::ages_queued` / `epochs_queued` at `+0x67F4/+0x67F5`.
+    pub ages_queued: u8,
+    pub epochs_queued: u8,
     pub last_unit_built: i32,
     pub last_unit_finished: Vec<i32>,
     pub age_stamp: [i32; 7],
@@ -281,6 +295,8 @@ impl Default for LiveProductionLeader {
             unit_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
             queued_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
             carrier_training_queued: TrainingQueueCounters::default(),
+            ages_queued: 0,
+            epochs_queued: 0,
             last_unit_built: -1,
             last_unit_finished: vec![-1; crate::systems::tech_cities::ty::NUM_TYPES],
             age_stamp: [-1; 7],
@@ -297,6 +313,10 @@ pub struct LiveProductionRuntime {
     pub leaders: Vec<LiveProductionLeader>,
     /// Current build type by `Sim::builds` row. `BuildData::orig_type` is not a substitute.
     pub build_types: Vec<Option<i32>>,
+    /// Exact `BuildData::is_unassimilated` result by live `Sim::builds` row. The Sim does
+    /// not yet own the complete city/type graph behind the predicate, so a reached Library
+    /// scan fails closed when this projection is absent.
+    pub build_unassimilated: Vec<Option<bool>>,
     pub local_player: u8,
     pub scenario_presentation_count: i32,
     pub game_tech_dirty: bool,
@@ -332,6 +352,7 @@ impl Default for LiveProductionRuntime {
                 .map(|_| LiveProductionLeader::default())
                 .collect(),
             build_types: Vec::new(),
+            build_unassimilated: Vec::new(),
             local_player: u8::MAX,
             scenario_presentation_count: 0,
             game_tech_dirty: false,
@@ -405,6 +426,13 @@ impl LiveProductionRuntime {
             self.build_types.resize(row + 1, None);
         }
         self.build_types[row] = Some(type_index);
+    }
+
+    pub fn install_build_unassimilated(&mut self, row: usize, value: bool) {
+        if self.build_unassimilated.len() <= row {
+            self.build_unassimilated.resize(row + 1, None);
+        }
+        self.build_unassimilated[row] = Some(value);
     }
 
     pub fn install_captured_building(&mut self, row: usize, state: LiveCapturedBuildingState) {
@@ -2209,10 +2237,175 @@ fn classify_sim_build_unqueue_command(
     )
 }
 
-/// Canonical implementation of the existing Fleet transaction envelope for the opcode-48
-/// Unit cohort owned here. The same owner resolves Build identities only far enough to retain
-/// their explicit open tail; market transactions and opcode 49 retain their existing hosts.
-pub fn apply_sim_carrier_unqueue_fleet_transaction(
+/// Execute opcode 48's reached Build receiver against the canonical Sim Build band and
+/// production/economy owners.
+///
+/// Every owner-band object, Library/assimilation projection, queued type classification,
+/// counter, resource mirror, and queue allocation is materialized before the first write.
+/// The complete 521-byte action and every reached 915-byte virtual unqueue are then planned
+/// on that snapshot, bound back to the decoded command receipt, and committed by replacement.
+pub fn process_sim_build_unqueue_command(
+    sim: &mut Sim,
+    runtime: &mut LiveProductionRuntime,
+    request: DirectEntityCommandRequest,
+    frame: i32,
+) -> DirectEntityCommandTransactionReceipt {
+    let prefix = classify_sim_build_unqueue_command(sim, runtime, request, frame);
+    if prefix.status != DirectEntityTransactionStatus::OpenTail {
+        return prefix;
+    }
+    let DirectEntityCommandRequest::Unqueue {
+        who,
+        object_index,
+        type_index: selector,
+        ..
+    } = request
+    else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Ok(owner) = usize::try_from(who) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if owner >= RETAIL_LEADER_SLOTS {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    let band_rows: Vec<usize> = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Build)
+        .iter()
+        .map(|&row| row as usize)
+        .collect();
+    let mut objects = Vec::with_capacity(band_rows.len());
+    let mut object_facts = Vec::with_capacity(band_rows.len());
+    for &row in &band_rows {
+        let Some(build) = sim.builds.get(row) else {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        };
+        if usize::from(build.who) != owner {
+            return DirectEntityCommandTransactionReceipt::unavailable(request);
+        }
+        let current_type = runtime.build_types.get(row).copied().flatten();
+        objects.push(Some(BuildActionObjectState {
+            flags: build.flags,
+            city: build.city,
+            build_masks: build.build_masks,
+            queue: BuildActionQueue {
+                queued: build.queue.queued,
+                entries: build.queue.entries.clone(),
+            },
+        }));
+        object_facts.push(BuildActionObjectFacts {
+            unassimilated: runtime.build_unassimilated.get(row).copied().flatten(),
+            is_library: current_type
+                .and_then(|type_index| runtime.facts(type_index))
+                .map(|facts| facts.is_library),
+        });
+    }
+
+    let Some(leader) = runtime.leaders.get(owner) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Some(economy_leader) = sim.leaders.get(owner) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let Some(step8_leader) = sim.step8.leaders.get(owner) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    if leader.resources != economy_leader.econ.stockpile
+        || leader.resources != step8_leader.econ.stockpile
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    let before = BuildActionUnqueueState {
+        owner: owner as u8,
+        objects,
+        queued_counts: leader.queued_counts.clone(),
+        training: leader.carrier_training_queued,
+        ages_queued: leader.ages_queued,
+        epochs_queued: leader.epochs_queued,
+        resources: leader.resources,
+        resource_scratch: runtime.carrier_resource_scratch,
+        queue_dirty: leader.queue_dirty,
+    };
+    let types = runtime
+        .types
+        .iter()
+        .enumerate()
+        .map(|(type_index, installed)| {
+            installed.as_ref().map(|installed| {
+                let object = if installed.class == LiveTypeClass::Unit {
+                    live_carrier_queue_type_facts(type_index as i32, installed)
+                        .and_then(|facts| facts.object)
+                } else {
+                    None
+                };
+                BuildQueuedTypeFacts {
+                    type_index: type_index as i32,
+                    is_unit_type: installed.class == LiveTypeClass::Unit,
+                    object,
+                }
+            })
+        })
+        .collect();
+    let facts = BuildActionUnqueueFacts {
+        local_player: runtime.local_player,
+        objects: object_facts,
+        types,
+    };
+    let receiver_request = BuildActionUnqueueRequest {
+        object_index: object_index as i16,
+        selector,
+    };
+    let Ok(plan) = plan_build_action_unqueue(receiver_request, &before, &facts) else {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    };
+    let receiver = BuildActionUnqueueReceipt {
+        request: receiver_request,
+        status: BuildActionUnqueueStatus::Complete,
+        before: Some(before),
+        facts: Some(facts),
+        plan: Some(plan.clone()),
+    };
+    let receipt = complete_build_action_unqueue_command(
+        request,
+        frame,
+        prefix.target,
+        prefix.type_facts,
+        receiver,
+    );
+    if receipt.status != DirectEntityTransactionStatus::Complete {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+    if plan.after.objects.len() != band_rows.len() || plan.after.objects.iter().any(Option::is_none)
+    {
+        return DirectEntityCommandTransactionReceipt::unavailable(request);
+    }
+
+    for (&row, object) in band_rows.iter().zip(&plan.after.objects) {
+        let object = object.as_ref().expect("shape preflighted");
+        let build = &mut sim.builds[row];
+        build.build_masks = object.build_masks;
+        build.queue.queued = object.queue.queued;
+        build.queue.entries.clone_from(&object.queue.entries);
+    }
+    let leader = &mut runtime.leaders[owner];
+    leader.queued_counts = plan.after.queued_counts;
+    leader.carrier_training_queued = plan.after.training;
+    leader.ages_queued = plan.after.ages_queued;
+    leader.epochs_queued = plan.after.epochs_queued;
+    leader.resources = plan.after.resources;
+    leader.queue_dirty = plan.after.queue_dirty;
+    sim.leaders[owner].econ.stockpile = plan.after.resources;
+    sim.step8.leaders[owner].econ.stockpile = plan.after.resources;
+    runtime.carrier_resource_scratch = plan.after.resource_scratch;
+    receipt
+}
+
+/// Canonical implementation of the existing Fleet transaction envelope for both opcode-48
+/// receiver cohorts. Market transactions and opcode 49 retain their existing hosts.
+pub fn apply_sim_unqueue_fleet_transaction(
     sim: &mut Sim,
     runtime: &mut LiveProductionRuntime,
     envelope: DirectEntityFleetRequest,
@@ -2222,7 +2415,7 @@ pub fn apply_sim_carrier_unqueue_fleet_transaction(
             request: request @ DirectEntityCommandRequest::Unqueue { object_index, .. },
             frame,
         } if object_index >= BUILD_BAND_BASE as i32 => DirectEntityFleetReceipt::Entity(
-            classify_sim_build_unqueue_command(sim, runtime, request, frame),
+            process_sim_build_unqueue_command(sim, runtime, request, frame),
         ),
         DirectEntityFleetRequest::Entity { request, frame } => DirectEntityFleetReceipt::Entity(
             process_sim_carrier_unqueue_command(sim, runtime, request, frame),

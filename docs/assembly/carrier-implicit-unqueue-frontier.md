@@ -86,8 +86,9 @@ counters, economy stockpile, production stockpile mirror, and refund scratch. It
 installed upgrade/type/cost and economy-availability projections, plans this receiver, validates
 the composed direct-entity receipt, and only then publishes the infallible owner updates. Opcode
 48's active Unit branch therefore closes; inactive/stale arms keep the earlier lazy complete
-no-op. The Build branch is a separate `Build::action_unqueue(type)` transaction and remains open,
-so the static row honestly stays `state_wired` and the generated closure delta remains zero.
+no-op. The Build branch is a separate `Build::action_unqueue(type)` transaction; it was open in
+this source frontier and is now closed through the canonical production host documented in
+`docs/assembly/build-opcode48-unqueue-integration.md`.
 
 Root convergence formatted the isolated files and validated all 13 tests in persvati batch
 `gen7-five-pack-20260809T231109Z-3866-5144-5f896c0277b5`. Retail was not run. The focused

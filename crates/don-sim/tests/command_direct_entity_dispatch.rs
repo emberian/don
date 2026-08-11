@@ -307,6 +307,6 @@ fn entity_dispatch_carries_a_validated_wrapper_prefix_without_completing_opcode4
             DirectEntityOpenTail::GeneralUnitComeOutTransaction { argument: 0, .. }
         ))
     ));
-    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::StateWired);
+    assert_eq!(InlineDef::find(48).unwrap().port, InlinePort::Complete);
     assert_eq!(InlineDef::find(49).unwrap().port, InlinePort::StateWired);
 }

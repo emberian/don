@@ -44,11 +44,15 @@ identity, receiver facts, after-image, or ordered step trace invalidates the Fle
 The focused dispatcher test is
 `crates/don-sim/tests/command_carrier_unqueue_integration.rs`. It covers the real packet walker and
 Fleet callback, exact aggregate/family/refund/scratch mutation, fail-closed atomicity on missing
-refund facts, the empty-queue lazy boundary, no-cost mode, and the still-open active Build arm.
+refund facts, the empty-queue lazy boundary, no-cost mode, and what was then the open active Build
+arm.
 
-The honest closure delta is **zero complete rows**: opcode 48 remains `state_wired` because an
-active Build can still reach `Build::action_unqueue(type)`. Its Unit branch is no longer part of
-that residual. Opcode 49 is unchanged.
+The honest closure delta for this historical Unit-only tranche was **zero complete rows**: opcode
+48 remained `state_wired` because an active Build could still reach
+`Build::action_unqueue(type)`. Its Unit branch was no longer part of that residual. The Build
+residual was subsequently closed by the canonical production transaction documented in
+`docs/assembly/build-opcode48-unqueue-integration.md`; opcode 48 is now complete. Opcode 49 is
+unchanged.
 
 Root convergence formatted the owners. The first four-case job passed; a new Build case initially
 sent `BuildData::object_id()==0` and correctly exercised Unit object zero instead. After the fixture
