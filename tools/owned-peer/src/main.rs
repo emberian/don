@@ -89,6 +89,12 @@ struct RetailReport {
     /// answered with a zero-command package. `CommandManager::start`
     /// `0x00942e10` produces exactly one of these per game.
     empty_replies: u32,
+    /// 5-byte `NETMSG_SYNCSIGNAL` records answered one-for-one. Retail's
+    /// `SyncPoint::sync` `0x0093a2d0` blocks the whole process until every
+    /// participating `NetPlayer` reports `get_sync_counter() >=
+    /// SyncPoint::counter`, and only an inbound sync signal advances a remote
+    /// peer's counter (`SyncPoint::process_sync_signal` `0x0093a150`).
+    sync_signals_answered: u32,
     orderly_disconnect_sent: bool,
     transcript_hash: u64,
     game_key: u32,
@@ -162,7 +168,7 @@ fn main() {
         },
         Mode::Retail(options) => match run_retail(&options) {
             Ok(report) => println!(
-                "{{\"schema\":\"don.owned-peer.retail.v3\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"{}\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"empty_replies\":{},\"orderly_disconnect_sent\":{},\"reconnects\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"game_key_source\":\"{}\",\"transcript_hash\":\"{:016x}\",\"evidence\":{},\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                "{{\"schema\":\"don.owned-peer.retail.v3\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"{}\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"empty_replies\":{},\"sync_signals_answered\":{},\"orderly_disconnect_sent\":{},\"reconnects\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"game_key_source\":\"{}\",\"transcript_hash\":\"{:016x}\",\"evidence\":{},\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
                 json_escape(&options.name),
                 report.local_id,
                 report.host_id,
@@ -172,6 +178,7 @@ fn main() {
                 report.checksum_turns,
                 report.packages_sent,
                 report.empty_replies,
+                report.sync_signals_answered,
                 report.orderly_disconnect_sent,
                 report.reconnects,
                 if options.passive { "passive" } else { "mirror-retail-checksum" },
@@ -531,6 +538,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
     let mut checksum_turns = 0u32;
     let mut packages_sent = 0u32;
     let mut empty_replies = 0u32;
+    let mut sync_signals_answered = 0u32;
     let mut transcript_hash = 0xcbf2_9ce4_8422_2325u64;
     let mut game_key = options.game_key;
     let mut game_key_source = if options.game_key.is_some() {
@@ -654,6 +662,42 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             let framed = msg
                 .decode()
                 .map_err(|e| format!("decode retail game packet from {from}: {e}"))?;
+            // `SyncPoint::sync` `0x0093a2d0` is a blocking rendezvous, and it is
+            // the reason a retail host sits on "Starting Game" forever when the
+            // only other participant is silent. It increments the global
+            // `SyncPoint::counter` `0x00cbee7c`, bumps the *local* NetPlayer's
+            // counter, broadcasts one 5-byte sync signal through
+            // `NetDaemon::send_sync_signal` `0x00950c50`, then spins on
+            // `NetDaemon::process_all` until **every** NetSys player bound to a
+            // `GameInfo::player[j].net_player` reports
+            // `NetPlayer::get_sync_counter() >= SyncPoint::counter`
+            // (`0x0093a48d..0x0093a496`).
+            //
+            // A remote peer's counter only ever moves on the receiving side:
+            // `NetDaemon::process` `0x00950f30` dispatches masked type 10 to
+            // `SyncPoint::process_sync_signal` `0x0093a150`, which calls
+            // `NetPlayer::inc_sync_counter` on the *sender's* NetPlayer. So the
+            // peer does not account for anything; it puts one sync signal on the
+            // wire per sync signal received and retail does its own arithmetic
+            // against its own counter.
+            if let NetMsg::SyncSignal { play } = framed.msg {
+                // `0x0093a150` reads only ECX (the `NetPlayer*` the transport
+                // resolved); it never dereferences the message. The `play` field
+                // is therefore inert on the only receive path that exists in this
+                // build, and echoing the observed word is the one choice that
+                // puts no underived number on the wire. Retail fills it from
+                // `Console::play` (`[[0x00c06210]+0x2a0]`, `0x00950c9c`), which a
+                // peer outside the process cannot read.
+                session
+                    .send_to(from, &NetMsg::SyncSignal { play })
+                    .map_err(|e| format!("answer retail sync signal from {from}: {e}"))?;
+                sync_signals_answered = sync_signals_answered.saturating_add(1);
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"sync-signal\",\"from\":{},\"play\":{},\"answered\":true,\"answered_total\":{}}}",
+                    from, play, sync_signals_answered,
+                );
+                continue;
+            }
             let NetMsg::CommandPackage {
                 stamp,
                 play,
@@ -887,6 +931,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 checksum_turns,
                 packages_sent,
                 empty_replies,
+                sync_signals_answered,
                 orderly_disconnect_sent: true,
                 transcript_hash,
                 game_key: game_key.expect("checksum traffic requires a key"),
@@ -897,7 +942,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
         }
         if start.elapsed() >= deadline {
             return Err(format!(
-                "retail-connect timeout after {}s: roster={} ready_sent={} all_ready={} packages_seen={} checksum_turns={} packages_sent={} empty_replies={} key={} key_source={game_key_source}",
+                "retail-connect timeout after {}s: roster={} ready_sent={} all_ready={} packages_seen={} checksum_turns={} packages_sent={} empty_replies={} sync_signals_answered={} key={} key_source={game_key_source}",
                 options.timeout_secs,
                 roster_announced,
                 ready_sent,
@@ -906,6 +951,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 checksum_turns,
                 packages_sent,
                 empty_replies,
+                sync_signals_answered,
                 game_key
                     .map(|key| format!("0x{key:08x}"))
                     .unwrap_or_else(|| "unannounced (supply --game-key)".into()),
@@ -1696,6 +1742,84 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(3));
         }
         host
+    }
+
+    /// Retail's pre-match rendezvous, and why silence hangs "Starting Game".
+    ///
+    /// `SyncPoint::sync` `0x0093a2d0` increments the global `SyncPoint::counter`
+    /// `0x00cbee7c`, bumps the local `NetPlayer`'s counter through vtable `+0x48`
+    /// (`0x0093a3fa`), broadcasts one 5-byte record via
+    /// `NetDaemon::send_sync_signal` `0x00950c50`, and then spins on
+    /// `NetDaemon::process_all` `0x00951300` while any participating player still
+    /// reports `NetPlayer::get_sync_counter() < SyncPoint::counter`
+    /// (`0x0093a48d..0x0093a496`). A remote peer's counter is advanced only by
+    /// `SyncPoint::process_sync_signal` `0x0093a150`, which retail runs on
+    /// *receipt* of masked type 10 — so the owned peer's entire obligation is to
+    /// return one sync signal per sync signal, and retail does its own counting.
+    /// `Game::run` `0x00584590` issues four of these before
+    /// `CommandManager::start` `0x00942e10`, which issues up to three more (two
+    /// of them inside `TimeSync::sync` `0x00955060`), so the one-for-one
+    /// accounting is what matters, not a single reply.
+    #[test]
+    fn the_retail_sync_barrier_is_answered_one_signal_per_signal() {
+        let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
+        let addr = host_transport.local_addr().unwrap();
+        let mut options = retail_options(addr.to_string());
+        options.turns = 1;
+        options.timeout_secs = 20;
+        let seed = 0x0055_1234u32;
+        let start = Instant::now();
+        let peer = std::thread::spawn(move || run_retail(&options));
+        let mut host = mock_retail_host_ready(host_transport, start);
+        let now = || start.elapsed().as_millis() as u64;
+
+        let barriers = [0i32, 7];
+        let mut echoed = Vec::new();
+        for play in barriers {
+            host.send_all(&NetMsg::SyncSignal { play }).unwrap();
+            let want = echoed.len() + 1;
+            while echoed.len() < want {
+                host.poll(now(), Duration::from_millis(5)).unwrap();
+                for event in host.drain_events() {
+                    if let Event::Game { from, msg } = event {
+                        assert_eq!(from, CLIENT_ID, "unexpected game traffic origin");
+                        echoed.push(msg);
+                    }
+                }
+                assert!(
+                    start.elapsed() < Duration::from_secs(10),
+                    "the owned peer never answered retail's sync signal (play={play}); \
+                     a real host would sit on Starting Game forever"
+                );
+            }
+        }
+        assert_eq!(
+            echoed.len(),
+            barriers.len(),
+            "one signal answers one signal: {echoed:?}"
+        );
+        for (msg, play) in echoed.iter().zip(barriers) {
+            assert_eq!(msg.id, 10, "the reply must land on jump-table entry 10");
+            assert_eq!(msg.bytes.len(), 5, "NetMsg_SyncSignal is exactly 5 bytes");
+            assert_eq!(msg.decode().unwrap().msg, NetMsg::SyncSignal { play });
+        }
+
+        // The barrier is crossed; retail then reaches its ordinary turn cadence,
+        // and the peer must still be in its normal reactive shape.
+        host.announce_game_key(seed, GameKeySource::RetailGameInfoSeed)
+            .unwrap();
+        let checksum = checksum_command(1);
+        host.send_command_package(1, 0, &encode_checksum_only(&checksum, seed).unwrap())
+            .unwrap();
+        while !host.turn_ready(1) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(14));
+        }
+        let report = peer.join().unwrap().unwrap();
+        assert_eq!(report.sync_signals_answered, barriers.len() as u32);
+        assert_eq!(report.checksum_turns, 1);
+        assert_eq!(report.packages_sent, 1);
     }
 
     #[test]

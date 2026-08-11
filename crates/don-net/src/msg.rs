@@ -757,6 +757,44 @@ mod tests {
         );
     }
 
+    /// `NetDaemon::send_sync_signal` `0x00950c50` builds the whole record on its
+    /// own stack and hands it to the transport:
+    ///
+    /// ```text
+    /// 00950c5f  mov  byte ptr [ebp - 8], 0xa      ; GenericNetPacket::type = 10
+    /// 00950c7c  mov  ecx, dword ptr [eax + 0x2a0] ; Console::play
+    /// 00950c9c  mov  dword ptr [ebp - 7], ecx     ; NetMsg_SyncSignal::play (+1)
+    /// 00950ce9  push 5                            ; the exact wire length
+    /// 00950cec  call dword ptr [eax + 0x58]       ; NetSys::send_all(msg, 5, 1)
+    /// ```
+    ///
+    /// Five bytes, unpacked, `play` at offset 1, no response flag on retail's own
+    /// emission. `SyncPoint::process_sync_signal` `0x0093a150` — the sole
+    /// consumer, reached through jump-table entry 10 at `0x009511b8` — reads only
+    /// the `NetPlayer*` the transport resolved and never dereferences the record,
+    /// so `play` is inert on the receive path. **[measured]**
+    #[test]
+    fn the_sync_signal_is_the_five_bytes_netdaemon_puts_on_the_wire() {
+        let m = NetMsg::SyncSignal { play: 0x0201 };
+        let mut b = Vec::new();
+        m.encode(&mut b);
+        assert_eq!(b, vec![10, 0x01, 0x02, 0x00, 0x00]);
+        assert_eq!(MSG_SIZE[10], Some(5));
+        assert_eq!(NetMsg::decode(&b).unwrap().msg, m);
+
+        // `NetDaemon::process` masks with 0xBF (`and ecx, 0xffffffbf` at
+        // `0x00950fb5`) before the switch, so a reply carrying the response
+        // marker lands on the same handler and must decode identically.
+        let mut reply = Vec::new();
+        m.encode_framed(true, &mut reply);
+        assert_eq!(reply[0], 10 | 64);
+        let got = NetMsg::decode(&reply).unwrap();
+        assert!(got.ty.response);
+        assert_eq!(got.msg, m);
+        assert_eq!(dispatch(10), Dispatch::Handled);
+        assert_eq!(DISPATCH_TARGET[10], 0x0095_11b8);
+    }
+
     #[test]
     fn internal_packet_types_are_rejected_not_misparsed() {
         assert_eq!(NetMsg::decode(&[128, 0]), Err(MsgError::IsInternal(128)));

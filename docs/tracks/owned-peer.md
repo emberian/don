@@ -138,6 +138,36 @@ on the checksum invariant, and `CommandManager::start` `0x00942E10` sends the fi
 every match without ever calling `CommandManager::issue_check_sums` `0x00940770`. See
 [`docs/assembly/retail-command-package-cadence.md`](../assembly/retail-command-package-cadence.md).
 
+## The pre-match sync barrier
+
+Before any of that runs, retail has to *start*. `SyncPoint::sync` `0x0093a2d0` is a blocking
+rendezvous: it bumps the local `NetPlayer`'s counter, increments the global
+`SyncPoint::counter` `0x00cbee7c`, broadcasts one 5-byte `NETMSG_SYNCSIGNAL` (id 10) through
+`NetDaemon::send_sync_signal` `0x00950c50`, then spins on `NetDaemon::process_all` until every
+`NetSys` player bound to a `GameInfo::player[j].net_player` reports
+`NetPlayer::get_sync_counter() >= SyncPoint::counter`. A remote peer's counter moves only when
+retail *receives* a sync signal from it: `NetDaemon::process` `0x00950f30` jump-table entry 10
+calls `SyncPoint::process_sync_signal` `0x0093a150`, which increments the counter on the
+sender's `NetPlayer` — an object that lives inside our shim.
+
+A live peer that classified id 10 as opaque and stayed silent left a retail host on "Starting
+Game" forever, with the shim trace ending at `netplayer.get_sync_counter`. The whole fix is
+one-for-one: **on every sync signal from the authoritative host, the peer sends one back**,
+echoing the received `play` verbatim. Retail does its own counting; the shim deliberately does
+not touch `sync_counter` on the peer's behalf. A clean start crosses seven of these barriers
+before the first command package (`Game::run` `0x00584590` issues four, `CommandManager::start`
+`0x00942e10` one, and `TimeSync::sync` `0x00955060` two) and two more right after it, so the
+peer must keep answering rather than answer once.
+
+The run record reports `"sync_signals_answered"`, each reply prints a `"sync-signal"` event,
+and the shim's diagnostic log carries `sync_signal=out`, `sync_signal=in`, and
+`sync_counter=inc` lines. The derivation is
+[`docs/assembly/retail-sync-point-barrier.md`](../assembly/retail-sync-point-barrier.md).
+
+Answering is not gated on `--passive`: the reply carries no simulation state — retail's
+handler provably never dereferences the record — and a passive observer that withholds it
+stalls the host it is observing.
+
 ## Reply policy
 
 One package per stamp, in one of two shapes, neither of which invents simulation state:
@@ -202,6 +232,12 @@ The shipped start handoff is independent of the replacement transport. The exact
    `process_system_messages` (`+0x9C`), then `get` (`+0x5C`) at
    `0x00950F67..0x00950FA4`. Command-package case 7 relays client packages through
    `NetSys::send_all` at `0x009510E5..0x009510FA`; the turn gate consumes one package per slot.
+
+Between step 3 and step 4 sits the sync barrier described above: `SetupWin` hands off, then
+`Game::run` and `CommandManager::start` each block in `SyncPoint::sync` until every peer's
+`NetPlayer::get_sync_counter()` has caught up with `SyncPoint::counter`. `NetDaemon::process_all`
+is what pumps the network inside that spin, which is why the barrier and the packet loop share
+the same call frontier.
 
 The owned-peer mock-retail test now crosses that packet boundary for three consecutive stamps,
 verifies silence before the first host package, mirrors only each stamp's extracted checksum,

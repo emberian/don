@@ -1851,6 +1851,38 @@ unsafe fn announce_game_key_for_package(this: *mut NetSysBase, packet: &[u8]) {
     }
 }
 
+/// `SyncPoint::sync` `0x0093a2d0` is a **blocking** pre-match rendezvous, and it
+/// is the only retail loop that can stall the whole process against state this
+/// shim owns. It bumps the local `NetPlayer`'s counter (vtable `+0x48` at
+/// `0x0093a3fa`), increments the global `SyncPoint::counter` `0x00cbee7c`,
+/// broadcasts one 5-byte record through `NetDaemon::send_sync_signal`
+/// `0x00950c50`, then spins on `NetDaemon::process_all` `0x00951300` for as long
+/// as any player bound to a `GameInfo::player[j].net_player` reports
+/// `NetPlayer::get_sync_counter() < SyncPoint::counter` (`0x0093a48d`).
+///
+/// Every one of those reads lands on `np_get_sync_counter` below, so if a peer
+/// never answers, retail sits on "Starting Game" forever and — because
+/// `trace_once` has already fired for every slot the loop touches — emits no
+/// further trace at all. These three detail lines are what makes that loop
+/// visible: one per outbound signal, one per inbound signal, one per counter
+/// move. The volume is a barrier count, not a packet count: `Game::run`
+/// `0x00584590` issues four before `CommandManager::start` `0x00942e10`, which
+/// issues up to three more (two inside `TimeSync::sync` `0x00955060`). The
+/// remaining ten of the seventeen `SyncPoint::sync` call sites are exceptional —
+/// OOS recovery, drop handling, file and mod transfer — not per-frame work.
+///
+/// The shim deliberately does **not** advance the counter itself. Retail already
+/// does it, on receipt, inside its own dispatcher: `NetDaemon::process`
+/// `0x00950f30` sends masked type 10 to `SyncPoint::process_sync_signal`
+/// `0x0093a150`, which calls `inc_sync_counter` on the *sender's* `NetPlayer`.
+/// Bumping it here as well would double-count a barrier retail is still running.
+fn sync_signal_play(packet: &[u8]) -> Option<i32> {
+    match don_net::msg::NetMsg::decode(packet).map(|framed| framed.msg) {
+        Ok(don_net::msg::NetMsg::SyncSignal { play }) => Some(play),
+        _ => None,
+    }
+}
+
 unsafe extern "thiscall" fn ns_send(
     this: *mut NetSysBase,
     packet: *const u8,
@@ -1869,6 +1901,12 @@ unsafe extern "thiscall" fn ns_send(
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
     announce_game_key_for_package(this, bytes);
+    if let Some(play) = sync_signal_play(bytes) {
+        trace_detail(format_args!(
+            "sync_signal=out dest=one peer={} play={play} bytes={size}",
+            (*to).unique_id
+        ));
+    }
     let dest = Dest::One((*to).unique_id);
     st(this)
         .and_then(|s| s.session.as_mut())
@@ -1892,6 +1930,11 @@ unsafe extern "thiscall" fn ns_send_all(
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
     announce_game_key_for_package(this, bytes);
+    if let Some(play) = sync_signal_play(bytes) {
+        trace_detail(format_args!(
+            "sync_signal=out dest=all play={play} bytes={size}"
+        ));
+    }
     st(this)
         .and_then(|s| s.session.as_mut())
         .map(|session| session.transport.send(Dest::All, bytes).is_ok())
@@ -1926,6 +1969,18 @@ unsafe extern "thiscall" fn ns_get(
             ));
             continue;
         };
+        if let Some(play) = sync_signal_play(&bytes) {
+            // Retail will now dispatch this through `NetDaemon::process`
+            // `0x00950f30` jump-table entry 10 (`0x009511b8`), which loads the
+            // resolved `NetPlayer*` we just wrote into `*from` and calls
+            // `SyncPoint::process_sync_signal` `0x0093a150` with it in ECX. The
+            // increment that unblocks `SyncPoint::sync` happens there, not here.
+            trace_detail(format_args!(
+                "sync_signal=in from={sender} play={play} bytes={} sync_counter={}",
+                bytes.len(),
+                (*sender_ptr).sync_counter
+            ));
+        }
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), packet, bytes.len());
         *size = bytes.len() as u32;
         *from = sender_ptr;
@@ -2439,10 +2494,24 @@ unsafe extern "thiscall" fn np_get_send_queue_info(
 unsafe extern "thiscall" fn np_reset_sync_counter(t: *mut NetPlayerObj) {
     trace_once("netplayer.reset_sync_counter");
     (*t).sync_counter = 0;
+    trace_detail(format_args!(
+        "sync_counter=reset peer={} value=0",
+        (*t).unique_id
+    ));
 }
 unsafe extern "thiscall" fn np_inc_sync_counter(t: *mut NetPlayerObj) {
     trace_once("netplayer.inc_sync_counter");
     (*t).sync_counter = (*t).sync_counter.wrapping_add(1);
+    // The number `SyncPoint::sync` `0x0093a2d0` compares against
+    // `SyncPoint::counter` `0x00cbee7c` at `0x0093a490`. Retail drives this for
+    // the local player once per barrier and for a remote player once per
+    // received sync signal.
+    trace_detail(format_args!(
+        "sync_counter=inc peer={} local={} value={}",
+        (*t).unique_id,
+        i32::from((*t).flags & SNLPLAYER_LOCAL != 0),
+        (*t).sync_counter
+    ));
 }
 unsafe extern "thiscall" fn np_get_sync_counter(t: *mut NetPlayerObj) -> i32 {
     trace_once("netplayer.get_sync_counter");
@@ -2519,6 +2588,61 @@ mod tests {
     #[test]
     fn receive_copy_ceiling_is_the_pdb_array_extent() {
         assert_eq!(NETDAEMON_RECEIVE_EXTENT, 2048);
+    }
+
+    /// The three `NetPlayer` slots `SyncPoint` drives, in the order retail drives
+    /// them, with the numbers its barrier actually compares.
+    ///
+    /// `SyncPoint::clear_counters` `0x0093a290` zeroes `SyncPoint::counter` and
+    /// calls vtable `+0x44` on every `NetSys::players[i]`. `SyncPoint::sync`
+    /// `0x0093a2d0` calls `+0x48` on the local player, increments the global, and
+    /// then reads `+0x4c` on each participant until none is behind. This shim
+    /// only stores and reports that number — the increments for a *remote* peer
+    /// come from retail's own `SyncPoint::process_sync_signal` `0x0093a150` on
+    /// receipt of a sync signal, so nothing here may bump it speculatively.
+    #[test]
+    fn the_sync_counter_slots_are_exactly_what_the_barrier_reads() {
+        let mut object = build_player(&don_net::session::Player {
+            unique_id: 2,
+            name: "DoN".into(),
+            is_host: false,
+            is_local: false,
+            ready: true,
+            last_pulse_ms: 0,
+            slot: 1,
+        });
+        let raw: *mut NetPlayerObj = object.as_mut();
+        unsafe {
+            assert_eq!(np_get_sync_counter(raw), 0);
+            np_inc_sync_counter(raw);
+            assert_eq!(np_get_sync_counter(raw), 1);
+            np_inc_sync_counter(raw);
+            assert_eq!(np_get_sync_counter(raw), 2);
+            np_reset_sync_counter(raw);
+            assert_eq!(np_get_sync_counter(raw), 0);
+        }
+    }
+
+    /// `NetDaemon::send_sync_signal` `0x00950c50` writes the type byte `0x0a` and
+    /// a four-byte `play`, then calls the send-all slot with length 5. The
+    /// dispatcher masks with `0xBF` (`0x00950fb5`), so a reply carrying
+    /// `NETMSG_RESPONSE_FLAG` reaches the same handler and must classify
+    /// identically. Nothing else in the message space may.
+    #[test]
+    fn a_sync_signal_is_recognised_in_both_directions_and_nothing_else_is() {
+        assert_eq!(sync_signal_play(&[10, 0x2a, 0, 0, 0]), Some(42));
+        assert_eq!(sync_signal_play(&[10 | 64, 0x2a, 0, 0, 0]), Some(42));
+        // Too short to hold the record at all.
+        assert_eq!(sync_signal_play(&[10, 0, 0, 0]), None);
+        // Length-tolerant on the high side, exactly like the dispatcher: retail
+        // never compares the received size against `sizeof(NetMsg_SyncSignal)`,
+        // it switches on `data[0] & 0xBF` (`0x00950fb5`) and reads the fixed
+        // struct out of `NetDaemon::data`. This is a trace classifier, so it
+        // must agree with what retail will do rather than be stricter.
+        assert_eq!(sync_signal_play(&[10, 0, 0, 0, 0, 0]), Some(0));
+        assert_eq!(sync_signal_play(&[7, 1, 0, 0, 0, 1, 0, 0]), None);
+        assert_eq!(sync_signal_play(&[136, 1]), None);
+        assert_eq!(sync_signal_play(&[]), None);
     }
 
     #[test]

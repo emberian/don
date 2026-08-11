@@ -32,7 +32,7 @@ MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
 # arm64 host (`run-gen7-wine-smoke.sh` shows the prefix seeding these need).
 XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 \
   XWIN_ARCH=x86 cargo xwin test --release --no-run
-wine target/i686-pc-windows-msvc/release/deps/CrossplayNetLib-*.exe   # 16 passed
+wine target/i686-pc-windows-msvc/release/deps/CrossplayNetLib-*.exe   # 18 passed
 ```
 
 Both variables are intentional on the current build host. `cargo-xwin` splats one architecture
@@ -80,6 +80,13 @@ ephemeral `local_addr` port, so it necessarily differs every run; what is stable
 69-line length and the fixed call sequence. Comparing raw trace digests across runs will
 always disagree. Emitting a normalized digest (pid and port elided) alongside the raw one
 would make this checkable and is not yet done.
+
+The 69 lines are a property of the **frozen** generation-7 artifacts, not a permanent
+invariant. A build of the current tree emits **71**, because `np_inc_sync_counter` and
+`np_reset_sync_counter` now write a `sync_counter=` detail line each — the number
+`SyncPoint::sync` `0x0093a2d0` blocks on. Rerun on 2026-08-10 against a freshly built DLL:
+`don.netsys-load-smoke.v4` `"status":"pass"`, 73 stack-pointer checks, 71 trace lines,
+5 of them `sync_counter=`.
 
 This is disposable PE32 evidence only; it did not read or modify a retail
 process and does not authorize a retail retry.
@@ -195,7 +202,8 @@ make the DLL self-describing under `dumpbin /exports`.
 | the pinned retail executable constructs the direct-access `LobbyDTO` at concrete `+0xD0` and survives the immediate post-`OnHostUpdated` copy-assignment | generation-5 PID 12080 trace records the retail constructor at exe RVA `0x4B1F0`, then `OnHostUpdated`; the process remained live where generations 3/4 faulted in `std::list::clear` |
 | `get_ip_addresses` returns the shipped borrowed embedded empty `ObjectArray<String>` at concrete `+0x1A0` | PID 5056 faulted at retail `SetupWin::draw_ip_address` `0x005BD635` after the old null result; the replacement uses the pinned executable constructor at RVA `0x39E80`; generation-7 v4 runtime revalidated the non-null offset/layout and ESP gate. Confirmed live 2026-08-10: `ip_array_ctor_rva=0x39e80` executes in the real process |
 | **the retail identity gate matches a live image** | **yes, as of 2026-08-10.** Two preferred-base-vs-loaded-image comparisons refused the real game: the `push imm32` inside `LOBBY_DTO_CTOR_PREFIX`, and `OptionalHeader.ImageBase`, which the loader rewrites to the chosen base. Both fixed and pinned by tests on the measured live bytes; the live run now reports `retail_identity=true` and `factory=lobby-dto-constructed`. See [`docs/assembly/netsys-retail-identity-relocation.md`](../../docs/assembly/netsys-retail-identity-relocation.md) |
-| **the retail game reaches a match over this DLL** | **in progress.** Current live frontier is the owned Friend Game UI gate; match/turn/reconnect evidence is not yet claimed. |
+| the pre-match `SyncPoint` barrier is understood and instrumented | `SyncPoint::sync` `0x0093a2d0` blocks until every `NetPlayer::get_sync_counter()` reaches `SyncPoint::counter` `0x00cbee7c`; only `SyncPoint::process_sync_signal` `0x0093a150` advances a remote peer's, on receipt of masked type 10. The shim stores and reports that counter and does **not** advance it itself. `sync_signal=out/in` and `sync_counter=inc` trace lines make the loop visible; three focused PE32 tests. See [`docs/assembly/retail-sync-point-barrier.md`](../../docs/assembly/retail-sync-point-barrier.md) |
+| **the retail game reaches a match over this DLL** | **in progress.** A live host crossed all-ready, reached `SyncPoint::sync`, and hung on "Starting Game" because the peer never answered its sync signal. `tools/owned-peer` now answers one-for-one, but that has only been exercised against a mock retail host over TCP. Match/turn/reconnect evidence is not yet claimed. |
 
 The last row is the honest gap. The loader, direct lobby callback, and exact
 mapped module have now run inside `riseofnations.exe`; a completed owned match
