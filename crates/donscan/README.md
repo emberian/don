@@ -5,9 +5,20 @@ Native, read-only Windows probes for `riseofnations.exe`:
 - `donscan` types the heap by vtable pointer for occasional diagnostics.
 - `donfeed` emits a coherent, least-data economy observation stream for RoNtoy.
 
-Every C++ object begins with its vtable pointer. `schema/vtables.json` maps 1,777 RTTI
-vtable VAs to class names. Scanning committed memory for those addresses, rebased by the
+Every C++ object begins with its vtable pointer. `schema/vtables.json` maps 1,888 vtable
+VAs to class names. Scanning committed memory for those addresses, rebased by the
 live ASLR delta, tells you *what kind of object* sits at every address it finds.
+
+The map is generated, not curated — one row per `??_7<class>@@6B…@` public symbol in
+`rise.pdb`, emitted by `tools/pdb-extract`'s optional fifth output:
+
+```sh
+tools/pdb-extract/target/release/pdb-extract ron-bin/sbl/rise.pdb 0x00400000 \
+    schema/symbols.json schema/types.json schema/vtables.json
+```
+
+Do not hand-edit it. `docs/derivation/vtable-map.md` records why that symbol set is the
+right one and what the previous RTTI-scan map got wrong in both directions.
 
 **Excluded from the root workspace** (see `../../Cargo.toml`): it links `kernel32` and
 cannot build for `aarch64-apple-darwin`. `cargo test` at the repo root never touches it.

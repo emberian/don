@@ -1,8 +1,9 @@
 //! donscan — native Windows heap scanner for a live `riseofnations.exe`.
 //!
 //! Every C++ object in the process begins with its vtable pointer. `schema/vtables.json`
-//! maps 1,777 RTTI vtable VAs to class names. Scanning committed memory for those
-//! addresses (rebased by the live ASLR delta) therefore *types the live heap*.
+//! maps 1,888 vtable VAs to class names — one row per `??_7…@@6B…@` symbol in `rise.pdb`,
+//! which is the image's complete vtable set. Scanning committed memory for those addresses
+//! (rebased by the live ASLR delta) therefore *types the live heap*.
 //!
 //! What this reports is a **candidate** count, not a proven object count: any dword that
 //! happens to equal a rebased vtable address is a hit, and the `.rdata` vtable arrays,

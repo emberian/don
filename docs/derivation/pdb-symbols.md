@@ -43,7 +43,8 @@ cd /Users/ember/dev/don/tools/pdb-extract && cargo build --release
 ./target/release/pdb-extract \
     /Users/ember/dev/don/ron-bin/sbl/rise.pdb 0x00400000 \
     /Users/ember/dev/don/schema/symbols.json \
-    /Users/ember/dev/don/schema/types.json
+    /Users/ember/dev/don/schema/types.json \
+    /Users/ember/dev/don/schema/vtables.json     # optional 5th output
 ```
 
 Use the **absolute** PDB path: it is recorded verbatim in `_meta.pdb`, and it is the only
@@ -84,6 +85,16 @@ Non-virtual methods are dropped and `methods_declared` records the true declared
 Every *emitted* method already appears in `symbols.json` with an address and a full signature;
 carrying them here too tripled the file (33 MB → 13 MB) for no new facts. What is genuinely
 lost is the declaration of methods that were fully inlined and never emitted.
+
+**A second omission, previously silent, now declared in the file:** `classes`/`enums` are
+keyed by the **bare tag name** and are first-record-wins, so the **208** definitions the PDB
+holds under an already-used name are not emitted — 194 colliding names, all Win32/COM/CRT/zlib
+headers duplicated across translation units, **no engine class among them**, 13 with genuinely
+divergent shapes. `_meta.counts` now carries the arithmetic and `_meta.collisions` lists every
+affected name with its definition count and distinct shapes. Field-type *resolution* is
+unaffected — it goes through the collision-free COMDAT unique name. Full derivation and the
+reasoning for declaring rather than restructuring:
+`docs/derivation/pdb-extract-name-collisions.md`.
 
 ## 3. Headline numbers **[measured]**
 
@@ -165,9 +176,19 @@ attached to it. **[measured]**
 
 Two structural cross-checks, both clean:
 
-- **`schema/vtables.json`** (1,777 RTTI vtable addresses recovered by scanning): of the 1,659
-  addresses that also carry a PDB `??_7…@@6B@` public symbol, **1,659 agree and 0 disagree**.
-  The remaining 118 have no public vftable symbol to compare against.
+- **`schema/vtables.json`**: of the 1,659 addresses in the then-current map that also carry a
+  PDB `??_7…@@6B@` public symbol, **1,659 agree and 0 disagree**.
+  > **CORRECTION (2026-08-11, lane `vtables`).** The sentence that used to follow —
+  > "the remaining 118 have no public vftable symbol to compare against" — was wrong, and
+  > it read as reassurance when it was the opposite. Those 118 addresses *do* carry PDB
+  > symbols, and the symbols say they are **not vtables**: 47 `RTTI Class Hierarchy
+  > Descriptor`, 28 `RTTI Base Class Array`, 23 `RTTI Complete Object Locator`, 19 `RTTI
+  > Base Class Descriptor`, 1 `__CTA1?AV_com_error@@`. Their first dword is outside `.text`
+  > [measured, `ron-bin/riseofnations.exe`]. The map has since been regenerated from the
+  > `??_7` symbol set alone — 1,888 rows — and `docs/derivation/vtable-map.md` has the
+  > derivation and the independent RTTI cross-check that bounds its completeness. The
+  > 1,659/1,659 agreement above is unaffected and is now the *whole* overlap by
+  > construction.
 - **`docs/derivation/rules-constants.json`** (719 rule constants with struct offsets, recovered
   from binding call sites): **719 / 719 offsets agree exactly** with the PDB's `Constants`
   class layout. The offset-recovery method is vindicated end to end.
@@ -248,6 +269,16 @@ Against `re/decomp-all/MANIFEST.jsonl` (46,727 Ghidra functions):
   four `ScenarioFuncSet` scripting entry points.
 - Of the 18,350 shared addresses, **827 disagree on size**, and in **820** of those the PDB's
   extent is *larger* — Ghidra truncated the tail (`ListBox::on_key_click`: 852 B vs 299 B).
+
+**`MANIFEST.jsonl`'s `size` is not a code size.** It is Ghidra's count of addresses in the
+function *body* it reconstructed, so it undercounts whenever control flow leaves the body and
+comes back, and the gap is not a bounded rounding error: `ConsoleWin::run_cmd` `0x007d6a70` is
+`"size": 664` in the manifest and **43,008** bytes in the PDB — a 65× difference, and it
+decompiles to 5,427 lines. Twelve of the 820 differ by ≥1 KiB (`ConquestFinalWin::on_redraw`
+1,758 vs 5,900; `Search::valid_filter` **19** vs 2,629; `Scene::draw_overlays` 9,350 vs 12,564)
+[measured, `MANIFEST.jsonl` × `schema/symbols.json`, 2026-08-11]. Never size a body, a budget or
+a coverage residual off a manifest `size`; take it from `schema/symbols.json`, which carries the
+PDB's `S_GPROC32` extent.
 
 `schema/islands.jsonl` is separately incomplete in a way worth knowing: its largest recorded
 function is 4,048 bytes, so every larger function — including `Constants::log_data` and
@@ -362,6 +393,7 @@ Decompiler before and after, `0x00936560`:
 |---|---|
 | `schema/symbols.json` | 22,750 functions + 20,811 globals, with names/sizes/lines/types |
 | `schema/types.json` | 19,914 classes, 26,469 fields, 21,997 virtual slots, 2,857 enums |
-| `tools/pdb-extract/` | the Rust extractor that produces both (standalone workspace) |
+| `schema/vtables.json` | 1,888 vtable VA → class, one row per `??_7…@@6B…@` symbol (optional 5th output; see `docs/derivation/vtable-map.md`) |
+| `tools/pdb-extract/` | the Rust extractor that produces all three (standalone workspace) |
 | `re/scripts/ApplyPdb.java` | preScript: point Ghidra at the PDB, disable other analyzers |
 | `re/scripts/PdbReport.java` | postScript: report what landed, re-check spot addresses |

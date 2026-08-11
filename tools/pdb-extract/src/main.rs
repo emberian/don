@@ -1,13 +1,17 @@
 //! pdb-extract — turn a shipped MSVC PDB into machine-readable ground truth.
 //!
-//! Emits two artifacts:
+//! Emits two artifacts, and optionally a third:
 //!   * symbols.json — every function: VA/RVA, PDB name, mangled name, demangled
 //!     signature, size, owning .obj module, source file + line span.
 //!   * types.json   — the type catalogue: classes/structs/unions with field
 //!     names, types, offsets, sizes; base classes; virtual method slots; enums.
+//!   * vtables.json — vtable VA -> class, one row per `??_7…@@6B…@` public
+//!     symbol. Optional because its flat address->string shape exists to feed
+//!     `donscan`'s hand-rolled embedded reader, not as a general artifact.
 //!
 //! Usage:
 //!   pdb-extract <rise.pdb> <image_base_hex> <out_symbols.json> <out_types.json>
+//!               [<out_vtables.json>]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -433,13 +437,16 @@ fn demangle(m: &str) -> Option<String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 5 {
-        eprintln!("usage: pdb-extract <pdb> <image_base_hex> <symbols.json> <types.json>");
+        eprintln!(
+            "usage: pdb-extract <pdb> <image_base_hex> <symbols.json> <types.json> [vtables.json]"
+        );
         std::process::exit(2);
     }
     let pdb_path = &args[1];
     let image_base = u64::from_str_radix(args[2].trim_start_matches("0x"), 16)?;
     let sym_out = &args[3];
     let ty_out = &args[4];
+    let vt_out = args.get(5);
 
     let file = File::open(pdb_path)?;
     let mut pdb = pdb::PDB::open(file)?;
@@ -511,6 +518,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut defs: HashMap<String, Ti> = HashMap::new();
     let mut udefs: HashMap<String, Ti> = HashMap::new();
     let mut all_type_records = 0usize;
+    // `defs` is keyed by the bare tag name and is first-record-wins, so a name the
+    // PDB defines more than once keeps one record and the rest are dropped from
+    // types.json. That is not a bug in the *resolution* path — `name_of`/`size_of`
+    // prefer `udefs`, keyed by the COMDAT unique name, which never collides — but
+    // it is real, silent loss in the emitted catalogue, so measure it and declare
+    // it in `_meta` rather than leaving it to be rediscovered.
+    // `shape` is the byte size for a class/union and the enumerator count for an
+    // enum: enough to tell "the same header seen twice" from "genuinely different
+    // definitions under one name".
+    let mut def_shapes: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    let mut enum_names: HashSet<String> = HashSet::new();
+    let mut class_union_records = 0usize;
+    let mut enum_records = 0usize;
     {
         let mut it = type_info.iter();
         while let Some(t) = it.next()? {
@@ -519,19 +539,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let idx = t.index();
             match t.parse() {
                 Ok(pdb::TypeData::Class(c)) if !c.properties.forward_reference() => {
-                    defs.entry(c.name.to_string().into_owned()).or_insert(idx);
+                    let name = c.name.to_string().into_owned();
+                    class_union_records += 1;
+                    def_shapes.entry(name.clone()).or_default().push(c.size);
+                    defs.entry(name).or_insert(idx);
                     if let Some(u) = c.unique_name {
                         udefs.entry(u.to_string().into_owned()).or_insert(idx);
                     }
                 }
                 Ok(pdb::TypeData::Union(u)) if !u.properties.forward_reference() => {
-                    defs.entry(u.name.to_string().into_owned()).or_insert(idx);
+                    let name = u.name.to_string().into_owned();
+                    class_union_records += 1;
+                    def_shapes.entry(name.clone()).or_default().push(u.size);
+                    defs.entry(name).or_insert(idx);
                     if let Some(n) = u.unique_name {
                         udefs.entry(n.to_string().into_owned()).or_insert(idx);
                     }
                 }
                 Ok(pdb::TypeData::Enumeration(e)) if !e.properties.forward_reference() => {
-                    defs.entry(e.name.to_string().into_owned()).or_insert(idx);
+                    let name = e.name.to_string().into_owned();
+                    enum_records += 1;
+                    enum_names.insert(name.clone());
+                    def_shapes.entry(name.clone()).or_default().push(e.count as u64);
+                    defs.entry(name).or_insert(idx);
                     if let Some(n) = e.unique_name {
                         udefs.entry(n.to_string().into_owned()).or_insert(idx);
                     }
@@ -540,6 +570,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    let colliding: BTreeMap<String, serde_json::Value> = def_shapes
+        .iter()
+        .filter(|(_, v)| v.len() > 1)
+        .map(|(name, shapes)| {
+            let mut distinct = shapes.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            (
+                name.clone(),
+                serde_json::json!({
+                    "kind": if enum_names.contains(name) { "enum" } else { "class_union" },
+                    "definitions": shapes.len(),
+                    "shapes": distinct,
+                }),
+            )
+        })
+        .collect();
+    let colliding_divergent = colliding
+        .values()
+        .filter(|v| v["shapes"].as_array().map_or(false, |a| a.len() > 1))
+        .count();
+    let def_names_total = def_shapes.len();
+    let enum_name_count = enum_names.len();
+    drop(def_shapes);
     let mut ctx = TypeCtx {
         finder,
         defs,
@@ -798,6 +852,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     globals.sort_by(|a, b| a.rva.cmp(&b.rva).then(a.name.cmp(&b.name)));
 
+    // ---- the vtable map ---------------------------------------------------
+    // Every real vtable in the image is named by exactly one `??_7<class>@@6B@`
+    // (or `??_7<class>@@6B<base>@@@` for a secondary vptr) public symbol; nothing
+    // else is one. `vt_out` is emitted from that set alone -- see
+    // docs/derivation/vtable-map.md for the two-method cross-check against the PE
+    // that establishes it, and for why an RTTI-descriptor scan does not.
+    let vtable_map: BTreeMap<u32, String> = globals
+        .iter()
+        .filter_map(|g| {
+            let m = g.mangled.as_deref()?.strip_prefix("??_7")?;
+            // Split at the LAST `@@6B`: a template argument can itself contain
+            // `@@`, so a first-match split mis-cuts `?$ArrayBase@U?$Rect@F@@`.
+            let cut = m.rfind("@@6B")?;
+            let class = &m[..cut];
+            if class.is_empty() {
+                return None;
+            }
+            Some((g.rva, class.to_string()))
+        })
+        .collect();
+
     for (rva, mangled, is_func) in pubs {
         if !is_func {
             continue;
@@ -932,13 +1007,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "type_records": all_type_records,
                 "classes": classes.len(),
                 "enums": enums.len(),
+                "class_union_definitions": class_union_records,
+                "enum_definitions": enum_records,
+                "definition_names": def_names_total,
+                "enum_definition_names": enum_name_count,
+                "definitions_dropped_to_name_collision":
+                    class_union_records + enum_records - def_names_total,
+                "colliding_names": colliding.len(),
+                "colliding_names_with_divergent_shapes": colliding_divergent,
             },
             "note": "offsets and sizes are bytes; `size` on a field is the size of that field's type, resolved through typedef/modifier/array/enum. Forward references are resolved to their definitions. `methods` lists VIRTUAL methods only (with their introducing vtable slot, which exists nowhere else); `methods_declared` is the full declared count. Non-virtual methods are omitted because every emitted one is already in symbols.json with an address and a full signature.",
+            "collision_note": "`classes`/`enums` are keyed by the BARE TAG NAME and are first-record-wins, so `definitions_dropped_to_name_collision` definitions are not emitted. `collisions` lists every affected name with its definition count and its distinct shapes (byte size for a class/union, enumerator count for an enum); more than one shape means the duplicates genuinely disagree and the emitted record is whichever the TPI stream reached first. Field-type RESOLUTION does not go through this map — it prefers the COMDAT unique name, which does not collide — so a dropped record cannot corrupt another class's layout.",
+            "collisions": colliding,
         },
         "classes": classes,
         "enums": enums,
     });
     serde_json::to_writer(std::io::BufWriter::new(File::create(ty_out)?), &ty_json)?;
+
+    // ---- vtables.json (optional) -----------------------------------------
+    // Hand-written rather than `serde_json` because `donscan` embeds this file
+    // with `include_str!` and reads it with a hand-rolled parser that accepts
+    // exactly one shape: a flat object of address string -> class string, one
+    // pair per line. No `_meta` key: it is not an address and the reader would
+    // reject the whole file.
+    if let Some(vt_out) = vt_out {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(File::create(vt_out)?);
+        writeln!(w, "{{")?;
+        let last = vtable_map.len().saturating_sub(1);
+        for (i, (rva, class)) in vtable_map.iter().enumerate() {
+            let va = image_base as u32 as u64 + *rva as u64;
+            let comma = if i == last { "" } else { "," };
+            writeln!(w, "\"0x{va:x}\": {}{comma}", serde_json::to_string(class)?)?;
+        }
+        writeln!(w, "}}")?;
+        w.flush()?;
+        eprintln!("vtables={}", vtable_map.len());
+    }
 
     eprintln!(
         "functions={} (proc={} public_only={}) with_line={} files={} modules={} classes={} enums={} type_records={}",

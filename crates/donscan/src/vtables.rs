@@ -1,10 +1,16 @@
-//! The vtable map: `schema/vtables.json` (1,777 RTTI vtable VA -> class name)
-//! compiled into a direct-index lookup table over the rebased address range.
+//! The vtable map: `schema/vtables.json` (1,888 vtable VA -> class name) compiled
+//! into a direct-index lookup table over the rebased address range.
 //!
-//! The table is `span/4` u16 slots, ~514 KB for the observed 0xac6d54..0xbc21d8
-//! span, so it lives in L2 and a hit costs one load. The prefilter in front of it
+//! The table is `span/4` u16 slots, ~322 KB for the 0xac6d54..0xb67d9c span, so it
+//! lives in L2 and a hit costs one load. The prefilter in front of it
 //! (`v.wrapping_sub(lo) <= span`) rejects essentially every dword in the heap with
 //! one subtract and one compare, which is what makes a whole-heap scan cheap.
+//!
+//! Provenance: one row per `??_7<class>@@6B…@` public symbol in `rise.pdb`, emitted
+//! by `tools/pdb-extract`. That set is exactly the image's real vtables — an
+//! independent scan of `.rdata`/`.data` for back-references to the 1,887 RTTI
+//! Complete Object Locators lands on 1,887 vtables and every one of them carries a
+//! `??_7` symbol. `docs/derivation/vtable-map.md` has the cross-check.
 
 /// The map is embedded so the deliverable is one file to copy into the guest.
 const VTABLES_JSON: &str = include_str!("../../../schema/vtables.json");
@@ -221,18 +227,73 @@ fn parse_flat_string_map(src: &str) -> Result<Vec<(String, String)>, String> {
 mod tests {
     use super::*;
 
+    fn find_in(m: &VtMap, va: u32) -> Option<&str> {
+        m.entries
+            .iter()
+            .find(|e| e.static_va == va)
+            .map(|e| m.names[e.name_idx as usize].as_str())
+    }
+
     #[test]
     fn embedded_map_parses_and_has_the_known_anchors() {
         let m = VtMap::build(0).expect("build");
-        assert_eq!(m.entries.len(), 1777, "vtables.json entry count changed");
-        let find = |va: u32| -> Option<&str> {
-            m.entries
-                .iter()
-                .find(|e| e.static_va == va)
-                .map(|e| m.names[e.name_idx as usize].as_str())
-        };
-        assert_eq!(find(0xb417d0), Some("Unit"));
-        assert_eq!(find(0xb434ac), Some("Object"));
+        // 1,888 = every `??_7…@@6B…@` public symbol in rise.pdb, and nothing else.
+        //
+        // This was 1,777 until 2026-08-11, and that number froze two defects at
+        // once. The old map came from an RTTI-descriptor scan, so 118 of its rows
+        // pointed at RTTI/EH metadata rather than a vtable (47 Class Hierarchy
+        // Descriptor, 28 Base Class Array, 23 Complete Object Locator, 19 Base
+        // Class Descriptor, 1 `__CTA1`) — 100 of those 118 also carried a class
+        // name that did not match the metadata's own owner — while 229 real
+        // vftables had no row at all, including `DataWalk`, `SaveGame`, `LoadGame`
+        // and `CheckSum`, the four classes `schema/state-schema.json` is defined
+        // by. Regenerate with:
+        //
+        //   pdb-extract ron-bin/sbl/rise.pdb 0x00400000 \
+        //       schema/symbols.json schema/types.json schema/vtables.json
+        //
+        // If this assertion trips again, check the *derivation* before the number:
+        // a changed count means the `??_7` symbol set changed, which for a fixed
+        // PDB it cannot.
+        assert_eq!(m.entries.len(), 1888, "vtables.json entry count changed");
+        assert_eq!(find_in(&m, 0xb417d0), Some("Unit"));
+        assert_eq!(find_in(&m, 0xb434ac), Some("Object"));
+    }
+
+    /// The four state-schema classes, absent from the map until 2026-08-11.
+    /// `DataWalk` is the `walker->vt[0]`/`vt[1]` pair the walk method is built on.
+    #[test]
+    fn the_state_schema_vftables_are_present() {
+        let m = VtMap::build(0).expect("build");
+        assert_eq!(find_in(&m, 0xb2bcd8), Some("DataWalk"));
+        assert_eq!(find_in(&m, 0xb35ac4), Some("SaveGame"));
+        assert_eq!(find_in(&m, 0xb30c88), Some("LoadGame"));
+        assert_eq!(find_in(&m, 0xb3f920), Some("CheckSum"));
+    }
+
+    /// Regression on the other direction: nothing whose first dword is not code
+    /// may be in the map. These four are one of each RTTI record kind the old map
+    /// carried, plus `Unit::vbtable` — a virtual *base* table (`0xfffffffc` in
+    /// slot 0), which `docs/tooling/native-scanner.md` used to call a missing
+    /// vtable and which is correctly absent.
+    #[test]
+    fn rtti_metadata_and_vbtables_are_not_in_the_map() {
+        let m = VtMap::build(0).expect("build");
+        // 0xb6c360 = PtrArray<Good>'s Class Hierarchy Descriptor, which the old map
+        // listed under the unrelated name `?$ObjectArray@VForm@@`.
+        for va in [0xb6c360u32, 0xb6abd4, 0xb71c38, 0xb72294, 0xb41ae0] {
+            assert_eq!(find_in(&m, va), None, "{va:#x} is not a vtable");
+        }
+    }
+
+    /// The prefilter window is derived from the map, so a regeneration that
+    /// widened it would silently make every scan slower. It got *narrower*: the
+    /// old upper bound `0xbc21d8` was a bogus `_com_error` RTTI row.
+    #[test]
+    fn the_prefilter_window_is_the_vftable_span() {
+        let m = VtMap::build(0).expect("build");
+        assert_eq!(m.lo, 0xac6d54);
+        assert_eq!(m.lo + m.span, 0xb67d9c);
     }
 
     #[test]

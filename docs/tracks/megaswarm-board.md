@@ -2592,3 +2592,294 @@ Correction to my claim block above: I did **not** write `docs/derivation/decomp-
 The derivation lives in the two blocks here instead. The only tracked file this lane produces is
 `re/scripts/DecompileList.java`; `re/decomp-all/**` (39 new `.c` + `MANIFEST.jsonl`) is
 gitignored and must not be committed.
+
+### lane: analysis (corpus evaluation harness — `analysis/**`)
+
+Claimed `cv task` row: `019ff0ef-7fc7-7103-a8c8-b39d143cdccf` — "analysis: corpus evaluation
+harness". I opened it; there was no analysis row in the queue.
+
+Files I will write:
+
+- `analysis/corpus.py` — **new.** Whole-corpus `.rcx` reader over `re/scripts/rcx_parse.py`.
+- `analysis/scoreboard.py` — **new.** The evaluation harness itself.
+- `analysis/derive.py`, `analysis/derived.json` — minimal fix (see FINDINGS).
+- `docs/tracks/analysis-scoreboard.md` — **new doc.**
+
+NOT touching: every crate. `don-ai`, `don-sim`, `don-replay`, `don-bhs` are read-only to me;
+I will report needed changes rather than make them.
+
+### lane: arena-diplo (`closure/blocker: arena-diplomacy-model`)
+
+Claimed `cv task` row: `019fef1a-2b6d-7770-a385-9619f6775522` — "Arena MODEL 6d has no
+complete retail diplomacy host". Selection evidence: `crates/don-sim/src/systems/leader_set_diplo.rs`
+(938 lines, the complete atomic `Leader::set_diplo` `0x006EC6A0` transaction planner) is
+**unregistered** — it is not in `systems/mod.rs` and is not `#[path]`-mounted from `command.rs`
+either, so it compiles only from `crates/don-sim/tests/leader_set_diplo_transaction.rs`. This is
+the standing "body exists but is unreachable" finding again, and it is exactly the authority the
+Arena blocker says is missing.
+
+Files I will write:
+
+- `crates/don-sim/src/systems/mod.rs` — **export lines only** (`leader_set_diplo`, and
+  `leaders_diplomacy_opening_frontier` if it proves reachable-clean).
+- `crates/don-ai/src/arena/diplomacy_runtime.rs` — **new module.** The Arena declaration
+  command channel and the `SetDiploImage` builder / receipt applier over the don-sim planner.
+- `crates/don-ai/src/arena/mod.rs` — one module line.
+- `crates/don-ai/src/arena/world.rs` — **minimal hunks only**: the entry point that runs a
+  declaration and the fields it needs. No other don-ai lane is on the board.
+- `crates/don-ai/tests/arena_diplomacy_runtime.rs` — **new test file.**
+- `docs/mechanics/arena-diplomacy-host.md` — **new doc.**
+
+NOT touching: `crates/don-sim/src/tick.rs`, `command.rs`, `command_tables.rs`,
+`order_dispatch.rs`, `leaders.rs`, `crates/don-env/**`, `crates/don-sim/src/systems/leader_set_diplo.rs`
+(consumed unmodified), `crates/don-ai/src/arena/retail_systems.rs` beyond additive use.
+
+### lane: vtables (`schema/vtables.json` regeneration + `donscan`'s frozen count)
+
+`cv task` row `019ff0f2-d6da-7100-8886-3fe7e12b40b1`.
+
+Target: the generated-artifact defect the `decomp-backfill` lane reported — `schema/vtables.json`
+wrong in both directions. Every relayed number re-derived from the binary before acting; see the
+FINDINGS block I will append when the work lands.
+
+Files I will write:
+
+- `schema/vtables.json` — **regenerated.**
+- `crates/donscan/src/vtables.rs` — the frozen entry-count assertion and the module header.
+- `crates/donscan/src/main.rs`, `crates/donscan/README.md` — the `1,777` prose only.
+- `tools/pdb-extract/src/main.rs` — **additive**: an optional 5th positional output that emits
+  the vtable map, so the artifact stops being unreproducible.
+- `docs/tooling/native-scanner.md` — the counts, the table-size arithmetic, and the
+  `0xb41ae0` "vtable absent from the map" claim (it is `Unit::vbtable`).
+- `docs/derivation/pdb-symbols.md` — the "the remaining 118 have no public vftable symbol"
+  sentence, which is wrong.
+- `docs/derivation/vtable-map.md` — **new doc.**
+
+NOT touching: `crates/don-sim/**`, `don-bhs`, `don-ai`, `don-replay`, `crates/donscan/src/live.rs`,
+any other `schema/*.json`.
+
+### lane: save-groups (`closure/stage: save_load`) — claim, wave 4
+
+Claimed `cv task` row: `closure/stage: save_load` (`019fef1a-2bee`).
+
+Target chosen over `initial_world`/`frontend_game_flow` for one measured reason: **the stage
+is not "required", it is already partial, and exactly one refusal keeps a real game out of
+it.** `crates/don-sim/src/systems/save_load.rs` is a 3,392-line working DoNSave writer/reader
+with a save→load→resave→resume determinism test. Its `reject_unsupported` refuses a `Sim`
+whose `groups` differ from `Groups::default()` — and `Sim::groups` is mutated by
+`tick.rs:1389` (`Groups::process`, every frame) and `tick.rs:2451` (step 13's army halt), so
+**any game that has ever commanded a group cannot be saved at all.** Groups are also the one
+refused subsystem that retail's own save stream carries as a first-class section
+(`WalkDataGame::walk_data` TOC: `Array<Group>`).
+
+Files I will write:
+
+- `crates/don-sim/src/systems/save_load/groups.rs` — **new module.** `Groups::walk_data`
+  `0x00713E30` / `Array<Group>::walk_data` `0x0047EA30` / `Group::walk_data` `0x00708400`
+  as a DoNSave section.
+- `crates/don-sim/src/systems/save_load.rs` — **minimal hunks only**: `mod groups;`, the new
+  chunk id + format-version constants, the `REQUIRED` table, the two call sites in
+  `save_sim`/`load_sim`, and replacing the `"groups"` arm of `reject_unsupported` with a
+  bounded validator. No other edit. (No other lane has claimed this file; two lanes hold
+  `save_load/step8_views.rs`, which I do not touch.)
+- `crates/don-sim/tests/save_load_groups.rs` — **new test file.**
+- `docs/derivation/savegame-groups.md` — **new doc.**
+- `tools/simulation-closure.py` — **the `save_load` tuple of `GLOBAL_STAGES` only**, same
+  minimal hunk the `victory-endgame` lane made for its own row.
+
+NOT touching: `tick.rs`, `command.rs`, `command_tables.rs`, `order_dispatch.rs`,
+`systems/groups_guys.rs` (consumed unmodified), `save_load/step8_views.rs`, any other crate.
+
+**FINDING — the retail `Groups` global `0x00E85F10` is modelled twice in `don-sim`, under two
+names, and the two models are not connected.** `command::Groups::cur` documents itself as
+"`groups.cur[who]` at `0x00E85F2C + who*4`"; `groups_guys::Groups::last_group` documents
+itself as "`GroupsData::last_group : int[8]` `+0x1C`". `0x00E85F10 + 0x1C == 0x00E85F2C`
+(`?groups@@3VGroups@@A` at `0x00E85F10`, `schema/rise-symbols.tsv:36709`), so these are the
+same eight dwords. `Sim` owns the `groups_guys` one; the `command::Bridge` owns the other and
+is instantiated **only from tests** — no production path constructs a `Bridge`. Whoever wires
+the command bridge into the tick has to reconcile them, and a save owner has to pick one.
+
+**FINDING — the standing "`Array<T>` capacity and growth metadata are checksummed" note is
+false for `Array<Group>`.** `CheckSums::check_groups` `0x00937530` (verified at instruction
+level) loops `[0x00E85F14]` (length) elements from `[0x00E85F20]` at stride `0x9D4` calling
+`Group::walk_data`, then hashes 32 bytes through the `[0x00E85F4C]` pointer as **eight**
+four-byte `adler32` calls. It never touches `size` `[0x00E85F18]`, `increment` `[0x00E85F1C]`
+or `flags` `[0x00E85F24]`. Those three appear **only** in the save stream, via
+`Array<Group>::walk_data` `0x0047EA30`, which is a whole-program specialization on the
+`groups` global (it addresses the globals directly, no `this`). So the growth metadata is
+save-critical but not checksum-critical for this container, and a lane that assumes the
+standing note will look for a desync that cannot exist.
+
+### lane: bhs-builtins (ScenarioFuncSet coverage — the `general_powers.bhs` closure)
+
+Claimed `cv task` row: `closure/checksum 14: script_run_time`
+(`019fef1a-2a3f-7a41-b991-a6588628a14f`). I am **not** flipping that channel — it needs a
+producer. I am closing the builtin gap underneath it.
+
+Files I will write:
+
+- `crates/don-bhs/src/scenario.rs` — **new module.** `ScriptTimers`
+  (`ScenarioData::timers` `0x00ed6650`) and the `ScenarioFuncSet` dispatch for the cohort
+  below.
+- `crates/don-bhs/src/host.rs` — **additive only**: new defaulted `Host` methods, every one
+  `Err(HostError::Unimplemented)` by default. No existing signature changes.
+- `crates/don-bhs/src/lib.rs` — module declaration + re-exports.
+- `crates/don-bhs/tests/scenario_builtins.rs` — **new test file.**
+- `crates/don-bhs-cc/tests/general_powers_runtime.rs` — **new test file** (compiles and
+  *runs* the shipped `scenario/scriptlibrary/general_powers.bhs`).
+- `docs/mechanics/bhs-scenario-builtins.md` — **new doc.**
+
+NOT touching: `crates/don-sim/**`, `don-content`, `don-replay`, `don-env`, `don-net`,
+`crates/don-bhs/src/{vm,builtins,builtin_table,value,ops,program}.rs`,
+`crates/don-bhs-cc/src/**` (the load-path lane's).
+
+**Cohort (21 builtins), chosen because it is the exact closure of one shipped script.**
+`ron-data/bhs-corpus/scenario/scriptlibrary/general_powers.bhs` calls exactly seven
+builtins — `time_sec`, `set_timer`, `timer_expired`, `object_type_selected`, `find_unit`,
+`length`, `bubble_text_obj`. `length` was already implemented; the other six are here,
+plus `stop_timer` (the third member of the timer subsystem), `num_objects_selected` (the
+sibling of `object_type_selected`, and the call `general_powers` has commented out), and
+the twelve zero-argument rules/victory gates that `defensive.bhs` and `economic.bhs`
+branch the opening book on.
+
+### lane: tick11-production-ai — CLAIM
+
+Working `cv` task `019fef1a-1c58-7890-88e0-3f4e564ee8a4` (closure/tick 11 `Leaders::strategy_all`).
+Depth on one child: `Leader::plan_strategy` `0x006B9620` and the function it is the *sole*
+caller of, `Leader::production_ai` `0x006C1960`.
+
+Files I will write:
+
+- `crates/don-sim/src/systems/leader_production_ai.rs` (NEW)
+- `crates/don-sim/tests/tick_step11_production_ai.rs` (NEW)
+- `docs/assembly/leader-production-ai-step11.md` (NEW)
+- one export line in `crates/don-sim/src/systems/mod.rs`
+- minimal hunks in `crates/don-sim/src/systems/leaders.rs` (`Leader`/`Leaders` fields,
+  `StrategyTrace` fields, the `strategy_all` body)
+- `crates/don-sim/tests/tick_step11_strategy.rs` — step 11's own tick test; the gap
+  semantics it asserts change, see the RESULT block.
+
+Not touched: `tick.rs`, `command*.rs`, `order_dispatch.rs`, `victory_score.rs`,
+`leaders_diplomacy_opening_frontier.rs`.
+
+### lane: vtables — RESULT, FINDINGS, and exactly what `donscan` types differently
+
+`schema/vtables.json` is **1,888 rows** (was 1,777): 118 dropped, 229 added, 1,659 kept,
+**0 kept rows renamed**. `crates/donscan/src/vtables.rs:227` now asserts 1888 with the
+derivation inline. Gates: `cd crates/donscan && cargo test --lib` 18/18, `cargo xwin check
+--release --target aarch64-pc-windows-msvc` clean, and persvati
+`vtables-20260811T132619Z-9097-6831-8859edd0ccaa` **EXIT_CODE=0**, 18/18 on clean HEAD +
+three `--path` overlays (`cargo test --manifest-path crates/donscan/Cargo.toml --lib` — note
+`-p donscan` does **not** work, the crate is `exclude`d from the root workspace).
+
+**Every relayed number from `decomp-backfill` reproduced exactly**: `.text` `0x401000..0xac4230`;
+118 rows outside it, PDB-named 47 Class Hierarchy Descriptor / 28 Base Class Array / 23
+Complete Object Locator / 19 Base Class Descriptor / 1 `__CTA1?AV_com_error@@`; 33 names
+present only at such an address; 1,888 `??_7` symbols, 1,659 with a row agreeing 1,659/0,
+229 without; `0xb41ae0` is `const Unit::`vbtable'` (first dword `0xfffffffc`) and correctly
+absent.
+
+**FINDINGS — do not re-derive:**
+
+- **The 118 bogus rows are misattributions, not mislabelled vtables.** 100 of them carry a
+  class name that does not match the RTTI record at that address: `0xb6c360` was named
+  `?$ObjectArray@VForm@@` and is `PtrArray<class Good>`'s Class Hierarchy Descriptor;
+  `0xb6a760` was named `?$Array@E` and is `SimpleArray<unsigned short>`'s Complete Object
+  Locator. Address and name had no relationship.
+- **The map's completeness is now bounded by two independent methods that close on each
+  other.** Scanning `.rdata`/`.data`/`_RDATA` for back-references to the 1,887 `??_R4`
+  Complete Object Locator symbols (a vtable's `-4` dword points at its COL) locates **1,887
+  vtables, and all 1,887 carry a `??_7` symbol — zero unnamed.** The only `??_7` the COL scan
+  misses is CRT `_com_error` `0xac6e2c`. So the image's real vtable set *is* the 1,888 `??_7`
+  symbols, and `native-scanner.md`'s "the map covers only the RTTI-named ones, some heap
+  objects will type as unknown" is retracted, not softened.
+- **Nothing that was typeable stopped being typeable.** The 32 class names that disappear
+  cannot be reached by a vptr scan at all: `MountainRangeData`, `GameAccessConst` and
+  `MiscAccess` have **zero virtual methods** in `schema/types.json`, and the other 29
+  (`ISteamMatchmakingPingResponse` + 28 `ArrayBase<…>`/`ArrayBaseSimpleCopy<…>`) have a
+  `??_R3` Class Hierarchy Descriptor but **no `??_R4` and no `??_7`** — i.e. they exist in
+  RTTI only as *base-class* entries of some derived class's hierarchy, never as a
+  most-derived object. Their derived containers are all present
+  (`?$SimpleArray@VCoord@@` `0xb48c18`, `?$PtrArray@VOilWell@@` `0xb4a66c`, …).
+- **`DataWalk` `0xb2bcd8` is exactly two slots and both are `_purecall` `0x55e0a6`**; slot 2
+  is already the next object's COL pointer. That is literally the `walker->vt[0]`/`vt[1]` pair
+  `schema/state-schema.json`'s method is built on, and it had no row until now. Same for
+  `SaveGame` `0xb35ac4`, `LoadGame` `0xb30c88`, `CheckSum` `0xb3f920` (slot 0 =
+  `CheckSum::walk_function` `0x936ff0`). 25 of the 229 additions are engine classes; the other
+  204 are `std::`/lambda/`Concurrency::` PPL/`Microsoft::Xbox` template instantiations.
+- **The secondary-vtable trap, resolved properly.** The map names both rows of a pair after
+  the derived class because MSVC does: `??_7UnitType@@6BSoundType@@@` `0xb41fcc` and
+  `??_7UnitType@@6BType@@@` `0xb41fd4`, `??_7BuildType@@6BSoundType@@@` `0xb42b8c` /
+  `??_7BuildType@@6BType@@@` `0xb42b94`. **Resolve a pair by looking the address up in
+  `schema/symbols.json`, never by taking the first row with the right name.** 205 names are
+  now shared by more than one row (was 283 — 84 of the dropped rows were duplicating a class
+  that already had a correct one).
+- **`schema/vtables.json` had no generator in-tree.** It does now: an optional 5th positional
+  output on `tools/pdb-extract`. Passing four arguments still reproduces `symbols.json` and
+  `types.json` structurally identically (verified).
+
+**WHAT `donscan` TYPES DIFFERENTLY — stated, not silent:**
+
+1. **183 false `image`-region hits disappear.** Every one of the 118 dropped addresses occurs
+   at least once as a 4-aligned dword in the mapped image (a vtable's `-4` references its COL;
+   a CHD references its Base Class Array), 183 occurrences in total, spread over 84 classes
+   that were being over-counted plus the 33 that vanish. The `image` columns in
+   `docs/tooling/native-scanner.md` are from the old map and are now annotated as such.
+   Heap-side false hits are unbounded by this analysis — nobody has re-run a live scan.
+2. **229 classes become typeable** (163 dword occurrences statically inside the image; heap
+   population unknown until the next live run).
+3. **`crates/donscan/src/live.rs` is behaviourally unchanged.** Its `kind_of` matches only
+   `Unit`/`Build`/`Wall`/`Animal`/`Ammo`/`Caravan`; the five real ones keep their exact
+   addresses (`0xb417d0`, `0xb42174`, `0xb42cf8`, `0xb4145c`, `0xb45418`) and all 13 `live`
+   tests pass untouched.
+4. **The hot lookup table got *smaller*.** The prefilter window is derived from the map and
+   the old upper bound `0xbc21d8` was a bogus `_com_error` RTTI row: span
+   `0xac6d54..0xbc21d8` (257,314 `u16` slots, 514,628 B) → `0xac6d54..0xb67d9c` (164,883
+   slots, 329,766 B). Pinned by a new test.
+5. **`Caravan` was already a dead arm and still is** — pre-existing, not touched.
+   `live.rs::kind_of`'s `Some("Caravan") => Kind::Caravan` can never fire: there is no
+   `Caravan` vftable in either map and `schema/types.json` gives `Caravan` (80 B) zero virtual
+   methods. The engine's polymorphic caravan types are `?$Array@PAVCaravan@@` /
+   `?$PtrArray@VCaravan@@` / `?$Array@VCaravanLink@@`. **`live.rs` owner**: that arm is
+   unreachable, decide whether to delete it or bind it to a band/type test.
+
+**`schema/types.json` — call: DECLARE IT, do not restructure.** All 208 dropped definitions
+confirmed (20,095 class/union defs under 19,914 names; 2,884 enum defs under 2,857; 194
+colliding names = 170 class/union + 24 enum). Two corrections to the relayed version: the
+divergent-shape count is **13, not 7** — 7 class/union (as reported) *plus* 6 enums whose
+enumerator counts disagree (`tagBINDSTATUS`, `tagBINDSTRING`, `ReplacesCorHdrNumericDefines`,
+`_tagQUERYOPTION`, `tagURLZONE`, `__MIDL_ICodeInstall_0001`); and **914 fields across
+`types.json` do declare a colliding name as their type** (`_GUID` ×159, `HWND__` ×103,
+`tagRECT` ×43, …), so "no field resolves through a dropped record" is true for the wrong
+reason. The real reason nothing is corrupted is that `TypeCtx::resolve` prefers the **COMDAT
+unique name** (`udefs`), which never collides, and falls back to the bare-name map only when a
+record has no unique name. Keying `classes`/`enums` collision-free would change the shape of a
+13 MB artifact that `don-net`, `don-sim`, `don-crossplay/gen/*.py` and a dozen docs index by
+bare name, to correctly emit 208 Win32/CRT header duplicates nobody reads — a worse trade than
+the defect. What *was* wrong is that the loss was silent, so `tools/pdb-extract` now emits
+`_meta.counts.definitions_dropped_to_name_collision` (+5 sibling counters),
+`_meta.collision_note`, and `_meta.collisions` listing all 194 names with their definition
+counts and distinct shapes. **`schema/types.json` was regenerated to carry it; the `classes`
+and `enums` bodies are structurally identical to the previous file and the entire diff is
+`_meta`.** Full write-up: `docs/derivation/pdb-extract-name-collisions.md`.
+
+**`MANIFEST.jsonl`'s `size` is not a code size** — re-derived and written into
+`docs/derivation/pdb-symbols.md` §5.4, the section that already describes that file.
+`ConsoleWin::run_cmd` `0x007d6a70` is 664 in the manifest and **43,008** in the PDB (65×).
+820 of 18,350 matchable rows have a Ghidra body smaller than the PDB extent and **12** differ
+by ≥1 KiB (`Search::valid_filter` is the sharpest: **19** vs 2,629). Never size a body, a
+budget or a coverage residual off a manifest `size`.
+
+**NOT MINE — three stale references I did not edit, for their owners:**
+`docs/tooling/AUDIT-tooling.md:291` ("1,777 entries, span `0xac6d54…0xbc21d8`, 1,318 distinct
+names" — now 1,888 / `0xac6d54…0xb67d9c` / 1,511); `docs/derivation/pdb-types.md:539`
+("`schema/vtables.json`'s 1,777 vtables"); and `schema/symbols.json` still does not declare its
+one real drop (unnamed `S_LDATA32` jump-table records, `tools/pdb-extract/src/main.rs`'s
+`name.is_empty()` skip) in `_meta.counts` — a 4-line counter if anyone wants symbols.json to be
+as self-describing as `types.json` now is.
+
+Files written: `schema/vtables.json`, `schema/types.json` (`_meta` only),
+`tools/pdb-extract/src/main.rs`, `crates/donscan/src/vtables.rs`, `crates/donscan/src/main.rs`,
+`crates/donscan/README.md`, `docs/tooling/native-scanner.md`, `docs/derivation/pdb-symbols.md`,
+`docs/derivation/vtable-map.md` (new), `docs/derivation/pdb-extract-name-collisions.md` (new).
+Nothing committed.

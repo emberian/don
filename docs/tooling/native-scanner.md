@@ -3,6 +3,18 @@
 **Lane:** native-tools. **Date:** 2026-08-08. **Machine:** arm64 Mac (build) → Parallels
 "Windows 11" ARM64 guest (run), against the live `riseofnations.exe`.
 
+> **Amendment, 2026-08-11 (lane `vtables`).** Everything below was measured against the
+> **1,777-row** `schema/vtables.json`. That map has since been regenerated to **1,888 rows**
+> from the PDB's `??_7…@@6B…@` symbol set: 118 of its rows were RTTI/EH metadata rather than
+> vtables and are gone, and 229 real vftables it had never carried are in. Two consequences
+> for the tables in this file: **the `image` columns include 183 statically-locatable false
+> hits** that the dropped rows produced, and 229 classes that read as absent were simply not
+> in the map. The per-class *heap* counts for `Unit`/`Build`/`Animal`/`Ammo`/`City`/`Group`/
+> `Guy`/`OrderList`/`MiningList`/`GatherPointList`/`UnitType`/`BuildType`/`TechType` and the
+> whole "pool capacity, not entity count" result are unaffected — those rows were correct and
+> keep their exact addresses. Nobody has re-run a live scan since. Derivation, the exact
+> delta, and the `0xb41ae0` correction: `docs/derivation/vtable-map.md`.
+
 ---
 
 ## What was established
@@ -19,7 +31,7 @@ per-frame loop if we want to.
 | **The Windows loader rewrites `OptionalHeader.ImageBase` in the mapped header**, so the preferred base `0x400000` is *not* recoverable from a live process | measured | `--modules`: game module reads `hdr_ImageBase = 0xd60000` |
 | Full scan: 2,429–2,451 committed regions, ~920 MiB, 0.45–0.68 s, 0 unreadable bytes | measured | 12 runs, table below |
 | ~181,672 vtable hits, of which 172,592 in `MEM_PRIVATE` (heap), 9,078 in `MEM_IMAGE`, 2 in `MEM_MAPPED` | measured | `schema/live/donscan-pid14644-full.txt` |
-| 395 distinct classes present on the heap; 1,071 of 1,318 named classes hit somewhere | measured | same |
+| 395 distinct classes present on the heap; 1,071 of 1,318 named classes hit somewhere | measured (against the 1,777-row map; the denominator is 1,511 names / 1,888 rows now) | same |
 | Null-model control: scanning with a *wrong* image base yields **33–136** hits vs **158,955** at the true base — a 1,200–4,800× signal-to-background ratio | measured | control runs below |
 | **`Unit`, `Build`, `Animal`, `Ammo`, `City`, `MiningList`, `GatherPointList`, `UnitType`, `BuildType`, `TechType` are fixed-size preallocated pools, not live-entity counts** | measured | counts bit-identical across scans 25 s apart during live play, while `Guy` and `Group` moved |
 | **`OrderList` is an embedded member at `+0xc8` of both `Unit` and `Animal`** (600/600 and 400/400, zero orphans) | measured | address-offset analysis, below |
@@ -61,8 +73,10 @@ Two decisions that made this painless and are worth keeping:
 `donscan` is **excluded from the root workspace** (`Cargo.toml`, alongside `oracle`) because
 it links `kernel32`, so `cargo test` at the repo root never builds it. The
 platform-independent half is a `lib` target so the vtable-map logic *is* tested on the Mac
-(`cargo test -p donscan --lib`, 2 tests: the embedded map parses to 1,777 entries with
-`Unit`/`Object` at the expected VAs, and `lookup` hits only on exact rebased addresses).
+(`cd crates/donscan && cargo test --lib`; five of the tests are the map's: it parses to
+1,888 entries with `Unit`/`Object` at the expected VAs, the four state-schema vftables are
+present, RTTI metadata and `Unit::vbtable` are absent, the prefilter window is exactly the
+vftable span, and `lookup` hits only on exact rebased addresses).
 
 **Root `cargo test` status.** At 12:37, immediately after adding the `exclude` entry, the
 root workspace was green: 66 passed, 0 failed. At 12:59 it is **red** — `don-sim`
@@ -120,10 +134,12 @@ Source: `/Users/ember/dev/don/crates/donscan/` — `src/main.rs` (scan + report)
    loader rewrites that field in the mapped header to the actual load address. That cost
    one failed run and is the single most useful gotcha here.
 3. **Build the lookup table.** `schema/vtables.json` is `include_str!`'d into the binary
-   (one file to copy into the guest). The 1,777 VAs are rebased by
+   (one file to copy into the guest). The 1,888 VAs are rebased by
    `delta = runtime_base - 0x400000` and written into a direct-index table over the rebased
-   range. Static span is `0xac6d54..0xbc21d8` = `0xfb484` ≈ 1 MB, so the table is 257 K
-   `u16` slots = 514 KB and sits in L2. All 1,777 VAs are 4-aligned [measured].
+   range. Static span is `0xac6d54..0xb67d9c` = `0xa1048` ≈ 644 KB, so the table is 164,883
+   `u16` slots = 329,766 B and sits in L2. All 1,888 VAs are 4-aligned [measured].
+   *(Was `0xac6d54..0xbc21d8`, 257,314 slots, 514,628 B — the old upper bound `0xbc21d8`
+   was a bogus `_com_error` RTTI row, so the corrected map makes the hot table smaller.)*
 4. **Scan.** `VirtualQueryEx` from 0 upward; take `MEM_COMMIT` regions whose protection is
    readable and not `PAGE_GUARD`; `ReadProcessMemory` in 4 MiB chunks into a `Vec<u32>`
    (guaranteed 4-aligned); test every 4-aligned dword. The prefilter is one
@@ -351,6 +367,15 @@ So the **object counts are 364 unit types, 129 build types, 873 script functions
 raw hit counts. The secondary vptr sitting at exactly `+0x1c8` in *both* `UnitType` and
 `BuildType` points at a shared base layout of 456 bytes.
 
+The map names both rows of a pair after the derived class, because MSVC does: A and B are
+`??_7UnitType@@6BSoundType@@@` and `??_7UnitType@@6BType@@@` respectively, and
+`??_7BuildType@@6BSoundType@@@` / `??_7BuildType@@6BType@@@`. **Never resolve one of these
+pairs by taking the first map row with the right name** — a lane that read the lower of the
+`BuildType` pair as "the vtable" shifted every slot by two. Look the address up in
+`schema/symbols.json`, which carries the full mangled name including the base qualifier.
+`BuildData::is_wonder` `0x00472320` compares `*ptype` against `0xb42b94`, i.e. the `Type`
+base's vptr.
+
 ### 364 + 129 = 493
 
 `docs/binary-ground-truth.md` and `README-LLM.md` record a **493 × 493 int16 balance table
@@ -377,11 +402,19 @@ itself until someone reads a name out of a type object and correlates it with a 
   starts; for scattered classes it does not. A stored copy of a vptr, or a `dynamic_cast`
   cache, would also hit. The null-model control bounds *arithmetic* coincidence at ≤136 per
   660 MiB, but it says nothing about legitimate non-header vptr copies.
-- **Secondary vtables are missing from `schema/vtables.json`.** `Unit + 4` holds
+- ~~**Secondary vtables are missing from `schema/vtables.json`.** `Unit + 4` holds
   `0x014a1ae0` (static `0xb41ae0`), which is squarely in the vtable range but **absent from
-  the map** — it sits between `UnitOut` (`0xb41960`) and `OrderList` (`0xb41af4`). So the
-  1,777-entry map does not cover every vtable in `.rdata`, only the RTTI-named ones. Some
-  heap objects will be typed as "unknown" for that reason.
+  the map**…~~
+  **RETRACTED 2026-08-11 (lane `vtables`), on both halves.** (a) `0xb41ae0` is not a vtable:
+  the dword there is `0xfffffffc` and the PDB names the address ``const Unit::`vbtable'`` —
+  a virtual *base* table, offsets rather than code pointers. It is correctly absent, and a
+  `donscan` test now pins it absent. (b) The map is not missing secondary vtables as a
+  class — it always carried them (`Texture` `0xb22a38`/`0xb22f18`, `UnitType`
+  `0xb41fcc`/`0xb41fd4`), and the regenerated map covers **every** vtable in the image, not
+  only RTTI-named ones: an independent scan of `.rdata`/`.data` for Complete Object Locator
+  back-references finds 1,887 vtables and all 1,887 carry a `??_7` symbol. What *was* true
+  is that 229 real vftables had no row, including `DataWalk`, `SaveGame`, `LoadGame` and
+  `CheckSum` — that is now fixed. See `docs/derivation/vtable-map.md`.
 - **`PathFinder`/`Terrain`/`BorderSpline`/`SyncDisplay`/`Tribes` as globals.** Zero heap hits
   is *consistent* with them being statics in `.data`, but the scanner does not separate
   `.data` globals from `.rdata` vtable tables — both land in the `image` column. Splitting
@@ -422,7 +455,7 @@ itself until someone reads a name out of a type object and correlates it with a 
 | `/Users/ember/dev/don/crates/donscan/README.md` | build + CLI reference |
 | `/Users/ember/dev/don/crates/donscan/src/main.rs` | scan loop, image-base detection, JSON report, `--read`/`--modules` |
 | `/Users/ember/dev/don/crates/donscan/src/win.rs` | raw kernel32 FFI |
-| `/Users/ember/dev/don/crates/donscan/src/vtables.rs` | embedded `vtables.json`, direct-index lookup table, 2 unit tests |
+| `/Users/ember/dev/don/crates/donscan/src/vtables.rs` | embedded `vtables.json`, direct-index lookup table, 5 unit tests |
 | `/Users/ember/dev/don/crates/donscan/src/lib.rs` | Mac-testable half |
 | `/Users/ember/dev/don/docs/tooling/native-scanner.md` | this report |
 | `/Users/ember/dev/don/schema/live/donscan-pid14644-full.txt` | full scan JSON (gitignored) |
