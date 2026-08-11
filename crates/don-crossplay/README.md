@@ -5,22 +5,91 @@ attributes, matchmaking, chat, and the Party P2P plumbing that
 `CrossplayNetLib.dll` sends turns over. `riseofnations.exe` reaches all of it
 through **two** imported free functions and then virtual dispatch.
 
-The crate is two things, in two layers:
+The crate is three things, in three layers:
 
 | layer | module | what it is |
 |---|---|---|
-| the interface | [`src/abi.rs`](src/abi.rs) | generated from the shipped private PDBs; 58 slots, 15 DTOs, 275 compile-time assertions. Retail's, and measured. |
-| the implementation | [`src/local.rs`](src/local.rs), [`src/msvc.rs`](src/msvc.rs), [`src/service.rs`](src/service.rs) | a **DoN-owned** lobby/session/P2P service that presents that interface. No PlayFab, no accounts, no WinHTTP, no Party, no TURN. |
+| the interface | [`src/abi.rs`](src/abi.rs) | generated from the shipped private PDBs; 58 slots, 15 DTOs, compile-time layout and alignment assertions. Retail's, and measured. |
+| the implementation | [`src/local.rs`](src/local.rs), [`src/msvc.rs`](src/msvc.rs), [`src/func.rs`](src/func.rs), [`src/logger.rs`](src/logger.rs), [`src/service.rs`](src/service.rs) | a **DoN-owned** lobby/session/P2P service, and the `ICrossplayLogger` behind export ordinal 1, that present those interfaces. No PlayFab, no accounts, no WinHTTP, no Party, no TURN. |
+| the image | [`dll/`](dll) | a PE32/i386 `CrossplayProxy.dll` exporting the four shipped names at their shipped ordinals, plus a disposable PE32 loader that executes it |
 
-**No DLL is built, nothing is installed, and no live process is touched.** The
-implementation has never been called by `riseofnations.exe`; see
+**Nothing is installed into a game directory and no live process is touched.**
+No slot here has ever been called by `riseofnations.exe`. What *has* run is
+`dll/src/bin/crossplay-load-smoke.rs`, a purpose-built PE32 host, in a
+disposable Wine prefix. See
+[`docs/tracks/crossplay-proxy-dll.md`](../../docs/tracks/crossplay-proxy-dll.md)
+for what that establishes,
 [`docs/tracks/crossplay-local-backend.md`](../../docs/tracks/crossplay-local-backend.md)
-for exactly what the tests do and do not establish, and
-[`../netsys-shim`](../netsys-shim) for the precedent that turned a checked ABI
-into a loadable image.
+for what the semantics do and do not claim, and
+[`../netsys-shim`](../netsys-shim) for the precedent this image follows.
 
 `--no-default-features` drops the `local` feature and leaves the crate the pure
 interface description it started as.
+
+## The image
+
+[`dll/`](dll) is a separate package on purpose. A `cdylib` crate type forces a
+panic handler and a global allocator into whichever crate carries it, and this
+one is deliberately `no_std` and host-testable; keeping the image next door
+leaves `cargo test --lib` on the development host untouched and lets the DLL
+bring `std` — and therefore the CRT startup the shipped DLL also links — without
+that becoming a property of the ABI crate.
+
+```sh
+cd crates/don-crossplay/dll
+XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 XWIN_ARCH=x86 \
+  cargo xwin build --release
+# -> target/i686-pc-windows-msvc/release/CrossplayProxy.dll        (PE32 i386 DLL)
+# -> target/i686-pc-windows-msvc/release/crossplay-load-smoke.exe
+
+uv run --with pefile --with capstone python3 crates/don-crossplay/dll/check-exports.py
+# name + ordinal parity, PE32/i386/DLL identity, image base, code-vs-data kind,
+# and the shared-UCRT heap import
+
+crates/don-crossplay/dll/run-wine-smoke.sh \
+  crates/don-crossplay/dll/target/i686-pc-windows-msvc/release/CrossplayProxy.dll \
+  crates/don-crossplay/dll/target/i686-pc-windows-msvc/release/crossplay-load-smoke.exe \
+  /tmp/don-crossplay-evidence
+```
+
+Both environment variables are intentional: `cargo-xwin` splats one architecture
+set per cache, and the shared default cache does not contain the complete x86
+desktop CRT/SDK.
+
+The four exports, copied verbatim from the shipped export directory:
+
+| ord | name | kind |
+|---|---|---|
+| 1 | `?Logger@Logging@Crossplay@@YAPAVICrossplayLogger@12@XZ` | code, `__cdecl` |
+| 2 | `?Service@Crossplay@@YAPAUICrossPlayService@1@XZ` | code, `__cdecl` |
+| 3 | `AmdPowerXpressRequestHighPerformance` | **data**, `.data`, `= 1` |
+| 4 | `NvOptimusEnablement` | **data**, `.data`, `= 1` |
+
+Ordinals 3 and 4 are the hybrid-GPU hints a vendor driver finds by walking
+export tables; they are `DWORD`s, not functions, and `build.rs` marks them
+`,DATA`. `#[export_name]` does not reach a cdylib's export set on this target,
+so `build.rs` emits explicit `/EXPORT:exported=internal,@ordinal` aliases with
+the target spelled without the leading underscore — the trick
+[`../netsys-shim/build.rs`](../netsys-shim/build.rs) measured.
+
+Configuration, since there is no UI to hang it off: `DON_CROSSPLAY_USER_ID`,
+`DON_CROSSPLAY_USER_NAME`, and `DON_CROSSPLAY_TRACE` (a path; setting it enables
+a synchronously flushed diagnostic log). There is deliberately **no load-only
+mode**: `netsys-shim` needs one because it owns a socket, and this service has
+no socket, no file, no account and no remote host to fail closed against.
+
+### The bug the runtime gate caught
+
+`MsvcFunction` was declared `#[repr(C, align(8))]`. On `i686-pc-windows-msvc` an
+aggregate aligned above 4 is passed **as a pointer**, not pushed, so the emitted
+`ICrossplayLogger::Register` ended `ret 8` where the shipped one pops 44 — and
+the first by-value `std::function` the game handed over would have returned into
+a destroyed stack frame. Every one of the compile-time layout assertions passed,
+export parity passed, and the crate's whole host suite was green. Only executing
+the call found it. There are now `align_of` assertions on every by-value
+aggregate, in the generator as well as the generated file. Full write-up in
+[`docs/tracks/crossplay-proxy-dll.md`](../../docs/tracks/crossplay-proxy-dll.md)
+§2.
 
 ## The rule that keeps the second layer honest
 
@@ -80,7 +149,9 @@ Everything is generated. Counts from the current run:
 | DTO structs | 15 | every field offset + total size |
 | enums | 5, all 4-byte `int` | — |
 
-275 compile-time assertions in total. The three opaque vendor slots are
+279 compile-time assertions in total, four of which are the `align_of` checks
+that pin the by-value calling convention (see § *The bug the runtime gate
+caught*). The three opaque vendor slots are
 `SetNew`, `SetDelete` and `P2PGetAllConnectedPlayers`: their by-value
 `std::function` / `std::vector` parameter types are only forward-declared in
 this PDB, so their sizes are not derivable here and are left explicitly absent
@@ -154,15 +225,27 @@ images, and a test guards that decision.
 ## Gates
 
 ```sh
-tools/swarm-cargo crossplay-local test --manifest-path crates/don-crossplay/Cargo.toml --lib
-# 42 passed; 0 failed
+cd crates/don-crossplay && cargo test --lib
+# 57 passed; 0 failed
 
 cd crates/don-crossplay && cargo check --lib --target i686-pc-windows-msvc
 cd crates/don-crossplay && cargo check --lib --no-default-features --target i686-pc-windows-msvc
+
+# the same suite compiled for the retail target and executed under Wine
+cd crates/don-crossplay
+XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 XWIN_ARCH=x86 \
+  cargo xwin test --release --lib --no-run --target i686-pc-windows-msvc
+wine target/i686-pc-windows-msvc/release/deps/don_crossplay-*.exe
+# 57 passed; 0 failed
 ```
 
 All pass. The crate is excluded from the root workspace (see `../../Cargo.toml`)
 exactly like `netsys-shim`, because `extern "thiscall"` only exists on x86.
+
+Running the suite on **both** targets is not redundant: two defects surfaced
+only on `i686-pc-windows-msvc` — the `MsvcFunction` alignment above, and an
+associated-`const` vtable that promoted to two different addresses. A host-only
+green is a green about layout arithmetic, not about the ABI.
 
 The vtable is emitted `extern "thiscall"` on x86 and `extern "C"` elsewhere, so
 the host tests drive all 58 slots through a real function-pointer table. Guest
@@ -217,5 +300,13 @@ walks the intrusive list and never touches a bucket.
   runs a hand transcription of `_Find_last`, so it proves the builder agrees with
   *this reading of the disassembly*, not that the shipped code accepts the map.
 - **Nothing has been executed by `riseofnations.exe`.** No slot has been called
-  by the game, no DLL was built, no image installed.
+  by the game and no image has been installed into a game directory. A PE32 DLL
+  now exists and has been loaded and driven — by
+  `dll/src/bin/crossplay-load-smoke.rs`, in a disposable Wine prefix, which is a
+  claim about the loader, the calling convention and object lifetime, and about
+  nothing else.
+- **The `std::function` probes in that smoke are ours, not MSVC's.** They
+  establish that this DLL calls `_Copy`, `_Move` and `_Delete_this` in the right
+  order with the right `deallocate` flag; they do not establish how the shipped
+  `_Func_impl` behaves.
 - **No live process** was read or modified, and nothing here authorises one.

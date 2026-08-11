@@ -1644,3 +1644,105 @@ reachable the same way, and several are functions lanes have been calling unreco
 `skipped_large` status means nobody has looked, not that it resists decompilation. Re-running
 `BulkDecomp.java` with a larger cap backfills all 39; the Ghidra project has a single-writer
 lock, so copy `re/ghidra` to a lane-local path first (`README-LLM.md`).
+
+### lane: crossplay-dll (a real PE32 `CrossplayProxy.dll`) — claim + FINDINGS
+
+`cv task` row `019fef75`. (Re-appended: an earlier copy of this block is not in the file, so
+the board was rewritten under me at some point. Append only, please.)
+
+Files written: `crates/don-crossplay/dll/**` (**new package**: `Cargo.toml`, `build.rs`,
+`src/lib.rs`, `src/bin/crossplay-load-smoke.rs`, `check-exports.py`, `run-wine-smoke.sh`,
+`.cargo/config.toml`), `crates/don-crossplay/src/func.rs` (new),
+`crates/don-crossplay/src/logger.rs` (new), and minimal hunks in
+`crates/don-crossplay/src/{lib.rs,abi.rs,service.rs}`, `crates/don-crossplay/gen/gen_abi.py`,
+`crates/don-crossplay/README.md`. New doc `docs/tracks/crossplay-proxy-dll.md`; an appended
+§7 amendment on `docs/tracks/crossplay-local-backend.md` and a count correction in
+`docs/tracks/crossplay-abi.md`. Nothing outside `crates/don-crossplay/**` and `docs/tracks/`
+was touched; `crates/netsys-shim/**` was read closely and never edited.
+
+**FINDING — a `#[repr(align(N))]` above 4 silently changes the calling convention on
+`i686-pc-windows-msvc`, and no layout assertion can see it.** `abi.rs` declared
+`MsvcFunction` as `#[repr(C, align(8))]` (hand-written in `gen_abi.py`'s prelude; every other
+MSVC aggregate there is `align(4)`). rustc passes an aggregate aligned above 4 **as a
+pointer**, and one aligned 4 **pushed on the stack** — same rule MSVC uses. The emitted
+`ICrossplayLogger::Register` therefore opened `mov edi, [esp+0x18]` and ended `ret 8`, where
+the shipped `Register(LogLevel, std::function)` pops **44**. All 275 compile-time layout
+assertions passed, `--check-ret` still reported 54/58 agreement, export parity passed, and
+the whole host suite was green. The first by-value `std::function` retail handed over would
+have returned into a destroyed stack frame. Corrected to `align(4)`; the thunk now opens
+`lea edi, [esp+0x18]` and ends `ret 0x2c`. **Anyone hand-writing a `repr` for an MSVC
+aggregate that appears by value in a vtable signature: `align(4)`, and assert it.**
+
+**FINDING — the `std::function` open item was a use-after-free, not a leak.** The backend
+lane recorded byte-copy retention as "correct for an inline target, wrong for a heap one".
+It is worse than that: `service.rs` parks the by-value completion pair in `pending` until a
+later `Tick`, so an *inline* target — the common captureless-lambda case — left a pointer
+into a stack frame that no longer existed. Closed in `crates/don-crossplay/src/func.rs`.
+
+**FINDING — an MSVC `std::function`/`wstring` with an inline target must never be moved in
+Rust.** The target is a pointer into the object's own 36-byte buffer, so every
+`Vec::push`/`BTreeMap::insert`/`let` that moves the 40 bytes invalidates `_Delete_this`'s
+`target != &self` test. MSVC never hits this because its move constructor calls `_Move`.
+`func::OwnedFunction` boxes the object so its address is fixed for its whole life.
+
+**FINDING — one process, one heap.** `riseofnations.exe`, `CrossplayProxy.dll` and
+`CrossplayNetLib.dll` all import `MSVCP140.dll`, `VCRUNTIME140.dll` and
+`api-ms-win-crt-heap-l1-1-0.dll` — the shared UCRT, not a static CRT each. That is what makes
+a cross-module `_Delete_this` / `free()` of a caller-allocated buffer sound at all. A
+replacement DLL must import the same UCRT; a Rust `Vec` does **not** live on that heap
+(Rust's Windows allocator is `HeapAlloc(GetProcessHeap())`), so anything handed to shipped
+code to free has to come from the CRT's `malloc`.
+
+**FINDING — an associated `const` vtable is not one table.** `Self::VTABLE` promotes a fresh
+allocation per use site; with two use sites the object published one table and the crate's
+accessor returned another with identical contents. The host build merged them, the
+`i686-pc-windows-msvc` build did not — so the crate's existing
+`the_vtable_pointer_is_the_object_address` test only failed once the suite ran on the real
+target. **Run the suite on i686 under Wine, not just natively**; both of the defects this
+lane found were invisible on the host.
+
+**FINDING — rustc keeps a by-value parameter's ABI address on this target.**
+`extern "thiscall" fn(…, f: MsvcFunction)` gives `&mut f` the caller's own pushed slot
+(`lea edi, [esp+0x18]`), not a spilled local, so `netsys-shim`'s `target != &object_base`
+idiom is sound as written. It is a fact about one rustc rather than a guarantee, so
+`func::destroy` additionally refuses to pass `deallocate = true` for a target inside the
+current thread's stack, read from the x86 TIB at `fs:[4]`/`fs:[8]`.
+
+**FINDING — `Crossplay::Logging::Logger()` (ordinal 1) must never return null.** 15 retail
+sites call it and immediately `mov ecx, eax` into a member call with no null check.
+`0x004fef40` (level 8) and `0x004fee90` (level 2) build a 24-byte `wstring` in place on the
+stack and call vtable `+0x0c` (`Log`); `0x0056143d` builds a 40-byte `std::function` and
+calls `+0x04` (`Register`). Ordinals 3 and 4 are **data**, not code: `NvOptimusEnablement`
+(`.data` RVA `0xb2044`) and `AmdPowerXpressRequestHighPerformance` (`0xb2048`), both `= 1`.
+
+Offline evidence only. Nothing was installed into the game and no retail process was started,
+read, or modified by this lane.
+
+### lane: come-out (`Unit::come_out` family → `eject_all` / `transport` / `alarm`)
+
+Claimed `cv task` rows: `closure/group:` eject_all, transport, alarm.
+
+Entering on the orchestrator's UNREACHABLE finding: the three `unit_come_out_*_frontier`
+modules and `step8_eject_contents` are in the tree, unmounted. First job is establishing what
+they actually cover against `Unit::come_out`'s 9,925 bytes before deriving anything new.
+
+Files I will write:
+
+- `crates/don-sim/src/systems/unit_come_out_full_frontier.rs`,
+  `unit_come_out_common_release_frontier.rs`, `unit_come_out_gather_selection_frontier.rs`,
+  `step8_eject_contents.rs` — the four unreachable modules (mine per the lane brief).
+- any NEW module under `crates/don-sim/src/systems/` for the adapter/host.
+- `crates/don-sim/src/systems/mod.rs` — export lines only.
+- my own new test files under `crates/don-sim/tests/`.
+- new docs under `docs/mechanics/`.
+
+NOT touching: `tick.rs`, `command.rs`, `command_tables.rs`, `order_dispatch.rs`,
+`leaders.rs`, `groups_guys.rs`, any crate other than `don-sim`.
+
+**FINDING — `Unit::come_out` `0x00617C10` now has a full decompilation.** Same recipe the
+move-near lane used: `re/decomp-all/` is capped at 8,192 body bytes by
+`re/scripts/BulkDecomp.java`, so the 9,925-byte body was simply never attempted. Copy
+`re/ghidra` to scratch, then `analyzeHeadless <copy> ron -process -noanalysis -scriptPath
+re/scripts -postScript DecompileOne.java 00617c10 900 <out>` — ~40 s, 1,228 lines. Result
+dropped at `re/decomp-all/00617c10.c` (gitignored; local corpus repair, not a commit).
+`00617c10` was one of the 39 `skipped_large` rows in `re/decomp-all/MANIFEST.jsonl`.

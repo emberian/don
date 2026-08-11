@@ -63,7 +63,7 @@
 //! * cross-PDB vtable identity: CrossplayProxy::ICrossPlayService (58 slots) vs rise.pdb Crossplay::ICrossPlayService (58) vs CrossplayNetLib.pdb Crossplay::ICrossPlayService (58): IDENTICAL
 //! * shipped .rdata vtable at RVA 0x9adc4: 58/58 interface slots resolve to CrossplayProxy::CrossPlayService::<declared name>; slot 58 is the deleting destructor (yes); slot 59 is outside .text (yes) so the emitted table is 236 bytes
 //! * DTO layout agreement: 15/15 identical wherever declared; 3 declared in only one PDB: JoinLobbyResultDTO(rise), MatchFoundDTO(CrossplayProxy), MatchMakingEnqueuedDTO(CrossplayProxy)
-//! * stack-cleanup check (`ret imm16` vs derived argument bytes): 54 agree, 0 disagree, 4 indeterminate; indeterminate: SetJoinLobbyCallback(+64): linear sweep found no `ret`; SetLeaveLobbyCallback(+72): linear sweep found no `ret`; SetUpdateLobbyCallback(+80): linear sweep found no `ret`; LobbyCancelPendingRequests(+84): linear sweep found no `ret`
+//! * stack-cleanup check: SKIPPED (capstone not importable)
 //! * slots emitted as opaque because a by-value parameter type is only forward-declared in this PDB: VendorICrossPlayService::SetNew (+4), VendorICrossPlayService::SetDelete (+8), VendorICrossPlayService::P2PGetAllConnectedPlayers (+308)
 
 #![allow(non_snake_case)]
@@ -80,7 +80,13 @@ pub const PTR_SIZE: usize = core::mem::size_of::<*const core::ffi::c_void>();
 pub struct MsvcWstring {
     pub raw: [u8; 24],
 }
-const _: () = assert!(core::mem::size_of::<MsvcWstring>() == 24);
+const _: () = {
+    assert!(core::mem::size_of::<MsvcWstring>() == 24);
+    // Load-bearing, not decoration: `ICrossplayLogger::Log` takes one of these
+    // **by value**, and on `i686-pc-windows-msvc` rustc passes an aggregate
+    // aligned above 4 as a pointer instead of on the stack. See `MsvcFunction`.
+    assert!(core::mem::align_of::<MsvcWstring>() == 4);
+};
 
 /// MSVC x86 `std::basic_string<char>` — 24 bytes. **[measured]**
 #[repr(C, align(4))]
@@ -88,7 +94,10 @@ const _: () = assert!(core::mem::size_of::<MsvcWstring>() == 24);
 pub struct MsvcString {
     pub raw: [u8; 24],
 }
-const _: () = assert!(core::mem::size_of::<MsvcString>() == 24);
+const _: () = {
+    assert!(core::mem::size_of::<MsvcString>() == 24);
+    assert!(core::mem::align_of::<MsvcString>() == 4);
+};
 
 /// MSVC x86 `std::function<...>` — 40 bytes for every one of the 191
 /// specialisations defined in `CrossplayProxy.pdb`. The target pointer lives at
@@ -97,7 +106,21 @@ const _: () = assert!(core::mem::size_of::<MsvcString>() == 24);
 ///
 /// `target` is a **32-bit** guest pointer, spelled `u32` so the layout is the
 /// x86 one on every host this crate is checked on. Never dereference it here.
-#[repr(C, align(8))]
+///
+/// # The alignment is part of the calling convention
+///
+/// `align(4)` is not decoration. On `i686-pc-windows-msvc` rustc passes an
+/// aggregate whose alignment exceeds 4 **indirectly, as a pointer**, and one
+/// with alignment 4 **on the stack by value**. MSVC does the same, which is why
+/// `ICrossplayLogger::Register(LogLevel, std::function)` pops 44 bytes and not
+/// 8. Declaring this type over-aligned silently changes every by-value slot on
+/// this interface into a different ABI, compiles clean, passes every layout
+/// assertion, and destroys the caller's stack on the first call.
+///
+/// Measured both ways: `crossplay-load-smoke` faulted on a null read at
+/// `+0x24` with the emitted `Register` ending in `ret 8`, and reaches the
+/// callback with `ret 44` after this line was corrected. **[measured]**
+#[repr(C, align(4))]
 #[derive(Clone, Copy)]
 pub struct MsvcFunction {
     pub storage: [u8; 36],
@@ -106,6 +129,9 @@ pub struct MsvcFunction {
 const _: () = {
     assert!(core::mem::size_of::<MsvcFunction>() == 40);
     assert!(core::mem::offset_of!(MsvcFunction, target) == 0x24);
+    // The one that decides whether 24 by-value callback arguments are pushed or
+    // passed as a pointer. Read the note above before touching it.
+    assert!(core::mem::align_of::<MsvcFunction>() == 4);
 };
 
 /// MSVC x86 `std::vector<T>` — 12 bytes: three 32-bit guest pointers
@@ -117,7 +143,10 @@ pub struct MsvcVector {
     pub last: u32,
     pub end: u32,
 }
-const _: () = assert!(core::mem::size_of::<MsvcVector>() == 12);
+const _: () = {
+    assert!(core::mem::size_of::<MsvcVector>() == 12);
+    assert!(core::mem::align_of::<MsvcVector>() == 4);
+};
 
 /// An opaque interface object: one vtable pointer, 4 bytes.
 /// `Crossplay::P2P::ICrossplayPlayer` and `Crossplay::ICrossPlayService` are

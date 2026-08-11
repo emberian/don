@@ -1,0 +1,36 @@
+[package]
+name = "crossplay-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Drop-in replacement CrossplayProxy.dll: the four shipped exports over don-crossplay's DoN-owned ICrossPlayService and ICrossplayLogger."
+
+# Windows i686 only — it must be loadable by riseofnations.exe, which is PE32
+# i386. A separate package from `don-crossplay` on purpose: a `cdylib` crate
+# type forces a panic handler and a global allocator into the crate that carries
+# it, and `don-crossplay` is deliberately `no_std` and host-testable. Keeping
+# the image here leaves `cargo test --lib` on the development host untouched and
+# lets the DLL bring `std` (and therefore the CRT startup the shipped DLL also
+# links) without that being a property of the ABI crate.
+#
+# Covered by the root workspace's `exclude = [... "crates/don-crossplay"]`, so
+# `cargo test` at the repo root never touches it. Build with cargo-xwin; see
+# ../README.md.
+
+[lib]
+name = "CrossplayProxy"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "crossplay-load-smoke"
+path = "src/bin/crossplay-load-smoke.rs"
+
+[dependencies]
+don-crossplay = { path = ".." }
+
+[profile.release]
+opt-level = 2
+codegen-units = 1
+# A Rust panic must never unwind into an MSVC frame belonging to the game.
+panic = "abort"

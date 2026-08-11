@@ -9,12 +9,16 @@
 //!
 //! # Status — read this before quoting anything from here
 //!
-//! **Nothing in this file has been executed by `riseofnations.exe`.** No DLL is
-//! built, no image is installed, no live process is touched. What the tests
-//! establish is that calling every slot through a real function-pointer table
-//! drives the backend correctly and produces DTOs whose bytes match the measured
-//! layouts. Whether the shipped game is satisfied by that is untested and needs
-//! the load-only run described in `docs/tracks/crossplay-abi.md` §5.
+//! **Nothing in this file has been executed by `riseofnations.exe`.** No image
+//! is installed into a game directory and no live process is touched. What the
+//! host and PE32 tests establish is that calling every slot through a real
+//! function-pointer table drives the backend correctly and produces DTOs whose
+//! bytes match the measured layouts; what `crates/don-crossplay/dll`'s loader
+//! adds is that the Windows loader accepts the image, the `__thiscall` boundary
+//! is crossed with the stack balanced, and the `std::function` ownership
+//! primitives in [`crate::func`] really run. Whether the shipped game is
+//! satisfied by any of it is untested and needs the load-only run described in
+//! `docs/tracks/crossplay-abi.md` §5.
 //!
 //! # The object layout is ours
 //!
@@ -58,6 +62,7 @@ use crate::abi::{
     ICrossplayPlayerVtable, LobbySearchCriteriaDTO, MsvcFunction, MsvcMap8, MsvcUnorderedMap32,
     MsvcWstring, SessionStatus, Visibility, CROSSPLAY_STATUS_ENABLED,
 };
+use crate::func::{self, OwnedFunction};
 use crate::local::{Attributes, Backend, Directory, Emission, Notice, Outcome, ReqId};
 use crate::msvc::{self, Gp, GuestMem, Scratch};
 
@@ -85,66 +90,61 @@ pub struct Dispatch {
 }
 
 /// The `std::function` pair a pending request must answer on.
-#[derive(Clone, Copy)]
+///
+/// Both arrive **by value** and are therefore this object's to own and to
+/// destroy — see [`crate::func`] for the two measurements that establish it —
+/// so they are held as [`OwnedFunction`], whose address survives being inserted
+/// into `pending` and removed again.
 struct Pending {
     slot: &'static str,
-    ok: MsvcFunction,
-    err: MsvcFunction,
+    ok: OwnedFunction,
+    err: OwnedFunction,
 }
 
-/// A `std::function` the game installed on us.
-///
-/// Retail hands these over by const reference for most setters and **by value**
-/// for `CreateLobby`, `GetLobby`, `FindLobbies`, `StartGame`, `CancelGameStart`
-/// and the stats/leaderboard family — a distinction measured by the `ret imm16`
-/// check in `gen/gen_abi.py` (54 slots agree, 0 disagree). Either way what we
-/// retain is a bitwise copy of the caller's 40 bytes.
-///
-/// # The ownership hole this leaves, stated plainly
-///
-/// MSVC's `std::function` owns a heap `_Func_impl` unless its target fits the
-/// inline buffer, and the correct way to keep one is `_Copy` (vtable slot 0)
-/// into our own storage plus `_Delete_this` (slot 4) on the caller's — which is
-/// what `crates/netsys-shim/src/netsys.rs` does for `set_p2p_callbacks`. This
-/// module **copies the bytes and calls neither**, because both mean executing
-/// guest code, which no test this lane may run can reach.
-///
-/// The consequence: for a by-value `std::function` whose target is heap
-/// allocated, retaining raw bytes aliases storage the caller still owns and will
-/// destroy. It is correct for a target living in the inline buffer (the common
-/// captureless- and small-lambda case, where `target == &self`) and is **not**
-/// correct in general. Closing it is one call to each of the two measured slots
-/// and is deliberately left until something can execute it.
-#[derive(Clone, Copy)]
-struct FunctionSlot {
-    value: MsvcFunction,
-}
+// How a `std::function` the game installed reaches this object.
+//
+// Retail hands these over by const reference for every `Set*Callback` setter
+// and **by value** for `CreateLobby`, `GetLobby`, `FindLobbies`, `StartGame`,
+// `CancelGameStart`, `UpdateLobby`'s eighth argument and the stats/leaderboard
+// family — a distinction measured by the `ret imm16` check in `gen/gen_abi.py`
+// (54 slots agree, 0 disagree).
+//
+// Both cases go through `crate::func`, which runs the measured `_Copy` and
+// `_Delete_this` rather than copying the 40 bytes: a bitwise copy aliases
+// storage the caller still owns, and for an inline target — the common
+// captureless- and small-lambda case, where `target == &self` — it leaves a
+// pointer into a stack frame that is gone by the time `Tick` answers the
+// request. That is a use-after-free, not a leak, which is why this is not
+// optional in a DLL the game calls.
+//
+// On any target that is not x86 there is no guest code to run, so `crate::func`
+// degrades to the bitwise copy the host tests have always exercised.
 
-impl FunctionSlot {
-    const fn empty() -> Self {
-        Self {
-            value: empty_function(),
-        }
-    }
-
-    fn set(&mut self, from: &MsvcFunction) {
-        self.value = *from;
-    }
-
-    fn installed(&self) -> bool {
-        self.value.target != 0
-    }
-}
-
+/// A `std::function` holding nothing, for tests that drive a slot without
+/// installing a callback.
+#[cfg(test)]
 const fn empty_function() -> MsvcFunction {
-    MsvcFunction {
-        storage: [0; 36],
-        target: 0,
-    }
+    func::empty()
 }
 
 fn gp_of<T>(p: *const T) -> Gp {
     p as *const u8 as usize as Gp
+}
+
+/// Copy a **by-reference** `std::function` argument, or produce an empty one.
+///
+/// The caller keeps owning `f`, so this is `_Copy` and never a take. A null
+/// pointer is a caller that installed nothing.
+///
+/// # Safety
+///
+/// `f`, when non-null, must point at a live 40-byte `std::function`.
+unsafe fn retained_or_empty(f: *const MsvcFunction) -> OwnedFunction {
+    if f.is_null() {
+        return OwnedFunction::empty();
+    }
+    // SAFETY: the caller's guarantee.
+    unsafe { OwnedFunction::retain(&*f) }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,15 +199,9 @@ pub mod cb {
 // Invoking a retained std::function.
 // ---------------------------------------------------------------------------
 
-/// `std::_Func_base`'s vtable slot for `_Do_call`.
-///
-/// **[measured]** — all 20 `??_7?$_Func_impl_no_alloc@…@std@@6B@` tables in
-/// `ron-bin/dll/CrossplayProxy.dll`'s `.rdata` resolve slot 0 to `_Copy`, 1 to
-/// `_Move`, 2 to `_Do_call`, 3 to `_Target_type`, 4 to `_Delete_this` and 5 to
-/// `_Get`, with slot 6 already outside `.text`. Slot 4 is independently
-/// corroborated by `~CrossPlayService`, which destroys the retained lobby
-/// callbacks with `call dword ptr [edx+0x10]` at RVA `0x14435`.
-pub const FUNC_DO_CALL_SLOT: usize = 2;
+/// `std::_Func_base`'s vtable slot for `_Do_call`. See [`crate::func`] for the
+/// measurement of all six slots. **[measured]**
+pub const FUNC_DO_CALL_SLOT: usize = func::FUNC_DO_CALL_SLOT;
 
 /// The `std::function` payload pointer, at `+0x24` of the 40-byte object.
 /// **[measured — `SetServiceErrorCallback` at `0x100145c0` reads exactly it]**
@@ -227,13 +221,13 @@ const _: () = assert!(core::mem::offset_of!(MsvcFunction, target) == FUNC_TARGET
 /// The caller must have marshalled arguments matching the installed function's
 /// real signature. Nothing here can check that; `abi.rs` records each slot's
 /// callback signature and every call site below cites it.
-unsafe fn invoke(slot: &FunctionSlot, args: &[u32]) -> bool {
-    if !slot.installed() || args.len() > 3 {
+unsafe fn invoke_target(target: u32, args: &[u32]) -> bool {
+    if target == 0 || args.len() > 3 {
         return false;
     }
     #[cfg(target_arch = "x86")]
     {
-        let this = slot.value.target as usize as *mut c_void;
+        let this = target as usize as *mut c_void;
         // SAFETY: a non-zero `target` points at a `_Func_impl` whose first word
         // is its vtable, per the measured layout above.
         let vtable: *const *const c_void = unsafe { *this.cast::<*const *const c_void>() };
@@ -471,7 +465,7 @@ pub struct LocalCrossPlayService<M: GuestMem + 'static> {
     pending: BTreeMap<ReqId, Pending>,
     peers: BTreeMap<String, Box<LocalPlayer>>,
     journal: Vec<Dispatch>,
-    callbacks: [FunctionSlot; cb::COUNT],
+    callbacks: [OwnedFunction; cb::COUNT],
     /// Persistent storage behind `GetPlayerGuid`'s returned `wstring&`.
     guid_at: Gp,
     guid_blocks: Vec<(Gp, u32)>,
@@ -544,6 +538,15 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
     };
 
     /// The vtable this object publishes.
+    ///
+    /// `#[inline(never)]`, and the **only** place `Self::VTABLE` is named.
+    /// `VTABLE` is an associated `const`, so every separate `&`-of-it is its own
+    /// promoted allocation; with two use sites the object published one table
+    /// and this accessor returned another with identical contents at a
+    /// different address. Harmless to retail, which never compares them, and a
+    /// lie in every diagnostic that does. Measured on `i686-pc-windows-msvc`,
+    /// where the host build happened to merge them and the target build did not.
+    #[inline(never)]
     pub fn vtable() -> &'static ICrossPlayServiceVtable {
         Self::VTABLE
     }
@@ -570,14 +573,14 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
 
     fn with_directory(mem: M, user_id: &str, user_name: &str, directory: DirectoryRef) -> Box<Self> {
         Box::new(Self {
-            vftable: Self::VTABLE,
+            vftable: Self::vtable(),
             mem,
             backend: Backend::new(user_id, user_name),
             directory,
             pending: BTreeMap::new(),
             peers: BTreeMap::new(),
             journal: Vec::new(),
-            callbacks: [FunctionSlot::empty(); cb::COUNT],
+            callbacks: core::array::from_fn(|_| OwnedFunction::empty()),
             guid_at: 0,
             guid_blocks: Vec::new(),
             guid_text: String::new(),
@@ -619,7 +622,7 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
     pub fn callback_installed(&self, index: usize) -> bool {
         self.callbacks
             .get(index)
-            .map(FunctionSlot::installed)
+            .map(OwnedFunction::installed)
             .unwrap_or(false)
     }
 
@@ -647,17 +650,25 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
         });
     }
 
-    fn remember(&mut self, req: ReqId, slot: &'static str, ok: MsvcFunction, err: MsvcFunction) {
+    /// Park a request's two answer callbacks until `Tick` resolves it.
+    ///
+    /// Each thunk builds its own [`OwnedFunction`], because whether a callback
+    /// is taken ([`OwnedFunction::adopt`], by value) or copied
+    /// ([`OwnedFunction::retain`], by reference) is a per-slot fact from the
+    /// PDB signature, not something this function can infer.
+    fn remember(&mut self, req: ReqId, slot: &'static str, ok: OwnedFunction, err: OwnedFunction) {
         self.pending.insert(req, Pending { slot, ok, err });
     }
 
+    /// Take an independent copy of a setter's by-reference callback, releasing
+    /// whatever occupied that slot before.
     fn retain(&mut self, index: usize, f: *const MsvcFunction) {
         if f.is_null() {
             return;
         }
-        // SAFETY: retail passes a live 40-byte `std::function`; the pointer is
-        // only read, never retained.
-        self.callbacks[index].set(unsafe { &*f });
+        // SAFETY: retail passes a live 40-byte `std::function` it keeps owning,
+        // so the discipline is `_Copy`, never a take.
+        self.callbacks[index] = unsafe { OwnedFunction::retain(&*f) };
     }
 
     /// Refresh the persistent `wstring` behind `GetPlayerGuid`.
@@ -698,13 +709,13 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
             }
         }
         while let Some(message) = self.backend.take_service_error() {
-            let slot = self.callbacks[cb::SERVICE_ERROR];
+            let slot = self.callbacks[cb::SERVICE_ERROR].target();
             let mut scratch = Scratch::new(&mut self.mem);
             let arg = scratch.wstring_ref(&message).unwrap_or(0);
             // SAFETY: `void(wstring)` is a by-value parameter, so `_Do_call`
             // takes an rvalue reference — one pointer. **[measured: the
             // `_Do_call` for that specialisation is a `ret 4` body]**
-            let invoked = arg != 0 && unsafe { invoke(&slot, &[arg]) };
+            let invoked = arg != 0 && unsafe { invoke_target(slot, &[arg]) };
             scratch.release();
             self.record(cb::NAMES[cb::SERVICE_ERROR], invoked, arg);
         }
@@ -714,8 +725,8 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
         let Some(pending) = self.pending.remove(&req) else {
             return;
         };
-        let ok = FunctionSlot { value: pending.ok };
-        let err = FunctionSlot { value: pending.err };
+        let ok = pending.ok.target();
+        let err = pending.err.target();
         let mut scratch = Scratch::new(&mut self.mem);
         let mut argument = 0;
         let mut args: Vec<u32> = Vec::new();
@@ -772,7 +783,7 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
         };
         // SAFETY: the argument list follows the callback signature `abi.rs`
         // records for `pending.slot`, as annotated above.
-        let invoked = unsafe { invoke(&target, &args) };
+        let invoked = unsafe { invoke_target(target, &args) };
         scratch.release();
         self.record(pending.slot, invoked, argument);
     }
@@ -793,12 +804,12 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
                 // **[measured that both are installed; DoN policy that they
                 // fire back to back, since a local directory has no separate
                 // negotiation phase]**
-                let opened = self.callbacks[cb::P2P_CONNECTION_OPENED];
-                let channel = self.callbacks[cb::P2P_DATA_CHANNEL_OPENED];
+                let opened = self.callbacks[cb::P2P_CONNECTION_OPENED].target();
+                let channel = self.callbacks[cb::P2P_DATA_CHANNEL_OPENED].target();
                 // SAFETY: `void(ICrossplayPlayer*)` — one pointer argument.
-                let a = unsafe { invoke(&opened, &[ptr]) };
+                let a = unsafe { invoke_target(opened, &[ptr]) };
                 self.record(cb::NAMES[cb::P2P_CONNECTION_OPENED], a, ptr);
-                let b = unsafe { invoke(&channel, &[ptr]) };
+                let b = unsafe { invoke_target(channel, &[ptr]) };
                 self.record(cb::NAMES[cb::P2P_DATA_CHANNEL_OPENED], b, ptr);
             }
             Notice::PeerClosed(user_id) => {
@@ -806,12 +817,12 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
                     return;
                 };
                 let ptr = gp_of(player.as_ptr());
-                let channel = self.callbacks[cb::P2P_DATA_CHANNEL_CLOSED];
-                let closed = self.callbacks[cb::P2P_CONNECTION_CLOSED];
+                let channel = self.callbacks[cb::P2P_DATA_CHANNEL_CLOSED].target();
+                let closed = self.callbacks[cb::P2P_CONNECTION_CLOSED].target();
                 // SAFETY: `void(ICrossplayPlayer*)`.
-                let a = unsafe { invoke(&channel, &[ptr]) };
+                let a = unsafe { invoke_target(channel, &[ptr]) };
                 self.record(cb::NAMES[cb::P2P_DATA_CHANNEL_CLOSED], a, ptr);
-                let b = unsafe { invoke(&closed, &[ptr]) };
+                let b = unsafe { invoke_target(closed, &[ptr]) };
                 self.record(cb::NAMES[cb::P2P_CONNECTION_CLOSED], b, ptr);
                 player.release(&mut self.mem);
             }
@@ -819,13 +830,13 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
                 let Some(ptr) = self.peers.get(&from).map(|p| gp_of(p.as_ptr())) else {
                     return;
                 };
-                let slot = self.callbacks[cb::P2P_DATA];
+                let slot = self.callbacks[cb::P2P_DATA].target();
                 let mut scratch = Scratch::new(&mut self.mem);
                 let at = scratch.place(&bytes).unwrap_or(0);
                 // SAFETY: `void(ICrossplayPlayer*, const unsigned char*,
                 // unsigned int)` — three 4-byte arguments.
                 let invoked =
-                    at != 0 && unsafe { invoke(&slot, &[ptr, at, bytes.len() as u32]) };
+                    at != 0 && unsafe { invoke_target(slot, &[ptr, at, bytes.len() as u32]) };
                 scratch.release();
                 self.record(cb::NAMES[cb::P2P_DATA], invoked, at);
             }
@@ -833,11 +844,11 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
                 let Some(ptr) = self.peers.get(&from).map(|p| gp_of(p.as_ptr())) else {
                     return;
                 };
-                let slot = self.callbacks[cb::P2P_TEXT];
+                let slot = self.callbacks[cb::P2P_TEXT].target();
                 let mut scratch = Scratch::new(&mut self.mem);
                 let at = scratch.wstring_ref(&text).unwrap_or(0);
                 // SAFETY: `void(ICrossplayPlayer*, const wstring&)`.
-                let invoked = at != 0 && unsafe { invoke(&slot, &[ptr, at]) };
+                let invoked = at != 0 && unsafe { invoke_target(slot, &[ptr, at]) };
                 scratch.release();
                 self.record(cb::NAMES[cb::P2P_TEXT], invoked, at);
             }
@@ -869,9 +880,9 @@ impl<M: GuestMem + 'static> LocalCrossPlayService<M> {
     /// Queue a refusal for a slot this backend does not implement, answering on
     /// the caller's own error callback. The `LIBERR_NOT_AVAILABLE` discipline
     /// `crates/netsys-shim` uses, transposed to a callback interface.
-    fn refuse(&mut self, slot: &'static str, err: MsvcFunction) {
+    fn refuse(&mut self, slot: &'static str, err: OwnedFunction) {
         let req = self.backend.fail_closed(slot);
-        self.remember(req, slot, empty_function(), err);
+        self.remember(req, slot, OwnedFunction::empty(), err);
     }
 }
 
@@ -918,8 +929,8 @@ macro_rules! service_impl {
                 _ => s.backend.user_id().to_string(),
             };
             let req = s.backend.start_session(&id);
-            let ok = if on_ok.is_null() { empty_function() } else { unsafe { *on_ok } };
-            let err = if on_err.is_null() { empty_function() } else { unsafe { *on_err } };
+            // SAFETY: both are `const&` parameters retail keeps owning.
+            let (ok, err) = unsafe { (retained_or_empty(on_ok), retained_or_empty(on_err)) };
             s.remember(req, "StartSession", ok, err);
         }
 
@@ -1161,22 +1172,29 @@ macro_rules! service_impl {
         pub(super) unsafe extern $abi fn get_lobby<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             id: *const MsvcWstring,
-            on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             let req = match s.read_wstring_arg(id) {
                 Some(id) => s.backend.get_lobby(&id),
                 None => s.backend.fail_closed("GetLobby: unreadable lobby id"),
             };
-            s.remember(req, "GetLobby", on_ok, on_err);
+            // SAFETY: both arrived by value and are this callee's to destroy.
+            let (ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "GetLobby", ok, err);
         }
 
         pub(super) unsafe extern $abi fn find_lobbies<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             criteria: *const LobbySearchCriteriaDTO,
-            on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             let req = if criteria.is_null() {
@@ -1188,7 +1206,14 @@ macro_rules! service_impl {
                 // notion of a peer. **[DoN policy]**
                 s.backend.find_lobbies(c.max_results, c.min_available_slots)
             };
-            s.remember(req, "FindLobbies", on_ok, on_err);
+            // SAFETY: both arrived by value and are this callee's to destroy.
+            let (ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "FindLobbies", ok, err);
         }
 
         pub(super) unsafe extern $abi fn create_lobby<M: GuestMem + 'static>(
@@ -1196,15 +1221,22 @@ macro_rules! service_impl {
             max_members: i32,
             visibility: Visibility,
             attributes: *const MsvcUnorderedMap32,
-            on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             let req = match s.read_attributes_arg(attributes) {
                 Some(attrs) => s.backend.create_lobby(max_members, visibility, attrs),
                 None => s.backend.fail_closed("CreateLobby: unreadable attribute map"),
             };
-            s.remember(req, "CreateLobby", on_ok, on_err);
+            // SAFETY: both arrived by value and are this callee's to destroy.
+            let (ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "CreateLobby", ok, err);
         }
 
         pub(super) unsafe extern $abi fn join_lobby<M: GuestMem + 'static>(
@@ -1218,8 +1250,8 @@ macro_rules! service_impl {
                 Some(id) => s.backend.join_lobby(&id),
                 None => s.backend.fail_closed("JoinLobby: unreadable lobby id"),
             };
-            let ok = if on_ok.is_null() { empty_function() } else { unsafe { *on_ok } };
-            let err = if on_err.is_null() { empty_function() } else { unsafe { *on_err } };
+            // SAFETY: both are `const&` parameters retail keeps owning.
+            let (ok, err) = unsafe { (retained_or_empty(on_ok), retained_or_empty(on_err)) };
             s.remember(req, "JoinLobby", ok, err);
         }
 
@@ -1234,8 +1266,8 @@ macro_rules! service_impl {
                 Some(id) => s.backend.leave_lobby(&id),
                 None => s.backend.fail_closed("LeaveLobby: unreadable lobby id"),
             };
-            let ok = if on_ok.is_null() { empty_function() } else { unsafe { *on_ok } };
-            let err = if on_err.is_null() { empty_function() } else { unsafe { *on_err } };
+            // SAFETY: both are `const&` parameters retail keeps owning.
+            let (ok, err) = unsafe { (retained_or_empty(on_ok), retained_or_empty(on_err)) };
             s.remember(req, "LeaveLobby", ok, err);
         }
 
@@ -1248,7 +1280,7 @@ macro_rules! service_impl {
             bot_count: i32,
             _unnamed: i32,
             on_ok: *const MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             // `UpdateLobby(const wstring&, int, const map&, int, int, onOk,
@@ -1263,8 +1295,16 @@ macro_rules! service_impl {
                 }
                 _ => s.backend.fail_closed("UpdateLobby: unreadable arguments"),
             };
-            let ok = if on_ok.is_null() { empty_function() } else { unsafe { *on_ok } };
-            s.remember(req, "UpdateLobby", ok, on_err);
+            // `onOk` is `const&` and `onErr` is by value — the one slot on
+            // this interface that mixes the two. **[measured — abi.rs]**
+            // SAFETY: each matches the parameter kind the PDB records.
+            let (ok, err) = unsafe {
+                (
+                    retained_or_empty(on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "UpdateLobby", ok, err);
         }
 
         pub(super) unsafe extern $abi fn lobby_cancel_pending<M: GuestMem + 'static>(
@@ -1284,8 +1324,8 @@ macro_rules! service_impl {
             this: *mut ICrossPlayService,
             id: *const MsvcWstring,
             _unnamed: bool,
-            on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             // The `bool` between the lobby id and the callbacks is unnamed in
@@ -1299,21 +1339,35 @@ macro_rules! service_impl {
                 Some(id) => s.backend.start_game(&id, &id.clone()),
                 None => s.backend.fail_closed("StartGame: unreadable lobby id"),
             };
-            s.remember(req, "StartGame", on_ok, on_err);
+            // SAFETY: both arrived by value and are this callee's to destroy.
+            let (ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "StartGame", ok, err);
         }
 
         pub(super) unsafe extern $abi fn cancel_game_start<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             id: *const MsvcWstring,
-            on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
             let Some(s) = (unsafe { LocalCrossPlayService::<M>::of(this) }) else { return };
             let req = match s.read_wstring_arg(id) {
                 Some(id) => s.backend.cancel_game_start(&id),
                 None => s.backend.fail_closed("CancelGameStart: unreadable lobby id"),
             };
-            s.remember(req, "CancelGameStart", on_ok, on_err);
+            // SAFETY: both arrived by value and are this callee's to destroy.
+            let (ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
+            s.remember(req, "CancelGameStart", ok, err);
         }
 
         // --- P2P -------------------------------------------------------------
@@ -1423,18 +1477,26 @@ macro_rules! service_impl {
             _text: *const MsvcWstring,
         ) {
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("SendLobbyChat", empty_function());
+                s.refuse("SendLobbyChat", OwnedFunction::empty());
             }
         }
 
         pub(super) unsafe extern $abi fn join_chat<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             _id: *const MsvcWstring,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("JoinChat", on_err);
+                s.refuse("JoinChat", err);
             }
         }
 
@@ -1443,7 +1505,7 @@ macro_rules! service_impl {
             _id: *const MsvcWstring,
         ) {
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("LeaveChat", empty_function());
+                s.refuse("LeaveChat", OwnedFunction::empty());
             }
         }
 
@@ -1453,29 +1515,45 @@ macro_rules! service_impl {
             _text: *const MsvcWstring,
         ) {
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("SendChatMessage", empty_function());
+                s.refuse("SendChatMessage", OwnedFunction::empty());
             }
         }
 
         pub(super) unsafe extern $abi fn set_stats<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             _stats: *const MsvcMap8,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("SetStats", on_err);
+                s.refuse("SetStats", err);
             }
         }
 
         pub(super) unsafe extern $abi fn get_stats<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             _id: *const MsvcWstring,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("GetStats", on_err);
+                s.refuse("GetStats", err);
             }
         }
 
@@ -1483,11 +1561,19 @@ macro_rules! service_impl {
             this: *mut ICrossPlayService,
             _name: *const MsvcWstring,
             _count: i32,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("GetGlobalLeaderboards", on_err);
+                s.refuse("GetGlobalLeaderboards", err);
             }
         }
 
@@ -1496,11 +1582,19 @@ macro_rules! service_impl {
             _name: *const MsvcWstring,
             _player: *const MsvcWstring,
             _count: i32,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("GetLeaderboardsAroundPlayer", on_err);
+                s.refuse("GetLeaderboardsAroundPlayer", err);
             }
         }
 
@@ -1508,22 +1602,38 @@ macro_rules! service_impl {
             this: *mut ICrossPlayService,
             _a: *const MsvcWstring,
             _b: *const MsvcWstring,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("CreateInvitation", on_err);
+                s.refuse("CreateInvitation", err);
             }
         }
 
         pub(super) unsafe extern $abi fn accept_invitation<M: GuestMem + 'static>(
             this: *mut ICrossPlayService,
             _id: *const MsvcWstring,
-            _on_ok: MsvcFunction,
-            on_err: MsvcFunction,
+            mut _on_ok: MsvcFunction,
+            mut on_err: MsvcFunction,
         ) {
+            // SAFETY: both arrived by value, so both are this callee's to
+            // destroy even though the call is refused.
+            let (_ok, err) = unsafe {
+                (
+                    OwnedFunction::adopt(&mut _on_ok),
+                    OwnedFunction::adopt(&mut on_err),
+                )
+            };
             if let Some(s) = unsafe { LocalCrossPlayService::<M>::of(this) } {
-                s.refuse("AcceptInvitation", on_err);
+                s.refuse("AcceptInvitation", err);
             }
         }
     };
@@ -2020,10 +2130,12 @@ mod tests {
     #[test]
     fn callbacks_are_retained_on_the_slot_they_were_installed_on() {
         let svc = Svc::new(ArenaMem::new(), "host", "Host");
-        // A `std::function` is "installed" iff its target is non-null; a real
-        // one points at its own inline buffer. Fake exactly that shape.
+        // A `std::function` is "installed" iff `_Copy` produced a target. The
+        // probe is a real six-slot `_Func_base` with an inline target, because
+        // retention now runs guest code and a fabricated pointer would fault on
+        // the target where that ABI is real.
         let mut f = empty_function();
-        f.target = 0x1234_5678;
+        crate::func::probe::install(&mut f);
         unsafe {
             (vt().SetServiceErrorCallback)(svc.as_service(), &f);
             (vt().SetJoinLobbyCallback)(svc.as_service(), &f);
@@ -2065,7 +2177,8 @@ mod tests {
         start(&mut host, "host");
         start(&mut peer, "peer");
         let mut f = empty_function();
-        f.target = 0x1234_5678;
+        crate::func::probe::install(&mut f);
+        let calls_before = crate::func::probe::DO_CALLS.load(core::sync::atomic::Ordering::Relaxed);
         unsafe {
             (vt().SetJoinLobbyCallback)(host.as_service(), &f);
             (vt().SetLeaveLobbyCallback)(host.as_service(), &f);
@@ -2100,6 +2213,14 @@ mod tests {
                 "{slot} was invoked; its bool parameter is not derived"
             );
         }
+        // The journal is this crate's own record; the probe counts from the
+        // other side of the call, so a dispatch that skipped the journal would
+        // still be caught.
+        assert_eq!(
+            crate::func::probe::DO_CALLS.load(core::sync::atomic::Ordering::Relaxed),
+            calls_before,
+            "a retained-but-never-invoked callback reached _Do_call"
+        );
         drop(host);
         drop(peer);
     }

@@ -1,0 +1,6 @@
+# The image must be loadable by riseofnations.exe, which is PE32 i386. Same
+# pinning as ../../netsys-shim/.cargo/config.toml. Scoped to this directory on
+# purpose: the parent `don-crossplay` package is host-testable and must keep
+# building for the development host by default.
+[build]
+target = "i686-pc-windows-msvc"

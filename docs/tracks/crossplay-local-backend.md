@@ -339,3 +339,36 @@ Nothing here is verified or proven. No slot has been called by
    `?Logger@Logging@Crossplay@@YAPAVICrossplayLogger@12@XZ` at ordinal 1
    (`crates/don-crossplay/src/lib.rs::SHIPPED_EXPORTS`), plus the four-slot
    `ICrossplayLogger`. This lane deliberately built no DLL.
+
+---
+
+## 7. Amendment from the crossplay-dll lane (wave 3)
+
+Appended, not rewritten — the sections above are the backend lane's record and
+stay as they were written.
+
+**§6 item 1 (`std::function` ownership) is closed.**
+`crates/don-crossplay/src/func.rs` now runs the measured `_Copy`, `_Move` and
+`_Delete_this`, and `OwnedFunction` keeps every retained callback at a fixed
+address, because an inline target is a pointer into the object's own buffer and
+a Rust move of the 40 bytes invalidates it. The by-reference setters use
+`retain`, the by-value completion pairs use `adopt`, and both directions were
+executed against synthetic `_Func_impl` targets in a PE32 process. The
+diagnosis in §6 was slightly optimistic in one respect: the byte copy was not
+merely wrong "for a heap `_Func_impl`" — because `Pending` holds the pair until
+a later `Tick`, an *inline* target left a pointer into a stack frame that no
+longer existed, which is a use-after-free rather than a leak.
+
+**§6 item 6 is closed.** `crates/don-crossplay/dll/` emits a PE32/i386
+`CrossplayProxy.dll` with all four shipped names at their shipped ordinals, and
+`crates/don-crossplay/src/logger.rs` is the four-slot `ICrossplayLogger` behind
+ordinal 1.
+
+**§6 item 2 is unchanged.** Nothing has been called by `riseofnations.exe`, and
+nothing has been installed into a game directory. What now exists is a
+disposable PE32 loader that executes the image outside the game.
+
+See [`crossplay-proxy-dll.md`](crossplay-proxy-dll.md), including §2 — a
+`#[repr(C, align(8))]` on `MsvcFunction` was silently changing every by-value
+slot on this interface into a different calling convention, and no compile-time
+assertion in `abi.rs` could see it.

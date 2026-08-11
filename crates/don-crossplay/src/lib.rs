@@ -11,10 +11,12 @@
 //! ```
 //!
 //! Everything else is virtual dispatch through the object `Service()` returns.
-//! This crate is that contract and nothing else: **no method is implemented, no
-//! DLL is built, nothing is replaced.** [`abi`] is generated from the shipped
+//! [`abi`] is that contract and nothing else; it is generated from the shipped
 //! private PDBs by `gen/gen_abi.py` and carries compile-time assertions on every
-//! vtable slot index and every DTO field offset.
+//! vtable slot index, every DTO field offset, and the alignment of every
+//! aggregate a slot takes by value — the last of which is part of the *calling
+//! convention*, not the layout, and is the one thing here a layout assertion
+//! cannot check for you.
 //!
 //! See [`abi`]'s module documentation for the two-`ICrossPlayService` hazard,
 //! which is the single fact most likely to silently produce a wrong ABI here,
@@ -35,9 +37,15 @@
 //!   against the shipped `_Find_last`.
 //! * [`service`] — the 58-slot vtable, bound to the two above.
 //!
-//! **None of it has been executed by `riseofnations.exe`.** See
-//! [`service`]'s module documentation for exactly what the tests do and do not
-//! establish.
+//! * [`func`] — who owns an MSVC `std::function` that crossed the boundary, and
+//!   the two measured vtable slots that transfer it.
+//! * [`logger`] — the 4-slot `ICrossplayLogger` behind export ordinal 1, which
+//!   retail dereferences with no null check.
+//!
+//! **None of it has been executed by `riseofnations.exe`.** It *has* been built
+//! into a PE32 `CrossplayProxy.dll` (`../dll/`) and driven by a disposable PE32
+//! loader; see `docs/tracks/crossplay-proxy-dll.md` and [`service`]'s module
+//! documentation for exactly what that does and does not establish.
 //!
 //! # What this crate deliberately does not know
 //!
@@ -60,7 +68,11 @@ extern crate alloc;
 pub mod abi;
 
 #[cfg(feature = "local")]
+pub mod func;
+#[cfg(feature = "local")]
 pub mod local;
+#[cfg(feature = "local")]
+pub mod logger;
 #[cfg(feature = "local")]
 pub mod msvc;
 #[cfg(feature = "local")]
@@ -68,6 +80,8 @@ pub mod service;
 
 #[cfg(feature = "local")]
 pub use local::{Attributes, Backend, Directory, Emission, Lobby, Member, Notice, Outcome};
+#[cfg(feature = "local")]
+pub use logger::LocalLogger;
 #[cfg(feature = "local")]
 pub use service::{LocalCrossPlayService, LocalPlayer};
 
