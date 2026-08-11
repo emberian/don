@@ -2096,3 +2096,48 @@ Second instance in the same lane: `Group::action_unitmask` is decompiled as
 - `Group::action_recall` / `action_return` behaviour (group-act's rows, landed this wave) beyond
   the ignore-orders gap above.
 - Opcode 0 `GroupCommand` (78,197) — `selection_partial`, outside the complete-47 target.
+
+#### audit-op FINDING 4 — `command.rs`'s `restart_delay` / `restart_gate_2` / `restart_gate_4` are misnamed; they are `Game::semaphore` fields
+
+`schema/types.json` gives `Game::semaphore` as a `BitMask<256>` at **`Game+0x814`, size 44**, and
+`BitMask<N>` as `bits`@`+0` / `size`@`+4` / `flags`@`+8` / `ptr`@`+0xC` (`0x814 + 44 = 0x840`,
+which is exactly where `graphic_clock` starts — the extent checks out). Therefore:
+
+| address | real name | `command.rs` calls it |
+| --- | --- | --- |
+| `Game+0x81C` | `semaphore.flags` | `restart_delay` (`command.rs:3053`, `:3377`) |
+| `Game+0x820` | `semaphore.ptr` — **first bit byte**, bits 0..7 | (unnamed) |
+| `Game+0x821 & 0x02` | semaphore bit **9** | `restart_gate_2` |
+| `Game+0x821 & 0x04` | semaphore bit **10** | `restart_gate_4` |
+
+This confirms op-life's earlier board finding from the type schema rather than from disassembly.
+The arithmetic in the port is right — the *names* are not, and they appear inside four
+`InlinePort::Complete` rows (55 `mp_log`, 59 `cheat_view_all`, 71 `quit`, and 74's cheat arm) plus
+the comment at `command.rs:3709` ("the restart delay at `Game+0x81C`"). There is no restart timer;
+the "set to 2 when zero" idiom is `BitMask::flags` bookkeeping shared by every semaphore writer,
+which is *why* those four opcodes appear coupled. Reported, not edited — `command.rs` is held by
+four live lanes.
+
+## ⚑ STANDING FINDING (2026-08-11) — `re/decomp-all/` DROPS CALL ARGUMENTS
+
+The decompiled C in `re/decomp-all/` renders some calls as zero-argument when the
+instructions plainly push arguments. This is not a cosmetic difference — it cost the
+`audit-op` lane a wrong conclusion inside one session, twice:
+
+- `006ee2d0.c` renders `Player::walk_data`'s second `DataWalk` call as zero-arg. The
+  instructions at `0x006EE303` push `Player+0x39` and `Player+0x00`. The lane briefly
+  concluded "synced fields unwalked" from the C.
+- `Group::action_unitmask` decompiles one-arg while emitting `ret 8`.
+
+**Read the disassembly before concluding anything about an argument list, a stack-cleanup
+size, or whether a value reaches a callee.** `re/decomp-all/` is a control-flow map — that is
+what `README-LLM.md` already says it is — and an absent argument in the C is not evidence
+that retail passes none. Capstone, not Ghidra's C, settles argument and rounding questions.
+
+Two other traps recorded the same day, same class: the PDB declaring `__cdecl` with two
+parameters for a body that takes none and reads only `ECX`; and `schema/vtables.json` listing
+type classes twice, 8 bytes apart, where the HIGHER address is the real vtable.
+
+Tooling note: `capstone`/`pefile` are absent from the system `python3` — run them under
+`uv run --with capstone --with pefile`. Do not name a helper script `dis.py`; it shadows the
+stdlib module capstone imports.
