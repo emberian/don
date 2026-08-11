@@ -99,6 +99,7 @@ pub mod script_channel;
 pub mod setup_place_unit_deep_re;
 pub mod state;
 pub mod setup_units_producer;
+pub mod starting_village_suffix;
 pub mod units_runtime;
 pub mod walk;
 pub mod wire;
