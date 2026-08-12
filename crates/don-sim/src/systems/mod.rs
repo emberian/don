@@ -73,6 +73,8 @@ pub mod building_gather;
 pub mod canonical_air_group_host;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
+/// Installed, revision-bound production adapter for the fresh saved Village BUILD_AT tick.
+pub mod canonical_build_at_work;
 /// Atomic Board/Repair/Trade packet planner sharing the canonical Group→Move selector.
 pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.

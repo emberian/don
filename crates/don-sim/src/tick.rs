@@ -64,11 +64,10 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, canonical_air_patrol_runtime, canonical_cast_work, canonical_gather_work,
-    canonical_strafe_runtime, casters_animals,
-    collision_blocks_live, combat, defeat_cleanup, economy, game_daemon_calc_danger,
-    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
-    order_dispatch, production,
+    ammo, borders_fog, canonical_air_patrol_runtime, canonical_build_at_work, canonical_cast_work,
+    canonical_gather_work, canonical_strafe_runtime, casters_animals, collision_blocks_live,
+    combat, defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys,
+    leaders, movement, movement_driver, movement_live, order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -891,6 +890,11 @@ pub struct Sim {
     pub cast_work_authority: canonical_cast_work::CastWorkAuthority,
     pub last_cast_work_receipt: Option<canonical_cast_work::CastWorkActivationReceipt>,
     pub last_cast_work_error: Option<canonical_cast_work::CastWorkRuntimeError>,
+    /// Revision/digest-bound target/Guy/content facts for the exact saved BUILD_AT tick.
+    /// Canonical order/Unit/Build fields remain in their existing owners.
+    pub build_at_work_authority: canonical_build_at_work::BuildAtWorkAuthority,
+    pub last_build_at_work_receipt: Option<canonical_build_at_work::BuildAtWorkActivationReceipt>,
+    pub last_build_at_work_error: Option<canonical_build_at_work::BuildAtWorkRuntimeError>,
     /// Reinstalled content/search projection and transaction epochs for STRAFE row 16.
     pub strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority,
     /// Most recent canonical STRAFE commit or refusal. Diagnostic only; gameplay effects live
@@ -1599,6 +1603,9 @@ impl Sim {
             cast_work_authority: canonical_cast_work::CastWorkAuthority::default(),
             last_cast_work_receipt: None,
             last_cast_work_error: None,
+            build_at_work_authority: canonical_build_at_work::BuildAtWorkAuthority::default(),
+            last_build_at_work_receipt: None,
+            last_build_at_work_error: None,
             strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority::default(),
             last_strafe_receipt: None,
             last_strafe_error: None,
@@ -1691,6 +1698,14 @@ impl Sim {
         authority: canonical_cast_work::CastWorkAuthority,
     ) {
         self.cast_work_authority = authority;
+    }
+
+    /// Install the revision-bound target/Guy/content projection used by canonical BUILD_AT.
+    pub fn replace_build_at_work_authority(
+        &mut self,
+        authority: canonical_build_at_work::BuildAtWorkAuthority,
+    ) {
+        self.build_at_work_authority = authority;
     }
 
     /// Install the revision-bound type/search projection used by canonical STRAFE activations.
@@ -3405,7 +3420,9 @@ impl Sim {
             OrderIndex::MoveTo | OrderIndex::FleeTo => self.do_move(row),
             // Arm 10, `Unit::do_attack` 0x005F1B80.
             OrderIndex::Attack => self.do_attack(row),
-            // Arm 6, `Unit::do_build` 0x005EEBF0 -> Wall::do_construct.
+            // Arm 6, `Unit::do_build` 0x005EEBF0 -> Wall::do_construct. The exact fresh
+            // witness uses installed authority; older synthetic construction fixtures retain
+            // the explicitly named compatibility path.
             OrderIndex::BuildAt => self.do_build(row),
             // Arm 9, `Unit::do_gather` `0x005EF2A0`, through the exact saved-Camp adapter.
             OrderIndex::Gather => self.do_gather_work(row),
@@ -3487,6 +3504,52 @@ impl Sim {
             Err(error) => {
                 self.last_cast_work_receipt = None;
                 self.last_cast_work_error = Some(error);
+            }
+        }
+    }
+
+    fn do_build_at_work(&mut self, row: usize) {
+        let prepared = match canonical_build_at_work::prepare_build_at_work_activation(
+            &self.world,
+            &self.builds,
+            &self.unit_type,
+            &self.production_runtime.build_types,
+            self.step8_env.leaders[0].payout.ai_speed,
+            self.step8.leaders[canonical_build_at_work::FRESH_BUILD_AT_ACTOR_WHO as usize]
+                .unit_stats
+                .has_tribe_bonus(0x10),
+            &self.prod_rules,
+            &self.build_at_work_authority,
+            row,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_build_at_work_receipt = None;
+                self.last_build_at_work_error = Some(error);
+                return;
+            }
+        };
+        match canonical_build_at_work::commit_build_at_work_activation(
+            &self.world,
+            &mut self.builds,
+            &self.unit_type,
+            &self.production_runtime.build_types,
+            self.step8_env.leaders[0].payout.ai_speed,
+            self.step8.leaders[canonical_build_at_work::FRESH_BUILD_AT_ACTOR_WHO as usize]
+                .unit_stats
+                .has_tribe_bonus(0x10),
+            &self.prod_rules,
+            &self.build_at_work_authority,
+            prepared,
+        ) {
+            Ok(receipt) => {
+                self.last_build_at_work_receipt = Some(receipt);
+                self.last_build_at_work_error = None;
+                self.cover.build_construct_steps += 1;
+            }
+            Err(error) => {
+                self.last_build_at_work_receipt = None;
+                self.last_build_at_work_error = Some(error);
             }
         }
     }
@@ -4146,6 +4209,28 @@ impl Sim {
     /// retail sees them in — which is the input `production::construct_frame` documents as
     /// belonging to the scheduler rather than to its own module.
     fn do_build(&mut self, row: usize) {
+        let fresh_identity = self.unit_type.get(row)
+            == Some(&canonical_build_at_work::FRESH_BUILD_AT_ACTOR_TYPE)
+            && self.world.units.get_who(row) == canonical_build_at_work::FRESH_BUILD_AT_ACTOR_WHO
+            && self.world.units.o()[row] == canonical_build_at_work::FRESH_BUILD_AT_ACTOR_O
+            && self.world.orders(row).current().is_some_and(|order| {
+                order.kind == OrderIndex::BuildAt
+                    && order.node_metric == 0
+                    && order.flags == canonical_build_at_work::FRESH_BUILD_AT_FLAGS
+                    && order.target_o == canonical_build_at_work::FRESH_BUILD_AT_TARGET_O
+                    && order.target_who == canonical_build_at_work::FRESH_BUILD_AT_TARGET_WHO as i8
+                    && order.target_uid == canonical_build_at_work::FRESH_BUILD_AT_TARGET_UID
+            });
+        if self.build_at_work_authority.is_installed() || fresh_identity {
+            self.do_build_at_work(row);
+            return;
+        }
+        self.do_build_compatibility(row);
+    }
+
+    /// Pre-authority compact-sim compatibility path. The exact fresh retail request above
+    /// never reaches this row-index approximation, even when authority is absent.
+    fn do_build_compatibility(&mut self, row: usize) {
         let Some(ord) = self.world.orders(row).current().cloned() else {
             return;
         };

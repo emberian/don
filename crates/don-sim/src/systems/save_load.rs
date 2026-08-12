@@ -1743,8 +1743,10 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         return Err(SaveError::Limit("building gather points"));
     }
 
-    if build.flags & production::flag::CAPTURED != 0
-        || build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
+    // The CAPTURED/converted flag is already an explicit byte in this section and has no
+    // subordinate allocation to reconstruct. Fresh retail construction sites carry it, so
+    // rejecting the value made an otherwise byte-owned BUILD_AT state unloadable.
+    if build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
         || build.demolition != 0
         || build.gather_down >= 0
         || build.wonder >= 0
@@ -1760,7 +1762,7 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         || !build.gather.is_empty()
     {
         return Err(SaveError::Builds(
-            "captured/wonder/gather/special-family building state is not owned".into(),
+            "wonder/gather/special-family building state is not owned".into(),
         ));
     }
     Ok(())
