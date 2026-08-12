@@ -53,23 +53,29 @@ That proves the exact content inputs available to setup and formation. It does *
 The spawned root's effective type must come from the existing setup receipt and agree with
 `Sim.unit_type`; choosing 69 or 71 because either looks plausible is forbidden.
 
-The package is not a clear-pool transition. Eight opcode-0 commands precede it:
+The package is not a clear-pool transition. `groups_build_history` now proves that all eight
+preceding opcode-0 commands are immediately followed by opcode 25
+`QueueUpBuildCommand`/`Group::action_build`, not by a simple-state or economy action:
 
 ```text
-serial 14: who0 [4]
-serial 17: who0 []
-serial 20: who0 []
-serial 23: who1 [1,2,3,4]
-serial 23: who0 []
-serial 26: who0 []
-serial 27: who1 []
-serial 32: who1 []
+serial/frame/play/action-index  selection          build rectangle                 type/queue  Groups
+14/79/1/0                         who0 [4]           (22286,66184)..same              0x1a1/1    1c78f3f5
+17/97/1/0                         who0 []            (22302,66836)..same              0x1a1/1    1118f44b
+20/115/1/1                        who0 []            (23056,66959)..same              0x1a1/1    119cf484
+23/133/0/0                        who1 [1,2,3,4]     (55125,13459)..same              0x1a1/1    119cf484
+23/133/1/1                        who0 []            (23071,66166)..same              0x1a1/1    119cf484
+26/151/1/0                        who0 []            (23078,65389)..same              0x1a1/1    48d2f51a
+27/157/0/0                        who1 []            (55173,12720)..same              0x1a1/1    48d2f51a
+32/187/0/1                        who1 []            (54388,12788)..(54347,12786)    0x1a1/1    53cbf553
 ```
 
-Therefore the synthetic `retail_fresh_groups()` state used by the adapter's execution test is
-evidence that the bounded host accepts real wire bytes, not evidence for retail's pre-pair Group
-pool. A substantive same-frame receipt must replay these packages and their following actions
-through canonical hosts first.
+Type `0x1a1` is Farm. Opcode 25 is construction placement: it is not opcode 24's production
+queue and does not debit the ordinary production queue/resource/counter transaction. The strict
+extractor retains the package checksum and presentation prefix/suffix, rejects every extra Sim
+command, and never executes the action. Therefore the synthetic `retail_fresh_groups()` state
+used by the adapter's execution test is evidence that the bounded host accepts real wire bytes,
+not evidence for retail's pre-pair Group pool. A substantive same-frame receipt must replay these
+packages, their Farm construction/link mutations, and the intervening frame processing first.
 
 ## The useful clear-pool comparison
 
@@ -109,6 +115,9 @@ the eventual Groups checksum.
 | `UnitData::is_modern_infantry` | `0x00607b40`, 113 bytes | join unit flags/age with Leader tech 0x12 |
 | `FormData::type_cat` | `0x0072dfc0`, 615 bytes | reuse the existing postload category owner; do not hardcode a category from the checksum target |
 | `Group::action_move_near` | `0x00704990`, 9,205 bytes | canonical Group host already owns the bounded transaction once authority is complete |
+| `Group::action_build` | `0x00707510`, 1,256 bytes | opcode 25 validates the selection/type, snaps and probes candidate sites, calls `Objects::init_build`, then delegates `action_swarm_around(..., BUILD_AT, 1)` |
+| `Group::action_swarm_around` | `0x0070fbe0`, 3,044 bytes | QueueLast appends an ungrouped MOVE_TO/EXPLORE_TO followed by a grouped BUILD_AT, clears Group form/disband, and clears target `BuildData::build_masks & 0x2000` |
+| `Objects::init_build` | `0x0065d190` | the existing canonical spawn owns registry identity only; Farm still needs the complete Build initializer, WData intrusive link and City building-chain join |
 | `CommandPackage::process_move_to` | `0x009497c0`, 421 bytes | real retail package provenance is already retained by `groups_sim_channel` |
 
 PDB sizes/offsets used by the projection are `UnitTypeData sizeof 1496`, `unit_flags +0x2b4`,
@@ -135,11 +144,17 @@ The shortest honest path is:
    `don-env::typecaps::FormationTypeCap` currently owns the postload category/spacing projection
    privately; the product hook should rehome or expose that owner rather than adding another TSV
    parser in replay.
-5. Replay every preceding Group package/action into `Sim.groups`. Only then install the authority
-   with `Sim::replace_group_move_authority` and call the already-landed
+5. Replay every preceding Group+opcode-25 package into the canonical Sim in serial/frame/play
+   order. Each successful Farm placement must join the exact `validate_build`, `snap_center`,
+   `blocked_site`, Build type, object UID, WData occupancy and City building-list authorities;
+   append MOVE_TO/EXPLORE_TO then BUILD_AT to every selected builder; and publish Group/cache,
+   Unit/order/path, Build/registry, World and City links atomically. Empty opcode-0 selections
+   reuse the play-keyed `(o,uid)` cache. Do not route this through production queue-up.
+6. Run the intervening canonical frames. Only then install the authority with
+   `Sim::replace_group_move_authority` and call the already-landed
    `groups_sim_channel::issue_replay_group_move` at the recorded frame.
-6. Compare the independent don-replay Group walk with the recorded package checksum. Until steps
-   2-5 are receipt-complete, scoreboard installation stays false.
+7. Compare the independent don-replay Group walk with the recorded package checksum. Until steps
+   2-6 are receipt-complete, scoreboard installation stays false.
 
 The stage map is therefore:
 
@@ -150,7 +165,10 @@ The stage map is therefore:
 | outer `Setup::build_units` call schedule | green owner exists; strict-witness type resolution not yet joined |
 | `place_unit` / `init_unit` real receipt | red |
 | exact Sim Unit state at frame 259 | red |
-| eight prior Group command/action transactions | red |
+| eight prior Group+opcode-25 chronology/provenance | green (`groups_build_history`) |
+| opcode-25 Farm Build initializer + WData/City links | red |
+| opcode-25 swarm MOVE_TO/EXPLORE_TO + BUILD_AT installer | red |
+| eight prior transactions plus intervening frame processing | red |
 | Handle-bound `GroupMoveAuthority` product adapter | red |
 | canonical pair execution + independent Group walk | green for caller-supplied state |
 | retail same-frame substantive comparison | red |
@@ -159,6 +177,7 @@ The stage map is therefore:
 
 ```sh
 cargo test -p don-replay --test groups_pre_pair_unit_authority -- --nocapture
+cargo test -p don-replay --test groups_build_history -- --nocapture
 
 tools/swarm-cargo-remote submit hbox groups-pre-pair-owner \
   --path crates/don-replay/src/groups_pre_pair_unit_authority.rs \
