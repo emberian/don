@@ -142,6 +142,8 @@ pub mod diplomacy_accept_host;
 /// Exact simulation/presentation split for the ordinary accepted-deal callbacks.
 pub mod diplomacy_deal_callbacks;
 pub mod diplomacy_declare_host;
+/// Digest- and identity-bound callback answers for alliance-revocation Unit ejection.
+pub mod diplomacy_ejection_authority;
 pub mod economy;
 /// Canonical fixed-`Groups` contract for economy/containment action transactions.
 pub mod economy_containment_group_host;

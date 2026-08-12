@@ -14,7 +14,6 @@ use super::canonical_diplomacy_host::{
     PrepareDiplomacyError, PreparedDiplomacyTransaction,
 };
 use super::leader_process_taunt;
-use super::leader_set_diplo::EjectionUnitFact;
 use super::leader_set_diplo::SetDiploAuthority;
 use super::sparse_object_bands_authority_frontier::RetailBand;
 use super::victory_score::VictoryType;
@@ -65,15 +64,9 @@ pub enum CanonicalDiplomacyRuntimeError {
         who: usize,
         band: RetailBand,
     },
-    DiplomacyUnitRowOutOfRange {
-        who: usize,
-        object_id: usize,
-        row: usize,
-    },
-    ContainedDiplomacyUnit {
-        who: usize,
-        object_id: usize,
-    },
+    ContainedEjectionAuthority(
+        super::diplomacy_ejection_authority::ContainedEjectionAuthorityError,
+    ),
     ArmyShape {
         who: usize,
         actual: usize,
@@ -136,18 +129,52 @@ impl CanonicalDiplomacyReceipt {
         }
     }
 
+    fn unavailable_prepared(
+        request: CanonicalDiplomacyRequest,
+        installed_facts: DiplomacyInstalledFacts,
+        prepared: PreparedDiplomacyTransaction,
+        authority: Vec<ExternalDiplomacyAuthority>,
+    ) -> Self {
+        Self {
+            request,
+            status: CanonicalDiplomacyStatus::Unavailable,
+            installed_facts: Some(installed_facts),
+            prepared: Some(prepared),
+            completed_authority: Vec::new(),
+            victory_receipts: Vec::new(),
+            defeat_cleanup: None,
+            error: Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)),
+        }
+    }
+
     pub fn validates(&self, expected: &CanonicalDiplomacyRequest) -> bool {
         if &self.request != expected {
             return false;
         }
         match self.status {
             CanonicalDiplomacyStatus::Unavailable => {
-                self.installed_facts.is_none()
-                    && self.prepared.is_none()
-                    && self.completed_authority.is_empty()
+                let common = self.completed_authority.is_empty()
                     && self.victory_receipts.is_empty()
-                    && self.defeat_cleanup.is_none()
-                    && self.error.is_some()
+                    && self.defeat_cleanup.is_none();
+                match (&self.installed_facts, &self.prepared, &self.error) {
+                    (None, None, Some(_)) => common,
+                    (
+                        Some(facts),
+                        Some(prepared),
+                        Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)),
+                    ) => {
+                        common
+                            && prepared.wire == expected.wire
+                            && authority == &prepared.required_external_authority
+                            && prepare_diplomacy_transaction(
+                                &prepared.before_owner,
+                                facts,
+                                &expected.wire,
+                            )
+                            .is_ok_and(|recomputed| recomputed == *prepared)
+                    }
+                    _ => false,
+                }
             }
             CanonicalDiplomacyStatus::Applied => {
                 let (Some(facts), Some(prepared)) = (&self.installed_facts, &self.prepared) else {
@@ -389,6 +416,11 @@ fn project_owner(sim: &Sim) -> Result<DiplomacyOwnerImage, CanonicalDiplomacyRun
         .as_ref()
         .map_or(-1, |players| players.console_who);
     owner.victory_mask = sim.vic_match.semaphore;
+    let ejection_units = sim
+        .diplomacy_authority
+        .contained_ejection
+        .project(&sim.world, sim.channel_digest())
+        .map_err(CanonicalDiplomacyRuntimeError::ContainedEjectionAuthority)?;
 
     for who in 0..NUM_LEADERS {
         let leader = &sim.vic_leaders.slots[who];
@@ -402,39 +434,6 @@ fn project_owner(sim: &Sim) -> Result<DiplomacyOwnerImage, CanonicalDiplomacyRun
             if sim.world.object_bands().mark(who, band) != Some(band.base()) {
                 return Err(CanonicalDiplomacyRuntimeError::NonEmptyObjectBand { who, band });
             }
-        }
-        let mut ejection_units = Vec::new();
-        for (object_id, row) in sim
-            .world
-            .objects
-            .slot(who)
-            .band(Band::Unit)
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            let row = row as usize;
-            if row >= sim.world.units.len() {
-                return Err(CanonicalDiplomacyRuntimeError::DiplomacyUnitRowOutOfRange {
-                    who,
-                    object_id,
-                    row,
-                });
-            }
-            if !crate::systems::air::is_on_map(sim.world.units.inside_up()[row]) {
-                return Err(CanonicalDiplomacyRuntimeError::ContainedDiplomacyUnit {
-                    who,
-                    object_id,
-                });
-            }
-            ejection_units.push(EjectionUnitFact {
-                object_id: object_id as i32,
-                is_unit: true,
-                carrier_who: None,
-                come_out_return: None,
-                domain: None,
-                has_air_patrol_order: None,
-            });
         }
         if sim.armies.lists[who].len() != super::leader_set_diplo::ARMY_SLOTS {
             return Err(CanonicalDiplomacyRuntimeError::ArmyShape {
@@ -451,7 +450,7 @@ fn project_owner(sim: &Sim) -> Result<DiplomacyOwnerImage, CanonicalDiplomacyRun
         owner.shared_vision[who] = leader.init_diplomacy.ally_mask;
         owner.valid_armies[who] =
             std::array::from_fn(|slot| sim.armies.lists[who][slot].valid != 0);
-        owner.ejection_units[who] = ejection_units;
+        owner.ejection_units[who] = ejection_units[who].clone();
         owner.leader_diplomacy[who] = CanonicalLeaderDiplomacyFields {
             response_314: leader.init_diplomacy.counteroffer,
             response_334: leader.init_diplomacy.tribute_demanded,
@@ -799,6 +798,16 @@ fn stage_victory_authority(
     if authority.is_empty() {
         return Ok(None);
     }
+    if authority
+        .iter()
+        .any(|call| !matches!(set_diplo_call(call), SetDiploAuthority::Victory { .. }))
+    {
+        // Preserve the whole instruction-ordered mutation cone for the next host. Returning
+        // only the first call would make a typed producer look more complete than it is.
+        return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
+            authority.to_vec(),
+        ));
+    }
     for call in authority {
         victory_request(call)?;
     }
@@ -927,13 +936,24 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let mut committed = before.clone();
             commit_diplomacy_transaction(&mut committed, &prepared, &completed_authority)
                 .map_err(CanonicalDiplomacyRuntimeError::Commit)?;
-            let staged_victory = stage_victory_authority(
+            let staged_victory = match stage_victory_authority(
                 self.sim,
                 &before,
                 &committed,
                 &prepared,
                 &completed_authority,
-            )?;
+            ) {
+                Ok(staged) => staged,
+                Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)) => {
+                    return Ok(CanonicalDiplomacyReceipt::unavailable_prepared(
+                        request.clone(),
+                        self.sim.diplomacy_authority.clone(),
+                        prepared,
+                        authority,
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
             if project_owner(self.sim)? != before {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }

@@ -183,6 +183,8 @@ pub struct DiplomacyInstalledFacts {
     pub num_allies: [Option<i32>; DIPLO_SLOTS],
     /// PDB `LeaderData::econ[6]` at `+0x450`; AI bookkeeping flags, not resource buckets.
     pub tribute_econ: [[Option<i32>; NUM_GOODS]; DIPLO_SLOTS],
+    /// Exact lazy callback answers for live contained Units. Reinstalled after load.
+    pub contained_ejection: super::diplomacy_ejection_authority::ContainedEjectionAuthority,
 }
 
 impl Default for DiplomacyInstalledFacts {
@@ -200,6 +202,7 @@ impl Default for DiplomacyInstalledFacts {
             team_members_mode_one: [None; DIPLO_SLOTS],
             num_allies: [None; DIPLO_SLOTS],
             tribute_econ: [[None; NUM_GOODS]; DIPLO_SLOTS],
+            contained_ejection: Default::default(),
         }
     }
 }

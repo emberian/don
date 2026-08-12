@@ -15,6 +15,9 @@ mod diplomacy_accept_host;
 mod diplomacy_deal_callbacks;
 #[path = "../src/systems/diplomacy_declare_host.rs"]
 mod diplomacy_declare_host;
+mod diplomacy_ejection_authority {
+    pub use don_sim::systems::diplomacy_ejection_authority::*;
+}
 #[path = "../src/systems/leader_set_diplo.rs"]
 mod leader_set_diplo;
 
@@ -67,6 +70,7 @@ fn complete_facts() -> DiplomacyInstalledFacts {
         team_members_mode_one: [Some(1); DIPLO_SLOTS],
         num_allies: [Some(0); DIPLO_SLOTS],
         tribute_econ: [[Some(4); NUM_GOODS]; DIPLO_SLOTS],
+        contained_ejection: Default::default(),
     }
 }
 

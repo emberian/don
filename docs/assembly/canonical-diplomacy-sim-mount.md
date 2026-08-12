@@ -16,7 +16,7 @@ whole-body planners; it does not introduce a second `ObjectTable` or `Leader` st
 | Shared vision | `vic_leaders.slots[who].init_diplomacy.ally_mask` | `shared_vision` |
 | Victory bit 22 | `Sim.vic_match.semaphore` | `victory_mask` |
 | Armies | `Sim.armies.lists[who][slot].valid` | `valid_armies` |
-| Object identity for diplomacy ejection | canonical `Sim.world` registry and its on-map Unit band; contained rows remain fail-closed | `ejection_units` |
+| Object identity for diplomacy ejection | canonical `Sim.world` registry plus transient digest/identity-bound callback authority for contained Units | `ejection_units` |
 
 Runtime query results—DOW costs, availability, tribute scale, console treaty, no-war gate, team
 counts, neutral classification, and shared-vision prerequisite—are installed revision-bound facts.
@@ -38,9 +38,13 @@ op41 aggregate image and executes the complete op38 or op41 planner over clones,
 5. replaces the caller's owner once.
 
 Missing or stale authority leaves resources, proposals, relations, vision, victory, armies, and
-objects unchanged. The shared Sim receiver still rejects `ComeOut`, `KillContainedUnit`,
-`AddAirStrafeOrder`, and `ForceArmyProcess` unless their complete staged host has been mounted;
-generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
+objects unchanged. A contained-Unit producer now binds `come_out(0)`, lazy type-domain, and lazy
+AIR_PATROL-query answers to the exact v17-reloaded Unit UID/type/generational identity, retail
+address, containment link, and channel digest. It exposes the complete instruction-ordered
+`ComeOut`/`KillContainedUnit`/`AddAirStrafeOrder` cone from a real opcode-38 packet. The shared Sim
+receiver still rejects those calls, and `ForceArmyProcess`, unless their complete staged host has
+been mounted. Generic Victory is admitted only through its canonical Leader/Match transaction and
+the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
 image, including its
 transposed positive-value tribute stamp and conditional gift stamp; even zero-valued goods emit
@@ -97,14 +101,19 @@ member order/path/leash fields, and the following exact `Unit::clear_orders` net
 together: orders and paths clear, facing latch `0x0400_0000` and defeat leash `0x0004_0000` are
 removed, and the empty action endpoint is rebuilt from current position/facing. A typed per-owner
 cleanup receipt records every stopped Army, Group, member, and Unit-band action. All owners and
-cleanup clones publish only after the diplomacy stale-owner CAS. Planes, contained Units, missing
-type/path facts, `ComeOut`, contained-unit kill/Strafe, or forced-army calls outside this Victory
-cleanup refuse before publication, so both static rows remain `StateWired`.
+cleanup clones publish only after the diplomacy stale-owner CAS. Planes, contained-Unit mutation
+calls, missing type/path facts, or forced-army calls outside this Victory cleanup refuse before
+publication, so both static rows remain `StateWired`. Opcode 41's ordinary accepted-deal roots use
+`max(accepted,current)`, while its attack-conflict preflight rejects attacks on either party's
+ally. The measured contained-ejection branch is therefore reached by opcode-38 alliance
+revocation, not manufactured through an impossible op41 downgrade.
 
-Focused status: the live opcode-38/opcode-41 runtime suite passes 10/10, including multi-opponent
-alliance Victory with empty cleanup, active-ground-Unit save/resume, and standing-Army
+Focused status: the live opcode-38/opcode-41 runtime suite passes 11/11 and includes a real opcode-38
+packet-to-v17-save/load-to-resume ejection projection covering success, failure/kill, and
+successful air/Strafe arms. It also covers multi-opponent alliance Victory with empty cleanup,
+active-ground-Unit save/resume, and standing-Army
 packet-to-v17-save/load-to-resume equality; plane and missing-type paths remain atomic refusals.
-the callback/aggregate
+The callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 46 private
 save/load tests pass. Opcodes 38/41 deliberately remain command-table red until the live Sim/Bridge

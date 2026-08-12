@@ -2,14 +2,19 @@
 
 use don_sim::command::diplomacy_command_plans::DiplomacyProposal;
 use don_sim::order::Order;
-use don_sim::systems::canonical_diplomacy_host::{DiplomacyInstalledFacts, PreparedDiplomacyPlan};
+use don_sim::systems::canonical_diplomacy_host::{
+    DiplomacyInstalledFacts, ExternalDiplomacyAuthority, PreparedDiplomacyPlan,
+};
 use don_sim::systems::canonical_diplomacy_runtime::{
     CanonicalDiplomacyRuntimeError, CanonicalDiplomacyStatus,
 };
 use don_sim::systems::defeat_cleanup;
 use don_sim::systems::diplomacy_accept_host::AcceptOutcome;
+use don_sim::systems::diplomacy_ejection_authority::{
+    ContainedEjectionAnswer, ContainedEjectionAuthority,
+};
 use don_sim::systems::groups_guys::{GroupData, Groups};
-use don_sim::systems::leader_set_diplo::Relation;
+use don_sim::systems::leader_set_diplo::{Relation, SetDiploAuthority};
 use don_sim::systems::movement::PathData;
 use don_sim::systems::player_setup::ManualPlayerSetup;
 use don_sim::systems::production::runtime::LiveProductionType;
@@ -44,6 +49,7 @@ fn complete_facts() -> DiplomacyInstalledFacts {
         team_members_mode_one: [Some(1); 8],
         num_allies: [Some(0); 8],
         tribute_econ: [[Some(4); 6]; 8],
+        contained_ejection: Default::default(),
     }
 }
 
@@ -176,6 +182,53 @@ fn install_defeated_ground_army(sim: &mut Sim) -> (usize, usize) {
     sim.armies.lists[4][5].num_groups = 1;
     sim.armies.lists[4][5].list[0] = group_id as i32;
     (row, group_id)
+}
+
+fn install_contained_ejection_roster(sim: &mut Sim) -> [ContainedEjectionAnswer; 3] {
+    for type_index in [100, 101, 102, 200] {
+        sim.production_runtime
+            .install_type(LiveProductionType::ordinary_unit(type_index, 1, 1));
+    }
+    let carrier = sim.spawn_unit(5, 200, 333, 444, 5).unwrap();
+    let carrier_row = sim.world.row_of(carrier).unwrap();
+    let carrier_object = sim.world.units.o()[carrier_row];
+    for type_index in [100, 101, 102] {
+        let unit = sim.spawn_unit(2, type_index, 111, 222, 2).unwrap();
+        let row = sim.world.row_of(unit).unwrap();
+        sim.world.units.inside_up_who_mut()[row] = 5;
+        sim.world.units.inside_up_mut()[row] = carrier_object;
+    }
+    [
+        ContainedEjectionAnswer {
+            owner: 2,
+            object_id: 0,
+            come_out_return: 0,
+            domain: Some(0),
+            has_air_patrol_order: None,
+        },
+        ContainedEjectionAnswer {
+            owner: 2,
+            object_id: 1,
+            come_out_return: 1,
+            domain: None,
+            has_air_patrol_order: None,
+        },
+        ContainedEjectionAnswer {
+            owner: 2,
+            object_id: 2,
+            come_out_return: 0,
+            domain: Some(2),
+            has_air_patrol_order: Some(false),
+        },
+    ]
+}
+
+fn install_ejection_authority(sim: &mut Sim, answers: &[ContainedEjectionAnswer]) {
+    let authority =
+        ContainedEjectionAuthority::capture(&sim.world, sim.channel_digest(), answers).unwrap();
+    let mut facts = complete_facts();
+    facts.contained_ejection = authority;
+    sim.replace_diplomacy_authority(facts);
 }
 
 fn with_large_stack(f: impl FnOnce() + Send + 'static) {
@@ -624,6 +677,108 @@ fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
         let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("stopped Army reloads");
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn alliance_revocation_projects_the_full_contained_ejection_cone_after_v17_resume() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_sim();
+        for (from, to) in [(2usize, 5usize), (5, 2)] {
+            uninterrupted.vic_leaders.slots[from].diplos[to] = Relation::Ally as i32;
+        }
+        let answers = install_contained_ejection_roster(&mut uninterrupted);
+        let checkpoint = save_sim(&uninterrupted).expect("contained Unit roster is savable");
+        assert_eq!(
+            u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
+            17
+        );
+        let mut resumed = load_sim(&checkpoint).expect("contained Unit roster reloads");
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let missing = resumed
+            .process_diplomacy_package(2, 0x2602, &declare(2, 5, Relation::Peace as i32))
+            .unwrap();
+        assert_eq!(missing.status, CanonicalDiplomacyStatus::Unavailable);
+        assert!(matches!(
+            missing.error,
+            Some(CanonicalDiplomacyRuntimeError::ContainedEjectionAuthority(
+                don_sim::systems::diplomacy_ejection_authority::ContainedEjectionAuthorityError::MissingAnswer {
+                    owner: 2,
+                    object_id: 0,
+                }
+            ))
+        ), "unexpected missing-authority receipt: {missing:#?}");
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
+
+        install_ejection_authority(&mut resumed, &answers);
+        install_ejection_authority(&mut uninterrupted, &answers);
+        let wire = declare(2, 5, Relation::Peace as i32);
+        let resumed_receipt = resumed.process_diplomacy_package(2, 0x2602, &wire).unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2602, &wire)
+            .unwrap();
+        let expected = vec![
+            ExternalDiplomacyAuthority::Declare(SetDiploAuthority::ComeOut {
+                owner: 2,
+                object_id: 0,
+            }),
+            ExternalDiplomacyAuthority::Declare(SetDiploAuthority::ComeOut {
+                owner: 2,
+                object_id: 1,
+            }),
+            ExternalDiplomacyAuthority::Declare(SetDiploAuthority::KillContainedUnit {
+                owner: 2,
+                object_id: 1,
+                reason: 0,
+            }),
+            ExternalDiplomacyAuthority::Declare(SetDiploAuthority::ComeOut {
+                owner: 2,
+                object_id: 2,
+            }),
+            ExternalDiplomacyAuthority::Declare(SetDiploAuthority::AddAirStrafeOrder {
+                owner: 2,
+                object_id: 2,
+                queue_pos: 2,
+            }),
+        ];
+        for receipt in [&resumed_receipt, &uninterrupted_receipt] {
+            assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
+            assert!(receipt.validates(&receipt.request));
+            assert!(receipt.installed_facts.is_some());
+            assert!(receipt.prepared.is_some());
+            assert!(receipt.completed_authority.is_empty());
+            assert_eq!(
+                receipt.error,
+                Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(
+                    expected.clone()
+                ))
+            );
+        }
+        let mut forged = resumed_receipt.clone();
+        let Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(calls)) = &mut forged.error
+        else {
+            unreachable!()
+        };
+        calls.swap(0, 1);
+        assert!(!forged.validates(&forged.request));
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
+        assert_eq!(save_sim(&uninterrupted).unwrap(), checkpoint);
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+
+        let mut stale = resumed.diplomacy_authority.clone();
+        stale.contained_ejection.units[0].uid ^= 1;
+        resumed.replace_diplomacy_authority(stale);
+        let stale_receipt = resumed.process_diplomacy_package(2, 0x2603, &wire).unwrap();
+        assert!(matches!(
+            stale_receipt.error,
+            Some(CanonicalDiplomacyRuntimeError::ContainedEjectionAuthority(
+                _
+            ))
+        ));
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
     });
 }
 
