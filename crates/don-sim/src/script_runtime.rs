@@ -20,6 +20,7 @@ use don_bhs::{
     Vm, VmError,
 };
 
+use crate::container::{EngineArray, INCREMENT_DOUBLE};
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use crate::systems::{
     bhs_create_unit_runtime::{
@@ -138,6 +139,16 @@ pub struct ScriptOutput {
 /// Number of `ScenarioData::find_counters` cells at `0x00CC2210`.
 pub const SCENARIO_FIND_COUNTER_COUNT: usize = 31;
 
+/// The checksum-walked payload of one `ScenarioRevealPoint` object. Retail's object
+/// carries a vtable before these three words; the vtable is process-local identity and
+/// is not part of the persistent/checksum payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScenarioRevealPoint {
+    pub x: i32,
+    pub y: i32,
+    pub radius: i32,
+}
+
 /// The scalar `ScenarioData` policy state currently owned by the script host.
 ///
 /// `ScenarioData::pop_cap[8]` lives at `0x00cc21f0`. Retail reset paths at
@@ -145,13 +156,19 @@ pub const SCENARIO_FIND_COUNTER_COUNT: usize = 31;
 /// calls because later `Leader::calc_pop_cap` invocations reread it. It sits exactly at
 /// the end of the ranges covered by `ScenarioData::walk_data`, so it is authoritative
 /// scenario configuration but not a checksum-channel field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioDataState {
     pub population_caps: [i32; 8],
     /// Rotating object-search cursors. Unlike `pop_cap`, these cells are inside
     /// `ScenarioData::walk_data` and therefore checksum-visible. Builtin 357 owns cell 30
     /// at `0x00CC2288`.
     pub find_counters: [i32; SCENARIO_FIND_COUNTER_COUNT],
+    /// `ScenarioData::ally_mask[8]` at `0x00CC21B8`, mirrored by each source
+    /// `LeaderData::ally_mask` when BHS add/remove-visibility succeeds.
+    pub ally_masks: [u8; 8],
+    /// `ObjectArray<ScenarioRevealPoint>[8]` at `0x00ED63F0`. The constructor at
+    /// `0x004131C0` creates each array at capacity zero with doubling growth.
+    pub reveal_points: [EngineArray<ScenarioRevealPoint>; 8],
 }
 
 impl Default for ScenarioDataState {
@@ -159,7 +176,34 @@ impl Default for ScenarioDataState {
         Self {
             population_caps: [-1; 8],
             find_counters: [-1; SCENARIO_FIND_COUNTER_COUNT],
+            ally_masks: [0; 8],
+            reveal_points: std::array::from_fn(|_| EngineArray::with_size(0, INCREMENT_DOUBLE)),
         }
+    }
+}
+
+impl ScenarioDataState {
+    /// Exact walked fields currently owned by this tranche. `population_caps` ends at
+    /// the walk boundary and is deliberately excluded.
+    pub fn walked_owned_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in self.find_counters {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&self.ally_masks);
+        for points in &self.reveal_points {
+            let (length, size, increment, flags) = points.checksum_header();
+            out.extend_from_slice(&length.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&increment.to_le_bytes());
+            out.push(flags);
+            for point in points.as_slice() {
+                out.extend_from_slice(&point.x.to_le_bytes());
+                out.extend_from_slice(&point.y.to_le_bytes());
+                out.extend_from_slice(&point.radius.to_le_bytes());
+            }
+        }
+        out
     }
 }
 
@@ -789,6 +833,39 @@ impl Sim {
     fn active_script_leader(&self, who: i32) -> Option<usize> {
         let who = self.in_game_script_leader(who)?;
         (self.step8.leaders[who].flags & leaders::flag::PROCESS != 0).then_some(who)
+    }
+
+    /// `ScenarioFuncSet::add_reveal_point` `0x009E4750`.
+    fn script_add_reveal_point(&mut self, who: i32, x: i32, y: i32, radius: i32) -> i32 {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(leader) = self.vic_leaders.slots.get(who) else {
+            return -1;
+        };
+        if !leader.is_active()
+            || x < 0
+            || y < 0
+            || x >= self.map.world.tile_xs
+            || y >= self.map.world.tile_ys
+            || radius <= 0
+        {
+            return -1;
+        }
+        self.scenario_data.reveal_points[who].add(ScenarioRevealPoint { x, y, radius });
+        1
+    }
+
+    /// `ScenarioFuncSet::clear_reveal_points` `0x009E4810`. `ObjectArray::clear`
+    /// resets length only; its capacity, doubling hint, and flags survive.
+    fn script_clear_reveal_points(&mut self, who: i32) -> i32 {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(leader) = self.vic_leaders.slots.get(who) else {
+            return -1;
+        };
+        if !leader.is_active() {
+            return -1;
+        }
+        self.scenario_data.reveal_points[who].clear();
+        1
     }
 
     /// `ScenarioFuncSet::set_explored(who,x,y,radius)` `0x009e44b0`.
@@ -1828,6 +1905,23 @@ impl ScenarioHost for Sim {
             75 => Ok(Value::Int(
                 self.script_set_show_all(args[0].as_int(), false),
             )),
+            70 => Ok(Value::Int(self.script_add_reveal_point(
+                args[0].as_int(),
+                args[1].as_int(),
+                args[2].as_int(),
+                args[3].as_int(),
+            ))),
+            71 => Ok(Value::Int(
+                self.script_clear_reveal_points(args[0].as_int()),
+            )),
+            691 => self
+                .scenario_set_visibility(args[0].as_int(), args[1].as_int(), true)
+                .map(Value::Int)
+                .map_err(|_| HostError::Unimplemented),
+            692 => self
+                .scenario_set_visibility(args[0].as_int(), args[1].as_int(), false)
+                .map(Value::Int)
+                .map_err(|_| HostError::Unimplemented),
             // `map_is_land` `0x009e4d90`: bounds against tile dimensions, then
             // `(low_byte(tdata[y * tile_xs + x]) & 0x30) != 0x20`.
             83 => {

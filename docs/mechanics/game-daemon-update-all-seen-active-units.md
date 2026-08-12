@@ -10,8 +10,9 @@ true before `GameDaemon::busy` or a World plane changes:
 1. every active owner's canonical sparse Build band starts at 2000 and resolves each retained
    slot to the exact save-owned `BuildData {who,o}` row, while its dedicated Wall mark remains
    the retail-empty `[3000,3000)` band;
-2. neither `Game+0x821 bit 4` nor `Game+0x822 bit 1` enables scenario reveal points;
-3. frame is nonzero, so the frame-zero alliance explored-sharing tail is unreachable;
+2. when `Game+0x821 bit 4` or `Game+0x822 bit 1` enables scenario reveal points, the
+   canonical eight-array owner and exact VALID leader slice are present;
+3. frame-zero alliance explored sharing has its canonical leader/options context;
 4. invalid retained Build rows take the PE's two false validity virtuals and skip; each valid
    incomplete row resolves its canonical current type through `LiveProductionRuntime`, and an
    ordinary non-Wonder or an unstarted Wonder takes the PE's exact no-visibility return;
@@ -61,8 +62,8 @@ The executed stage map is:
 | `Object::update_seen(0)` `0x00651B80` | run the Build type preamble, then stamp Builds before Units using each exact resolved LOS, centre, detector prefix, full circle-table order, and infiltrated `set_was_seen` suffix |
 | `Unit::update_local_seen` `0x0060E410` | when Unit `visible` is nonzero, walk `circle_radius[UnitTypeData::x_size]` from the original position and stamp that exact mask before the ordinary disc |
 | `World::reveal_fog` `0x006B3D30` | retain exact call chronology; all calls take the preflight-proven no-effect path |
-| scenario reveal points | skip because both exact Game gates are clear |
-| frame-zero sharing | skip because scheduled phase 33 is nonzero |
+| scenario reveal points | when enabled, stamp the first canonical point array for every VALID leader, preserving retail's repeated-array-zero quirk |
+| frame-zero sharing | execute for direct frame-zero routes; scheduled phase 33 skips |
 
 Preflight clones persistent `seen2` to reproduce Build/Unit local-seen exploration and the
 exact later first-exploration chronology. It validates every local-seen cell, reached
@@ -99,9 +100,10 @@ introduced.
 
 ## Remaining red boundary
 
-The gap remains red. A nonempty dedicated Wall band, effectful reveal, scenario reveal-point
-pass, the non-`Game::run` direct routes, or incremental entry fails closed. `Game::run`'s
-frame-zero explored sharing is mounted separately on the same transaction in
+The gap remains red. A nonempty dedicated Wall band, effectful reveal, `Build::close`,
+`set_explored_show_buildings`, or incremental entry fails closed. The paired
+`add_visibility`/`remove_visibility` routes and scenario reveal-point pass are mounted in
+`scenario-visibility-direct.md`; `Game::run`'s frame-zero explored sharing is mounted in
 `game-daemon-update-all-seen-frame-zero.md`. Missing current Build type, reached footprint/fort
 facts, or Unit local radius also refuses atomically rather than inventing an ordinary row.
 Those remaining bodies need their complete canonical owners and the same

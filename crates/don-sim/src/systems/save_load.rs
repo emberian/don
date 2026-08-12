@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use crate::container::EngineArray;
 use crate::generated::state::unit::{UnitCols, W1_PLANES, W2_PLANES, W4_PLANES, WF_PLANES};
 use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
@@ -19,7 +20,7 @@ use crate::order::{
     FollowOrderPayload, FormOrderState, MoveOrderState, Order, OrderIndex, OrderList,
     SpecialAnimOrderState, SpecialAnimType,
 };
-use crate::script_runtime::ScriptRuntime;
+use crate::script_runtime::{ScenarioDataState, ScenarioRevealPoint, ScriptRuntime};
 use crate::systems::{
     air_runtime_authority::{
         self, AirOrderPayload, AirPatrolOrderPayload, WalkedCoordArray, MAX_DECODED_PATROL_POINTS,
@@ -64,7 +65,9 @@ const SCENARIO_IGNORES_FORMAT_VERSION: u32 = 15;
 const FARMS_FORMAT_VERSION: u32 = 16;
 /// First version persisting the exact canonical eight-by-sixteen Armies owner.
 const ARMIES_FORMAT_VERSION: u32 = 17;
-const FORMAT_VERSION: u32 = ARMIES_FORMAT_VERSION;
+/// First version persisting checksum-owned ScenarioData ally masks and reveal arrays.
+const SCENARIO_DATA_FORMAT_VERSION: u32 = 18;
+const FORMAT_VERSION: u32 = SCENARIO_DATA_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -161,8 +164,9 @@ const DIPLOMACY: u16 = 0x000c;
 const SCENARIO_IGNORES: u16 = 0x000d;
 const FARMS: u16 = 0x000e;
 const ARMIES: u16 = 0x000f;
+const SCENARIO_DATA: u16 = 0x0010;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 15] = [
+const REQUIRED: [u16; 16] = [
     CORE,
     MAP,
     OBJECTS,
@@ -178,11 +182,13 @@ const REQUIRED: [u16; 15] = [
     SCENARIO_IGNORES,
     FARMS,
     ARMIES,
+    SCENARIO_DATA,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        ARMIES_FORMAT_VERSION => &REQUIRED,
+        SCENARIO_DATA_FORMAT_VERSION => &REQUIRED,
+        ARMIES_FORMAT_VERSION => &REQUIRED[..15],
         FARMS_FORMAT_VERSION => &REQUIRED[..14],
         SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED[..13],
         DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..12],
@@ -3184,6 +3190,71 @@ fn read_player_setup(data: &[u8]) -> Result<Option<PlayerSetupSaveState>, SaveEr
     }))
 }
 
+fn write_scenario_data(state: &ScenarioDataState) -> Result<Vec<u8>, SaveError> {
+    let mut w = Writer::default();
+    for value in state.population_caps {
+        w.i32(value);
+    }
+    for value in state.find_counters {
+        w.i32(value);
+    }
+    for mask in state.ally_masks {
+        w.u8(mask);
+    }
+    for points in &state.reveal_points {
+        let (length, size, increment, flags) = points.checksum_header();
+        w.u32(u32::try_from(length).map_err(|_| SaveError::Limit("scenario reveal points"))?);
+        w.i32(size);
+        w.i16(increment);
+        w.u8(flags);
+        for point in points.as_slice() {
+            w.i32(point.x);
+            w.i32(point.y);
+            w.i32(point.radius);
+        }
+    }
+    Ok(w.0)
+}
+
+fn read_scenario_data(data: &[u8]) -> Result<ScenarioDataState, SaveError> {
+    const MAX_REVEAL_POINTS: usize = 1 << 20;
+    let mut r = Reader::new(data);
+    let mut state = ScenarioDataState::default();
+    for value in &mut state.population_caps {
+        *value = r.i32()?;
+    }
+    for value in &mut state.find_counters {
+        *value = r.i32()?;
+    }
+    for mask in &mut state.ally_masks {
+        *mask = r.u8()?;
+    }
+    for slot in 0..state.reveal_points.len() {
+        let length = r.u32()? as usize;
+        if length > MAX_REVEAL_POINTS {
+            return Err(SaveError::Limit("scenario reveal points"));
+        }
+        let size = r.i32()?;
+        let increment = r.i16()?;
+        let flags = r.u8()?;
+        if size < 0 || length > size as usize {
+            return Err(SaveError::Invalid("scenario reveal-point array header"));
+        }
+        let mut points = EngineArray::with_size(size, increment);
+        points.set_flags(flags);
+        for _ in 0..length {
+            points.add(ScenarioRevealPoint {
+                x: r.i32()?,
+                y: r.i32()?,
+                radius: r.i32()?,
+            });
+        }
+        state.reveal_points[slot] = points;
+    }
+    r.finish()?;
+    Ok(state)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CoreState {
     format_version: u32,
@@ -3374,6 +3445,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             ),
             Chunk::leaf(FARMS, write_farms(&sim.farms)?),
             Chunk::leaf(ARMIES, armies::write(&sim.armies, &sim.groups)?),
+            Chunk::leaf(SCENARIO_DATA, write_scenario_data(&sim.scenario_data)?),
         ],
     )
     .encode()?;
@@ -3513,6 +3585,13 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         }
         _ => return Err(SaveError::Invalid("Armies section version")),
     };
+    let scenario_data = match sections[15] {
+        Some(data) if core.format_version >= SCENARIO_DATA_FORMAT_VERSION => {
+            read_scenario_data(data)?
+        }
+        None if core.format_version < SCENARIO_DATA_FORMAT_VERSION => ScenarioDataState::default(),
+        _ => return Err(SaveError::Invalid("ScenarioData section version")),
+    };
     validate_farm_bindings(&builds, &farms)?;
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
@@ -3587,6 +3666,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.command_package_state = command_state;
     sim.diplomacy = diplomacy;
     sim.scenario_ignore_orders = scenario_ignore_orders;
+    sim.scenario_data = scenario_data;
     sim.farms = farms;
     if let Some(state) = leader_match {
         leader_match::restore(&mut sim, state)?;
@@ -3705,6 +3785,49 @@ mod tests {
         sim.map.fog.leaders[2].player_mask = 4;
         sim.map.fog.leaders[2].reveal_counter = 3;
         sim
+    }
+
+    #[test]
+    fn scenario_data_v18_roundtrips_walked_array_metadata_and_digest() {
+        let mut original = supported_sim();
+        let pristine_digest = original.channel_digest();
+        original.scenario_data.population_caps[0] = 321;
+        original.scenario_data.find_counters[30] = 17;
+        original.scenario_data.ally_masks[0] = 0b0000_0110;
+        original.scenario_data.reveal_points[0].add(ScenarioRevealPoint {
+            x: 9,
+            y: 11,
+            radius: 5,
+        });
+        original.scenario_data.reveal_points[0].set_flags(0x20);
+        original.scenario_data.reveal_points[3].add(ScenarioRevealPoint {
+            x: 3,
+            y: 7,
+            radius: 2,
+        });
+        let digest = original.channel_digest();
+        assert_ne!(digest, pristine_digest);
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+
+        assert_eq!(loaded.scenario_data, original.scenario_data);
+        assert_eq!(loaded.channel_digest(), digest);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+        assert_eq!(
+            loaded.scenario_data.reveal_points[0].checksum_header(),
+            (1, 4, -1, 0x20)
+        );
+    }
+
+    #[test]
+    fn v17_stream_restores_the_exact_fresh_scenario_data_owner() {
+        let original = supported_sim();
+        let legacy = prior_format_stream(&original, ARMIES_FORMAT_VERSION);
+        let loaded = load_sim(&legacy).unwrap();
+
+        assert_eq!(loaded.scenario_data, ScenarioDataState::default());
+        assert_eq!(prior_format_stream(&loaded, ARMIES_FORMAT_VERSION), legacy);
     }
 
     fn section_offset(bytes: &[u8], id: u16) -> usize {
@@ -4275,7 +4398,7 @@ mod tests {
         let bytes = save_sim(&original).unwrap();
         assert_eq!(
             u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
-            ARMIES_FORMAT_VERSION
+            FORMAT_VERSION
         );
         let loaded = load_sim(&bytes).unwrap();
         assert_eq!(loaded.armies.lists[2][3].image(), expected_image);
@@ -4542,6 +4665,7 @@ mod tests {
                         | SCENARIO_IGNORES
                         | FARMS
                         | ARMIES
+                        | SCENARIO_DATA
                 )
             })
             .map(|child| {
@@ -4594,6 +4718,7 @@ mod tests {
                         | SCENARIO_IGNORES
                         | FARMS
                         | ARMIES
+                        | SCENARIO_DATA
                 )
             })
             .map(|child| {

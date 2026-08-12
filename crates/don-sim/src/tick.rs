@@ -790,6 +790,15 @@ pub enum GameRunVisibilityError {
     Preflight(step12_visibility_runtime::Step12VisibilityPreflightError),
 }
 
+/// Fail-closed boundary for BHS `add_visibility` / `remove_visibility`. Retail stores
+/// both ally-mask mirrors before its immediate visibility refresh; this port preflights
+/// the complete reached producer first so a missing child cannot leave half a command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScenarioVisibilityError {
+    GameFrameMismatch { world: i32, game: i32 },
+    Preflight(step12_visibility_runtime::Step12VisibilityPreflightError),
+}
+
 /// A world plus the state its tick needs, and the executable `Game::do_frame`.
 ///
 /// Deliberately not `Clone`: `movement::PathFinder` owns search containers that are scratch
@@ -921,9 +930,8 @@ pub struct Sim {
     pub last_strafe_error: Option<canonical_strafe_runtime::CanonicalStrafeRuntimeError>,
     /// Most recent atomic step-11 transaction. The receipt is diagnostic; its after-image is
     /// committed to the canonical `victory_score::LeaderState` fields below this boundary.
-    pub last_strategy_receipt: Option<
-        crate::systems::leader_production_ai::strategy_runtime::StrategyTransactionReceipt,
-    >,
+    pub last_strategy_receipt:
+        Option<crate::systems::leader_production_ai::strategy_runtime::StrategyTransactionReceipt>,
     pub last_strategy_error:
         Option<crate::systems::leader_production_ai::strategy_runtime::StrategyRuntimeError>,
     /// Most recent canonical AIR_PATROL commit or refusal. The order/path/Unit/RNG owners
@@ -1400,6 +1408,7 @@ fn commit_prepared_visibility(
                 .saturating_add(trace.build_local_seen_cells as u32)
                 .saturating_add(trace.unit_local_seen_cells as u32)
                 .saturating_add(trace.unit_stamps as u32)
+                .saturating_add(trace.scenario_seen_cells as u32)
                 .saturating_add(trace.reveal_no_effect_calls as u32)
                 .saturating_add(trace.frame_zero_share_groups as u32)
                 .saturating_add(trace.frame_zero_explored_cell_writes as u32)
@@ -1611,8 +1620,8 @@ impl Sim {
             groups: crate::systems::canonical_group_move_host::retail_fresh_groups(),
             command_package_state:
                 crate::systems::canonical_group_move_host::CommandPackageState::default(),
-            diplomacy:
-                crate::systems::canonical_diplomacy_host::DiplomacyPersistentState::default(),
+            diplomacy: crate::systems::canonical_diplomacy_host::DiplomacyPersistentState::default(
+            ),
             diplomacy_authority:
                 crate::systems::canonical_diplomacy_host::DiplomacyInstalledFacts::default(),
             group_move_authority:
@@ -1988,7 +1997,9 @@ impl Sim {
         crate::systems::canonical_guard_runtime::CanonicalGuardError,
     > {
         use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
-        use crate::systems::canonical_guard_runtime::{commit_guard_package, prepare_guard_package};
+        use crate::systems::canonical_guard_runtime::{
+            commit_guard_package, prepare_guard_package,
+        };
         let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
             self.players.as_ref().and_then(|players| {
                 let row = players.players[slot];
@@ -3500,6 +3511,15 @@ impl Sim {
                 builds: &self.builds,
                 production: &self.production_runtime,
                 scenario_reveal_points_enabled,
+                scenario_reveal_points: scenario_reveal_points_enabled.then_some(
+                    step12_visibility_runtime::ScenarioRevealPointContext {
+                        leaders: &self.vic_leaders.slots,
+                        points: &self.scenario_data.reveal_points,
+                    },
+                ),
+                authorized_direct: Some(
+                    step12_visibility_runtime::AuthorizedDirectVisibilityRoute::GameRun,
+                ),
                 frame_zero_sharing: Some(
                     step12_visibility_runtime::FrameZeroExploredSharingContext {
                         leaders: &self.vic_leaders.slots,
@@ -3520,6 +3540,103 @@ impl Sim {
         self.game_daemon.busy = busy;
         self.step12_visibility_error = None;
         Ok(work)
+    }
+
+    /// Exact simulation-visible transaction shared by
+    /// `ScenarioFuncSet::{add,remove}_visibility` (`0x009FC710` / `0x009FC7B0`).
+    pub fn scenario_set_visibility(
+        &mut self,
+        source: i32,
+        target: i32,
+        enabled: bool,
+    ) -> Result<i32, ScenarioVisibilityError> {
+        let source = source.wrapping_sub(1) as u32 as usize;
+        let target = target.wrapping_sub(1) as u32 as usize;
+        let Some(source_leader) = self.vic_leaders.slots.get(source) else {
+            return Ok(-1);
+        };
+        let Some(target_leader) = self.vic_leaders.slots.get(target) else {
+            return Ok(-1);
+        };
+        if !source_leader.is_active() || !target_leader.is_active() {
+            return Ok(-1);
+        }
+        if self.world.frame != self.vic_match.frame {
+            return Err(ScenarioVisibilityError::GameFrameMismatch {
+                world: self.world.frame,
+                game: self.vic_match.frame,
+            });
+        }
+
+        let target_mask = 1u8 << target;
+        let mut candidate_leaders = self.vic_leaders.slots.clone();
+        if enabled {
+            candidate_leaders[source].init_diplomacy.ally_mask |= target_mask;
+        } else {
+            candidate_leaders[source].init_diplomacy.ally_mask &= !target_mask;
+        }
+        let trigger = if enabled {
+            step12_visibility_producer_frontier::Step12VisibilityTrigger::ScenarioAddVisibility
+        } else {
+            step12_visibility_producer_frontier::Step12VisibilityTrigger::ScenarioRemoveVisibility
+        };
+        let leader_active = std::array::from_fn(|who| self.leaders[who].active);
+        let scenario_reveal_points_enabled = self.vic_match.sem(victory_score::game_sem::PLAYBACK)
+            || self.vic_match.sem(victory_score::game_sem::SCENARIO_RULES);
+        let prepared = self.step12_visibility.preflight_full_producer(
+            &self.world,
+            &self.unit_type,
+            leader_active,
+            self.map.fog.option.0,
+            trigger,
+            Some(step12_visibility_runtime::ScheduledActiveProducerContext {
+                terrain: &self.map.world,
+                circle: &self.map.circle,
+                builds: &self.builds,
+                production: &self.production_runtime,
+                scenario_reveal_points_enabled,
+                scenario_reveal_points: scenario_reveal_points_enabled.then_some(
+                    step12_visibility_runtime::ScenarioRevealPointContext {
+                        leaders: &candidate_leaders,
+                        points: &self.scenario_data.reveal_points,
+                    },
+                ),
+                authorized_direct: Some(if enabled {
+                    step12_visibility_runtime::AuthorizedDirectVisibilityRoute::ScenarioAddVisibility
+                } else {
+                    step12_visibility_runtime::AuthorizedDirectVisibilityRoute::ScenarioRemoveVisibility
+                }),
+                frame_zero_sharing: Some(
+                    step12_visibility_runtime::FrameZeroExploredSharingContext {
+                        leaders: &candidate_leaders,
+                        starting_resources: self.vic_match.options.starting_resources,
+                    },
+                ),
+            }),
+        );
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.step12_visibility_error = Some(error.clone());
+                return Err(ScenarioVisibilityError::Preflight(error));
+            }
+        };
+
+        // All reached object/scenario/reveal effects are now known to succeed. Commit
+        // the two retail mirrors, then execute the prepared refresh without another
+        // fallible branch.
+        if enabled {
+            self.scenario_data.ally_masks[source] |= target_mask;
+        } else {
+            self.scenario_data.ally_masks[source] &= !target_mask;
+        }
+        self.vic_leaders.slots[source].init_diplomacy.ally_mask =
+            candidate_leaders[source].init_diplomacy.ally_mask;
+        let mut busy = self.game_daemon.busy;
+        commit_prepared_visibility(self, &mut busy, prepared, 0);
+        self.game_daemon.busy = busy;
+        self.step12_visibility_error = None;
+        Ok(1)
     }
 
     /// `GameDaemon::process_all` `0x00732700` — `process_victory`, `calc_danger`,
@@ -3550,6 +3667,13 @@ impl Sim {
                     builds: &self.builds,
                     production: &self.production_runtime,
                     scenario_reveal_points_enabled,
+                    scenario_reveal_points: scenario_reveal_points_enabled.then_some(
+                        step12_visibility_runtime::ScenarioRevealPointContext {
+                            leaders: &self.vic_leaders.slots,
+                            points: &self.scenario_data.reveal_points,
+                        },
+                    ),
+                    authorized_direct: None,
                     frame_zero_sharing: None,
                 }),
             )
@@ -5179,6 +5303,7 @@ impl Sim {
             mix(adler32(1, &b.image()));
         }
         mix(adler32(1, &self.farms.walked_image()));
+        mix(adler32(1, &self.scenario_data.walked_owned_bytes()));
         // `check_groups` `0x00937530`. Without this the digest is blind to a group desync,
         // so every determinism test built on it — including save/load resume — could pass
         // across a diverged group pool. Requested as HOOK NEEDED by the save_load lane,

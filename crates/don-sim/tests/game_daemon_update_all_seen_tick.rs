@@ -2,6 +2,7 @@
 //! paths through `GameDaemon::update_all_seen` `0x00732840`.
 
 use don_sim::objects::BUILD_BAND_BASE;
+use don_sim::script_runtime::ScenarioRevealPoint;
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::step12_visibility_runtime::{
     ActiveUnitProducerFault, RevealFogNoEffectBlocker, Step12VisibilityAuthority,
@@ -16,8 +17,9 @@ use don_sim::systems::{
         runtime::{LiveBuildVisibilityTypeFacts, LiveProductionType},
         Footprint,
     },
+    victory_score,
 };
-use don_sim::tick::{GameRunVisibilityError, Gap, Sim, StepRun};
+use don_sim::tick::{GameRunVisibilityError, Gap, ScenarioVisibilityError, Sim, StepRun};
 
 fn advance_to_phase_33(sim: &mut Sim) {
     while sim.world.frame < 33 {
@@ -32,6 +34,105 @@ fn seed_fog_planes(sim: &mut Sim) -> Vec<u8> {
     sim.map.world.seen3.fill(0xc4);
     sim.map.world.wcoord_seen.fill(0x38);
     sim.map.world.seen2.clone()
+}
+
+fn scenario_visibility_pair() -> Sim {
+    let mut sim = Sim::new(0x9fc7_10, 8);
+    sim.activate(0);
+    sim.activate(1);
+    sim.world.frame = 7;
+    sim.vic_match.frame = 7;
+    sim.vic_match
+        .set_sem(victory_score::game_sem::SCENARIO_RULES);
+    sim.scenario_data.reveal_points[0].add(ScenarioRevealPoint {
+        x: 8,
+        y: 8,
+        radius: 2,
+    });
+    sim
+}
+
+#[test]
+fn scenario_visibility_direct_routes_stamp_first_array_for_every_valid_leader() {
+    let mut sim = scenario_visibility_pair();
+    sim.map.world.seen.fill(0x55);
+    sim.map.world.seen2.fill(0);
+    sim.map.world.seen3.fill(0xaa);
+
+    assert_eq!(sim.scenario_set_visibility(1, 2, true).unwrap(), 1);
+    assert_eq!(sim.scenario_data.ally_masks[0], 0b10);
+    assert_eq!(sim.vic_leaders.slots[0].init_diplomacy.ally_mask, 0b10);
+    let center = sim.map.world.f_index(4, 4);
+    assert_eq!(sim.map.world.seen[center] & 0b11, 0b11);
+    assert_eq!(sim.map.world.seen2[center] & 0b11, 0b11);
+    assert_eq!(sim.map.world.seen3[center], 0);
+
+    assert_eq!(sim.scenario_set_visibility(1, 2, false).unwrap(), 1);
+    assert_eq!(sim.scenario_data.ally_masks[0], 0);
+    assert_eq!(sim.vic_leaders.slots[0].init_diplomacy.ally_mask, 0);
+}
+
+#[test]
+fn scenario_visibility_invalid_and_effectful_paths_are_atomic() {
+    let mut sim = scenario_visibility_pair();
+    let digest = sim.channel_digest();
+    assert_eq!(sim.scenario_set_visibility(1, 9, true).unwrap(), -1);
+    assert_eq!(sim.channel_digest(), digest);
+
+    sim.map.world.tdata.fill(tflag::RESOURCE);
+    let daemon = sim.game_daemon;
+    let seen = sim.map.world.seen.clone();
+    let seen2 = sim.map.world.seen2.clone();
+    let masks = sim.scenario_data.ally_masks;
+    let error = sim.scenario_set_visibility(1, 2, true).unwrap_err();
+    assert!(matches!(
+        error,
+        ScenarioVisibilityError::Preflight(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::RevealFogEffectful {
+                blocker: RevealFogNoEffectBlocker::ResourceTile,
+                ..
+            }
+        ))
+    ));
+    assert_eq!(sim.game_daemon, daemon);
+    assert_eq!(sim.map.world.seen, seen);
+    assert_eq!(sim.map.world.seen2, seen2);
+    assert_eq!(sim.scenario_data.ally_masks, masks);
+    assert_eq!(sim.vic_leaders.slots[0].init_diplomacy.ally_mask, 0);
+}
+
+#[test]
+fn scenario_visibility_save_reload_resumes_with_identical_after_image() {
+    let mut original = Sim::new(0x9fc7_b0, 8);
+    let mut setup = ManualPlayerSetup {
+        active_mask: 0b11,
+        local_player_setup_slot: 0,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[0] = 0;
+    setup.teams[1] = 1;
+    original.start_manual_player_setup(setup).unwrap();
+    original
+        .vic_match
+        .set_sem(victory_score::game_sem::SCENARIO_RULES);
+    original.scenario_data.reveal_points[0].add(ScenarioRevealPoint {
+        x: 8,
+        y: 8,
+        radius: 2,
+    });
+    original.scenario_set_visibility(1, 2, true).unwrap();
+
+    let saved = save_sim(&original).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    assert_eq!(resumed.scenario_data, original.scenario_data);
+    assert_eq!(resumed.channel_digest(), original.channel_digest());
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+
+    original.scenario_set_visibility(1, 2, false).unwrap();
+    resumed.scenario_set_visibility(1, 2, false).unwrap();
+    assert_eq!(resumed.channel_digest(), original.channel_digest());
+    assert_eq!(resumed.map.world.checksum(), original.map.world.checksum());
+    assert_eq!(save_sim(&resumed).unwrap(), save_sim(&original).unwrap());
 }
 
 #[test]

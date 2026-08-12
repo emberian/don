@@ -5,7 +5,8 @@ use don_bhs_cc::sema::{self, Severity};
 use don_sim::order::Order;
 use don_sim::rng::Random;
 use don_sim::script_runtime::{
-    ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
+    ScenarioRevealPoint, ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput,
+    ScriptRuntime, ScriptSlot,
 };
 use don_sim::systems::{
     economy, leaders,
@@ -167,6 +168,71 @@ fn position_to_stockpile_program() -> Program {
 
 fn game_runtime(program: Program) -> ScriptRuntime {
     ScriptRuntime::new(program, Some(ScriptBinding::new(0, "game_tick")), None).unwrap()
+}
+
+#[test]
+fn reveal_point_builtins_preserve_retail_empty_array_growth_and_clear_metadata() {
+    let mut sim = Sim::new(0x9e47_50, 8);
+    sim.activate(0);
+    let mut add = game_runtime(one_builtin_program(
+        "add_reveal_point",
+        &[Value::Int(1), Value::Int(8), Value::Int(10), Value::Int(3)],
+    ));
+
+    sim.do_frame_with_scripts(&mut add).unwrap();
+    assert_eq!(
+        sim.scenario_data.reveal_points[0].as_slice(),
+        &[ScenarioRevealPoint {
+            x: 8,
+            y: 10,
+            radius: 3,
+        }]
+    );
+    assert_eq!(
+        sim.scenario_data.reveal_points[0].checksum_header(),
+        (1, 4, -1, 0)
+    );
+
+    let mut clear = game_runtime(one_builtin_program("clear_reveal_points", &[Value::Int(1)]));
+    sim.do_frame_with_scripts(&mut clear).unwrap();
+    assert_eq!(
+        sim.scenario_data.reveal_points[0].checksum_header(),
+        (0, 4, -1, 0)
+    );
+}
+
+#[test]
+fn visibility_builtins_execute_the_atomic_direct_refresh_route() {
+    let mut sim = Sim::new(0x9fc7_10, 8);
+    sim.activate(0);
+    sim.activate(1);
+    sim.vic_match
+        .set_sem(victory_score::game_sem::SCENARIO_RULES);
+    sim.scenario_data.reveal_points[0].add(ScenarioRevealPoint {
+        x: 8,
+        y: 8,
+        radius: 2,
+    });
+    let mut add = game_runtime(one_builtin_program(
+        "add_visibility",
+        &[Value::Int(1), Value::Int(2)],
+    ));
+
+    sim.do_frame_with_scripts(&mut add).unwrap();
+    assert_eq!(sim.scenario_data.ally_masks[0], 0b10);
+    assert_eq!(sim.vic_leaders.slots[0].init_diplomacy.ally_mask, 0b10);
+    assert_eq!(
+        sim.map.world.seen2[sim.map.world.f_index(4, 4)] & 0b11,
+        0b11
+    );
+
+    let mut remove = game_runtime(one_builtin_program(
+        "remove_visibility",
+        &[Value::Int(1), Value::Int(2)],
+    ));
+    sim.do_frame_with_scripts(&mut remove).unwrap();
+    assert_eq!(sim.scenario_data.ally_masks[0], 0);
+    assert_eq!(sim.vic_leaders.slots[0].init_diplomacy.ally_mask, 0);
 }
 
 fn compile_source_fixture(name: &str) -> Program {

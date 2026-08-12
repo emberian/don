@@ -6,10 +6,13 @@
 //! instance-detector facts required by [`super::step12_visibility_producer_frontier`].  It is
 //! extended with canonical Build rows in exact retail Build-before-Unit order, including the
 //! complete `Wall::update_local_seen` footprint body. The active cohort requires an empty
-//! dedicated Wall band, disabled scenario reveal points, and the PE-proven no-effect branch of
-//! every reached `World::reveal_fog`. The `Game::run` direct entry additionally owns the exact
-//! frame-zero explored-sharing tail. Other active maps still stop before `World::clear_seen`.
+//! dedicated Wall band and the PE-proven no-effect branch of every reached
+//! `World::reveal_fog`. It also owns the scenario reveal-point pass and exact direct
+//! `Game::run` / BHS add/remove-visibility entries. Other active maps still stop before
+//! `World::clear_seen`.
 
+use crate::container::EngineArray;
+use crate::script_runtime::ScenarioRevealPoint;
 use crate::systems::sparse_object_bands_authority_frontier::{
     RetailBand, RetailObjectAddress, SparseSlotLifecycle, BUILD_BAND_BASE, WALL_BAND_BASE,
 };
@@ -249,7 +252,7 @@ impl Step12ProducerResiduals {
         build_and_wall_bands: true,
         started_wonder_local_seen: true,
         reveal_fog: true,
-        scenario_reveal_points: true,
+        scenario_reveal_points: false,
         frame_zero_explored_sharing: true,
         direct_entry_routing: true,
         incremental_update_seen: true,
@@ -273,9 +276,41 @@ pub struct ScheduledActiveProducerContext<'a> {
     pub builds: &'a [BuildData],
     pub production: &'a LiveProductionRuntime,
     pub scenario_reveal_points_enabled: bool,
+    /// Required when the scenario-semaphore gate is set. Retail's producer reads the
+    /// first of the eight arrays for every valid leader (an exact shipped quirk).
+    pub scenario_reveal_points: Option<ScenarioRevealPointContext<'a>>,
+    /// Direct entries must name themselves; a populated context alone cannot authorize
+    /// a different immediate caller.
+    pub authorized_direct: Option<AuthorizedDirectVisibilityRoute>,
     /// Required only by a direct producer entry at `Game::frame == 0`, after every
     /// object and scenario-point stamp has been preflighted.
     pub frame_zero_sharing: Option<FrameZeroExploredSharingContext<'a>>,
+}
+
+/// Only the three direct entries whose complete owning action is mounted may cross the
+/// full-producer boundary. `BuildClose` and `ScenarioSetExploredShowBuildings` cannot be
+/// represented by this authorization type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorizedDirectVisibilityRoute {
+    GameRun,
+    ScenarioAddVisibility,
+    ScenarioRemoveVisibility,
+}
+
+impl AuthorizedDirectVisibilityRoute {
+    const fn trigger(self) -> Step12VisibilityTrigger {
+        match self {
+            Self::GameRun => Step12VisibilityTrigger::GameRun,
+            Self::ScenarioAddVisibility => Step12VisibilityTrigger::ScenarioAddVisibility,
+            Self::ScenarioRemoveVisibility => Step12VisibilityTrigger::ScenarioRemoveVisibility,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ScenarioRevealPointContext<'a> {
+    pub leaders: &'a [victory_score::LeaderState],
+    pub points: &'a [EngineArray<ScenarioRevealPoint>; LEADER_SLOTS],
 }
 
 /// Canonical retail fields read by the explored-sharing tail at
@@ -359,7 +394,10 @@ pub enum ActiveUnitProducerFault {
         who: usize,
         mark: i32,
     },
-    ScenarioRevealPointsEnabled,
+    MissingScenarioRevealPointContext,
+    ScenarioLeaderCardinality {
+        actual: usize,
+    },
     MissingFrameZeroExploredSharingContext,
     FrameZeroLeaderCardinality {
         actual: usize,
@@ -390,6 +428,7 @@ pub struct PreparedStep12ActiveUnitClear {
     build_actions: Vec<PreparedStep12BuildAction>,
     unit_pass: PreparedStep12UnitPass,
     unit_local_seen: Vec<Vec<PreparedStep12LocalSeen>>,
+    scenario_seen: Vec<PreparedScenarioSeen>,
     expected_reveal_calls: usize,
     frame_zero_sharing: Option<PreparedFrameZeroExploredSharing>,
 }
@@ -428,6 +467,10 @@ impl PreparedStep12ActiveUnitClear {
         self.unit_local_seen.iter().map(Vec::len).sum()
     }
 
+    pub fn scenario_seen_cells(&self) -> usize {
+        self.scenario_seen.len()
+    }
+
     pub fn frame_zero_explored_cells_changed(&self) -> usize {
         self.frame_zero_sharing
             .as_ref()
@@ -455,6 +498,13 @@ struct PreparedStep12LocalSeen {
     fog_y: i32,
     player_mask: u8,
     explored_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedScenarioSeen {
+    fog_x: i32,
+    fog_y: i32,
+    who: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,6 +540,7 @@ pub struct ActiveUnitClearTrace {
     pub build_local_seen_cells: usize,
     pub unit_local_seen_cells: usize,
     pub unit_stamps: usize,
+    pub scenario_seen_cells: usize,
     pub reveal_no_effect_calls: usize,
     pub frame_zero_share_groups: usize,
     pub frame_zero_explored_cell_writes: usize,
@@ -822,6 +873,60 @@ fn prepare_frame_zero_explored_sharing(
     }))
 }
 
+fn prepare_scenario_reveal_points(
+    context: ScheduledActiveProducerContext<'_>,
+    explored: &mut [u8],
+) -> Result<(Vec<PreparedScenarioSeen>, usize), ActiveUnitProducerFault> {
+    if !context.scenario_reveal_points_enabled {
+        return Ok((Vec::new(), 0));
+    }
+    let scenario = context
+        .scenario_reveal_points
+        .ok_or(ActiveUnitProducerFault::MissingScenarioRevealPointContext)?;
+    if scenario.leaders.len() != LEADER_SLOTS {
+        return Err(ActiveUnitProducerFault::ScenarioLeaderCardinality {
+            actual: scenario.leaders.len(),
+        });
+    }
+
+    // Exact 0x00732A7D..0x00732BD8: despite the global's declared [8] shape, the
+    // shipped body reloads the first ObjectArray header for every leader iteration.
+    let points = scenario.points[0].as_slice();
+    let mut cells = Vec::new();
+    let mut reveal_calls = 0usize;
+    for who in 0..LEADER_SLOTS {
+        if scenario.leaders[who].leader_flags & victory_score::leader_flag::VALID == 0 {
+            continue;
+        }
+        let mask = 1u8 << who;
+        for point in points {
+            let center_x = point.x >> 1;
+            let center_y = point.y >> 1;
+            let radius = (point.radius.wrapping_mul(0xC0) / 0x180).clamp(0, 64);
+            let end = context.circle.radius[radius as usize] as usize;
+            for index in 0..end {
+                let fog_x = center_x + i32::from(context.circle.x[index]);
+                let fog_y = center_y + i32::from(context.circle.y[index]);
+                if !context.terrain.valid_f(fog_x, fog_y) {
+                    continue;
+                }
+                let plane_index = context.terrain.f_index(fog_x, fog_y);
+                if explored[plane_index] & mask == 0 {
+                    reveal_fog_no_effect(context.terrain, fog_x, fog_y)?;
+                    reveal_calls += 1;
+                }
+                explored[plane_index] |= mask;
+                cells.push(PreparedScenarioSeen {
+                    fog_x,
+                    fog_y,
+                    who: who as u8,
+                });
+            }
+        }
+    }
+    Ok((cells, reveal_calls))
+}
+
 fn prepare_active_unit_clear(
     pass: PreparedStep12UnitPass,
     world: &World,
@@ -829,9 +934,6 @@ fn prepare_active_unit_clear(
     fog_option: u8,
     context: ScheduledActiveProducerContext<'_>,
 ) -> Result<PreparedStep12ActiveUnitClear, ActiveUnitProducerFault> {
-    if context.scenario_reveal_points_enabled {
-        return Err(ActiveUnitProducerFault::ScenarioRevealPointsEnabled);
-    }
     let mut explored = context.terrain.seen2.clone();
     let mut expected_reveal_calls = 0usize;
     let mut build_rows_visited = 0usize;
@@ -1008,6 +1110,9 @@ fn prepare_active_unit_clear(
             &mut explored,
         )?;
     }
+    let (scenario_seen, scenario_reveal_calls) =
+        prepare_scenario_reveal_points(context, &mut explored)?;
+    expected_reveal_calls += scenario_reveal_calls;
     let frame_zero_sharing = prepare_frame_zero_explored_sharing(
         pass.frame(),
         fog_option,
@@ -1020,6 +1125,7 @@ fn prepare_active_unit_clear(
         build_actions,
         unit_pass: pass,
         unit_local_seen,
+        scenario_seen,
         expected_reveal_calls,
         frame_zero_sharing,
     })
@@ -1097,6 +1203,11 @@ pub fn commit_active_unit_clear(
             &mut newly_explored,
         );
     }
+    for cell in &prepared.scenario_seen {
+        if fog.set_seen(terrain, cell.fog_x, cell.fog_y, i32::from(cell.who), false) {
+            newly_explored.push((cell.fog_x, cell.fog_y));
+        }
+    }
     assert_eq!(
         newly_explored.len(),
         prepared.expected_reveal_calls,
@@ -1134,6 +1245,7 @@ pub fn commit_active_unit_clear(
         build_local_seen_cells: prepared.build_local_seen_cells(),
         unit_local_seen_cells: prepared.unit_local_seen_cells(),
         unit_stamps: prepared.unit_pass.stamps(),
+        scenario_seen_cells: prepared.scenario_seen_cells(),
         reveal_no_effect_calls: newly_explored.len(),
         frame_zero_share_groups: prepared
             .frame_zero_sharing
@@ -1570,8 +1682,11 @@ impl Step12VisibilityAuthority {
             }
             LiveStep12Preparation::UnitPass(pass)
                 if matches!(trigger, Step12VisibilityTrigger::ScheduledStep12)
-                    || (matches!(trigger, Step12VisibilityTrigger::GameRun)
-                        && scheduled_active.is_some()) =>
+                    || scheduled_active.is_some_and(|context| {
+                        context
+                            .authorized_direct
+                            .is_some_and(|route| route.trigger() == trigger)
+                    }) =>
             {
                 let context =
                     scheduled_active.ok_or(Step12VisibilityPreflightError::ActiveUnitCohort(
@@ -2060,6 +2175,8 @@ mod tests {
             builds: &builds,
             production: &production,
             scenario_reveal_points_enabled: false,
+            scenario_reveal_points: None,
+            authorized_direct: None,
             frame_zero_sharing: None,
         };
         let authority = Step12VisibilityAuthority::default();
@@ -2088,6 +2205,38 @@ mod tests {
                 }
             );
         }
+
+        world.frame = 1;
+        let authorized_add = ScheduledActiveProducerContext {
+            authorized_direct: Some(AuthorizedDirectVisibilityRoute::ScenarioAddVisibility),
+            ..context
+        };
+        assert!(matches!(
+            authority
+                .preflight_full_producer(
+                    &world,
+                    &[],
+                    [true, false, false, false, false, false, false, false],
+                    0,
+                    Step12VisibilityTrigger::ScenarioRemoveVisibility,
+                    Some(authorized_add),
+                )
+                .unwrap_err(),
+            Step12VisibilityPreflightError::IncompleteProducer { .. }
+        ));
+        assert!(matches!(
+            authority
+                .preflight_full_producer(
+                    &world,
+                    &[],
+                    [true, false, false, false, false, false, false, false],
+                    0,
+                    Step12VisibilityTrigger::ScenarioAddVisibility,
+                    Some(authorized_add),
+                )
+                .unwrap(),
+            PreparedStep12FullProducer::ActiveUnitClear(_)
+        ));
     }
 
     #[test]

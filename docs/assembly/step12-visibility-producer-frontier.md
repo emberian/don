@@ -102,13 +102,13 @@ After the option-3 early return, `GameDaemon::update_all_seen` performs:
 The isolated module owns the cadence, instance detector transition, Unit admission/stamp
 plan, and exact post-frame `seen`/`seen3` cell sample. Later bounded tranches mount those
 facts, active Build/Unit local-seen bodies, and `Game::run`'s frame-zero explored-sharing
-tail, but still do **not** claim the complete 1,221-byte producer. Remaining bodies before
+tail, plus the exact scenario-point pass and paired BHS add/remove-visibility direct routes,
+but still do **not** claim the complete 1,221-byte producer. Remaining bodies before
 general closure are:
 
 - a nonempty dedicated Wall band (structurally absent in the supported executable);
 - `Object::update_seen`'s effectful newly-explored `World::reveal_fog` branches;
-- scenario reveal-point storage and its two Game flag gates;
-- the other four direct-entry owning actions; and
+- the remaining `Build::close` and `set_explored_show_buildings` direct-entry actions; and
 - incremental `Object::update_seen(1)` calls outside this periodic step-12 refresh.
 
 These are checksum/replay concerns even though only the Unit detector subpass is needed to
@@ -240,9 +240,10 @@ HeroesData, or the synchronized type composition: saving a non-default Step-12 a
 therefore rejected as `Unsupported("step-12 visibility authority")` rather than silently
 serializing guessed state. No competing save version or chunk was allocated for this tranche.
 
-The exact residual transaction owners are nonempty dedicated Wall vision,
-`World::reveal_fog`, scenario reveal points, the `Build::close` and three Scenario direct entry
-routes, and incremental `Object::update_seen(1)`. The `Game::run` direct route and its
-frame-zero alliance explored-sharing tail now execute against canonical saved owners, as do
-scheduled active Build/Unit local-seen bodies. The general row remains blocked until all
-reached contributors and side effects can preflight and commit atomically.
+The exact residual transaction owners are nonempty dedicated Wall vision, effectful
+`World::reveal_fog`, the `Build::close` and `set_explored_show_buildings` direct routes,
+and incremental `Object::update_seen(1)`. The `Game::run` and paired BHS visibility direct
+routes, frame-zero alliance explored-sharing tail, scenario point pass, and scheduled active
+Build/Unit local-seen bodies now execute against canonical saved owners. The general row
+remains blocked until all reached contributors and side effects can preflight and commit
+atomically.
