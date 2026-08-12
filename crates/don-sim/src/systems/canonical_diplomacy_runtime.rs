@@ -23,6 +23,7 @@ use crate::command::{
     Bridge, Fleet, Package, WireError,
 };
 use crate::objects::Band;
+use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::leader_match_host::{
@@ -85,6 +86,11 @@ pub enum CanonicalDiplomacyRuntimeError {
     Victory(LeaderMatchError),
     VictoryNeedsNonVacuousDefeatCleanup {
         owners: u8,
+    },
+    VictoryMalformedArmyLink {
+        owner: usize,
+        army_slot: usize,
+        group_id: i32,
     },
     VictoryNeedsPlaneDefeatCleanup {
         owner: usize,
@@ -177,9 +183,11 @@ impl DiplomacyDefeatCleanupReceipt {
             && self.per_owner.iter().all(|receipt| {
                 receipt.owner < NUM_LEADERS
                     && self.owners & (1u8 << receipt.owner) != 0
-                    && receipt.armies_stopped == 0
-                    && receipt.groups_stopped == 0
-                    && receipt.army_members_halted == 0
+                    && receipt.armies_stopped <= super::leader_set_diplo::ARMY_SLOTS
+                    && receipt.groups_stopped
+                        <= receipt.armies_stopped * super::armies::ARMY_MAX_GROUPS
+                    && receipt.army_members_halted
+                        <= receipt.groups_stopped * super::groups_guys::GROUP_MAX_MEMBERS
                     && receipt.planes_killed == 0
                     && receipt.slots_visited == receipt.invalid_skipped + receipt.orders_closed
                     && receipt.unit_masks_cleared == receipt.orders_closed
@@ -504,6 +512,7 @@ struct StagedVictoryAuthority {
     leaders: super::victory_score::Leaders,
     game: super::victory_score::Match,
     world: crate::world::World,
+    groups: super::groups_guys::Groups,
     paths: Vec<super::movement::PathStack>,
     builds: Vec<super::production::BuildData>,
     production_runtime: super::production::runtime::LiveProductionRuntime,
@@ -517,6 +526,7 @@ fn stage_ground_defeat_cleanup(
 ) -> Result<
     (
         crate::world::World,
+        super::groups_guys::Groups,
         Vec<super::movement::PathStack>,
         DiplomacyDefeatCleanupReceipt,
     ),
@@ -525,17 +535,148 @@ fn stage_ground_defeat_cleanup(
     use super::defeat_cleanup::{DefeatCleanupError as Error, DEFEAT_UNIT_MASK};
 
     let mut world = sim.world.clone();
+    let mut groups = sim.groups.clone();
     let mut paths = sim.paths.clone();
+    let mut army_group_predecessor = vec![None; groups.list.len()];
     let mut per_owner = Vec::with_capacity(owners.count_ones() as usize);
     for owner in 0..NUM_LEADERS {
         if owners & (1u8 << owner) == 0 {
             continue;
         }
         let armies = sim.armies.leader_defeated_targets(owner);
-        if armies.valid_armies != 0 || !armies.groups.is_empty() {
-            return Err(
-                CanonicalDiplomacyRuntimeError::VictoryNeedsNonVacuousDefeatCleanup { owners },
-            );
+        let mut army_plans = Vec::with_capacity(armies.groups.len());
+        for target in armies.groups.iter().copied() {
+            let group_id = target.group_id as usize;
+            let Some(group) = groups.list.get(group_id).cloned() else {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::MissingArmyGroup {
+                        owner,
+                        army_slot: target.army_slot,
+                        group_id: target.group_id,
+                    },
+                ));
+            };
+            if army_group_predecessor[group_id]
+                .replace((owner, target.army_slot))
+                .is_some()
+                || (group.num != 0 && group.army != target.army_slot as i32)
+            {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryMalformedArmyLink {
+                    owner,
+                    army_slot: target.army_slot,
+                    group_id: target.group_id,
+                });
+            }
+            if group.num == 0 {
+                continue;
+            }
+            if group.who as usize != owner {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::ArmyGroupOwnerMismatch {
+                        owner,
+                        army_slot: target.army_slot,
+                        group_id: target.group_id,
+                        group_owner: group.who,
+                    },
+                ));
+            }
+            if group.buildings != 0 {
+                let plan =
+                    super::groups_guys::plan_action_halt(&group, 0, &[]).map_err(|error| {
+                        CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(Error::ArmyGroupPlan {
+                            owner,
+                            army_slot: target.army_slot,
+                            group_id: target.group_id,
+                            error,
+                        })
+                    })?;
+                army_plans.push((group_id, plan));
+                continue;
+            }
+
+            let n = group
+                .num
+                .clamp(0, super::groups_guys::GROUP_MAX_MEMBERS as i32)
+                as usize;
+            let mut members = Vec::with_capacity(n);
+            for &member_o in &group.list[..n] {
+                let mut facts = super::groups_guys::HaltMemberFacts {
+                    o: member_o,
+                    ..Default::default()
+                };
+                let Ok(object_id) = usize::try_from(member_o) else {
+                    members.push(facts);
+                    continue;
+                };
+                let Some(row) = world
+                    .objects
+                    .slot(owner)
+                    .band(Band::Unit)
+                    .get(object_id)
+                    .copied()
+                    .map(|row| row as usize)
+                else {
+                    members.push(facts);
+                    continue;
+                };
+                if row >= world.units.len() || world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                    members.push(facts);
+                    continue;
+                }
+
+                facts.valid_unit = true;
+                facts.on_map = crate::systems::air::is_on_map(world.units.inside_up()[row]);
+                if !facts.on_map {
+                    members.push(facts);
+                    continue;
+                }
+                let Some(&type_index) = sim.unit_type.get(row) else {
+                    return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                        Error::MissingUnitType { owner, object_id },
+                    ));
+                };
+                let Some(is_plane) = sim.production_runtime.installed_unit_is_plane(type_index)
+                else {
+                    return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                        Error::UnsupportedUnitType {
+                            owner,
+                            object_id,
+                            type_index,
+                        },
+                    ));
+                };
+                facts.is_plane = is_plane;
+                if is_plane {
+                    facts.domain = 2;
+                } else {
+                    let Some(entering_or_exiting) = world
+                        .orders(row)
+                        .current()
+                        .map_or(Some(false), Order::is_entering_or_exiting)
+                    else {
+                        return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                            Error::MissingSpecialAnimPayload { owner, object_id },
+                        ));
+                    };
+                    facts.entering_or_exiting = entering_or_exiting;
+                    if !entering_or_exiting && paths.get(row).is_none() {
+                        return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                            Error::MissingPathState { owner, object_id },
+                        ));
+                    }
+                }
+                members.push(facts);
+            }
+            let plan =
+                super::groups_guys::plan_action_halt(&group, 0, &members).map_err(|error| {
+                    CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(Error::ArmyGroupPlan {
+                        owner,
+                        army_slot: target.army_slot,
+                        group_id: target.group_id,
+                        error,
+                    })
+                })?;
+            army_plans.push((group_id, plan));
         }
 
         let object_rows = sim.world.objects.slot(owner).band(Band::Unit).to_vec();
@@ -584,10 +725,49 @@ fn stage_ground_defeat_cleanup(
 
         let mut receipt = DefeatCleanupReceipt {
             owner,
+            armies_stopped: armies.valid_armies,
+            groups_stopped: army_plans.len(),
             slots_visited: object_rows.len(),
             invalid_skipped,
             ..DefeatCleanupReceipt::default()
         };
+        for (group_id, halt) in army_plans {
+            groups.list[group_id] = halt.group;
+            for step in halt.steps {
+                let (who, object_id) = match step {
+                    super::groups_guys::HaltStep::ClearUnitMask { who, o, .. }
+                    | super::groups_guys::HaltStep::ClearPathAnchor { who, o }
+                    | super::groups_guys::HaltStep::CloseOrders { who, o, .. }
+                    | super::groups_guys::HaltStep::ClearPartialPath { who, o }
+                    | super::groups_guys::HaltStep::UpdateAction { who, o } => {
+                        (who as usize, o as usize)
+                    }
+                };
+                let row = world.objects.slot(who).band(Band::Unit)[object_id] as usize;
+                match step {
+                    super::groups_guys::HaltStep::ClearUnitMask { mask, .. } => {
+                        let masks = world.units.get_unit_masks(row) & !mask;
+                        world.units.set_unit_masks(row, masks);
+                    }
+                    super::groups_guys::HaltStep::ClearPathAnchor { .. }
+                    | super::groups_guys::HaltStep::ClearPartialPath { .. } => {
+                        paths[row].clear();
+                    }
+                    super::groups_guys::HaltStep::CloseOrders { .. } => {
+                        world.orders_mut(row).clear();
+                    }
+                    super::groups_guys::HaltStep::UpdateAction { .. } => {
+                        let x = world.units.x_internal()[row];
+                        let y = world.units.y_internal()[row];
+                        let angle = world.units.angle()[row];
+                        world.units.orders_x_mut()[row] = x;
+                        world.units.orders_y_mut()[row] = y;
+                        world.units.dest_angle_mut()[row] = angle;
+                        receipt.army_members_halted += 1;
+                    }
+                }
+            }
+        }
         for row in plan {
             world.orders_mut(row).clear();
             paths[row].clear();
@@ -606,7 +786,7 @@ fn stage_ground_defeat_cleanup(
     }
     let receipt = DiplomacyDefeatCleanupReceipt { owners, per_owner };
     debug_assert!(receipt.validates());
-    Ok((world, paths, receipt))
+    Ok((world, groups, paths, receipt))
 }
 
 fn stage_victory_authority(
@@ -646,7 +826,7 @@ fn stage_victory_authority(
     }
 
     let defeated_owners = leaders.take_defeat_unit_cleanup();
-    let (world, paths, defeat_cleanup) = stage_ground_defeat_cleanup(sim, defeated_owners)?;
+    let (world, groups, paths, defeat_cleanup) = stage_ground_defeat_cleanup(sim, defeated_owners)?;
     let build_owners = leaders.take_terminal_queue_cleanup();
     for owner in 0..NUM_LEADERS {
         if build_owners & (1u8 << owner) != 0 {
@@ -664,6 +844,7 @@ fn stage_victory_authority(
         leaders,
         game,
         world,
+        groups,
         paths,
         builds,
         production_runtime,
@@ -761,6 +942,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 self.sim.vic_leaders = staged.leaders;
                 self.sim.vic_match = staged.game;
                 self.sim.world = staged.world;
+                self.sim.groups = staged.groups;
                 self.sim.paths = staged.paths;
                 self.sim.builds = staged.builds;
                 self.sim.production_runtime = staged.production_runtime;

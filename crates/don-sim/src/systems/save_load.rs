@@ -51,6 +51,7 @@ use crate::systems::{
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldObjectIdentity, WorldSaveError, WorldSaveState, MAX_UNITS};
 
+mod armies;
 mod command_package_state;
 mod groups;
 mod leader_match;
@@ -61,7 +62,9 @@ const MAGIC: &[u8; 8] = b"DoNSave\0";
 const SCENARIO_IGNORES_FORMAT_VERSION: u32 = 15;
 /// First version persisting the checksum-owned global FarmStruct array.
 const FARMS_FORMAT_VERSION: u32 = 16;
-const FORMAT_VERSION: u32 = FARMS_FORMAT_VERSION;
+/// First version persisting the exact canonical eight-by-sixteen Armies owner.
+const ARMIES_FORMAT_VERSION: u32 = 17;
+const FORMAT_VERSION: u32 = ARMIES_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -157,8 +160,9 @@ const COMMAND_PACKAGE_STATE: u16 = 0x000b;
 const DIPLOMACY: u16 = 0x000c;
 const SCENARIO_IGNORES: u16 = 0x000d;
 const FARMS: u16 = 0x000e;
+const ARMIES: u16 = 0x000f;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 14] = [
+const REQUIRED: [u16; 15] = [
     CORE,
     MAP,
     OBJECTS,
@@ -173,11 +177,13 @@ const REQUIRED: [u16; 14] = [
     DIPLOMACY,
     SCENARIO_IGNORES,
     FARMS,
+    ARMIES,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        FARMS_FORMAT_VERSION => &REQUIRED,
+        ARMIES_FORMAT_VERSION => &REQUIRED,
+        FARMS_FORMAT_VERSION => &REQUIRED[..14],
         SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED[..13],
         DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..12],
         PRE_DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..11],
@@ -3175,6 +3181,7 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
         }
     }
     groups::validate(&sim.groups)?;
+    armies::validate(&sim.armies, &sim.groups)?;
     if sim.game_daemon.empty_colls != sim.collision_blocks.cursor() {
         // The runtime is an execution adapter for the same GameDaemon+0x20 scalar, not a
         // second persistent owner. Refuse divergent public state instead of choosing one.
@@ -3238,6 +3245,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
                     .map_err(|_| SaveError::Invalid("scenario ignore-orders state"))?,
             ),
             Chunk::leaf(FARMS, write_farms(&sim.farms)?),
+            Chunk::leaf(ARMIES, armies::write(&sim.armies, &sim.groups)?),
         ],
     )
     .encode()?;
@@ -3368,6 +3376,15 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         }
         _ => return Err(SaveError::Invalid("Farms section version")),
     };
+    let armies = match sections[14] {
+        Some(data) if core.format_version >= ARMIES_FORMAT_VERSION => {
+            armies::read(data, &group_pool)?
+        }
+        None if core.format_version < ARMIES_FORMAT_VERSION => {
+            crate::systems::armies::Armies::new()
+        }
+        _ => return Err(SaveError::Invalid("Armies section version")),
+    };
     validate_farm_bindings(&builds, &farms)?;
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
@@ -3438,6 +3455,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             core.game_daemon.empty_colls,
         );
     sim.groups = group_pool;
+    sim.armies = armies;
     sim.command_package_state = command_state;
     sim.diplomacy = diplomacy;
     sim.scenario_ignore_orders = scenario_ignore_orders;
@@ -4086,6 +4104,108 @@ mod tests {
     }
 
     #[test]
+    fn v17_armies_roundtrip_legacy_defaults_and_malformed_links_fail_closed() {
+        let mut original = supported_sim();
+        let group_id = groups_guys::Groups::index(2, 3);
+        let mut group = groups_guys::GroupData {
+            id: group_id as i32,
+            army: 3,
+            who: 2,
+            form: 4,
+            ..groups_guys::GroupData::default()
+        };
+        assert!(group.add(0, 2, false, 0x44, 7));
+        original.groups.list[group_id] = group;
+        let army = &mut original.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.status = 0x12;
+        army.reg = 9;
+        army.role = 0x44;
+        army.num_units = 1;
+        army.num_captains = 2;
+        army.num_standard = 3;
+        army.num_decoys = 4;
+        army.city = 5;
+        army.navy = 1;
+        army.human_frame = 6;
+        army.hurry = 7;
+        army.target_o = 8;
+        army.target_who = 3;
+        army.x = 900;
+        army.y = 901;
+        army.angle = 48;
+        army.rally_dist = 77;
+        army.muster_x = 12;
+        army.muster_y = 13;
+        army.muster_angle = 14;
+        army.num_groups = 1;
+        army.list[0] = group_id as i32;
+        let expected_image = army.image();
+
+        let bytes = save_sim(&original).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            ARMIES_FORMAT_VERSION
+        );
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.armies.lists[2][3].image(), expected_image);
+        assert_eq!(
+            loaded.armies.find_dist,
+            crate::systems::armies::FIND_DIST_SEED
+        );
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        let pristine = supported_sim();
+        let v16 = prior_format_stream(&pristine, FARMS_FORMAT_VERSION);
+        let upgraded = load_sim(&v16).unwrap();
+        assert!(upgraded
+            .armies
+            .lists
+            .iter()
+            .flatten()
+            .all(|army| army.valid == 0));
+        assert_eq!(prior_format_stream(&upgraded, FARMS_FORMAT_VERSION), v16);
+
+        let mut bad_presence = bytes.clone();
+        let section = section_offset(&bad_presence, ARMIES);
+        bad_presence[section + 8 + 11] = 0;
+        assert_eq!(
+            load_error(&bad_presence),
+            SaveError::Invalid("Army pointer presence")
+        );
+
+        let mut bad_identity = bytes.clone();
+        let section = section_offset(&bad_identity, ARMIES);
+        let valid = section + 8 + 2 * 65 + 33 + 3 * 2;
+        bad_identity[valid + 2..valid + 4].copy_from_slice(&4i16.to_le_bytes());
+        assert_eq!(
+            load_error(&bad_identity),
+            SaveError::Invalid("live Army identity/shape")
+        );
+
+        let mut duplicate = original;
+        let second = &mut duplicate.armies.lists[2][4];
+        second.valid = 1;
+        second.army = 4;
+        second.who = 2;
+        second.num_groups = 1;
+        second.list[0] = group_id as i32;
+        assert_eq!(
+            save_sim(&duplicate),
+            Err(SaveError::Invalid("Army group duplicate/cycle"))
+        );
+
+        let mut bad_backlink = loaded;
+        bad_backlink.groups.list[group_id].army = 4;
+        assert_eq!(
+            save_sim(&bad_backlink),
+            Err(SaveError::Invalid("Army/Group backlink"))
+        );
+    }
+
+    #[test]
     fn format_twelve_typed_orders_load_with_empty_cache_and_upgrade_to_v14() {
         let mut original = supported_sim();
         let row = 0;
@@ -4293,6 +4413,7 @@ mod tests {
                         | DIPLOMACY
                         | SCENARIO_IGNORES
                         | FARMS
+                        | ARMIES
                 )
             })
             .map(|child| {
@@ -4339,7 +4460,12 @@ mod tests {
             .filter(|child| {
                 !matches!(
                     child.header.id,
-                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY | SCENARIO_IGNORES | FARMS
+                    LEADER_MATCH
+                        | COMMAND_PACKAGE_STATE
+                        | DIPLOMACY
+                        | SCENARIO_IGNORES
+                        | FARMS
+                        | ARMIES
                 )
             })
             .map(|child| {

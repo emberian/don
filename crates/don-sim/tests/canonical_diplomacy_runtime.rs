@@ -8,6 +8,7 @@ use don_sim::systems::canonical_diplomacy_runtime::{
 };
 use don_sim::systems::defeat_cleanup;
 use don_sim::systems::diplomacy_accept_host::AcceptOutcome;
+use don_sim::systems::groups_guys::{GroupData, Groups};
 use don_sim::systems::leader_set_diplo::Relation;
 use don_sim::systems::movement::PathData;
 use don_sim::systems::player_setup::ManualPlayerSetup;
@@ -152,6 +153,31 @@ fn install_defeated_ground_unit(sim: &mut Sim) -> usize {
     row
 }
 
+fn install_defeated_ground_army(sim: &mut Sim) -> (usize, usize) {
+    let row = install_defeated_ground_unit(sim);
+    let object_id = sim.world.units.o()[row];
+    sim.world
+        .units
+        .set_unit_masks(row, sim.world.units.get_unit_masks(row) | 0x0000_0100);
+    let group_id = Groups::index(4, 3);
+    let mut group = GroupData {
+        id: group_id as i32,
+        army: 5,
+        who: 4,
+        form: 4,
+        disband: 7,
+        ..GroupData::default()
+    };
+    assert!(group.add(object_id, 4, false, 0, 0));
+    sim.groups.list[group_id] = group;
+    sim.armies.lists[4][5].valid = 1;
+    sim.armies.lists[4][5].army = 5;
+    sim.armies.lists[4][5].who = 4;
+    sim.armies.lists[4][5].num_groups = 1;
+    sim.armies.lists[4][5].list[0] = group_id as i32;
+    (row, group_id)
+}
+
 fn with_large_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -182,7 +208,7 @@ fn retail_packet_runs_bridge_sim_current_load_and_resumed_packet_identically() {
         let checkpoint = save_sim(&uninterrupted).expect("applied declaration is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            16
+            17
         );
         let mut resumed = load_sim(&checkpoint).expect("declaration state reloads");
 
@@ -220,6 +246,8 @@ fn reached_army_authority_is_unavailable_and_rolls_back_every_owner() {
     with_large_stack(|| {
         let mut sim = configured_sim();
         sim.armies.lists[2][3].valid = 1;
+        sim.armies.lists[2][3].army = 3;
+        sim.armies.lists[2][3].who = 2;
         let before = save_sim(&sim).unwrap();
         let receipt = sim
             .process_diplomacy_package(2, 9, &RETAIL_DECLARE_2_5_WAR)
@@ -244,6 +272,8 @@ fn accept_with_reached_army_authority_rolls_back_resources_relations_and_records
     with_large_stack(|| {
         let mut sim = configured_accept_sim();
         sim.armies.lists[2][3].valid = 1;
+        sim.armies.lists[2][3].army = 3;
+        sim.armies.lists[2][3].who = 2;
         let before = save_sim(&sim).unwrap();
         let receipt = sim
             .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
@@ -539,23 +569,61 @@ fn alliance_victory_with_a_live_defeated_plane_stays_unavailable_and_atomic() {
 }
 
 #[test]
-fn alliance_victory_with_a_live_defeated_army_rolls_back_every_owner() {
+fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
     with_large_stack(|| {
-        let mut sim = configured_alliance_with_defeated_opponents_sim();
-        sim.armies.lists[4][3].valid = 1;
-        let before = save_sim(&sim).unwrap();
-        let receipt = sim
+        let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();
+        let (row, group_id) = install_defeated_ground_army(&mut uninterrupted);
+        let army_before = uninterrupted.armies.lists[4][5].clone();
+        let checkpoint = save_sim(&uninterrupted).expect("standing Army is savable in v17");
+        assert_eq!(
+            u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
+            17
+        );
+        let mut resumed = load_sim(&checkpoint).expect("standing Army reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+        resumed
+            .production_runtime
+            .install_type(LiveProductionType::ordinary_unit(100, 1, 1));
+
+        let resumed_receipt = resumed
             .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
             .unwrap();
-        assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
-        assert!(receipt.validates(&receipt.request));
-        assert!(matches!(
-            receipt.error,
-            Some(CanonicalDiplomacyRuntimeError::VictoryNeedsNonVacuousDefeatCleanup {
-                owners,
-            }) if owners & (1 << 4) != 0
-        ));
-        assert_eq!(save_sim(&sim).unwrap(), before);
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert!(uninterrupted_receipt.validates(&uninterrupted_receipt.request));
+
+        let cleanup = resumed_receipt
+            .defeat_cleanup
+            .as_ref()
+            .unwrap()
+            .per_owner
+            .iter()
+            .find(|cleanup| cleanup.owner == 4)
+            .unwrap();
+        assert_eq!(cleanup.armies_stopped, 1);
+        assert_eq!(cleanup.groups_stopped, 1);
+        assert_eq!(cleanup.army_members_halted, 1);
+        assert_eq!(cleanup.orders_closed, 1);
+        assert_eq!(resumed.armies.lists[4][5], army_before);
+        assert_eq!(resumed.groups.list[group_id].form, -1);
+        assert_eq!(resumed.groups.list[group_id].disband, 0);
+        assert!(resumed.world.orders(row).is_empty());
+        assert!(resumed.paths[row].is_empty());
+        assert_eq!(
+            resumed.world.units.get_unit_masks(row)
+                & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100),
+            0
+        );
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("stopped Army reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
     });
 }
 

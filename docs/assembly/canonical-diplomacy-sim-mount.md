@@ -60,11 +60,22 @@ existing `LEADER_MATCH` row by the five production-AI scalars not already saved 
 `leader_flags2`. AIR, STRAFE, command-cache, metric, and economy order leaves retain their v13
 layout in v14; focused tests pin byte equality and malformed-v14 refusal.
 
+## DoNSave v17 Armies owner
+
+The additive top-level chunk `0x000f` persists the canonical eight owner lists and all sixteen
+preallocated Army slots per owner. Its bytes follow retail `Armies::walk_data`: exact fixed
+`PtrArray` allocation history, one pointer-presence byte per slot, every `valid:i16`, and the
+remaining 150-byte `ArmyData` image only for live slots. Decode validates live owner/slot identity,
+bounded prefixes, Group backlinks, and unique Group predecessors; malformed references and
+duplicate/cyclic ownership fail before constructing a Sim. Formats v7 through v16 retain their
+original root bytes and restore the constructor-empty Army owner.
+
 ## Mounted and remaining boundary
 
 - exported `canonical_diplomacy_host`, `diplomacy_accept_host`, and the two callback bodies;
 - added the small homeless retained state plus transient installed authority to `Sim`;
 - mounted v14 chunk `0x000c` and the coordinated production-AI Leader row extension;
+- mounted v17 chunk `0x000f` for the exact canonical Armies owner;
 - retained exact v13 root/order bytes and v7-v13 load behavior;
 - mounted real opcode-38 packets and authority-empty opcode-41 transactions through
   `Bridge::process_all` into the canonical Sim owner;
@@ -76,23 +87,25 @@ Opcodes 38 and 41 now execute production transactions whose ordered external-aut
 empty or consists only of the staged generic-Victory authority. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
 clears publish together. Generic alliance Victory is also mounted when its staged canonical
-Leader/Match transaction has an exact empty defeated-player Army/Unit cleanup: relation rows are
+Leader/Match transaction has an exact staged defeated-player Army/Unit cleanup: relation rows are
 folded into the staged Leader image before `Leader::victory`, terminal Build queues are cleaned on
-staged clones, and defeated owners may have empty Unit bands or active on-map ground Units while
-their Army rosters are empty. The ground arm clones `World` and every path stack, resolves all
-type/path facts first, then performs the exact `Unit::clear_orders` net transition: orders and path
-are cleared, facing latch `0x0400_0000` and defeat leash `0x0004_0000` are removed, and the empty
-action endpoint is rebuilt from current position/facing. A typed per-owner cleanup receipt records
-the whole sweep. All owners and cleanup clones publish only after the diplomacy stale-owner CAS.
-Standing Armies, planes, contained Units, missing type/path facts, `ComeOut`, contained-unit
-kill/Strafe, or forced-army calls refuse before publication, so both static rows remain
-`StateWired`.
+staged clones, and defeated owners may have empty Unit bands, active on-map ground Units, and
+standing Armies whose reached Groups contain only authority-complete halt members. The transaction
+clones `Groups`, `World`, and every path stack, resolves the whole Army/Group/member and Unit-band
+fact cone first, then applies `Army::stop` without closing or unlinking the Army. Group action state,
+member order/path/leash fields, and the following exact `Unit::clear_orders` net transition publish
+together: orders and paths clear, facing latch `0x0400_0000` and defeat leash `0x0004_0000` are
+removed, and the empty action endpoint is rebuilt from current position/facing. A typed per-owner
+cleanup receipt records every stopped Army, Group, member, and Unit-band action. All owners and
+cleanup clones publish only after the diplomacy stale-owner CAS. Planes, contained Units, missing
+type/path facts, `ComeOut`, contained-unit kill/Strafe, or forced-army calls outside this Victory
+cleanup refuse before publication, so both static rows remain `StateWired`.
 
 Focused status: the live opcode-38/opcode-41 runtime suite passes 10/10, including multi-opponent
-alliance Victory with empty cleanup, active-ground-Unit save/resume, missing-type rollback, and
-standing-Army/plane rollback;
+alliance Victory with empty cleanup, active-ground-Unit save/resume, and standing-Army
+packet-to-v17-save/load-to-resume equality; plane and missing-type paths remain atomic refusals.
 the callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
-passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 42 private
+passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 46 private
 save/load tests pass. Opcodes 38/41 deliberately remain command-table red until the live Sim/Bridge
 adapter can execute every reached external authority rather than acknowledging scalar stubs.
