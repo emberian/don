@@ -253,6 +253,43 @@ fn post_fix_diag_constructor_native_graph_is_frozen() {
 }
 
 #[test]
+fn post_fix_diag_checksum_log_native_graph_is_frozen() {
+    use don_replay::post_continent as pc;
+
+    assert_eq!(pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.entry_va, 0x0093_0b30);
+    assert_eq!(
+        pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.end_va_exclusive,
+        0x0093_1ca8
+    );
+    assert_eq!(pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.ret_va, 0x0093_1ca5);
+    assert_eq!(pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.size, 4_472);
+    assert_eq!(
+        pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.instruction_count,
+        1_379
+    );
+    assert_eq!(
+        pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.sha256,
+        "8e58ddabcd6742238aab95311529e9f615c5f322771f070c4805fbc48f2ef868"
+    );
+    assert_eq!(
+        pc::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY.check_accept_call_va,
+        0x0093_0b6d
+    );
+    assert_eq!(pc::GAME_LOG_CHECK_ACCEPT_NATIVE_BODY.size, 390);
+    assert_eq!(pc::GAME_LOG_CHECK_ACCEPT_NATIVE_BODY.instruction_count, 98);
+    assert_eq!(
+        pc::GAME_LOG_CHECK_ACCEPT_NATIVE_BODY.reentrancy_guard_va,
+        0x00ee_12c0
+    );
+    assert_eq!(pc::MAP_MAKE_POST_CHECKSUM_CALLER_BODY.size, 15);
+    assert_eq!(pc::MAP_MAKE_POST_CHECKSUM_CALLER_BODY.instruction_count, 3);
+    assert_eq!(
+        pc::MAP_MAKE_POST_CHECKSUM_CALLER_BODY.sha256,
+        "3f130942dec6f49dc4774ad3eacbcee60a43d3181698848f155a44d835a1ace0"
+    );
+}
+
+#[test]
 fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
     assert_eq!(RING_COUNT[10], 441);
     assert_eq!((RING_X[288], RING_Y[288]), (-8, -16));
@@ -525,6 +562,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             territory_limits,
             fix_diag_land,
             post_fix_diag_string_constructor,
+            game_log_say_checksum,
             next_va,
             next_mutator_va,
             ..
@@ -541,12 +579,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::GAME_LOG_SAY_CHECKSUM_VA,
+            don_replay::post_continent::STRING_CLOSE_VA,
             "{name}"
         );
         assert_eq!(
@@ -809,6 +847,52 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                     primitive_va: don_replay::continent::GAME_LOG_SAY_CHECKSUM_VA,
                 }
             ),
+            "{name}"
+        );
+        assert_eq!(
+            game_log_say_checksum.body,
+            don_replay::post_continent::GAME_LOG_SAY_CHECKSUM_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(game_log_say_checksum.call.line_number, 0x1e9b, "{name}");
+        assert_eq!(game_log_say_checksum.call.mode, 1, "{name}");
+        assert_eq!(
+            game_log_say_checksum.owner.source_owner,
+            don_replay::continent::MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            "{name}"
+        );
+        assert!(game_log_say_checksum.owner.source_preserved, "{name}");
+        assert_eq!(
+            game_log_say_checksum.owner.checksum_sequence_delta, 1,
+            "{name}"
+        );
+        assert!(!game_log_say_checksum.owner.host_pointer_recorded, "{name}");
+        assert_eq!(game_log_say_checksum.cleanup_guard_after, -1, "{name}");
+        assert_eq!(
+            game_log_say_checksum.world_before, post_fix_diag_string_constructor.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            game_log_say_checksum.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(
+            game_log_say_checksum.world_sections_changed.is_empty(),
+            "{name}"
+        );
+        assert_eq!(
+            game_log_say_checksum.next,
+            don_replay::continent::MapMakePostFixDiagGameLogNext::StringClose {
+                local_load_va:
+                    don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_LOCAL_LOAD_VA,
+                call_va:
+                    don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+                primitive_va: don_replay::post_continent::STRING_CLOSE_VA,
+                allocation_owner:
+                    don_replay::continent::MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                may_release_owned_string_guts: true,
+            },
             "{name}"
         );
         assert!(

@@ -160,10 +160,11 @@ pub fn advance_continent_world_ownership(
             territory_limits,
             fix_diag_land,
             post_fix_diag_string_constructor,
+            game_log_say_checksum,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA
-            || *next_mutator_va != crate::continent::GAME_LOG_SAY_CHECKSUM_VA
+        } if *next_va != crate::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA
+            || *next_mutator_va != crate::post_continent::STRING_CLOSE_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -304,6 +305,10 @@ pub fn advance_continent_world_ownership(
             || post_fix_diag_string_constructor.world_before != fix_diag_land.world_after
             || post_fix_diag_string_constructor.random_state_before
                 != fix_diag_land.random_state_after
+            || game_log_say_checksum.world_before
+                != post_fix_diag_string_constructor.world_after
+            || game_log_say_checksum.random_state_before
+                != post_fix_diag_string_constructor.random_state_after
             || !crate::post_continent::validate_map_make_post_fix_diag_string_constructor_receipt(
                 &map.world,
                 &map.generation_regions,
@@ -313,11 +318,18 @@ pub fn advance_continent_world_ownership(
                 fix_diag_land,
                 post_fix_diag_string_constructor,
             )
+            || !crate::post_continent::validate_map_make_post_fix_diag_game_log_receipt(
+                &map.world,
+                &map.generation_regions,
+                regions_clear_all,
+                regions_find_all,
+                territory_limits,
+                fix_diag_land,
+                post_fix_diag_string_constructor,
+                game_log_say_checksum,
+            )
     ) {
-        return Err(mismatch(
-            stage,
-            "stop.post_fix_diag_string_constructor_residual",
-        ));
+        return Err(mismatch(stage, "stop.post_fix_diag_game_log_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

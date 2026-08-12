@@ -208,6 +208,9 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             regions_clear_all,
             regions_find_all,
             territory_limits,
+            fix_diag_land,
+            post_fix_diag_string_constructor,
+            game_log_say_checksum,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -259,13 +262,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
+            don_replay::post_continent::STRING_CLOSE_VA,
             "{}",
             expected.name
         );
@@ -484,14 +487,19 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             expected.name
         );
         assert_eq!(regions_find_all.world_before, regions_clear_all.world_after);
-        assert_eq!(checksum, regions_find_all.world_after, "{}", expected.name);
+        assert_eq!(territory_limits.world_before, regions_find_all.world_after);
+        assert_eq!(fix_diag_land.world_before, territory_limits.world_after);
+        assert_eq!(checksum, fix_diag_land.world_after, "{}", expected.name);
+        assert_eq!(
+            post_fix_diag_string_constructor.world_before,
+            fix_diag_land.world_after
+        );
+        assert_eq!(game_log_say_checksum.world_after, checksum);
         assert_eq!(
             regions_find_all.successful_find_calls, 3,
             "{}",
             expected.name
         );
-        assert_eq!(territory_limits.world_before, regions_find_all.world_after);
-        assert_eq!(territory_limits.world_after, checksum);
         assert!(territory_limits.world_sections_changed.is_empty());
         assert_eq!(
             checksum.section(WorldSection::StartArrays).adler,
@@ -544,11 +552,17 @@ fn later_selector_failure_stops_before_visiting_another_active_slot() {
         player_land,
         regions_clear_all,
         regions_find_all,
+        fix_diag_land,
         ..
     } = prefix.stop
     else {
         panic!("unexpected stop {:?}", prefix.stop);
     };
+
+    for mutation in &fix_diag_land.mutations {
+        map.world.wdata[mutation.cell] = mutation.before.clone();
+    }
+    assert_eq!(map.world.checksum_sections(), fix_diag_land.world_before);
 
     for mutation in &regions_find_all.world_mutations {
         map.world.wdata[mutation.cell].region = mutation.region_before;

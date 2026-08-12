@@ -178,6 +178,39 @@ pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA: u32 = 0x0068_be99;
 pub const GAME_LOG_GLOBAL_VA: u32 = 0x00eb_1360;
 pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA: u32 = 0x0068_be9e;
 pub const GAME_LOG_SAY_CHECKSUM_VA: u32 = 0x0093_0b30;
+pub const GAME_LOG_SAY_CHECKSUM_END_VA: u32 = 0x0093_1ca8;
+pub const GAME_LOG_SAY_CHECKSUM_RET_VA: u32 = 0x0093_1ca5;
+pub const GAME_LOG_SAY_CHECKSUM_SIZE: u32 = 4_472;
+pub const GAME_LOG_SAY_CHECKSUM_INSTRUCTION_COUNT: u32 = 1_379;
+pub const GAME_LOG_SAY_CHECKSUM_SHA256: &str =
+    "8e58ddabcd6742238aab95311529e9f615c5f322771f070c4805fbc48f2ef868";
+pub const GAME_LOG_CHECK_ACCEPT_CALL_VA: u32 = 0x0093_0b6d;
+pub const GAME_LOG_CHECK_ACCEPT_VA: u32 = 0x0093_09a0;
+pub const GAME_LOG_CHECK_ACCEPT_END_VA: u32 = 0x0093_0b26;
+pub const GAME_LOG_CHECK_ACCEPT_RET_VA: u32 = 0x0093_0b25;
+pub const GAME_LOG_CHECK_ACCEPT_SIZE: u32 = 390;
+pub const GAME_LOG_CHECK_ACCEPT_INSTRUCTION_COUNT: u32 = 98;
+pub const GAME_LOG_CHECK_ACCEPT_SHA256: &str =
+    "bdc002281b2d9ee6024de7fbdb549e7580b87f7a7d6a469f96d91171fffe51f6";
+pub const GAME_LOG_REENTRANCY_GUARD_VA: u32 = 0x00ee_12c0;
+pub const GAME_LOG_CATEGORY_OFFSET: u32 = 0x48;
+pub const GAME_LOG_MODE_OFFSET: u32 = 0x4c;
+pub const GAME_LOG_FRAME_CALLBACK_FLAG_OFFSET: u32 = 0x50;
+pub const GAME_LOG_CHECKSUM_SEQUENCE_OFFSET: u32 = 0x68;
+pub const GAME_LOG_ROLLOVER_SEQUENCE_OFFSET: u32 = 0x6c;
+pub const GAME_LOG_BREAK_SEQUENCE_OFFSET: u32 = 0x70;
+pub const GAME_LOG_CHECKSUM_CATEGORY: i32 = 0x1e;
+pub const GAME_LOG_FIRST_VIRTUAL_SINK_CALL_VA: u32 = 0x0093_0c25;
+pub const GAME_LOG_FRAME_ROLLOVER_CALL_VA: u32 = 0x0093_1c86;
+pub const GAME_LOG_FRAME_ROLLOVER_VA: u32 = 0x0092_f2d0;
+pub const MAP_MAKE_POST_CHECKSUM_GUARD_STORE_VA: u32 = 0x0068_bea3;
+pub const MAP_MAKE_POST_CHECKSUM_STRING_LOCAL_LOAD_VA: u32 = 0x0068_beaa;
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA: u32 = 0x0068_bead;
+pub const MAP_MAKE_POST_CHECKSUM_CALLER_END_VA: u32 = MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA;
+pub const MAP_MAKE_POST_CHECKSUM_CALLER_SIZE: u32 = 15;
+pub const MAP_MAKE_POST_CHECKSUM_CALLER_INSTRUCTION_COUNT: u32 = 3;
+pub const MAP_MAKE_POST_CHECKSUM_CALLER_SHA256: &str =
+    "3f130942dec6f49dc4774ad3eacbcee60a43d3181698848f155a44d835a1ace0";
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 
@@ -1897,6 +1930,282 @@ pub(crate) fn validate_map_make_post_fix_diag_string_constructor_receipt(
                     primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
                 },
             )
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct GameLogSayChecksumNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub check_accept_call_va: u32,
+    pub check_accept_va: u32,
+    pub first_virtual_sink_call_va: u32,
+    pub frame_rollover_call_va: u32,
+    pub frame_rollover_va: u32,
+}
+
+pub const GAME_LOG_SAY_CHECKSUM_NATIVE_BODY: GameLogSayChecksumNativeBody =
+    GameLogSayChecksumNativeBody {
+        entry_va: GAME_LOG_SAY_CHECKSUM_VA,
+        end_va_exclusive: GAME_LOG_SAY_CHECKSUM_END_VA,
+        ret_va: GAME_LOG_SAY_CHECKSUM_RET_VA,
+        callee_stack_argument_bytes_popped: 12,
+        size: GAME_LOG_SAY_CHECKSUM_SIZE,
+        instruction_count: GAME_LOG_SAY_CHECKSUM_INSTRUCTION_COUNT,
+        sha256: GAME_LOG_SAY_CHECKSUM_SHA256,
+        check_accept_call_va: GAME_LOG_CHECK_ACCEPT_CALL_VA,
+        check_accept_va: GAME_LOG_CHECK_ACCEPT_VA,
+        first_virtual_sink_call_va: GAME_LOG_FIRST_VIRTUAL_SINK_CALL_VA,
+        frame_rollover_call_va: GAME_LOG_FRAME_ROLLOVER_CALL_VA,
+        frame_rollover_va: GAME_LOG_FRAME_ROLLOVER_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct GameLogCheckAcceptNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub reentrancy_guard_va: u32,
+}
+
+pub const GAME_LOG_CHECK_ACCEPT_NATIVE_BODY: GameLogCheckAcceptNativeBody =
+    GameLogCheckAcceptNativeBody {
+        entry_va: GAME_LOG_CHECK_ACCEPT_VA,
+        end_va_exclusive: GAME_LOG_CHECK_ACCEPT_END_VA,
+        ret_va: GAME_LOG_CHECK_ACCEPT_RET_VA,
+        size: GAME_LOG_CHECK_ACCEPT_SIZE,
+        instruction_count: GAME_LOG_CHECK_ACCEPT_INSTRUCTION_COUNT,
+        sha256: GAME_LOG_CHECK_ACCEPT_SHA256,
+        reentrancy_guard_va: GAME_LOG_REENTRANCY_GUARD_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostChecksumCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_POST_CHECKSUM_CALLER_BODY: MapMakePostChecksumCallerBody =
+    MapMakePostChecksumCallerBody {
+        entry_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+        end_va_exclusive: MAP_MAKE_POST_CHECKSUM_CALLER_END_VA,
+        size: MAP_MAKE_POST_CHECKSUM_CALLER_SIZE,
+        instruction_count: MAP_MAKE_POST_CHECKSUM_CALLER_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_CHECKSUM_CALLER_SHA256,
+    };
+
+/// Exact owner-relative effects of `GameLog::say_checksum`. The replay does
+/// not have a live `GameLog` singleton, so data-dependent acceptance, output,
+/// and frame rollover are retained as host observations rather than invented
+/// concrete state. The unconditional sequence delta and temporary field
+/// schedule are exact.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagGameLogOwnerReceipt {
+    pub owner_va: u32,
+    pub source_owner: MapMakePostFixDiagStringAllocationOwner,
+    pub source_passed_by_const_reference: bool,
+    pub source_preserved: bool,
+    pub category_offset: u32,
+    pub temporary_category: i32,
+    pub previous_category_restored: bool,
+    pub mode_offset: u32,
+    pub temporary_mode: i32,
+    pub previous_nonnegative_mode_restored: bool,
+    pub frame_callback_flag_offset: u32,
+    pub checksum_sequence_offset: u32,
+    pub checksum_sequence_delta: u32,
+    pub rollover_sequence_offset: u32,
+    pub break_sequence_offset: u32,
+    pub acceptance_is_host_state_dependent: bool,
+    pub sink_output_is_host_state_dependent: bool,
+    pub frame_rollover_is_host_state_dependent: bool,
+    pub host_pointer_recorded: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostFixDiagGameLogNext {
+    StringClose {
+        local_load_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+        allocation_owner: MapMakePostFixDiagStringAllocationOwner,
+        may_release_owned_string_guts: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagGameLogReceipt {
+    pub caller: MapMakePostChecksumCallerBody,
+    pub body: GameLogSayChecksumNativeBody,
+    pub check_accept: GameLogCheckAcceptNativeBody,
+    pub call: MapMakePostFixDiagGameLogCall,
+    pub owner: MapMakePostFixDiagGameLogOwnerReceipt,
+    pub source_before: MapMakePostFixDiagLocalString,
+    pub source_after: MapMakePostFixDiagLocalString,
+    pub cleanup_guard_store_va: u32,
+    pub cleanup_guard_after: i32,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakePostFixDiagGameLogNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostFixDiagGameLogError {
+    PriorStringConstructorReceiptMismatch,
+}
+
+fn map_make_post_fix_diag_game_log_call() -> MapMakePostFixDiagGameLogCall {
+    MapMakePostFixDiagGameLogCall {
+        source_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_LOAD_VA,
+        line_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_PUSH_VA,
+        line_number: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_NUMBER,
+        source_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_PUSH_VA,
+        mode_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE_PUSH_VA,
+        mode: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE,
+        this_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA,
+        game_log_va: GAME_LOG_GLOBAL_VA,
+        call_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+        primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
+    }
+}
+
+fn map_make_post_fix_diag_game_log_owner() -> MapMakePostFixDiagGameLogOwnerReceipt {
+    MapMakePostFixDiagGameLogOwnerReceipt {
+        owner_va: GAME_LOG_GLOBAL_VA,
+        source_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+        source_passed_by_const_reference: true,
+        source_preserved: true,
+        category_offset: GAME_LOG_CATEGORY_OFFSET,
+        temporary_category: GAME_LOG_CHECKSUM_CATEGORY,
+        previous_category_restored: true,
+        mode_offset: GAME_LOG_MODE_OFFSET,
+        temporary_mode: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE,
+        previous_nonnegative_mode_restored: true,
+        frame_callback_flag_offset: GAME_LOG_FRAME_CALLBACK_FLAG_OFFSET,
+        checksum_sequence_offset: GAME_LOG_CHECKSUM_SEQUENCE_OFFSET,
+        checksum_sequence_delta: 1,
+        rollover_sequence_offset: GAME_LOG_ROLLOVER_SEQUENCE_OFFSET,
+        break_sequence_offset: GAME_LOG_BREAK_SEQUENCE_OFFSET,
+        acceptance_is_host_state_dependent: true,
+        sink_output_is_host_state_dependent: true,
+        frame_rollover_is_host_state_dependent: true,
+        host_pointer_recorded: false,
+    }
+}
+
+/// Execute the exact checksum-log invocation as a typed host observation,
+/// then execute the caller guard clear and local-address load. The local
+/// `map.cpp` allocation is preserved across the const-reference call. Freeze
+/// before `String::close`, whose sole-owner path may release that allocation.
+pub fn execute_map_make_post_fix_diag_game_log_say_checksum(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+) -> Result<MapMakePostFixDiagGameLogReceipt, MapMakePostFixDiagGameLogError> {
+    if !validate_map_make_post_fix_diag_string_constructor_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+    ) || prior_string.random_state_after != random_state
+    {
+        return Err(MapMakePostFixDiagGameLogError::PriorStringConstructorReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let source_before = prior_string.local.clone();
+    let source_after = source_before.clone();
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostFixDiagGameLogReceipt {
+        caller: MAP_MAKE_POST_CHECKSUM_CALLER_BODY,
+        body: GAME_LOG_SAY_CHECKSUM_NATIVE_BODY,
+        check_accept: GAME_LOG_CHECK_ACCEPT_NATIVE_BODY,
+        call: map_make_post_fix_diag_game_log_call(),
+        owner: map_make_post_fix_diag_game_log_owner(),
+        source_before,
+        source_after,
+        cleanup_guard_store_va: MAP_MAKE_POST_CHECKSUM_GUARD_STORE_VA,
+        cleanup_guard_after: -1,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakePostFixDiagGameLogNext::StringClose {
+            local_load_va: MAP_MAKE_POST_CHECKSUM_STRING_LOCAL_LOAD_VA,
+            call_va: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+            primitive_va: STRING_CLOSE_VA,
+            allocation_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            may_release_owned_string_guts: true,
+        },
+    })
+}
+
+pub(crate) fn validate_map_make_post_fix_diag_game_log_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    receipt: &MapMakePostFixDiagGameLogReceipt,
+) -> bool {
+    validate_map_make_post_fix_diag_string_constructor_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+    ) && receipt.caller == MAP_MAKE_POST_CHECKSUM_CALLER_BODY
+        && receipt.body == GAME_LOG_SAY_CHECKSUM_NATIVE_BODY
+        && receipt.check_accept == GAME_LOG_CHECK_ACCEPT_NATIVE_BODY
+        && receipt.call == map_make_post_fix_diag_game_log_call()
+        && receipt.owner == map_make_post_fix_diag_game_log_owner()
+        && receipt.source_before == prior_string.local
+        && receipt.source_before == receipt.source_after
+        && receipt.source_after.owns_typed_string_guts
+        && receipt.cleanup_guard_store_va == MAP_MAKE_POST_CHECKSUM_GUARD_STORE_VA
+        && receipt.cleanup_guard_after == -1
+        && receipt.world_before == prior_string.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_string.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == (MapMakePostFixDiagGameLogNext::StringClose {
+                local_load_va: MAP_MAKE_POST_CHECKSUM_STRING_LOCAL_LOAD_VA,
+                call_va: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+                primitive_va: STRING_CLOSE_VA,
+                allocation_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                may_release_owned_string_guts: true,
+            })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

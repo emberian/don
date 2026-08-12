@@ -124,13 +124,17 @@ use crate::pools::{
 };
 pub use crate::post_continent::{
     execute_map_fix_diag_land, execute_map_make_first_regions_clear_all,
-    execute_map_make_first_regions_find_all, execute_map_make_post_fix_diag_string_constructor,
-    execute_map_make_territory_limits, MapFixDiagLandError, MapFixDiagLandNativeBody,
-    MapFixDiagLandNext, MapFixDiagLandReceipt, MapFixDiagLandWorldMutation,
-    MapMakeFirstRegionsClearAllNext, MapMakeFirstRegionsClearAllReceipt,
-    MapMakeFirstRegionsFindAllCallerBody, MapMakeFirstRegionsFindAllError,
-    MapMakeFirstRegionsFindAllNext, MapMakeFirstRegionsFindAllReceipt,
-    MapMakeFirstTerritoryPrepBody, MapMakePostFixDiagGameLogCall, MapMakePostFixDiagLocalString,
+    execute_map_make_first_regions_find_all, execute_map_make_post_fix_diag_game_log_say_checksum,
+    execute_map_make_post_fix_diag_string_constructor, execute_map_make_territory_limits,
+    GameLogCheckAcceptNativeBody, GameLogSayChecksumNativeBody, MapFixDiagLandError,
+    MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
+    MapFixDiagLandWorldMutation, MapMakeFirstRegionsClearAllNext,
+    MapMakeFirstRegionsClearAllReceipt, MapMakeFirstRegionsFindAllCallerBody,
+    MapMakeFirstRegionsFindAllError, MapMakeFirstRegionsFindAllNext,
+    MapMakeFirstRegionsFindAllReceipt, MapMakeFirstTerritoryPrepBody,
+    MapMakePostChecksumCallerBody, MapMakePostFixDiagGameLogCall, MapMakePostFixDiagGameLogError,
+    MapMakePostFixDiagGameLogNext, MapMakePostFixDiagGameLogOwnerReceipt,
+    MapMakePostFixDiagGameLogReceipt, MapMakePostFixDiagLocalString,
     MapMakePostFixDiagStringAllocationOwner, MapMakePostFixDiagStringAllocationReceipt,
     MapMakePostFixDiagStringConstructorError, MapMakePostFixDiagStringConstructorNext,
     MapMakePostFixDiagStringConstructorReceipt, MapMakeTerritoryLimitsError,
@@ -292,8 +296,9 @@ pub enum ContinentStop {
     /// array `_free` calls, the complete style-virtual epilogue, and the common
     /// driver's first `Regions::clear_all` / `Regions::find_all` pair, all six
     /// World territory-limit stores, complete `Map::fix_diag_land`, and the
-    /// caller-local log `String` constructor. Execution is frozen before
-    /// `GameLog::say_checksum`.
+    /// caller-local log `String` constructor, and the typed
+    /// `GameLog::say_checksum` host observation. Execution is frozen before
+    /// destroying the sole-owned local `map.cpp` allocation.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -313,6 +318,7 @@ pub enum ContinentStop {
         territory_limits: MapMakeTerritoryLimitsReceipt,
         fix_diag_land: MapFixDiagLandReceipt,
         post_fix_diag_string_constructor: MapMakePostFixDiagStringConstructorReceipt,
+        game_log_say_checksum: MapMakePostFixDiagGameLogReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -424,6 +430,7 @@ pub enum ContinentError {
     TerritoryLimits(MapMakeTerritoryLimitsError),
     FixDiagLand(MapFixDiagLandError),
     PostFixDiagStringConstructor(MapMakePostFixDiagStringConstructorError),
+    PostFixDiagGameLog(MapMakePostFixDiagGameLogError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1762,8 +1769,25 @@ fn east_meets_west(
                         .map_err(ContinentError::PostFixDiagStringConstructor)?;
                     let MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(next) =
                         post_fix_diag_string_constructor.next;
-                    let next_va = next.call_va;
-                    let next_mutator_va = next.primitive_va;
+                    debug_assert_eq!(next.call_va, MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA);
+                    debug_assert_eq!(next.primitive_va, GAME_LOG_SAY_CHECKSUM_VA);
+                    let game_log_say_checksum =
+                        execute_map_make_post_fix_diag_game_log_say_checksum(
+                            world,
+                            regions,
+                            rng.state(),
+                            &regions_clear_all,
+                            &regions_find_all,
+                            &territory_limits,
+                            &fix_diag_land,
+                            &post_fix_diag_string_constructor,
+                        )
+                        .map_err(ContinentError::PostFixDiagGameLog)?;
+                    let MapMakePostFixDiagGameLogNext::StringClose {
+                        call_va: next_va,
+                        primitive_va: next_mutator_va,
+                        ..
+                    } = game_log_say_checksum.next;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1785,6 +1809,7 @@ fn east_meets_west(
                             territory_limits,
                             fix_diag_land,
                             post_fix_diag_string_constructor,
+                            game_log_say_checksum,
                             next_mutator_va,
                         },
                         starts_added,

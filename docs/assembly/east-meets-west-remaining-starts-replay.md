@@ -119,7 +119,7 @@ does not visit slot 2.
 - exact corpus census: 13,119,476 walked / 7,917,091 owned / 5,202,385 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
 - exact current integrated boundary set: 2
-  map_team_continent_game_log_say_checksum and 19
+  map_team_continent_post_checksum_string_close and 19
   place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:

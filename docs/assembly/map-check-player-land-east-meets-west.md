@@ -13,8 +13,10 @@ Execution then runs the common driver's full `Regions::clear_all` and
 `Regions::find_all` bodies and all six World territory-limit stores, follows
 the style-19 fallthrough, executes complete `Map::fix_diag_land` at
 `0x0068be75 -> 0x0069c250`, constructs the caller-local `map.cpp` String at
-`0x0068be82 -> 0x00a1d660`, and freezes before `GameLog::say_checksum` at
-`0x0068be9e -> 0x00930b30`. None of these tranches consumes RNG.
+`0x0068be82 -> 0x00a1d660`, executes the typed `GameLog::say_checksum` host
+observation at `0x0068be9e -> 0x00930b30`, clears the caller cleanup guard,
+and freezes before the sole-owner `String::close` at
+`0x0068bead -> 0x00a1cf40`. None of these tranches consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -298,9 +300,39 @@ zero, and zero lazy hashes.
 Caller execution stores cleanup guard 4 and stages the exact log arguments
 through `0x0068be9e`. This 28-byte, seven-instruction slice has SHA-256
 `98eba84d611b7e7c9ed1a9244a4b1f9712ba709e36426e8e0439020d9382497c`.
-It freezes before `GameLog::say_checksum` at
-`0x0068be9e -> 0x00930b30`, with line number `0x1e9b`, mode 1, and GameLog
-owner `0x00eb1360`. World and RNG are unchanged.
+It stages `GameLog::say_checksum` at `0x0068be9e -> 0x00930b30`, with line
+number `0x1e9b`, mode 1, GameLog owner `0x00eb1360`, and the sole-owned local
+`map.cpp` allocation passed by const reference. World and RNG are unchanged.
+
+## Typed checksum-log observation
+
+PDB gives `GameLog::say_checksum(int, const String&, int)` size 4,472. Its
+exact half-open extent `0x00930b30..0x00931ca8` contains 1,379 decoded
+instructions, returns with `ret 0xc` at `0x00931ca5`, and has SHA-256
+`8e58ddabcd6742238aab95311529e9f615c5f322771f070c4805fbc48f2ef868`.
+The mandatory `GameLog::check_accept` child at
+`0x00930b6d -> 0x009309a0` is 390 bytes / 98 instructions with SHA-256
+`bdc002281b2d9ee6024de7fbdb549e7580b87f7a7d6a469f96d91171fffe51f6`.
+
+The checksum logger is a host observation, not a World mutator. It
+temporarily writes checksum category `0x1e` to `GameLog+0x48`, writes mode 1
+to `GameLog+0x4c`, invokes the acceptance/output schedule, restores the prior
+category and any nonnegative prior mode, and unconditionally increments the
+checksum sequence at `GameLog+0x68`. Acceptance, the virtual sink beginning
+at `0x00930c25`, and the conditional frame rollover at
+`0x00931c86 -> 0x0092f2d0` depend on live GameLog/game state not present in
+offline reconstruction. The typed owner receipt retains those branches as
+host-state-dependent observations; it does not invent their concrete output
+or store a host pointer. The `map.cpp` const-reference owner is unchanged.
+
+After return, the caller stores cleanup guard `-1` at `0x0068bea3` and loads
+the local address at `0x0068beaa`. The exact call/cleanup slice
+`0x0068be9e..0x0068bead` is 15 bytes / three instructions, SHA-256
+`3f130942dec6f49dc4774ad3eacbcee60a43d3181698848f155a44d835a1ace0`.
+Execution freezes before `String::close` because this local is the sole owner:
+unlike the earlier internal-table lease, its close may enter the
+`StringGuts` deleting-destructor and allocator-release path. No later caller
+tail is inferred.
 
 ## Typed residual and gates
 
@@ -313,8 +345,9 @@ does the same for X and additionally binds every local clear, callee-saved
 register pop, SEH restoration, frame restoration, and `ret 4`.  The common
 clear, find, and territory receipts then bind the complete Region/World
 transitions; the diagonal receipt binds the final WData mutation and the
-constructor receipt binds the caller-local allocation and arguments. It
-exposes `next_va = 0x0068be9e`, `next_mutator_va = 0x00930b30`. Owner transition
+constructor receipt binds the caller-local allocation and arguments; the log
+receipt binds the exact source/mode/line owner and GameLog-relative effects.
+It exposes `next_va = 0x0068bead`, `next_mutator_va = 0x00a1cf40`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
@@ -322,7 +355,7 @@ unchanged RNG chronology match; its implementation
 digest includes the replay executor plus the sim Region and map-terrain
 bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_game_log_say_checksum`.
+`map_team_continent_post_checksum_string_close`.
 
 Validation gates:
 
@@ -399,3 +432,13 @@ Validation gates:
   265,619/265,619 same-group comparisons, with exact endpoints of two
   `map_team_continent_game_log_say_checksum` / nineteen
   `place_all_mountains_add_mountain`.
+- current Cycle 10 exact source/all-test compile is green. The focused pack is
+  continent 4/4, player-land/checksum-log 6/6, remaining starts 2/2, edge
+  canals 4/4, and initial-item reconstruction 4/4; both shipped style-19
+  fixtures retain the exact line/mode/string owner and unchanged World/RNG.
+  Owner transition is 2/2, including all 21 checksum-bearing recordings. The
+  installed full localizer opens 62 recordings, finds 21 checksum-bearing,
+  retains 21/21 coherent owner ledgers and 265,619/265,619 same-group
+  comparisons, and names exactly two
+  `map_team_continent_post_checksum_string_close` / nineteen
+  `place_all_mountains_add_mountain` endpoints.

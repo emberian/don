@@ -89,7 +89,7 @@ bytes from `schema/replay-validation.json`:
 | current exact stop | recordings |
 |---|---:|
 | `place_all_mountains_add_mountain` | 19 |
-| `map_team_continent_game_log_say_checksum` | 2 |
+| `map_team_continent_post_checksum_string_close` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
 style virtual completes also receipt the common post-continent and fertility stages. This

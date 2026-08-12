@@ -223,6 +223,9 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             regions_clear_all,
             regions_find_all,
             territory_limits,
+            fix_diag_land,
+            post_fix_diag_string_constructor,
+            game_log_say_checksum,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -344,12 +347,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
+            don_replay::post_continent::STRING_CLOSE_VA,
             "{name}"
         );
         assert_eq!(post_player_land_cleanup.centroid_y_length, 2, "{name}");
@@ -381,8 +384,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             "{name}"
         );
         assert_eq!(
-            regions_find_all.world_after,
-            map.world.checksum_sections(),
+            regions_find_all.world_after, fix_diag_land.world_before,
             "{name}"
         );
         assert_eq!(regions_find_all.successful_find_calls, 3, "{name}");
@@ -393,7 +395,20 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             "{name}"
         );
         assert_eq!(
-            territory_limits.world_after,
+            territory_limits.world_after, fix_diag_land.world_before,
+            "{name}"
+        );
+        assert_eq!(
+            fix_diag_land.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.world_before, fix_diag_land.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            game_log_say_checksum.world_after,
             map.world.checksum_sections(),
             "{name}"
         );
