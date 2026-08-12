@@ -30,6 +30,8 @@ pub mod air_patrol_unit_search_frontier;
 /// Complete top-level `Unit::do_air_physics` control/state transaction with nested flight,
 /// collision, fuel, path, animation, and RNG mutations represented by atomic receipts.
 pub mod air_physics_frontier;
+/// Exact AIR_PATROL dynamic payload plus synchronized type/scenario authority codecs.
+pub mod air_runtime_authority;
 pub mod ammo;
 /// Recovered from the cut-off `cg:armies` lane. `Army`/`Armies` is the standing
 /// formation-of-groups layer executed at step 13 of `Game::do_frame`. The module keeps

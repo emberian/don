@@ -3070,7 +3070,7 @@ impl Sim {
     /// own `Stack<PathData>` and the side-effecting collision transaction. Movement without a
     /// complete live collision source holds position and increments the named gap.
     fn do_move(&mut self, row: usize) {
-        let Some(ord) = self.world.orders(row).current().copied() else {
+        let Some(ord) = self.world.orders(row).current().cloned() else {
             return;
         };
         let speed = self.world.units.myspeed()[row] as i32;
@@ -3200,7 +3200,7 @@ impl Sim {
     /// (`Unit::fight` `0x005FD4D0`, `find_attack_pos` `0x00601280`) is uncited, so the
     /// order must already name its target.
     fn do_attack(&mut self, row: usize) {
-        let Some(ord) = self.world.orders(row).current().copied() else {
+        let Some(ord) = self.world.orders(row).current().cloned() else {
             return;
         };
         if ord.target_who < 0 || ord.target_o < 0 {
@@ -3443,7 +3443,7 @@ impl Sim {
     /// retail sees them in — which is the input `production::construct_frame` documents as
     /// belonging to the scheduler rather than to its own module.
     fn do_build(&mut self, row: usize) {
-        let Some(ord) = self.world.orders(row).current().copied() else {
+        let Some(ord) = self.world.orders(row).current().cloned() else {
             return;
         };
         let site = ord.target_o as usize;

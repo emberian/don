@@ -31,21 +31,45 @@ pub const SIZEOF_GROUP_PATROL_ORDER: usize = 100;
 pub const SIZEOF_AIR_PATROL_ORDER: usize = 104;
 
 /// The fields of the `PatrolOrder` primary base.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatrolPoints {
     /// `PatrolOrder::x_pos` at `+4`.
     pub x: Vec<i32>,
+    /// Walked `SimpleArray<Coord>::increment` / normalized flags for `x_pos`.
+    pub x_increment: i16,
+    pub x_flags: u8,
     /// `PatrolOrder::y_pos` at `+32`.
     pub y: Vec<i32>,
+    /// Walked `SimpleArray<Coord>::increment` / normalized flags for `y_pos`.
+    pub y_increment: i16,
+    pub y_flags: u8,
     /// `PatrolOrder::waypoint` at `+60`.
     pub waypoint: i32,
+}
+
+impl Default for PatrolPoints {
+    fn default() -> Self {
+        Self {
+            x: Vec::new(),
+            x_increment: -1,
+            x_flags: 0,
+            y: Vec::new(),
+            y_increment: -1,
+            y_flags: 0,
+            waypoint: 0,
+        }
+    }
 }
 
 impl PatrolPoints {
     pub fn one(x: i32, y: i32) -> Self {
         Self {
             x: vec![x],
+            x_increment: -1,
+            x_flags: 0,
             y: vec![y],
+            y_increment: -1,
+            y_flags: 0,
             waypoint: 0,
         }
     }
@@ -53,7 +77,11 @@ impl PatrolPoints {
     pub fn two(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
         Self {
             x: vec![x0, x1],
+            x_increment: -1,
+            x_flags: 0,
             y: vec![y0, y1],
+            y_increment: -1,
+            y_flags: 0,
             waypoint: 0,
         }
     }

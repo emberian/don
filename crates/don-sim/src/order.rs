@@ -447,7 +447,7 @@ pub struct OrderTargetIdentity {
 /// The retail hierarchy is 31 classes with a virtual `get_type()`, a virtually-inherited
 /// `UnitOrder` subobject at the *tail* of each object, and 30 `update_<X>_order` slots.
 /// None of that shape is load-bearing for us; the *fields* are, and this is their union.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Order {
     pub kind: OrderIndex,
     /// `UnitOrder::flags`, a `char` at +4. See the `ORDER_*` bits.
@@ -480,6 +480,9 @@ pub struct Order {
     /// Concrete payload for order 18. `None` on `CHANGE_FORM` is malformed: neither the
     /// form byte nor final angle may be guessed by the executor.
     pub form_order: Option<FormOrderState>,
+    /// Complete walked payload of `AirPatrolOrder`, including both dynamic-array metadata
+    /// records and the secondary `AirOrder` base. `Some` is valid only for AIR_PATROL.
+    pub air_patrol: Option<crate::systems::air_runtime_authority::AirPatrolOrderPayload>,
 }
 
 impl Default for Order {
@@ -498,6 +501,7 @@ impl Default for Order {
             follow: None,
             special_anim: None,
             form_order: None,
+            air_patrol: None,
         }
     }
 }
@@ -592,6 +596,20 @@ impl Order {
             }),
             ..Order::default()
         }
+    }
+
+    /// Construct one canonical AIR_PATROL queue node from its complete walked payload.
+    pub fn air_patrol(
+        payload: crate::systems::air_runtime_authority::AirPatrolOrderPayload,
+        group: bool,
+    ) -> Result<Order, crate::systems::air_runtime_authority::AirRuntimeAuthorityError> {
+        payload.validate()?;
+        Ok(Order {
+            kind: OrderIndex::AirPatrol,
+            flags: if group { ORDER_GROUP } else { 0 },
+            air_patrol: Some(payload),
+            ..Order::default()
+        })
     }
 
     /// Exact result of `UnitData::is_entering_or_exiting` for this flattened order.

@@ -21,6 +21,9 @@ use crate::order::{
 };
 use crate::script_runtime::ScriptRuntime;
 use crate::systems::{
+    air_runtime_authority::{
+        self, AirOrderPayload, AirPatrolOrderPayload, WalkedCoordArray, MAX_DECODED_PATROL_POINTS,
+    },
     bhs_type_runtime::TypeBuiltinBoundaryError,
     borders_fog, economy, game_daemon_step12, groups_guys,
     items::Item,
@@ -439,6 +442,11 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     // Validate the typed envelope before appending any bytes. `save_sim` writes into a local
     // buffer too, so an invalid public order cannot leak either a partial stream or a
     // partially normalized replacement order to its caller.
+    if format_version < ORDER_NODE_METRIC_FORMAT_VERSION && o.air_patrol.is_some() {
+        return Err(SaveError::Unsupported(
+            "AIR_PATROL payload before DoNSave v13",
+        ));
+    }
     if format_version >= TYPED_ORDER_FORMAT_VERSION {
         if o.move_state.is_some() && !order_kind_carries_move_state(o.kind) {
             return Err(SaveError::Invalid("movement payload on foreign order kind"));
@@ -451,7 +459,29 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
                 return Err(SaveError::Invalid("change-form movement angle mismatch"));
             }
         }
+        if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
+            if o.air_patrol.is_some() && o.kind != OrderIndex::AirPatrol {
+                return Err(SaveError::Invalid(
+                    "AIR_PATROL payload on foreign order kind",
+                ));
+            }
+            if o.air_patrol.is_none() && o.kind == OrderIndex::AirPatrol {
+                return Err(SaveError::Invalid("missing AIR_PATROL payload"));
+            }
+        }
+        if o.move_state.is_some() && o.air_patrol.is_some() {
+            return Err(SaveError::Invalid("multiple typed order payloads"));
+        }
     }
+    let air_patrol_leaf = if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
+        o.air_patrol
+            .as_ref()
+            .map(air_runtime_authority::encode_air_patrol_leaf)
+            .transpose()
+            .map_err(map_air_patrol_save_error)?
+    } else {
+        None
+    };
     w.u8(o.kind as u8);
     w.u8(o.flags);
     w.i32(o.x);
@@ -495,11 +525,19 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = if o.move_state.is_some() {
             DoNSaveOrderPayloadTag::Move
+        } else if air_patrol_leaf.is_some() {
+            DoNSaveOrderPayloadTag::AirPatrol
         } else {
             DoNSaveOrderPayloadTag::None
         };
-        w.u8(tag as u8);
-        w.u8(tag.wire_version());
+        if let Some(leaf) = air_patrol_leaf {
+            debug_assert_eq!(leaf[0], tag as u8);
+            debug_assert_eq!(leaf[1], tag.wire_version());
+            w.bytes(&leaf);
+        } else {
+            w.u8(tag as u8);
+            w.u8(tag.wire_version());
+        }
         if let Some(state) = o.move_state {
             w.i32(state.angle);
             w.i32(state.dest);
@@ -553,6 +591,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         special_anim: None,
         follow: None,
         form_order: None,
+        air_patrol: None,
     };
     let special_anim = if r.bool()? {
         let special_type = SpecialAnimType::from_raw(r.i32()?)
@@ -592,7 +631,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     } else {
         None
     };
-    let move_state = if format_version >= TYPED_ORDER_FORMAT_VERSION {
+    let (move_state, air_patrol) = if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = DoNSaveOrderPayloadTag::from_raw(r.u8()?).ok_or(SaveError::Invalid(
             "unknown order payload discriminator/version",
         ))?;
@@ -602,37 +641,78 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                 if order_kind_carries_move_state(kind) {
                     return Err(SaveError::Invalid("missing movement payload"));
                 }
-                None
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION
+                    && kind == OrderIndex::AirPatrol
+                {
+                    return Err(SaveError::Invalid("missing AIR_PATROL payload"));
+                }
+                (None, None)
             }
             (DoNSaveOrderPayloadTag::Move, 1) => {
                 if !order_kind_carries_move_state(kind) {
                     return Err(SaveError::Invalid("movement payload on foreign order kind"));
                 }
-                Some(MoveOrderState {
-                    angle: r.i32()?,
-                    dest: r.i32()?,
-                    pause: r.i32()?,
-                    retry: r.i32()?,
-                    attempts: r.i32()?,
-                    timer: r.i32()?,
-                    facing: r.i32()?,
-                    dest_x: r.i32()?,
-                    dest_y: r.i32()?,
-                    last_x: r.i32()?,
-                    last_y: r.i32()?,
-                    coll_x: r.i32()?,
-                    coll_y: r.i32()?,
-                    orig_x: r.i32()?,
-                    orig_y: r.i32()?,
-                    off_x: r.i16()?,
-                    off_y: r.i16()?,
-                    group_oxx: r.i32()?,
-                    group_whose: r.i32()?,
-                    group_id: r.i32()?,
-                    group_form_id: r.i32()?,
-                    group_angle: r.i32()?,
-                    in_group: r.i32()?,
-                })
+                (
+                    Some(MoveOrderState {
+                        angle: r.i32()?,
+                        dest: r.i32()?,
+                        pause: r.i32()?,
+                        retry: r.i32()?,
+                        attempts: r.i32()?,
+                        timer: r.i32()?,
+                        facing: r.i32()?,
+                        dest_x: r.i32()?,
+                        dest_y: r.i32()?,
+                        last_x: r.i32()?,
+                        last_y: r.i32()?,
+                        coll_x: r.i32()?,
+                        coll_y: r.i32()?,
+                        orig_x: r.i32()?,
+                        orig_y: r.i32()?,
+                        off_x: r.i16()?,
+                        off_y: r.i16()?,
+                        group_oxx: r.i32()?,
+                        group_whose: r.i32()?,
+                        group_id: r.i32()?,
+                        group_form_id: r.i32()?,
+                        group_angle: r.i32()?,
+                        in_group: r.i32()?,
+                    }),
+                    None,
+                )
+            }
+            (DoNSaveOrderPayloadTag::AirPatrol, 1)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                if kind != OrderIndex::AirPatrol {
+                    return Err(SaveError::Invalid(
+                        "AIR_PATROL payload on foreign order kind",
+                    ));
+                }
+                let x = read_air_patrol_coord_array(r)?;
+                let y = read_air_patrol_coord_array(r)?;
+                let payload = AirPatrolOrderPayload {
+                    x,
+                    y,
+                    waypoint: r.i32()?,
+                    air: AirOrderPayload {
+                        home_o: r.i32()?,
+                        home_who: r.i32()?,
+                        cruising_alt: r.i32()?,
+                        sharp_turn: r.i32()?,
+                        old: r.i32()?,
+                        returning: r.i32()?,
+                    },
+                };
+                payload.validate().map_err(map_air_patrol_save_error)?;
+                (None, Some(payload))
+            }
+            (DoNSaveOrderPayloadTag::AirPatrol, _)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                return Err(SaveError::Invalid(
+                    "unknown order payload discriminator/version",
+                ));
             }
             (
                 DoNSaveOrderPayloadTag::Gather
@@ -653,7 +733,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
             }
         }
     } else {
-        None
+        (None, None)
     };
     if let (Some(move_state), Some(form)) = (move_state, form_order) {
         if kind == OrderIndex::ChangeForm && move_state.angle != form.angle {
@@ -665,7 +745,33 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         form_order,
         follow,
         move_state,
+        air_patrol,
         ..order
+    })
+}
+
+fn map_air_patrol_save_error(error: air_runtime_authority::AirRuntimeAuthorityError) -> SaveError {
+    match error {
+        air_runtime_authority::AirRuntimeAuthorityError::PointCountLimit(_)
+        | air_runtime_authority::AirRuntimeAuthorityError::PointCountOutOfRange(_) => {
+            SaveError::Limit("AIR_PATROL waypoint count")
+        }
+        _ => SaveError::Invalid("invalid AIR_PATROL payload"),
+    }
+}
+
+fn read_air_patrol_coord_array(r: &mut Reader<'_>) -> Result<WalkedCoordArray, SaveError> {
+    let len = r.len(MAX_DECODED_PATROL_POINTS, "AIR_PATROL waypoint count")?;
+    let increment = r.i16()?;
+    let flags = r.u8()?;
+    let mut values = Vec::with_capacity(len);
+    for _ in 0..len {
+        values.push(r.i32()?);
+    }
+    Ok(WalkedCoordArray {
+        increment,
+        flags,
+        values,
     })
 }
 
@@ -3154,7 +3260,7 @@ mod tests {
             .replace(Order::move_to(4_000, 5_000, 17));
         let legacy = format_eleven_stream(&active_move);
         let loaded = load_sim(&legacy).unwrap();
-        let decoded = *loaded.world.orders(0).current().unwrap();
+        let decoded = loaded.world.orders(0).current().unwrap().clone();
         assert_eq!(decoded.kind, OrderIndex::MoveTo);
         assert_eq!(decoded.move_state, None);
         let before = loaded.world.orders(0).clone();
@@ -3876,10 +3982,132 @@ mod tests {
         reader.finish().unwrap();
     }
 
+    fn exact_air_patrol_order() -> Order {
+        Order::air_patrol(
+            AirPatrolOrderPayload {
+                x: WalkedCoordArray {
+                    increment: -7,
+                    flags: 0x08,
+                    values: vec![1, 2, 3],
+                },
+                y: WalkedCoordArray {
+                    increment: 9,
+                    flags: 0x10,
+                    values: vec![4, 5, 6],
+                },
+                waypoint: 2,
+                air: AirOrderPayload {
+                    home_o: 2_015,
+                    home_who: 0,
+                    cruising_alt: 0x640,
+                    sharp_turn: 1,
+                    old: 2,
+                    returning: 0,
+                },
+            },
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn air_patrol_tag_six_round_trips_every_dynamic_field() {
+        let order = exact_air_patrol_order();
+        let mut writer = Writer::default();
+        write_order(&mut writer, &order, FORMAT_VERSION).unwrap();
+        assert_eq!(writer.0[23], DoNSaveOrderPayloadTag::AirPatrol as u8);
+        assert_eq!(writer.0[24], 1);
+        let mut reader = Reader::new(&writer.0);
+        assert_eq!(read_order(&mut reader, FORMAT_VERSION).unwrap(), order);
+        reader.finish().unwrap();
+    }
+
+    #[test]
+    fn air_patrol_tag_six_is_v13_only_and_v7_through_v12_stay_exact() {
+        let legacy = Order {
+            kind: OrderIndex::AirPatrol,
+            flags: 0x5a,
+            x: 0x1122_3344,
+            y: -77,
+            ..Order::default()
+        };
+        let mut writer = Writer::default();
+        write_order(&mut writer, &legacy, TYPED_ORDER_FORMAT_VERSION).unwrap();
+        assert_eq!(writer.0[23], DoNSaveOrderPayloadTag::None as u8);
+        assert_eq!(writer.0[24], 0);
+        let mut reader = Reader::new(&writer.0);
+        assert_eq!(
+            read_order(&mut reader, TYPED_ORDER_FORMAT_VERSION).unwrap(),
+            legacy
+        );
+        reader.finish().unwrap();
+
+        let exact = exact_air_patrol_order();
+        for version in LEGACY_DENSE_OBJECTS_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION {
+            assert_eq!(
+                write_order(&mut Writer::default(), &exact, version),
+                Err(SaveError::Unsupported(
+                    "AIR_PATROL payload before DoNSave v13"
+                )),
+                "v{version} silently discarded the typed AIR_PATROL payload"
+            );
+        }
+        assert_eq!(
+            write_order(&mut Writer::default(), &legacy, FORMAT_VERSION),
+            Err(SaveError::Invalid("missing AIR_PATROL payload"))
+        );
+
+        let mut reserved = writer.0;
+        reserved[23] = DoNSaveOrderPayloadTag::AirPatrol as u8;
+        reserved[24] = 1;
+        assert_eq!(
+            read_order(&mut Reader::new(&reserved), TYPED_ORDER_FORMAT_VERSION),
+            Err(SaveError::Unsupported("reserved typed order payload"))
+        );
+    }
+
+    #[test]
+    fn air_patrol_tag_version_count_flags_and_truncation_mutations_refuse() {
+        let order = exact_air_patrol_order();
+        let mut writer = Writer::default();
+        write_order(&mut writer, &order, FORMAT_VERSION).unwrap();
+        let valid = writer.0;
+
+        let mut wrong_version = valid.clone();
+        wrong_version[24] = 2;
+        assert_eq!(
+            read_order(&mut Reader::new(&wrong_version), FORMAT_VERSION),
+            Err(SaveError::Invalid(
+                "unknown order payload discriminator/version"
+            ))
+        );
+
+        let mut excessive = valid.clone();
+        excessive[25..29].copy_from_slice(&((MAX_DECODED_PATROL_POINTS as u32) + 1).to_le_bytes());
+        assert_eq!(
+            read_order(&mut Reader::new(&excessive), FORMAT_VERSION),
+            Err(SaveError::Limit("AIR_PATROL waypoint count"))
+        );
+
+        let mut allocator_flag = valid.clone();
+        allocator_flag[31] |= 0x40;
+        assert_eq!(
+            read_order(&mut Reader::new(&allocator_flag), FORMAT_VERSION),
+            Err(SaveError::Invalid("invalid AIR_PATROL payload"))
+        );
+
+        let mut truncated = valid;
+        truncated.pop();
+        assert_eq!(
+            read_order(&mut Reader::new(&truncated), FORMAT_VERSION),
+            Err(SaveError::Invalid("truncated payload"))
+        );
+    }
+
     #[test]
     fn versions_seven_through_eleven_keep_the_exact_legacy_order_image() {
         let order = Order::move_to(0x1020_3040, -0x1020_304, 77);
-        let mut expected = order;
+        let mut expected = order.clone();
         expected.move_state = None;
         let mut reference = None;
         for version in LEGACY_DENSE_OBJECTS_FORMAT_VERSION..=LEGACY_ORDER_FORMAT_VERSION {

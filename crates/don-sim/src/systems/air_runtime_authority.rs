@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Lossless runtime authority required by the canonical Group air-action host.
 //!
-//! This module is deliberately `std`-only and is not registered in `systems/mod.rs` yet.
-//! It freezes three state contracts which the existing shadow bridge cannot provide:
+//! This module began as a `std`-only frozen contract. It is now registered because the
+//! canonical `Order` and DoNSave owners consume its AIR_PATROL payload; the type/scenario
+//! authorities remain unmounted until one Sim transaction can own their effects:
 //!
 //! * the synchronized type projection read by `Group::action_launch_patrol` and
 //!   `Group::action_scramble`;
@@ -16,6 +17,8 @@
 //! split-brain state that currently prevents closure of opcodes 11 and 36.
 
 use std::collections::BTreeMap;
+
+use crate::systems::{air::AirOrderWalk, patrol};
 
 pub const DON_SAVE_AIR_PATROL_TAG: u8 = 6;
 pub const AIR_PATROL_PAYLOAD_VERSION: u8 = 1;
@@ -176,6 +179,59 @@ impl AirPatrolOrderPayload {
         out.push(order_flags);
         self.air.append_bytes(&mut out);
         Ok(out)
+    }
+}
+
+impl From<&patrol::AirPatrolOrder> for AirPatrolOrderPayload {
+    fn from(order: &patrol::AirPatrolOrder) -> Self {
+        Self {
+            x: WalkedCoordArray {
+                increment: order.points.x_increment,
+                flags: order.points.x_flags,
+                values: order.points.x.clone(),
+            },
+            y: WalkedCoordArray {
+                increment: order.points.y_increment,
+                flags: order.points.y_flags,
+                values: order.points.y.clone(),
+            },
+            waypoint: order.points.waypoint,
+            air: AirOrderPayload {
+                home_o: order.air.oxx,
+                home_who: order.air.whose,
+                cruising_alt: order.air.cruising_alt,
+                sharp_turn: order.air.sharp_turn,
+                old: order.air.old,
+                returning: order.air.returning,
+            },
+        }
+    }
+}
+
+impl TryFrom<&AirPatrolOrderPayload> for patrol::AirPatrolOrder {
+    type Error = AirRuntimeAuthorityError;
+
+    fn try_from(payload: &AirPatrolOrderPayload) -> Result<Self, Self::Error> {
+        payload.validate()?;
+        Ok(Self {
+            points: patrol::PatrolPoints {
+                x: payload.x.values.clone(),
+                x_increment: payload.x.increment,
+                x_flags: payload.x.flags,
+                y: payload.y.values.clone(),
+                y_increment: payload.y.increment,
+                y_flags: payload.y.flags,
+                waypoint: payload.waypoint,
+            },
+            air: AirOrderWalk {
+                oxx: payload.air.home_o,
+                whose: payload.air.home_who,
+                cruising_alt: payload.air.cruising_alt,
+                sharp_turn: payload.air.sharp_turn,
+                old: payload.air.old,
+                returning: payload.air.returning,
+            },
+        })
     }
 }
 

@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The new authority is intentionally not registered until the shared Order/Sim/save merge.
-#[allow(dead_code)]
-#[path = "../src/systems/air_runtime_authority.rs"]
-mod air_runtime_authority;
-
-// The landed air transaction is likewise exercised through its exclusive-test aliases.
+// The authority is now a registered canonical Order/save dependency. The transaction
+// remains an exclusive contract until one Sim host owns its packet and commit surfaces.
 mod command {
     pub mod air_launch_receivers {
         pub use don_sim::command::air_launch_receivers::*;
@@ -21,7 +17,7 @@ mod air_group_action_transaction;
 use air_group_action_transaction::{
     decode_air_group_packet_pair, AirGroupCommand, CommandPackagePosition,
 };
-use air_runtime_authority::*;
+use don_sim::systems::air_runtime_authority::*;
 
 fn position(
     game_frame: i32,

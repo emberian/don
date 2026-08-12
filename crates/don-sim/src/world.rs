@@ -1288,7 +1288,7 @@ impl World {
     /// movement *placeholder wearing derived trig*; [`crate::systems::movement`] holds
     /// the real pathfinder and is what this should be rewired to.
     fn do_move(&mut self, row: usize) {
-        let Some(ord) = self.unit_orders[row].current().copied() else {
+        let Some(ord) = self.unit_orders[row].current().cloned() else {
             self.move_step_x[row] = 0;
             self.move_step_y[row] = 0;
             return;
@@ -1332,7 +1332,7 @@ impl World {
     ///
     /// Real formula, real table, no modifiers, invented gating. Tier C as a whole.
     fn do_attack(&mut self, row: usize) {
-        let Some(ord) = self.unit_orders[row].current().copied() else {
+        let Some(ord) = self.unit_orders[row].current().cloned() else {
             return;
         };
         if ord.target_who < 0 || ord.target_o < 0 {

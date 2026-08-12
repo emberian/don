@@ -903,6 +903,11 @@ impl From<Order> for OrderRec {
         let move_state = o
             .move_state
             .unwrap_or_else(|| crate::order::MoveOrderState::fresh(o.x, o.y));
+        let patrol_payload = o
+            .air_patrol
+            .as_ref()
+            .and_then(|payload| patrol::AirPatrolOrder::try_from(payload).ok())
+            .map_or(PatrolPayload::None, PatrolPayload::Air);
         OrderRec {
             kind: o.kind,
             flags: o.flags,
@@ -940,6 +945,7 @@ impl From<Order> for OrderRec {
             angle: o.form_order.map_or(move_state.angle, |form| form.angle),
             form_order: o.form_order,
             targeted_payload,
+            patrol_payload,
             ..OrderRec::default()
         }
     }
@@ -949,6 +955,12 @@ impl From<OrderRec> for Order {
     /// Narrow back to the descriptive form, for anything that speaks
     /// [`crate::order::OrderList`] (e.g. [`crate::world::World::issue`]).
     fn from(r: OrderRec) -> Order {
+        let air_patrol = match &r.patrol_payload {
+            PatrolPayload::Air(order) => {
+                Some(crate::systems::air_runtime_authority::AirPatrolOrderPayload::from(order))
+            }
+            PatrolPayload::None | PatrolPayload::Group(_) | PatrolPayload::Strafe(_) => None,
+        };
         let move_state = matches!(
             r.kind,
             OrderIndex::MoveTo
@@ -998,6 +1010,7 @@ impl From<OrderRec> for Order {
             follow: r.follow,
             special_anim: r.special_anim,
             form_order: r.form_order,
+            air_patrol,
         }
     }
 }
@@ -5296,9 +5309,10 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 /// what stands between this module and `World::step`.
 ///
 /// The `MoveOrder`/`GroupMoveOrder` scalar image is lossless through
-/// [`crate::order::MoveOrderState`]. Concrete attack, patrol, guard, and other dynamically
-/// sized payloads are still not part of this narrow bridge; callers must not publish those
-/// classes through this adapter until their typed [`crate::order::Order`] variants land.
+/// [`crate::order::MoveOrderState`]. AIR_PATROL's dynamic arrays and walked secondary base
+/// are likewise lossless through `air_runtime_authority::AirPatrolOrderPayload`. Concrete
+/// attack, group-patrol, guard, and other payloads are still outside this narrow bridge;
+/// callers must not publish those classes until their typed [`crate::order::Order`] variants land.
 /// Exact target identity is retained by `target_uid` plus `target_handle`; a legacy target
 /// order which lacks a Handle still cannot grow one during widening. Widening a newly issued
 /// ATTACK_GROUND or
@@ -5307,7 +5321,7 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 pub fn adopt(list: &crate::order::OrderList) -> OrderQueue {
     let mut q = OrderQueue::new();
     for o in list.iter() {
-        q.push_back(OrderRec::from(*o));
+        q.push_back(OrderRec::from(o.clone()));
     }
     q
 }
@@ -8041,7 +8055,7 @@ mod tests {
             ..Order::default()
         };
         let mut source = crate::order::OrderList::new();
-        source.push(order);
+        source.push(order.clone());
 
         let executable = adopt(&source);
         let rec = executable.current().unwrap();
