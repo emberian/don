@@ -81,6 +81,12 @@
 
 use std::fmt;
 
+/// Canonical build-band adapter and atomic step-11 transaction. Kept below the recovered
+/// planner/production machine so the first integration tranche does not need a declaration in
+/// the shared `systems/mod.rs` registry.
+#[path = "leader_strategy_runtime.rs"]
+pub mod strategy_runtime;
+
 // ===============================================================================================
 // Retail addresses
 // ===============================================================================================
