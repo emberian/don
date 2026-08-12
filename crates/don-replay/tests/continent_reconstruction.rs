@@ -520,6 +520,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             centroid_x_free_cleanup,
             regions_clear_all,
             regions_find_all,
+            territory_limits,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -549,11 +550,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 *next_va,
-                don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA
+                don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA
             );
             assert_eq!(
                 *next_mutator_va,
-                don_replay::continent::MAP_MAKE_FIRST_TERRITORY_STORE_VA
+                don_replay::post_continent::MAP_FIX_DIAG_LAND_VA
             );
             assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
             assert!(post_player_land_cleanup.centroid_y_list_non_null);
@@ -580,6 +581,21 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             );
             assert_eq!(regions_find_all.successful_find_calls, 3);
             assert_eq!(regions_find_all.build.non_input_pumps, 4);
+            assert_eq!(territory_limits.stores.len(), 6);
+            assert_eq!(territory_limits.world_before, regions_find_all.world_after);
+            assert_eq!(
+                territory_limits.world_after,
+                eastwest_world.checksum_sections()
+            );
+            assert!(territory_limits.world_sections_changed.is_empty());
+            assert_eq!(
+                territory_limits
+                    .stores
+                    .iter()
+                    .map(|store| store.source_value)
+                    .collect::<Vec<_>>(),
+                [44, 4, 4, 44, 4, 4]
+            );
             assert_eq!(player_land.random_state_before, eastwest.rng_final);
             assert_eq!(player_land.random_state_after, eastwest.rng_final);
             assert!(player_land.direct_rng_sites.is_empty());

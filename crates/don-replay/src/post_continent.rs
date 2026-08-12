@@ -66,6 +66,34 @@ pub const MAP_MAKE_FIRST_TERRITORY_PREP_SHA256: &str =
     "cf0aa5dda08cbce5603defb8fddc99471fdbb7d6f4bd348812170223b59ea05f";
 pub const MAP_PLAYER_TERRITORY_LIMIT_OFFSET: u32 = 0x4c;
 pub const WORLD_PLAYER_TERRITORY_LIMIT_OFFSET: u32 = 0x38;
+pub const MAP_MAKE_TERRITORY_LIMITS_END_VA: u32 = 0x0068_be75;
+pub const MAP_MAKE_TERRITORY_LIMITS_SIZE: u32 = 43;
+pub const MAP_MAKE_TERRITORY_LIMITS_INSTRUCTION_COUNT: u32 = 13;
+pub const MAP_MAKE_TERRITORY_LIMITS_SHA256: &str =
+    "9cd159ea34e9aeebc982230cc0a6234d628c2b4588e0e01261611d85bf0cb5fa";
+pub const MAP_MAKE_TERRITORY_LIMIT_LOAD_VAS: [u32; 6] = [
+    0x0068_be47,
+    0x0068_be4d,
+    0x0068_be53,
+    0x0068_be59,
+    0x0068_be5f,
+    0x0068_be65,
+];
+pub const MAP_MAKE_TERRITORY_LIMIT_STORE_VAS: [u32; 6] = [
+    0x0068_be4a,
+    0x0068_be50,
+    0x0068_be56,
+    0x0068_be5c,
+    0x0068_be62,
+    0x0068_be68,
+];
+pub const MAP_TERRITORY_LIMIT_OFFSETS: [u32; 6] = [0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60];
+pub const WORLD_TERRITORY_LIMIT_OFFSETS: [u32; 6] = [0x38, 0x3c, 0x40, 0x44, 0x48, 0x4c];
+pub const MAP_MAKE_STYLE_COMPARE_VA: u32 = 0x0068_be6b;
+pub const MAP_MAKE_STYLE_BRANCH_VA: u32 = 0x0068_be6f;
+pub const MAP_MAKE_STYLE_BRANCH_VALUE: u8 = 23;
+pub const MAP_MAKE_STYLE_BRANCH_TARGET_VA: u32 = 0x0068_c84a;
+pub const MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA: u32 = 0x0068_be75;
 pub const MAP_FIX_DIAG_LAND_VA: u32 = 0x0069_c250;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
@@ -890,6 +918,269 @@ impl TerritoryLimits {
             colonized_city: world.colonized_territory_limit_city,
         }
     }
+
+    fn values(self) -> [i32; 6] {
+        [
+            self.player_base,
+            self.player_civic,
+            self.player_city,
+            self.colonized_base,
+            self.colonized_civic,
+            self.colonized_city,
+        ]
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeTerritoryLimitsNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const MAP_MAKE_TERRITORY_LIMITS_NATIVE_BODY: MapMakeTerritoryLimitsNativeBody =
+    MapMakeTerritoryLimitsNativeBody {
+        entry_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+        end_va_exclusive: MAP_MAKE_TERRITORY_LIMITS_END_VA,
+        size: MAP_MAKE_TERRITORY_LIMITS_SIZE,
+        instruction_count: MAP_MAKE_TERRITORY_LIMITS_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_TERRITORY_LIMITS_SHA256,
+        direct_calls: &[],
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TerritoryLimitField {
+    PlayerBase,
+    PlayerCivic,
+    PlayerCity,
+    ColonizedBase,
+    ColonizedCivic,
+    ColonizedCity,
+}
+
+pub const TERRITORY_LIMIT_FIELDS: [TerritoryLimitField; 6] = [
+    TerritoryLimitField::PlayerBase,
+    TerritoryLimitField::PlayerCivic,
+    TerritoryLimitField::PlayerCity,
+    TerritoryLimitField::ColonizedBase,
+    TerritoryLimitField::ColonizedCivic,
+    TerritoryLimitField::ColonizedCity,
+];
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TerritoryLimitStoreReceipt {
+    pub field: TerritoryLimitField,
+    pub map_value_load_va: u32,
+    pub store_va: u32,
+    pub map_field_offset: u32,
+    pub world_field_offset: u32,
+    pub source_value: i32,
+    pub value_before: i32,
+    pub value_after: i32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeTerritoryStyleBranchReceipt {
+    pub compare_va: u32,
+    pub branch_va: u32,
+    pub map_style: u8,
+    pub compared_value: u8,
+    pub taken: bool,
+    pub target_va: u32,
+    pub fallthrough_va: u32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeTerritoryLimitsNext {
+    FixDiagLand { call_va: u32, primitive_va: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeTerritoryLimitsReceipt {
+    pub body: MapMakeTerritoryLimitsNativeBody,
+    pub source: TerritoryLimits,
+    pub stores: Vec<TerritoryLimitStoreReceipt>,
+    pub branch: MapMakeTerritoryStyleBranchReceipt,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakeTerritoryLimitsNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeTerritoryLimitsError {
+    PriorFindAllReceiptMismatch,
+    AlternateStyleBranch { map_style: u8, target_va: u32 },
+}
+
+fn world_territory_limits(world: &World) -> TerritoryLimits {
+    TerritoryLimits {
+        player_base: world.player_territory_limit,
+        player_civic: world.player_territory_limit_civic,
+        player_city: world.player_territory_limit_city,
+        colonized_base: world.colonized_territory_limit,
+        colonized_civic: world.colonized_territory_limit_civic,
+        colonized_city: world.colonized_territory_limit_city,
+    }
+}
+
+fn set_world_territory_limit(world: &mut World, field: TerritoryLimitField, value: i32) {
+    match field {
+        TerritoryLimitField::PlayerBase => world.player_territory_limit = value,
+        TerritoryLimitField::PlayerCivic => world.player_territory_limit_civic = value,
+        TerritoryLimitField::PlayerCity => world.player_territory_limit_city = value,
+        TerritoryLimitField::ColonizedBase => world.colonized_territory_limit = value,
+        TerritoryLimitField::ColonizedCivic => world.colonized_territory_limit_civic = value,
+        TerritoryLimitField::ColonizedCity => world.colonized_territory_limit_city = value,
+    }
+}
+
+/// Execute the six exact `Map::make` territory-limit stores and the style-23
+/// branch. The admitted East Meets West path freezes before `Map::fix_diag_land`.
+pub fn execute_map_make_territory_limits(
+    world: &mut World,
+    regions: &Regions,
+    map_style: u8,
+    source: TerritoryLimits,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+) -> Result<MapMakeTerritoryLimitsReceipt, MapMakeTerritoryLimitsError> {
+    if !validate_map_make_first_regions_find_all_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+    ) || prior_find_all.random_state_after != random_state
+    {
+        return Err(MapMakeTerritoryLimitsError::PriorFindAllReceiptMismatch);
+    }
+    if map_style == MAP_MAKE_STYLE_BRANCH_VALUE {
+        return Err(MapMakeTerritoryLimitsError::AlternateStyleBranch {
+            map_style,
+            target_va: MAP_MAKE_STYLE_BRANCH_TARGET_VA,
+        });
+    }
+
+    let world_before = world.checksum_sections();
+    let before_values = world_territory_limits(world).values();
+    let source_values = source.values();
+    let mut stores = Vec::with_capacity(TERRITORY_LIMIT_FIELDS.len());
+    for index in 0..TERRITORY_LIMIT_FIELDS.len() {
+        let field = TERRITORY_LIMIT_FIELDS[index];
+        set_world_territory_limit(world, field, source_values[index]);
+        stores.push(TerritoryLimitStoreReceipt {
+            field,
+            map_value_load_va: MAP_MAKE_TERRITORY_LIMIT_LOAD_VAS[index],
+            store_va: MAP_MAKE_TERRITORY_LIMIT_STORE_VAS[index],
+            map_field_offset: MAP_TERRITORY_LIMIT_OFFSETS[index],
+            world_field_offset: WORLD_TERRITORY_LIMIT_OFFSETS[index],
+            source_value: source_values[index],
+            value_before: before_values[index],
+            value_after: source_values[index],
+        });
+    }
+    let world_after = world.checksum_sections();
+    let world_sections_changed = world_before.differing_sections(&world_after);
+
+    Ok(MapMakeTerritoryLimitsReceipt {
+        body: MAP_MAKE_TERRITORY_LIMITS_NATIVE_BODY,
+        source,
+        stores,
+        branch: MapMakeTerritoryStyleBranchReceipt {
+            compare_va: MAP_MAKE_STYLE_COMPARE_VA,
+            branch_va: MAP_MAKE_STYLE_BRANCH_VA,
+            map_style,
+            compared_value: MAP_MAKE_STYLE_BRANCH_VALUE,
+            taken: false,
+            target_va: MAP_MAKE_STYLE_BRANCH_TARGET_VA,
+            fallthrough_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+        },
+        world_before,
+        world_after,
+        world_sections_changed,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakeTerritoryLimitsNext::FixDiagLand {
+            call_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            primitive_va: MAP_FIX_DIAG_LAND_VA,
+        },
+    })
+}
+
+pub(crate) fn validate_map_make_territory_limits_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    receipt: &MapMakeTerritoryLimitsReceipt,
+) -> bool {
+    if receipt.stores.len() != TERRITORY_LIMIT_FIELDS.len() {
+        return false;
+    }
+    let mut find_world = world.clone();
+    for store in &receipt.stores {
+        set_world_territory_limit(&mut find_world, store.field, store.value_before);
+    }
+    if !validate_map_make_first_regions_find_all_receipt(
+        &find_world,
+        regions,
+        prior_clear,
+        prior_find_all,
+    ) {
+        return false;
+    }
+
+    let source_values = receipt.source.values();
+    let current_values = world_territory_limits(world).values();
+    for index in 0..TERRITORY_LIMIT_FIELDS.len() {
+        let store = receipt.stores[index];
+        if store.field != TERRITORY_LIMIT_FIELDS[index]
+            || store.map_value_load_va != MAP_MAKE_TERRITORY_LIMIT_LOAD_VAS[index]
+            || store.store_va != MAP_MAKE_TERRITORY_LIMIT_STORE_VAS[index]
+            || store.map_field_offset != MAP_TERRITORY_LIMIT_OFFSETS[index]
+            || store.world_field_offset != WORLD_TERRITORY_LIMIT_OFFSETS[index]
+            || store.source_value != source_values[index]
+            || store.value_after != source_values[index]
+            || store.value_after != current_values[index]
+        {
+            return false;
+        }
+    }
+
+    receipt.body == MAP_MAKE_TERRITORY_LIMITS_NATIVE_BODY
+        && receipt.branch
+            == (MapMakeTerritoryStyleBranchReceipt {
+                compare_va: MAP_MAKE_STYLE_COMPARE_VA,
+                branch_va: MAP_MAKE_STYLE_BRANCH_VA,
+                map_style: 19,
+                compared_value: MAP_MAKE_STYLE_BRANCH_VALUE,
+                taken: false,
+                target_va: MAP_MAKE_STYLE_BRANCH_TARGET_VA,
+                fallthrough_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            })
+        && receipt.world_before == prior_find_all.world_after
+        && receipt.world_before == find_world.checksum_sections()
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed
+            == receipt
+                .world_before
+                .differing_sections(&receipt.world_after)
+        && receipt.random_state_before == prior_find_all.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == (MapMakeTerritoryLimitsNext::FixDiagLand {
+                call_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+                primitive_va: MAP_FIX_DIAG_LAND_VA,
+            })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

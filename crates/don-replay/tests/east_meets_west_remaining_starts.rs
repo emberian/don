@@ -207,6 +207,7 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             player_land,
             regions_clear_all,
             regions_find_all,
+            territory_limits,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -258,13 +259,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
             "{}",
             expected.name
         );
@@ -489,6 +490,9 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             "{}",
             expected.name
         );
+        assert_eq!(territory_limits.world_before, regions_find_all.world_after);
+        assert_eq!(territory_limits.world_after, checksum);
+        assert!(territory_limits.world_sections_changed.is_empty());
         assert_eq!(
             checksum.section(WorldSection::StartArrays).adler,
             expected.starts_after,

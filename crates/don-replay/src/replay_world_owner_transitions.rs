@@ -127,7 +127,8 @@ fn advance(
 }
 
 /// Advance through one executed map-style virtual. The virtual may grow the
-/// four start arrays and may mutate WData; no other walked section is admitted.
+/// four start arrays, mutate WData, and execute the six World Scalar
+/// territory-limit stores.
 pub fn advance_continent_world_ownership(
     map: &mut InitialWorld,
     receipt: &ContinentReceipt,
@@ -154,10 +155,11 @@ pub fn advance_continent_world_ownership(
             centroid_x_free_cleanup,
             regions_clear_all,
             regions_find_all,
+            territory_limits,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA
-            || *next_mutator_va != crate::continent::MAP_MAKE_FIRST_TERRITORY_STORE_VA
+        } if *next_va != crate::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA
+            || *next_mutator_va != crate::post_continent::MAP_FIX_DIAG_LAND_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -290,14 +292,18 @@ pub fn advance_continent_world_ownership(
             || regions_find_all.world_before != regions_clear_all.world_after
             || regions_find_all.random_state_before
                 != regions_clear_all.random_state_after
-            || !crate::post_continent::validate_map_make_first_regions_find_all_receipt(
+            || territory_limits.world_before != regions_find_all.world_after
+            || territory_limits.random_state_before
+                != regions_find_all.random_state_after
+            || !crate::post_continent::validate_map_make_territory_limits_receipt(
                 &map.world,
                 &map.generation_regions,
                 regions_clear_all,
                 regions_find_all,
+                territory_limits,
             )
     ) {
-        return Err(mismatch(stage, "stop.regions_find_all_residual"));
+        return Err(mismatch(stage, "stop.territory_limits_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added
@@ -323,7 +329,8 @@ pub fn advance_continent_world_ownership(
             input_checksum,
             output_checksum,
             allowed_sections: WorldSectionMask::only(WorldSection::StartArrays)
-                .with(WorldSection::WData),
+                .with(WorldSection::WData)
+                .with(WorldSection::Scalars),
         },
     )
 }

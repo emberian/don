@@ -10,9 +10,9 @@ executes the first centroid-array `_free` at `0x006974c2` plus its caller-local
 destructor bookkeeping, then executes the centroid-X `_free` at `0x00697502`
 and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
 Execution then runs the common driver's full `Regions::clear_all` and
-`Regions::find_all` bodies, returns to `Map::make` at `0x0068be41`, and freezes
-before its first World territory-limit store at `0x0068be4a`. None of these
-tranches consumes RNG.
+`Regions::find_all` bodies and all six World territory-limit stores, follows
+the style-19 fallthrough, and freezes before `Map::fix_diag_land` at caller
+`0x0068be75 -> 0x0069c250`. None of these tranches consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -247,8 +247,24 @@ width, but no host pointer. The caller's exact `push`/`call` slice
 `0x0068be3b..0x0068be41` has SHA-256
 `ff5c2df80ce0958c86143fb098cb30488633cc03971c09d64b1bf9f918a9b1da`.
 The following read-only preparation loads at `0x0068be41` and `0x0068be47`
-lead to the next unexecuted native mutator, the World player-territory-limit
-store at `0x0068be4a`.
+lead to the first World player-territory-limit store at `0x0068be4a`.
+
+## World territory-limit stores
+
+The exact caller tranche `0x0068be4a..0x0068be75` is 43 bytes and thirteen
+instructions, SHA-256
+`9cd159ea34e9aeebc982230cc0a6234d628c2b4588e0e01261611d85bf0cb5fa`.
+It copies Map fields `+0x4c/+0x50/+0x54/+0x58/+0x5c/+0x60` into World fields
+`+0x38/+0x3c/+0x40/+0x44/+0x48/+0x4c`, in order. The two real fixtures execute
+all six stores with values `[44, 4, 4, 44, 4, 4]`; the stores are observable
+instructions but idempotent over the already rule-seeded World Scalars.
+
+The caller then compares map style to 23 at `0x0068be6b` and conditionally
+branches at `0x0068be6f -> 0x0068c84a`. East Meets West is style 19, so the
+branch is not taken and execution reaches the next native mutator call,
+`0x0068be75 -> Map::fix_diag_land` (`0x0069c250`). The receipt binds every
+source/destination field offset, load/store VA, before/after value, the exact
+branch decision, unchanged RNG, and the World checksum on both sides.
 
 ## Typed residual and gates
 
@@ -259,14 +275,16 @@ receipt that names the logical Y-coordinate allocation and its exact values as
 `Live -> Freed` without storing or comparing a host pointer.  The final receipt
 does the same for X and additionally binds every local clear, callee-saved
 register pop, SEH restoration, frame restoration, and `ret 4`.  The common
-clear and find receipts then bind both complete Region/World transitions and
-expose `next_va = 0x0068be41`, `next_mutator_va = 0x0068be4a`. Owner transition
+clear, find, and territory receipts then bind the complete Region/World
+transitions and expose `next_va = 0x0068be75`,
+`next_mutator_va = 0x0069c250`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
-scratch lifecycle, and unchanged RNG chronology match; its implementation
+scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
+unchanged RNG chronology match; its implementation
 digest includes the replay executor and the sim Region body. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_territory_limit_store`.
+`map_team_continent_fix_diag_land`.
 
 Validation gates:
 
@@ -320,3 +338,10 @@ Validation gates:
   ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
   `map_team_continent_territory_limit_store` / nineteen
   `place_all_mountains_add_mountain`.
+- current Cycle 7 local pack: continent reconstruction 4/4, both real
+  player-land/territory receipts 4/4, remaining-start continuation 2/2, edge
+  canals 4/4, and initial-item reconstruction 4/4; owner transition 2/2,
+  including all 21 checksum-bearing recordings; full localizer: 62 opened, 21
+  checksum-bearing, 21/21 coherent ledgers, 265,619/265,619 same-group
+  comparisons, and exact endpoints of two `map_team_continent_fix_diag_land` /
+  nineteen `place_all_mountains_add_mountain`.

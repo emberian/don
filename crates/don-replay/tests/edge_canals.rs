@@ -222,6 +222,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             centroid_x_free_cleanup,
             regions_clear_all,
             regions_find_all,
+            territory_limits,
             next_mutator_va,
         } = &prefix.stop
         else {
@@ -342,12 +343,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
             "{name}"
         );
         assert_eq!(post_player_land_cleanup.centroid_y_length, 2, "{name}");
@@ -385,6 +386,17 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         );
         assert_eq!(regions_find_all.successful_find_calls, 3, "{name}");
         assert_eq!(regions_find_all.build.non_input_pumps, 4, "{name}");
+        assert_eq!(territory_limits.stores.len(), 6, "{name}");
+        assert_eq!(
+            territory_limits.world_before, regions_find_all.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(territory_limits.world_sections_changed.is_empty(), "{name}");
         assert_eq!(
             player_land.random_state_before, player_land.random_state_after,
             "{name}"

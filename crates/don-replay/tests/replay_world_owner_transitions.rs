@@ -94,7 +94,12 @@ fn checksum_bearing_corpus_commits_a_coherent_transitioned_ledger() {
                         if *proof_document == PROOF_DOCUMENT
                 ) {
                     assert!(
-                        matches!(section, WorldSection::StartArrays | WorldSection::WData),
+                        matches!(
+                            section,
+                            WorldSection::StartArrays
+                                | WorldSection::Scalars
+                                | WorldSection::WData
+                        ),
                         "{}: transition owner escaped the admitted sections into {section:?}+{offset}",
                         path.display()
                     );

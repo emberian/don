@@ -28,8 +28,7 @@ use don_replay::continent::{
     FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
     MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
-    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
-    MAP_MAKE_FIRST_TERRITORY_STORE_VA, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
     REGIONS_CLEAR_ALL_END_VA, REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
     REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
     REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
@@ -478,6 +477,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             centroid_x_free_cleanup,
             regions_clear_all,
             regions_find_all,
+            territory_limits,
             next_va,
             next_mutator_va,
             ..
@@ -492,9 +492,14 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        assert_eq!(*next_va, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA, "{name}");
         assert_eq!(
-            *next_mutator_va, MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            *next_va,
+            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            "{name}"
+        );
+        assert_eq!(
+            *next_mutator_va,
+            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
             "{name}"
         );
         assert_eq!(
@@ -572,6 +577,66 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         assert_eq!(regions_find_all.build.non_input_pumps, 4, "{name}");
         assert!(regions_find_all.scratch.allocation.is_some(), "{name}");
         assert!(regions_find_all.scratch.final_free.is_some(), "{name}");
+        assert_eq!(territory_limits.stores.len(), 6, "{name}");
+        assert_eq!(
+            territory_limits.body,
+            don_replay::continent::MAP_MAKE_TERRITORY_LIMITS_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits
+                .stores
+                .iter()
+                .map(|store| store.map_value_load_va)
+                .collect::<Vec<_>>(),
+            don_replay::continent::MAP_MAKE_TERRITORY_LIMIT_LOAD_VAS,
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits
+                .stores
+                .iter()
+                .map(|store| store.store_va)
+                .collect::<Vec<_>>(),
+            don_replay::continent::MAP_MAKE_TERRITORY_LIMIT_STORE_VAS,
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits
+                .stores
+                .iter()
+                .map(|store| (store.source_value, store.value_before, store.value_after))
+                .collect::<Vec<_>>(),
+            [
+                (44, 44, 44),
+                (4, 4, 4),
+                (4, 4, 4),
+                (44, 44, 44),
+                (4, 4, 4),
+                (4, 4, 4),
+            ],
+            "{name}"
+        );
+        assert_eq!(territory_limits.branch.map_style, 19, "{name}");
+        assert!(!territory_limits.branch.taken, "{name}");
+        assert_eq!(
+            territory_limits.next,
+            don_replay::continent::MapMakeTerritoryLimitsNext::FixDiagLand {
+                call_va: don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+                primitive_va: don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
+            },
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits.world_before, regions_find_all.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            territory_limits.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(territory_limits.world_sections_changed.is_empty(), "{name}");
         assert!(
             !post_player_land_cleanup
                 .string_close
