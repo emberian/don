@@ -5,13 +5,20 @@
 //! 12 active Camp/Woodcutter orders.  This module binds both shapes without pretending
 //! that all of `Unit::do_gather` is available.  It executes one substantive branch shared
 //! by all 12 Camp images: a non-capacity phase, `goto_build == 0`, lead animation `0x19`,
-//! and a positive wait which remains nonzero after its retail decrement.
+//! and the animation-`0x19` wait loop, including its exact wait-zero
+//! `Build::all_gathering`/single-RNG-draw tail.
 //!
 //! Planning is read-only.  Publishing is one compare/exchange host call over the actor,
 //! order, target building, RNG state, and authority revision.  Farm, Mine, destination
-//! selection, capacity, all-gathering/RNG, direct-resource, cast/special, and retirement
-//! branches fail closed before that call.  There is no geometric, resource-rate, or scalar
-//! approximation.
+//! selection, capacity, direct-resource, cast/special, and retirement branches fail closed
+//! before that call.  There is no geometric, resource-rate, or scalar approximation.
+
+use crate::objects::{Band, BUILD_BAND_BASE, OWNER_SLOTS};
+use crate::order::{Order, OrderIndex};
+use crate::systems::economy_order_payload_authority::EconomyOrderPayload;
+use crate::systems::gathering::{self, GatherAssignment, GatherSite, GatherWorker};
+use crate::systems::production::BuildData;
+use crate::world::{Handle, World};
 
 /// `ObjectTypeData::property` values stored in `GatherOrder::build_type`.
 pub const FARM_PROPERTY: i32 = 0x1a1;
@@ -241,6 +248,8 @@ impl From<FreshGatherBindingError> for GatherWorkPlanError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatherWorkBranch {
     CampAnimation19Waiting,
+    CampAnimation19AllGathering,
+    CampAnimation19Rescheduled,
 }
 
 /// Whole-owner plan.  `after` differs only at exact writes in the selected PE branch.
@@ -261,6 +270,7 @@ fn changed_fields(before: &GatherWorkSnapshot, after: &GatherWorkSnapshot) -> u8
         before.order.wait != after.order.wait,
         before.site.build_masks != after.site.build_masks,
         before.site.recharging != after.site.recharging,
+        before.rng_state != after.rng_state,
     ]
     .into_iter()
     .map(u8::from)
@@ -270,6 +280,27 @@ fn changed_fields(before: &GatherWorkSnapshot, after: &GatherWorkSnapshot) -> u8
 /// Plan the exact no-RNG Camp timer tick reached by the fresh saved payloads.
 pub fn plan_fresh_gather_tick(
     before: GatherWorkSnapshot,
+) -> Result<GatherWorkPlan, GatherWorkPlanError> {
+    plan_fresh_gather_tick_inner(before, None)
+}
+
+/// Plan the same exact Camp timer arm when the decrement reaches zero.
+///
+/// `all_gathering` must be the result of the structurally executed
+/// `Build::check_gatherers` + `Build::all_gathering` chain walk. It is deliberately not an
+/// arbitrary policy bit at the production boundary: [`prepare_gather_work_activation`]
+/// derives it from canonical Build/Unit/order owners and records every chain unlink in the
+/// transaction.
+pub fn plan_fresh_gather_tick_at_wait_zero(
+    before: GatherWorkSnapshot,
+    all_gathering: bool,
+) -> Result<GatherWorkPlan, GatherWorkPlanError> {
+    plan_fresh_gather_tick_inner(before, Some(all_gathering))
+}
+
+fn plan_fresh_gather_tick_inner(
+    before: GatherWorkSnapshot,
+    all_gathering: Option<bool>,
 ) -> Result<GatherWorkPlan, GatherWorkPlanError> {
     let class = bind_fresh_gather_payload(before.actor.who, before.order)?;
     if class == FreshGatherPayloadClass::FarmActive {
@@ -317,8 +348,7 @@ pub fn plan_fresh_gather_tick(
             UnownedGatherArm::LeadAnimation(lead_animation),
         ));
     }
-    // A decrement from one reaches `Build::all_gathering`, and possibly Random::get.
-    if before.order.wait <= 1 {
+    if before.order.wait < 1 || (before.order.wait == 1 && all_gathering.is_none()) {
         return Err(GatherWorkPlanError::Unowned(
             UnownedGatherArm::AllGatheringAndRng,
         ));
@@ -332,14 +362,528 @@ pub fn plan_fresh_gather_tick(
         after.site.build_masks |= GATHER_SITE_LATCH;
     }
     after.order.wait = after.order.wait.wrapping_sub(1);
+    let (branch, rng_draws) = if after.order.wait != 0 {
+        (GatherWorkBranch::CampAnimation19Waiting, 0)
+    } else if all_gathering.expect("wait-one caller supplied the structural result") {
+        after.order.wait = -1;
+        (GatherWorkBranch::CampAnimation19AllGathering, 0)
+    } else {
+        // `Random::get(0, 0xffff)`, exactly: one LCG step, low sixteen bits, half-open
+        // scaling, then the animation-0x19 `% 100 + 300` reschedule.
+        after.rng_state = after
+            .rng_state
+            .wrapping_mul(0x0019_660d)
+            .wrapping_add(0x3c6e_f35f);
+        let low = (after.rng_state as u32 & 0xffff) as i32;
+        let draw = ((low.wrapping_mul(0xffff) as u32) >> 16) as i32;
+        after.order.wait = draw % 100 + 300;
+        (GatherWorkBranch::CampAnimation19Rescheduled, 1)
+    };
 
     Ok(GatherWorkPlan {
         before,
         after,
-        branch: GatherWorkBranch::CampAnimation19Waiting,
+        branch,
         changed_fields: changed_fields(&before, &after),
-        rng_draws: 0,
+        rng_draws,
         external_effects: 0,
+    })
+}
+
+/// Revision-bound facts for the slot-zero `GuyData` body which is not represented in the
+/// generated Unit columns.  The fresh SVX witnesses all have the exact `(1,1,1,0)` array
+/// header pinned here; a normalized "has animation" bit is not accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherActorRuntimeFacts {
+    pub actor: Handle,
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub type_index: i32,
+    pub guys_length: i32,
+    pub guys_capacity: i32,
+    pub guys_increment: i32,
+    pub guys_flags: u8,
+    pub slot_zero_present: bool,
+    pub lead_animation: u8,
+}
+
+/// Revision-bound result of the target's Build/Wall virtual projection. Canonical
+/// [`BuildData`] remains the mutable owner of flags, property, latch, and recharge count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherSiteRuntimeFacts {
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub property: i32,
+    pub resolves_build: bool,
+    pub valid_wall_projection: bool,
+}
+
+/// Installed content/executable projection for production Gather work.
+///
+/// It is intentionally absent from DoNSave. A loaded simulation restores the canonical
+/// World/Build/order bytes and remains fail-closed until the same nonzero composition digest
+/// and revision are installed again.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GatherWorkAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub actors: Vec<GatherActorRuntimeFacts>,
+    pub sites: Vec<GatherSiteRuntimeFacts>,
+}
+
+impl GatherWorkAuthority {
+    fn actor(&self, actor: Handle) -> Option<GatherActorRuntimeFacts> {
+        self.actors
+            .iter()
+            .copied()
+            .find(|facts| facts.actor == actor)
+    }
+
+    fn site(&self, who: u8, o: i16, uid: u16) -> Option<GatherSiteRuntimeFacts> {
+        self.sites
+            .iter()
+            .copied()
+            .find(|facts| (facts.who, facts.o, facts.uid) == (who, o, uid))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GatherWorkRuntimeError {
+    MissingAuthority,
+    MissingCompositionDigest,
+    DuplicateActorAuthority(Handle),
+    DuplicateSiteAuthority { who: u8, o: i16, uid: u16 },
+    InvalidGuyArrayFacts,
+    UnitTypeProjectionMismatch,
+    MissingGatherOrder,
+    MissingTypedPayload,
+    TargetOutOfRange,
+    MissingBuildTarget,
+    BuildIdentityMismatch,
+    SiteAuthorityMismatch,
+    UnsupportedChainWorkerType(i32),
+    CorruptGatherChain,
+    Plan(GatherWorkPlanError),
+    StaleState,
+}
+
+impl From<GatherWorkPlanError> for GatherWorkRuntimeError {
+    fn from(error: GatherWorkPlanError) -> Self {
+        Self::Plan(error)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GatherChainProjection {
+    pub site_head_before: i16,
+    pub site_head_after: i16,
+    /// `(unit row, gather_down before, gather_down after)` in canonical row order.
+    pub unit_links: Vec<(usize, i16, i16)>,
+    pub removed: usize,
+    pub all_gathering: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedGatherWorkActivation {
+    pub row: usize,
+    pub build_row: usize,
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub actor_facts: GatherActorRuntimeFacts,
+    pub site_facts: GatherSiteRuntimeFacts,
+    pub plan: GatherWorkPlan,
+    pub chain: Option<GatherChainProjection>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherWorkActivationReceipt {
+    pub actor: Handle,
+    pub site_who: u8,
+    pub site_o: i16,
+    pub site_uid: u16,
+    pub authority_revision: u64,
+    pub frame: i32,
+    pub branch: GatherWorkBranch,
+    pub wait_before: i32,
+    pub wait_after: i32,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub changed_fields: u8,
+    pub chain_unlinks: usize,
+    pub rng_draws: u8,
+}
+
+fn work_order(order: &Order) -> Result<GatherWorkOrder, GatherWorkRuntimeError> {
+    if order.kind != OrderIndex::Gather {
+        return Err(GatherWorkRuntimeError::MissingGatherOrder);
+    }
+    let Some(EconomyOrderPayload::Gather(payload)) = order.economy else {
+        return Err(GatherWorkRuntimeError::MissingTypedPayload);
+    };
+    Ok(GatherWorkOrder {
+        node_metric: order.node_metric,
+        flags: order.flags,
+        target_o: i32::from(order.target_o),
+        target_who: i32::from(order.target_who),
+        target_uid: order.target_uid,
+        tx: payload.tx,
+        ty: payload.ty,
+        build_type: payload.build_type,
+        wait: payload.wait,
+        goto_build: payload.goto_build,
+        non_flat_gather: payload.non_flat_gather,
+        dist_mod: payload.dist_mod,
+        been_there: payload.been_there,
+    })
+}
+
+fn validate_authority(authority: &GatherWorkAuthority) -> Result<(), GatherWorkRuntimeError> {
+    if authority.composition_digest == [0; 32] {
+        return Err(GatherWorkRuntimeError::MissingCompositionDigest);
+    }
+    for (index, facts) in authority.actors.iter().enumerate() {
+        if authority.actors[..index]
+            .iter()
+            .any(|old| old.actor == facts.actor)
+        {
+            return Err(GatherWorkRuntimeError::DuplicateActorAuthority(facts.actor));
+        }
+    }
+    for (index, facts) in authority.sites.iter().enumerate() {
+        if authority.sites[..index]
+            .iter()
+            .any(|old| (old.who, old.o, old.uid) == (facts.who, facts.o, facts.uid))
+        {
+            return Err(GatherWorkRuntimeError::DuplicateSiteAuthority {
+                who: facts.who,
+                o: facts.o,
+                uid: facts.uid,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn build_row(
+    world: &World,
+    builds: &[BuildData],
+    who: i32,
+    o: i32,
+) -> Result<usize, GatherWorkRuntimeError> {
+    if !(0..OWNER_SLOTS as i32).contains(&who)
+        || !(BUILD_BAND_BASE as i32..=i16::MAX as i32).contains(&o)
+    {
+        return Err(GatherWorkRuntimeError::TargetOutOfRange);
+    }
+    let offset = (o - BUILD_BAND_BASE as i32) as usize;
+    let row = *world
+        .objects
+        .slot(who as usize)
+        .band(Band::Build)
+        .get(offset)
+        .ok_or(GatherWorkRuntimeError::MissingBuildTarget)? as usize;
+    let build = builds
+        .get(row)
+        .ok_or(GatherWorkRuntimeError::MissingBuildTarget)?;
+    if (i32::from(build.who), i32::from(build.object_id())) != (who, o) {
+        return Err(GatherWorkRuntimeError::BuildIdentityMismatch);
+    }
+    Ok(row)
+}
+
+fn gather_assignment(
+    order: Option<&Order>,
+) -> Result<Option<GatherAssignment>, GatherWorkRuntimeError> {
+    let Some(order) = order else {
+        return Ok(None);
+    };
+    if order.kind != OrderIndex::Gather {
+        return Ok(None);
+    }
+    let work = work_order(order)?;
+    Ok(Some(GatherAssignment {
+        target_owner: work.target_who,
+        target_build: work.target_o,
+        target_uid: work.target_uid,
+        been_there: work.been_there != 0,
+        inside_target: None,
+    }))
+}
+
+fn structural_all_gathering(
+    world: &World,
+    unit_types: &[i32],
+    build: &BuildData,
+) -> Result<GatherChainProjection, GatherWorkRuntimeError> {
+    let live = world.live_count() as usize;
+    if unit_types.len() != live {
+        return Err(GatherWorkRuntimeError::UnitTypeProjectionMismatch);
+    }
+    let mut workers = Vec::with_capacity(live);
+    for row in 0..live {
+        workers.push(GatherWorker {
+            owner: world.units.get_who(row),
+            unit_o: world.units.o()[row],
+            type_index: unit_types[row],
+            valid_unit: world.units.get_flags(row) & 1 != 0,
+            assignment: gather_assignment(world.orders(row).current())?,
+            gather_down: world.units.gather_down()[row],
+            good_obj: world.units.good_obj()[row],
+            group: world.units.group()[row],
+            unit_masks: world.units.get_unit_masks(row),
+            hold_doober: world.units.doober()[row],
+        });
+    }
+
+    // Scholars/special gatherers consult containment before their order. That projection is
+    // deliberately absent from this Camp transaction, so encountering one in the live chain
+    // is a hard boundary rather than an on-map assumption.
+    let mut current = build.gather_down;
+    let mut visited = 0usize;
+    while current >= 0 {
+        if visited >= workers.len() {
+            return Err(GatherWorkRuntimeError::CorruptGatherChain);
+        }
+        visited += 1;
+        let worker = workers
+            .iter()
+            .find(|worker| worker.owner == build.who && worker.unit_o == current)
+            .ok_or(GatherWorkRuntimeError::CorruptGatherChain)?;
+        if matches!(worker.type_index, 0x34 | 0x35) {
+            return Err(GatherWorkRuntimeError::UnsupportedChainWorkerType(
+                worker.type_index,
+            ));
+        }
+        current = worker.gather_down;
+    }
+
+    let before_links = workers
+        .iter()
+        .map(|worker| worker.gather_down)
+        .collect::<Vec<_>>();
+    let mut site = GatherSite {
+        owner: build.who,
+        build_o: build.object_id(),
+        uid: build.uid,
+        gather_max: build.gather_max,
+        gather_down: build.gather_down,
+        build_masks: build.build_masks,
+        recharging: build.recharging,
+    };
+    let removed = gathering::check_gatherers(&mut site, &mut workers)
+        .map_err(|_| GatherWorkRuntimeError::CorruptGatherChain)?;
+
+    let mut all_gathering = true;
+    current = site.gather_down;
+    visited = 0;
+    while current >= 0 {
+        if visited >= workers.len() {
+            return Err(GatherWorkRuntimeError::CorruptGatherChain);
+        }
+        visited += 1;
+        let row = workers
+            .iter()
+            .position(|worker| worker.owner == site.owner && worker.unit_o == current)
+            .ok_or(GatherWorkRuntimeError::CorruptGatherChain)?;
+        let Some(order) = world.orders(row).current() else {
+            all_gathering = false;
+            break;
+        };
+        let work = work_order(order)?;
+        if work.goto_build != 0 || work.wait < 0 {
+            all_gathering = false;
+            break;
+        }
+        current = workers[row].gather_down;
+    }
+
+    let unit_links = workers
+        .iter()
+        .enumerate()
+        .filter_map(|(row, worker)| {
+            (before_links[row] != worker.gather_down).then_some((
+                row,
+                before_links[row],
+                worker.gather_down,
+            ))
+        })
+        .collect();
+    Ok(GatherChainProjection {
+        site_head_before: build.gather_down,
+        site_head_after: site.gather_down,
+        unit_links,
+        removed,
+        all_gathering,
+    })
+}
+
+/// Read and plan one production `Unit::work` Gather activation from canonical owners.
+pub fn prepare_gather_work_activation(
+    world: &World,
+    builds: &[BuildData],
+    unit_types: &[i32],
+    authority: &GatherWorkAuthority,
+    row: usize,
+) -> Result<PreparedGatherWorkActivation, GatherWorkRuntimeError> {
+    validate_authority(authority)?;
+    let actor = world
+        .handle_at_row(row)
+        .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
+    let actor_facts = authority
+        .actor(actor)
+        .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
+    if (actor_facts.who, actor_facts.o, actor_facts.uid)
+        != (
+            world.units.get_who(row),
+            world.units.o()[row],
+            world.units.get_uid(row),
+        )
+    {
+        return Err(GatherWorkRuntimeError::MissingAuthority);
+    }
+    if (
+        actor_facts.guys_length,
+        actor_facts.guys_capacity,
+        actor_facts.guys_increment,
+    ) != (1, 1, 1)
+        || actor_facts.guys_flags != 0
+        || !actor_facts.slot_zero_present
+        || i32::from(world.units.guy_mark()[row]) != actor_facts.guys_length
+    {
+        return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
+    }
+    let type_index = unit_types
+        .get(row)
+        .copied()
+        .ok_or(GatherWorkRuntimeError::UnitTypeProjectionMismatch)?;
+    if world.unit_type_id(row) != Some(type_index) || actor_facts.type_index != type_index {
+        return Err(GatherWorkRuntimeError::UnitTypeProjectionMismatch);
+    }
+    let order = work_order(
+        world
+            .orders(row)
+            .current()
+            .ok_or(GatherWorkRuntimeError::MissingGatherOrder)?,
+    )?;
+    let build_row = build_row(world, builds, order.target_who, order.target_o)?;
+    let build = &builds[build_row];
+    if build.uid != order.target_uid {
+        return Err(GatherWorkRuntimeError::BuildIdentityMismatch);
+    }
+    let site_facts = authority
+        .site(build.who, build.object_id(), build.uid)
+        .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
+    if site_facts.property != build.orig_type
+        || !site_facts.resolves_build
+        || !site_facts.valid_wall_projection
+    {
+        return Err(GatherWorkRuntimeError::SiteAuthorityMismatch);
+    }
+    let before = GatherWorkSnapshot {
+        revision: authority.revision,
+        frame: world.frame,
+        rng_state: world.random.state(),
+        actor: GatherActorImage {
+            who: world.units.get_who(row),
+            o: world.units.o()[row],
+            uid: world.units.get_uid(row),
+            group: world.units.group()[row],
+            unit_masks: world.units.get_unit_masks(row),
+            lead_animation: Some(actor_facts.lead_animation),
+        },
+        order,
+        site: GatherSiteImage {
+            who: i32::from(build.who),
+            o: i32::from(build.object_id()),
+            uid: build.uid,
+            resolved_build: site_facts.resolves_build,
+            valid_wall: build.is_valid() && site_facts.valid_wall_projection,
+            active: build.is_active(),
+            property: build.orig_type,
+            build_masks: build.build_masks,
+            recharging: build.recharging,
+        },
+    };
+    let (chain, plan) = if order.wait == 1 {
+        let chain = structural_all_gathering(world, unit_types, build)?;
+        let plan = plan_fresh_gather_tick_at_wait_zero(before, chain.all_gathering)?;
+        (Some(chain), plan)
+    } else {
+        (None, plan_fresh_gather_tick(before)?)
+    };
+    Ok(PreparedGatherWorkActivation {
+        row,
+        build_row,
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        actor_facts,
+        site_facts,
+        plan,
+        chain,
+    })
+}
+
+/// Re-read the complete plan and publish actor/order/Build/chain/RNG writes by assignment.
+/// Every possible failure precedes the first write.
+pub fn commit_gather_work_activation(
+    world: &mut World,
+    builds: &mut [BuildData],
+    unit_types: &[i32],
+    authority: &GatherWorkAuthority,
+    prepared: PreparedGatherWorkActivation,
+) -> Result<GatherWorkActivationReceipt, GatherWorkRuntimeError> {
+    let current =
+        prepare_gather_work_activation(world, builds, unit_types, authority, prepared.row)?;
+    if current != prepared {
+        return Err(GatherWorkRuntimeError::StaleState);
+    }
+
+    let before = prepared.plan.before;
+    let after = prepared.plan.after;
+    world.units.group_mut()[prepared.row] = after.actor.group;
+    world
+        .units
+        .set_unit_masks(prepared.row, after.actor.unit_masks);
+    builds[prepared.build_row].build_masks = after.site.build_masks;
+    builds[prepared.build_row].recharging = after.site.recharging;
+    if let Some(chain) = &prepared.chain {
+        builds[prepared.build_row].gather_down = chain.site_head_after;
+        for &(row, _, after_link) in &chain.unit_links {
+            world.units.gather_down_mut()[row] = after_link;
+        }
+    }
+    let current_order = world
+        .orders_mut(prepared.row)
+        .current_mut()
+        .expect("preflight retained the current Gather order");
+    let EconomyOrderPayload::Gather(payload) = current_order
+        .economy
+        .as_mut()
+        .expect("preflight retained the concrete Gather payload")
+    else {
+        unreachable!("preflight retained the concrete Gather payload")
+    };
+    payload.wait = after.order.wait;
+    if after.rng_state != before.rng_state {
+        world.random.reseed(after.rng_state);
+    }
+    Ok(GatherWorkActivationReceipt {
+        actor: prepared.actor_facts.actor,
+        site_who: prepared.site_facts.who,
+        site_o: prepared.site_facts.o,
+        site_uid: prepared.site_facts.uid,
+        authority_revision: prepared.authority_revision,
+        frame: before.frame,
+        branch: prepared.plan.branch,
+        wait_before: before.order.wait,
+        wait_after: after.order.wait,
+        random_state_before: before.rng_state,
+        random_state_after: after.rng_state,
+        changed_fields: prepared.plan.changed_fields,
+        chain_unlinks: prepared.chain.as_ref().map_or(0, |chain| chain.removed),
+        rng_draws: prepared.plan.rng_draws,
     })
 }
 

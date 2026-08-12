@@ -1,14 +1,15 @@
 # Canonical saved Gather work transaction
 
-Status: **exclusive atomic executor slice; fresh-SVX-bound; no Sim tick hook or closure
-credit**.
+Status: **production `Sim::unit_work` hook; revision-bound fresh-SVX Camp authority;
+wait loop plus exact wait-zero/all-gathering/RNG tail**.
 
 The full fresh Unit census found 29 `GATHER` nodes, making Gather the dominant concrete
 saved executor.  `crates/don-sim/src/systems/canonical_gather_work.rs` binds all 29 exact
 31-byte retail payloads and mounts one substantive branch shared by the 12 Camp payloads.
 `crates/don-sim/tests/canonical_gather_saved_work.rs` carries every exact payload image and
-SHA-256, mutation/fail-closed gates, PE/PDB anchors, atomic-host checks, and a DoNSave-v13
-save/reload/resume/resave test.
+SHA-256, mutation/fail-closed gates, PE/PDB anchors, atomic-host checks, and a DoNSave
+save/reload/resume/resave test. `canonical_gather_runtime.rs` proves the production
+`do_frame` hook and wait-zero tail.
 
 This is not the earlier scalar `target + distance + GatherOutcome` approximation.  The
 transaction snapshots the complete actor/order/build slice and either publishes every
@@ -42,8 +43,9 @@ The focused Rust artifact gate also pins these exact instruction sites:
 - `0x005f0db4..0x005f0dd9`: read lead-Guy animation `+0x9c`, return on `0x1d`, select
   animation `0x19`, decrement `GatherOrder::wait` at concrete `+0x20`, and return when the
   result remains nonzero; and
-- `0x005f0ddf` onward: only a zero result reaches `Build::all_gathering` and the possible
-  `Random::get` reschedule, which this slice rejects before commit.
+- `0x005f0ddf` onward: only a zero result reaches `Build::all_gathering`; false consumes
+  exactly one `Random::get(0,0xffff)` draw and stores `draw % 100 + 300`, while true stores
+  `wait=-1` without RNG.
 
 The Gather `do_job` call is unique at `0x00617a72`; its ordinary caller is `Unit::work` at
 `0x0060dad8` (the other direct caller is `Animal::work` at `0x005d734f`).
@@ -86,7 +88,8 @@ The branch is deliberately narrow.  A coherent snapshot must prove:
    equals `build_type=0x1a2`;
 4. `(frame + actor.o * 4) & 0x7f != 0`, so the 128-frame capacity/count branch is not due;
 5. a live slot-zero Guys body and lead `GuyData::animation == 0x19`; and
-6. `wait > 1`, so the decrement cannot reach `Build::all_gathering` or RNG.
+6. `wait > 0`. `wait>1` takes the no-RNG return; `wait==1` additionally requires the exact
+   canonical gather-chain projection described below.
 
 The whole after-image is then:
 
@@ -100,6 +103,27 @@ order.wait           := wrapping_i32(order.wait - 1)
 rng_state            := unchanged
 external effects     := none
 ```
+
+When `wait==1`, the installed runtime adapter constructs the exact owner-local
+`BuildData::gather_down`/`UnitData::gather_down` chain from canonical World rows. It runs
+`Build::check_gatherers`, recording every unlink in the same transaction, then checks every
+survivor's concrete current Gather order. A chain is all-gathering exactly when every
+survivor has `goto_build==0` and `wait>=0` (the empty chain is true). The zero tail is:
+
+```text
+order.wait := 0
+if all_gathering:
+    order.wait := -1
+else:
+    rng_state := rng_state * 0x0019660d + 0x3c6ef35f
+    draw       := ((low16(rng_state) * 0xffff) >> 16)
+    order.wait := draw % 100 + 300
+```
+
+Types `0x34/0x35` in the chain remain fail-closed because their
+`is_gathering_at` path consults containment before the order. Ordinary Camp workers use the
+canonical type, validity, identity, current order, and intrusive-link owners; there is no
+boolean all-gathering oracle.
 
 Planning does not mutate.  `AtomicGatherWorkHost::compare_exchange` must compare the full
 actor/order/site/RNG/revision before-image and publish all changed fields in one commit.
@@ -116,23 +140,32 @@ or mismatched receipt is not success.
 | 128-frame Camp/Mine phase | exact gather chain and capacity/count result | no commit |
 | `goto_build != 0` | destination selection, access, collision and movement insertion | no commit |
 | animation other than `0x19` | animation/location-specific resource and movement arms | no commit |
-| `wait == 1` | `Build::all_gathering`, RNG reschedule and follow-on effects | no commit |
+| `wait == 1`, ordinary exact chain | canonical chain cleanup and all-gathering; one exact RNG draw only when false | admitted atomically |
+| `wait == 1`, scholar/special chain member | containment-first `is_gathering_at` facts | no commit |
 | stale/dead target | Gather retirement, replacement search and queue surgery | no commit |
 | direct resource or special/cast gather | object/type-specific resource/cast authority | no commit |
 
 In particular, the executor does not award a scalar yield, guess a distance, manufacture a
 terrain tile, count workers from a number, or silently consume an RNG draw.
 
-## Save/reload/resume witness
+## Production authority and save/reload/resume witnesses
+
+`GatherWorkAuthority` is an installed, non-serialized adapter keyed by stable Unit Handle and
+Build `(who,o,uid)`. A nonzero composition digest and revision bind exact type, Guys-array
+`(length,capacity,increment,flags)=(1,1,1,0)`, slot-zero presence/animation, and the target's
+Build/Wall virtual projection. Mutable Unit, GatherOrder, Build latch/recharge/chain, frame,
+and RNG bytes remain canonical `Sim` owners. Load restores those canonical owners but resets
+the adapter to default, so Gather work fails closed until content reinstalls the matching
+authority.
 
 The integration test installs the exact first Camp image from the fresh SVX on owner 0 Unit
 `o=3`, targeting Build `o=2001, uid=1`.  Its `wait=295`, `tx=270`, `ty=116`, and payload
 SHA-256 is
 `3d4d8ca9d0bd71b0f4af4416425953cd82c0fa5c452a5fba1a5e18f50615f0f2`.
 
-It then:
+The original isolated witness:
 
-1. saves the production `Sim` through DoNSave v13 and reloads it;
+1. saves the production `Sim` through DoNSave and reloads it;
 2. reconstructs the atomic snapshot from the reloaded canonical Unit, order, Build, frame,
    and RNG owners plus the explicit lead-animation/type gates;
 3. runs the transaction on both the direct and reloaded controls;
@@ -141,14 +174,22 @@ It then:
 6. reloads the post-tick save and proves `wait=294`, group `-1`, cleared action masks,
    building mask `0x800`, `recharging=1`, and unchanged RNG survive.
 
-The source is not exported from `systems/mod.rs` and the production `Sim::do_frame` does not
-call it yet.  That shared integration is intentionally deferred until a canonical Sim host
-can acquire the lead-Guy/type gates and perform the whole compare/exchange; this tranche
-therefore earns observable saved-work evidence, but no general Gather arm or closure flip.
+The production witness now installs that authority on both the direct and reloaded controls,
+executes the ordinary object pass through `Sim::do_frame`, and proves byte-identical saves
+after the frame. A second save/reload/do-frame witness starts at `wait=1` with an empty
+gather chain, proves the exact all-gathering `wait=-1` result, and proves zero RNG draws.
+Focused direct tests cover a nonempty false chain (one exact LCG draw and animation-`0x19`
+reschedule), stale compare/exchange, exact `check_gatherers` unlink publication, malformed
+Guys authority, and zero writes on every refusal.
+
+This is production credit for the exact Camp branches above, not general Gather closure:
+Farm, Mine, capacity phase, destination/collision, resource payout, retirement/replacement,
+and containment-special arms remain explicit boundaries.
 
 Run the focused gate with:
 
 ```sh
-CARGO_TARGET_DIR=/tmp/don-gather-target \
-  cargo test -p don-sim --test canonical_gather_saved_work
+CARGO_TARGET_DIR=/tmp/don-gather-runtime-target \
+  cargo test -p don-sim --test canonical_gather_saved_work \
+  --test canonical_gather_runtime
 ```

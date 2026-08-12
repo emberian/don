@@ -66,6 +66,8 @@ pub mod building_gather;
 pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
 pub mod canonical_group_move_host;
+/// Installed, revision-bound production adapter for exact saved Camp Gather work.
+pub mod canonical_gather_work;
 /// Canonical fixed-Group transaction for the strict Group plus UNITMASK packet cohort.
 pub mod canonical_simple_group_host;
 /// Canonical live-World/path/RNG/animation/ammo adapter for STRAFE row 16.

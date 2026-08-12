@@ -1,11 +1,8 @@
-#[path = "../src/systems/canonical_gather_work.rs"]
-mod canonical_gather_work;
-
 use std::collections::BTreeSet;
 use std::fs;
 
-use canonical_gather_work::*;
 use don_sim::order::{Order, OrderIndex};
+use don_sim::systems::canonical_gather_work::*;
 use don_sim::systems::economy_order_payload_authority::{
     EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload, GatherOrderPayload,
     StableTargetIdentity,
@@ -308,6 +305,20 @@ fn malformed_and_unowned_edges_fail_before_any_commit() {
             },
             FreshGatherBindingError::CampStateMismatch,
         ),
+        (
+            GatherWorkOrder {
+                build_type: MINE_PROPERTY,
+                ..camp
+            },
+            FreshGatherBindingError::UnsupportedBuildType(MINE_PROPERTY),
+        ),
+        (
+            GatherWorkOrder {
+                build_type: 0x1a6,
+                ..camp
+            },
+            FreshGatherBindingError::UnsupportedBuildType(0x1a6),
+        ),
     ];
     for (order, expected) in mutations {
         assert_eq!(bind_fresh_gather_payload(0, order), Err(expected));
@@ -427,6 +438,23 @@ fn host_compare_exchange_is_whole_image_and_rejections_are_zero_write() {
         Err(GatherWorkTransactionError::InvalidCommitReceipt)
     );
     assert_eq!(bad.state, before);
+
+    let mut unavailable_before = before;
+    unavailable_before.site.active = false;
+    let mut unavailable = AtomicHost {
+        state: unavailable_before,
+        commits: 0,
+        stale: false,
+        bad_receipt: false,
+    };
+    assert_eq!(
+        resume_fresh_gather_tick(&mut unavailable, 0, actor_o),
+        Err(GatherWorkTransactionError::Plan(
+            GatherWorkPlanError::Unowned(UnownedGatherArm::TargetRetirementAndReplacement)
+        ))
+    );
+    assert_eq!(unavailable.commits, 0);
+    assert_eq!(unavailable.state, unavailable_before);
 }
 
 fn ordinary_build(uid: u16, object_o: i16) -> production::BuildData {
