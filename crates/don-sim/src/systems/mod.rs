@@ -97,6 +97,9 @@ pub mod death_inctime;
 /// Exact defeated-player Unit-band dispatch: true planes die, other valid units close
 /// orders, and both branches clear `unit_masks & 0x40000`.
 pub mod defeat_cleanup;
+/// Atomic opcode-38 declaration transaction over command, resource, relation, vision,
+/// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
+pub mod diplomacy_declare_host;
 pub mod economy;
 /// Canonical policy-facing external Unit frame owner, including exact cloak/detection/fog
 /// projection and revision-bound target ordinals.
