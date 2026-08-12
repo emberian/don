@@ -518,6 +518,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             post_player_land_cleanup,
             centroid_y_free_cleanup,
             centroid_x_free_cleanup,
+            regions_clear_all,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -545,11 +546,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(remaining.random_state_after, eastwest.rng_final);
             assert_eq!(selector.draws.len(), 1);
             assert_eq!(selector.accepted_pass, Some(1));
-            assert_eq!(*next_va, don_replay::continent::REGIONS_CLEAR_ALL_VA);
             assert_eq!(
-                *next_mutator_va,
-                don_replay::continent::REGIONS_CLEAR_ALL_VA
+                *next_va,
+                don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA
             );
+            assert_eq!(*next_mutator_va, don_replay::continent::REGIONS_FIND_ALL_VA);
             assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
             assert!(post_player_land_cleanup.centroid_y_list_non_null);
             assert_eq!(
@@ -563,6 +564,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 centroids.centroid_x
             );
             assert!(centroid_x_free_cleanup.exception_registration_restored);
+            assert_eq!(regions_clear_all.region_records_visited, 128);
+            assert!(regions_clear_all
+                .region_records
+                .iter()
+                .all(|record| record.after.size == 0));
             assert_eq!(player_land.random_state_before, eastwest.rng_final);
             assert_eq!(player_land.random_state_after, eastwest.rng_final);
             assert!(player_land.direct_rng_sites.is_empty());
@@ -626,7 +632,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x7420_6b9e, 0x4f28_bf8c, 0x0fac_4f9d)
+        (0xd293_cb35, 0xdd7f_eb47, 0x4f28_bf8c, 0x1a47_cf46)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

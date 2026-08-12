@@ -220,6 +220,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             post_player_land_cleanup,
             centroid_y_free_cleanup,
             centroid_x_free_cleanup,
+            regions_clear_all,
             next_mutator_va,
         } = &prefix.stop
         else {
@@ -297,9 +298,13 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             let mut singleton_partition = prefix.team_partition.as_ref().unwrap().clone();
             singleton_partition.continent_counts[call.selected_continent as usize] = 1;
             let mut singleton_rng = Random::new(0x1234_5678);
+            let mut world_before_clear = map.world.clone();
+            for mutation in &regions_clear_all.world_region_mutations {
+                world_before_clear.wdata[mutation.cell].region = mutation.region_before;
+            }
             let singleton = execute_first_place_start_boundary(
                 &plan.inputs,
-                &map.world,
+                &world_before_clear,
                 &singleton_partition,
                 centroids,
                 &mut singleton_rng,
@@ -332,12 +337,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::continent::REGIONS_CLEAR_ALL_VA,
+            don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::REGIONS_CLEAR_ALL_VA,
+            don_replay::continent::REGIONS_FIND_ALL_VA,
             "{name}"
         );
         assert_eq!(post_player_land_cleanup.centroid_y_length, 2, "{name}");
@@ -354,6 +359,14 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         );
         assert!(
             centroid_x_free_cleanup.exception_registration_restored,
+            "{name}"
+        );
+        assert_eq!(regions_clear_all.region_records_visited, 128, "{name}");
+        assert!(
+            regions_clear_all
+                .region_records
+                .iter()
+                .all(|record| record.after.size == 0),
             "{name}"
         );
         assert_eq!(

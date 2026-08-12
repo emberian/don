@@ -122,7 +122,19 @@ use crate::player_land::{
 use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
-pub use crate::post_continent::{REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA};
+pub use crate::post_continent::{
+    execute_map_make_first_regions_clear_all, MapMakeFirstRegionsClearAllNext,
+    MapMakeFirstRegionsClearAllReceipt, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
+    RegionsClearAllNativeBody, RegionsClearAllRegionReceipt, RegionsClearAllWorldMutation,
+    FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
+    MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA, MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
+    REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA, REGIONS_CLEAR_ALL_END_VA,
+    REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
+    REGIONS_CLEAR_ALL_RET_EMPTY_WORLD_VA, REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA,
+    REGIONS_CLEAR_ALL_RET_NULL_WORLD_DATA_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
+    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA,
+};
 use crate::region_centroid::{
     execute_east_meets_west_centroids, EastMeetsWestCentroidReceipt, RegionCentroidError,
     MAP_ELIMINATE_EDGE_CANALS_VA,
@@ -234,8 +246,9 @@ pub enum ContinentStop {
     },
     /// Every active selector and World append completed, followed by the exact
     /// post-loop `Map::check_player_land`, local-string cleanup, both centroid
-    /// array `_free` calls, and the complete style-virtual epilogue. Execution
-    /// is frozen at the common driver's next `Regions::clear_all` mutator.
+    /// array `_free` calls, the complete style-virtual epilogue, and the common
+    /// driver's first `Regions::clear_all`. Execution is frozen before the
+    /// following `Regions::find_all` mutator.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -250,6 +263,7 @@ pub enum ContinentStop {
         post_player_land_cleanup: EastMeetsWestPostPlayerLandCleanupReceipt,
         centroid_y_free_cleanup: EastMeetsWestCentroidYFreeCleanupReceipt,
         centroid_x_free_cleanup: EastMeetsWestCentroidXFreeCleanupReceipt,
+        regions_clear_all: MapMakeFirstRegionsClearAllReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -1631,8 +1645,13 @@ fn east_meets_west(
                     } = centroid_x_free_cleanup.next;
                     debug_assert_eq!(ret_va, EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA);
                     debug_assert_eq!(callee_stack_argument_bytes_popped, 4);
-                    let next_va = REGIONS_CLEAR_ALL_VA;
-                    let next_mutator_va = REGIONS_CLEAR_ALL_VA;
+                    let regions_clear_all =
+                        execute_map_make_first_regions_clear_all(world, regions, rng.state());
+                    let MapMakeFirstRegionsClearAllNext::FindAll {
+                        call_va: next_va,
+                        primitive_va: next_mutator_va,
+                        ..
+                    } = regions_clear_all.next;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1649,6 +1668,7 @@ fn east_meets_west(
                             post_player_land_cleanup,
                             centroid_y_free_cleanup,
                             centroid_x_free_cleanup,
+                            regions_clear_all,
                             next_mutator_va,
                         },
                         starts_added,

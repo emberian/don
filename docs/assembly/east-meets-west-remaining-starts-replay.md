@@ -12,7 +12,8 @@ execute it.
 The canonical continuation now executes that separately proved leaf and its
 exact local-string cleanup, the centroid-Y free, and its caller bookkeeping,
 then the centroid-X free and complete style-virtual epilogue.  The integrated
-continent stop is now the common `Regions::clear_all` at 0x00680060; see
+continuation also executes the first common `Regions::clear_all`; the stop is
+now `Regions::find_all` at 0x0067eff0 (caller 0x0068be3c); see
 `map-check-player-land-east-meets-west.md`. The boundary below remains the
 historical contract of this isolated remaining-start tranche.
 
@@ -95,8 +96,8 @@ active-slot schedule, skipped inactive slots, every repeated call, selector
 and mutation receipt, RNG chronology, and before/after World sections. On
 complete success the isolated remaining receipt retains the unexecuted leaf
 call site 0x00697492. The integrated
-ContinentStop::AddStartingLocation::next_va advances through that leaf and the
-complete cleanups to 0x00680060. A later selector failure instead advances to
+ContinentStop::AddStartingLocation::next_va advances through that leaf, the
+complete cleanups, and the clear to 0x0068be3c. A later selector failure advances to
 0x00697003. The continent owner digest includes the new source, so the
 localizer cannot reuse an older implementation proof.
 
@@ -118,7 +119,7 @@ does not visit slot 2.
 - exact corpus census: 13,119,476 walked / 7,917,091 owned / 5,202,385 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
 - exact current integrated boundary set: 2
-  map_team_continent_regions_clear_all and 19
+  map_team_continent_regions_find_all and 19
   place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:

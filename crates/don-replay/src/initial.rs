@@ -948,7 +948,7 @@ impl InitialItemReconstruction {
             crate::continent::ContinentStop::AddStartingLocation {
                 next_mutator_va, ..
             } => InitialItemBoundary::MapContinentPrimitiveUnavailable {
-                boundary: "map_team_continent_regions_clear_all",
+                boundary: "map_team_continent_regions_find_all",
                 map_style: receipt.map_style,
                 make_continents_va: receipt.make_continents_va,
                 primitive_va: *next_mutator_va,

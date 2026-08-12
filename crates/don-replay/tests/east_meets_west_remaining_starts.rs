@@ -205,6 +205,7 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             mutation: first_mutation,
             remaining,
             player_land,
+            regions_clear_all,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -256,13 +257,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::continent::REGIONS_CLEAR_ALL_VA,
+            don_replay::continent::MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::REGIONS_CLEAR_ALL_VA,
+            don_replay::continent::REGIONS_FIND_ALL_VA,
             "{}",
             expected.name
         );
@@ -475,7 +476,12 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             expected.name
         );
         let checksum = map.world.checksum_sections();
-        assert_eq!(checksum, player_land.world_after, "{}", expected.name);
+        assert_eq!(
+            regions_clear_all.world_before, player_land.world_after,
+            "{}",
+            expected.name
+        );
+        assert_eq!(checksum, regions_clear_all.world_after, "{}", expected.name);
         assert_eq!(
             checksum.section(WorldSection::StartArrays).adler,
             expected.starts_after,
@@ -525,11 +531,23 @@ fn later_selector_failure_stops_before_visiting_another_active_slot() {
         mutation,
         remaining,
         player_land,
+        regions_clear_all,
         ..
     } = prefix.stop
     else {
         panic!("unexpected stop {:?}", prefix.stop);
     };
+
+    for mutation in &regions_clear_all.world_region_mutations {
+        map.world.wdata[mutation.cell].region = mutation.region_before;
+    }
+    for record in &regions_clear_all.region_records {
+        map.generation_regions.list[usize::from(record.region)] = record.before.clone();
+    }
+    map.generation_regions.coords = regions_clear_all.regions_coords_before.clone();
+    map.generation_regions.land = regions_clear_all.regions_land_before;
+    map.generation_regions.sea = regions_clear_all.regions_sea_before;
+    assert_eq!(map.world.checksum_sections(), player_land.world_after);
 
     for write in &player_land.world_cell_mutations {
         assert_eq!(map.world.wdata(write.x, write.y), &write.after);

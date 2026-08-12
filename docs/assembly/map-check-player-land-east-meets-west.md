@@ -9,8 +9,9 @@ been appended.  It executes the native call at `0x00697492`, returns to
 executes the first centroid-array `_free` at `0x006974c2` plus its caller-local
 destructor bookkeeping, then executes the centroid-X `_free` at `0x00697502`
 and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
-Execution stops at the common driver's next `Regions::clear_all` mutator.
-Neither the leaf nor any cleanup consumes RNG.
+Execution then runs the common driver's full `Regions::clear_all` body and
+stops before `Regions::find_all` at caller `0x0068be3c`.  None of these
+tranches consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -197,6 +198,29 @@ at `0x0069753c`.  PDB's 3,839-byte
 `MapEastMeetsWest::make_continents(int)` extent is exactly
 `0x00696640..0x0069753f`, so no unmodeled instruction remains in the body.
 
+## First common `Regions::clear_all`
+
+The common `Map::make` caller invokes `Regions::clear_all` at
+`0x0068be36 -> 0x00680060`, resumes at `0x0068be3b`, pushes an unread ECX word,
+and reaches the still-unexecuted `Regions::find_all(int)` call at
+`0x0068be3c -> 0x0067eff0`.  PDB gives `Regions::clear_all` size 275; its exact
+extent `0x00680060..0x00680173` contains 79 instructions, SHA-256
+`86333bac51dacb209b15048ecb33aa57b77c2d143a1ad797631e1992994b7317`.
+
+The body visits all 128 fixed 136-byte `Region` records.  Every record gets
+flags, climate, and goodies zeroed and common/goody factors reset to eight.
+Only a record whose old size is nonzero enters the conditional destructor
+path: size becomes zero; a non-null `WCoordList` allocation is released via
+`0x006800c5 -> __imp__free` at `0x00ac5500`; list, capacity, length, flags,
+borders, and border id are cleared.  Increment and cursor are preserved.  It
+then zeroes `WData::region` for every World cell without touching `region2`,
+sets land-region count to zero and sea-region state to 64, and returns along
+the nonempty-World path at `0x0068014e`.
+
+The receipt retains every Region before/after record, every changed World
+region label, and a typed logical coordinate-allocation release for each
+executed `_free`; no host pointer is stored or compared.
+
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
@@ -205,14 +229,14 @@ retains the complete wrapper and cleanup receipts, including a typed allocator
 receipt that names the logical Y-coordinate allocation and its exact values as
 `Live -> Freed` without storing or comparing a host pointer.  The final receipt
 does the same for X and additionally binds every local clear, callee-saved
-register pop, SEH restoration, frame restoration, and `ret 4`.  It exposes
-`next_va = next_mutator_va = 0x00680060`, the common driver's still-unexecuted
-`Regions::clear_all`.  The generic continent receipt carries the same leaf
-receipt.  Owner transition accepts the result only when both logical
-allocations, every cleanup anchor, the complete epilogue, and unchanged RNG
-chronology match; its implementation digest includes this source body.  The
+register pop, SEH restoration, frame restoration, and `ret 4`.  The common
+clear receipt then binds the complete Region/World transition and exposes
+`next_va = 0x0068be3c`, `next_mutator_va = 0x0067eff0`.  Owner transition
+accepts the result only when both centroid allocations, every cleanup anchor,
+all 128 Region transitions, the WData region clears, and unchanged RNG
+chronology match; its implementation digest includes both source bodies.  The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_regions_clear_all`.
+`map_team_continent_regions_find_all`.
 
 Validation gates:
 
@@ -245,7 +269,7 @@ Validation gates:
 - current centroid-X-free local owner audit: 2/2, including all 21
   checksum-bearing recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
   ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
-  `map_team_continent_regions_clear_all` / nineteen
+  `map_team_continent_regions_find_all` / nineteen
   `place_all_mountains_add_mountain`.
 - current clean-HEAD Hbox overlay: final source compile plus full 4/4 suite,
   including both real fixtures, green in

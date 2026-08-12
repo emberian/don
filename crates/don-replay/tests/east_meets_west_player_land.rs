@@ -2,13 +2,13 @@ use don_replay::continent::{
     execute_continent_prefix_with_regions_from_rng,
     execute_east_meets_west_centroid_x_free_cleanup,
     execute_east_meets_west_centroid_y_free_cleanup, execute_east_meets_west_player_land,
-    execute_east_meets_west_post_player_land_cleanup, ContinentStop,
-    EastMeetsWestCentroidListOwner, EastMeetsWestCentroidXFreeCleanupNext,
+    execute_east_meets_west_post_player_land_cleanup, execute_map_make_first_regions_clear_all,
+    ContinentStop, EastMeetsWestCentroidListOwner, EastMeetsWestCentroidXFreeCleanupNext,
     EastMeetsWestCentroidYFreeCleanupNext, EastMeetsWestPlayerLandCall,
     EastMeetsWestPlayerLandNext, EastMeetsWestPostPlayerLandCleanupNext,
-    EastMeetsWestStringClosePath, RetailAllocationState, CHECK_PLAYER_LAND_NATIVE_BODY,
-    EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY,
-    EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA,
+    EastMeetsWestStringClosePath, MapMakeFirstRegionsClearAllNext, RegionsAllocationState,
+    RetailAllocationState, CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY, EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA,
     EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_INSTRUCTION_COUNT,
     EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SHA256, EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SIZE,
     EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY,
@@ -27,9 +27,15 @@ use don_replay::continent::{
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SIZE,
     FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
-    REGIONS_CLEAR_ALL_VA, RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE, STRING_CLOSE_INSTRUCTION_COUNT,
-    STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256, STRING_CLOSE_SIZE, STRING_CLOSE_VA,
-    STRING_GUTS_DESTRUCTOR_CALL_VA, STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+    MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
+    REGIONS_CLEAR_ALL_END_VA, REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
+    REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
+    REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
+    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA, RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE,
+    STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256,
+    STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
+    STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
 };
 use don_replay::fractal_boundary::resolve_tile_selection;
 use don_replay::map_style::{ron_data_root_for_replay, MapStyleStaticData};
@@ -159,6 +165,24 @@ fn native_extent_fastcall_and_typed_residual_are_frozen() {
     assert_eq!(
         EAST_MEETS_WEST_MAKE_CONTINENTS_ENTRY_VA + EAST_MEETS_WEST_MAKE_CONTINENTS_SIZE,
         EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA
+    );
+    assert_eq!(REGIONS_CLEAR_ALL_NATIVE_BODY.entry_va, REGIONS_CLEAR_ALL_VA);
+    assert_eq!(
+        REGIONS_CLEAR_ALL_NATIVE_BODY.end_va_exclusive,
+        REGIONS_CLEAR_ALL_END_VA
+    );
+    assert_eq!(REGIONS_CLEAR_ALL_SIZE, 275);
+    assert_eq!(REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, 79);
+    assert_eq!(
+        REGIONS_CLEAR_ALL_NATIVE_BODY.sha256,
+        REGIONS_CLEAR_ALL_SHA256
+    );
+    assert_eq!(
+        REGIONS_CLEAR_ALL_NATIVE_BODY.indirect_import_calls,
+        [(
+            REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
+            REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA
+        )]
     );
 }
 
@@ -351,6 +375,39 @@ fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
             callee_stack_argument_bytes_popped: 4,
         }
     );
+    let clear = execute_map_make_first_regions_clear_all(
+        &mut world,
+        &mut regions,
+        x_cleanup.random_state_after,
+    );
+    assert_eq!(clear.caller_call_va, MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA);
+    assert_eq!(clear.body, REGIONS_CLEAR_ALL_NATIVE_BODY);
+    assert_eq!(
+        clear.executed_ret_va,
+        REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA
+    );
+    assert_eq!(clear.region_records_visited, 128);
+    assert_eq!(clear.world_cells_visited, world.wdata.len());
+    assert!(world.wdata.iter().all(|cell| cell.region == 0));
+    assert!(clear.world_region2_unchanged);
+    assert_eq!(regions.land, 0);
+    assert_eq!(regions.sea, 64);
+    assert!(clear.coordinate_frees.iter().all(|free| {
+        free.call_va == REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA
+            && free.import_iat_va == REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA
+            && free.element_width == 8
+            && free.state_before == RegionsAllocationState::Live
+            && free.state_after == RegionsAllocationState::Freed
+    }));
+    assert_eq!(
+        clear.next,
+        MapMakeFirstRegionsClearAllNext::FindAll {
+            argument_push_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+            call_va: MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
+            primitive_va: REGIONS_FIND_ALL_VA,
+            stack_argument_is_unread: true,
+        }
+    );
 }
 
 #[test]
@@ -418,6 +475,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             post_player_land_cleanup,
             centroid_y_free_cleanup,
             centroid_x_free_cleanup,
+            regions_clear_all,
             next_va,
             next_mutator_va,
             ..
@@ -432,8 +490,8 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        assert_eq!(*next_va, REGIONS_CLEAR_ALL_VA, "{name}");
-        assert_eq!(*next_mutator_va, REGIONS_CLEAR_ALL_VA, "{name}");
+        assert_eq!(*next_va, MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, "{name}");
+        assert_eq!(*next_mutator_va, REGIONS_FIND_ALL_VA, "{name}");
         assert_eq!(
             post_player_land_cleanup.centroid_y_length,
             usize::from(prefix.team_partition.as_ref().unwrap().continent_count),
@@ -466,6 +524,26 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             centroid_x_free_cleanup.exception_registration_restored,
             "{name}"
         );
+        assert_eq!(regions_clear_all.region_records_visited, 128, "{name}");
+        assert_eq!(
+            regions_clear_all.world_cells_visited,
+            map.world.wdata.len(),
+            "{name}"
+        );
+        assert!(
+            regions_clear_all
+                .region_records
+                .iter()
+                .all(|record| record.after
+                    == map.generation_regions.list[usize::from(record.region)]),
+            "{name}"
+        );
+        assert!(
+            map.world.wdata.iter().all(|cell| cell.region == 0),
+            "{name}"
+        );
+        assert_eq!(map.generation_regions.land, 0, "{name}");
+        assert_eq!(map.generation_regions.sea, 64, "{name}");
         assert!(
             !post_player_land_cleanup
                 .string_close
@@ -529,13 +607,22 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         );
         assert!(!receipt.world_cell_mutations.is_empty(), "{name}");
         assert!(
-            receipt
-                .world_cell_mutations
-                .iter()
-                .all(|mutation| mutation.before != mutation.after
-                    && map.world.wdata(mutation.x, mutation.y) == &mutation.after),
+            receipt.world_cell_mutations.iter().all(|mutation| {
+                let mut after_clear = mutation.after.clone();
+                after_clear.region = 0;
+                mutation.before != mutation.after
+                    && map.world.wdata(mutation.x, mutation.y) == &after_clear
+            }),
             "{name}"
         );
-        assert_eq!(map.world.checksum_sections(), receipt.world_after, "{name}");
+        assert_eq!(
+            regions_clear_all.world_before, receipt.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            map.world.checksum_sections(),
+            regions_clear_all.world_after,
+            "{name}"
+        );
     }
 }
