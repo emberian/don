@@ -67,6 +67,8 @@ pub struct ReplayUnitTypeFacts {
     pub guy_spacing: i32,
     pub x_spacing: i32,
     pub y_spacing: i32,
+    /// `ObjectTypeData::new_block_radius +0x248`, consumed by initial Guy collision stamps.
+    pub new_block_radius: i32,
     pub graft: i32,
     pub age: i32,
     pub unit_flags: u32,
@@ -378,6 +380,7 @@ pub fn replay_unit_type_facts(
                     guy_spacing: read_i32(section, object_at(0x224))?,
                     x_spacing: read_i32(section, object_at(0x228))?,
                     y_spacing: read_i32(section, object_at(0x22c))?,
+                    new_block_radius: read_i32(section, object_at(0x248))?,
                     graft: read_i32(section, object_at(0x25c))?,
                     age: read_i32(section, object_at(0x278))?,
                     unit_flags: read_u32(section, unit_at(0x2b4))?,

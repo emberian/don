@@ -122,6 +122,34 @@ it cannot construct either upstream authority for the 2018 match. The segment th
 a source-only receipt producer: no replay channel is installed and the real first-Farm execution
 boundary remains red.
 
+### Nested first-Scout location continuation
+
+The next adapter composes that Guy prefix with the landed source-only
+`produce_unit_init_location_continuation`. The replay Rules projection now includes
+`ObjectTypeData::new_block_radius +0x248`; alongside domain, spacings, flags, squad/crew sizes,
+and base formation, this supplies every static type fact consumed by the location body. The
+placement request is normalized with retail's signed 48-unit-center formula, and the canonical
+complete-initializer after-image must independently agree with the resulting position, angle
+`0x55555555`, and base formation.
+
+Composing these receipts exposed and corrected an older abstraction error in the detailed
+`Objects::init_unit` validator: its `UnitAfterInit` position had been equated to the raw receiver
+arguments. It now validates the normalized post-`Unit::init` coordinates, including signed
+negative table division, while retaining the raw arguments on `UnitInitReceipt`. The nearby-spot
+fallback test is pinned to the normalized after-image rather than the call inputs.
+
+Fresh coherent graphics receipts restore the two Guys' gpieces and crew track offsets. Every
+terrain-height answer remains an explicit ordered receipt, so neither the replay-prefix World nor
+a flat default can silently authorize the transaction. The result contains both final synchronized
+Guy images, unchanged post-Guy RNG, and the exact Guy-0 `CollCheck::move_unit` request. That shared
+collision mutation is journaled but not applied; visibility and the remaining Unit tail are still
+outside this adapter.
+
+As above, the local height values and installed-graphics extractions are synthetic contract tests,
+not evidence for the 2018 run. The recording carries neither input, and no completed-worldgen
+authority is available. This therefore closes an executable nested segment without promoting the
+real initializer, executing the Farm package, or installing a checksum channel.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking

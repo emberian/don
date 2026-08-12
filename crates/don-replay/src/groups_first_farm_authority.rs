@@ -11,10 +11,11 @@
 use std::fmt;
 
 use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
+use don_sim::systems::groups_guys::UnitTypeStats;
 use don_sim::systems::map_terrain::{Coord, WCoord};
 use don_sim::systems::objects_init_unit_authority_frontier::{
-    BhsInitUnitRequest, DetailedInitUnitReceipt, InitUnitReceiptError, InitUnitStep,
-    ValidatedInitUnitEffects,
+    normalize_unit_init_coordinate, BhsInitUnitRequest, DetailedInitUnitReceipt,
+    InitUnitReceiptError, InitUnitStep, ValidatedInitUnitEffects,
 };
 use don_sim::systems::production::{self, Footprint};
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
@@ -42,6 +43,10 @@ use crate::setup_units_producer::{
     starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
     BuildUnitsPrefixReceipt, BuildUnitsReceiptError, PlacementOutcomeReceipt, PlacementRngEvent,
     StableUnitIdentityReceipt, StartingUnitPhase, CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
+};
+use crate::unit_init_location_deep_re::{
+    produce_unit_init_location_continuation, TerrainHeightReceipt, UnitInitLocationError,
+    UnitInitLocationInputs, UnitInitLocationReceipt, UNIT_INIT_SET_ANGLE,
 };
 use crate::wire::CommandView;
 use crate::world_owner_frontier::sha256;
@@ -366,6 +371,29 @@ pub struct FirstFarmFirstScoutGuyReceipt {
     pub prefix: UnitGuyInitPrefixReceipt,
 }
 
+/// Explicit external inputs to the source-owned location continuation.
+///
+/// The graphics hierarchy and terrain heights are not serialized by the replay. Keeping them in
+/// one input makes that boundary visible and prevents the adapter from consulting a caller-created
+/// map or inventing flat terrain behind the receipt API.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstScoutLocationInputs {
+    pub graphics: Vec<GuyGraphicsInitReceipt>,
+    pub predicates: Vec<GuyInitPredicateFacts>,
+    pub terrain: Vec<TerrainHeightReceipt>,
+}
+
+/// Exact first-Scout continuation through `Unit::set_new_location`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstScoutLocationReceipt {
+    pub guy: FirstFarmFirstScoutGuyReceipt,
+    pub unit_type: UnitTypeStats,
+    pub raw_request: (i32, i32),
+    pub normalized_anchor: (i32, i32),
+    pub world_bounds: (i32, i32),
+    pub location: UnitInitLocationReceipt,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FirstFarmFirstScoutGuyError {
     Init(FirstFarmFirstInitUnitError),
@@ -379,6 +407,42 @@ pub enum FirstFarmFirstScoutGuyError {
         prefix_after: i32,
         init_after: i32,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstScoutLocationError {
+    Guy(FirstFarmFirstScoutGuyError),
+    Discovery(FirstFarmAuthorityError),
+    WrongScoutLocationTypeFacts,
+    WorldShapeOverflow,
+    Location(UnitInitLocationError),
+    CanonicalLocationMismatch,
+}
+
+impl fmt::Display for FirstFarmFirstScoutLocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "first 2018 Farm Scout location refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FirstFarmFirstScoutLocationError {}
+
+impl From<FirstFarmFirstScoutGuyError> for FirstFarmFirstScoutLocationError {
+    fn from(value: FirstFarmFirstScoutGuyError) -> Self {
+        Self::Guy(value)
+    }
+}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstScoutLocationError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<UnitInitLocationError> for FirstFarmFirstScoutLocationError {
+    fn from(value: UnitInitLocationError) -> Self {
+        Self::Location(value)
+    }
 }
 
 impl fmt::Display for FirstFarmFirstScoutGuyError {
@@ -944,6 +1008,115 @@ pub fn produce_first_farm_first_scout_guy_prefix(
         squad_size: discovery.scout.squad_size,
         crew_size: discovery.scout.crew_size,
         prefix,
+    })
+}
+
+/// Continue the first Scout through the exact graphics refresh and initial location body.
+///
+/// Rules supplies the type projection, including the newly bound collision radius. The raw
+/// placement request is normalized by the native `Unit::init` formula, and the completed
+/// initializer after-image must independently agree with the resulting position, angle, and
+/// base formation. Every terrain query remains an ordered external receipt. Collision writes are
+/// only journaled by the location producer, so this function never mutates `after` or its map.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_scout_location(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    placement_authority: &FirstFarmSetupEntryAuthority,
+    detailed: &DetailedInitUnitReceipt,
+    after: &Sim,
+    init_authority: &FirstFarmFirstInitUnitAuthority,
+    inputs: FirstFarmFirstScoutLocationInputs,
+) -> Result<FirstFarmFirstScoutLocationReceipt, FirstFarmFirstScoutLocationError> {
+    let guy = produce_first_farm_first_scout_guy_prefix(
+        replay,
+        plan,
+        before,
+        placement_authority,
+        detailed,
+        after,
+        init_authority,
+        inputs.graphics.clone(),
+        inputs.predicates,
+    )?;
+    let discovery = discover_first_2018_farm(replay)?;
+    let scout = discovery.scout;
+    if scout.domain != 0
+        || scout.squad_size != 1
+        || scout.crew_size != 1
+        || scout.uber_size != 1
+        || scout.new_block_radius < 0
+        || scout.new_block_radius > 10
+        || i8::try_from(scout.base_form).is_err()
+    {
+        return Err(FirstFarmFirstScoutLocationError::WrongScoutLocationTypeFacts);
+    }
+    let raw_request = (guy.init.request.x, guy.init.request.y);
+    let normalized_anchor = (
+        normalize_unit_init_coordinate(raw_request.0),
+        normalize_unit_init_coordinate(raw_request.1),
+    );
+    let world_bounds = (
+        after
+            .map
+            .world
+            .xs
+            .checked_mul(0x300)
+            .ok_or(FirstFarmFirstScoutLocationError::WorldShapeOverflow)?,
+        after
+            .map
+            .world
+            .ys
+            .checked_mul(0x300)
+            .ok_or(FirstFarmFirstScoutLocationError::WorldShapeOverflow)?,
+    );
+    let formation = scout.base_form as i8;
+    let unit_type = UnitTypeStats {
+        domain: scout.domain,
+        guy_spacing: scout.guy_spacing,
+        x_spacing: scout.x_spacing,
+        y_spacing: scout.y_spacing,
+        new_block_radius: scout.new_block_radius,
+        turn_speed: scout.turn_speed,
+        role: scout.role,
+        squad_size: scout.squad_size,
+        uber_size: scout.uber_size,
+        crew_size: scout.crew_size,
+        base_form: scout.base_form,
+        ..UnitTypeStats::default()
+    };
+    let location = produce_unit_init_location_continuation(UnitInitLocationInputs {
+        prefix: guy.prefix.clone(),
+        graphics: inputs.graphics,
+        unit_type,
+        formation,
+        unit_masks: scout.obj_masks,
+        domain_two_tracks_ground: scout.unit_flags & 0x20 != 0,
+        anchor_x: normalized_anchor.0,
+        anchor_y: normalized_anchor.1,
+        world_max_x: world_bounds.0,
+        world_max_y: world_bounds.1,
+        terrain: inputs.terrain,
+    })?;
+    if location.identity != guy.prefix.identity
+        || (location.unit.x, location.unit.y) != normalized_anchor
+        || location.unit.angle != UNIT_INIT_SET_ANGLE
+        || location.unit.formation != formation
+        || guy.init.unit.x != location.unit.x
+        || guy.init.unit.y != location.unit.y
+        || guy.init.unit.angle != location.unit.angle
+        || guy.init.unit.form != formation
+    {
+        return Err(FirstFarmFirstScoutLocationError::CanonicalLocationMismatch);
+    }
+    Ok(FirstFarmFirstScoutLocationReceipt {
+        guy,
+        unit_type,
+        raw_request,
+        normalized_anchor,
+        world_bounds,
+        location,
     })
 }
 

@@ -326,6 +326,22 @@ pub struct UnitInitReceipt {
     pub after: UnitAfterInit,
 }
 
+/// `Unit::init` coordinate projection at `0x00612100`: signed table-division UCoord followed by
+/// the 48-unit cell center. `Objects::init_unit` passes raw coordinates, while the completed Unit
+/// after-image and captain/location continuations observe this normalized value.
+#[inline]
+pub fn normalize_unit_init_coordinate(value: i32) -> i32 {
+    let shifted = value >> 4;
+    let quotient = shifted / 3;
+    let remainder = shifted % 3;
+    let ucoord = if shifted < 0 && remainder != 0 {
+        quotient - 1
+    } else {
+        quotient
+    };
+    ucoord.wrapping_mul(48).wrapping_add(24)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LeaderCorrectionReceipt {
     pub ordinal: u32,
@@ -523,8 +539,8 @@ impl DetailedInitUnitReceipt {
                 owner: self.request.owner,
                 o: member_o,
                 type_index: self.request.type_index,
-                x: self.request.x,
-                y: self.request.y,
+                x: normalize_unit_init_coordinate(self.request.x),
+                y: normalize_unit_init_coordinate(self.request.y),
                 angle: init.after.angle,
                 unit_masks: init.after.unit_masks,
             };

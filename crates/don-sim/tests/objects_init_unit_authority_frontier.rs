@@ -99,8 +99,8 @@ fn init(ordinal: u32, o: i32, returned: i32, unit_masks: u32) -> UnitInitReceipt
             owner: request.owner,
             o,
             type_index: request.type_index,
-            x: request.x,
-            y: request.y,
+            x: normalize_unit_init_coordinate(request.x),
+            y: normalize_unit_init_coordinate(request.y),
             angle: 0x5555_5555,
             unit_masks,
         },
@@ -116,8 +116,8 @@ fn captain(ordinal: u32, from_o: i32, captain_o: i32) -> ResolveCaptainReceipt {
         captain: CaptainFacts {
             owner: request().owner,
             o: captain_o,
-            x: request().x,
-            y: request().y,
+            x: normalize_unit_init_coordinate(request().x),
+            y: normalize_unit_init_coordinate(request().y),
             angle: 0x5555_5555,
             new_block_radius: 2,
         },
@@ -159,7 +159,10 @@ fn two_member_receipt(nearby_returned: i32) -> DetailedInitUnitReceipt {
     let (x, y) = if nearby_returned == 0 {
         (nearby.output_x, nearby.output_y)
     } else {
-        (request().x, request().y)
+        (
+            normalize_unit_init_coordinate(request().x),
+            normalize_unit_init_coordinate(request().y),
+        )
     };
 
     DetailedInitUnitReceipt {
@@ -246,6 +249,9 @@ fn native_addresses_sizes_and_layout_offsets_are_frozen() {
     assert_eq!(UNIT_TYPE_UBER_SIZE_OFFSET, 0x308);
     assert_eq!(FIGHTER_BOMBER_TYPE, 308);
     assert_eq!(GOVERNMENT_HERO_FLAG, 0x0400_0000);
+    assert_eq!(normalize_unit_init_coordinate(4_032), 4_056);
+    assert_eq!(normalize_unit_init_coordinate(2_496), 2_520);
+    assert_eq!(normalize_unit_init_coordinate(-1), -24);
 }
 
 #[test]
@@ -369,7 +375,13 @@ fn nearby_nonzero_falls_back_to_post_init_coordinates_and_does_not_abort() {
             _ => None,
         })
         .unwrap();
-    assert_eq!((location.x, location.y), (request().x, request().y));
+    assert_eq!(
+        (location.x, location.y),
+        (
+            normalize_unit_init_coordinate(request().x),
+            normalize_unit_init_coordinate(request().y),
+        )
+    );
     assert_eq!(receipt.validate().unwrap().returned_captain_or_failure, 10);
 
     let mut wrong = receipt;

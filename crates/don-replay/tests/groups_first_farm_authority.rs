@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use don_replay::groups_first_farm_authority::{
     bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
     produce_first_farm_first_placement, produce_first_farm_first_scout_guy_prefix,
-    FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FirstFarmBuilderBindingError,
-    FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError, FirstFarmFirstInitUnitSource,
-    FirstFarmFirstPlacementError, FirstFarmFirstScoutGuyError, FirstFarmFrame79Authority,
+    produce_first_farm_first_scout_location, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
+    FirstFarmBuilderBindingError, FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError,
+    FirstFarmFirstInitUnitSource, FirstFarmFirstPlacementError, FirstFarmFirstScoutGuyError,
+    FirstFarmFirstScoutLocationError, FirstFarmFirstScoutLocationInputs, FirstFarmFrame79Authority,
     FirstFarmFrame79Source, FirstFarmSetupEntryAuthority, FirstFarmSetupEntrySource, FIRST_FRAME,
     FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
 };
@@ -28,6 +29,11 @@ use don_replay::{
     setup_place_unit_deep_re::{
         GuyGraphicsInitReceipt, GuyInitPredicateFacts, PlaceUnitExternalResidual, ProbeDisposition,
         UnitGuyInitError,
+    },
+    unit_init_location_deep_re::{
+        TerrainHeightReceipt, TerrainQueryKind, UnitInitLocationError, GUY_TERRAIN_Z_CALL_VA,
+        TERRAIN_FIND_DATA_Z_VA, TERRAIN_FIND_TCOORD_Z_VA, UNIT_INIT_SET_ANGLE,
+        UNIT_TERRAIN_Z_CALL_VA,
     },
 };
 use don_sim::rng::Random;
@@ -338,8 +344,8 @@ fn first_scout_detailed_receipt(
                 captain: CaptainFacts {
                     owner: request.owner,
                     o: 0,
-                    x: request.x,
-                    y: request.y,
+                    x: after_image.x,
+                    y: after_image.y,
                     angle: after_image.angle,
                     new_block_radius: 1,
                 },
@@ -377,6 +383,16 @@ fn synthetic_first_scout_init(
             2,
         )
         .unwrap();
+    let row = after.world.unit_row_at(request.owner, 0).unwrap();
+    let normalize = |value: i32| {
+        let shifted = value >> 4;
+        shifted.div_euclid(3) * 48 + 24
+    };
+    after
+        .world
+        .set_pos(row, normalize(request.x), normalize(request.y));
+    after.world.units.angle_mut()[row] = UNIT_INIT_SET_ANGLE;
+    after.world.units.form_mut()[row] = 0;
     let mut init_rng = Random::new(placement.placement.rng_after_probes);
     init_rng.get(0, 0xffff);
     init_rng.get(0, 0xffff);
@@ -404,8 +420,8 @@ fn synthetic_first_scout_graphics(slot: i8) -> GuyGraphicsInitReceipt {
             guy_num: slot,
             gpiece: 100 + i32::from(slot),
             pivot_graph_name: None,
-            track_dx: 300,
-            track_dy: -400,
+            track_dx: if slot == 0 { 0 } else { 300 },
+            track_dy: if slot == 0 { 0 } else { -400 },
             turret_angles: [0; 4],
             des_turret_angles: [0; 4],
             node_flags: 0,
@@ -413,6 +429,83 @@ fn synthetic_first_scout_graphics(slot: i8) -> GuyGraphicsInitReceipt {
         },
         restriction_count: 0,
     }
+}
+
+fn first_scout_terrain(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    authority: &FirstFarmSetupEntryAuthority,
+    crew_track: (i32, i32),
+) -> Vec<TerrainHeightReceipt> {
+    let placement = produce_first_farm_first_placement(replay, plan, before, authority).unwrap();
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        unreachable!()
+    };
+    let normalize = |value: i32| {
+        let shifted = value >> 4;
+        shifted.div_euclid(3) * 48 + 24
+    };
+    let anchor = (normalize(request.x), normalize(request.y));
+    let world_max = (before.map.world.xs * 0x300, before.map.world.ys * 0x300);
+    let angle = UNIT_INIT_SET_ANGLE;
+    let crew_at = |base: (i32, i32)| {
+        let (dx, dy) = crew_track;
+        let mut x = base.0;
+        let mut y = base.1;
+        if dx != 0 {
+            x = x.wrapping_add(don_sim::systems::groups_guys::sinx(
+                angle.wrapping_add(0x4000_0000),
+                dx,
+            ));
+            y = y.wrapping_add(don_sim::systems::groups_guys::sinx(angle, dx));
+        }
+        if dy != 0 {
+            x = x.wrapping_add(don_sim::systems::groups_guys::sinx(
+                angle.wrapping_add(i32::MIN),
+                dy,
+            ));
+            y = y.wrapping_add(don_sim::systems::groups_guys::sinx(
+                angle.wrapping_add(0x4000_0000),
+                dy,
+            ));
+        }
+        if dx != 0 || dy != 0 {
+            x = x.clamp(0, world_max.0 - 1);
+            y = y.clamp(0, world_max.1 - 1);
+        }
+        (x, y)
+    };
+    let pre_crew = crew_at((-1_536, -1_536));
+    let final_crew = crew_at(anchor);
+    let unit = |ordinal, x, y, returned_z| TerrainHeightReceipt {
+        ordinal,
+        call_va: UNIT_TERRAIN_Z_CALL_VA,
+        body_va: TERRAIN_FIND_TCOORD_Z_VA,
+        kind: TerrainQueryKind::UnitTcoord,
+        x,
+        y,
+        final_arg: 1,
+        returned_z,
+    };
+    let guy = |ordinal, x, y, returned_z| TerrainHeightReceipt {
+        ordinal,
+        call_va: GUY_TERRAIN_Z_CALL_VA,
+        body_va: TERRAIN_FIND_DATA_Z_VA,
+        kind: TerrainQueryKind::GuyCoord,
+        x,
+        y,
+        final_arg: 0,
+        returned_z,
+    };
+    vec![
+        unit(0, anchor.0 / 192, anchor.1 / 192, 10),
+        guy(1, pre_crew.0, pre_crew.1, 11),
+        guy(2, anchor.0, anchor.1, 12),
+        guy(3, final_crew.0, final_crew.1, 13),
+    ]
 }
 
 fn synthetic_first_scout_predicates() -> GuyInitPredicateFacts {
@@ -952,6 +1045,161 @@ fn first_scout_guy_prefix_rejects_unbound_graphics_and_full_body_rng_disagreemen
             prefix_after,
             init_after: authority.rng_after,
         }
+    );
+}
+
+#[test]
+fn first_scout_location_composes_rules_graphics_terrain_and_canonical_after_image() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, after, authority) =
+        synthetic_first_scout_init(&replay, &plan);
+    let graphics = vec![
+        synthetic_first_scout_graphics(0),
+        synthetic_first_scout_graphics(1),
+    ];
+    let terrain = first_scout_terrain(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        (
+            graphics[1].extracted.track_dx,
+            graphics[1].extracted.track_dy,
+        ),
+    );
+    let receipt = produce_first_farm_first_scout_location(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &authority,
+        FirstFarmFirstScoutLocationInputs {
+            graphics,
+            predicates: vec![
+                synthetic_first_scout_predicates(),
+                synthetic_first_scout_predicates(),
+            ],
+            terrain,
+        },
+    )
+    .unwrap();
+
+    assert_ne!(receipt.raw_request, receipt.normalized_anchor);
+    assert_eq!(
+        receipt.normalized_anchor,
+        (receipt.guy.init.unit.x, receipt.guy.init.unit.y)
+    );
+    assert_eq!(receipt.location.unit.angle, UNIT_INIT_SET_ANGLE);
+    assert_eq!(
+        receipt.location.unit.formation,
+        receipt.unit_type.base_form as i8
+    );
+    assert_eq!(receipt.unit_type.squad_size, 1);
+    assert_eq!(receipt.unit_type.crew_size, 1);
+    assert_eq!(receipt.location.graphics_calls.len(), 2);
+    assert_eq!(receipt.location.collision_requests.len(), 1);
+    assert_eq!(
+        receipt.location.first_unapplied_shared_mutation,
+        receipt.location.collision_requests.first().copied()
+    );
+    assert_eq!(receipt.location.rng_before, receipt.location.rng_after);
+    assert_eq!(
+        receipt.location.rng_before,
+        receipt.guy.prefix.rng_after_guys
+    );
+}
+
+#[test]
+fn first_scout_location_rejects_terrain_and_canonical_after_image_mutations() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, mut after, authority) =
+        synthetic_first_scout_init(&replay, &plan);
+    let graphics = vec![
+        synthetic_first_scout_graphics(0),
+        synthetic_first_scout_graphics(1),
+    ];
+    let mut terrain = first_scout_terrain(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        (
+            graphics[1].extracted.track_dx,
+            graphics[1].extracted.track_dy,
+        ),
+    );
+    terrain[1].x += 1;
+    assert_eq!(
+        produce_first_farm_first_scout_location(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &authority,
+            FirstFarmFirstScoutLocationInputs {
+                graphics: graphics.clone(),
+                predicates: vec![
+                    synthetic_first_scout_predicates(),
+                    synthetic_first_scout_predicates(),
+                ],
+                terrain,
+            },
+        ),
+        Err(FirstFarmFirstScoutLocationError::Location(
+            UnitInitLocationError::TerrainReceiptMismatch { ordinal: 1 }
+        ))
+    );
+
+    let row = after.world.unit_row_at(FIRST_OWNER.into(), 0).unwrap();
+    after.world.units.angle_mut()[row] ^= 1;
+    let terrain = first_scout_terrain(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        (
+            graphics[1].extracted.track_dx,
+            graphics[1].extracted.track_dy,
+        ),
+    );
+    let mut mismatched = detailed.clone();
+    let InitUnitStep::UnitInit(unit) = &mut mismatched.steps[1] else {
+        unreachable!()
+    };
+    unit.after.angle ^= 1;
+    let InitUnitStep::ResolveCaptain(captain) = mismatched.steps.last_mut().unwrap() else {
+        unreachable!()
+    };
+    captain.captain.angle ^= 1;
+    assert_eq!(
+        produce_first_farm_first_scout_location(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &mismatched,
+            &after,
+            &authority,
+            FirstFarmFirstScoutLocationInputs {
+                graphics,
+                predicates: vec![
+                    synthetic_first_scout_predicates(),
+                    synthetic_first_scout_predicates(),
+                ],
+                terrain,
+            },
+        ),
+        Err(FirstFarmFirstScoutLocationError::CanonicalLocationMismatch)
     );
 }
 
