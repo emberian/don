@@ -1,9 +1,9 @@
-//! Exclusive builtin-357/455 bridge over the canonical BHS, Sim, and production owners.
+//! Exclusive builtin-357/386/455 bridge over the canonical BHS, Sim, and production owners.
 //!
 //! The generic production-prefix host intentionally leaves stateful research red. This
 //! adapter adds the measured single-Library path, builtin 332's immediate stock continuation,
-//! and builtin 455's live idle-Unit census. Every other builtin is delegated to that strict
-//! prefix host.
+//! builtin 386's City/Build census, and builtin 455's live idle-Unit census. Every other
+//! builtin is delegated to that strict prefix host.
 
 use crate::replay_bhs_live_bindings::{
     ProductionBuiltinCall, ProductionBuiltinImage, ProductionBuiltinValue, ProductionDisposition,
@@ -15,6 +15,10 @@ use don_bhs::{BuiltinDecl, Host, HostError, HostResult, Value};
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::script_runtime::{
     ExternalGameSeconds, ExternalScriptFailure, ExternalTimerHost, ScriptRuntime,
+};
+use don_sim::systems::bhs_city_building_runtime::{
+    apply_sim_city_building_count_transaction, CityBuildingCountReceipt, CityBuildingCountRequest,
+    NUM_CITY_BUILDINGS_BUILTIN,
 };
 use don_sim::systems::bhs_create_unit_runtime::BhsCreateUnitRuntime;
 use don_sim::systems::bhs_idle_unit_runtime::{
@@ -38,6 +42,7 @@ pub struct ProductionResearchRunReceipt {
     pub production: ProductionRunReceipt,
     pub research: Vec<SingleLibraryResearchReceipt>,
     pub idle_units: Vec<IdleUnitCensusReceipt>,
+    pub city_buildings: Vec<CityBuildingCountReceipt>,
 }
 
 struct ResearchHost<'a> {
@@ -50,6 +55,7 @@ struct ResearchHost<'a> {
     trace: Vec<ProductionBuiltinCall>,
     research: Vec<SingleLibraryResearchReceipt>,
     idle_units: Vec<IdleUnitCensusReceipt>,
+    city_buildings: Vec<CityBuildingCountReceipt>,
 }
 
 impl<'a> ResearchHost<'a> {
@@ -70,6 +76,7 @@ impl<'a> ResearchHost<'a> {
             trace: Vec::new(),
             research: Vec::new(),
             idle_units: Vec::new(),
+            city_buildings: Vec::new(),
         }
     }
 
@@ -320,6 +327,25 @@ impl<'a> ResearchHost<'a> {
         Ok(Value::Int(returned))
     }
 
+    fn num_city_buildings(&mut self, args: &[Value]) -> HostResult {
+        let request = CityBuildingCountRequest {
+            who: Self::int_arg(args, 0)?,
+            city_name: Self::str_arg(args, 1)?.to_owned(),
+            type_name: Self::str_arg(args, 2)?.to_owned(),
+            include_unfinished: Self::int_arg(args, 3)?,
+        };
+        let receipt = apply_sim_city_building_count_transaction(
+            self.sim,
+            self.production,
+            self.types,
+            request,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        let returned = receipt.returned;
+        self.city_buildings.push(receipt);
+        Ok(Value::Int(returned))
+    }
+
     fn record(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
         self.trace.push(ProductionBuiltinCall {
             index: decl.index,
@@ -335,6 +361,7 @@ impl Host for ResearchHost<'_> {
         let returned = match decl.index {
             RESEARCH_TECH_WITH_COST_BUILTIN => self.research_tech_with_cost(args),
             FIND_NUM_IDLE_UNIT_BUILTIN => self.find_num_idle_unit(args),
+            NUM_CITY_BUILDINGS_BUILTIN => self.num_city_buildings(args),
             AT_LEAST_TYPE_BUILTIN => self.at_least_type(args),
             245 | 246 => self.population(decl.index, args),
             _ => {
@@ -413,7 +440,7 @@ pub fn run_production_research_call(
         std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].econ.stockpile);
     let victory_before = sim.vic_leaders.clone();
 
-    let (result, trace, research, idle_units) = {
+    let (result, trace, research, idle_units, city_buildings) = {
         let mut host = ResearchHost::new(image, types, upgrades, sim, production);
         let result = script_runtime.run_external_timer_transaction(
             binding.file,
@@ -434,7 +461,13 @@ pub fn run_production_research_call(
                 Ok((*after_step, *returned))
             },
         );
-        (result, host.trace, host.research, host.idle_units)
+        (
+            result,
+            host.trace,
+            host.research,
+            host.idle_units,
+            host.city_buildings,
+        )
     };
 
     let committed = match result {
@@ -474,5 +507,6 @@ pub fn run_production_research_call(
         },
         research,
         idle_units,
+        city_buildings,
     })
 }

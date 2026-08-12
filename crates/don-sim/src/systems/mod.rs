@@ -43,6 +43,8 @@ pub mod armies;
 /// to the complete nearby-spot service; building targets retain perimeter order plus the
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.
 pub mod attack_position;
+/// Canonical City/Build census for BHS builtin 386, `num_city_buildings`.
+pub mod bhs_city_building_runtime;
 /// Exact registrations 508--510 wrapper/prefix reversal. Runtime integration consumes this
 /// split plan so the native post-clear authority boundary remains non-atomic.
 pub mod bhs_create_unit_frontier;

@@ -66,6 +66,9 @@ fn canonical_type_owners(owner: usize) -> (TypeBuiltinState, BhsCreateUnitRuntim
                 51 => "Citizens".into(),
                 52 => "Upgraded Citizen".into(),
                 53 => "Grafted Citizen".into(),
+                417 => "Farm".into(),
+                418 => "Woodcutter's Camp".into(),
+                419 => "Mine".into(),
                 420 => "University".into(),
                 427 => "Barracks".into(),
                 432 => "Dock".into(),
@@ -177,6 +180,8 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut build = BuildData {
         flags: flag::VALID | flag::ACTIVE,
         who: owner as u8,
+        city: 0,
+        city_down: -1,
         queue: BuildQueue {
             queued: 0,
             entries: vec![BuildQueueEntry::default(); 2],
@@ -186,6 +191,14 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     build.other[off::OBJECT_ID..off::OBJECT_ID + 2]
         .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
     let row = sim.spawn_build(owner, build);
+    sim.cities.city_mark[owner] = 1;
+    let city = &mut sim.cities.slots[owner][0];
+    city.city_flags = 1;
+    city.city = 0;
+    city.o = BUILD_BAND_BASE as i16;
+    city.who = owner as i8;
+    city.name = "Athens".into();
+    city.id = "capital_0".into();
 
     let mut production = std::mem::take(&mut sim.production_runtime);
     production.register_build(row, LIBRARY);
@@ -333,6 +346,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     let idle_inside_before = sim.world.units.inside_up()[idle_row];
     let idle_captain_before = sim.world.units.o_up()[idle_row];
     let idle_orders_before = sim.world.orders(idle_row).clone();
+    let cities_before = sim.cities.clone();
     let scenario_before = sim.scenario_data;
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
@@ -368,7 +382,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357, 455]
+        [78, 357, 455, 386]
     );
     assert_eq!(call, call_before);
     assert_eq!(
@@ -378,9 +392,11 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     assert_eq!(script_runtime.script_timers(), &pristine_timers);
     assert_eq!(
         error.trace.last().map(|call| (&call.index, &call.returned)),
-        Some((&455, &ProductionBuiltinValue::Int(1)))
+        Some((&386, &ProductionBuiltinValue::Int(0)))
     );
     assert_eq!(sim.scenario_data, scenario_before);
+    assert_eq!(sim.cities.slots, cities_before.slots);
+    assert_eq!(sim.cities.city_mark, cities_before.city_mark);
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(sim.groups.last_group, groups_before.last_group);
     assert_eq!(sim.groups.proc_group, groups_before.proc_group);
@@ -596,8 +612,8 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         matches!(
             &error.failure,
             ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-                index: 386,
-                name: "num_city_buildings"
+                index: 436,
+                name: "num_type_queued"
             })
         ),
         "unexpected installed continuation: {:?}",
@@ -649,6 +665,27 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         ProductionBuiltinValue::Int(0),
         "the installed Sim has an empty canonical Unit band"
     );
+    let city_counts: Vec<_> = error
+        .trace
+        .iter()
+        .skip(idle + 1)
+        .take_while(|entry| entry.index == 386)
+        .collect();
+    assert_eq!(city_counts.len(), 3);
+    assert_eq!(
+        city_counts
+            .iter()
+            .map(|entry| entry.args.get(2))
+            .collect::<Vec<_>>(),
+        [
+            Some(&ProductionBuiltinValue::Str("Farm".into())),
+            Some(&ProductionBuiltinValue::Str("Woodcutter's Camp".into())),
+            Some(&ProductionBuiltinValue::Str("Mine".into())),
+        ]
+    );
+    assert!(city_counts
+        .iter()
+        .all(|entry| entry.returned == ProductionBuiltinValue::Int(0)));
 
     assert_eq!(call, call_before);
     assert_eq!(
