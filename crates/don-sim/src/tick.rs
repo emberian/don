@@ -5212,6 +5212,10 @@ mod tests {
     #[test]
     fn the_tick_executes_and_reports_what_it_executed() {
         let mut sim = populated(1);
+        // This generic schedule/accounting test is not a calc_danger authority fixture.
+        // Start on an ordinary frame; frame zero correctly schedules that child and the
+        // deliberately minimal `populated` world fails its stronger type preflight.
+        sim.world.frame = 1;
         let t = sim.do_frame();
         // The steps this driver claims to run.
         for s in [8, 11, 12, 14, 20, 23] {
@@ -5554,6 +5558,10 @@ mod tests {
         );
         sim.production_runtime.leaders[0].queued_counts[queued_type as usize] = 1;
 
+        // Keep this test on the always-entered process_victory path. Its intentionally
+        // under-specified Build has no calc_danger type/strength projection, so frame zero
+        // correctly refuses the whole atomic shell before victory instead of partially running it.
+        sim.world.frame = 1;
         sim.do_frame();
 
         assert!(sim.vic_leaders.slots[0].has_preq_2b9);
