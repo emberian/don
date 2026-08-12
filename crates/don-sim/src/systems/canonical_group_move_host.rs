@@ -18,7 +18,9 @@ use crate::systems::groups_guys::{
     GROUP_MAX_MEMBERS, NUM_GROUPS, NUM_LEADERS,
 };
 use crate::systems::movement::PathStack;
-use crate::world::{Handle, World, OBJ_FLAG_ACTIVE};
+use crate::systems::production::{BuildData, BUILDDATA_SIZE};
+use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
+use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 pub const GROUP_OPCODE: u8 = 0;
 pub const MOVE_TO_OPCODE: u8 = 7;
@@ -175,6 +177,11 @@ pub enum PackageError {
     InactiveUnit { who: u8, o: i16 },
     MissingHandle { who: u8, o: i16 },
     MissingAuthority { handle: Handle },
+    MissingBuild { who: u8, o: i16 },
+    InactiveBuild { who: u8, o: i16 },
+    MissingBuildAuthority { who: u8, o: i16, row: u32 },
+    DuplicateBuildAuthority { who: u8, o: i16, row: u32 },
+    StaleBuildIdentity { who: u8, o: i16, row: u32 },
     IncompleteSelectionAuthority { handle: Handle },
     IncompleteMoveAuthority { handle: Handle },
     SubordinateChainUnavailable { who: u8, o: i16 },
@@ -344,6 +351,48 @@ pub struct PreparedSelectionMember {
     pub authority: MoveMemberAuthority,
 }
 
+/// Stable Build-band identity used by the AIR selector. Unlike a Unit, a Build has no
+/// `UnitData::group` backlink and its current dense row is itself the strongest identity the
+/// canonical object registry can provide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildSelectionIdentity {
+    pub row: u32,
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+}
+
+/// Type-derived facts required to reproduce `Group::add` for a Build member. The identity binds
+/// the answer to one sparse-registry slot and BuildData reuse token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildSelectionAuthority {
+    pub identity: BuildSelectionIdentity,
+    pub role: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildSelectionImage {
+    pub identity: BuildSelectionIdentity,
+    pub bytes: [u8; BUILDDATA_SIZE],
+    pub position: (i32, i32),
+    pub inside_down: i16,
+    pub inside_down_who: i8,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedBuildSelectionMember {
+    pub image: BuildSelectionImage,
+    pub authority: BuildSelectionAuthority,
+}
+
+/// Ordered all-band selection image. Existing Unit-only consumers keep using `members`; AIR uses
+/// this exact list so a mixed or Build-only retail Group never gets projected through UnitData.
+#[derive(Clone, Debug)]
+pub enum PreparedSelectionObject {
+    Unit(PreparedSelectionMember),
+    Build(PreparedBuildSelectionMember),
+}
+
 /// Detached after-images for the canonical opcode-0 selection/cache/allocation stage.
 ///
 /// This is deliberately reusable by every same-package Group action. The after-images are
@@ -356,6 +405,7 @@ pub struct PreparedGroupSelection {
     pub who: u8,
     pub group_slot: usize,
     pub members: Vec<PreparedSelectionMember>,
+    pub selected_objects: Vec<PreparedSelectionObject>,
     pub command_state_before: CommandPackageState,
     pub command_state_after: CommandPackageState,
     pub groups_before: Groups,
@@ -902,12 +952,319 @@ pub fn prepare_group_selection(
     // that action passes, so a failed package leaves the revision untouched.
     command_state_after.revision = command_state_after.revision.wrapping_add(1);
 
+    let selected_objects = effective
+        .iter()
+        .cloned()
+        .map(PreparedSelectionObject::Unit)
+        .collect();
     Ok(PreparedGroupSelection {
         play,
         frame,
         who,
         group_slot,
         members: effective,
+        selected_objects,
+        command_state_before: command_state.clone(),
+        command_state_after,
+        groups_before: groups.clone(),
+        groups_after,
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        authority_members: authority.members.clone(),
+        units: mutations,
+    })
+}
+
+fn capture_build(
+    world: &World,
+    builds: &[BuildData],
+    who: u8,
+    o: i16,
+) -> Result<BuildSelectionImage, PackageError> {
+    let address = RetailObjectAddress::new(who, RetailBand::Build, i32::from(o));
+    let WorldObjectIdentity::BuildRow(row) = world
+        .object_bands()
+        .live_identity(address)
+        .ok_or(PackageError::MissingBuild { who, o })?
+    else {
+        return Err(PackageError::MissingBuild { who, o });
+    };
+    let build = builds
+        .get(row as usize)
+        .ok_or(PackageError::MissingBuild { who, o })?;
+    if build.who != who || build.object_id() != o {
+        return Err(PackageError::StaleBuildIdentity { who, o, row });
+    }
+    if !build.is_valid() {
+        return Err(PackageError::InactiveBuild { who, o });
+    }
+    Ok(BuildSelectionImage {
+        identity: BuildSelectionIdentity {
+            row,
+            who,
+            o,
+            uid: build.uid,
+        },
+        bytes: build.image(),
+        position: build.position(),
+        inside_down: i16::from_le_bytes([build.other[0x28], build.other[0x29]]),
+        inside_down_who: build.other[0x3e] as i8,
+    })
+}
+
+pub fn build_still_current(
+    world: &World,
+    builds: &[BuildData],
+    before: &BuildSelectionImage,
+) -> bool {
+    capture_build(world, builds, before.identity.who, before.identity.o)
+        .is_ok_and(|current| current == *before)
+}
+
+fn exact_air_allocator_slot(
+    groups: &mut Groups,
+    who: u8,
+    world: &World,
+    authority: &GroupMoveAuthority,
+) -> Result<usize, PackageError> {
+    let base = usize::from(who) * GROUPS_PER_PLAYER;
+    let current = groups.last_group[usize::from(who)];
+    for slot in base..base + RETAIL_ALLOCATOR_SLOTS {
+        // Building groups have no Unit backlinks to normalize. Retail admits them as immediate
+        // reusable slots; Unit groups retain the exact existing normalization path.
+        let count = if groups.list[slot].buildings != 0 {
+            groups.list[slot].num.max(0)
+        } else {
+            get_num_for_allocator(&mut groups.list[slot], world, authority)?
+        };
+        if (count == 0 || groups.list[slot].buildings != 0) && slot as i32 != current {
+            return Ok(slot);
+        }
+    }
+    Err(PackageError::AllocatorCaptainLruBoundary)
+}
+
+/// AIR-only extension of the canonical opcode-0 selector. It preserves the established Unit
+/// selection/cache/backlink path while additionally resolving Build-band airbases through the
+/// sparse object registry and `BuildData::uid`. Build members form a building Group but never
+/// receive a fabricated UnitData backlink.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn prepare_air_group_selection(
+    world: &World,
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    authority: &GroupMoveAuthority,
+    build_authority: &[BuildSelectionAuthority],
+    frame: i32,
+    play: usize,
+    who: u8,
+    objects: &[i16],
+) -> Result<PreparedGroupSelection, PackageError> {
+    if play >= NETWORK_PLAYERS {
+        return Err(PackageError::PlayOutOfRange { play });
+    }
+    if usize::from(who) >= NUM_LEADERS {
+        return Err(PackageError::OwnerOutOfRange { who: who as i8 });
+    }
+    if objects.len() > RECEIVED_SELECTION_CAPACITY {
+        return Err(PackageError::ExplicitSelectionTooLong { len: objects.len() });
+    }
+    if let Some(&o) = objects.iter().find(|&&o| o < 0) {
+        return Err(PackageError::NegativeObject { o });
+    }
+    if let Some(duplicate) = build_authority
+        .iter()
+        .enumerate()
+        .find_map(|(index, entry)| {
+            build_authority[..index]
+                .iter()
+                .any(|old| old.identity == entry.identity)
+                .then_some(entry.identity)
+        })
+    {
+        return Err(PackageError::DuplicateBuildAuthority {
+            who: duplicate.who,
+            o: duplicate.o,
+            row: duplicate.row,
+        });
+    }
+    validate_group_pool(groups)?;
+
+    let mut command_state_after = command_state.clone();
+    let received = if objects.is_empty() {
+        command_state.last_selection_by_play[play].clone()
+    } else {
+        let mut cache = Vec::with_capacity(objects.len());
+        for &o in objects {
+            let uid = if RetailBand::Unit.contains(i32::from(o)) {
+                world
+                    .unit_row_at(i32::from(who), i32::from(o))
+                    .filter(|&row| world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0)
+                    .map(|row| world.units.get_uid(row))
+            } else if RetailBand::Build.contains(i32::from(o)) {
+                capture_build(world, builds, who, o)
+                    .ok()
+                    .map(|image| image.identity.uid)
+            } else {
+                None
+            };
+            if let Some(uid) = uid {
+                cache.push(CachedSelection { o, uid });
+            }
+        }
+        command_state_after.last_selection_by_play[play] = cache.clone();
+        cache
+    };
+
+    let mut selected_objects = Vec::new();
+    let mut unit_members = Vec::new();
+    for entry in received {
+        if selected_objects.iter().any(|selected| match selected {
+            PreparedSelectionObject::Unit(member) => member.identity.o == entry.o,
+            PreparedSelectionObject::Build(member) => member.image.identity.o == entry.o,
+        }) {
+            continue;
+        }
+        if RetailBand::Unit.contains(i32::from(entry.o)) {
+            let (row, handle, facts) = match unit_authority(world, authority, who, entry.o) {
+                Ok(found) => found,
+                Err(PackageError::MissingUnit { .. } | PackageError::InactiveUnit { .. }) => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if world.units.get_uid(row) != entry.uid {
+                continue;
+            }
+            if world.units.o_down()[row] >= 0 {
+                return Err(PackageError::SubordinateChainUnavailable { who, o: entry.o });
+            }
+            if !facts.can_install_order {
+                return Err(PackageError::IncompleteSelectionAuthority { handle });
+            }
+            let member = PreparedSelectionMember {
+                row,
+                identity: UnitIdentity {
+                    handle,
+                    who,
+                    o: entry.o,
+                    uid: entry.uid,
+                },
+                authority: facts.clone(),
+            };
+            unit_members.push(member.clone());
+            selected_objects.push(PreparedSelectionObject::Unit(member));
+        } else if RetailBand::Build.contains(i32::from(entry.o)) {
+            let image = match capture_build(world, builds, who, entry.o) {
+                Ok(image) => image,
+                Err(PackageError::MissingBuild { .. } | PackageError::InactiveBuild { .. }) => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if image.identity.uid != entry.uid {
+                continue;
+            }
+            let build_facts = build_authority
+                .iter()
+                .copied()
+                .find(|facts| facts.identity == image.identity)
+                .ok_or(PackageError::MissingBuildAuthority {
+                    who,
+                    o: entry.o,
+                    row: image.identity.row,
+                })?;
+            selected_objects.push(PreparedSelectionObject::Build(
+                PreparedBuildSelectionMember {
+                    image,
+                    authority: build_facts,
+                },
+            ));
+        }
+    }
+    if selected_objects.is_empty() {
+        return Err(PackageError::EmptyEffectiveSelection);
+    }
+
+    let mut transient = GroupData {
+        id: -1,
+        army: -1,
+        form: -1,
+        stamp: frame,
+        ..GroupData::default()
+    };
+    for member in &selected_objects {
+        match member {
+            PreparedSelectionObject::Unit(member) => {
+                transient.add(member.identity.o, who, false, member.authority.role, frame);
+            }
+            PreparedSelectionObject::Build(member) => {
+                transient.add(
+                    member.image.identity.o,
+                    who,
+                    true,
+                    member.authority.role,
+                    frame,
+                );
+            }
+        }
+    }
+
+    let mut groups_after = groups.clone();
+    let current = groups_after.last_group[usize::from(who)];
+    let n = transient.num as usize;
+    let reuse = usize::try_from(current).ok().is_some_and(|slot| {
+        groups_after.list.get(slot).is_some_and(|candidate| {
+            candidate.num == transient.num
+                && candidate.buildings == transient.buildings
+                && candidate.list[..n] == transient.list[..n]
+        })
+    });
+    let group_slot = if reuse {
+        current as usize
+    } else {
+        let slot = exact_air_allocator_slot(&mut groups_after, who, world, authority)?;
+        let id = groups_after.list[slot].id;
+        groups_after.list[slot] = transient;
+        groups_after.list[slot].id = id;
+        groups_after.list[slot].stamp = frame;
+        groups_after.last_group[usize::from(who)] = slot as i32;
+        slot
+    };
+
+    let mut mutations = Vec::new();
+    if !reuse && groups.list[group_slot].buildings == 0 {
+        for row in 0..world.live_count() as usize {
+            if world.units.get_who(row) == who && world.units.group()[row] == group_slot as i16 {
+                let index = ensure_mutation_for_row(&mut mutations, world, paths, row)?;
+                mutations[index].after.group = -1;
+            }
+        }
+    }
+    for member in &unit_members {
+        let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, member.row)?;
+        let previous = mutations[mutation_index].after.group;
+        if previous >= 0 && previous as usize != group_slot {
+            let previous_index = previous as usize;
+            if previous_index >= groups_after.list.len() {
+                return Err(PackageError::InvalidGroupPool);
+            }
+            remove_group_member(&mut groups_after.list[previous_index], member.identity.o);
+            recompute_group(&mut groups_after.list[previous_index], world, authority)?;
+        }
+        mutations[mutation_index].after.group = group_slot as i16;
+    }
+
+    command_state_after.revision = command_state_after.revision.wrapping_add(1);
+    Ok(PreparedGroupSelection {
+        play,
+        frame,
+        who,
+        group_slot,
+        members: unit_members,
+        selected_objects,
         command_state_before: command_state.clone(),
         command_state_after,
         groups_before: groups.clone(),

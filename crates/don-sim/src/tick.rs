@@ -1778,6 +1778,7 @@ impl Sim {
         });
         let prepared = prepare_canonical_air_package(
             &self.world,
+            &self.builds,
             &self.groups,
             &self.paths,
             &self.command_package_state,
@@ -1791,6 +1792,7 @@ impl Sim {
         )?;
         Ok(commit_canonical_air_package(
             &mut self.world,
+            &self.builds,
             &mut self.groups,
             &mut self.paths,
             &mut self.command_package_state,

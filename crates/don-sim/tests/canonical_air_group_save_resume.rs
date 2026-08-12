@@ -80,6 +80,7 @@ fn install_package_authorities(sim: &mut Sim, plane: Handle, carrier: Handle) {
             is_bomber: false,
             is_helicopter: false,
         }],
+        builds: Vec::new(),
     });
 }
 

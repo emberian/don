@@ -13,9 +13,9 @@ use crate::command::air_launch_receivers::{
 use crate::order::{OrderIndex, ORDER_GROUP};
 use crate::systems::air_group_action_transaction as transaction;
 use crate::systems::canonical_group_move_host::{
-    ensure_mutation_for_row, groups_equal, prepare_group_selection, unit_still_current,
-    CommandPackageState, GroupMoveAuthority, GroupSelectionUse, PackageError,
-    PreparedGroupSelection, UnitImage, NETWORK_PLAYERS,
+    build_still_current, ensure_mutation_for_row, groups_equal, prepare_air_group_selection,
+    unit_still_current, BuildSelectionAuthority, CommandPackageState, GroupMoveAuthority,
+    PackageError, PreparedGroupSelection, PreparedSelectionObject, UnitImage, NETWORK_PLAYERS,
 };
 use crate::systems::groups_guys::{
     CheckSum, GroupData, Groups, GROUPS_PER_PLAYER, GROUP_MAX_MEMBERS,
@@ -24,7 +24,9 @@ use crate::systems::movement::PathStack;
 use crate::systems::order_dispatch::{
     self, clear_partial_path, install_air_patrol, update_action, OrderRec, UnitWork,
 };
-use crate::world::{Handle, World, OBJ_FLAG_ACTIVE};
+use crate::systems::production::BuildData;
+use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
+use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AirGroupUnitAuthority {
@@ -44,6 +46,7 @@ pub struct AirGroupRuntimeAuthority {
     pub composition_digest: [u8; 32],
     pub ignore_orders: bool,
     pub units: Vec<AirGroupUnitAuthority>,
+    pub builds: Vec<BuildSelectionAuthority>,
 }
 
 impl AirGroupRuntimeAuthority {
@@ -184,14 +187,18 @@ fn group_before_image(
     let group = &selection.groups_after.list[selection.group_slot];
     let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
     let mut members = Vec::with_capacity(n);
-    for &o in &group.list[..n] {
-        let row = world
-            .unit_row_at(i32::from(group.who), i32::from(o))
-            .ok_or(CanonicalAirPackageError::InvalidContainment {
-                who: group.who as i8,
-                o,
-            })?;
-        members.push(unit_identity(world, row)?);
+    for member in &selection.selected_objects {
+        members.push(match member {
+            PreparedSelectionObject::Unit(member) => unit_identity(world, member.row)?,
+            PreparedSelectionObject::Build(member) => transaction::CanonicalObjectIdentity {
+                owner: member.image.identity.who,
+                band: transaction::CanonicalObjectBand::Build,
+                o: i32::from(member.image.identity.o),
+                generation: transaction::CanonicalObjectGeneration::BuildRow(
+                    member.image.identity.row,
+                ),
+            },
+        });
     }
     Ok(transaction::GroupBeforeImage {
         key: transaction::CanonicalGroupKey {
@@ -218,6 +225,7 @@ fn move_authority_for(
 
 fn outer_container(
     world: &World,
+    builds: &[BuildData],
     row: usize,
 ) -> Result<Option<(i16, u8)>, CanonicalAirPackageError> {
     let o = world.units.inside_up()[row];
@@ -225,21 +233,41 @@ fn outer_container(
         return Ok(None);
     }
     let who = world.units.inside_up_who()[row];
-    let parent = usize::try_from(who)
-        .ok()
-        .and_then(|who| world.unit_row_at(who as i32, i32::from(o)))
-        .ok_or(CanonicalAirPackageError::InvalidContainment { who, o })?;
-    if world.units.inside_up()[parent] >= 0 {
-        return Err(CanonicalAirPackageError::NestedContainerUnsupported { who, o });
+    let owner =
+        u8::try_from(who).map_err(|_| CanonicalAirPackageError::InvalidContainment { who, o })?;
+    if RetailBand::Unit.contains(i32::from(o)) {
+        let parent = world
+            .unit_row_at(i32::from(owner), i32::from(o))
+            .ok_or(CanonicalAirPackageError::InvalidContainment { who, o })?;
+        if world.units.inside_up()[parent] >= 0 {
+            return Err(CanonicalAirPackageError::NestedContainerUnsupported { who, o });
+        }
+    } else if RetailBand::Build.contains(i32::from(o)) {
+        let address = RetailObjectAddress::new(owner, RetailBand::Build, i32::from(o));
+        let WorldObjectIdentity::BuildRow(build_row) = world
+            .object_bands()
+            .live_identity(address)
+            .ok_or(CanonicalAirPackageError::InvalidContainment { who, o })?
+        else {
+            return Err(CanonicalAirPackageError::InvalidContainment { who, o });
+        };
+        builds
+            .get(build_row as usize)
+            .filter(|build| build.who == owner && build.object_id() == o && build.is_valid())
+            .ok_or(CanonicalAirPackageError::InvalidContainment { who, o })?;
+    } else {
+        return Err(CanonicalAirPackageError::InvalidContainment { who, o });
     }
-    Ok(Some((o, who as u8)))
+    Ok(Some((o, owner)))
 }
 
 fn capture_contained(
     world: &World,
+    builds: &[BuildData],
     selection_authority: &GroupMoveAuthority,
     authority: &AirGroupRuntimeAuthority,
-    member_row: usize,
+    mut next_o: i16,
+    mut next_who: i8,
 ) -> Result<
     (
         Vec<ContainedFacts>,
@@ -249,8 +277,6 @@ fn capture_contained(
 > {
     let mut facts = Vec::new();
     let mut identities = Vec::new();
-    let mut next_o = world.units.inside_down()[member_row];
-    let mut next_who = world.units.inside_down_who()[member_row];
     let mut seen = std::collections::BTreeSet::new();
     while next_o >= 0 {
         let who =
@@ -298,7 +324,7 @@ fn capture_contained(
             object_masks: Some(air.object_masks),
             unit_flags: movement.unit_flags,
             mana_burn: Some(world.units.mana_burn()[row]),
-            inside: Some(outer_container(world, row)?),
+            inside: Some(outer_container(world, builds, row)?),
             is_biplane: Some(air.is_biplane),
             is_bomber: Some(air.is_bomber),
             is_helicopter: Some(air.is_helicopter),
@@ -317,6 +343,7 @@ fn capture_contained(
 
 fn capture_facts(
     world: &World,
+    builds: &[BuildData],
     selection: &PreparedGroupSelection,
     selection_authority: &GroupMoveAuthority,
     authority: &AirGroupRuntimeAuthority,
@@ -331,18 +358,35 @@ fn capture_facts(
     let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
     let mut members = Vec::with_capacity(n);
     let mut identities = Vec::with_capacity(n);
-    for &o in &group.list[..n] {
-        let row = world
-            .unit_row_at(i32::from(group.who), i32::from(o))
-            .ok_or(CanonicalAirPackageError::InvalidContainment {
-                who: group.who as i8,
-                o,
-            })?;
-        let (contained, contained_identities) =
-            capture_contained(world, selection_authority, authority, row)?;
+    for selected in &selection.selected_objects {
+        let (object, pos, inside_down, inside_down_who) = match selected {
+            PreparedSelectionObject::Unit(member) => (
+                (member.identity.who, member.identity.o),
+                (
+                    world.units.x_internal()[member.row],
+                    world.units.y_internal()[member.row],
+                ),
+                world.units.inside_down()[member.row],
+                world.units.inside_down_who()[member.row],
+            ),
+            PreparedSelectionObject::Build(member) => (
+                (member.image.identity.who, member.image.identity.o),
+                member.image.position,
+                member.image.inside_down,
+                member.image.inside_down_who,
+            ),
+        };
+        let (contained, contained_identities) = capture_contained(
+            world,
+            builds,
+            selection_authority,
+            authority,
+            inside_down,
+            inside_down_who,
+        )?;
         members.push(MemberFacts {
-            object: (group.who, o),
-            pos: (world.units.x_internal()[row], world.units.y_internal()[row]),
+            object,
+            pos,
             contained,
             containment_answered: true,
         });
@@ -368,6 +412,24 @@ fn path_token(paths: &[PathStack], row: usize) -> Option<u64> {
     paths
         .get(row)
         .map(|path| u64::from(crate::checksum::adler32(1, &path.walk_bytes())))
+}
+
+fn object_position(world: &World, builds: &[BuildData], who: u8, o: i16) -> Option<(i32, i32)> {
+    if RetailBand::Unit.contains(i32::from(o)) {
+        let row = world.unit_row_at(i32::from(who), i32::from(o))?;
+        return Some((world.units.x_internal()[row], world.units.y_internal()[row]));
+    }
+    if !RetailBand::Build.contains(i32::from(o)) {
+        return None;
+    }
+    let address = RetailObjectAddress::new(who, RetailBand::Build, i32::from(o));
+    let WorldObjectIdentity::BuildRow(row) = world.object_bands().live_identity(address)? else {
+        return None;
+    };
+    builds
+        .get(row as usize)
+        .filter(|build| build.who == who && build.object_id() == o && build.is_valid())
+        .map(BuildData::position)
 }
 
 fn action_token(world: &World, row: usize) -> u64 {
@@ -403,6 +465,7 @@ fn target_before(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn prepare_canonical_air_package(
     world: &World,
+    builds: &[BuildData],
     groups: &Groups,
     paths: &[PathStack],
     command_state: &CommandPackageState,
@@ -442,17 +505,18 @@ pub fn prepare_canonical_air_package(
             got: pair.group.owner,
         });
     }
-    let selection = prepare_group_selection(
+    let selection = prepare_air_group_selection(
         world,
+        builds,
         groups,
         paths,
         command_state,
         selection_authority,
+        &authority.builds,
         frame,
         play,
         pair.group.owner,
         &pair.group.requested,
-        GroupSelectionUse::AirOrderInstall,
     )?;
     let group_before = group_before_image(world, &selection)?;
     let (group_packet, action_packet) = decode_package_parts(bytes)?;
@@ -470,7 +534,7 @@ pub fn prepare_canonical_air_package(
     )
     .map_err(CanonicalAirPackageError::Pair)?;
     let (facts, contained_identities) =
-        capture_facts(world, &selection, selection_authority, authority)?;
+        capture_facts(world, builds, &selection, selection_authority, authority)?;
     let installs = match request.command {
         transaction::AirGroupCommand::Scramble => {
             plan_scramble(&facts)
@@ -577,6 +641,7 @@ fn image_from_actor(image: &mut UnitImage, actor: &UnitWork) {
 
 struct CanonicalAirCommitHost<'a> {
     world: &'a mut World,
+    builds: &'a [BuildData],
     groups: &'a mut Groups,
     paths: &'a mut [PathStack],
     command_state: &'a mut CommandPackageState,
@@ -654,6 +719,18 @@ impl transaction::AtomicAirGroupActionHost for CanonicalAirCommitHost<'_> {
         {
             return Err(transaction::AirCommitFailure::StaleGroup);
         }
+        if selection
+            .selected_objects
+            .iter()
+            .any(|member| match member {
+                PreparedSelectionObject::Unit(_) => false,
+                PreparedSelectionObject::Build(member) => {
+                    !build_still_current(self.world, self.builds, &member.image)
+                }
+            })
+        {
+            return Err(transaction::AirCommitFailure::StaleGroup);
+        }
         if let Some(stale) = prepared
             .snapshot
             .target_orders
@@ -698,22 +775,15 @@ impl transaction::AtomicAirGroupActionHost for CanonicalAirCommitHost<'_> {
                 } => {
                     let (home_o, home_who, home_pos) = match home {
                         None => (-1, -1, None),
-                        Some((home_o, home_who)) => {
-                            let home_row = self
-                                .world
-                                .unit_row_at(i32::from(home_who), i32::from(home_o))
-                                .ok_or(transaction::AirCommitFailure::HostRejected(
-                                    "home target",
-                                ))?;
-                            (
-                                i32::from(home_o),
-                                i32::from(home_who),
-                                Some((
-                                    self.world.units.x_internal()[home_row],
-                                    self.world.units.y_internal()[home_row],
-                                )),
-                            )
-                        }
+                        Some((home_o, home_who)) => (
+                            i32::from(home_o),
+                            i32::from(home_who),
+                            Some(
+                                object_position(self.world, self.builds, home_who, home_o).ok_or(
+                                    transaction::AirCommitFailure::HostRejected("home target"),
+                                )?,
+                            ),
+                        ),
                     };
                     install_air_patrol(
                         &mut actor,
@@ -806,6 +876,7 @@ impl transaction::AtomicAirGroupActionHost for CanonicalAirCommitHost<'_> {
 /// Execute the already-prepared landed transaction against canonical owners.
 pub fn commit_canonical_air_package(
     world: &mut World,
+    builds: &[BuildData],
     groups: &mut Groups,
     paths: &mut [PathStack],
     command_state: &mut CommandPackageState,
@@ -817,6 +888,7 @@ pub fn commit_canonical_air_package(
     let snapshot = prepared.snapshot.clone();
     let mut host = CanonicalAirCommitHost {
         world,
+        builds,
         groups,
         paths,
         command_state,

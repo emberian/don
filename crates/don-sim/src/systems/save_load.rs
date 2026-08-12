@@ -1504,7 +1504,63 @@ fn validate_build_state(
             "BuildData vector contains an unregistered row".into(),
         ));
     }
+    validate_build_unit_containment(builds, world)?;
     validate_build_city_links(builds, world)?;
+    Ok(())
+}
+
+fn saved_unit_row(world: &WorldSaveState, who: u8, o: i16) -> Option<usize> {
+    (0..world.live as usize)
+        .find(|&row| world.units.get_who(row) == who && world.units.o()[row] == o)
+}
+
+/// Admit only the exact Build-garrison shape needed by AIR packages: a Build head followed by an
+/// acyclic Unit `inside_down` chain whose every child has the reciprocal Build `inside_up` link.
+/// The bytes were already carried by the Build and Unit save images; this closes validation
+/// without silently admitting nested buildings, wrong owners, duplicate children, or tombstones.
+fn validate_build_unit_containment(
+    builds: &[production::BuildData],
+    world: &WorldSaveState,
+) -> Result<(), SaveError> {
+    let mut claimed = vec![false; world.live as usize];
+    for build in builds {
+        let mut next_o = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
+        let mut next_who = build.other[0x3e] as i8;
+        let mut walked = 0usize;
+        while next_o >= 0 {
+            let who = u8::try_from(next_who).map_err(|_| {
+                SaveError::Builds("Build containment has a negative child owner".into())
+            })?;
+            let row = saved_unit_row(world, who, next_o).ok_or_else(|| {
+                SaveError::Builds("Build containment points outside the live Unit band".into())
+            })?;
+            if world.units.get_flags(row) & crate::world::OBJ_FLAG_ACTIVE == 0 {
+                return Err(SaveError::Builds(
+                    "Build containment points at an inactive Unit".into(),
+                ));
+            }
+            if std::mem::replace(&mut claimed[row], true) {
+                return Err(SaveError::Builds(
+                    "Build containment repeats a Unit or contains a cycle".into(),
+                ));
+            }
+            if world.units.inside_up()[row] != build.object_id()
+                || world.units.inside_up_who()[row] != build.who as i8
+            {
+                return Err(SaveError::Builds(
+                    "Build containment child lacks the reciprocal inside_up link".into(),
+                ));
+            }
+            walked += 1;
+            if walked > world.live as usize {
+                return Err(SaveError::Builds(
+                    "Build containment chain exceeds the live Unit pool".into(),
+                ));
+            }
+            next_o = world.units.inside_down()[row];
+            next_who = world.units.inside_down_who()[row];
+        }
+    }
     Ok(())
 }
 
@@ -1687,7 +1743,6 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         return Err(SaveError::Limit("building gather points"));
     }
 
-    let inside_down = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
     if build.flags & production::flag::CAPTURED != 0
         || build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
         || build.demolition != 0
@@ -1703,10 +1758,9 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         || build.gather_from.cliff != 0
         || !build.gather_from.tiles.is_empty()
         || !build.gather.is_empty()
-        || inside_down >= 0
     {
         return Err(SaveError::Builds(
-            "captured/wonder/gather/garrison/special-family building state is not owned".into(),
+            "captured/wonder/gather/special-family building state is not owned".into(),
         ));
     }
     Ok(())

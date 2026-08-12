@@ -2,8 +2,8 @@
 
 This tranche mounts the recovered LaunchPatrol (opcode 11) and Scramble (opcode 36)
 transaction on the real simulation owners for one bounded selection cone: opcode-0 selects
-ordinary Unit-band carrier objects, and the aircraft are ordinary Unit objects in each
-carrier's `inside_down` chain.
+ordinary Unit-band carriers or sparse-registry-bound Build-band airbases, and the aircraft are
+ordinary Unit objects in each selected container's `inside_down` chain.
 
 The production route is:
 
@@ -11,7 +11,9 @@ The production route is:
 exact [Group][11|36] bytes
   -> persisted CommandPackage selection cache
   -> fixed groups_guys::Groups slot
-  -> Handle-bound containment/type/scenario snapshot
+  -> typed Unit Handle / BuildRow+uid selection image
+  -> reciprocal, acyclic Build-to-Unit containment snapshot
+  -> Handle-bound aircraft type/scenario snapshot
   -> checkpointed World/order/path/Group publish
   -> typed v13 AIR_PATROL tag 6
   -> canonical Unit::work row 17
@@ -33,13 +35,19 @@ install branches. Scramble installs AIR_PATROL above the selected member positio
 eligible non-helicopter child. LaunchPatrol consumes all six unaligned dwords and retains
 its filter/force-all/single-best planner. Helicopters receive the recovered MOVE_TO image.
 
-Replay evidence prevents an opcode closure claim here. All explicit recorded Scramble
-Group packets in the audited corpus select Build-band airbases/carriers (objects 2015,
-2090, 2091 and 2147), while the current canonical fixed-Group selector admits Unit-band
-members only. In addition, an armed `ScenarioData::ignore_orders` prelude still requires an
-atomic canonical prune transaction, and the general `UnitData::is_busy` answer requires
-the CastOrder/SpecialAnim spell-type projection. This adapter refuses those cases before
-mutation. The opcode 11/36 and Group action ledger rows therefore remain incomplete.
+The canonical selector now resolves all explicit recorded Scramble Group packets in the audited
+corpus: `000100df0724`, `0002002a082b0824`, and `0003002a082b08630824`. Build selection uses the
+sparse `BuildRow`, owner/object address, `BuildData::uid`, full 220-byte image, position and
+containment head. Commit revalidates that image, and Build members never receive a fabricated
+`UnitData::group` backlink. The persisted retail `(o,uid)` cache also resumes the recorded empty
+`00000024` reselection. DoNSave already retained both sides of the containment link; it now admits
+only reciprocal, active, acyclic Build-to-Unit chains.
+
+This removes the replay selection blocker but does not support an opcode closure claim. An armed
+`ScenarioData::ignore_orders` prelude still requires an atomic canonical prune transaction, and
+the general `UnitData::is_busy` answer requires the CastOrder/SpecialAnim spell-type projection.
+Those cases remain fail-closed. The opcode 11/36 and Group action ledger rows therefore remain
+incomplete.
 
 ## Focused evidence
 
@@ -54,5 +62,15 @@ mutation. The opcode 11/36 and Group action ledger rows therefore remain incompl
 - armed ignore-orders blocks without Group/order/RNG mutation; and
 - a changed canonical World between prepare and commit rejects without publishing the
   detached after-image.
+
+`canonical_air_build_selection_save_resume` additionally proves:
+
+- all three exact explicit Build-band replay packets select the recorded airbases;
+- contained Unit aircraft receive AIR_PATROL while retaining `group == -1`;
+- current v14 save/load/resave retains the v13-origin Build selection cache and empty cached
+  Scramble;
+- Build uid or containment mutation between prepare and commit publishes no Group, cache, order
+  or RNG after-image; and
+- malformed nonreciprocal or cyclic Build garrisons remain unsavable.
 
 No closure flag is changed by this tranche.

@@ -14,6 +14,12 @@ mod systems {
     pub mod movement {
         pub use don_sim::systems::movement::*;
     }
+    pub mod production {
+        pub use don_sim::systems::production::*;
+    }
+    pub mod sparse_object_bands_authority_frontier {
+        pub use don_sim::systems::sparse_object_bands_authority_frontier::*;
+    }
 }
 
 #[path = "../src/systems/canonical_group_move_host.rs"]
