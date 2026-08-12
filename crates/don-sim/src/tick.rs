@@ -807,6 +807,10 @@ pub struct Sim {
 
     /// Retained scalar ScenarioData configuration used by exact BHS mutations.
     pub scenario_data: crate::script_runtime::ScenarioDataState,
+    /// Persisted scalar plus eight ordered `objects_ignoring_orders` arrays consumed by
+    /// Group action entry preludes. Revisions are process-local and reset on load.
+    pub scenario_ignore_orders:
+        crate::systems::air_runtime_authority::ScenarioIgnoreOrdersAuthority,
 
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
@@ -1564,6 +1568,8 @@ impl Sim {
             leaders: Default::default(),
             market: economy::MarketState::default(),
             scenario_data: crate::script_runtime::ScenarioDataState::default(),
+            scenario_ignore_orders:
+                crate::systems::air_runtime_authority::ScenarioIgnoreOrdersAuthority::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
             cities: tech_cities::CityPool::new(),
@@ -1768,7 +1774,7 @@ impl Sim {
     /// Process exactly one opcode-0 Unit-band Group followed by LaunchPatrol (11) or
     /// Scramble (36). The fixed Group/cache, containment, target orders and paths publish
     /// through one checkpointed transaction. Build-band airbase selection and armed
-    /// scenario-ignore pruning remain explicit fail-closed boundaries.
+    /// scenario-ignore pruning are prepared and published by the same outer transaction.
     pub fn process_air_group_package(
         &mut self,
         play: usize,
@@ -1800,6 +1806,7 @@ impl Sim {
             &self.command_package_state,
             &self.group_move_authority,
             &self.air_group_authority,
+            &self.scenario_ignore_orders,
             &player_who,
             self.world.frame,
             play,
@@ -1814,6 +1821,7 @@ impl Sim {
             &mut self.command_package_state,
             &self.group_move_authority,
             &self.air_group_authority,
+            &self.scenario_ignore_orders,
             prepared,
         ))
     }

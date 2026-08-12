@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Bounded Unit-carrier Scramble package -> DoNSave v13 -> AIR_PATROL -> STRAFE execution.
+//! Bounded Unit-carrier Scramble package -> current DoNSave -> AIR_PATROL -> STRAFE execution.
 
-use don_sim::order::OrderIndex;
+use don_sim::order::{Order, OrderIndex, SpecialAnimType};
+use don_sim::systems::air_busy_authority::{AirBusyAuthorityError, AirBusySpellAuthority};
 use don_sim::systems::air_group_action_transaction::{
     AirGroupCommand, AirTransactionStatus, LAUNCH_PATROL_OPCODE, SCRAMBLE_OPCODE,
 };
-use don_sim::systems::canonical_air_group_host::{AirGroupRuntimeAuthority, AirGroupUnitAuthority};
+use don_sim::systems::canonical_air_group_host::{
+    commit_canonical_air_package, prepare_canonical_air_package, AirGroupRuntimeAuthority,
+    AirGroupUnitAuthority,
+};
 use don_sim::systems::canonical_air_patrol_runtime::{
     commit_air_patrol_activation, prepare_air_patrol_activation, CanonicalAirPatrolRuntimeError,
 };
@@ -15,6 +19,7 @@ use don_sim::systems::canonical_group_move_host::{
 use don_sim::systems::canonical_strafe_runtime::{
     StrafeFireMode, StrafeRuntimeAuthority, StrafeSearchObservation, StrafeTypeFacts,
 };
+use don_sim::systems::economy_order_payload_authority::{CastOrderPayload, EconomyOrderPayload};
 use don_sim::systems::groups_guys::FormationMember;
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::strafe_order_frontier::{AirTargetSearchKind, ObjectIdentity};
@@ -27,6 +32,15 @@ const PLANE_TYPE: i32 = 77;
 fn scramble_packet(owner: u8, carrier_o: i16) -> Vec<u8> {
     let mut packet = vec![GROUP_OPCODE, 1, owner];
     packet.extend_from_slice(&carrier_o.to_le_bytes());
+    packet.push(SCRAMBLE_OPCODE);
+    packet
+}
+
+fn scramble_packet_many(owner: u8, carriers: &[i16]) -> Vec<u8> {
+    let mut packet = vec![GROUP_OPCODE, carriers.len() as u8, owner];
+    for carrier in carriers {
+        packet.extend_from_slice(&carrier.to_le_bytes());
+    }
     packet.push(SCRAMBLE_OPCODE);
     packet
 }
@@ -69,18 +83,16 @@ fn install_package_authorities(sim: &mut Sim, plane: Handle, carrier: Handle) {
     });
     sim.replace_air_group_authority(AirGroupRuntimeAuthority {
         revision: 0x48,
-        scenario_revision: 0x49,
         composition_digest: [0xb8; 32],
-        ignore_orders: false,
         units: vec![AirGroupUnitAuthority {
             handle: plane,
             object_masks: 0,
-            busy: false,
             is_biplane: true,
             is_bomber: false,
             is_helicopter: false,
         }],
         builds: Vec::new(),
+        busy_spells: Vec::new(),
     });
 }
 
@@ -167,6 +179,25 @@ fn fixture() -> (Sim, Handle, Handle, Handle, Vec<u8>) {
     (sim, plane, carrier, target, packet)
 }
 
+fn subordinate_ignore_fixture() -> (Sim, Handle, Handle, Handle, Vec<u8>) {
+    let (mut sim, plane, carrier, _target, packet) = fixture();
+    let subordinate = sim.spawn_unit(0, 92, 2_100, 2_000, 4).unwrap();
+    let carrier_row = sim.world.row_of(carrier).unwrap();
+    let subordinate_row = sim.world.row_of(subordinate).unwrap();
+    let carrier_o = sim.world.units.o()[carrier_row];
+    let subordinate_o = sim.world.units.o()[subordinate_row];
+    sim.world.units.o_down_mut()[carrier_row] = subordinate_o;
+    sim.world.units.o_up_mut()[subordinate_row] = carrier_o;
+    sim.world.units.o_down_mut()[subordinate_row] = -1;
+    sim.world.units.group_mut()[subordinate_row] = -1;
+    let mut subordinate_authority = move_member(subordinate, 0);
+    subordinate_authority.is_captain = false;
+    sim.group_move_authority.members.push(subordinate_authority);
+    sim.scenario_ignore_orders.ignore_orders = true;
+    sim.scenario_ignore_orders.ignored_by_owner[0] = vec![i32::from(subordinate_o)];
+    (sim, plane, carrier, subordinate, packet)
+}
+
 fn assert_air_state(left: &Sim, right: &Sim, plane: Handle) {
     let left_row = left.world.row_of(plane).unwrap();
     let right_row = right.world.row_of(plane).unwrap();
@@ -186,6 +217,20 @@ fn assert_air_state(left: &Sim, right: &Sim, plane: Handle) {
         left.world.units.angle()[left_row],
         right.world.units.angle()[right_row]
     );
+}
+
+fn cast_order(spell: i32) -> Order {
+    Order {
+        kind: OrderIndex::CastSpell,
+        x: -1,
+        y: -1,
+        target_uid: u16::MAX,
+        economy: Some(EconomyOrderPayload::CastSpell(CastOrderPayload {
+            paid: 1,
+            spell,
+        })),
+        ..Order::default()
+    }
 }
 
 #[test]
@@ -359,17 +404,271 @@ fn air_patrol_commit_rejects_a_changed_canonical_world_without_publishing_after_
 }
 
 #[test]
-fn armed_ignore_orders_refuses_without_group_order_or_rng_mutation() {
-    let (mut sim, plane, _carrier, _target, packet) = fixture();
-    sim.air_group_authority.ignore_orders = true;
+fn armed_ignore_orders_duplicate_tombstone_prune_survives_save_and_commits_without_rng() {
+    let (mut sim, plane, carrier, _target, packet) = fixture();
+    let carrier_row = sim.world.row_of(carrier).unwrap();
+    let carrier_o = sim.world.units.o()[carrier_row];
+    sim.scenario_ignore_orders.ignore_orders = true;
+    sim.scenario_ignore_orders.ignored_by_owner[0] =
+        vec![i32::from(carrier_o), -1, i32::from(carrier_o)];
+
+    let bytes = save_sim(&sim).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install_package_authorities(&mut resumed, plane, carrier);
+    let before_rng = resumed.world.random.state();
+    let plane_row = resumed.world.row_of(plane).unwrap();
+    let before_order = resumed.world.orders(plane_row).clone();
+    let receipt = resumed.process_air_group_package(0, 72, &packet).unwrap();
+    assert!(receipt.validates());
+    assert!(
+        matches!(receipt.status, AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()),
+        "{receipt:#?}"
+    );
+    let group = &resumed.groups.list[resumed.groups.last_group[0] as usize];
+    assert_eq!(group.num, 0);
+    assert_eq!(resumed.world.units.group()[carrier_row], -1);
+    assert_eq!(resumed.world.orders(plane_row), &before_order);
+    assert_eq!(resumed.world.random.state(), before_rng);
+}
+
+#[test]
+fn armed_prune_packet_save_reload_resumes_the_surviving_air_patrol_runtime() {
+    let (mut control, plane, carrier, target, _packet) = fixture();
+    let ignored_carrier = control.spawn_unit(0, 93, 2_400, 2_000, 4).unwrap();
+    let carrier_row = control.world.row_of(carrier).unwrap();
+    let ignored_row = control.world.row_of(ignored_carrier).unwrap();
+    let carrier_o = control.world.units.o()[carrier_row];
+    let ignored_o = control.world.units.o()[ignored_row];
+    control.world.units.group_mut()[ignored_row] = -1;
+    control.world.units.o_down_mut()[ignored_row] = -1;
+    control.world.units.form_mut()[ignored_row] = 0;
+    control.world.units.form_mod_mut()[ignored_row] = 50;
+    control
+        .group_move_authority
+        .members
+        .push(move_member(ignored_carrier, 0));
+    control.scenario_ignore_orders.ignore_orders = true;
+    control.scenario_ignore_orders.ignored_by_owner[0] = vec![i32::from(ignored_o)];
+    let packet = scramble_packet_many(0, &[ignored_o, carrier_o]);
+
+    let receipt = control.process_air_group_package(0, 0x96, &packet).unwrap();
+    assert!(receipt.validates());
+    assert!(
+        matches!(receipt.status, AirTransactionStatus::Applied(ref evidence) if evidence.installs.len() == 1)
+    );
+    let group = &control.groups.list[control.groups.last_group[0] as usize];
+    assert_eq!(&group.list[..group.num as usize], &[carrier_o]);
+    assert_eq!(control.world.units.group()[ignored_row], -1);
+
+    let bytes = save_sim(&control).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    let actor = actor_identity(&resumed, plane);
+    let target_id = target_identity(&resumed, target);
+    install_runtime_authority(&mut resumed, actor, target_id);
+
+    control.do_frame();
+    resumed.do_frame();
+    assert_air_state(&control, &resumed, plane);
+    assert_eq!(
+        control
+            .world
+            .orders(control.world.row_of(plane).unwrap())
+            .order_type(),
+        OrderIndex::Strafe
+    );
+}
+
+#[test]
+fn ignored_subordinate_redirects_to_captain_before_the_air_body() {
+    let (mut sim, plane, carrier, subordinate, packet) = subordinate_ignore_fixture();
+    let carrier_row = sim.world.row_of(carrier).unwrap();
+    let subordinate_row = sim.world.row_of(subordinate).unwrap();
     let before_rng = sim.world.random.state();
-    let before_groups = sim.groups.clone();
     let plane_row = sim.world.row_of(plane).unwrap();
     let before_order = sim.world.orders(plane_row).clone();
-    let receipt = sim.process_air_group_package(0, 72, &packet).unwrap();
+    let receipt = sim.process_air_group_package(0, 0x94, &packet).unwrap();
     assert!(receipt.validates());
-    assert!(matches!(receipt.status, AirTransactionStatus::Blocked(_)));
-    assert_eq!(sim.world.random.state(), before_rng);
-    assert_eq!(sim.groups.list, before_groups.list);
+    assert!(
+        matches!(receipt.status, AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()),
+        "{receipt:#?}"
+    );
+    assert_eq!(sim.world.units.group()[carrier_row], -1);
+    assert_eq!(sim.world.units.group()[subordinate_row], -1);
     assert_eq!(sim.world.orders(plane_row), &before_order);
+    assert_eq!(sim.world.random.state(), before_rng);
+}
+
+#[test]
+fn stale_scenario_list_between_prepare_and_commit_rolls_back_every_owner() {
+    let (mut sim, plane, carrier, _subordinate, packet) = subordinate_ignore_fixture();
+    let carrier_row = sim.world.row_of(carrier).unwrap();
+    let players = std::array::from_fn(|play| (play == 0).then_some(0));
+    let prepared = prepare_canonical_air_package(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        sim.world.frame,
+        0,
+        0x95,
+        &packet,
+    )
+    .unwrap();
+    let before_groups = sim.groups.clone();
+    let before_cache = sim.command_package_state.clone();
+    let before_carrier_group = sim.world.units.group()[carrier_row];
+    let before_order = sim.world.orders(sim.world.row_of(plane).unwrap()).clone();
+    sim.scenario_ignore_orders.ignored_by_owner[0].push(-1);
+    let receipt = commit_canonical_air_package(
+        &mut sim.world,
+        &sim.builds,
+        &mut sim.groups,
+        &mut sim.paths,
+        &mut sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        prepared,
+    );
+    assert!(receipt.validates());
+    assert!(matches!(
+        receipt.status,
+        AirTransactionStatus::RolledBack { .. }
+    ));
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.command_package_state, before_cache);
+    assert_eq!(sim.world.units.group()[carrier_row], before_carrier_group);
+    assert_eq!(
+        sim.world.orders(sim.world.row_of(plane).unwrap()),
+        &before_order
+    );
+}
+
+#[test]
+fn saved_cast_with_both_busy_predicates_clear_launches_identically_after_reload() {
+    let (mut control, plane, carrier, _target, packet) = fixture();
+    let row = control.world.row_of(plane).unwrap();
+    let spell = 0x292;
+    control.world.orders_mut(row).replace(cast_order(spell));
+    control.air_group_authority.busy_spells = vec![AirBusySpellAuthority {
+        spell,
+        predicate_50: false,
+        predicate_54: false,
+    }];
+
+    let bytes = save_sim(&control).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install_package_authorities(&mut resumed, plane, carrier);
+    resumed.air_group_authority.busy_spells = control.air_group_authority.busy_spells.clone();
+
+    let control_receipt = control.process_air_group_package(0, 0x91, &packet).unwrap();
+    let resumed_receipt = resumed.process_air_group_package(0, 0x91, &packet).unwrap();
+    assert!(matches!(
+        control_receipt.status,
+        AirTransactionStatus::Applied(_)
+    ));
+    assert_eq!(control_receipt, resumed_receipt);
+    assert_eq!(control.world.orders(row), resumed.world.orders(row));
+    assert_eq!(
+        control.world.orders(row).order_type(),
+        OrderIndex::AirPatrol
+    );
+    assert_eq!(control.world.random.state(), resumed.world.random.state());
+}
+
+#[test]
+fn either_cast_predicate_and_enter_or_exit_special_anim_are_exact_busy_vetoes() {
+    let spell = 0x292;
+    let cases = [
+        (
+            cast_order(spell),
+            vec![AirBusySpellAuthority {
+                spell,
+                predicate_50: true,
+                predicate_54: false,
+            }],
+        ),
+        (
+            cast_order(spell),
+            vec![AirBusySpellAuthority {
+                spell,
+                predicate_50: false,
+                predicate_54: true,
+            }],
+        ),
+        (Order::special_anim(SpecialAnimType::Enter, 0, 0), vec![]),
+        (Order::special_anim(SpecialAnimType::Exit, 0, 0), vec![]),
+    ];
+    for (order, busy_spells) in cases {
+        let (mut sim, plane, _carrier, _target, packet) = fixture();
+        let row = sim.world.row_of(plane).unwrap();
+        sim.world.orders_mut(row).replace(order);
+        sim.air_group_authority.busy_spells = busy_spells;
+        let before_groups = sim.groups.clone();
+        let before_cache = sim.command_package_state.clone();
+        let before_order = sim.world.orders(row).clone();
+        let before_rng = sim.world.random.state();
+        assert_eq!(
+            sim.process_air_group_package(0, 0x92, &packet),
+            Err(don_sim::systems::canonical_air_group_host::CanonicalAirPackageError::NoInstalls)
+        );
+        assert_eq!(sim.groups.list, before_groups.list);
+        assert_eq!(sim.command_package_state, before_cache);
+        assert_eq!(sim.world.orders(row), &before_order);
+        assert_eq!(sim.world.random.state(), before_rng);
+    }
+}
+
+#[test]
+fn reached_cast_and_special_anim_malformed_states_fail_closed_before_selection_publish() {
+    let spell = 0x292;
+    let cases = [
+        (
+            cast_order(spell),
+            AirBusyAuthorityError::MissingSpell(spell),
+        ),
+        (
+            Order {
+                kind: OrderIndex::CastSpell,
+                economy: None,
+                ..Order::default()
+            },
+            AirBusyAuthorityError::MalformedCastOrder,
+        ),
+        (
+            Order {
+                kind: OrderIndex::SpecialAnim,
+                special_anim: None,
+                ..Order::default()
+            },
+            AirBusyAuthorityError::MalformedSpecialAnim,
+        ),
+    ];
+    for (order, error) in cases {
+        let (mut sim, plane, _carrier, _target, packet) = fixture();
+        let row = sim.world.row_of(plane).unwrap();
+        sim.world.orders_mut(row).replace(order);
+        let before_groups = sim.groups.clone();
+        let before_cache = sim.command_package_state.clone();
+        let before_order = sim.world.orders(row).clone();
+        assert_eq!(
+            sim.process_air_group_package(0, 0x93, &packet),
+            Err(
+                don_sim::systems::canonical_air_group_host::CanonicalAirPackageError::BusyAuthority(
+                    error,
+                ),
+            )
+        );
+        assert_eq!(sim.groups.list, before_groups.list);
+        assert_eq!(sim.command_package_state, before_cache);
+        assert_eq!(sim.world.orders(row), &before_order);
+    }
 }

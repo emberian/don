@@ -11,14 +11,22 @@ use crate::command::air_launch_receivers::{
     MemberFacts,
 };
 use crate::order::{OrderIndex, ORDER_GROUP};
+use crate::systems::air_busy_authority::{
+    exact_air_busy, validate_spell_authority, AirBusyAuthorityError, AirBusySpellAuthority,
+};
 use crate::systems::air_group_action_transaction as transaction;
+use crate::systems::air_runtime_authority::{
+    AirRuntimeAuthorityError, ScenarioIgnoreOrdersAuthority,
+};
 use crate::systems::canonical_group_move_host::{
-    build_still_current, ensure_mutation_for_row, groups_equal, prepare_air_group_selection,
-    unit_still_current, BuildSelectionAuthority, CommandPackageState, GroupMoveAuthority,
-    PackageError, PreparedGroupSelection, PreparedSelectionObject, UnitImage, NETWORK_PLAYERS,
+    build_still_current, ensure_mutation_for_row, group_leader_speed, groups_equal,
+    prepare_air_group_selection, unit_still_current, BuildSelectionAuthority, CommandPackageState,
+    GroupMoveAuthority, PackageError, PreparedGroupSelection, PreparedSelectionObject, UnitImage,
+    NETWORK_PLAYERS,
 };
 use crate::systems::groups_guys::{
-    CheckSum, GroupData, Groups, GROUPS_PER_PLAYER, GROUP_MAX_MEMBERS,
+    plan_ignore_order_kills, CheckSum, GroupData, GroupKillPlanError, GroupKillStep, Groups,
+    KillObjectFacts, GROUPS_PER_PLAYER, GROUP_MAX_MEMBERS,
 };
 use crate::systems::movement::PathStack;
 use crate::systems::order_dispatch::{
@@ -32,7 +40,6 @@ use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 pub struct AirGroupUnitAuthority {
     pub handle: Handle,
     pub object_masks: u32,
-    pub busy: bool,
     pub is_biplane: bool,
     pub is_bomber: bool,
     pub is_helicopter: bool,
@@ -42,11 +49,10 @@ pub struct AirGroupUnitAuthority {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AirGroupRuntimeAuthority {
     pub revision: u64,
-    pub scenario_revision: u64,
     pub composition_digest: [u8; 32],
-    pub ignore_orders: bool,
     pub units: Vec<AirGroupUnitAuthority>,
     pub builds: Vec<BuildSelectionAuthority>,
+    pub busy_spells: Vec<AirBusySpellAuthority>,
 }
 
 impl AirGroupRuntimeAuthority {
@@ -72,6 +78,10 @@ pub enum CanonicalAirPackageError {
     MissingAirAuthority(Handle),
     MissingMoveAuthority(Handle),
     StaleAirAuthority(Handle),
+    BusyAuthority(AirBusyAuthorityError),
+    ScenarioAuthority(AirRuntimeAuthorityError),
+    ScenarioPrune(GroupKillPlanError),
+    UnsupportedScenarioObject { who: u8, o: i16 },
     InvalidContainment { who: i8, o: i16 },
     ContainmentCycle { who: u8, o: i16 },
     NestedContainerUnsupported { who: i8, o: i16 },
@@ -85,6 +95,24 @@ impl From<PackageError> for CanonicalAirPackageError {
     }
 }
 
+impl From<AirBusyAuthorityError> for CanonicalAirPackageError {
+    fn from(error: AirBusyAuthorityError) -> Self {
+        Self::BusyAuthority(error)
+    }
+}
+
+impl From<AirRuntimeAuthorityError> for CanonicalAirPackageError {
+    fn from(error: AirRuntimeAuthorityError) -> Self {
+        Self::ScenarioAuthority(error)
+    }
+}
+
+impl From<GroupKillPlanError> for CanonicalAirPackageError {
+    fn from(error: GroupKillPlanError) -> Self {
+        Self::ScenarioPrune(error)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedCanonicalAirPackage {
     pub play: usize,
@@ -94,6 +122,7 @@ pub struct PreparedCanonicalAirPackage {
     pub request: transaction::AirGroupActionRequest,
     pub snapshot: transaction::AirGroupActionSnapshot,
     pub authority_snapshot: AirGroupRuntimeAuthority,
+    pub scenario_snapshot: ScenarioIgnoreOrdersAuthority,
 }
 
 fn decode_package_parts(bytes: &[u8]) -> Result<(&[u8], &[u8]), CanonicalAirPackageError> {
@@ -202,7 +231,9 @@ fn group_before_image(
     }
     Ok(transaction::GroupBeforeImage {
         key: transaction::CanonicalGroupKey {
-            owner: group.who,
+            // `Group::clear(-1)` zeros `who` after the scenario prelude removes its last
+            // member. The addressed receiver nevertheless remains the packet owner's slot.
+            owner: selection.who,
             // The transaction key is owner-local, while `Groups::list` uses a global slot.
             slot: (selection.group_slot % GROUPS_PER_PLAYER) as u8,
             group_id: group.id,
@@ -211,6 +242,192 @@ fn group_before_image(
         walk_image: group_walk_image(group),
         members,
     })
+}
+
+fn staged_unit_group(selection: &PreparedGroupSelection, row: usize, world: &World) -> i16 {
+    selection
+        .units
+        .iter()
+        .find(|mutation| world.row_of(mutation.before.identity.handle) == Some(row))
+        .map_or(world.units.group()[row], |mutation| mutation.after.group)
+}
+
+fn scenario_kill_facts(
+    world: &World,
+    builds: &[BuildData],
+    selection: &PreparedGroupSelection,
+    selection_authority: &GroupMoveAuthority,
+    ignored: &[i32],
+) -> Result<Vec<KillObjectFacts>, CanonicalAirPackageError> {
+    let who = selection.who;
+    let mut pending = ignored
+        .iter()
+        .copied()
+        .filter_map(|o| i16::try_from(o).ok())
+        .filter(|&o| o >= 0)
+        .collect::<Vec<_>>();
+    let mut facts = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(o) = pending.pop() {
+        if !seen.insert(o) {
+            continue;
+        }
+        let band = [RetailBand::Unit, RetailBand::Build, RetailBand::Wall]
+            .into_iter()
+            .find(|band| band.contains(i32::from(o)));
+        let identity = band.and_then(|band| {
+            world
+                .object_bands()
+                .live_identity(RetailObjectAddress::new(who, band, i32::from(o)))
+        });
+        let fact = match identity {
+            Some(WorldObjectIdentity::Unit { .. }) => {
+                let row = world
+                    .unit_row_at(i32::from(who), i32::from(o))
+                    .ok_or(CanonicalAirPackageError::UnsupportedScenarioObject { who, o })?;
+                let handle = world
+                    .handle_at_row(row)
+                    .ok_or(CanonicalAirPackageError::UnsupportedScenarioObject { who, o })?;
+                let movement = move_authority_for(selection_authority, handle)
+                    .ok_or(CanonicalAirPackageError::MissingMoveAuthority(handle))?;
+                let valid = world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0;
+                KillObjectFacts {
+                    o,
+                    valid,
+                    captain: movement.is_captain,
+                    o_up: world.units.o_up()[row],
+                    o_down: world.units.o_down()[row],
+                    group: staged_unit_group(selection, row, world),
+                }
+            }
+            Some(WorldObjectIdentity::BuildRow(row)) => {
+                builds
+                    .get(row as usize)
+                    .filter(|build| build.who == who && build.object_id() == o)
+                    .ok_or(CanonicalAirPackageError::UnsupportedScenarioObject { who, o })?;
+                KillObjectFacts {
+                    o,
+                    // Group::kill's reached +0x18 virtual is the Unit-only validity/group
+                    // arm. A Build is still removed from the Group list but never enters
+                    // captain/down recursion or receives a UnitData::group write.
+                    valid: false,
+                    captain: true,
+                    o_up: -1,
+                    o_down: -1,
+                    // Build-band Groups do not own a UnitData::group backlink.
+                    group: -1,
+                }
+            }
+            Some(WorldObjectIdentity::WallRow(_)) => KillObjectFacts {
+                o,
+                valid: false,
+                captain: true,
+                o_up: -1,
+                o_down: -1,
+                group: -1,
+            },
+            None => KillObjectFacts {
+                o,
+                valid: false,
+                captain: true,
+                o_up: -1,
+                o_down: -1,
+                group: -1,
+            },
+        };
+        if fact.valid {
+            if !fact.captain && fact.o_up >= 0 {
+                pending.push(fact.o_up);
+            }
+            if fact.o_down >= 0 {
+                pending.push(fact.o_down);
+            }
+        }
+        facts.push(fact);
+    }
+    facts.sort_by_key(|fact| fact.o);
+    Ok(facts)
+}
+
+fn selection_identity(
+    world: &World,
+    member: &PreparedSelectionObject,
+) -> Result<transaction::CanonicalObjectIdentity, CanonicalAirPackageError> {
+    match member {
+        PreparedSelectionObject::Unit(member) => unit_identity(world, member.row),
+        PreparedSelectionObject::Build(member) => Ok(transaction::CanonicalObjectIdentity {
+            owner: member.image.identity.who,
+            band: transaction::CanonicalObjectBand::Build,
+            o: i32::from(member.image.identity.o),
+            generation: transaction::CanonicalObjectGeneration::BuildRow(member.image.identity.row),
+        }),
+    }
+}
+
+fn prepare_scenario_prune(
+    world: &World,
+    builds: &[BuildData],
+    paths: &[PathStack],
+    selection_authority: &GroupMoveAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    selection: &mut PreparedGroupSelection,
+) -> Result<Option<transaction::IgnoreOrdersPruneReceipt>, CanonicalAirPackageError> {
+    if !scenario.ignore_orders {
+        return Ok(None);
+    }
+    let ignored = scenario.ignored_for_owner(usize::from(selection.who))?;
+    let group_before = selection.groups_after.list[selection.group_slot].clone();
+    let members_before = selection
+        .selected_objects
+        .iter()
+        .map(|member| selection_identity(world, member))
+        .collect::<Result<Vec<_>, _>>()?;
+    let facts = scenario_kill_facts(world, builds, selection, selection_authority, ignored)?;
+    let mut plan = plan_ignore_order_kills(&group_before, ignored, selection.frame, &facts)?;
+    let leader_speed = if plan.needs_leader_speed {
+        group_leader_speed(&plan.group, world, selection_authority)?
+    } else {
+        None
+    };
+    plan.resolve_leader_speed(leader_speed);
+
+    for step in &plan.steps {
+        let GroupKillStep::ClearObjectGroup { who, o } = *step;
+        let row = world
+            .unit_row_at(i32::from(who), i32::from(o))
+            .ok_or(CanonicalAirPackageError::UnsupportedScenarioObject { who, o })?;
+        let mutation = ensure_mutation_for_row(&mut selection.units, world, paths, row)?;
+        selection.units[mutation].after.group = -1;
+    }
+    selection.groups_after.list[selection.group_slot] = plan.group.clone();
+    let survivors = &plan.group.list[..plan.group.num.max(0) as usize];
+    selection.selected_objects.retain(|member| {
+        let o = match member {
+            PreparedSelectionObject::Unit(member) => member.identity.o,
+            PreparedSelectionObject::Build(member) => member.image.identity.o,
+        };
+        survivors.contains(&o)
+    });
+    selection
+        .members
+        .retain(|member| survivors.contains(&member.identity.o));
+    let members_after = selection
+        .selected_objects
+        .iter()
+        .map(|member| selection_identity(world, member))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(transaction::IgnoreOrdersPruneReceipt {
+        frame: selection.frame,
+        ignored: ignored.to_vec(),
+        facts,
+        group_before,
+        members_before,
+        group_after: plan.group,
+        members_after,
+        leader_speed,
+        steps: plan.steps,
+        removals: plan.removals,
+    }))
 }
 
 fn move_authority_for(
@@ -320,7 +537,10 @@ fn capture_contained(
             object: (who, next_o),
             is_unit: true,
             domain: movement.domain,
-            busy: Some(air.busy),
+            busy: Some(exact_air_busy(
+                world.orders(row).current(),
+                &authority.busy_spells,
+            )?),
             object_masks: Some(air.object_masks),
             unit_flags: movement.unit_flags,
             mana_burn: Some(world.units.mana_burn()[row]),
@@ -471,6 +691,7 @@ pub fn prepare_canonical_air_package(
     command_state: &CommandPackageState,
     selection_authority: &GroupMoveAuthority,
     authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     frame: i32,
     play: usize,
@@ -480,6 +701,7 @@ pub fn prepare_canonical_air_package(
     if authority.composition_digest == [0; 32] {
         return Err(CanonicalAirPackageError::MissingCompositionDigest);
     }
+    validate_spell_authority(&authority.busy_spells)?;
     if let Some(duplicate) = authority
         .units
         .iter()
@@ -505,7 +727,8 @@ pub fn prepare_canonical_air_package(
             got: pair.group.owner,
         });
     }
-    let selection = prepare_air_group_selection(
+    scenario.validate()?;
+    let mut selection = prepare_air_group_selection(
         world,
         builds,
         groups,
@@ -518,10 +741,18 @@ pub fn prepare_canonical_air_package(
         pair.group.owner,
         &pair.group.requested,
     )?;
+    let scenario_prune = prepare_scenario_prune(
+        world,
+        builds,
+        paths,
+        selection_authority,
+        scenario,
+        &mut selection,
+    )?;
     let group_before = group_before_image(world, &selection)?;
     let (group_packet, action_packet) = decode_package_parts(bytes)?;
     let revisions = transaction::AuthorityRevisions {
-        scenario: authority.scenario_revision,
+        scenario: scenario.revision,
         types: authority.revision,
         world_orders: world.digest(),
     };
@@ -547,7 +778,11 @@ pub fn prepare_canonical_air_package(
                 .installs
         }
     };
-    if installs.is_empty() {
+    if installs.is_empty()
+        && scenario_prune
+            .as_ref()
+            .is_none_or(|prune| prune.removals == 0)
+    {
         return Err(CanonicalAirPackageError::NoInstalls);
     }
     let target_orders = installs
@@ -571,13 +806,14 @@ pub fn prepare_canonical_air_package(
             &request,
             cache_revision,
         )),
-        ignore_orders: if authority.ignore_orders {
-            transaction::IgnoreOrdersSnapshot::Armed {
-                revision: authority.scenario_revision,
+        ignore_orders: if let Some(prune) = scenario_prune {
+            transaction::IgnoreOrdersSnapshot::ArmedPrepared {
+                revision: scenario.revision,
+                prune: Box::new(prune),
             }
         } else {
             transaction::IgnoreOrdersSnapshot::Clear {
-                revision: authority.scenario_revision,
+                revision: scenario.revision,
             }
         },
         type_authority: transaction::AirTypeAuthoritySnapshot {
@@ -609,6 +845,7 @@ pub fn prepare_canonical_air_package(
         request,
         snapshot,
         authority_snapshot: authority.clone(),
+        scenario_snapshot: scenario.clone(),
     })
 }
 
@@ -647,6 +884,7 @@ struct CanonicalAirCommitHost<'a> {
     command_state: &'a mut CommandPackageState,
     selection_authority: &'a GroupMoveAuthority,
     authority: &'a AirGroupRuntimeAuthority,
+    scenario: &'a ScenarioIgnoreOrdersAuthority,
     prepared: &'a PreparedCanonicalAirPackage,
 }
 
@@ -708,6 +946,7 @@ impl transaction::AtomicAirGroupActionHost for CanonicalAirCommitHost<'_> {
             return Err(transaction::AirCommitFailure::StaleTypes);
         }
         if self.authority != &self.prepared.authority_snapshot
+            || self.scenario != &self.prepared.scenario_snapshot
             || prepared.request.authority.world_orders != self.world.digest()
         {
             return Err(transaction::AirCommitFailure::StaleWorldOrders);
@@ -882,6 +1121,7 @@ pub fn commit_canonical_air_package(
     command_state: &mut CommandPackageState,
     selection_authority: &GroupMoveAuthority,
     authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
     prepared: PreparedCanonicalAirPackage,
 ) -> transaction::AirGroupActionReceipt {
     let request = prepared.request.clone();
@@ -894,6 +1134,7 @@ pub fn commit_canonical_air_package(
         command_state,
         selection_authority,
         authority,
+        scenario,
         prepared: &prepared,
     };
     transaction::execute_air_group_action(&mut host, &request, &snapshot)

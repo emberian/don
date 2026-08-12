@@ -101,22 +101,20 @@ fn install_authorities(sim: &mut Sim, planes: &[Handle], selected: &[i16]) {
         .collect();
     sim.replace_air_group_authority(AirGroupRuntimeAuthority {
         revision: 0x6275_696c_642d_6169,
-        scenario_revision: 0x51,
         composition_digest: [0xa6; 32],
-        ignore_orders: false,
         units: planes
             .iter()
             .copied()
             .map(|handle| AirGroupUnitAuthority {
                 handle,
                 object_masks: 0,
-                busy: false,
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
             })
             .collect(),
         builds,
+        busy_spells: Vec::new(),
     });
 }
 
@@ -198,6 +196,29 @@ fn all_three_recorded_explicit_build_packets_resolve_the_exact_airbase_members()
 }
 
 #[test]
+fn ignored_build_airbase_is_pruned_without_a_fabricated_unit_backlink() {
+    let (mut sim, planes) = fixture();
+    sim.scenario_ignore_orders.ignore_orders = true;
+    sim.scenario_ignore_orders.ignored_by_owner[0] = vec![2_015];
+    let build_before = sim.builds[15].image();
+    let plane_row = sim.world.row_of(planes[0]).unwrap();
+    let order_before = sim.world.orders(plane_row).clone();
+    let rng_before = sim.world.random.state();
+    let receipt = sim
+        .process_air_group_package(0, 0x7f0, RECORDED_ONE)
+        .unwrap();
+    assert!(receipt.validates());
+    assert!(matches!(
+        receipt.status,
+        AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()
+    ));
+    assert_eq!(selected_group(&sim).num, 0);
+    assert_eq!(sim.builds[15].image(), build_before);
+    assert_eq!(sim.world.orders(plane_row), &order_before);
+    assert_eq!(sim.world.random.state(), rng_before);
+}
+
+#[test]
 fn recorded_build_cache_survives_save_reload_and_empty_scramble_reselection() {
     let (mut sim, planes) = fixture();
     let first = sim
@@ -241,6 +262,7 @@ fn prepared_first(
         &sim.command_package_state,
         &sim.group_move_authority,
         &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
         &players,
         sim.world.frame,
         0,
@@ -262,6 +284,7 @@ fn commit_prepared(
         &mut sim.command_package_state,
         &sim.group_move_authority,
         &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
         prepared,
     )
 }

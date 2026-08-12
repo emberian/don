@@ -21,6 +21,8 @@
 /// slice of the `units` channel plus the `Ammo::init` anti-air gate that the `ammo`
 /// channel depends on. Uses [`crate::rng::Random`], so it needs the crate to build.
 pub mod air;
+/// Exact `UnitData::is_busy` CastOrder spell-virtual OR and SpecialAnim tail.
+pub mod air_busy_authority;
 /// Atomic LaunchPatrol/Scramble transaction over an exact Group packet pair.
 pub mod air_group_action_transaction;
 /// Exact snapshot owner for AIR_PATROL's mod-32 `find_building_at` traversal and dynamic

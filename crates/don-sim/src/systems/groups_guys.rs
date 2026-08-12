@@ -1703,7 +1703,7 @@ impl FormScratch {
 }
 
 /// One selection / control group. Layout matches `GroupData`, `sizeof` 2508.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupData {
     /// `+0x04`. Negative means "not a persistent group" — several prunes key off `id >= 0`.
     pub id: i32,

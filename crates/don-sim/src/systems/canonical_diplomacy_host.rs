@@ -709,8 +709,12 @@ pub fn decode_diplomacy_for_save(
         (version, Some(_)) if version <= PRE_DIPLOMACY_SAVE_FORMAT_VERSION => {
             Err(DiplomacyCodecError::UnexpectedForLegacyFormat)
         }
-        (DIPLOMACY_SAVE_FORMAT_VERSION, Some(bytes)) => decode_diplomacy_payload(bytes),
-        (DIPLOMACY_SAVE_FORMAT_VERSION, None) => Err(DiplomacyCodecError::MissingForCurrentFormat),
+        (version, Some(bytes)) if version >= DIPLOMACY_SAVE_FORMAT_VERSION => {
+            decode_diplomacy_payload(bytes)
+        }
+        (version, None) if version >= DIPLOMACY_SAVE_FORMAT_VERSION => {
+            Err(DiplomacyCodecError::MissingForCurrentFormat)
+        }
         (version, _) => Err(DiplomacyCodecError::UnsupportedSaveFormat(version)),
     }
 }

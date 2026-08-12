@@ -13,7 +13,8 @@ exact [Group][11|36] bytes
   -> fixed groups_guys::Groups slot
   -> typed Unit Handle / BuildRow+uid selection image
   -> reciprocal, acyclic Build-to-Unit containment snapshot
-  -> Handle-bound aircraft type/scenario snapshot
+  -> exact Cast/SpecialAnim busy + Handle-bound aircraft type snapshot
+  -> persisted ordered scenario-ignore prune image
   -> checkpointed World/order/path/Group publish
   -> typed v13 AIR_PATROL tag 6
   -> canonical Unit::work row 17
@@ -35,7 +36,7 @@ install branches. Scramble installs AIR_PATROL above the selected member positio
 eligible non-helicopter child. LaunchPatrol consumes all six unaligned dwords and retains
 its filter/force-all/single-best planner. Helicopters receive the recovered MOVE_TO image.
 
-The canonical selector now resolves all explicit recorded Scramble Group packets in the audited
+The canonical selector resolves all explicit recorded Scramble Group packets in the audited
 corpus: `000100df0724`, `0002002a082b0824`, and `0003002a082b08630824`. Build selection uses the
 sparse `BuildRow`, owner/object address, `BuildData::uid`, full 220-byte image, position and
 containment head. Commit revalidates that image, and Build members never receive a fabricated
@@ -43,23 +44,37 @@ containment head. Commit revalidates that image, and Build members never receive
 `00000024` reselection. DoNSave already retained both sides of the containment link; it now admits
 only reciprocal, active, acyclic Build-to-Unit chains.
 
-This removes the replay selection blocker but does not support an opcode closure claim. An armed
-`ScenarioData::ignore_orders` prelude still requires an atomic canonical prune transaction, and
-the general `UnitData::is_busy` answer requires the CastOrder/SpecialAnim spell-type projection.
-Those cases remain fail-closed. The opcode 11/36 and Group action ledger rows therefore remain
-incomplete.
+`UnitData::is_busy` now follows the executable at `0x0060A370`: a typed current CastOrder reads
+its exact spell id, then ORs the synchronized spell-type virtual answers at `+0x50` and `+0x54`;
+when there is no CastOrder, typed SpecialAnim Enter/Exit supplies the recovered
+`is_entering_or_exiting` tail. Missing spell rows or malformed typed orders fail before selection
+or cache publication.
+
+Armed `ScenarioData::ignore_orders` is no longer bypassed. The Sim owns and persists the scalar
+plus all eight arrays in DoNSave v15; list order, duplicates and negative tombstones survive
+load/resave. The action transaction recomputes `plan_ignore_order_kills`, including subordinate
+to captain redirection, active `o_down` recursion, final leader-speed recomputation and the exact
+last-member clear image. Its receipt binds full before/after Groups, ordered object facts and
+Unit backlink clears. Selection, cache, Group, backlinks, target orders and paths still publish
+through one checkpoint; a changed scenario list rolls all of them back.
+
+No closure flag is changed in this isolated tranche; closure metadata remains a separate
+integration decision after the patch lands with its save-version coordination.
 
 ## Focused evidence
 
 `canonical_air_group_save_resume` proves:
 
 - Scramble packet -> fixed Group/cache -> typed AIR_PATROL, with no RNG draw;
-- v13 save/load/resave and reinstalled external authority;
+- current save/load/resave and reinstalled external type authority;
 - the first resumed row-17 tick performs air physics and inserts typed STRAFE at queue first;
 - the following row-16 tick executes the landed STRAFE runtime with identical loaded and
   uninterrupted World/order/path/RNG state;
 - opcode 11 retains all six dwords and installs the expected relative patrol waypoint;
-- armed ignore-orders blocks without Group/order/RNG mutation; and
+- exact Cast predicate and SpecialAnim busy vetoes, including malformed-state gates;
+- v15 duplicate/tombstone scenario persistence, captain/down recursion and stale-list rollback;
+- an armed partial prune followed by AIR_PATROL save/load and identical resumed row-17 STRAFE
+  insertion; and
 - a changed canonical World between prepare and commit rejects without publishing the
   detached after-image.
 
@@ -67,7 +82,7 @@ incomplete.
 
 - all three exact explicit Build-band replay packets select the recorded airbases;
 - contained Unit aircraft receive AIR_PATROL while retaining `group == -1`;
-- current v14 save/load/resave retains the v13-origin Build selection cache and empty cached
+- current v15 save/load/resave retains the v13-origin Build selection cache and empty cached
   Scramble;
 - Build uid or containment mutation between prepare and commit publishes no Group, cache, order
   or RNG after-image; and

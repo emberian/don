@@ -24,6 +24,9 @@ use crate::command::air_launch_receivers::{
     SCRAMBLE_WIRE_SIZE,
 };
 use crate::order::OrderIndex;
+use crate::systems::groups_guys::{
+    plan_ignore_order_kills, GroupData, GroupKillStep, KillObjectFacts, GROUP_MAX_MEMBERS,
+};
 
 pub const LAUNCH_PATROL_OPCODE: u8 = 11;
 pub const SCRAMBLE_OPCODE: u8 = 36;
@@ -478,13 +481,105 @@ impl AirGroupActionRequest {
     }
 }
 
-/// The scenario scalar is an authority, not a default.  `Armed` remains a blocker until
-/// the canonical host can commit `plan_ignore_order_kills` in this same transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Recomputable evidence for the ordered `ScenarioData::objects_ignoring_orders` prelude.
+/// The full before/after Group and ordered object facts are retained so a receipt cannot
+/// authorize a prune merely by asserting a digest produced by the same untrusted caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IgnoreOrdersPruneReceipt {
+    pub frame: i32,
+    pub ignored: Vec<i32>,
+    pub facts: Vec<KillObjectFacts>,
+    pub group_before: GroupData,
+    pub members_before: Vec<CanonicalObjectIdentity>,
+    pub group_after: GroupData,
+    pub members_after: Vec<CanonicalObjectIdentity>,
+    pub leader_speed: Option<i32>,
+    pub steps: Vec<GroupKillStep>,
+    pub removals: usize,
+}
+
+fn group_walk_image(group: &GroupData) -> Vec<u8> {
+    let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    let mut image = group.header_bytes().to_vec();
+    for value in &group.list[..n] {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    for values in [&group.off_x, &group.off_y, &group.curr_x, &group.curr_y] {
+        for value in &values[..n] {
+            image.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    image.extend(group.angles[..n].iter().map(|value| *value as u8));
+    image
+}
+
+fn identities_match_group(group: &GroupData, identities: &[CanonicalObjectIdentity]) -> bool {
+    let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    identities.len() == n
+        && identities.iter().all(|identity| identity.is_well_formed())
+        && group.list[..n]
+            .iter()
+            .zip(identities)
+            .all(|(&o, identity)| identity.address() == (group.who, o))
+}
+
+impl IgnoreOrdersPruneReceipt {
+    fn validates_for(&self, request: &AirGroupActionRequest) -> bool {
+        if self.group_before.id != request.group_before.key.group_id
+            || self.group_after.id != request.group_before.key.group_id
+            || self.group_before.who != request.group_before.key.owner
+            || !identities_match_group(&self.group_before, &self.members_before)
+            || !identities_match_group(&self.group_after, &self.members_after)
+            || self.group_after.who != request.group_before.key.owner && self.group_after.num != 0
+            || group_walk_image(&self.group_after) != request.group_before.walk_image
+            || self.members_after != request.group_before.members
+            || self
+                .members_after
+                .iter()
+                .any(|after| !self.members_before.contains(after))
+        {
+            return false;
+        }
+        let Ok(mut recomputed) =
+            plan_ignore_order_kills(&self.group_before, &self.ignored, self.frame, &self.facts)
+        else {
+            return false;
+        };
+        if !recomputed.needs_leader_speed && self.leader_speed.is_some() {
+            return false;
+        }
+        recomputed.resolve_leader_speed(self.leader_speed);
+        recomputed.group == self.group_after
+            && recomputed.steps == self.steps
+            && recomputed.removals == self.removals
+            && !recomputed.needs_leader_speed
+    }
+}
+
+/// The scenario scalar is an authority, not a default. A bare `Armed` snapshot remains a
+/// blocker; only `ArmedPrepared` carries the recomputable same-transaction prune evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IgnoreOrdersSnapshot {
     Unavailable,
-    Clear { revision: u64 },
-    Armed { revision: u64 },
+    Clear {
+        revision: u64,
+    },
+    Armed {
+        revision: u64,
+    },
+    ArmedPrepared {
+        revision: u64,
+        prune: Box<IgnoreOrdersPruneReceipt>,
+    },
+}
+
+impl IgnoreOrdersSnapshot {
+    fn prune_changed(&self) -> bool {
+        matches!(
+            self,
+            Self::ArmedPrepared { prune, .. } if prune.removals != 0
+        )
+    }
 }
 
 /// Evidence that the values copied into `AirLaunchFacts` came from synchronized type data.
@@ -621,6 +716,7 @@ pub enum AirTransactionBlocker {
     AuthorityRevisionChanged,
     IgnoreOrdersUnavailable,
     IgnoreOrdersPruneUnavailable,
+    IgnoreOrdersPruneMismatch,
     PacketToSimRouteUnavailable,
     TypeAuthorityUnavailable(AirTypeAuthorityColumn),
     FactsOwnerMismatch {
@@ -903,18 +999,26 @@ pub fn prepare_air_group_action(
     if snapshot.authority != request.authority {
         return Err(AirTransactionBlocker::AuthorityRevisionChanged);
     }
-    match snapshot.ignore_orders {
+    match &snapshot.ignore_orders {
         IgnoreOrdersSnapshot::Unavailable => {
             return Err(AirTransactionBlocker::IgnoreOrdersUnavailable)
         }
         IgnoreOrdersSnapshot::Armed { revision } => {
-            if revision != request.authority.scenario {
+            if *revision != request.authority.scenario {
                 return Err(AirTransactionBlocker::AuthorityRevisionChanged);
             }
             return Err(AirTransactionBlocker::IgnoreOrdersPruneUnavailable);
         }
+        IgnoreOrdersSnapshot::ArmedPrepared { revision, prune } => {
+            if *revision != request.authority.scenario {
+                return Err(AirTransactionBlocker::AuthorityRevisionChanged);
+            }
+            if !prune.validates_for(request) {
+                return Err(AirTransactionBlocker::IgnoreOrdersPruneMismatch);
+            }
+        }
         IgnoreOrdersSnapshot::Clear { revision } => {
-            if revision != request.authority.scenario {
+            if *revision != request.authority.scenario {
                 return Err(AirTransactionBlocker::AuthorityRevisionChanged);
             }
         }
@@ -1028,7 +1132,9 @@ fn commit_evidence_matches(
         return false;
     }
     if installs.is_empty() {
-        if evidence.state_digest_before != evidence.state_digest_after {
+        if prepared.snapshot.ignore_orders.prune_changed()
+            == (evidence.state_digest_before == evidence.state_digest_after)
+        {
             return false;
         }
     } else if evidence.state_digest_before == evidence.state_digest_after {

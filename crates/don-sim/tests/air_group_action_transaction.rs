@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The transaction module is intentionally not registered in the shared module table yet.
-// These aliases give its eventual crate-relative imports the same shape in this exclusive
-// integration test.
+// Keep the source-inclusion contract gate independent of the registered crate module. These
+// aliases give its crate-relative imports the same shape in this integration test.
 mod command {
     pub mod air_launch_receivers {
         pub use don_sim::command::air_launch_receivers::*;
@@ -10,6 +9,11 @@ mod command {
 }
 mod order {
     pub use don_sim::order::*;
+}
+mod systems {
+    pub mod groups_guys {
+        pub use don_sim::systems::groups_guys::*;
+    }
 }
 
 #[allow(dead_code)]

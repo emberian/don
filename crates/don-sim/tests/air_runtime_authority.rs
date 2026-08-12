@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The authority is now a registered canonical Order/save dependency. The transaction
-// remains an exclusive contract until one Sim host owns its packet and commit surfaces.
+// The authority and transaction are registered canonical dependencies. This source-inclusion
+// gate still exercises their frozen import surface independently of the crate module table.
 mod command {
     pub mod air_launch_receivers {
         pub use don_sim::command::air_launch_receivers::*;
@@ -9,6 +9,11 @@ mod command {
 }
 mod order {
     pub use don_sim::order::*;
+}
+mod systems {
+    pub mod groups_guys {
+        pub use don_sim::systems::groups_guys::*;
+    }
 }
 #[allow(dead_code)]
 #[path = "../src/systems/air_group_action_transaction.rs"]

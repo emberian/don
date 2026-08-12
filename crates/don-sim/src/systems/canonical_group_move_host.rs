@@ -592,6 +592,16 @@ fn group_leader<'a>(
     Ok(None)
 }
 
+/// Exact dynamic `Group::find_leader(0) -> UnitData::speed()` projection reused by
+/// same-package action preludes after they remove scenario-ignored members.
+pub(crate) fn group_leader_speed(
+    group: &GroupData,
+    world: &World,
+    authority: &GroupMoveAuthority,
+) -> Result<Option<i32>, PackageError> {
+    group_leader(group, world, authority).map(|leader| leader.map(|(_, _, _, facts)| facts.speed))
+}
+
 fn recompute_group(
     group: &mut GroupData,
     world: &World,
@@ -1179,9 +1189,6 @@ pub fn prepare_air_group_selection(
             };
             if world.units.get_uid(row) != entry.uid {
                 continue;
-            }
-            if world.units.o_down()[row] >= 0 {
-                return Err(PackageError::SubordinateChainUnavailable { who, o: entry.o });
             }
             if !facts.can_install_order {
                 return Err(PackageError::IncompleteSelectionAuthority { handle });

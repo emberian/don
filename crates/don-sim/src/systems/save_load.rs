@@ -57,7 +57,9 @@ mod leader_match;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = DIPLOMACY_SAVE_FORMAT_VERSION;
+/// First version persisting the scenario ignore-orders scalar and eight ordered lists.
+const SCENARIO_IGNORES_FORMAT_VERSION: u32 = 15;
+const FORMAT_VERSION: u32 = SCENARIO_IGNORES_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -151,8 +153,9 @@ const GROUPS: u16 = 0x0009;
 const LEADER_MATCH: u16 = 0x000a;
 const COMMAND_PACKAGE_STATE: u16 = 0x000b;
 const DIPLOMACY: u16 = 0x000c;
+const SCENARIO_IGNORES: u16 = 0x000d;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 12] = [
+const REQUIRED: [u16; 13] = [
     CORE,
     MAP,
     OBJECTS,
@@ -165,11 +168,13 @@ const REQUIRED: [u16; 12] = [
     LEADER_MATCH,
     COMMAND_PACKAGE_STATE,
     DIPLOMACY,
+    SCENARIO_IGNORES,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        FORMAT_VERSION => &REQUIRED,
+        SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED,
+        DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..12],
         PRE_DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..11],
         LEGACY_ORDER_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION => &REQUIRED[..10],
         GROUPS_FORMAT_VERSION => &REQUIRED[..9],
@@ -3121,6 +3126,11 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
                 command_package_state::write(&sim.command_package_state)?,
             ),
             Chunk::leaf(DIPLOMACY, encode_diplomacy_payload(&sim.diplomacy)),
+            Chunk::leaf(
+                SCENARIO_IGNORES,
+                air_runtime_authority::encode_scenario_ignores(&sim.scenario_ignore_orders)
+                    .map_err(|_| SaveError::Invalid("scenario ignore-orders state"))?,
+            ),
         ],
     )
     .encode()?;
@@ -3234,6 +3244,16 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     };
     let diplomacy = decode_diplomacy_for_save(core.format_version, sections[11])
         .map_err(|_| SaveError::Invalid("diplomacy payload"))?;
+    let scenario_ignore_orders = match sections[12] {
+        Some(data) if core.format_version == SCENARIO_IGNORES_FORMAT_VERSION => {
+            air_runtime_authority::decode_scenario_ignores(data)
+                .map_err(|_| SaveError::Invalid("scenario ignore-orders payload"))?
+        }
+        None if core.format_version < SCENARIO_IGNORES_FORMAT_VERSION => {
+            air_runtime_authority::ScenarioIgnoreOrdersAuthority::default()
+        }
+        _ => return Err(SaveError::Invalid("scenario ignore-orders section version")),
+    };
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
             return Err(SaveError::Invalid("player setup outside frame zero"));
@@ -3305,6 +3325,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.groups = group_pool;
     sim.command_package_state = command_state;
     sim.diplomacy = diplomacy;
+    sim.scenario_ignore_orders = scenario_ignore_orders;
     if let Some(state) = leader_match {
         leader_match::restore(&mut sim, state)?;
     } else {
@@ -3911,6 +3932,44 @@ mod tests {
     }
 
     #[test]
+    fn v15_scenario_ignore_lists_roundtrip_and_v14_defaults_byte_exactly() {
+        let mut original = supported_sim();
+        original.scenario_ignore_orders.ignore_orders = true;
+        original.scenario_ignore_orders.ignored_by_owner[0] = vec![17, -1, 17];
+        original.scenario_ignore_orders.ignored_by_owner[7] = vec![i16::MAX as i32];
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.scenario_ignore_orders.ignore_orders, true);
+        assert_eq!(
+            loaded.scenario_ignore_orders.ignored_by_owner,
+            original.scenario_ignore_orders.ignored_by_owner
+        );
+        assert_eq!(loaded.scenario_ignore_orders.revision, 0);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        let mut wrong_payload_version = bytes.clone();
+        let scenario = section_offset(&wrong_payload_version, SCENARIO_IGNORES);
+        wrong_payload_version[scenario + 8] = 2;
+        assert_eq!(
+            load_error(&wrong_payload_version),
+            SaveError::Invalid("scenario ignore-orders payload")
+        );
+
+        let pristine = supported_sim();
+        let v14 = prior_format_stream(&pristine, DIPLOMACY_SAVE_FORMAT_VERSION);
+        let upgraded = load_sim(&v14).unwrap();
+        assert_eq!(
+            upgraded.scenario_ignore_orders,
+            air_runtime_authority::ScenarioIgnoreOrdersAuthority::default()
+        );
+        assert_eq!(
+            prior_format_stream(&upgraded, DIPLOMACY_SAVE_FORMAT_VERSION),
+            v14
+        );
+    }
+
+    #[test]
     fn format_twelve_typed_orders_load_with_empty_cache_and_upgrade_to_v14() {
         let mut original = supported_sim();
         let row = 0;
@@ -4111,7 +4170,12 @@ mod tests {
             .filter(|child| {
                 !matches!(
                     child.header.id,
-                    PLAYER_SETUP | GROUPS | LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY
+                    PLAYER_SETUP
+                        | GROUPS
+                        | LEADER_MATCH
+                        | COMMAND_PACKAGE_STATE
+                        | DIPLOMACY
+                        | SCENARIO_IGNORES
                 )
             })
             .map(|child| {
@@ -4158,7 +4222,7 @@ mod tests {
             .filter(|child| {
                 !matches!(
                     child.header.id,
-                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY
+                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY | SCENARIO_IGNORES
                 )
             })
             .map(|child| {
