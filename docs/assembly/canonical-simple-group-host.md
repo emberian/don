@@ -1,14 +1,15 @@
 # Canonical simple-Group package host
 
-Status: UNITMASK opcode 32 and the ordinary-Unit arm of STOP_SPELL opcode 29 are mounted through
-`Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. No command-table,
-general packet router, or closure status changes are made. STOP_SPELL's special type 61/62/400
-graphics tail remains a typed whole-package refusal.
+Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, and HALT opcode 12 are
+mounted through `Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT
+also crosses one canonical `Sim::do_frame`. No command-table, general packet router, or closure
+status changes are made. STOP_SPELL's special type 61/62/400 graphics tail remains a typed
+whole-package refusal.
 
 ## First executable row
 
-`canonical_simple_group_host.rs` admits exactly `[GroupCommand][UnitmaskCommand]` or
-`[GroupCommand][StopSpellCommand]`. It never
+`canonical_simple_group_host.rs` admits exactly `[GroupCommand]` followed by UNITMASK,
+STOP_SPELL, or HALT. It never
 constructs `command::Bridge` and never reads or copies the Bridge-owned `command::Groups`.
 Opcode 0 reuses the fixed 512-slot `groups_guys::Groups` selector, play-keyed receive cache,
 UID/Handle revalidation, allocator, old-Group removal, and Unit backlinks already used by the
@@ -53,6 +54,22 @@ such a type is harmless when it is not currently casting. The canonical Sim curr
 the ordinary multiplayer/product `ScenarioData::ignore_orders == 0` state; scenario prune state
 is not invented by this host.
 
+## Third executable row
+
+HALT consumes the complete `plan_action_halt` body at `Group::action_halt`
+`0x0070D0C0..0x0070D36D`. Opcode 12 is a one-byte command whose handler always supplies action
+flags zero. The `flag_4_veto`, `special`, and `spy` predicates are therefore unreachable rather
+than defaulted. The existing selection authority supplies the reached on-map, plane, domain,
+and Unit-flags facts; the canonical `Order` supplies the ENTER/EXIT discriminator. A malformed
+SPECIAL_ANIM without its typed payload refuses before publication.
+
+For every admitted ordinary member the detached transaction clears mask bits `0x04000000` and
+`0x100`, path state, the entire order list, and the action endpoint. It also applies
+`action_begin` (`disband = 0`) and resets Group form. Entering/exiting Units and airborne planes
+without the `unit_flags & 0x20` exception remain selected but are not halted, exactly as retail.
+No order payload is installed, no RNG draw is consumed, and scenario ignore-orders remains the
+same ordinary-product no-op boundary documented for STOP_SPELL.
+
 ## Retail packet evidence
 
 The artifact-backed replay test freezes the shipped recording
@@ -92,6 +109,20 @@ forms:
 
 The full-corpus census sees 113 strict Group+STOP_SPELL pairs.
 
+HALT is bound to `multi/Playback___2024.03.23_21_16_13__Sat_.rcx`, SHA-256
+`82bfb0898209d40afd887b1a487f565446cdb154d1192435e41a43137809355a`. The executable witness is
+package index 8,864, turn 8,865, play 1, frame 35,465: Group owner 0 with 24 explicit Unit ids,
+followed by the one-byte `0c` action. Package index 9,574, turn 9,575, frame 38,305 supplies the
+persistent-cache form:
+
+```text
+001800550074004200440045005e006900710075007d007c00800040004b005d0001000300050006000a000c005c006e008700
+0c                       Halt
+000000 0c                Group(owner=0, cache reuse), Halt
+```
+
+The full-corpus census sees 69 strict Group+HALT pairs.
+
 ## Integration and save boundary
 
 The module export and `Sim` sibling now construct the same present-player map as Group+Move and
@@ -99,15 +130,16 @@ call prepare/commit synchronously against the fixed owners. The integration test
 exact retail packet above, saves the resulting Groups/cache/Unit/order/path image, reloads it,
 reinstalls only the revision-bound authority, executes the observed empty-Group cached-selection
 wire, and proves complete after-image, Groups checksum, serialized bytes, and RNG equality.
+The HALT resume test then executes one full canonical frame on both the direct and reloaded Sims
+and proves the stopped orders remain empty and the serialized states remain identical.
 
 The remaining production-routing tranche is bounded:
 
-1. teach the replay/package router to invoke this strict host only for an exact `[0,32]` pair;
+1. teach the replay/package router to invoke this strict host only for exact admitted pairs;
 2. compare the first executable packet's Groups/Unit channels to the retail recording; and
 3. only after that evidence update closure reporting for opcode 32.
 
-The other seven audited simple actions remain red at this host. HALT can reuse the
-same Unit image once its additional action/type fields are bound.
+The other six audited simple actions remain red at this host.
 SET_TRANSPORT needs Leader flags; FOLLOW needs its typed payload; STANCE spans Unit and Build;
 DISBAND reaches the nested Build production queue; BUILDMASK requires the canonical Build-band
 selector and feedback receipt. BEGIN has no corpus occurrence and is not used to claim execution.
@@ -121,7 +153,11 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   retail_replay_binds_stop_spell_explicit_and_cached_wires
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  retail_replay_binds_halt_explicit_and_persistent_cache_wires
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_unitmask_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_stop_spell_packets -- --ignored --nocapture
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  census_strict_group_halt_packets -- --ignored --nocapture
 ```

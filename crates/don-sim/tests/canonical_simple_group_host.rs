@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Focused canonical `[Group][Unitmask]` transaction tests.
+//! Focused canonical `[Group][one simple action]` transaction tests.
 
-use don_sim::order::{Order, OrderIndex, ORDER_GROUP};
+use don_sim::order::{Order, OrderIndex, SpecialAnimType, ORDER_GROUP};
 use don_sim::systems::canonical_group_move_host::{
     retail_fresh_groups, CommandPackageState, GroupMoveAuthority, MoveMemberAuthority,
     NETWORK_PLAYERS,
@@ -33,6 +33,20 @@ fn stop_packet(who: u8, objects: &[i16]) -> Vec<u8> {
     bytes.push(STOP_SPELL_OPCODE);
     bytes
 }
+
+fn halt_packet(who: u8, objects: &[i16]) -> Vec<u8> {
+    let mut bytes = vec![GROUP_OPCODE, objects.len() as u8, who];
+    for &o in objects {
+        bytes.extend_from_slice(&o.to_le_bytes());
+    }
+    bytes.push(HALT_OPCODE);
+    bytes
+}
+
+const RETAIL_HALT_OBJECTS: [i16; 24] = [
+    0x55, 0x74, 0x42, 0x44, 0x45, 0x5e, 0x69, 0x71, 0x75, 0x7d, 0x7c, 0x80, 0x40, 0x4b, 0x5d, 0x01,
+    0x03, 0x05, 0x06, 0x0a, 0x0c, 0x5c, 0x6e, 0x87,
+];
 
 fn cast_spell_order(spell: i32) -> Order {
     Order {
@@ -219,6 +233,16 @@ fn decoder_accepts_the_exact_retail_fixture_and_refuses_any_suffix() {
             action: SimpleGroupActionWire::StopSpell,
         }
     );
+    // Playback___2024.03.23_21_16_13__Sat_.rcx, turn index 8864 / turn 8865 / frame 35465.
+    let retail_halt = halt_packet(0, &RETAIL_HALT_OBJECTS);
+    assert_eq!(
+        decode_simple_group_package(&retail_halt).unwrap(),
+        SimpleGroupWire {
+            who: 0,
+            objects: RETAIL_HALT_OBJECTS.to_vec(),
+            action: SimpleGroupActionWire::Halt,
+        }
+    );
     let mut trailing = retail.to_vec();
     trailing.push(79);
     assert_eq!(
@@ -371,6 +395,125 @@ fn stop_spell_spell_clock_and_type_staleness_publish_nothing() {
     );
     assert_eq!(fixture.groups.list, groups_before.list);
     assert_eq!(fixture.state, state_before);
+}
+
+#[test]
+fn exact_retail_halt_packet_closes_orders_paths_masks_and_action_endpoints() {
+    let mut fixture = Fixture::new(136);
+    let untouched = fixture.world.row_of(fixture.handles[2]).unwrap();
+    fixture.world.orders_mut(untouched).replace(Order {
+        kind: OrderIndex::Think,
+        ..Order::default()
+    });
+    for &o in &RETAIL_HALT_OBJECTS {
+        let row = fixture.world.row_of(fixture.handles[o as usize]).unwrap();
+        fixture.world.units.set_unit_masks(row, 0x0400_0123);
+        fixture.world.units.orders_x_mut()[row] = -10;
+        fixture.world.units.orders_y_mut()[row] = -11;
+        fixture.world.units.dest_angle_mut()[row] = -12;
+        fixture.world.orders_mut(row).replace(Order {
+            kind: OrderIndex::Think,
+            flags: 0x5a,
+            ..Order::default()
+        });
+        fixture.paths[row].push(PathData {
+            to_x: 1,
+            to_y: 2,
+            tolerance: 3,
+            flags: 4,
+        });
+    }
+    let retail = halt_packet(0, &RETAIL_HALT_OBJECTS);
+    assert_eq!(retail[0..3], [0, 24, 0]);
+    assert_eq!(retail.last(), Some(&0x0c));
+    let random_before = fixture.world.random.state();
+    let receipt = fixture.process(35_465, &retail).unwrap();
+    assert_eq!(receipt.opcode, HALT_OPCODE);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::Halt { halted_units: 24 }
+    );
+    assert_eq!(receipt.random_state_before, random_before);
+    assert_eq!(receipt.random_state_after, random_before);
+    assert_eq!(fixture.state.selection(0).unwrap().len(), 24);
+    assert_eq!(fixture.groups.list[receipt.group_slot].form, -1);
+    assert_eq!(fixture.groups.list[receipt.group_slot].disband, 0);
+    for &o in &RETAIL_HALT_OBJECTS {
+        let row = fixture.world.row_of(fixture.handles[o as usize]).unwrap();
+        assert_eq!(fixture.world.units.get_unit_masks(row), 0x23);
+        assert!(fixture.world.orders(row).is_empty());
+        assert!(fixture.paths[row].is_empty());
+        assert_eq!(
+            fixture.world.units.orders_x()[row],
+            fixture.world.units.x_internal()[row]
+        );
+        assert_eq!(
+            fixture.world.units.orders_y()[row],
+            fixture.world.units.y_internal()[row]
+        );
+        assert_eq!(
+            fixture.world.units.dest_angle()[row],
+            fixture.world.units.angle()[row]
+        );
+    }
+    assert_eq!(
+        fixture.world.orders(untouched).order_type(),
+        OrderIndex::Think
+    );
+}
+
+#[test]
+fn halt_skips_entering_and_airborne_plane_members_without_losing_selection() {
+    let mut fixture = Fixture::new(2);
+    let entering = fixture.world.row_of(fixture.handles[0]).unwrap();
+    let plane = fixture.world.row_of(fixture.handles[1]).unwrap();
+    fixture
+        .world
+        .orders_mut(entering)
+        .replace(Order::special_anim(SpecialAnimType::Enter, 7, 8));
+    fixture.world.orders_mut(plane).replace(Order {
+        kind: OrderIndex::Think,
+        ..Order::default()
+    });
+    fixture.authority.members[1].is_plane = true;
+    fixture.authority.members[1].domain = 2;
+    fixture.authority.members[1].unit_flags = 0;
+    let objects = fixture.objects.clone();
+    let receipt = fixture.process(139, &halt_packet(0, &objects)).unwrap();
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::Halt { halted_units: 0 }
+    );
+    assert_eq!(receipt.selected.len(), 2);
+    assert_eq!(
+        fixture.world.orders(entering).order_type(),
+        OrderIndex::SpecialAnim
+    );
+    assert_eq!(fixture.world.orders(plane).order_type(), OrderIndex::Think);
+}
+
+#[test]
+fn halt_malformed_special_anim_payload_refuses_before_publication() {
+    let mut fixture = Fixture::new(1);
+    let handle = fixture.handles[0];
+    let row = fixture.world.row_of(handle).unwrap();
+    fixture.world.orders_mut(row).replace(Order {
+        kind: OrderIndex::SpecialAnim,
+        special_anim: None,
+        ..Order::default()
+    });
+    let groups_before = fixture.groups.clone();
+    let state_before = fixture.state.clone();
+    assert_eq!(
+        fixture.prepare(140, &halt_packet(0, &[0])).unwrap_err(),
+        SimpleGroupPackageError::MissingSpecialAnimPayload { handle }
+    );
+    assert_eq!(fixture.groups.list, groups_before.list);
+    assert_eq!(fixture.state, state_before);
+    assert_eq!(
+        fixture.world.orders(row).order_type(),
+        OrderIndex::SpecialAnim
+    );
 }
 
 #[test]
@@ -728,6 +871,99 @@ fn exact_retail_stop_spell_packet_survives_donsave_and_cached_resume() {
         assert_eq!(
             direct.world.units.spell_time()[direct_row],
             resumed.world.units.spell_time()[resumed_row]
+        );
+        assert_eq!(direct.paths[direct_row], resumed.paths[resumed_row]);
+    }
+    assert_eq!(direct.groups.list, resumed.groups.list);
+    assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+#[test]
+fn retail_halt_survives_donsave_cached_resume_and_one_canonical_tick() {
+    let make = || {
+        let mut sim = don_sim::tick::Sim::new(0x0c12, 4);
+        sim.world.frame = 35_465;
+        sim.vic_match.frame = 35_465;
+        let mut players = PlayerTable::new();
+        players.seat(1, 1, 0, 0);
+        sim.players = Some(players);
+        let mut handles = Vec::new();
+        for index in 0..136 {
+            let handle = sim.spawn_unit(0, 30, 2_000 + index * 4, 3_000, 3).unwrap();
+            let row = sim.world.row_of(handle).unwrap();
+            sim.world.units.group_mut()[row] = -1;
+            sim.world.units.o_down_mut()[row] = -1;
+            handles.push(handle);
+        }
+        sim.replace_group_move_authority(simple_authority(&handles, 12, [0x0c; 32]));
+        (sim, handles)
+    };
+    let arm_orders = |sim: &mut don_sim::tick::Sim, handles: &[Handle]| {
+        for &o in &RETAIL_HALT_OBJECTS {
+            let row = sim.world.row_of(handles[o as usize]).unwrap();
+            sim.world.units.set_unit_masks(row, 0x0400_0123);
+            sim.world.orders_mut(row).replace(Order {
+                kind: OrderIndex::Think,
+                ..Order::default()
+            });
+            sim.paths[row].push(PathData {
+                to_x: 4,
+                to_y: 5,
+                tolerance: 6,
+                flags: 7,
+            });
+        }
+    };
+
+    let (mut direct, direct_handles) = make();
+    let (mut resumed, resumed_handles) = make();
+    arm_orders(&mut direct, &direct_handles);
+    arm_orders(&mut resumed, &resumed_handles);
+    let retail = halt_packet(0, &RETAIL_HALT_OBJECTS);
+    direct
+        .process_simple_group_package(1, 8_865, &retail)
+        .unwrap();
+    resumed
+        .process_simple_group_package(1, 8_865, &retail)
+        .unwrap();
+    let saved = save_sim(&resumed).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    resumed.replace_group_move_authority(simple_authority(&resumed_handles, 12, [0x0c; 32]));
+
+    arm_orders(&mut direct, &direct_handles);
+    arm_orders(&mut resumed, &resumed_handles);
+    // The same artifact later carries this exact persistent-cache Group wire.
+    let cached = halt_packet(0, &[]);
+    assert_eq!(cached, [0x00, 0x00, 0x00, 0x0c]);
+    let direct_receipt = direct
+        .process_simple_group_package(1, 9_575, &cached)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_simple_group_package(1, 9_575, &cached)
+        .unwrap();
+    assert_eq!(
+        direct_receipt.action_result,
+        SimpleGroupActionResult::Halt { halted_units: 24 }
+    );
+    assert_eq!(direct_receipt.action_result, resumed_receipt.action_result);
+    assert_eq!(
+        direct_receipt.groups_checksum,
+        resumed_receipt.groups_checksum
+    );
+    let frame_before = direct.world.frame;
+    direct.do_frame();
+    resumed.do_frame();
+    assert_eq!(direct.world.frame, frame_before + 1);
+    assert_eq!(direct.world.frame, resumed.world.frame);
+    for &o in &RETAIL_HALT_OBJECTS {
+        let direct_row = direct.world.row_of(direct_handles[o as usize]).unwrap();
+        let resumed_row = resumed.world.row_of(resumed_handles[o as usize]).unwrap();
+        assert_eq!(direct.world.units.get_unit_masks(direct_row), 0x23);
+        assert!(direct.world.orders(direct_row).is_empty());
+        assert!(direct.paths[direct_row].is_empty());
+        assert_eq!(
+            direct.world.units.get_unit_masks(direct_row),
+            resumed.world.units.get_unit_masks(resumed_row)
         );
         assert_eq!(direct.paths[direct_row], resumed.paths[resumed_row]);
     }

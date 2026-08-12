@@ -1698,8 +1698,8 @@ impl Sim {
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
-    /// UNITMASK (32) or STOP_SPELL (29). Selection/cache/allocation and every reached
-    /// Unit/order/path mutation are
+    /// UNITMASK (32), STOP_SPELL (29), or HALT (12). Selection/cache/allocation and every
+    /// reached Unit/order/path mutation are
     /// prepared and revalidated against the canonical owners before one assignment-only commit.
     pub fn process_simple_group_package(
         &mut self,

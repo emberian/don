@@ -10,6 +10,9 @@ const STOP_SPELL_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2017.07.20_20_46_23__Thu_.rcx";
 const STOP_SPELL_REPLAY_SHA256: &str =
     "2c962b3607348784caec4ca0f95a1e6a43b28b2175c2db0dce8afb48ae425741";
+const HALT_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2024.03.23_21_16_13__Sat_.rcx";
+const HALT_REPLAY_SHA256: &str = "82bfb0898209d40afd887b1a487f565446cdb154d1192435e41a43137809355a";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -189,6 +192,69 @@ fn retail_replay_binds_stop_spell_explicit_and_cached_wires() {
 }
 
 #[test]
+fn retail_replay_binds_halt_explicit_and_persistent_cache_wires() {
+    let path = root().join(HALT_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        HALT_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let wanted = [8_864_usize, 9_574];
+    let mut fixtures = Vec::new();
+    for (package_index0, turn) in replay.turns.iter().enumerate() {
+        if !wanted.contains(&package_index0) {
+            continue;
+        }
+        for player in &turn.players {
+            for pair in player.commands.windows(2) {
+                if pair[0].opcode == 0 && pair[1].opcode == 12 {
+                    fixtures.push(Fixture {
+                        package_index0,
+                        turn: turn.turn,
+                        play: player.play,
+                        frame: player.stamp,
+                        opcodes: player
+                            .commands
+                            .iter()
+                            .map(|command| command.opcode)
+                            .collect(),
+                        group_hex: hex(&pair[0].bytes),
+                        action_hex: hex(&pair[1].bytes),
+                    });
+                }
+            }
+        }
+    }
+    assert_eq!(
+        fixtures,
+        [
+            Fixture {
+                package_index0: 8_864,
+                turn: 8_865,
+                play: 1,
+                frame: 35_465,
+                opcodes: vec![79, 0, 12, 57, 74, 72],
+                group_hex: "001800550074004200440045005e006900710075007d007c00800040004b005d0001000300050006000a000c005c006e008700".into(),
+                action_hex: "0c".into(),
+            },
+            Fixture {
+                package_index0: 9_574,
+                turn: 9_575,
+                play: 1,
+                frame: 38_305,
+                opcodes: vec![79, 0, 12, 57, 74, 72],
+                group_hex: "000000".into(),
+                action_hex: "0c".into(),
+            },
+        ]
+    );
+}
+
+#[test]
 #[ignore = "full retail replay corpus"]
 fn census_strict_group_unitmask_packets() {
     let mut found = Vec::new();
@@ -260,6 +326,44 @@ fn census_strict_group_stop_spell_packets() {
     assert!(!found.is_empty());
     eprintln!("strict Group+STOP_SPELL occurrences={}", found.len());
     for fixture in found.iter().take(24) {
+        eprintln!("fixture={fixture:?}");
+    }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_strict_group_halt_packets() {
+    let mut found = Vec::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        for (turn_index, turn) in replay.turns.iter().enumerate() {
+            for player in &turn.players {
+                for pair in player.commands.windows(2) {
+                    if pair[0].opcode == 0 && pair[1].opcode == 12 {
+                        found.push((
+                            path.clone(),
+                            turn_index,
+                            turn.turn,
+                            player.play,
+                            player.stamp,
+                            player
+                                .commands
+                                .iter()
+                                .map(|command| command.opcode)
+                                .collect::<Vec<_>>(),
+                            hex(&pair[0].bytes),
+                            hex(&pair[1].bytes),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(!found.is_empty());
+    eprintln!("strict Group+HALT occurrences={}", found.len());
+    for fixture in found.iter().take(40) {
         eprintln!("fixture={fixture:?}");
     }
 }

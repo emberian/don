@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Canonical `GroupCommand` plus one simple Group action transaction.
 //!
-//! The production arms are opcode 32, `UNITMASK`, and opcode 29, `STOP_SPELL`. They reuse the fixed-`Groups`
+//! The production arms are opcode 32 `UNITMASK`, opcode 29 `STOP_SPELL`, and opcode 12
+//! `HALT`. They reuse the fixed-`Groups`
 //! selector/cache/allocator from [`canonical_group_move_host`], plans the exact recovered
 //! `Group::action_unitmask` body, and publishes every reached Group, backlink, Unit, order,
 //! path, player-map, clock, and RNG surface at one stale-checked boundary. No
@@ -14,7 +15,8 @@ use crate::systems::canonical_group_move_host::{
     NETWORK_PLAYERS, RECEIVED_SELECTION_CAPACITY,
 };
 use crate::systems::groups_guys::{
-    plan_action_unitmask, CheckSum, Groups, UnitMaskMemberFacts, UnitMaskStep,
+    plan_action_halt, plan_action_unitmask, CheckSum, Groups, HaltMemberFacts, HaltStep,
+    UnitMaskMemberFacts, UnitMaskStep,
 };
 use crate::systems::movement::PathStack;
 use crate::systems::sparse_object_bands_authority_frontier::UNIT_BAND_LIMIT;
@@ -25,11 +27,14 @@ pub const UNITMASK_OPCODE: u8 = 32;
 pub const UNITMASK_WIRE_SIZE: usize = 9;
 pub const STOP_SPELL_OPCODE: u8 = 29;
 pub const STOP_SPELL_WIRE_SIZE: usize = 1;
+pub const HALT_OPCODE: u8 = 12;
+pub const HALT_WIRE_SIZE: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimpleGroupActionWire {
     UnitMask { mask: u32, set: i32 },
     StopSpell,
+    Halt,
 }
 
 impl SimpleGroupActionWire {
@@ -37,6 +42,7 @@ impl SimpleGroupActionWire {
         match self {
             Self::UnitMask { .. } => UNITMASK_OPCODE,
             Self::StopSpell => STOP_SPELL_OPCODE,
+            Self::Halt => HALT_OPCODE,
         }
     }
 }
@@ -45,6 +51,7 @@ impl SimpleGroupActionWire {
 pub enum SimpleGroupActionResult {
     UnitMask { final_set: bool },
     StopSpell { stopped_units: usize },
+    Halt { halted_units: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +79,7 @@ pub enum SimpleGroupPackageError {
     StaleUnitType { handle: Handle },
     StaleUnitSpellTime { handle: Handle },
     MissingStopSpellGpieceAuthority { handle: Handle, type_index: i32 },
+    MissingSpecialAnimPayload { handle: Handle },
 }
 
 impl From<PackageError> for SimpleGroupPackageError {
@@ -95,7 +103,7 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Decode exactly `[Group][Unitmask]` or `[Group][StopSpell]`. Prefixes, suffixes, and a
+/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, or HALT. Prefixes, suffixes, and a
 /// second action are refused.
 pub fn decode_simple_group_package(
     bytes: &[u8],
@@ -125,6 +133,7 @@ pub fn decode_simple_group_package(
     let action_size = match opcode {
         UNITMASK_OPCODE => UNITMASK_WIRE_SIZE,
         STOP_SPELL_OPCODE => STOP_SPELL_WIRE_SIZE,
+        HALT_OPCODE => HALT_WIRE_SIZE,
         _ => return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode }),
     };
     let expected = group_len + action_size;
@@ -151,6 +160,7 @@ pub fn decode_simple_group_package(
             set: read_i32(bytes, group_len + 5).ok_or(SimpleGroupPackageError::Truncated)?,
         },
         STOP_SPELL_OPCODE => SimpleGroupActionWire::StopSpell,
+        HALT_OPCODE => SimpleGroupActionWire::Halt,
         _ => unreachable!("action size match admitted this opcode"),
     };
     Ok(SimpleGroupWire {
@@ -222,7 +232,7 @@ fn mutation_for(
         .ok_or(SimpleGroupPackageError::BrokenPlanIdentity { who, o })
 }
 
-/// Prepare opcode-0 selection and the exact UNITMASK body against detached after-images.
+/// Prepare opcode-0 selection and one admitted simple action against detached after-images.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_simple_group_package(
     world: &World,
@@ -450,6 +460,74 @@ pub fn prepare_simple_group_package(
                 }
             }
             SimpleGroupActionResult::StopSpell { stopped_units }
+        }
+        SimpleGroupActionWire::Halt => {
+            let mut facts = Vec::with_capacity(selection.members.len());
+            for member in &selection.members {
+                let mutation = mutation_for(&mut units, member.identity.who, member.identity.o)?;
+                let airborne_plane_veto = member.authority.is_plane
+                    && member.authority.domain == 2
+                    && member.authority.unit_flags & 0x20 == 0;
+                let entering_or_exiting = if member.authority.on_map && !airborne_plane_veto {
+                    mutation
+                        .unit
+                        .after
+                        .orders
+                        .current()
+                        .map_or(Some(false), crate::order::Order::is_entering_or_exiting)
+                        .ok_or(SimpleGroupPackageError::MissingSpecialAnimPayload {
+                            handle: mutation.unit.before.identity.handle,
+                        })?
+                } else {
+                    false
+                };
+                facts.push(HaltMemberFacts {
+                    o: member.identity.o,
+                    valid_unit: true,
+                    on_map: member.authority.on_map,
+                    is_plane: member.authority.is_plane,
+                    domain: member.authority.domain,
+                    unit_flags: member.authority.unit_flags,
+                    entering_or_exiting,
+                    // Wire opcode 12 always calls `action_halt(0)`, so these predicates are
+                    // not read by retail and are intentionally absent from the authority.
+                    flag_4_veto: false,
+                    special: false,
+                    spy: false,
+                });
+            }
+            let plan = plan_action_halt(&group, 0, &facts).map_err(|_| {
+                SimpleGroupPackageError::BrokenPlanIdentity {
+                    who: wire.who,
+                    o: -1,
+                }
+            })?;
+            groups_after.list[group_slot] = plan.group;
+            let mut halted_units = 0usize;
+            for step in plan.steps {
+                let (who, o) = match step {
+                    HaltStep::ClearUnitMask { who, o, .. }
+                    | HaltStep::ClearPathAnchor { who, o }
+                    | HaltStep::CloseOrders { who, o, .. }
+                    | HaltStep::ClearPartialPath { who, o }
+                    | HaltStep::UpdateAction { who, o } => (who, o),
+                };
+                let mutation = mutation_for(&mut units, who, o)?;
+                match step {
+                    HaltStep::ClearUnitMask { mask, .. } => mutation.unit.after.unit_masks &= !mask,
+                    HaltStep::ClearPathAnchor { .. } | HaltStep::ClearPartialPath { .. } => {
+                        mutation.unit.after.path.clear()
+                    }
+                    HaltStep::CloseOrders { .. } => mutation.unit.after.orders.clear(),
+                    HaltStep::UpdateAction { .. } => {
+                        mutation.unit.after.orders_x = mutation.unit.after.x;
+                        mutation.unit.after.orders_y = mutation.unit.after.y;
+                        mutation.dest_angle_after = mutation.unit.after.angle;
+                        halted_units += 1;
+                    }
+                }
+            }
+            SimpleGroupActionResult::Halt { halted_units }
         }
     };
 
