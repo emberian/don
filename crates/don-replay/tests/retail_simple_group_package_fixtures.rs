@@ -29,6 +29,10 @@ const AIR_LAUNCH_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2017.07.20_20_24_10__Thu_.rcx";
 const AIR_LAUNCH_REPLAY_SHA256: &str =
     "e8c0103f21dbdb97ecd083c1899065209bdb055581daaceff0c3ee547100ef8d";
+const AIR_FORCE_ALL_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2019.03.24_11_56_19__Sun_.rcx";
+const AIR_FORCE_ALL_REPLAY_SHA256: &str =
+    "dab1c282556642300a5bc153f1f432f417fa039b265b4d72cb5876dd643ec055";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -90,6 +94,67 @@ fn retail_replay_binds_build_launch_patrol_single_best_wire_and_shell_chronology
             "3a03ce217829",
             "4a48001000000000000000",
             "4804f7af00005c6f0000",
+        ],
+    );
+}
+
+#[test]
+fn retail_replay_binds_the_unique_cached_force_all_launch_and_its_explicit_cache_origin() {
+    let path = root().join(AIR_FORCE_ALL_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        AIR_FORCE_ALL_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+
+    let origin = &replay.turns[10_981];
+    let origin_player = origin
+        .players
+        .iter()
+        .find(|player| player.play == 2)
+        .unwrap();
+    assert_eq!((origin.turn, origin_player.stamp), (10_982, 65_887));
+    assert_eq!(
+        origin_player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 28, 57, 74, 72],
+    );
+    assert_eq!(
+        hex(&origin_player.commands[0].bytes),
+        "0004052f08300831083208"
+    );
+
+    let turn = &replay.turns[10_988];
+    let player = turn.players.iter().find(|player| player.play == 2).unwrap();
+    assert_eq!((turn.turn, player.stamp), (10_989, 65_929));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 11, 79, 57, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "000005",
+            "0be90d01007523000001000000010000000000000000000000",
+            "4f0008010000010000",
+            "390a68becf7d2f714a01000000ca9d89bd7479fcd0d348ea71dd7f2b0b2c1d3cbd092a209101000000e5e3811761ae81b40431ba12e01deeb601000400d79fd709",
+            "4a48001000000000000000",
+            "4804460e01000d130000",
         ],
     );
 }

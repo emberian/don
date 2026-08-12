@@ -8,7 +8,9 @@ ordinary Unit objects in each selected container's `inside_down` chain.
 The production route is:
 
 ```text
-exact [Group][11|36] bytes
+exact decoded retail package shell
+  -> typed checksum / telemetry / speed / camera receipts
+  -> exact [Group][11|36] command indices and bytes
   -> persisted CommandPackage selection cache
   -> fixed groups_guys::Groups slot
   -> typed Unit Handle / BuildRow+uid selection image
@@ -35,6 +37,14 @@ the sparse Build address, binds its `BuildRow`, owner/object id, uid, full 220-b
 position and containment head, and revalidates that image immediately before publishing the
 detached AIR after-image. A changed Build home rejects as `StaleHome` without order, path, Unit,
 RNG or authority mutation.
+
+The package adapter no longer requires replay callers to discard every command outside the air
+pair. `canonical_air_package_shell` admits the bounded retail shell opcodes 57, 58, 72, 74 and
+79, checks every fixed wire size, retains the complete ordered byte image, and decodes typed
+checksum, camera and player-speed facts plus exact TurnData payload bytes. It deliberately does
+not copy TurnControl or presentation state into `command::Bridge`; only the canonical Group/AIR
+transaction mutates Sim. Commit rechecks the complete command image, so a shell mutation between
+prepare and commit publishes nothing.
 
 An answered containment chain with zero eligible aircraft is also a successful package, not an
 adapter error. Opcode 0 has already advanced the canonical selection revision and may have
@@ -65,6 +75,17 @@ chronology is `[79, 0, 11, 58, 74, 72]`; command indices 1/2 are Group
 `0bebb20000a77d000002000000000000000000000000000000`. The six unaligned dwords decode to
 target `(45803,32167)`, queue `2`, force-all `0`, bombers-only `0`, fighters-only `0`, which
 enters the executable's single-best scoring arm rather than launch-all.
+
+The remaining launch-all arm has one especially strong finished-replay witness: package 10,988 /
+serial 10,989 / frame 65,929 / play 2 from SHA-256
+`dab1c282556642300a5bc153f1f432f417fa039b265b4d72cb5876dd643ec055`. Its complete
+chronology is `[0, 11, 79, 57, 74, 72]`. Group `000005` is the retail empty cached reselection;
+the exact preceding explicit cache origin is package 10,981 Group
+`0004052f08300831083208` (owner 5, Build objects 2095–2098). LaunchPatrol
+`0be90d01007523000001000000010000000000000000000000` decodes to target `(69097,9077)`,
+queue `1`, force-all `1`, and both type filters clear. The canonical saved cache resolves all
+four Builds, force-all bypasses mana burn, and each installed AIR_PATROL retains its own Build
+home.
 
 Replay decoding no longer has to collapse every admitted pair to command indices 0/1. The
 canonical pair entrypoint consumes the exact decoded Group and Scramble/LaunchPatrol slices plus
@@ -105,6 +126,11 @@ integration decision after the patch lands with its save-version coordination.
   preserves its Build home across v17 load/resave, inserts STRAFE on the first resumed row-17
   tick and executes the same STRAFE/RNG state on the next row-16 tick;
 - a changed Build uid/image between AIR_PATROL prepare and commit rejects with no publication;
+- the unique exact cached force-all package consumes its full six-command shell, launches all
+  four Build-contained aircraft with zero package RNG, survives v17 load/resave, resumes four
+  row-17 activations and executes the due aircraft's row-16 STRAFE identically; and
+- a changed PlayerSpeed shell byte between prepare and commit rejects before Group, cache, order,
+  path or RNG publication;
 - exact Cast predicate and SpecialAnim busy vetoes, including malformed-state gates;
 - v15 duplicate/tombstone scenario persistence, captain/down recursion and stale-list rollback;
 - an armed partial prune followed by AIR_PATROL save/load and identical resumed row-17 STRAFE

@@ -75,6 +75,8 @@ pub mod borders_fog;
 /// building types and type-data shapes fail closed.
 pub mod building_gather;
 pub mod canonical_air_group_host;
+/// Exact decoded retail package shell surrounding one canonical Group/AIR action pair.
+pub mod canonical_air_package_shell;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
 /// Installed, revision-bound production adapter for the fresh saved Village BUILD_AT tick.
