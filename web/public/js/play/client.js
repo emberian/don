@@ -1576,6 +1576,7 @@ function validateAgreedLocalTurn(turn) {
       if (reconstructed.hex !== package_.payload) {
         throw new Error('native turn relay exposed a noncanonical Group→Move payload');
       }
+    }
     packets.push({ play, bytes, decoded, lockstepSerial });
   }
   return packets;
