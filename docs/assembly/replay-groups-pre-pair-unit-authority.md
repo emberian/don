@@ -145,11 +145,14 @@ The shortest honest path is:
    privately; the product hook should rehome or expose that owner rather than adding another TSV
    parser in replay.
 5. Replay every preceding Group+opcode-25 package into the canonical Sim in serial/frame/play
-   order. Each successful Farm placement must join the exact `validate_build`, `snap_center`,
-   `blocked_site`, Build type, object UID, WData occupancy and City building-list authorities;
-   append MOVE_TO/EXPLORE_TO then BUILD_AT to every selected builder; and publish Group/cache,
-   Unit/order/path, Build/registry, World and City links atomically. Empty opcode-0 selections
-   reuse the play-keyed `(o,uid)` cache. Do not route this through production queue-up.
+   order through `groups_build_runtime::process_group_build_package`. Its one publication point
+   joins the exact `validate_build`, `snap_center`, `blocked_site`, complete post-`Build::init`
+   body/UID, WData occupancy and City tail-chain authorities; appends MOVE_TO/EXPLORE_TO then
+   BUILD_AT to every selected builder; and publishes Group/cache, Unit/order/path,
+   Build/registry, World and City links atomically. Empty opcode-0 selections reuse the play-keyed
+   `(o,uid)` cache. The host changes no resources, production queues, or RNG. It refuses until a
+   revision/digest-bound adapter supplies the exact per-package initializer/search after-images;
+   do not route this through production queue-up or manufacture those facts.
 6. Run the intervening canonical frames. Only then install the authority with
    `Sim::replace_group_move_authority` and call the already-landed
    `groups_sim_channel::issue_replay_group_move` at the recorded frame.
@@ -166,8 +169,8 @@ The stage map is therefore:
 | `place_unit` / `init_unit` real receipt | red |
 | exact Sim Unit state at frame 259 | red |
 | eight prior Group+opcode-25 chronology/provenance | green (`groups_build_history`) |
-| opcode-25 Farm Build initializer + WData/City links | red |
-| opcode-25 swarm MOVE_TO/EXPLORE_TO + BUILD_AT installer | red |
+| opcode-25 atomic Farm/Group/Unit/WData/City host | green infrastructure; real per-package initializer/search authority red |
+| same-owner active-City rooted `city_down` save/load/resume | green (v13/v14, malformed links fail closed) |
 | eight prior transactions plus intervening frame processing | red |
 | Handle-bound `GroupMoveAuthority` product adapter | red |
 | canonical pair execution + independent Group walk | green for caller-supplied state |
@@ -178,6 +181,8 @@ The stage map is therefore:
 ```sh
 cargo test -p don-replay --test groups_pre_pair_unit_authority -- --nocapture
 cargo test -p don-replay --test groups_build_history -- --nocapture
+cargo test -p don-replay --test groups_build_runtime -- --nocapture
+cargo test -p don-sim --lib city_build -- --nocapture
 
 tools/swarm-cargo-remote submit hbox groups-pre-pair-owner \
   --path crates/don-replay/src/groups_pre_pair_unit_authority.rs \

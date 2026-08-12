@@ -66,6 +66,20 @@ pub struct CanonicalBuildSpawnReceipt {
     pub registered_ptype: i32,
 }
 
+/// Non-mutating result of the exact allocation/registry preflight used by
+/// [`spawn_canonical_build`].  Composite transactions use this to bind orders and intrusive
+/// links to the object id retail will allocate before reaching their one publication point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalBuildSpawnPreview {
+    pub row: usize,
+    pub owner: u8,
+    pub type_index: i32,
+    pub object_id: i16,
+    pub snapped_position: (i32, i32),
+    pub build_mark_before: u32,
+    pub owner_active_before: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CanonicalBuildSpawnError {
     OwnerOutOfRange {
@@ -208,15 +222,14 @@ impl fmt::Display for CanonicalBuildSpawnError {
 
 impl std::error::Error for CanonicalBuildSpawnError {}
 
-/// Atomically append one identity-complete Build after all fallible checks have passed.
+/// Run every fallible check performed by [`spawn_canonical_build`] without changing `sim`.
 ///
-/// No `Err` path mutates `sim`. After preflight, `Sim::spawn_build` and
-/// `LiveProductionRuntime::register_build` are infallible dense appends. The receipt is read
-/// back from both registry owners and the committed body rather than echoing the request.
-pub fn spawn_canonical_build(
-    sim: &mut Sim,
-    request: CanonicalBuildSpawnRequest,
-) -> Result<CanonicalBuildSpawnReceipt, CanonicalBuildSpawnError> {
+/// The request's opaque Build body is only read.  A successful preview remains valid while the
+/// caller holds the exclusive `&mut Sim` borrow and does not mutate a Build registry owner.
+pub fn preview_canonical_build_spawn(
+    sim: &Sim,
+    request: &CanonicalBuildSpawnRequest,
+) -> Result<CanonicalBuildSpawnPreview, CanonicalBuildSpawnError> {
     let owner = request.owner as usize;
     if owner >= BANDED_SLOTS {
         return Err(CanonicalBuildSpawnError::OwnerOutOfRange {
@@ -258,10 +271,35 @@ pub fn spawn_canonical_build(
             build_mark: build_mark_before,
         });
     }
-    let object_id = build_mark_before as i16;
+
+    Ok(CanonicalBuildSpawnPreview {
+        row,
+        owner: request.owner,
+        type_index: request.type_index,
+        object_id: build_mark_before as i16,
+        snapped_position: (request.snapped_x, request.snapped_y),
+        build_mark_before,
+        owner_active_before: sim.world.objects.is_active(owner),
+    })
+}
+
+/// Atomically append one identity-complete Build after all fallible checks have passed.
+///
+/// No `Err` path mutates `sim`. After preflight, `Sim::spawn_build` and
+/// `LiveProductionRuntime::register_build` are infallible dense appends. The receipt is read
+/// back from both registry owners and the committed body rather than echoing the request.
+pub fn spawn_canonical_build(
+    sim: &mut Sim,
+    request: CanonicalBuildSpawnRequest,
+) -> Result<CanonicalBuildSpawnReceipt, CanonicalBuildSpawnError> {
+    let preview = preview_canonical_build_spawn(sim, &request)?;
+    let owner = preview.owner as usize;
+    let row = preview.row;
+    let build_mark_before = preview.build_mark_before;
+    let object_id = preview.object_id;
     let encoded_x = request.snapped_x ^ SUBOBJECT_COORD_XOR;
     let encoded_y = request.snapped_y ^ SUBOBJECT_COORD_XOR;
-    let owner_active_before = sim.world.objects.is_active(owner);
+    let owner_active_before = preview.owner_active_before;
 
     let mut build = request.build;
     build.who = request.owner;

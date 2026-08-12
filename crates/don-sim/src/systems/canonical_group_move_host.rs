@@ -324,12 +324,14 @@ pub struct UnitMutation {
 /// Which recovered consumer is asking the canonical opcode-0 selector to form a Group.
 ///
 /// Simple Unit-state actions need only a live generational Unit with a bound authority member.
-/// Economy actions additionally need an order-installable Unit, while Group→Move also requires
-/// the exact split admission bit.
+/// Economy and construction-placement actions additionally need an order-installable Unit, while
+/// Group→Move also requires the exact split admission bit. Construction placement still selects
+/// builder Units here; its separately allocated Build target never enters this selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupSelectionUse {
     SimpleUnitState,
     EconomyOrderInstall,
+    ConstructionPlacement,
     MoveNear,
 }
 
@@ -397,7 +399,8 @@ pub struct GroupMovePackageReceipt {
     pub random_state_after: i32,
 }
 
-pub(crate) fn groups_equal(a: &Groups, b: &Groups) -> bool {
+/// Exact equality predicate used by outer canonical Group transactions before publication.
+pub fn groups_equal(a: &Groups, b: &Groups) -> bool {
     a.last_group == b.last_group && a.proc_group == b.proc_group && a.list == b.list
 }
 
@@ -809,6 +812,9 @@ pub fn prepare_group_selection(
                 GroupSelectionUse::EconomyOrderInstall => {
                     PackageError::IncompleteSelectionAuthority { handle }
                 }
+                GroupSelectionUse::ConstructionPlacement => {
+                    PackageError::IncompleteSelectionAuthority { handle }
+                }
                 GroupSelectionUse::MoveNear => PackageError::IncompleteMoveAuthority { handle },
             });
         }
@@ -1182,7 +1188,8 @@ pub fn prepare_group_move_package(
     })
 }
 
-pub(crate) fn unit_still_current(world: &World, paths: &[PathStack], image: &UnitImage) -> bool {
+/// Revalidate one detached Unit/order/path before an outer canonical transaction publishes.
+pub fn unit_still_current(world: &World, paths: &[PathStack], image: &UnitImage) -> bool {
     let Some(address_row) =
         world.unit_row_at(i32::from(image.identity.who), i32::from(image.identity.o))
     else {

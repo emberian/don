@@ -60,6 +60,7 @@ pub mod edge_canals;
 pub mod fractal_boundary;
 pub mod groups_channel;
 pub mod groups_build_history;
+pub mod groups_build_runtime;
 pub mod growth;
 pub mod groups_dynamic;
 pub mod groups_pre_pair_unit_authority;
