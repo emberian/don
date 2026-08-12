@@ -67,7 +67,8 @@ fn continent_implementation_digest() -> [u8; 32] {
             + include_bytes!("east_meets_west_remaining_starts.rs").len()
             + include_bytes!("east_meets_west_player_land.rs").len()
             + include_bytes!("post_continent.rs").len()
-            + include_bytes!("../../don-sim/src/systems/regions.rs").len(),
+            + include_bytes!("../../don-sim/src/systems/regions.rs").len()
+            + include_bytes!("../../don-sim/src/systems/map_terrain.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
@@ -81,6 +82,7 @@ fn continent_implementation_digest() -> [u8; 32] {
     source.extend_from_slice(include_bytes!("east_meets_west_player_land.rs"));
     source.extend_from_slice(include_bytes!("post_continent.rs"));
     source.extend_from_slice(include_bytes!("../../don-sim/src/systems/regions.rs"));
+    source.extend_from_slice(include_bytes!("../../don-sim/src/systems/map_terrain.rs"));
     sha256(&source)
 }
 
@@ -156,10 +158,11 @@ pub fn advance_continent_world_ownership(
             regions_clear_all,
             regions_find_all,
             territory_limits,
+            fix_diag_land,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA
-            || *next_mutator_va != crate::post_continent::MAP_FIX_DIAG_LAND_VA
+        } if *next_va != crate::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA
+            || *next_mutator_va != crate::continent::STRING_CONSTRUCTOR_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -295,15 +298,18 @@ pub fn advance_continent_world_ownership(
             || territory_limits.world_before != regions_find_all.world_after
             || territory_limits.random_state_before
                 != regions_find_all.random_state_after
-            || !crate::post_continent::validate_map_make_territory_limits_receipt(
+            || fix_diag_land.world_before != territory_limits.world_after
+            || fix_diag_land.random_state_before != territory_limits.random_state_after
+            || !crate::post_continent::validate_map_fix_diag_land_receipt(
                 &map.world,
                 &map.generation_regions,
                 regions_clear_all,
                 regions_find_all,
                 territory_limits,
+                fix_diag_land,
             )
     ) {
-        return Err(mismatch(stage, "stop.territory_limits_residual"));
+        return Err(mismatch(stage, "stop.fix_diag_land_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

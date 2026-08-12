@@ -521,6 +521,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             regions_clear_all,
             regions_find_all,
             territory_limits,
+            fix_diag_land,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -550,11 +551,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 *next_va,
-                don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA
+                don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA
             );
             assert_eq!(
                 *next_mutator_va,
-                don_replay::post_continent::MAP_FIX_DIAG_LAND_VA
+                don_replay::continent::STRING_CONSTRUCTOR_VA
             );
             assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
             assert!(post_player_land_cleanup.centroid_y_list_non_null);
@@ -575,19 +576,21 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .iter()
                 .all(|record| record.after.size == 0));
             assert_eq!(regions_find_all.world_before, regions_clear_all.world_after);
-            assert_eq!(
-                regions_find_all.world_after,
-                eastwest_world.checksum_sections()
-            );
+            assert_eq!(regions_find_all.world_after, fix_diag_land.world_before);
             assert_eq!(regions_find_all.successful_find_calls, 3);
             assert_eq!(regions_find_all.build.non_input_pumps, 4);
             assert_eq!(territory_limits.stores.len(), 6);
             assert_eq!(territory_limits.world_before, regions_find_all.world_after);
+            assert_eq!(territory_limits.world_after, fix_diag_land.world_before);
+            assert!(territory_limits.world_sections_changed.is_empty());
             assert_eq!(
-                territory_limits.world_after,
+                fix_diag_land.body,
+                don_replay::post_continent::MAP_FIX_DIAG_LAND_NATIVE_BODY
+            );
+            assert_eq!(
+                fix_diag_land.world_after,
                 eastwest_world.checksum_sections()
             );
-            assert!(territory_limits.world_sections_changed.is_empty());
             assert_eq!(
                 territory_limits
                     .stores
@@ -659,7 +662,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x7420_6b9e, 0x4f28_bf8c, 0x0fac_4f9d)
+        (0xd293_cb35, 0x7a34_6ba0, 0x4f28_bf8c, 0xaf72_4f9f)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

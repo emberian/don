@@ -205,8 +205,11 @@ pub use pools::{
     PoolMergeReceipt,
 };
 pub use post_continent::{
-    execute_post_continent, PostContinentError, PostContinentReceipt, TerritoryLimits,
-    MAP_FIX_DIAG_LAND_VA, MAP_MAKE_COASTLINES_VA, TERRAIN_GROUPS_FILL_FERTILE_VA,
+    execute_map_fix_diag_land, execute_post_continent, MapFixDiagLandError,
+    MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
+    MapFixDiagLandWorldMutation, PostContinentError, PostContinentReceipt, TerritoryLimits,
+    MAP_FIX_DIAG_LAND_NATIVE_BODY, MAP_FIX_DIAG_LAND_VA, MAP_MAKE_COASTLINES_VA,
+    TERRAIN_GROUPS_FILL_FERTILE_VA,
 };
 pub use post_nubify_transition_frontier::{
     execute_post_nubify_transitions, PostNubifyTransitionError, PostNubifyTransitionReceipt,

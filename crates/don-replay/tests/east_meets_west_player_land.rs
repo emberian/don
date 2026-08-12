@@ -478,6 +478,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             regions_clear_all,
             regions_find_all,
             territory_limits,
+            fix_diag_land,
             next_va,
             next_mutator_va,
             ..
@@ -494,12 +495,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+            don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_FIX_DIAG_LAND_VA,
+            don_replay::continent::STRING_CONSTRUCTOR_VA,
             "{name}"
         );
         assert_eq!(
@@ -549,8 +550,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            regions_find_all.world_after,
-            map.world.checksum_sections(),
+            regions_find_all.world_after, fix_diag_land.world_before,
             "{name}"
         );
         assert_eq!(regions_find_all.region_records_visited, 128, "{name}");
@@ -632,11 +632,48 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            territory_limits.world_after,
-            map.world.checksum_sections(),
+            territory_limits.world_after, fix_diag_land.world_before,
             "{name}"
         );
         assert!(territory_limits.world_sections_changed.is_empty(), "{name}");
+        assert_eq!(
+            fix_diag_land.body,
+            don_replay::post_continent::MAP_FIX_DIAG_LAND_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(fix_diag_land.cells_scanned, map.world.wdata.len(), "{name}");
+        assert_eq!(
+            fix_diag_land.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(fix_diag_land.direct_rng_sites.is_empty(), "{name}");
+        assert_eq!(
+            fix_diag_land.random_state_before, fix_diag_land.random_state_after,
+            "{name}"
+        );
+        assert_eq!(
+            fix_diag_land.next,
+            don_replay::continent::MapFixDiagLandNext::StringConstructor {
+                caller_resume_va: don_replay::continent::MAP_MAKE_FIX_DIAG_LAND_RESUME_VA,
+                string_literal_push_va:
+                    don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA,
+                string_local_load_va:
+                    don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA,
+                call_va: don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+                primitive_va: don_replay::continent::STRING_CONSTRUCTOR_VA,
+            },
+            "{name}"
+        );
+        assert!(
+            fix_diag_land.mutations.iter().all(|mutation| {
+                let mut expected = mutation.before.clone();
+                expected.land = don_sim::systems::map_terrain::land::OCEAN;
+                expected.land_sub = 0;
+                mutation.before.land == 0 && mutation.after == expected
+            }),
+            "{name}"
+        );
         assert!(
             !post_player_land_cleanup
                 .string_close
@@ -717,7 +754,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         );
         assert_eq!(
             map.world.checksum_sections(),
-            regions_find_all.world_after,
+            fix_diag_land.world_after,
             "{name}"
         );
     }

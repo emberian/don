@@ -5,7 +5,7 @@
 //! `World`, `Map::fix_diag_land`, `Map::make_coastlines`, then rebuild the
 //! regions again.  The next call is `TerrainGroups::fill_fertile`.
 
-use don_sim::systems::map_terrain::{land, wflag, World, WorldChecksum, WorldSection};
+use don_sim::systems::map_terrain::{land, wflag, WData, World, WorldChecksum, WorldSection};
 use don_sim::systems::regions::{
     make_coastlines_and_rebuild_regions, Region, RegionBuildReceipt, Regions, RegionsError,
     WCoordList, REGION_COUNT,
@@ -95,6 +95,21 @@ pub const MAP_MAKE_STYLE_BRANCH_VALUE: u8 = 23;
 pub const MAP_MAKE_STYLE_BRANCH_TARGET_VA: u32 = 0x0068_c84a;
 pub const MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA: u32 = 0x0068_be75;
 pub const MAP_FIX_DIAG_LAND_VA: u32 = 0x0069_c250;
+pub const MAP_FIX_DIAG_LAND_END_VA: u32 = 0x0069_c458;
+pub const MAP_FIX_DIAG_LAND_RET_VA: u32 = 0x0069_c457;
+pub const MAP_FIX_DIAG_LAND_SIZE: u32 = 520;
+pub const MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT: u32 = 173;
+pub const MAP_FIX_DIAG_LAND_SHA256: &str =
+    "cf6610b0c5d5df3e5bfeb40010cdf729e587f69cdf1c3c3eaefd8c72c4fe65dd";
+pub const MAP_FIX_DIAG_LAND_CORNER_X_VA: u32 = 0x00ad_c3c4;
+pub const MAP_FIX_DIAG_LAND_CORNER_Y_VA: u32 = 0x00ad_c3e4;
+pub const MAP_FIX_DIAG_LAND_CORNER_X: [i32; 4] = [-1, 1, 1, -1];
+pub const MAP_FIX_DIAG_LAND_CORNER_Y: [i32; 4] = [-1, -1, 1, 1];
+pub const MAP_MAKE_FIX_DIAG_LAND_RESUME_VA: u32 = 0x0068_be7a;
+pub const MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA: u32 = 0x0068_be7a;
+pub const MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA: u32 = 0x0068_be7f;
+pub const MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_be82;
+pub const STRING_CONSTRUCTOR_VA: u32 = 0x00a1_d660;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 
@@ -1180,6 +1195,208 @@ pub(crate) fn validate_map_make_territory_limits_receipt(
             == (MapMakeTerritoryLimitsNext::FixDiagLand {
                 call_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
                 primitive_va: MAP_FIX_DIAG_LAND_VA,
+            })
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapFixDiagLandNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+    pub corner_x_va: u32,
+    pub corner_y_va: u32,
+    pub corner_x: [i32; 4],
+    pub corner_y: [i32; 4],
+}
+
+pub const MAP_FIX_DIAG_LAND_NATIVE_BODY: MapFixDiagLandNativeBody = MapFixDiagLandNativeBody {
+    entry_va: MAP_FIX_DIAG_LAND_VA,
+    end_va_exclusive: MAP_FIX_DIAG_LAND_END_VA,
+    ret_va: MAP_FIX_DIAG_LAND_RET_VA,
+    size: MAP_FIX_DIAG_LAND_SIZE,
+    instruction_count: MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT,
+    sha256: MAP_FIX_DIAG_LAND_SHA256,
+    direct_calls: &[],
+    corner_x_va: MAP_FIX_DIAG_LAND_CORNER_X_VA,
+    corner_y_va: MAP_FIX_DIAG_LAND_CORNER_Y_VA,
+    corner_x: MAP_FIX_DIAG_LAND_CORNER_X,
+    corner_y: MAP_FIX_DIAG_LAND_CORNER_Y,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapFixDiagLandWorldMutation {
+    pub x: i32,
+    pub y: i32,
+    pub cell: usize,
+    pub before: WData,
+    pub after: WData,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapFixDiagLandNext {
+    StringConstructor {
+        caller_resume_va: u32,
+        string_literal_push_va: u32,
+        string_local_load_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapFixDiagLandReceipt {
+    pub caller_call_va: u32,
+    pub body: MapFixDiagLandNativeBody,
+    pub cells_scanned: usize,
+    pub mutations: Vec<MapFixDiagLandWorldMutation>,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapFixDiagLandNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapFixDiagLandError {
+    PriorTerritoryLimitsReceiptMismatch,
+}
+
+/// Execute the complete call-free retail `Map::fix_diag_land` body. The scan
+/// is X-major and in-place; every changed WData record is retained verbatim.
+pub fn execute_map_fix_diag_land(
+    world: &mut World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+) -> Result<MapFixDiagLandReceipt, MapFixDiagLandError> {
+    if !validate_map_make_territory_limits_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+    ) || prior_limits.random_state_after != random_state
+    {
+        return Err(MapFixDiagLandError::PriorTerritoryLimitsReceiptMismatch);
+    }
+
+    let before_world = world.clone();
+    let world_before = before_world.checksum_sections();
+    world.fix_diag_land();
+    let world_after = world.checksum_sections();
+    let mut mutations = Vec::new();
+    for x in 0..world.xs {
+        for y in 0..world.ys {
+            let cell = world.w_index(x, y);
+            if before_world.wdata[cell] != world.wdata[cell] {
+                mutations.push(MapFixDiagLandWorldMutation {
+                    x,
+                    y,
+                    cell,
+                    before: before_world.wdata[cell].clone(),
+                    after: world.wdata[cell].clone(),
+                });
+            }
+        }
+    }
+
+    Ok(MapFixDiagLandReceipt {
+        caller_call_va: MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+        body: MAP_FIX_DIAG_LAND_NATIVE_BODY,
+        cells_scanned: world.wdata.len(),
+        mutations,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapFixDiagLandNext::StringConstructor {
+            caller_resume_va: MAP_MAKE_FIX_DIAG_LAND_RESUME_VA,
+            string_literal_push_va: MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA,
+            string_local_load_va: MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA,
+            call_va: MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+            primitive_va: STRING_CONSTRUCTOR_VA,
+        },
+    })
+}
+
+pub(crate) fn validate_map_fix_diag_land_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    receipt: &MapFixDiagLandReceipt,
+) -> bool {
+    let mut before_world = world.clone();
+    let mut previous = None;
+    for mutation in &receipt.mutations {
+        if mutation.x < 0
+            || mutation.x >= world.xs
+            || mutation.y < 0
+            || mutation.y >= world.ys
+            || mutation.cell != world.w_index(mutation.x, mutation.y)
+            || previous.is_some_and(|(x, y)| (mutation.x, mutation.y) <= (x, y))
+            || world.wdata[mutation.cell] != mutation.after
+        {
+            return false;
+        }
+        let mut expected = mutation.before.clone();
+        expected.land = land::OCEAN;
+        expected.land_sub = 0;
+        if mutation.before.land != 0 || mutation.after != expected {
+            return false;
+        }
+        before_world.wdata[mutation.cell] = mutation.before.clone();
+        previous = Some((mutation.x, mutation.y));
+    }
+    if !validate_map_make_territory_limits_receipt(
+        &before_world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+    ) {
+        return false;
+    }
+    let mut replayed = before_world.clone();
+    replayed.fix_diag_land();
+
+    receipt.caller_call_va == MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA
+        && receipt.body == MAP_FIX_DIAG_LAND_NATIVE_BODY
+        && receipt.cells_scanned == world.wdata.len()
+        && receipt.world_before == before_world.checksum_sections()
+        && receipt.world_before == prior_limits.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_after == replayed.checksum_sections()
+        && replayed.wdata == world.wdata
+        && receipt.world_sections_changed
+            == receipt
+                .world_before
+                .differing_sections(&receipt.world_after)
+        && receipt
+            .world_sections_changed
+            .iter()
+            .all(|section| *section == WorldSection::WData)
+        && receipt.random_state_before == prior_limits.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == (MapFixDiagLandNext::StringConstructor {
+                caller_resume_va: MAP_MAKE_FIX_DIAG_LAND_RESUME_VA,
+                string_literal_push_va: MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA,
+                string_local_load_va: MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA,
+                call_va: MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+                primitive_va: STRING_CONSTRUCTOR_VA,
             })
 }
 

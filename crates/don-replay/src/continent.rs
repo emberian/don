@@ -123,8 +123,10 @@ use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
 pub use crate::post_continent::{
-    execute_map_make_first_regions_clear_all, execute_map_make_first_regions_find_all,
-    execute_map_make_territory_limits, MapMakeFirstRegionsClearAllNext,
+    execute_map_fix_diag_land, execute_map_make_first_regions_clear_all,
+    execute_map_make_first_regions_find_all, execute_map_make_territory_limits,
+    MapFixDiagLandError, MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
+    MapFixDiagLandWorldMutation, MapMakeFirstRegionsClearAllNext,
     MapMakeFirstRegionsClearAllReceipt, MapMakeFirstRegionsFindAllCallerBody,
     MapMakeFirstRegionsFindAllError, MapMakeFirstRegionsFindAllNext,
     MapMakeFirstRegionsFindAllReceipt, MapMakeFirstTerritoryPrepBody, MapMakeTerritoryLimitsError,
@@ -134,7 +136,10 @@ pub use crate::post_continent::{
     RegionsFindAllNativeBody, RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall,
     RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation,
     FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
-    MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA,
+    MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA, MAP_FIX_DIAG_LAND_CORNER_X,
+    MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y, MAP_FIX_DIAG_LAND_CORNER_Y_VA,
+    MAP_FIX_DIAG_LAND_END_VA, MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT, MAP_FIX_DIAG_LAND_NATIVE_BODY,
+    MAP_FIX_DIAG_LAND_RET_VA, MAP_FIX_DIAG_LAND_SHA256, MAP_FIX_DIAG_LAND_SIZE,
     MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
     MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA, MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
     MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
@@ -145,6 +150,8 @@ pub use crate::post_continent::{
     MAP_MAKE_FIRST_TERRITORY_PREP_END_VA, MAP_MAKE_FIRST_TERRITORY_PREP_INSTRUCTION_COUNT,
     MAP_MAKE_FIRST_TERRITORY_PREP_SHA256, MAP_MAKE_FIRST_TERRITORY_PREP_SIZE,
     MAP_MAKE_FIRST_TERRITORY_STORE_VA, MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+    MAP_MAKE_FIX_DIAG_LAND_RESUME_VA, MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+    MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA, MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA,
     MAP_MAKE_STYLE_BRANCH_TARGET_VA, MAP_MAKE_STYLE_BRANCH_VA, MAP_MAKE_STYLE_BRANCH_VALUE,
     MAP_MAKE_STYLE_COMPARE_VA, MAP_MAKE_TERRITORY_LIMITS_END_VA,
     MAP_MAKE_TERRITORY_LIMITS_INSTRUCTION_COUNT, MAP_MAKE_TERRITORY_LIMITS_NATIVE_BODY,
@@ -157,7 +164,7 @@ pub use crate::post_continent::{
     REGIONS_CLEAR_ALL_RET_NULL_WORLD_DATA_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
     REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_END_VA, REGIONS_FIND_ALL_INSTRUCTION_COUNT,
     REGIONS_FIND_ALL_NATIVE_BODY, REGIONS_FIND_ALL_RET_VA, REGIONS_FIND_ALL_SHA256,
-    REGIONS_FIND_ALL_SIZE, REGIONS_FIND_ALL_VA, TERRITORY_LIMIT_FIELDS,
+    REGIONS_FIND_ALL_SIZE, REGIONS_FIND_ALL_VA, STRING_CONSTRUCTOR_VA, TERRITORY_LIMIT_FIELDS,
     WORLD_PLAYER_TERRITORY_LIMIT_OFFSET, WORLD_TERRITORY_LIMIT_OFFSETS,
 };
 pub use crate::post_continent::{TerritoryLimitField, TerritoryLimitStoreReceipt, TerritoryLimits};
@@ -273,9 +280,9 @@ pub enum ContinentStop {
     /// Every active selector and World append completed, followed by the exact
     /// post-loop `Map::check_player_land`, local-string cleanup, both centroid
     /// array `_free` calls, the complete style-virtual epilogue, and the common
-    /// driver's first `Regions::clear_all` / `Regions::find_all` pair and all
-    /// six World territory-limit stores. Execution is frozen before
-    /// `Map::fix_diag_land`.
+    /// driver's first `Regions::clear_all` / `Regions::find_all` pair, all six
+    /// World territory-limit stores, and complete `Map::fix_diag_land` body.
+    /// Execution is frozen before the caller-local log `String` constructor.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -293,6 +300,7 @@ pub enum ContinentStop {
         regions_clear_all: MapMakeFirstRegionsClearAllReceipt,
         regions_find_all: MapMakeFirstRegionsFindAllReceipt,
         territory_limits: MapMakeTerritoryLimitsReceipt,
+        fix_diag_land: MapFixDiagLandReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -402,6 +410,7 @@ pub enum ContinentError {
     EastMeetsWestPlayerLand(EastMeetsWestPlayerLandError),
     RegionsFindAll(MapMakeFirstRegionsFindAllError),
     TerritoryLimits(MapMakeTerritoryLimitsError),
+    FixDiagLand(MapFixDiagLandError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1703,9 +1712,28 @@ fn east_meets_west(
                     )
                     .map_err(ContinentError::TerritoryLimits)?;
                     let MapMakeTerritoryLimitsNext::FixDiagLand {
+                        call_va,
+                        primitive_va: fix_diag_primitive_va,
+                    } = territory_limits.next;
+                    debug_assert_eq!(call_va, MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA);
+                    debug_assert_eq!(
+                        fix_diag_primitive_va,
+                        crate::post_continent::MAP_FIX_DIAG_LAND_VA
+                    );
+                    let fix_diag_land = execute_map_fix_diag_land(
+                        world,
+                        regions,
+                        rng.state(),
+                        &regions_clear_all,
+                        &regions_find_all,
+                        &territory_limits,
+                    )
+                    .map_err(ContinentError::FixDiagLand)?;
+                    let MapFixDiagLandNext::StringConstructor {
                         call_va: next_va,
                         primitive_va: next_mutator_va,
-                    } = territory_limits.next;
+                        ..
+                    } = fix_diag_land.next;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1725,6 +1753,7 @@ fn east_meets_west(
                             regions_clear_all,
                             regions_find_all,
                             territory_limits,
+                            fix_diag_land,
                             next_mutator_va,
                         },
                         starts_added,

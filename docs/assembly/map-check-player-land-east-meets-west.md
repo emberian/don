@@ -11,8 +11,10 @@ destructor bookkeeping, then executes the centroid-X `_free` at `0x00697502`
 and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
 Execution then runs the common driver's full `Regions::clear_all` and
 `Regions::find_all` bodies and all six World territory-limit stores, follows
-the style-19 fallthrough, and freezes before `Map::fix_diag_land` at caller
-`0x0068be75 -> 0x0069c250`. None of these tranches consumes RNG.
+the style-19 fallthrough, executes complete `Map::fix_diag_land` at
+`0x0068be75 -> 0x0069c250`, and freezes before the caller-local `String`
+constructor at `0x0068be82 -> 0x00a1d660`. None of these tranches consumes
+RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -266,6 +268,20 @@ branch is not taken and execution reaches the next native mutator call,
 source/destination field offset, load/store VA, before/after value, the exact
 branch decision, unchanged RNG, and the World checksum on both sides.
 
+## Complete diagonal-land repair
+
+The admitted call executes the complete call-free retail body
+`0x0069c250..0x0069c458`: 520 bytes, 173 decoded instructions, return at
+`0x0069c457`, SHA-256
+`cf6610b0c5d5df3e5bfeb40010cdf729e587f69cdf1c3c3eaefd8c72c4fe65dd`.
+It binds the shipped `corner_x` / `corner_y` tables at `0x00adc3c4` /
+`0x00adc3e4` (`[-1,1,1,-1]` / `[-1,-1,1,1]`), the exact X-major in-place
+scan, and every full WData record changed by the 16-bit `land = 2,
+land_sub = 0` store. It consumes no RNG and changes no checksum section other
+than WData. Execution resumes at `0x0068be7a`, performs the two caller-local
+argument-preparation instructions, and freezes before the next native
+mutation, `String::String(char const*)` at `0x0068be82 -> 0x00a1d660`.
+
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
@@ -276,15 +292,16 @@ receipt that names the logical Y-coordinate allocation and its exact values as
 does the same for X and additionally binds every local clear, callee-saved
 register pop, SEH restoration, frame restoration, and `ret 4`.  The common
 clear, find, and territory receipts then bind the complete Region/World
-transitions and expose `next_va = 0x0068be75`,
-`next_mutator_va = 0x0069c250`. Owner transition
+transitions; the diagonal receipt binds the final WData mutation and exposes
+`next_va = 0x0068be82`, `next_mutator_va = 0x00a1d660`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
 unchanged RNG chronology match; its implementation
-digest includes the replay executor and the sim Region body. The
+digest includes the replay executor plus the sim Region and map-terrain
+bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_fix_diag_land`.
+`map_team_continent_post_fix_diag_log_string`.
 
 Validation gates:
 
@@ -345,3 +362,11 @@ Validation gates:
   checksum-bearing, 21/21 coherent ledgers, 265,619/265,619 same-group
   comparisons, and exact endpoints of two `map_team_continent_fix_diag_land` /
   nineteen `place_all_mountains_add_mountain`.
+- current Cycle 8 focused real-fixture gate: both shipped style-19 fixtures
+  execute the complete 520-byte diagonal repair receipt and freeze at the
+  caller-local `String` constructor; cargo check, all-test compilation,
+  continent 4/4, initial 4/4, and owner transition 2/2 are green. Full
+  localizer: 62 opened, 21 checksum-bearing, 21/21 coherent ledgers,
+  265,619/265,619 same-group comparisons, with exact endpoints of two
+  `map_team_continent_post_fix_diag_log_string` / nineteen
+  `place_all_mountains_add_mountain`.
