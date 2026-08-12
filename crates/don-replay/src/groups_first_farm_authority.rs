@@ -12,6 +12,10 @@ use std::fmt;
 
 use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
 use don_sim::systems::map_terrain::{Coord, WCoord};
+use don_sim::systems::objects_init_unit_authority_frontier::{
+    BhsInitUnitRequest, DetailedInitUnitReceipt, InitUnitReceiptError, InitUnitStep,
+    ValidatedInitUnitEffects,
+};
 use don_sim::systems::production::{self, Footprint};
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use don_sim::tick::Sim;
@@ -28,8 +32,9 @@ use crate::groups_pre_pair_unit_authority::{
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
 use crate::setup_place_unit_deep_re::{
-    produce_place_unit_probe_prefix, CenterBuildFacts, PlaceUnitInputs, PlaceUnitProducerError,
-    PlaceUnitProducerReceipt, PlacementMapSnapshot, PlacementTileFacts,
+    produce_place_unit_probe_prefix, CenterBuildFacts, ObjectsInitUnitRequest,
+    PlaceUnitExternalResidual, PlaceUnitInputs, PlaceUnitProducerError, PlaceUnitProducerReceipt,
+    PlacementMapSnapshot, PlacementTileFacts,
 };
 use crate::setup_units_producer::{
     starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
@@ -257,6 +262,91 @@ impl From<FirstFarmAuthorityError> for FirstFarmFirstPlacementError {
 impl From<PlaceUnitProducerError> for FirstFarmFirstPlacementError {
     fn from(value: PlaceUnitProducerError) -> Self {
         Self::Placement(value)
+    }
+}
+
+/// External provenance for the complete first Scout `Objects::init_unit` body and its
+/// canonical after-image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstInitUnitSource {
+    CompleteRetailBodyAndCanonicalAfterImage,
+}
+
+/// Revisioned authority for effects below the first placement residual.
+///
+/// This is intentionally not constructible from `World::allocate_typed_at` alone. The digest
+/// must attest the complete retail 1,603-byte receiver, including its nested 3,732-byte
+/// `Unit::init`, Guy/graphics/RNG work, collision, visibility, Leader accounting, and object-band
+/// publication. The explicit after checksum and RNG are independently checked here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmFirstInitUnitAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: FirstFarmFirstInitUnitSource,
+    pub map_checksum_after: don_sim::systems::map_terrain::WorldChecksum,
+    pub rng_after: i32,
+}
+
+/// Read-only binding of the complete retail receipt to the canonical first Scout row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmFirstInitUnitReceipt {
+    pub placement_authority_revision: u64,
+    pub placement_authority_digest: [u8; 32],
+    pub init_authority_revision: u64,
+    pub init_authority_digest: [u8; 32],
+    pub source: FirstFarmFirstInitUnitSource,
+    pub request: ObjectsInitUnitRequest,
+    pub effects: ValidatedInitUnitEffects,
+    pub rng_before: i32,
+    pub rng_after: i32,
+    pub map_checksum_after: don_sim::systems::map_terrain::WorldChecksum,
+    pub allocation: StableUnitIdentityReceipt,
+    pub row: usize,
+    pub unit: UnitImage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstInitUnitError {
+    Placement(FirstFarmFirstPlacementError),
+    MissingAuthorityRevision,
+    MissingCompositionDigest,
+    PlacementDidNotReachObjectsInitUnit,
+    InitRequestMismatch,
+    WrongTypeFacts,
+    DetailedReceipt(InitUnitReceiptError),
+    WrongEffects,
+    WrongAfterFrame { expected: i32, actual: i32 },
+    AfterMapChecksumMismatch,
+    AfterRngMismatch,
+    WrongAfterUnitMark { expected: i32, actual: i32 },
+    MissingCanonicalUnit,
+    InactiveCanonicalUnit,
+    MissingCanonicalHandle,
+    MissingCanonicalType,
+    CanonicalAfterImageMismatch,
+    MissingCanonicalPath,
+}
+
+impl fmt::Display for FirstFarmFirstInitUnitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "first 2018 Farm Objects::init_unit receipt refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for FirstFarmFirstInitUnitError {}
+
+impl From<FirstFarmFirstPlacementError> for FirstFarmFirstInitUnitError {
+    fn from(value: FirstFarmFirstPlacementError) -> Self {
+        Self::Placement(value)
+    }
+}
+
+impl From<InitUnitReceiptError> for FirstFarmFirstInitUnitError {
+    fn from(value: InitUnitReceiptError) -> Self {
+        Self::DetailedReceipt(value)
     }
 }
 
@@ -542,6 +632,188 @@ pub fn produce_first_farm_first_placement(
         center_row,
         post_worldgen_rng: authority.post_worldgen_rng,
         placement,
+    })
+}
+
+/// Bind the first exact placement residual to a complete retail `Objects::init_unit` receipt.
+///
+/// Both simulations are read-only inputs. `before` is re-run through the exact placement
+/// producer; `after` must be the canonical state immediately after the supplied complete retail
+/// receipt. This adapter validates chronology and publishes a stable identity/image receipt, but
+/// it does not execute the nested initializer or construct Guy/graphics bytes locally.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_first_farm_first_init_unit(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    placement_authority: &FirstFarmSetupEntryAuthority,
+    detailed: &DetailedInitUnitReceipt,
+    after: &Sim,
+    init_authority: &FirstFarmFirstInitUnitAuthority,
+) -> Result<FirstFarmFirstInitUnitReceipt, FirstFarmFirstInitUnitError> {
+    if init_authority.revision == 0 {
+        return Err(FirstFarmFirstInitUnitError::MissingAuthorityRevision);
+    }
+    if init_authority.composition_digest == [0; 32] {
+        return Err(FirstFarmFirstInitUnitError::MissingCompositionDigest);
+    }
+    let placement = produce_first_farm_first_placement(replay, plan, before, placement_authority)?;
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        return Err(FirstFarmFirstInitUnitError::PlacementDidNotReachObjectsInitUnit);
+    };
+    if request.come_out_zero_after_success
+        || detailed.request
+            != (BhsInitUnitRequest {
+                owner: request.owner,
+                type_index: request.type_index,
+                x: request.x,
+                y: request.y,
+                exact_o: request.exact_o,
+                external_previous: request.external_previous,
+                external_next: request.external_next,
+            })
+    {
+        return Err(FirstFarmFirstInitUnitError::InitRequestMismatch);
+    }
+    let discovery = discover_first_2018_farm(replay).map_err(FirstFarmFirstPlacementError::from)?;
+    if detailed.type_facts.uber_size != discovery.scout.uber_size || discovery.scout.uber_size != 1
+    {
+        return Err(FirstFarmFirstInitUnitError::WrongTypeFacts);
+    }
+    let effects = detailed.validate()?;
+    if effects.initialized_members.as_slice() != [0]
+        || effects.terminal_find_free_failure.is_some()
+        || effects.returned_captain_or_failure != 0
+        || effects.unit_mark_before != 0
+        || effects.unit_mark_after != 1
+    {
+        return Err(FirstFarmFirstInitUnitError::WrongEffects);
+    }
+    if after.world.frame != 0 {
+        return Err(FirstFarmFirstInitUnitError::WrongAfterFrame {
+            expected: 0,
+            actual: after.world.frame,
+        });
+    }
+    let map_checksum_after = after.map.world.checksum_sections();
+    if map_checksum_after != init_authority.map_checksum_after {
+        return Err(FirstFarmFirstInitUnitError::AfterMapChecksumMismatch);
+    }
+    if after.world.random.state() != init_authority.rng_after {
+        return Err(FirstFarmFirstInitUnitError::AfterRngMismatch);
+    }
+    let mark = after.world.unit_mark(FIRST_OWNER as usize).unwrap_or(-1);
+    if mark != 1 {
+        return Err(FirstFarmFirstInitUnitError::WrongAfterUnitMark {
+            expected: 1,
+            actual: mark,
+        });
+    }
+    let row = after
+        .world
+        .unit_row_at(i32::from(FIRST_OWNER), 0)
+        .ok_or(FirstFarmFirstInitUnitError::MissingCanonicalUnit)?;
+    if after.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+        return Err(FirstFarmFirstInitUnitError::InactiveCanonicalUnit);
+    }
+    let handle = after
+        .world
+        .handle_at_row(row)
+        .ok_or(FirstFarmFirstInitUnitError::MissingCanonicalHandle)?;
+    let world_type = after
+        .world
+        .unit_type_id(row)
+        .ok_or(FirstFarmFirstInitUnitError::MissingCanonicalType)?;
+    let sim_type = after
+        .unit_type
+        .get(row)
+        .copied()
+        .ok_or(FirstFarmFirstInitUnitError::MissingCanonicalType)?;
+    let unit_init_after = detailed.steps.iter().find_map(|step| match step {
+        InitUnitStep::UnitInit(receipt) => Some(receipt.after),
+        _ => None,
+    });
+    let final_captain = detailed.steps.last().and_then(|step| match step {
+        InitUnitStep::ResolveCaptain(receipt) => Some(receipt.captain),
+        _ => None,
+    });
+    let current_x = after.world.units.x_internal()[row];
+    let current_y = after.world.units.y_internal()[row];
+    let current_angle = after.world.units.angle()[row];
+    if world_type != discovery.scout.type_index
+        || sim_type != world_type
+        || unit_init_after
+            != Some(
+                don_sim::systems::objects_init_unit_authority_frontier::UnitAfterInit {
+                    owner: i32::from(FIRST_OWNER),
+                    o: 0,
+                    type_index: world_type,
+                    x: current_x,
+                    y: current_y,
+                    angle: current_angle,
+                    unit_masks: after.world.units.get_unit_masks(row),
+                },
+            )
+        || final_captain.is_none_or(|captain| {
+            captain.owner != i32::from(FIRST_OWNER)
+                || captain.o != 0
+                || captain.x != current_x
+                || captain.y != current_y
+                || captain.angle != current_angle
+        })
+        || !after.world.orders(row).is_empty()
+    {
+        return Err(FirstFarmFirstInitUnitError::CanonicalAfterImageMismatch);
+    }
+    let path = after
+        .paths
+        .get(row)
+        .cloned()
+        .ok_or(FirstFarmFirstInitUnitError::MissingCanonicalPath)?;
+    if !path.is_empty() {
+        return Err(FirstFarmFirstInitUnitError::CanonicalAfterImageMismatch);
+    }
+    let unit = UnitImage {
+        identity: UnitIdentity {
+            handle,
+            who: FIRST_OWNER,
+            o: 0,
+            uid: after.world.units.get_uid(row),
+        },
+        group: after.world.units.group()[row],
+        unit_masks: after.world.units.get_unit_masks(row),
+        form: after.world.units.form()[row],
+        form_mod: after.world.units.form_mod()[row],
+        angle: after.world.units.angle()[row],
+        x: after.world.units.x_internal()[row],
+        y: after.world.units.y_internal()[row],
+        orders_x: after.world.units.orders_x()[row],
+        orders_y: after.world.units.orders_y()[row],
+        dest_angle: after.world.units.dest_angle()[row],
+        orders: after.world.orders(row).clone(),
+        path,
+    };
+    Ok(FirstFarmFirstInitUnitReceipt {
+        placement_authority_revision: placement.authority_revision,
+        placement_authority_digest: placement.authority_digest,
+        init_authority_revision: init_authority.revision,
+        init_authority_digest: init_authority.composition_digest,
+        source: init_authority.source,
+        request,
+        effects,
+        rng_before: placement.placement.rng_after_probes,
+        rng_after: init_authority.rng_after,
+        map_checksum_after,
+        allocation: StableUnitIdentityReceipt {
+            id: handle.id,
+            generation: handle.generation,
+            owner: i32::from(FIRST_OWNER),
+            o: 0,
+        },
+        row,
+        unit,
     })
 }
 

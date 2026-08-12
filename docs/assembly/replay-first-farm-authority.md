@@ -80,6 +80,28 @@ not all present. The adapter therefore does not allocate a Unit or clear the exi
 `PostWorldgenRandomState` / `SetupPlacementWorldSnapshot` blockers merely because a synthetic test
 can exercise the API.
 
+## First Scout `Objects::init_unit` receipt join
+
+The complete instruction-derived `Objects::init_unit` receipt validator is now compiled through
+the normal `don-sim::systems` surface. The first-Farm adapter consumes that detailed chronology
+only when the placement receipt reached the exact all-`-1` initializer request. For the first
+Scout it requires one `find_free` allocation from mark 0 to 1, a complete 3,732-byte `Unit::init`
+extent for native `o=0`, the `previous=-1` link, and the final captain resolution back to `o=0`.
+
+The join is read-only: it accepts canonical Sim states immediately before and after an externally
+executed complete receiver. The after-state authority separately binds the map checksum and main
+RNG, while a nonzero composition digest attests the nested Guy/graphics, collision, visibility,
+Leader-accounting, and object-publication effects that are not represented by a scalar Unit
+allocation. The adapter then checks owner-0 mark 1, active Scout type 69, initializer and final
+captain position/angle/masks, empty initial orders/path, and resolves native `o=0` to the
+canonical minted Handle/UID before returning the full Unit image.
+
+`Sim::spawn_unit` appears only in the synthetic mutation fixture used to exercise this join. It
+does not produce the authority digest and is not claimed to implement retail `Objects::init_unit`.
+The actual 2018 chain remains red until a completed-worldgen authority and a retail-complete
+initializer/after-image receipt are captured or executed. Consequently no replay channel is
+installed and the `ObjectsInitUnitReceipts` blocker remains in the ordered discovery ledger.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking
@@ -107,5 +129,6 @@ atomic opcode-25 host without defaults.
 path, asserts the stage map and both recorded checksums, and asserts the ordered red
 boundary. Its mutations change the in-memory opcode-25 body and replay-carried Farm footprint,
 then exercise a wrong setup map checksum/RNG/center type/allocation chronology, wrong frame,
-missing direct placement draw, nonconsecutive setup allocation, stale Handle generation, and
-split Sim/World types. All are rejected before runtime promotion.
+wrong initializer request/body extent/final captain/RNG/type/Unit mark, missing direct placement
+draw, nonconsecutive setup allocation, stale Handle generation, and split Sim/World types. All are
+rejected before runtime promotion.

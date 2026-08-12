@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
-    bind_first_farm_builder_at_frame79, discover_first_2018_farm,
+    bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
     produce_first_farm_first_placement, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
-    FirstFarmBuilderBindingError, FirstFarmFirstPlacementError, FirstFarmFrame79Authority,
+    FirstFarmBuilderBindingError, FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError,
+    FirstFarmFirstInitUnitSource, FirstFarmFirstPlacementError, FirstFarmFrame79Authority,
     FirstFarmFrame79Source, FirstFarmSetupEntryAuthority, FirstFarmSetupEntrySource, FIRST_FRAME,
     FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
 };
@@ -26,7 +27,16 @@ use don_replay::{
     setup_place_unit_deep_re::{PlaceUnitExternalResidual, ProbeDisposition},
 };
 use don_sim::rng::Random;
-use don_sim::systems::{map_terrain::land, production};
+use don_sim::systems::{
+    map_terrain::land,
+    objects_init_unit_authority_frontier::{
+        BhsInitUnitRequest, CaptainFacts, CompleteBody, DetailedInitUnitReceipt,
+        FindFreeDisposition, FindFreeUnitReceipt, InitUnitReceiptError, InitUnitStep,
+        ResolveCaptainReceipt, TrackUnitTypeFacts, TrainingWhere, UnitAfterInit,
+        UnitBandStorageClass, UnitInitReceipt, UnitTypeAuthorityFacts,
+    },
+    production,
+};
 use don_sim::tick::Sim;
 use don_sim::world::Handle;
 
@@ -234,6 +244,139 @@ fn synthetic_setup_entry(replay: &Replay) -> (Sim, FirstFarmSetupEntryAuthority)
         post_worldgen_rng,
     };
     (sim, authority)
+}
+
+fn first_scout_detailed_receipt(
+    request: don_replay::setup_place_unit_deep_re::ObjectsInitUnitRequest,
+    after: &Sim,
+) -> DetailedInitUnitReceipt {
+    let row = after.world.unit_row_at(FIRST_OWNER.into(), 0).unwrap();
+    let after_image = UnitAfterInit {
+        owner: request.owner,
+        o: 0,
+        type_index: request.type_index,
+        x: after.world.units.x_internal()[row],
+        y: after.world.units.y_internal()[row],
+        angle: after.world.units.angle()[row],
+        unit_masks: after.world.units.get_unit_masks(row),
+    };
+    DetailedInitUnitReceipt {
+        request: BhsInitUnitRequest {
+            owner: request.owner,
+            type_index: request.type_index,
+            x: request.x,
+            y: request.y,
+            exact_o: request.exact_o,
+            external_previous: request.external_previous,
+            external_next: request.external_next,
+        },
+        type_facts: UnitTypeAuthorityFacts {
+            uber_size: 1,
+            control_cost: 0,
+            is_fighter_bomber: false,
+            is_government_hero: false,
+            track: TrackUnitTypeFacts {
+                has_attack: false,
+                training_where: TrainingWhere::Other,
+                domain: 0,
+                is_peasant: false,
+                is_scholar: false,
+                role_has_scout_bit: true,
+                is_type_0x42: false,
+                is_type_0x4b: false,
+                member_former_type_is_0x34: false,
+            },
+        },
+        steps: vec![
+            InitUnitStep::FindFree(FindFreeUnitReceipt {
+                ordinal: 0,
+                owner: request.owner,
+                start: 0,
+                limit: 2_000,
+                exact_o: -1,
+                cursor_before: 0,
+                cursor_after: 1,
+                returned: 0,
+                disposition: FindFreeDisposition::ConstructedAndRegistered {
+                    class: UnitBandStorageClass::Unit,
+                    object_list_registered: true,
+                    unit_projection_registered: true,
+                },
+            }),
+            InitUnitStep::UnitInit(UnitInitReceipt {
+                ordinal: 0,
+                owner: request.owner,
+                type_index: request.type_index,
+                o: 0,
+                x: request.x,
+                y: request.y,
+                returned: 0,
+                extent: CompleteBody::UnitInit3732Bytes,
+                after: after_image,
+            }),
+            InitUnitStep::SetPrevious {
+                ordinal: 0,
+                member_o: 0,
+                previous_o: -1,
+            },
+            InitUnitStep::ResolveCaptain(ResolveCaptainReceipt {
+                ordinal: 1,
+                from_owner: request.owner,
+                from_o: 0,
+                returned: 0,
+                captain: CaptainFacts {
+                    owner: request.owner,
+                    o: 0,
+                    x: request.x,
+                    y: request.y,
+                    angle: after_image.angle,
+                    new_block_radius: 1,
+                },
+            }),
+        ],
+        returned: 0,
+    }
+}
+
+fn synthetic_first_scout_init(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+) -> (
+    Sim,
+    FirstFarmSetupEntryAuthority,
+    DetailedInitUnitReceipt,
+    Sim,
+    FirstFarmFirstInitUnitAuthority,
+) {
+    let (before, placement_authority) = synthetic_setup_entry(replay);
+    let placement =
+        produce_first_farm_first_placement(replay, plan, &before, &placement_authority).unwrap();
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        unreachable!()
+    };
+    let (mut after, _) = synthetic_setup_entry(replay);
+    after
+        .spawn_unit(
+            request.owner as usize,
+            request.type_index,
+            request.x,
+            request.y,
+            1,
+        )
+        .unwrap();
+    let rng_after = placement.placement.rng_after_probes.wrapping_add(0x404);
+    after.world.random.reseed(rng_after);
+    let detailed = first_scout_detailed_receipt(request, &after);
+    let authority = FirstFarmFirstInitUnitAuthority {
+        revision: 1,
+        composition_digest: [0x65; 32],
+        source: FirstFarmFirstInitUnitSource::CompleteRetailBodyAndCanonicalAfterImage,
+        map_checksum_after: after.map.world.checksum_sections(),
+        rng_after,
+    };
+    (before, placement_authority, detailed, after, authority)
 }
 
 #[test]
@@ -456,6 +599,179 @@ fn first_placement_refuses_unbound_map_rng_center_and_allocation_chronology() {
     assert_eq!(
         produce_first_farm_first_placement(&replay, &plan, &sim, &authority),
         Err(FirstFarmFirstPlacementError::ExistingOwnerUnits { mark: 1 })
+    );
+}
+
+#[test]
+fn complete_first_scout_init_receipt_binds_native_o0_to_the_canonical_handle() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, after, authority) =
+        synthetic_first_scout_init(&replay, &plan);
+
+    let receipt = bind_first_farm_first_init_unit(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(receipt.effects.initialized_members, [0]);
+    assert_eq!(
+        (
+            receipt.effects.unit_mark_before,
+            receipt.effects.unit_mark_after
+        ),
+        (0, 1)
+    );
+    assert_eq!((receipt.allocation.owner, receipt.allocation.o), (0, 0));
+    assert_eq!(receipt.allocation.id, receipt.unit.identity.handle.id);
+    assert_eq!(
+        receipt.allocation.generation,
+        receipt.unit.identity.handle.generation
+    );
+    assert_eq!(
+        (
+            receipt.row,
+            receipt.unit.identity.who,
+            receipt.unit.identity.o
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!((receipt.request.owner, receipt.request.type_index), (0, 69));
+    assert_eq!(receipt.rng_after, authority.rng_after);
+    assert!(receipt.unit.orders.is_empty());
+    assert!(receipt.unit.path.is_empty());
+}
+
+#[test]
+fn first_scout_init_join_rejects_extent_request_rng_type_and_mark_mutations() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, mut after, authority) =
+        synthetic_first_scout_init(&replay, &plan);
+
+    let mut missing_revision = authority.clone();
+    missing_revision.revision = 0;
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &missing_revision,
+        ),
+        Err(FirstFarmFirstInitUnitError::MissingAuthorityRevision)
+    );
+
+    let mut wrong_request = detailed.clone();
+    wrong_request.request.x += 1;
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &wrong_request,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::InitRequestMismatch)
+    );
+
+    let mut wrong_extent = detailed.clone();
+    let InitUnitStep::UnitInit(init) = &mut wrong_extent.steps[1] else {
+        unreachable!()
+    };
+    init.extent = CompleteBody::SetNewLocation1757Bytes;
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &wrong_extent,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::DetailedReceipt(
+            InitUnitReceiptError::InvalidUnitInit
+        ))
+    );
+
+    let mut wrong_captain = detailed.clone();
+    let InitUnitStep::ResolveCaptain(captain) = wrong_captain.steps.last_mut().unwrap() else {
+        unreachable!()
+    };
+    captain.captain.x += 1;
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &wrong_captain,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::CanonicalAfterImageMismatch)
+    );
+
+    after.world.random.reseed(authority.rng_after ^ 1);
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::AfterRngMismatch)
+    );
+    after.world.random.reseed(authority.rng_after);
+
+    after.unit_type[0] = 70;
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::CanonicalAfterImageMismatch)
+    );
+    after.unit_type[0] = 69;
+
+    after.spawn_unit(0, 50, 100, 100, 1).unwrap();
+    after.world.random.reseed(authority.rng_after);
+    assert_eq!(
+        bind_first_farm_first_init_unit(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &authority,
+        ),
+        Err(FirstFarmFirstInitUnitError::WrongAfterUnitMark {
+            expected: 1,
+            actual: 2,
+        })
     );
 }
 

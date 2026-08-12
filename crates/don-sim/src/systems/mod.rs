@@ -256,6 +256,10 @@ pub mod movement_live;
 /// proxies. It is intentionally not a retail-complete naval executor; see
 /// `docs/mechanics/naval.md`.
 pub mod naval;
+/// Exact validator for the complete all-`-1` `Objects::init_unit` receipt chronology.
+/// Product callers must still supply a retail-complete Unit-init receipt and canonical
+/// after-image; registering this source does not turn `World::allocate_typed_at` into retail.
+pub mod objects_init_unit_authority_frontier;
 /// Added by `assembly:order-dispatch`. `Unit::work` `0x0060D180` and a real `Unit::do_job`
 /// `0x00617A10` dispatch over an `OrderList` with retail's cursor semantics — the driver
 /// `docs/mechanics/COVERAGE.md` §3 records as uncited. It is [`movement`]'s first caller.
