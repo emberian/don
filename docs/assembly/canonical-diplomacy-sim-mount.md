@@ -73,10 +73,15 @@ layout in v14; focused tests pin byte equality and malformed-v14 refusal.
 Opcodes 38 and 41 now execute production transactions whose ordered external-authority list is
 empty. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
-clears publish together. Any reached `ComeOut`, contained-unit kill/Strafe, victory, or forced-army
-call refuses before publication, so both static rows remain `StateWired`.
+clears publish together. Generic alliance Victory is also mounted when its staged canonical
+Leader/Match transaction produces no defeated-Unit cleanup: relation rows are folded into the
+staged Leader image before `Leader::victory`, terminal Build queues are cleaned on staged clones,
+and all owners publish only after the diplomacy stale-owner CAS. A Victory which would defeat an
+opponent, or any reached `ComeOut`, contained-unit kill/Strafe, or forced-army call, refuses before
+publication, so both static rows remain `StateWired`.
 
-Focused status: the live opcode-38/opcode-41 runtime suite passes 5/5; the callback/aggregate
+Focused status: the live opcode-38/opcode-41 runtime suite passes 7/7, including alliance Victory
+save/resume and defeated-Unit rollback; the callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 42 private
 save/load tests pass. Opcodes 38/41 deliberately remain command-table red until the live Sim/Bridge
