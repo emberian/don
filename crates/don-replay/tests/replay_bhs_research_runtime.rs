@@ -62,7 +62,8 @@ fn canonical_type_owners(owner: usize) -> (TypeBuiltinState, BhsCreateUnitRuntim
             row.name = match slot {
                 0 => "Food".into(),
                 2 => "Wealth".into(),
-                50 | 51 => "Citizen".into(),
+                50 => "Citizen".into(),
+                51 => "Citizens".into(),
                 52 => "Upgraded Citizen".into(),
                 53 => "Grafted Citizen".into(),
                 420 => "University".into(),
@@ -324,6 +325,14 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     };
     let (types, upgrades) = canonical_type_owners(OWNER);
     let (mut sim, mut production, row) = production_owners(OWNER);
+    let idle_unit = sim
+        .spawn_unit(OWNER, 50, 100, 200, 4)
+        .expect("install one live idle Citizen captain");
+    let idle_row = sim.world.row_of(idle_unit).unwrap();
+    let idle_flags_before = sim.world.units.get_flags(idle_row);
+    let idle_inside_before = sim.world.units.inside_up()[idle_row];
+    let idle_captain_before = sim.world.units.o_up()[idle_row];
+    let idle_orders_before = sim.world.orders(idle_row).clone();
     let scenario_before = sim.scenario_data;
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
@@ -359,7 +368,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357]
+        [78, 357, 455]
     );
     assert_eq!(call, call_before);
     assert_eq!(
@@ -367,11 +376,20 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         pristine_program
     );
     assert_eq!(script_runtime.script_timers(), &pristine_timers);
+    assert_eq!(
+        error.trace.last().map(|call| (&call.index, &call.returned)),
+        Some((&455, &ProductionBuiltinValue::Int(1)))
+    );
     assert_eq!(sim.scenario_data, scenario_before);
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(sim.groups.last_group, groups_before.last_group);
     assert_eq!(sim.groups.proc_group, groups_before.proc_group);
     assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+    assert_eq!(sim.world.units.get_flags(idle_row), idle_flags_before);
+    assert_eq!(sim.world.units.inside_up()[idle_row], idle_inside_before);
+    assert_eq!(sim.world.units.o_up()[idle_row], idle_captain_before);
+    assert_eq!(sim.world.orders(idle_row), &idle_orders_before);
+    assert_eq!(sim.unit_type[idle_row], 50);
     assert_eq!(
         sim.builds[row].queue.entries[0].image(),
         queue_before.entries[0].image()
@@ -574,13 +592,17 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         game_seconds(0),
     )
     .expect_err("the next unowned production builtin must keep the whole call red");
-    assert!(matches!(
-        &error.failure,
-        ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-            index: 455,
-            name: "find_num_idle_unit"
-        })
-    ));
+    assert!(
+        matches!(
+            &error.failure,
+            ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
+                index: 386,
+                name: "num_city_buildings"
+            })
+        ),
+        "unexpected installed continuation: {:?}",
+        error.failure
+    );
 
     let ww = error
         .trace
@@ -609,6 +631,23 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
     assert_eq!(
         error.trace[ww + 3].returned,
         ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32)
+    );
+    let idle = error
+        .trace
+        .iter()
+        .position(|entry| entry.index == 455)
+        .expect("installed success continuation reaches the live idle-Unit census");
+    assert_eq!(
+        error.trace[idle].args,
+        [
+            ProductionBuiltinValue::Int(content_owner as i32 + 1),
+            ProductionBuiltinValue::Str("Citizens".into()),
+        ]
+    );
+    assert_eq!(
+        error.trace[idle].returned,
+        ProductionBuiltinValue::Int(0),
+        "the installed Sim has an empty canonical Unit band"
     );
 
     assert_eq!(call, call_before);

@@ -2,6 +2,7 @@ int scenario research_then_fail(int who, ref int step, int boom_vs_rush, int num
 {
     stop_timer(who);
     step = research_tech_with_cost(who, "Written Word");
+    step += find_num_idle_unit(who, "Citizen");
     get_is_no_nation_powers();
     return step + boom_vs_rush + num_loops;
 }

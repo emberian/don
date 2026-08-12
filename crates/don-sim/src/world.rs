@@ -1011,6 +1011,15 @@ impl World {
         &self.unit_orders[row]
     }
 
+    /// Canonical `UnitData::ptype` referent retained by the World row owner.
+    ///
+    /// Sim-side production adapters keep a synchronized projection; readers that join both
+    /// owners use this narrow accessor to fail closed on a stale projection.
+    #[inline]
+    pub fn unit_type_id(&self, row: usize) -> Option<i32> {
+        self.unit_type_id.get(row).copied()
+    }
+
     #[inline]
     pub fn orders_mut(&mut self, row: usize) -> &mut OrderList {
         &mut self.unit_orders[row]
