@@ -1,4 +1,4 @@
-//! Atomic replay/BHS proof for the builtin-357 single-Library bridge.
+//! Atomic replay/BHS proof for the production research and census bridge.
 
 use std::path::{Path, PathBuf};
 
@@ -382,7 +382,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357, 455, 386]
+        [78, 357, 455, 386, 436]
     );
     assert_eq!(call, call_before);
     assert_eq!(
@@ -392,7 +392,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     assert_eq!(script_runtime.script_timers(), &pristine_timers);
     assert_eq!(
         error.trace.last().map(|call| (&call.index, &call.returned)),
-        Some((&386, &ProductionBuiltinValue::Int(0)))
+        Some((&436, &ProductionBuiltinValue::Int(0)))
     );
     assert_eq!(sim.scenario_data, scenario_before);
     assert_eq!(sim.cities.slots, cities_before.slots);
@@ -430,7 +430,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
 }
 
 #[test]
-fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_cohort() {
+fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missing_call() {
     let content_root = repo_root().join("ron-data/bhs-corpus");
     if !content_root.is_dir() {
         eprintln!(
@@ -488,7 +488,7 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
                     age: 0,
                     cities: vec![ProductionCityImage {
                         active: true,
-                        object_id: 100,
+                        object_id: BUILD_BAND_BASE as i16,
                         name: "Athens".into(),
                         identity: "capital_0".into(),
                         last_attacked: 0,
@@ -612,8 +612,8 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         matches!(
             &error.failure,
             ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-                index: 436,
-                name: "num_type_queued"
+                index: 520,
+                name: "place_building_with_cost"
             })
         ),
         "unexpected installed continuation: {:?}",
@@ -686,6 +686,25 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
     assert!(city_counts
         .iter()
         .all(|entry| entry.returned == ProductionBuiltinValue::Int(0)));
+    let queue_counts: Vec<_> = error
+        .trace
+        .iter()
+        .filter(|entry| entry.index == 436)
+        .collect();
+    assert_eq!(queue_counts.len(), 1);
+    assert_eq!(
+        queue_counts[0].args,
+        [
+            ProductionBuiltinValue::Int(content_owner as i32 + 1),
+            ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32),
+            ProductionBuiltinValue::Str("Citizens".into()),
+        ]
+    );
+    assert_eq!(
+        queue_counts[0].returned,
+        ProductionBuiltinValue::Int(0),
+        "the canonical Library queue contains research, not Citizen production"
+    );
 
     assert_eq!(call, call_before);
     assert_eq!(

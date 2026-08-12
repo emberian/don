@@ -53,6 +53,8 @@ pub mod bhs_create_unit_frontier;
 pub mod bhs_create_unit_runtime;
 /// Canonical live-Unit census for BHS builtin 455, `find_num_idle_unit`.
 pub mod bhs_idle_unit_runtime;
+/// Canonical Build-queue census for BHS builtin 436, `num_type_queued`.
+pub mod bhs_type_queue_runtime;
 /// Exact fail-closed Types prefix of checksum channel 13 over the canonical mutable owner.
 pub mod bhs_type_channel13_frontier;
 /// Exact synchronized-rules producer and immutable-backup provenance for the BHS type owner.
