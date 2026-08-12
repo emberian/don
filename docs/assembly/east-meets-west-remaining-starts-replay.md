@@ -11,7 +11,8 @@ execute it.
 
 The canonical continuation now executes that separately proved leaf and its
 exact local-string cleanup, the centroid-Y free, and its caller bookkeeping,
-advancing the integrated continent stop to the centroid-X free at 0x00697502; see
+then the centroid-X free and complete style-virtual epilogue.  The integrated
+continent stop is now the common `Regions::clear_all` at 0x00680060; see
 `map-check-player-land-east-meets-west.md`. The boundary below remains the
 historical contract of this isolated remaining-start tranche.
 
@@ -95,7 +96,7 @@ and mutation receipt, RNG chronology, and before/after World sections. On
 complete success the isolated remaining receipt retains the unexecuted leaf
 call site 0x00697492. The integrated
 ContinentStop::AddStartingLocation::next_va advances through that leaf and the
-next cleanups to 0x00697502. A later selector failure instead advances to
+complete cleanups to 0x00680060. A later selector failure instead advances to
 0x00697003. The continent owner digest includes the new source, so the
 localizer cannot reuse an older implementation proof.
 
@@ -117,7 +118,7 @@ does not visit slot 2.
 - exact corpus census: 13,119,476 walked / 7,917,091 owned / 5,202,385 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
 - exact current integrated boundary set: 2
-  map_team_continent_centroid_x_free and 19
+  map_team_continent_regions_clear_all and 19
   place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:

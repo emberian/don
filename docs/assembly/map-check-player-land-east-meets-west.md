@@ -7,8 +7,10 @@ East Meets West caller edge after all active-player starting locations have
 been appended.  It executes the native call at `0x00697492`, returns to
 `0x00697497`, executes the exact caller-local `String::close` cleanup, and
 executes the first centroid-array `_free` at `0x006974c2` plus its caller-local
-destructor bookkeeping.  It stops before the second `_free` at `0x00697502`.
-Neither the leaf nor either cleanup consumes RNG.
+destructor bookkeeping, then executes the centroid-X `_free` at `0x00697502`
+and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
+Execution stops at the common driver's next `Regions::clear_all` mutator.
+Neither the leaf nor any cleanup consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -181,8 +183,19 @@ is dismissed to `-1` at `0x006974e6`.  The caller loads the centroid-X list at
 `0x006974ed`, restores its vftable at `0x006974f3`, tests it at
 `0x006974fd`, and pushes it at `0x00697501`.  Both real receipts have nonempty
 Y and X arrays, so execution reaches the still-unexecuted second `_free` at
-`0x00697502`.  No later array destruction or style-virtual epilogue is
-inferred.
+`0x00697502`.
+
+The final exact slice `0x00697502..0x0069753f` is 61 bytes / 14 instructions,
+SHA-256
+`8dfe4067651d56aabcf8819c42d9a569df1ac1d28cef3efe954f245aa38d2535`.
+It calls the already loaded `__imp__free`, pops the four-byte argument, loads
+the saved exception registration, restores EDI and ESI, then clears the X
+list, size, length, and flags at `0x0069750c`, `0x00697516`, `0x00697520`, and
+`0x0069752a`.  It restores `fs:[0]` at `0x00697531`, restores EBX and the stack
+frame, and returns while popping the style virtual's single four-byte argument
+at `0x0069753c`.  PDB's 3,839-byte
+`MapEastMeetsWest::make_continents(int)` extent is exactly
+`0x00696640..0x0069753f`, so no unmodeled instruction remains in the body.
 
 ## Typed residual and gates
 
@@ -190,15 +203,16 @@ The canonical continent continuation now executes this receipt immediately
 after the frozen remaining-start loop.  `ContinentStop::AddStartingLocation`
 retains the complete wrapper and cleanup receipts, including a typed allocator
 receipt that names the logical Y-coordinate allocation and its exact values as
-`Live -> Freed` without storing or comparing a host pointer.  It exposes
-`next_va = 0x00697502`, and names the still-unexecuted imported mutator as
-`next_mutator_va = 0x00ac5500`.  The generic continent receipt carries the
-same leaf receipt.  Owner transition accepts the result only when the call,
-import slot, freed Y values, cleared array locals, prepared X length, and
-unchanged RNG chronology all match; its implementation digest includes this
-source body.  The offline localizer consequently retains the two style-19
-endpoints `map_team_continent_centroid_x_free`, now at the exact second call,
-rather than the already executed leaf, local-string close, or Y free.
+`Live -> Freed` without storing or comparing a host pointer.  The final receipt
+does the same for X and additionally binds every local clear, callee-saved
+register pop, SEH restoration, frame restoration, and `ret 4`.  It exposes
+`next_va = next_mutator_va = 0x00680060`, the common driver's still-unexecuted
+`Regions::clear_all`.  The generic continent receipt carries the same leaf
+receipt.  Owner transition accepts the result only when both logical
+allocations, every cleanup anchor, the complete epilogue, and unchanged RNG
+chronology match; its implementation digest includes this source body.  The
+offline localizer consequently names the two style-19 endpoints
+`map_team_continent_regions_clear_all`.
 
 Validation gates:
 
@@ -228,10 +242,10 @@ Validation gates:
   `map-player-land-owner-full-hbox-20260812T003150Z-51674-1002-70f09f227b1d`,
   and the 62-opened-recording localizer census in
   `map-player-land-localizer-v2-hbox-20260812T003205Z-52756-15460-ed73570f9d4e`.
-- current centroid-Y-free local owner audit: 2/2, including all 21
+- current centroid-X-free local owner audit: 2/2, including all 21
   checksum-bearing recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
   ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
-  `map_team_continent_centroid_x_free` / nineteen
+  `map_team_continent_regions_clear_all` / nineteen
   `place_all_mountains_add_mountain`.
 - current clean-HEAD Hbox overlay: final source compile plus full 4/4 suite,
   including both real fixtures, green in
@@ -241,3 +255,6 @@ Validation gates:
 - current clean-HEAD Hbox centroid-Y-free overlay: full 4/4 suite, including
   both real fixtures, green in
   `map-player-land-y-free-real-20260812T012804Z-33056-25206-a937d193cd03`.
+- current clean-HEAD Hbox centroid-X-free/complete-epilogue overlay: full 4/4
+  suite, including both real fixtures, green in
+  `map-player-land-x-free-real-v2-20260812T015625Z-75503-436-7cad6dcf92f8`.

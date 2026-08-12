@@ -146,10 +146,11 @@ pub fn advance_continent_world_ownership(
             centroids,
             post_player_land_cleanup,
             centroid_y_free_cleanup,
+            centroid_x_free_cleanup,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA
-            || *next_mutator_va != crate::continent::FREE_IMPORT_IAT_VA
+        } if *next_va != crate::continent::REGIONS_CLEAR_ALL_VA
+            || *next_mutator_va != crate::continent::REGIONS_CLEAR_ALL_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -225,8 +226,59 @@ pub fn advance_continent_world_ownership(
                 })
             || centroid_y_free_cleanup.random_state_before
                 != centroid_y_free_cleanup.random_state_after
+            || centroid_x_free_cleanup.body
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY
+            || centroid_x_free_cleanup.free.call_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA
+            || centroid_x_free_cleanup.free.import_iat_va
+                != crate::continent::FREE_IMPORT_IAT_VA
+            || centroid_x_free_cleanup.free.allocation.owner
+                != crate::continent::EastMeetsWestCentroidListOwner::XCoordinates
+            || centroid_x_free_cleanup.free.allocation.elements != centroids.centroid_x
+            || centroid_x_free_cleanup.free.allocation.element_width != 4
+            || centroid_x_free_cleanup.free.state_before
+                != crate::continent::RetailAllocationState::Live
+            || centroid_x_free_cleanup.free.state_after
+                != crate::continent::RetailAllocationState::Freed
+            || centroid_x_free_cleanup.stack_argument_pop_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_STACK_POP_VA
+            || centroid_x_free_cleanup.stack_argument_bytes_popped != 4
+            || centroid_x_free_cleanup.exception_registration_load_va
+                != crate::continent::EAST_MEETS_WEST_EXCEPTION_REGISTRATION_LOAD_VA
+            || centroid_x_free_cleanup.callee_saved_register_pop_vas
+                != [
+                    crate::continent::EAST_MEETS_WEST_EDI_POP_VA,
+                    crate::continent::EAST_MEETS_WEST_ESI_POP_VA,
+                    crate::continent::EAST_MEETS_WEST_EBX_POP_VA,
+                ]
+            || centroid_x_free_cleanup.list_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_LIST_CLEAR_VA
+            || centroid_x_free_cleanup.size_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_SIZE_CLEAR_VA
+            || centroid_x_free_cleanup.length_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_LENGTH_CLEAR_VA
+            || centroid_x_free_cleanup.flags_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_FLAGS_CLEAR_VA
+            || !centroid_x_free_cleanup.local_list_is_null
+            || centroid_x_free_cleanup.local_size != 0
+            || centroid_x_free_cleanup.local_length != 0
+            || centroid_x_free_cleanup.local_flags != 0
+            || centroid_x_free_cleanup.exception_registration_restore_va
+                != crate::continent::EAST_MEETS_WEST_EXCEPTION_REGISTRATION_RESTORE_VA
+            || !centroid_x_free_cleanup.exception_registration_restored
+            || centroid_x_free_cleanup.stack_frame_restore_va
+                != crate::continent::EAST_MEETS_WEST_STACK_FRAME_RESTORE_VA
+            || centroid_x_free_cleanup.frame_pointer_pop_va
+                != crate::continent::EAST_MEETS_WEST_FRAME_POINTER_POP_VA
+            || centroid_x_free_cleanup.next
+                != (crate::continent::EastMeetsWestCentroidXFreeCleanupNext::ReturnedFromMakeContinents {
+                    ret_va: crate::continent::EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA,
+                    callee_stack_argument_bytes_popped: 4,
+                })
+            || centroid_x_free_cleanup.random_state_before
+                != centroid_x_free_cleanup.random_state_after
     ) {
-        return Err(mismatch(stage, "stop.centroid_y_free_residual"));
+        return Err(mismatch(stage, "stop.centroid_x_free_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

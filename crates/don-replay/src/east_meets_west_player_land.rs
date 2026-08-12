@@ -59,6 +59,26 @@ pub const EAST_MEETS_WEST_CENTROID_X_VFTABLE_STORE_VA: u32 = 0x0069_74f3;
 pub const EAST_MEETS_WEST_CENTROID_X_LIST_TEST_VA: u32 = 0x0069_74fd;
 pub const EAST_MEETS_WEST_CENTROID_X_LIST_PUSH_VA: u32 = 0x0069_7501;
 pub const EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA: u32 = 0x0069_7502;
+pub const EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA: u32 = 0x0069_753f;
+pub const EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SIZE: u32 = 61;
+pub const EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_INSTRUCTION_COUNT: u32 = 14;
+pub const EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SHA256: &str =
+    "8dfe4067651d56aabcf8819c42d9a569df1ac1d28cef3efe954f245aa38d2535";
+pub const EAST_MEETS_WEST_CENTROID_X_STACK_POP_VA: u32 = 0x0069_7504;
+pub const EAST_MEETS_WEST_EXCEPTION_REGISTRATION_LOAD_VA: u32 = 0x0069_7507;
+pub const EAST_MEETS_WEST_EDI_POP_VA: u32 = 0x0069_750a;
+pub const EAST_MEETS_WEST_ESI_POP_VA: u32 = 0x0069_750b;
+pub const EAST_MEETS_WEST_CENTROID_X_LIST_CLEAR_VA: u32 = 0x0069_750c;
+pub const EAST_MEETS_WEST_CENTROID_X_SIZE_CLEAR_VA: u32 = 0x0069_7516;
+pub const EAST_MEETS_WEST_CENTROID_X_LENGTH_CLEAR_VA: u32 = 0x0069_7520;
+pub const EAST_MEETS_WEST_CENTROID_X_FLAGS_CLEAR_VA: u32 = 0x0069_752a;
+pub const EAST_MEETS_WEST_EXCEPTION_REGISTRATION_RESTORE_VA: u32 = 0x0069_7531;
+pub const EAST_MEETS_WEST_EBX_POP_VA: u32 = 0x0069_7538;
+pub const EAST_MEETS_WEST_STACK_FRAME_RESTORE_VA: u32 = 0x0069_7539;
+pub const EAST_MEETS_WEST_FRAME_POINTER_POP_VA: u32 = 0x0069_753b;
+pub const EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA: u32 = 0x0069_753c;
+pub const EAST_MEETS_WEST_MAKE_CONTINENTS_ENTRY_VA: u32 = 0x0069_6640;
+pub const EAST_MEETS_WEST_MAKE_CONTINENTS_SIZE: u32 = 3_839;
 
 pub const EAST_MEETS_WEST_LOG_STRING_ASSIGN_CALL_VA: u32 = 0x0069_67cc;
 pub const STRING_ASSIGN_VA: u32 = 0x00a1_eeb0;
@@ -164,6 +184,17 @@ pub const EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY: CleanupNativeBody = Clea
     sha256: EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SHA256,
     direct_calls: &[],
     indirect_import_calls: &[(EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, FREE_IMPORT_IAT_VA)],
+};
+
+pub const EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY: CleanupNativeBody = CleanupNativeBody {
+    entry_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+    end_va_exclusive: EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA,
+    ret_va: Some(EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA),
+    size: EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SIZE,
+    instruction_count: EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_INSTRUCTION_COUNT,
+    sha256: EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SHA256,
+    direct_calls: &[],
+    indirect_import_calls: &[(EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, FREE_IMPORT_IAT_VA)],
 };
 
 /// Values live at the exact caller edge.  `unread_stack_word` is retained
@@ -276,6 +307,7 @@ pub struct EastMeetsWestPostPlayerLandCleanupReceipt {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum EastMeetsWestCentroidListOwner {
     YCoordinates,
+    XCoordinates,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -338,6 +370,42 @@ pub struct EastMeetsWestCentroidYFreeCleanupReceipt {
     pub next: EastMeetsWestCentroidYFreeCleanupNext,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EastMeetsWestCentroidXFreeCleanupNext {
+    ReturnedFromMakeContinents {
+        ret_va: u32,
+        callee_stack_argument_bytes_popped: u8,
+    },
+}
+
+/// Exact final caller tranche: centroid-X `_free`, the remaining inlined
+/// `SimpleArray<int>` destructor stores, SEH/frame restoration, and the
+/// `MapEastMeetsWest::make_continents(int)` return.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EastMeetsWestCentroidXFreeCleanupReceipt {
+    pub body: CleanupNativeBody,
+    pub free: EastMeetsWestImportedFreeReceipt,
+    pub stack_argument_pop_va: u32,
+    pub stack_argument_bytes_popped: u8,
+    pub exception_registration_load_va: u32,
+    pub callee_saved_register_pop_vas: [u32; 3],
+    pub list_clear_va: u32,
+    pub size_clear_va: u32,
+    pub length_clear_va: u32,
+    pub flags_clear_va: u32,
+    pub local_list_is_null: bool,
+    pub local_size: i32,
+    pub local_length: i32,
+    pub local_flags: u8,
+    pub exception_registration_restore_va: u32,
+    pub exception_registration_restored: bool,
+    pub stack_frame_restore_va: u32,
+    pub frame_pointer_pop_va: u32,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub next: EastMeetsWestCentroidXFreeCleanupNext,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EastMeetsWestPlayerLandReceipt {
     pub caller_entry_va: u32,
@@ -378,6 +446,11 @@ pub enum EastMeetsWestPlayerLandError {
     EmptyCentroidXArray,
     PostStringCleanupResidualMismatch,
     CentroidYLengthMismatch {
+        cleanup: usize,
+        allocation: usize,
+    },
+    PostCentroidYCleanupResidualMismatch,
+    CentroidXLengthMismatch {
         cleanup: usize,
         allocation: usize,
     },
@@ -519,6 +592,74 @@ pub fn execute_east_meets_west_centroid_y_free_cleanup(
         next: EastMeetsWestCentroidYFreeCleanupNext::FreeCentroidXList {
             call_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
             import_iat_va: FREE_IMPORT_IAT_VA,
+        },
+    })
+}
+
+/// Execute `0x00697502..0x0069753f`, including the final imported `_free`,
+/// every remaining local-array clear, the SEH/frame epilogue, and `ret 4`.
+pub fn execute_east_meets_west_centroid_x_free_cleanup(
+    cleanup: &EastMeetsWestCentroidYFreeCleanupReceipt,
+    centroid_x: &[i32],
+) -> Result<EastMeetsWestCentroidXFreeCleanupReceipt, EastMeetsWestPlayerLandError> {
+    if cleanup.next
+        != (EastMeetsWestCentroidYFreeCleanupNext::FreeCentroidXList {
+            call_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+            import_iat_va: FREE_IMPORT_IAT_VA,
+        })
+        || !cleanup.centroid_x_list_non_null
+    {
+        return Err(EastMeetsWestPlayerLandError::PostCentroidYCleanupResidualMismatch);
+    }
+    if centroid_x.is_empty() {
+        return Err(EastMeetsWestPlayerLandError::EmptyCentroidXArray);
+    }
+    if cleanup.centroid_x_length != centroid_x.len() {
+        return Err(EastMeetsWestPlayerLandError::CentroidXLengthMismatch {
+            cleanup: cleanup.centroid_x_length,
+            allocation: centroid_x.len(),
+        });
+    }
+
+    Ok(EastMeetsWestCentroidXFreeCleanupReceipt {
+        body: EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY,
+        free: EastMeetsWestImportedFreeReceipt {
+            call_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+            import_iat_va: FREE_IMPORT_IAT_VA,
+            allocation: EastMeetsWestCentroidListAllocation {
+                owner: EastMeetsWestCentroidListOwner::XCoordinates,
+                element_width: 4,
+                elements: centroid_x.to_vec(),
+            },
+            state_before: RetailAllocationState::Live,
+            state_after: RetailAllocationState::Freed,
+            native_return: (),
+        },
+        stack_argument_pop_va: EAST_MEETS_WEST_CENTROID_X_STACK_POP_VA,
+        stack_argument_bytes_popped: 4,
+        exception_registration_load_va: EAST_MEETS_WEST_EXCEPTION_REGISTRATION_LOAD_VA,
+        callee_saved_register_pop_vas: [
+            EAST_MEETS_WEST_EDI_POP_VA,
+            EAST_MEETS_WEST_ESI_POP_VA,
+            EAST_MEETS_WEST_EBX_POP_VA,
+        ],
+        list_clear_va: EAST_MEETS_WEST_CENTROID_X_LIST_CLEAR_VA,
+        size_clear_va: EAST_MEETS_WEST_CENTROID_X_SIZE_CLEAR_VA,
+        length_clear_va: EAST_MEETS_WEST_CENTROID_X_LENGTH_CLEAR_VA,
+        flags_clear_va: EAST_MEETS_WEST_CENTROID_X_FLAGS_CLEAR_VA,
+        local_list_is_null: true,
+        local_size: 0,
+        local_length: 0,
+        local_flags: 0,
+        exception_registration_restore_va: EAST_MEETS_WEST_EXCEPTION_REGISTRATION_RESTORE_VA,
+        exception_registration_restored: true,
+        stack_frame_restore_va: EAST_MEETS_WEST_STACK_FRAME_RESTORE_VA,
+        frame_pointer_pop_va: EAST_MEETS_WEST_FRAME_POINTER_POP_VA,
+        random_state_before: cleanup.random_state_after,
+        random_state_after: cleanup.random_state_after,
+        next: EastMeetsWestCentroidXFreeCleanupNext::ReturnedFromMakeContinents {
+            ret_va: EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA,
+            callee_stack_argument_bytes_popped: 4,
         },
     })
 }

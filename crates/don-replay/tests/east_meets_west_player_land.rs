@@ -1,26 +1,33 @@
 use don_replay::continent::{
     execute_continent_prefix_with_regions_from_rng,
+    execute_east_meets_west_centroid_x_free_cleanup,
     execute_east_meets_west_centroid_y_free_cleanup, execute_east_meets_west_player_land,
     execute_east_meets_west_post_player_land_cleanup, ContinentStop,
-    EastMeetsWestCentroidListOwner, EastMeetsWestCentroidYFreeCleanupNext,
-    EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandNext,
-    EastMeetsWestPostPlayerLandCleanupNext, EastMeetsWestStringClosePath, RetailAllocationState,
-    CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+    EastMeetsWestCentroidListOwner, EastMeetsWestCentroidXFreeCleanupNext,
+    EastMeetsWestCentroidYFreeCleanupNext, EastMeetsWestPlayerLandCall,
+    EastMeetsWestPlayerLandNext, EastMeetsWestPostPlayerLandCleanupNext,
+    EastMeetsWestStringClosePath, RetailAllocationState, CHECK_PLAYER_LAND_NATIVE_BODY,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_INSTRUCTION_COUNT,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SHA256, EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SIZE,
     EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY,
     EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_END_VA,
     EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_INSTRUCTION_COUNT,
     EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SHA256, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SIZE,
     EAST_MEETS_WEST_LOG_STRING, EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET,
     EAST_MEETS_WEST_LOG_STRING_HASH, EAST_MEETS_WEST_LOG_STRING_ORDINAL,
-    EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS, EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_CALL_VA, EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
+    EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS, EAST_MEETS_WEST_MAKE_CONTINENTS_ENTRY_VA,
+    EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA, EAST_MEETS_WEST_MAKE_CONTINENTS_SIZE,
+    EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA, EAST_MEETS_WEST_PLAYER_LAND_CALL_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA, EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_END_VA,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_INSTRUCTION_COUNT,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SIZE,
     FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
-    RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE, STRING_CLOSE_INSTRUCTION_COUNT,
+    REGIONS_CLEAR_ALL_VA, RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE, STRING_CLOSE_INSTRUCTION_COUNT,
     STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256, STRING_CLOSE_SIZE, STRING_CLOSE_VA,
     STRING_GUTS_DESTRUCTOR_CALL_VA, STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
 };
@@ -128,6 +135,31 @@ fn native_extent_fastcall_and_typed_residual_are_frozen() {
         [(EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, FREE_IMPORT_IAT_VA)]
     );
     assert_eq!(SIMPLE_ARRAY_INT_SIZE, 28);
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY.end_va_exclusive,
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA
+    );
+    assert_eq!(EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SIZE, 61);
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_INSTRUCTION_COUNT,
+        14
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY.sha256,
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_SHA256
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY.ret_va,
+        Some(EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA)
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_BODY.indirect_import_calls,
+        [(EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, FREE_IMPORT_IAT_VA)]
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_MAKE_CONTINENTS_ENTRY_VA + EAST_MEETS_WEST_MAKE_CONTINENTS_SIZE,
+        EAST_MEETS_WEST_CENTROID_X_FREE_CLEANUP_END_VA
+    );
 }
 
 #[test]
@@ -295,6 +327,30 @@ fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
             import_iat_va: FREE_IMPORT_IAT_VA,
         }
     );
+    assert_eq!(
+        execute_east_meets_west_centroid_x_free_cleanup(&free_cleanup, &[]),
+        Err(don_replay::continent::EastMeetsWestPlayerLandError::EmptyCentroidXArray)
+    );
+    let x_cleanup = execute_east_meets_west_centroid_x_free_cleanup(&free_cleanup, &[41]).unwrap();
+    assert_eq!(
+        x_cleanup.free.allocation.owner,
+        EastMeetsWestCentroidListOwner::XCoordinates
+    );
+    assert_eq!(x_cleanup.free.allocation.elements, [41]);
+    assert_eq!(x_cleanup.free.state_before, RetailAllocationState::Live);
+    assert_eq!(x_cleanup.free.state_after, RetailAllocationState::Freed);
+    assert!(x_cleanup.local_list_is_null);
+    assert_eq!(x_cleanup.local_size, 0);
+    assert_eq!(x_cleanup.local_length, 0);
+    assert_eq!(x_cleanup.local_flags, 0);
+    assert!(x_cleanup.exception_registration_restored);
+    assert_eq!(
+        x_cleanup.next,
+        EastMeetsWestCentroidXFreeCleanupNext::ReturnedFromMakeContinents {
+            ret_va: EAST_MEETS_WEST_MAKE_CONTINENTS_RET_VA,
+            callee_stack_argument_bytes_popped: 4,
+        }
+    );
 }
 
 #[test]
@@ -361,6 +417,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             player_land: receipt,
             post_player_land_cleanup,
             centroid_y_free_cleanup,
+            centroid_x_free_cleanup,
             next_va,
             next_mutator_va,
             ..
@@ -375,8 +432,8 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        assert_eq!(*next_va, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, "{name}");
-        assert_eq!(*next_mutator_va, FREE_IMPORT_IAT_VA, "{name}");
+        assert_eq!(*next_va, REGIONS_CLEAR_ALL_VA, "{name}");
+        assert_eq!(*next_mutator_va, REGIONS_CLEAR_ALL_VA, "{name}");
         assert_eq!(
             post_player_land_cleanup.centroid_y_length,
             usize::from(prefix.team_partition.as_ref().unwrap().continent_count),
@@ -394,6 +451,19 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         assert_eq!(
             centroid_y_free_cleanup.free.state_after,
             RetailAllocationState::Freed,
+            "{name}"
+        );
+        assert_eq!(
+            centroid_x_free_cleanup.free.allocation.elements, centroids.centroid_x,
+            "{name}"
+        );
+        assert_eq!(
+            centroid_x_free_cleanup.free.state_after,
+            RetailAllocationState::Freed,
+            "{name}"
+        );
+        assert!(
+            centroid_x_free_cleanup.exception_registration_restored,
             "{name}"
         );
         assert!(

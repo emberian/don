@@ -256,13 +256,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+            don_replay::continent::REGIONS_CLEAR_ALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::FREE_IMPORT_IAT_VA,
+            don_replay::continent::REGIONS_CLEAR_ALL_VA,
             "{}",
             expected.name
         );
