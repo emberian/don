@@ -93,7 +93,7 @@ fn a_commanded_match_round_trips_after_frame_zero_and_resaves_identically() {
     let before_players = original.players.clone();
     let before_setup = original.vic_leaders.setup_owner.applied().cloned();
     let bytes = save_sim(&original).expect("current format owns the configured mid-match pair");
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 15);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 16);
     assert!(!section_range(&bytes, LEADER_MATCH).is_empty());
 
     let loaded = load_sim(&bytes).expect("current leader/match state loads");

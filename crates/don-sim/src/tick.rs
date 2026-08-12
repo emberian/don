@@ -889,6 +889,8 @@ pub struct Sim {
     /// Revision/digest-bound Build virtual and slot-zero Guy facts for Gather work.
     /// Canonical actor/order/Build/RNG mutations remain in World/Build owners.
     pub gather_work_authority: canonical_gather_work::GatherWorkAuthority,
+    /// Canonical checksum/save owner for retail's global `Farms::farm_data` array.
+    pub farms: canonical_gather_work::Farms,
     pub last_gather_work_receipt: Option<canonical_gather_work::GatherWorkActivationReceipt>,
     pub last_gather_work_error: Option<canonical_gather_work::GatherWorkRuntimeError>,
     pub cast_work_authority: canonical_cast_work::CastWorkAuthority,
@@ -1605,6 +1607,7 @@ impl Sim {
             last_trade_route_receipt: None,
             last_trade_route_error: None,
             gather_work_authority: canonical_gather_work::GatherWorkAuthority::default(),
+            farms: canonical_gather_work::Farms::default(),
             last_gather_work_receipt: None,
             last_gather_work_error: None,
             cast_work_authority: canonical_cast_work::CastWorkAuthority::default(),
@@ -3473,6 +3476,7 @@ impl Sim {
         let prepared = match canonical_gather_work::prepare_gather_work_activation(
             &self.world,
             &self.builds,
+            &self.farms,
             &self.unit_type,
             &self.gather_work_authority,
             row,
@@ -3487,6 +3491,7 @@ impl Sim {
         match canonical_gather_work::commit_gather_work_activation(
             &mut self.world,
             &mut self.builds,
+            &mut self.farms,
             &self.unit_type,
             &self.gather_work_authority,
             prepared,
@@ -4811,6 +4816,7 @@ impl Sim {
         for b in self.builds.iter() {
             mix(adler32(1, &b.image()));
         }
+        mix(adler32(1, &self.farms.walked_image()));
         // `check_groups` `0x00937530`. Without this the digest is blind to a group desync,
         // so every determinism test built on it — including save/load resume — could pass
         // across a diverged group pool. Requested as HOOK NEEDED by the save_load lane,

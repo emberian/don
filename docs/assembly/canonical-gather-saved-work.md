@@ -63,7 +63,7 @@ coordinate, timer, or UID:
 
 | count | `build_type` | exact mutable suffix shape | transaction status |
 |---:|---:|---|---|
-| 17 | `0x1a1` Farm | `tx=ty=-1`, `wait=0`, `(goto,non_flat,dist,been)=(1,0,0,1)` | recognized, then fail-closed at Farm world/animation |
+| 17 | `0x1a1` Farm | `tx=ty=-1`, `wait=0`, `(goto,non_flat,dist,been)=(1,0,0,1)` | one exact grow image admitted by the [Farm continuation](canonical-gather-farm-work.md); residuals fail closed |
 | 12 | `0x1a2` Camp | `tx,ty>=0`, `wait>0`, `(goto,non_flat,dist,been)=(0,1,4,1)` | admitted to the recovered timer branch when the live snapshot gates match |
 
 Every node also has metric zero, flags zero, a same-owner Build-band target, and a positive
@@ -135,7 +135,7 @@ or mismatched receipt is not success.
 
 | branch | missing exact owner | result |
 |---|---|---|
-| Farm tick | Farm cell update, animation/table and possible footprint movement | no commit |
+| Farm tick | one exact FarmStruct grow now owned; residual animation/relocation/snip tails | one saved grow commits; residuals no commit |
 | Mine tick | MiningList/object identity, terrain and collision | no commit |
 | 128-frame Camp/Mine phase | exact gather chain and capacity/count result | no commit |
 | `goto_build != 0` | destination selection, access, collision and movement insertion | no commit |
@@ -183,8 +183,8 @@ reschedule), stale compare/exchange, exact `check_gatherers` unlink publication,
 Guys authority, and zero writes on every refusal.
 
 This is production credit for the exact Camp branches above, not general Gather closure:
-Farm, Mine, capacity phase, destination/collision, resource payout, retirement/replacement,
-and containment-special arms remain explicit boundaries.
+Residual Farm, Mine, capacity phase, destination/collision, resource payout,
+retirement/replacement, and containment-special arms remain explicit boundaries.
 
 Run the focused gate with:
 

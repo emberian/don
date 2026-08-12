@@ -162,7 +162,7 @@ fn retail_packet_runs_bridge_sim_current_load_and_resumed_packet_identically() {
         let checkpoint = save_sim(&uninterrupted).expect("applied declaration is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            15
+            16
         );
         let mut resumed = load_sim(&checkpoint).expect("declaration state reloads");
 

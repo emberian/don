@@ -59,7 +59,9 @@ mod step8_views;
 const MAGIC: &[u8; 8] = b"DoNSave\0";
 /// First version persisting the scenario ignore-orders scalar and eight ordered lists.
 const SCENARIO_IGNORES_FORMAT_VERSION: u32 = 15;
-const FORMAT_VERSION: u32 = SCENARIO_IGNORES_FORMAT_VERSION;
+/// First version persisting the checksum-owned global FarmStruct array.
+const FARMS_FORMAT_VERSION: u32 = 16;
+const FORMAT_VERSION: u32 = FARMS_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -154,8 +156,9 @@ const LEADER_MATCH: u16 = 0x000a;
 const COMMAND_PACKAGE_STATE: u16 = 0x000b;
 const DIPLOMACY: u16 = 0x000c;
 const SCENARIO_IGNORES: u16 = 0x000d;
+const FARMS: u16 = 0x000e;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 13] = [
+const REQUIRED: [u16; 14] = [
     CORE,
     MAP,
     OBJECTS,
@@ -169,11 +172,13 @@ const REQUIRED: [u16; 13] = [
     COMMAND_PACKAGE_STATE,
     DIPLOMACY,
     SCENARIO_IGNORES,
+    FARMS,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED,
+        FARMS_FORMAT_VERSION => &REQUIRED,
+        SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED[..13],
         DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..12],
         PRE_DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..11],
         LEGACY_ORDER_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION => &REQUIRED[..10],
@@ -1751,11 +1756,17 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
     // The CAPTURED/converted flag is already an explicit byte in this section and has no
     // subordinate allocation to reconstruct. Fresh retail construction sites carry it, so
     // rejecting the value made an otherwise byte-owned BUILD_AT state unloadable.
+    // `BuildData::dock/farm/fort/oil_well` is one serialized i16 union.  A completed Farm
+    // (`orig_type == 0x1A1`) uses it only as the `Farms::farm_data` index.  The canonical
+    // Gather-Farm adapter binds that index to the canonical v16 FarmStruct owner plus a
+    // revision/digest Guy/content authority after load. Preserve this already-owned scalar;
+    // keep every other union interpretation closed.
+    let unsupported_special_index = build.dock >= 0 && build.orig_type != 0x1a1;
     if build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
         || build.demolition != 0
         || build.gather_down >= 0
         || build.wonder >= 0
-        || build.dock >= 0
+        || unsupported_special_index
         || build.attack_ox >= 0
         || build.attack_whom >= 0
         || build.gather_max != 0
@@ -1936,6 +1947,100 @@ fn read_builds(
     r.finish()?;
     validate_build_state(&builds, world)?;
     Ok(builds)
+}
+
+fn write_farms(farms: &crate::systems::canonical_gather_work::Farms) -> Result<Vec<u8>, SaveError> {
+    let (length, capacity, increment, flags) = farms.header();
+    if length < 0 || capacity < length || capacity > i16::MAX as i32 || flags != 0 {
+        return Err(SaveError::Invalid("Farms array header"));
+    }
+    let mut w = Writer::default();
+    w.i32(length);
+    w.i32(capacity);
+    w.i16(increment);
+    w.u8(flags);
+    for farm in farms.records() {
+        w.bytes(&farm.image());
+    }
+    Ok(w.0)
+}
+
+fn read_farms(data: &[u8]) -> Result<crate::systems::canonical_gather_work::Farms, SaveError> {
+    use crate::systems::canonical_gather_work::{FarmStruct, Farms};
+
+    let mut r = Reader::new(data);
+    let length = r.i32()?;
+    let capacity = r.i32()?;
+    let increment = r.i16()?;
+    let flags = r.u8()?;
+    if length < 0 || capacity < length || capacity > i16::MAX as i32 || flags != 0 {
+        return Err(SaveError::Invalid("Farms array header"));
+    }
+    let mut farms = Farms::with_header(capacity, increment, flags);
+    for _ in 0..length {
+        let image = r.take(FarmStruct::WALKED_BYTES)?;
+        let mut farm = FarmStruct {
+            who: i32::from_le_bytes(image[0..4].try_into().unwrap()),
+            o: i32::from_le_bytes(image[4..8].try_into().unwrap()),
+            valid: image[188],
+            farm_type: image[189],
+            ..FarmStruct::default()
+        };
+        for index in 0..16 {
+            farm.percent[index] =
+                u32::from_le_bytes(image[8 + index * 4..12 + index * 4].try_into().unwrap());
+        }
+        for index in 0..25 {
+            farm.terrain_height[index] =
+                u32::from_le_bytes(image[72 + index * 4..76 + index * 4].try_into().unwrap());
+        }
+        farm.status.copy_from_slice(&image[172..188]);
+        farms
+            .push(farm)
+            .map_err(|_| SaveError::Invalid("Farms array capacity"))?;
+    }
+    r.finish()?;
+    Ok(farms)
+}
+
+fn validate_farm_bindings(
+    builds: &[production::BuildData],
+    farms: &crate::systems::canonical_gather_work::Farms,
+) -> Result<(), SaveError> {
+    for build in builds {
+        if build.orig_type == crate::systems::canonical_gather_work::FARM_PROPERTY
+            && build.dock >= 0
+        {
+            let farm = farms
+                .get(build.dock as usize)
+                .ok_or(SaveError::Invalid("Farm Build index"))?;
+            if (farm.valid, farm.who, farm.o)
+                != (1, i32::from(build.who), i32::from(build.object_id()))
+            {
+                return Err(SaveError::Invalid("Farm Build/record identity"));
+            }
+        }
+    }
+    for (index, farm) in farms
+        .records()
+        .iter()
+        .enumerate()
+        .filter(|(_, farm)| farm.valid != 0)
+    {
+        let matches = builds
+            .iter()
+            .filter(|build| {
+                build.orig_type == crate::systems::canonical_gather_work::FARM_PROPERTY
+                    && build.dock == index as i16
+                    && i32::from(build.who) == farm.who
+                    && i32::from(build.object_id()) == farm.o
+            })
+            .count();
+        if matches != 1 {
+            return Err(SaveError::Invalid("orphan or duplicate Farm record"));
+        }
+    }
+    Ok(())
 }
 
 fn write_items(sim: &Sim) -> Result<Vec<u8>, SaveError> {
@@ -3102,6 +3207,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
     reject_unsupported(sim)?;
     let state = sim.world.export_save_state()?;
     validate_build_city_pool(&sim.builds, &state, &sim.cities)?;
+    validate_farm_bindings(&sim.builds, &sim.farms)?;
     let builds = write_builds(&sim.builds, &state)?;
     let map = write_map(sim)?;
     // Validate the producer through the same bounded decoder used for untrusted input.
@@ -3131,6 +3237,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
                 air_runtime_authority::encode_scenario_ignores(&sim.scenario_ignore_orders)
                     .map_err(|_| SaveError::Invalid("scenario ignore-orders state"))?,
             ),
+            Chunk::leaf(FARMS, write_farms(&sim.farms)?),
         ],
     )
     .encode()?;
@@ -3245,7 +3352,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     let diplomacy = decode_diplomacy_for_save(core.format_version, sections[11])
         .map_err(|_| SaveError::Invalid("diplomacy payload"))?;
     let scenario_ignore_orders = match sections[12] {
-        Some(data) if core.format_version == SCENARIO_IGNORES_FORMAT_VERSION => {
+        Some(data) if core.format_version >= SCENARIO_IGNORES_FORMAT_VERSION => {
             air_runtime_authority::decode_scenario_ignores(data)
                 .map_err(|_| SaveError::Invalid("scenario ignore-orders payload"))?
         }
@@ -3254,6 +3361,14 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         }
         _ => return Err(SaveError::Invalid("scenario ignore-orders section version")),
     };
+    let farms = match sections[13] {
+        Some(data) if core.format_version >= FARMS_FORMAT_VERSION => read_farms(data)?,
+        None if core.format_version < FARMS_FORMAT_VERSION => {
+            crate::systems::canonical_gather_work::Farms::default()
+        }
+        _ => return Err(SaveError::Invalid("Farms section version")),
+    };
+    validate_farm_bindings(&builds, &farms)?;
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
             return Err(SaveError::Invalid("player setup outside frame zero"));
@@ -3326,6 +3441,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.command_package_state = command_state;
     sim.diplomacy = diplomacy;
     sim.scenario_ignore_orders = scenario_ignore_orders;
+    sim.farms = farms;
     if let Some(state) = leader_match {
         leader_match::restore(&mut sim, state)?;
     } else {
@@ -4176,6 +4292,7 @@ mod tests {
                         | COMMAND_PACKAGE_STATE
                         | DIPLOMACY
                         | SCENARIO_IGNORES
+                        | FARMS
                 )
             })
             .map(|child| {
@@ -4222,7 +4339,7 @@ mod tests {
             .filter(|child| {
                 !matches!(
                     child.header.id,
-                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY | SCENARIO_IGNORES
+                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY | SCENARIO_IGNORES | FARMS
                 )
             })
             .map(|child| {

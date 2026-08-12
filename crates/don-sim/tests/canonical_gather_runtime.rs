@@ -85,6 +85,7 @@ fn authority(sim: &Sim, actor_row: usize, build_row: usize) -> GatherWorkAuthori
             resolves_build: true,
             valid_wall_projection: true,
         }],
+        farms: vec![],
     }
 }
 
@@ -207,6 +208,7 @@ fn wait_zero_false_chain_consumes_one_exact_rng_draw() {
     let prepared = prepare_gather_work_activation(
         &sim.world,
         &sim.builds,
+        &sim.farms,
         &sim.unit_type,
         &authority,
         actor_row,
@@ -216,6 +218,7 @@ fn wait_zero_false_chain_consumes_one_exact_rng_draw() {
     let receipt = commit_gather_work_activation(
         &mut sim.world,
         &mut sim.builds,
+        &mut sim.farms,
         &sim.unit_type,
         &authority,
         prepared,
@@ -344,6 +347,7 @@ fn check_gatherers_unlink_and_stale_compare_are_atomic() {
     let prepared = prepare_gather_work_activation(
         &sim.world,
         &sim.builds,
+        &sim.farms,
         &sim.unit_type,
         &authority,
         actor_row,
@@ -357,6 +361,7 @@ fn check_gatherers_unlink_and_stale_compare_are_atomic() {
     let receipt = commit_gather_work_activation(
         &mut sim.world,
         &mut sim.builds,
+        &mut sim.farms,
         &sim.unit_type,
         &authority,
         prepared,
@@ -371,6 +376,7 @@ fn check_gatherers_unlink_and_stale_compare_are_atomic() {
     let prepared = prepare_gather_work_activation(
         &stale_sim.world,
         &stale_sim.builds,
+        &stale_sim.farms,
         &stale_sim.unit_type,
         &authority,
         actor_row,
@@ -383,6 +389,7 @@ fn check_gatherers_unlink_and_stale_compare_are_atomic() {
         commit_gather_work_activation(
             &mut stale_sim.world,
             &mut stale_sim.builds,
+            &mut stale_sim.farms,
             &stale_sim.unit_type,
             &authority,
             prepared,
@@ -402,6 +409,7 @@ fn missing_or_normalized_guy_authority_is_zero_write() {
         prepare_gather_work_activation(
             &sim.world,
             &sim.builds,
+            &sim.farms,
             &sim.unit_type,
             &missing,
             actor_row,
@@ -413,6 +421,7 @@ fn missing_or_normalized_guy_authority_is_zero_write() {
         prepare_gather_work_activation(
             &sim.world,
             &sim.builds,
+            &sim.farms,
             &sim.unit_type,
             &authority,
             actor_row,
