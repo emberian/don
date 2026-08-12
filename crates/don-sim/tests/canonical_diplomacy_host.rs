@@ -55,6 +55,7 @@ fn active_owner(relation: Relation) -> DiplomacyOwnerImage {
 
 fn complete_facts() -> DiplomacyInstalledFacts {
     DiplomacyInstalledFacts {
+        no_rush_frames: Some(0),
         type_available: [[Some(true); NUM_GOODS]; DIPLO_SLOTS],
         declaration_costs: [[Some(10); NUM_GOODS]; DIPLO_SLOTS],
         tribute_scale_percent: [Some(100); DIPLO_SLOTS],

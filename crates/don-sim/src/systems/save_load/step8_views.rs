@@ -67,7 +67,7 @@ fn leader_has_only_mirrors(
         && (policy_is_empty || policy_is_synchronized)
         && actual.flags == expected_flags
         && actual.slot == fresh.slot
-        && actual.diplo == fresh.diplo
+        && crate::systems::canonical_diplomacy_runtime::step8_diplomacy_view_matches(sim, who)
         && actual.taunt_kind == fresh.taunt_kind
         && actual.taunt_arg == fresh.taunt_arg
         && actual.taunt_frame == fresh.taunt_frame
@@ -92,12 +92,6 @@ fn leader_has_only_mirrors(
         // non-default value here is state without a save owner and is refused.
         && actual.city_num == fresh.city_num
         && actual.build_stats == fresh.build_stats
-        // The `LeaderData` slice `Leader::process_taunt` `0x006B8CC0` writes: `gift_stamp`,
-        // `last_taunt`/`taunt_frame`, `tributes`, the six `+0x794..+0x7A8` AI scalars,
-        // `Personality::raid` and `dip[8]`. DoNSave has no chunk for any of them here, and
-        // `dip[].offers` is a two-sided ledger — reloading one side of it without the other
-        // is worse than refusing, so a non-default value is refused.
-        && actual.taunt == fresh.taunt
 }
 
 fn expected_owner_in_game(sim: &Sim, who: usize) -> bool {

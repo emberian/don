@@ -209,6 +209,10 @@ use self::unimplemented_group_command_plans::{
     GroupActionCall, PlanStatus as GroupCommandPrefixPlanStatus, UnimplementedGroupCommandFacts,
     UnimplementedGroupCommandReceipt, UnimplementedGroupCommandRequest,
 };
+use crate::systems::canonical_diplomacy_runtime::{
+    CanonicalDiplomacyReceipt, CanonicalDiplomacyRequest, CanonicalDiplomacyRuntimeError,
+    CanonicalDiplomacyStatus,
+};
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
@@ -1515,6 +1519,18 @@ pub trait Fleet {
         request: DiplomacyCommandRequest,
     ) -> DiplomacyCommandReceipt {
         DiplomacyCommandReceipt::unavailable(request)
+    }
+
+    /// Whole-body opcode-38 boundary over the canonical Sim owners. The default host has no
+    /// such owner and remains unavailable; opcode 41 deliberately does not enter this edge.
+    fn apply_canonical_diplomacy_transaction(
+        &mut self,
+        request: CanonicalDiplomacyRequest,
+    ) -> CanonicalDiplomacyReceipt {
+        CanonicalDiplomacyReceipt::unavailable(
+            request,
+            CanonicalDiplomacyRuntimeError::BridgeDidNotReturnReceipt,
+        )
     }
 
     /// Preflight facts for rows 70, 71, 73, 78, and 80. Boundary decisions authorize no
@@ -3826,7 +3842,7 @@ impl Bridge {
     fn process_inline(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
         match cmd[0] {
             34 => self.process_hotkey(pkg, cmd),
-            37..=45 => self.process_diplomacy(cmd, f),
+            37..=45 => self.process_diplomacy(pkg, cmd, f),
             46..=49 => self.process_direct_entity_command(cmd, f),
             50 => self.process_ping(pkg, cmd),
             51 => self.process_spline(pkg, cmd),
@@ -4485,7 +4501,19 @@ impl Bridge {
     /// Opcodes 37..45 through one host-owned diplomacy image and atomic commit. The
     /// receipt validator rejects every planner boundary, so incomplete declaration and
     /// acceptance branches cannot partially mutate state here.
-    fn process_diplomacy(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+    fn process_diplomacy(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
+        if cmd.first().copied() == Some(38) {
+            let request = CanonicalDiplomacyRequest {
+                frame: self.frame,
+                package_stamp: pkg.stamp,
+                play: pkg.play,
+                wire: cmd.to_vec(),
+            };
+            let receipt = f.apply_canonical_diplomacy_transaction(request.clone());
+            if receipt.status == CanonicalDiplomacyStatus::Applied && receipt.validates(&request) {
+                return;
+            }
+        }
         let Some(before) = f.diplomacy_command_state() else {
             return;
         };

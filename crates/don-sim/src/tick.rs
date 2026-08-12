@@ -2481,6 +2481,7 @@ impl Sim {
             let src = &self.leaders[who];
             let dst = &mut self.step8.leaders[who];
             let policy = &self.vic_leaders.slots[who];
+            dst.diplo = policy.diplos;
             dst.econ = src.econ;
             dst.last_calc_frame = src.last_calc_frame;
             dst.econ_dirty = src.dirty;

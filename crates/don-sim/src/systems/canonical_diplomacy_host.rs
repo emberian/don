@@ -169,6 +169,8 @@ impl Default for DiplomacyOwnerImage {
 /// These are reinstalled after load; they do not belong in the diplomacy save payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiplomacyInstalledFacts {
+    /// `Constants+0xcf8`, reinstalled with the rules projection after load.
+    pub no_rush_frames: Option<i32>,
     pub type_available: [[Option<bool>; NUM_GOODS]; DIPLO_SLOTS],
     pub declaration_costs: [[Option<i32>; NUM_GOODS]; DIPLO_SLOTS],
     pub tribute_scale_percent: [Option<i32>; DIPLO_SLOTS],
@@ -186,6 +188,7 @@ pub struct DiplomacyInstalledFacts {
 impl Default for DiplomacyInstalledFacts {
     fn default() -> Self {
         Self {
+            no_rush_frames: None,
             type_available: [[None; NUM_GOODS]; DIPLO_SLOTS],
             declaration_costs: [[None; NUM_GOODS]; DIPLO_SLOTS],
             tribute_scale_percent: [None; DIPLO_SLOTS],

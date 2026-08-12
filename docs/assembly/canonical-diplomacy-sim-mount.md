@@ -64,9 +64,15 @@ layout in v14; focused tests pin byte equality and malformed-v14 refusal.
 - added the small homeless retained state plus transient installed authority to `Sim`;
 - mounted v14 chunk `0x000c` and the coordinated production-AI Leader row extension;
 - retained exact v13 root/order bytes and v7-v13 load behavior;
-- project/fold all canonical owners and rebuild step-8 mirrors;
-- add a Bridge whole-body receipt for opcodes 38/41 without weakening the old boundary receipt;
+- mounted real opcode-38 packets through `Bridge::process_all` into the canonical Sim owner;
+- project/fold all canonical owners and rebuild the exact step-8 relation/taunt mirrors;
+- added a self-validating whole-body receipt which recomputes the prepared transaction;
 - flip opcode closure rows only after real Bridge packets execute before and after save/load.
+
+Opcode 38 now executes production transactions whose ordered external-authority list is empty.
+Any reached `ComeOut`, contained-unit kill/Strafe, victory, or forced-army call refuses before
+publication, so the static row remains `StateWired`. Opcode 41 remains wholly outside the
+production adapter and red until all of those external authorities can be committed atomically.
 
 Focused status: the callback/aggregate suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 42 private

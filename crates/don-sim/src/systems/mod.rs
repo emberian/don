@@ -123,6 +123,8 @@ pub mod defeat_cleanup;
 /// Atomic opcode-38 declaration transaction over command, resource, relation, vision,
 /// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
 pub mod canonical_diplomacy_host;
+/// Real Bridge-to-Sim opcode-38 mount; reached external authority remains fail-closed.
+pub mod canonical_diplomacy_runtime;
 /// Full `Leader::action_respond(target, 1)` transaction reached by synchronized opcode 41.
 pub mod diplomacy_accept_host;
 /// Exact simulation/presentation split for the ordinary accepted-deal callbacks.
