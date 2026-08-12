@@ -1,19 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `GameDaemon::calc_danger` `0x00732D10` against the authoritative `map_terrain::World`.
 //!
-//! # What this file does and does not prove
-//!
-//! The step-12 child hook lives in `crates/don-sim/src/tick.rs`, which a sibling lane owns
-//! this wave, so **the body is not yet reachable from `Sim::do_frame`**. The first test here
-//! pins that fact from the real tick — step 12 runs, the scheduler reaches `calc_danger` on
-//! `frame % 200 == 0`, and the child is still charged to
-//! [`Gap::GameDaemonCalcDanger`] with every danger plane untouched. It is a *red* proof, and
-//! it will start failing the moment the hook lands, which is exactly when it should.
-//!
-//! The remaining tests drive [`game_daemon_calc_danger::calc_danger`] directly against
-//! `sim.map.world` — the same `map_terrain::World` the `world` checksum channel walks, not a
-//! test double — so the plane mutations are on the authoritative state even though the tick
-//! does not call them yet. Do not read them as real-tick coverage.
+//! The direct tests drive [`game_daemon_calc_danger::calc_danger`] against `sim.map.world` —
+//! the same `map_terrain::World` the world checksum channel walks, not a test double. The real
+//! tick test pins the empty canonical projection; `game_daemon_calc_danger_tick.rs` owns the
+//! non-empty band-2000 checksum/save/resume transaction and the preflight mutation guard.
 
 use don_sim::systems::game_daemon_calc_danger::{
     calc_danger, region_of, BuildDangerFacts, CalcDangerError, CalcDangerHost, DangerPlanes,
@@ -113,7 +104,7 @@ fn internal(region: i32) -> i32 {
 }
 
 #[test]
-fn the_real_tick_still_charges_the_danger_child_and_leaves_every_plane_zero() {
+fn the_real_tick_executes_an_empty_projection_without_charging_a_gap() {
     let mut sim = Sim::new(0x12_732d10, 16);
     // Salt one plane so a hook that ran the wipe would be visible even with no population.
     sim.map.world.danger[0][0] = 4242;
@@ -123,19 +114,19 @@ fn the_real_tick_still_charges_the_danger_child_and_leaves_every_plane_zero() {
     assert_eq!(frame0.steps[12], StepRun::Executed, "the shell itself runs");
     assert_eq!(
         sim.cover.gaps[Gap::GameDaemonCalcDanger.index()],
-        1,
-        "frame 0 is the frame % 200 == 0 phase, so the child is reached and charged"
+        0,
+        "the exact body has no unresolved fact in an empty projection"
     );
     assert_eq!(
         sim.map.world.danger[0][0], 4242,
-        "the hook is NOT wired: nothing wipes the plane from the real tick yet"
+        "an inactive leader does not own a plane clear"
     );
 
     let frame1 = sim.do_frame();
     assert_eq!(frame1.steps[12], StepRun::Executed);
     assert_eq!(
         sim.cover.gaps[Gap::GameDaemonCalcDanger.index()],
-        1,
+        0,
         "frame 1 is off-phase"
     );
 }

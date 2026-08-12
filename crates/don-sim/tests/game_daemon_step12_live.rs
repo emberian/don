@@ -24,7 +24,7 @@ fn real_tick_runs_the_shell_reaps_the_live_world_and_retains_both_cursor_views()
     assert_eq!(sim.game_daemon.empty_colls, 5);
     assert_eq!(sim.groups.proc_group, 1);
     assert_eq!(sim.cover.gaps[Gap::GameDaemonProcessCollBlocks.index()], 0);
-    assert_eq!(sim.cover.gaps[Gap::GameDaemonCalcDanger.index()], 1);
+    assert_eq!(sim.cover.gaps[Gap::GameDaemonCalcDanger.index()], 0);
 
     let second = sim.do_frame();
     assert_eq!(second.steps[12], StepRun::Executed);
@@ -33,7 +33,7 @@ fn real_tick_runs_the_shell_reaps_the_live_world_and_retains_both_cursor_views()
     assert_eq!(sim.groups.proc_group, 2);
     assert_eq!(
         sim.cover.gaps[Gap::GameDaemonCalcDanger.index()],
-        1,
+        0,
         "frame 1 must not charge the frame%200 danger child"
     );
 }

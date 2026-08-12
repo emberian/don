@@ -2,8 +2,8 @@
 
 Tick step 12's shell (`GameDaemon::process_all` `0x00732700`) has executed since the
 `game_daemon_step12` lane. Six of its seven children had bodies. The seventh —
-`calc_danger` `0x00732D10` — was charged as `Gap::GameDaemonCalcDanger` with the note
-*"body absent; exact scheduler charges only frame % 200 == 0"*. This document is that body.
+`calc_danger` `0x00732D10` — was charged as `Gap::GameDaemonCalcDanger`. This document is
+that body and its fail-closed canonical tick adapter.
 
 Ground truth: capstone disassembly of `0x00732D10` (1,476 B) and `0x00732390` (195 B) in
 `ron-bin/riseofnations.exe` sha256 `30478a44…625079`, with layouts and vtable slots from
@@ -170,16 +170,28 @@ body (`min(hits(0) - damage, hits(0))`, clamped to zero if either term is negati
   `CalcDangerTrace::unmapped_centre_cells`. Named divergence at the memory-safety floor.
 * **It does not invent an object host.** `attack()`, `hits_left()`, `is(...)`,
   `basic_type()`, `is_seen()` and both band bounds come from `CalcDangerHost`, whose
-  `preflight` must refuse the whole child before any plane is touched. A `Sim` whose
-  building band carries no authoritative `Build`/`Wall` facts therefore leaves
-  `Gap::GameDaemonCalcDanger` charged, which is the honest state today.
+  `preflight` must refuse the whole child before any plane is touched. The Sim adapter
+  snapshots every reached answer before the step-12 shell: sparse/dense band identity from
+  `World`, leaders from the exact step-8 records, Unit roles from the step-12 type authority,
+  Build state from `BuildData`, and fort/tower answers from step 8's existing object query
+  packages. A reached `UnitData::attack`, late Airbase/Dock/basic-type strength rung, or missing
+  type package still leaves `Gap::GameDaemonCalcDanger` charged. The raw static type attack is
+  deliberately not substituted for the 1,219-byte `UnitData::attack` override.
 * **It does not resolve the `role` bit or the two `build_flags` bits to shipped names.**
   `role & 0x10000`, `build_flags & 0x10` and `build_flags & 0x40000000` are used as the
   binary uses them. Mapping them to `rules.xml` attribute names is a separate derivation.
 
 ## 6. Tick hook
 
-Not wired. `crates/don-sim/src/tick.rs` is held by the step-8 lane this wave; the hook is
-reported in this lane's return and is a replacement of `SimGameDaemonHost::calc_danger`'s
-one-line gap charge with a `calc_danger(&mut sim.map.world, &host)` call plus a Sim-side
-`CalcDangerHost`.
+Wired in `crates/don-sim/src/tick.rs`. On `frame % 200 == 0`, the adapter builds one immutable
+projection before `GameDaemon::process_all` preflight. The shell refuses before victory, plane,
+market, border, collision, or Group mutation if any reached answer is absent. After acceptance,
+the callback runs `calc_danger(&mut sim.map.world, &prepared)`; the prepared host's own trait
+preflight is infallible, so canonical facts are not queried a second time after victory work.
+
+`game_daemon_calc_danger_tick.rs` exercises an active band-2000 Tower through the real 29-step
+tick. The center receives `-100`, each valid neighbor `-50`, the World checksum changes, the
+danger image survives save/load/resave, and the direct and resumed simulations agree after the
+next frame. Its paired mutation test removes the reached tower answer and proves that both the
+daemon record and all eight danger planes remain byte-for-byte unchanged. This is executable
+integration evidence, not a retail oracle; the tier remains C.

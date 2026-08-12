@@ -65,8 +65,8 @@ use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, canonical_strafe_runtime, casters_animals, collision_blocks_live, combat,
-    defeat_cleanup, economy, game_daemon_step12, groups_guys, leaders, movement, movement_driver,
-    movement_live, order_dispatch, production,
+    defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys, leaders,
+    movement, movement_driver, movement_live, order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -77,8 +77,11 @@ use crate::world::{Handle, World, WorldObjectIdentity, MAP_SPAN, OBJ_FLAG_ACTIVE
 /// Aliased because this file also names [`crate::world::World`], which is the unit SoA.
 pub use crate::systems::map_terrain::World as TerrainWorld;
 
+#[path = "systems/game_daemon_calc_danger_host.rs"]
+mod game_daemon_calc_danger_host;
 #[path = "systems/leader_match_host.rs"]
 pub mod leader_match_host;
+use game_daemon_calc_danger_host::{PreparedSimCalcDangerHost, SimCalcDangerPreflightFault};
 /// The `Sim`-side host for the recovered player-lifecycle command tails — the link between
 /// the command wire and `Leader::defeat` `0x006ECB00` / `Game::check_victory` `0x005926B0`.
 ///
@@ -158,7 +161,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::check_explore leaders.cpp:26413 - uncited",
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
-    "step 12 GameDaemon::calc_danger 0x00732D10 - body absent; exact scheduler charges only frame % 200 == 0",
+    "step 12 GameDaemon::calc_danger 0x00732D10 - exact body/tick adapter execute; reached UnitData::attack and late Airbase/Dock/basic-type building strength remain fail-closed",
     "step 12 GameDaemon::update_all_seen 0x00732840 - exact Unit pass preflights; plane clear remains blocked on Build/Wall/reveal_fog ownership",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
@@ -1284,6 +1287,7 @@ impl order_dispatch::SpecialAnimWorld for SimSpecialAnimHost<'_> {
 struct SimGameDaemonHost<'a> {
     sim: &'a mut Sim,
     expected_empty_colls: i32,
+    danger: Option<Result<PreparedSimCalcDangerHost, SimCalcDangerPreflightFault>>,
     work: u32,
 }
 
@@ -1293,6 +1297,7 @@ enum SimGameDaemonBridgeFault {
         daemon_empty_colls: i32,
         runtime_cursor: i32,
     },
+    Danger(SimCalcDangerPreflightFault),
     Visibility(step12_visibility_runtime::Step12VisibilityPreflightError),
 }
 
@@ -1306,6 +1311,13 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
                 daemon_empty_colls: self.expected_empty_colls,
                 runtime_cursor,
             });
+        }
+        if schedule.contains(game_daemon_step12::GameDaemonCall::CalcDanger) {
+            self.danger
+                .as_ref()
+                .expect("scheduled calc_danger has a prepared image")
+                .as_ref()
+                .map_err(|error| SimGameDaemonBridgeFault::Danger(error.clone()))?;
         }
         if schedule.contains(game_daemon_step12::GameDaemonCall::UpdateAllSeen) {
             let leader_active = std::array::from_fn(|who| self.sim.leaders[who].active);
@@ -1366,9 +1378,20 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     }
 
     fn calc_danger(&mut self) {
-        // The exact shell reaches this only at `frame % 200 == 0`. Retain the red child
-        // honestly without shifting every ordinary frame's gap count.
-        self.sim.cover.gaps[Gap::GameDaemonCalcDanger.index()] += 1;
+        let prepared = self
+            .danger
+            .as_ref()
+            .expect("scheduled calc_danger has a prepared image")
+            .as_ref()
+            .expect("step-12 preflight rejected every failed danger image");
+        let trace = game_daemon_calc_danger::calc_danger(&mut self.sim.map.world, prepared)
+            .expect("prepared danger image and unchanged region lattice are infallible");
+        self.work = self
+            .work
+            .saturating_add(trace.planes_cleared)
+            .saturating_add(trace.units_scanned)
+            .saturating_add(trace.builds_scanned)
+            .saturating_add(trace.cells_written);
     }
 
     fn update_all_seen(&mut self) {
@@ -2921,17 +2944,20 @@ impl Sim {
 
     /// `GameDaemon::process_all` `0x00732700` — `process_victory`, `calc_danger`,
     /// `update_all_seen`, `calc_markets`, `check_borders`, `process_coll_blocks`,
-    /// `Groups::process`. Six children have live bodies; scheduled `calc_danger` remains red.
+    /// `Groups::process`. `calc_danger` executes from an immutable projection of canonical
+    /// leader/object/type owners and refuses the whole shell when a reached virtual is unresolved.
     ///
     /// Order is retail's, and it matters: fog, markets and borders are all recomputed
     /// **before** any unit moves, and group normalisation is the tail of this pass rather
     /// than a pass of its own.
     fn game_daemon_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
+        let danger = (frame % 200 == 0).then(|| game_daemon_calc_danger_host::prepare(self));
         let mut daemon = std::mem::take(&mut self.game_daemon);
         let mut regions = std::mem::take(&mut self.map.regions);
         let mut host = SimGameDaemonHost {
             expected_empty_colls: daemon.empty_colls,
+            danger,
             sim: self,
             work: 0,
         };
@@ -2957,6 +2983,9 @@ impl Sim {
                 self.step12_visibility_error = Some(error);
                 self.cover.gaps[Gap::GameDaemonUpdateAllSeen.index()] += 1;
                 (StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen), 0)
+            }
+            Err(game_daemon_step12::ProcessAllError::Host(SimGameDaemonBridgeFault::Danger(_))) => {
+                (StepRun::Unimplemented(Gap::GameDaemonCalcDanger), 0)
             }
             Err(_) => {
                 // Structural/collision errors are also preflight failures, so the adapter has
