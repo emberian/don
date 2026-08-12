@@ -80,7 +80,7 @@ fn real_frame_reaches_the_host_free_special_unit_no_op() {
     let mut sim = Sim::new(0x25_5880, 16);
     sim.activate(0);
     let (_, row) = actor_with_order(&mut sim, Order::special_anim(SpecialAnimType::Unit, 9, 10));
-    let before = *sim.world.orders(row).current().unwrap();
+    let before = sim.world.orders(row).current().unwrap().clone();
 
     sim.do_frame();
 
@@ -141,7 +141,7 @@ fn canonical_unit_and_wall_targets_also_refuse_without_relation_rows() {
     let target_row = unit_sim.world.row_of(target).unwrap();
     let target_o = i32::from(unit_sim.world.units.o()[target_row]);
     let (_, actor_row) = actor_with_order(&mut unit_sim, exit_from_target(target_o));
-    let unit_order_before = *unit_sim.world.orders(actor_row).current().unwrap();
+    let unit_order_before = unit_sim.world.orders(actor_row).current().unwrap().clone();
 
     unit_sim.do_frame();
 
@@ -166,7 +166,7 @@ fn canonical_unit_and_wall_targets_also_refuse_without_relation_rows() {
         },
     );
     let (_, actor_row) = actor_with_order(&mut wall_sim, exit_from_target(WALL_BAND_BASE as i32));
-    let wall_order_before = *wall_sim.world.orders(actor_row).current().unwrap();
+    let wall_order_before = wall_sim.world.orders(actor_row).current().unwrap().clone();
 
     wall_sim.do_frame();
 
@@ -202,7 +202,7 @@ fn reached_canonical_airbase_exit_refuses_before_any_local_or_rng_write() {
         tolerance: 24,
         flags: 0,
     });
-    let order_before = *sim.world.orders(row).current().unwrap();
+    let order_before = sim.world.orders(row).current().unwrap().clone();
     let path_before = sim.paths[row].clone();
     let rng_before = sim.world.random.state();
 
@@ -219,6 +219,7 @@ fn reached_canonical_airbase_exit_refuses_before_any_local_or_rng_write() {
 fn target_type_missing_after_save_load_refuses_instead_of_defaulting_non_airbase() {
     let mut original = Sim::new(0x25_5880, 16);
     original.world.frame = 1;
+    original.vic_match.frame = 1;
     original.market.cycle = 1;
     let build_row = original.spawn_build(0, savable_build(0x5225));
     original.production_runtime.register_build(build_row, 0x120);
@@ -226,7 +227,7 @@ fn target_type_missing_after_save_load_refuses_instead_of_defaulting_non_airbase
         &mut original,
         exit_from_target(BUILD_BAND_BASE as i32),
     );
-    let order_before = *original.world.orders(actor_row).current().unwrap();
+    let order_before = original.world.orders(actor_row).current().unwrap().clone();
     let bytes = save_sim(&original).unwrap();
 
     let mut loaded = load_sim(&bytes).unwrap();
@@ -268,7 +269,7 @@ fn reached_external_tails_refuse_before_order_path_or_rng_mutation() {
             tolerance: 24,
             flags: 0,
         });
-        let order_before = *sim.world.orders(row).current().unwrap();
+        let order_before = sim.world.orders(row).current().unwrap().clone();
         let path_before = sim.paths[row].clone();
         let rng_before = sim.world.random.state();
 

@@ -340,7 +340,7 @@ fn real_sim_frame_reaches_the_host_free_special_unit_adapter() {
     let actor = sim.spawn_unit(0, 1, 192, 192, 1).unwrap();
     assert!(sim.issue(actor, Order::special_anim(SpecialAnimType::Unit, 9, 10),));
     let row = sim.world.row_of(actor).unwrap();
-    let before = *sim.world.orders(row).current().unwrap();
+    let before = sim.world.orders(row).current().unwrap().clone();
 
     let trace = sim.do_frame();
 

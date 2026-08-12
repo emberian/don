@@ -79,13 +79,13 @@ fn wire_move_order_survives_tick_owned_save_reload_and_resume() {
     executable.in_group = expected.in_group;
 
     order_dispatch::publish(&host.get(0, 0).unwrap().orders, sim.world.orders_mut(row));
-    let installed = *sim.world.orders(row).current().unwrap();
+    let installed = sim.world.orders(row).current().unwrap().clone();
     assert_eq!(installed.kind, OrderIndex::MoveTo);
     assert_eq!(installed.move_state, Some(expected));
 
     let bytes = save_load::save_sim(&sim).unwrap();
     let mut resumed = save_load::load_sim(&bytes).unwrap();
-    let restored = *resumed.world.orders(row).current().unwrap();
+    let restored = resumed.world.orders(row).current().unwrap().clone();
     assert_eq!(restored, installed);
 
     // The actor's default zero speed makes this a deterministic held movement frame. It still
