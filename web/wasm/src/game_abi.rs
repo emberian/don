@@ -313,12 +313,33 @@ impl Game {
     /// Mount the complete collision source for every browser-created one-Guy land Unit.
     /// All immutable type rows and live identities are resolved before the first spatial write.
     fn install_browser_movement_sources(&mut self) -> Result<bool, BrowserGroupMoveAuthorityError> {
-        if !self.gd.is_real {
+        let Some(planned) = Self::browser_movement_sources_for(&self.gd, &self.core)? else {
             return Ok(false);
+        };
+        for (handle, source) in planned {
+            self.core
+                .install_movement_collision_source(handle, source)
+                .map_err(BrowserGroupMoveAuthorityError::Movement)?;
         }
-        let mut planned = Vec::with_capacity(self.core.world.live_count() as usize);
-        for row in 0..self.core.world.live_count() as usize {
-            let handle = self.core.world.handle_at_row(row).ok_or(
+        Ok(true)
+    }
+
+    /// Resolve the immutable pack rows and current generation/position of a complete browser
+    /// collision cohort without mutating the target core. Creation installs this plan into a new
+    /// spatial world; load rehydrates it around the already-saved spatial channels.
+    fn browser_movement_sources_for(
+        gd: &GameData,
+        core: &CoreSim,
+    ) -> Result<
+        Option<Vec<(Handle, don_sim::systems::movement_live::LiveCollisionSource)>>,
+        BrowserGroupMoveAuthorityError,
+    > {
+        if !gd.is_real {
+            return Ok(None);
+        }
+        let mut planned = Vec::with_capacity(core.world.live_count() as usize);
+        for row in 0..core.world.live_count() as usize {
+            let handle = core.world.handle_at_row(row).ok_or(
                 BrowserGroupMoveAuthorityError::MissingCollisionType {
                     handle: Handle {
                         id: row as u32,
@@ -327,24 +348,18 @@ impl Game {
                     type_id: -1,
                 },
             )?;
-            let type_id = self.core.unit_type.get(row).copied().unwrap_or(-1);
-            let source = self
-                .gd
+            let type_id = core.unit_type.get(row).copied().unwrap_or(-1);
+            let source = gd
                 .browser_collision_source(
                     type_id,
-                    self.core.world.units.x_internal()[row],
-                    self.core.world.units.y_internal()[row],
-                    self.core.world.units.angle()[row],
+                    core.world.units.x_internal()[row],
+                    core.world.units.y_internal()[row],
+                    core.world.units.angle()[row],
                 )
                 .ok_or(BrowserGroupMoveAuthorityError::MissingCollisionType { handle, type_id })?;
             planned.push((handle, source));
         }
-        for (handle, source) in planned {
-            self.core
-                .install_movement_collision_source(handle, source)
-                .map_err(BrowserGroupMoveAuthorityError::Movement)?;
-        }
-        Ok(true)
+        Ok(Some(planned))
     }
 
     fn row_for_id(&self, id: u32) -> Option<usize> {
@@ -1493,6 +1508,15 @@ pub unsafe extern "C" fn game_start_manual_teams(
         // The browser does not yet expose a technology/prerequisite setup owner.
         shared_vision_preq_mask: 0,
     };
+    // Game construction opens every browser object registry so the initial object rows can be
+    // allocated. PlayerSetup is the canonical activation owner. Temporarily return the registry
+    // to its pre-setup image, then either keep the exact applied cohort or restore every bit on a
+    // refusal so this adapter-side preparation is atomic with the Sim transaction.
+    let object_active: [bool; PLAYERS] =
+        std::array::from_fn(|who| game.core.world.objects.is_active(who));
+    for who in 0..PLAYERS {
+        assert!(game.core.world.set_object_owner_active(who, false));
+    }
     match game.core.start_manual_player_setup(request) {
         Ok(applied) => {
             // Browser play slots and Sim leader owners are the same bounded cohort. Install
@@ -1531,6 +1555,9 @@ pub unsafe extern "C" fn game_start_manual_teams(
             1
         }
         Err(error) => {
+            for (who, active) in object_active.into_iter().enumerate() {
+                assert!(game.core.world.set_object_owner_active(who, active));
+            }
             game.set_error(format!("manual player setup refused: {error:?}"));
             0
         }
@@ -2228,10 +2255,29 @@ pub unsafe extern "C" fn game_load_alloc(g: *mut Game, len: u32) -> *mut u8 {
 pub unsafe extern "C" fn game_load_commit(g: *mut Game) -> u32 {
     let game = game_ref!(g);
     match load_sim(&game.load_bytes) {
-        Ok(core) if core.map.world.tile_xs == MAP_TILES && core.map.world.tile_ys == MAP_TILES => {
+        Ok(mut core)
+            if core.map.world.tile_xs == MAP_TILES && core.map.world.tile_ys == MAP_TILES =>
+        {
             if let Err(reason) = game.validate_adapter_queues(&core) {
                 game.set_error(format!("load refused: {reason}"));
                 return 0;
+            }
+            match Game::browser_movement_sources_for(&game.gd, &core) {
+                Ok(Some(sources)) => {
+                    if let Err(error) = core.rehydrate_movement_collision_sources(sources) {
+                        game.set_error(format!(
+                            "load refused: collision-source rehydration failed: {error:?}"
+                        ));
+                        return 0;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    game.set_error(format!(
+                        "load refused: collision-source projection failed: {error:?}"
+                    ));
+                    return 0;
+                }
             }
             game.core = core;
             game.install_production_facts();
@@ -2803,6 +2849,102 @@ mod tests {
             }
         }
         assert_eq!(moved, [true, true]);
+
+        for game in [&mut left, &mut right] {
+            assert_eq!(
+                unsafe { game_save(game) },
+                1,
+                "{}",
+                String::from_utf8_lossy(&game.error)
+            );
+            assert!(!game.save_bytes.is_empty());
+            game.load_bytes = game.save_bytes.clone();
+            assert_eq!(
+                unsafe { game_load_commit(game) },
+                1,
+                "{}",
+                String::from_utf8_lossy(&game.error)
+            );
+            assert!(game.error.is_empty());
+        }
+        assert_eq!(left.core.channel_digest(), right.core.channel_digest());
+        assert_eq!(
+            left.core.world.random.state(),
+            right.core.world.random.state()
+        );
+
+        let resumed = actors
+            .iter()
+            .map(|&(who, row, handle, _, _)| {
+                let start = (
+                    left.core.world.units.x_internal()[row],
+                    left.core.world.units.y_internal()[row],
+                );
+                let x_direction = if start.0 < MAP_SPAN / 2 { 1 } else { -1 };
+                let y_direction = if start.1 < MAP_SPAN / 2 { 1 } else { -1 };
+                let destination = (
+                    start.0 + x_direction * TILE_COORD * 4,
+                    start.1 + y_direction * TILE_COORD * 2,
+                );
+                (who, row, handle, start, destination)
+            })
+            .collect::<Vec<_>>();
+        for (serial_index, &(who, row, handle, _, destination)) in resumed.iter().enumerate() {
+            let o = left.core.world.units.o()[row];
+            let packet = group_move_packet(who, o, destination.0, destination.1);
+            let mut expected_receipt = None;
+            for game in [&mut left, &mut right] {
+                game.cmd[..packet.len()].copy_from_slice(&packet);
+                assert_eq!(
+                    unsafe { game_object_command_identity(game, handle.id as i32) },
+                    1
+                );
+                assert_eq!(
+                    unsafe {
+                        game_process_command_package(
+                            game,
+                            u32::from(who),
+                            serial_index as i32 + 3,
+                            packet.len() as u32,
+                        )
+                    },
+                    1,
+                    "{}",
+                    String::from_utf8_lossy(&game.error)
+                );
+                if let Some(expected) = &expected_receipt {
+                    assert_eq!(&game.package_receipt, expected);
+                } else {
+                    expected_receipt = Some(game.package_receipt.clone());
+                }
+            }
+        }
+
+        let mut resumed_moved = [false; 2];
+        for _ in 0..32 {
+            unsafe {
+                game_step(&mut left, 1);
+                game_step(&mut right, 1);
+            }
+            assert_eq!(left.core.channel_digest(), right.core.channel_digest());
+            assert_eq!(
+                left.core.world.random.state(),
+                right.core.world.random.state()
+            );
+            for (actor_index, &(_, row, _, start, _)) in resumed.iter().enumerate() {
+                let left_position = (
+                    left.core.world.units.x_internal()[row],
+                    left.core.world.units.y_internal()[row],
+                );
+                let right_position = (
+                    right.core.world.units.x_internal()[row],
+                    right.core.world.units.y_internal()[row],
+                );
+                assert_eq!(left_position, right_position);
+                resumed_moved[actor_index] |= left_position != start;
+            }
+        }
+        assert_eq!(resumed_moved, [true, true]);
     }
 
     #[test]
@@ -3352,6 +3494,8 @@ mod tests {
             let mut game = Game::new(0x1000 + index as u64);
             let digest = game.core.channel_digest();
             let rng = game.core.world.random.state();
+            let object_active: [bool; PLAYERS] =
+                std::array::from_fn(|who| game.core.world.objects.is_active(who));
             assert_eq!(
                 unsafe { game_start_manual_teams(&mut game, mask, teams, style, local, ranked) },
                 0
@@ -3361,6 +3505,9 @@ mod tests {
             assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0);
             assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0);
             assert!(game.core.players.is_none());
+            let after_object_active: [bool; PLAYERS] =
+                std::array::from_fn(|who| game.core.world.objects.is_active(who));
+            assert_eq!(after_object_active, object_active);
         }
     }
 

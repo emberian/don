@@ -2137,6 +2137,16 @@ impl Sim {
             .install(&mut self.world, &mut self.map.world, h, source)
     }
 
+    /// Reattach exact external collision bodies to a loaded canonical spatial image. The
+    /// runtime validates the complete generation-bound batch before publishing any sidecar.
+    pub fn rehydrate_movement_collision_sources(
+        &mut self,
+        sources: Vec<(Handle, movement_live::LiveCollisionSource)>,
+    ) -> Result<usize, movement_live::LiveCollisionFault> {
+        self.movement_collision
+            .rehydrate_saved_sources(&self.world, &self.map.world, sources)
+    }
+
     /// Snapshot the identity- and revision-bound movement action state for one actor.
     pub fn movement_source_state(
         &self,

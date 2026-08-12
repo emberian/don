@@ -83,10 +83,19 @@ the requested active local slot. A failed setup still installs nothing. This tab
 included in the canonical save image, and survives load exactly.
 
 Load deliberately clears adapter-only command identity scratch, the one-shot lease, selections,
-and receipt. The loaded play→who table remains authoritative. The collision runtime is not yet a
-canonical save section, however, so the product-authority join now preflights it and fails closed
-at `Movement(MissingSource)` after load. A freshly captured post-load package cannot publish a
-movement receipt until exact collision-source rehydration is implemented.
+and receipt. The loaded play→who table remains authoritative. The collision runtime is not a
+canonical save section, so `game_load_commit` resolves a complete generation-bound DONPACK5 source
+batch against the decoded core before swapping it live. The Sim rehydration transaction verifies
+every active Handle, immutable source, saved WData anchor, and one-Guy position/angle before one
+assignment installs the pointer-free sidecar. It neither relinks anchors nor restamps the saved
+collision bitmap. Any missing, duplicate, stale, contained, foreign, or altered source refuses the
+whole load while the previous live core remains unchanged.
+
+The browser constructor opens all four object registries to allocate their starting rows. The
+manual-setup adapter captures those bits, returns the registries to the inactive pre-setup image,
+and then lets `PlayerSetup` activate exactly its requested cohort. A refusal restores every prior
+bit; success no longer leaves construction-only activity on slots two and three that makes
+canonical save validation diverge from its applied setup receipt.
 
 ## Guarded JavaScript wrapper
 
@@ -157,7 +166,12 @@ Focused source evidence covers:
 - exact DONPACK5 parsing plus stale DONPACK4 rejection and collision-row projection;
 - two independently created native ABI `Game` instances processing both players' leased
   Group→Move packages with identical receipts, frame digests, and RNG after every step; and
-- actual position change for both selected land Units within 32 frames in both instances.
+- actual position change for both selected land Units within 32 frames in both instances, followed
+  by canonical save/load, a second receipt pair, and a second position change in both instances.
+
+Focused collision-runtime tests also rehydrate a complete two-Unit loaded image without changing
+its saved anchors or bitmap and prove that altering the second Guy body rejects atomically before
+the first source becomes visible.
 
 The dormant client helper now chooses an inward destination from the authoritative exported span
 and passes only strict `{who,o,uid}` input to the package encoder; renderer id and generation remain
@@ -166,5 +180,4 @@ lease evidence and never become retail `o`.
 This remains source-only. No checked-in Wasm artifact, capability/version bit, or client default is
 changed. Activation still requires an exact-commit reproducible Wasm build and the same two-instance
 receipt/frame/digest/RNG **and position-change** proof against the compiled artifact. Browser proof
-is additionally unavailable while the required Chrome target is absent, and load/resume remains
-red until the collision runtime has a generation-safe canonical rehydration transaction.
+is additionally unavailable while the required Chrome target is absent.

@@ -148,6 +148,16 @@ pub enum LiveCollisionFault {
     MissingPath(usize),
     MissingOrderState(usize),
     SourceAlreadyInstalled(usize),
+    NonEmptyRehydrationRuntime,
+    IncompleteRehydration {
+        active: usize,
+        supplied: usize,
+    },
+    DuplicateRehydratedRow(usize),
+    SavedGuyActorMismatch {
+        row: usize,
+        guy: usize,
+    },
     ForeignSource {
         row: usize,
         requested: Handle,
@@ -339,6 +349,78 @@ impl LiveCollisionRuntime {
             linked: true,
         });
         Ok(row)
+    }
+
+    /// Rebuild the pointer-free collision sidecar around a canonical loaded World/terrain
+    /// image without relinking anchors or restamping Guy footprints.
+    ///
+    /// DoNSave owns the intrusive WData lists and collision bitmap but deliberately carries no
+    /// external type/Guy source. A product adapter may reconstruct those immutable facts after
+    /// load. This transaction accepts exactly one generation-bound source for every active Unit,
+    /// validates every source, saved anchor, and one-Guy actor image before the first sidecar
+    /// write, then replaces the empty runtime in one assignment. It cannot hide a malformed save
+    /// by repairing the checksum-owned spatial channels.
+    pub fn rehydrate_saved_sources(
+        &mut self,
+        world: &World,
+        terrain: &TerrainWorld,
+        sources: Vec<(Handle, LiveCollisionSource)>,
+    ) -> Result<usize, LiveCollisionFault> {
+        if self.sources.iter().any(Option::is_some) {
+            return Err(LiveCollisionFault::NonEmptyRehydrationRuntime);
+        }
+        let rows = world.live_count() as usize;
+        let active = (0..rows)
+            .filter(|&row| world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0)
+            .count();
+        if sources.len() != active {
+            return Err(LiveCollisionFault::IncompleteRehydration {
+                active,
+                supplied: sources.len(),
+            });
+        }
+
+        let mut planned = vec![None; rows];
+        for (actor, source) in sources {
+            let row = world
+                .row_of(actor)
+                .ok_or(LiveCollisionFault::StaleActor(actor))?;
+            if planned[row].is_some() {
+                return Err(LiveCollisionFault::DuplicateRehydratedRow(row));
+            }
+            validate_source(world, terrain, row, &source)?;
+            if !anchor_is_linked(world, terrain, row) {
+                return Err(LiveCollisionFault::UnlinkedAnchor(row));
+            }
+            if let [guy] = source.guys.as_slice() {
+                if (guy.x, guy.y, guy.angle)
+                    != (
+                        world.units.x_internal()[row],
+                        world.units.y_internal()[row],
+                        world.units.angle()[row],
+                    )
+                {
+                    return Err(LiveCollisionFault::SavedGuyActorMismatch { row, guy: 0 });
+                }
+            }
+            planned[row] = Some(InstalledSource {
+                actor,
+                state_revision: 0,
+                facts: source,
+                linked: true,
+            });
+        }
+        for row in 0..rows {
+            if world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0 && planned[row].is_none() {
+                return Err(LiveCollisionFault::MissingSource(row));
+            }
+        }
+
+        let mut replacement = Self::new();
+        replacement.ensure_rows(rows);
+        replacement.sources = planned;
+        *self = replacement;
+        Ok(active)
     }
 
     /// Attach an exact collision/Guy source for a Unit which is currently inside an object.
@@ -1308,6 +1390,89 @@ mod tests {
         assert!(block_get(block, ux, uy));
         let paths = vec![PathStack::new(), PathStack::new()];
         assert_eq!(rt.preflight(&world, &terrain, &paths), Ok(()));
+    }
+
+    #[test]
+    fn loaded_collision_sources_rehydrate_without_relinking_or_restamping() {
+        let mut world = World::new(31);
+        let mut terrain = TerrainWorld::init_default_rules(3, 3);
+        let h1 = world.allocate_typed_at(0, 1, 360, 504).unwrap();
+        let h2 = world.allocate_typed_at(0, 1, 600, 504).unwrap();
+        world.units.guy_mark_mut()[0] = 1;
+        world.units.guy_mark_mut()[1] = 1;
+        let source1 = source(360, 504);
+        let source2 = source(600, 504);
+        let mut installed = LiveCollisionRuntime::new();
+        installed
+            .install(&mut world, &mut terrain, h1, source1.clone())
+            .unwrap();
+        installed
+            .install(&mut world, &mut terrain, h2, source2.clone())
+            .unwrap();
+        let head_before = {
+            let head = terrain.wdata(movement::wcell_of(600), movement::wcell_of(504));
+            (head.down_who, head.down)
+        };
+        let block_before = terrain
+            .wdata(ucell_of(360) >> 4, ucell_of(504) >> 4)
+            .block
+            .clone();
+
+        let mut loaded = LiveCollisionRuntime::new();
+        assert_eq!(
+            loaded.rehydrate_saved_sources(
+                &world,
+                &terrain,
+                vec![(h1, source1.clone()), (h2, source2.clone())],
+            ),
+            Ok(2)
+        );
+        assert_eq!(loaded.source(0), Some(&source1));
+        assert_eq!(loaded.source(1), Some(&source2));
+        assert_eq!(
+            {
+                let head = terrain.wdata(movement::wcell_of(600), movement::wcell_of(504));
+                (head.down_who, head.down)
+            },
+            head_before
+        );
+        assert_eq!(
+            terrain.wdata(ucell_of(360) >> 4, ucell_of(504) >> 4).block,
+            block_before
+        );
+        assert_eq!(
+            loaded.preflight(&world, &terrain, &[PathStack::new(), PathStack::new()]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn loaded_collision_rehydration_rejects_one_altered_body_atomically() {
+        let mut world = World::new(32);
+        let mut terrain = TerrainWorld::init_default_rules(3, 3);
+        let h1 = world.allocate_typed_at(0, 1, 360, 504).unwrap();
+        let h2 = world.allocate_typed_at(0, 1, 600, 504).unwrap();
+        world.units.guy_mark_mut()[0] = 1;
+        world.units.guy_mark_mut()[1] = 1;
+        let source1 = source(360, 504);
+        let source2 = source(600, 504);
+        let mut installed = LiveCollisionRuntime::new();
+        installed
+            .install(&mut world, &mut terrain, h1, source1.clone())
+            .unwrap();
+        installed
+            .install(&mut world, &mut terrain, h2, source2.clone())
+            .unwrap();
+
+        let mut altered = source2;
+        altered.guys[0].x = 984;
+        let mut loaded = LiveCollisionRuntime::new();
+        assert_eq!(
+            loaded.rehydrate_saved_sources(&world, &terrain, vec![(h1, source1), (h2, altered)],),
+            Err(LiveCollisionFault::SavedGuyActorMismatch { row: 1, guy: 0 })
+        );
+        assert!(loaded.sources.is_empty());
+        assert!(loaded.order_state.is_empty());
     }
 
     #[test]
