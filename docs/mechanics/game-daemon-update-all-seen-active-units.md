@@ -12,17 +12,21 @@ true before `GameDaemon::busy` or a World plane changes:
    the retail-empty `[3000,3000)` band;
 2. neither `Game+0x821 bit 4` nor `Game+0x822 bit 1` enables scenario reveal points;
 3. frame is nonzero, so the frame-zero alliance explored-sharing tail is unreachable;
-4. every valid Build is construction-complete (`flags & 4`); valid incomplete/Wonder rows stop
-   before their unrecovered type and `Wall::update_local_seen` cone, while invalid retained rows
-   take the PE's two false validity virtuals and are skipped;
-5. each admitted Build gets signed LOS from `ObjectData::mylos +0x3C`; negative LOS refuses,
+4. invalid retained Build rows take the PE's two false validity virtuals and skip; each valid
+   incomplete row resolves its canonical current type through `LiveProductionRuntime`, and an
+   ordinary non-Wonder or an unstarted Wonder takes the PE's exact no-visibility return;
+5. a valid started Wonder carries exact `ObjectTypeData +0x234/+0x238` footprint and, when
+   uncaptured, the reached `BuildTypeData::is_fort` fact; the captured branch returns before
+   that virtual. Its complete `Wall::update_local_seen` body writes the canonical World planes
+   in x-outer/y-inner tile order through `World::set_locally_seen`;
+6. each admitted active Build gets signed LOS from `ObjectData::mylos +0x3C`; negative LOS refuses,
    zero returns without reading `visible`, and positive LOS requires `visible +0x40 == 0` and an
    `infiltrated +0x3A` recipient in `0..=7`;
-6. the existing revision-bound Unit authority resolves every active owner-local Unit row,
+7. the existing revision-bound Unit authority resolves every active owner-local Unit row,
    detector byte, LOS/general result, small-radius projection, and extra explored recipient;
-7. every Unit that stamps has `ObjectData::visible +0x40 == 0`, avoiding the unrecovered
+8. every Unit that stamps has `ObjectData::visible +0x40 == 0`, avoiding the unrecovered
    virtual `Unit::update_local_seen`; and
-8. every newly explored cell's `World::reveal_fog` call is proven mutation-free: its centre
+9. every newly explored cell's `World::reveal_fog` call is proven mutation-free: its centre
    TData tile has no `RESOURCE 0x0200`, and its WData cell has neither `OIL 0x0800` nor item
    bit `0x8000`.
 
@@ -42,7 +46,10 @@ The executed stage map is:
 | `World::clear_seen` `0x006B2250` | clear canonical `seen` and `wcoord_seen` |
 | `memset(World+0x164)` | clear canonical `seen3` |
 | Build vtable `0x00B42174`, `+0x0C/+0x10` | visit each canonical sparse Build identity; invalid retained rows skip |
-| `BuildData::is_wonder` `0x00472320`, active `0x00472350` | refuse valid incomplete Builds before the started-Wonder/local-seen branch; admit complete active Builds |
+| `BuildData::is_wonder` `0x00472320`, active `0x00472350`, started `0x00472360` | resolve valid incomplete type identity; ordinary incomplete and unstarted Wonder rows skip, while complete Builds take `Object::update_seen` |
+| `Wall::update_local_seen` `0x0063ED50` | for a started Wonder, compose the exact all-player or captured/fort mask and walk its canonical footprint in retail order |
+| `WallData::tile_corner` `0x00643440` | derive footprint corner from canonical Build position and exact type `x_size/y_size`; reject off-map or malformed type facts during preflight |
+| `World::set_locally_seen` `0x006B4BB0` | write `seen2` and `WData::was_seen`, plus `seen` and `wcoord_seen` unless the captured/fort explored-only flag is set; `seen3` is untouched |
 | `WallData::los` `0x0063FA50` | read signed canonical `ObjectData::mylos +0x3C`; zero LOS returns before `visible` |
 | dedicated Wall outer pass | exact retail structural band `[3000,3000)` proves zero rows; any nonempty Wall band refuses |
 | Unit outer pass | traverse the opaque prepared Unit rows in retail owner/object order |
@@ -51,12 +58,13 @@ The executed stage map is:
 | scenario reveal points | skip because both exact Game gates are clear |
 | frame-zero sharing | skip because scheduled phase 33 is nonzero |
 
-Preflight clones only persistent `seen2` to reproduce the exact first-exploration chronology.
-It validates every reached `reveal_fog` cell and all residual gates before publishing anything.
-The commit then performs the real canonical plane clear and calls the existing exact
-`borders_fog::update_seen` body for each prepared Build stamp and then each prepared Unit stamp.
-A chronology assertion binds the
-preflight to the commit. No danger/visibility sidecar is introduced.
+Preflight clones persistent `seen2` to reproduce both started-Wonder footprint exploration and
+the exact later first-exploration chronology. It validates every footprint cell, reached
+`reveal_fog` cell, and residual gate before publishing anything. The commit then performs the
+real canonical plane clear and replays the opaque Build action sequence—Wonder local footprints
+and active Build stamps interleaved in sparse object order—before each prepared Unit stamp.
+A chronology assertion binds the preflight to the commit. No danger/visibility sidecar is
+introduced.
 
 ## Atomicity, checksum, and save/resume proof
 
@@ -65,21 +73,26 @@ preflight to the commit. No danger/visibility sidecar is introduced.
 - an active empty leader executes the exact zero-row member of this cohort;
 - a canonical active-complete Build stamps nonempty `seen` and persistent `seen2`, with Object
   flag `0x40` driving the freshly cleared detector `seen3` plane;
+- an incomplete ordinary Build executes without a vision write, while a 6x6 started Wonder
+  executes 36 exact tile calls folding onto 3x3 fog cells, changes the World checksum, and
+  survives save/reload plus a resumed frame byte-for-byte;
 - a live canonical Unit writes nonempty `seen`, persistent `seen2`, and `wcoord_seen`, while a
   nondetector leaves the freshly cleared `seen3` plane empty;
 - the canonical World checksum changes;
 - after removing only the reinstallable type/instance authority, save/load preserves that
   checksum and the next resumed frame converges in channel digest and byte-identical save;
-- an incomplete Build, a positive-LOS Build with nonzero `visible`, a resource-cell reveal, or a
-  Unit with nonzero `visible` refuses before daemon or plane mutation.
+- a missing incomplete-Build current type, missing started-Wonder footprint facts, a reached
+  but absent fort predicate, a positive-LOS active Build with nonzero `visible`, a resource-cell
+  reveal, or a Unit with nonzero `visible` refuses before daemon or plane mutation;
 - a zero-LOS Build returns before its deliberately nonzero `visible` byte is read.
 
 ## Remaining red boundary
 
-The gap remains red. Valid incomplete/Wonder Builds, a nonempty dedicated Wall band,
-either Build or Unit local-seen call, effectful reveal, scenario reveal-point pass,
-direct/incremental entry, or frame-zero explored sharing fails closed. Those bodies need their
-complete canonical owners and the same
+The gap remains red. A nonempty dedicated Wall band, active-Build or Unit local-seen call,
+effectful reveal, scenario reveal-point pass, direct/incremental entry, or frame-zero explored
+sharing fails closed. Missing current Build type or reached Wonder footprint/fort facts also
+refuse atomically rather than inventing an ordinary row. Those bodies need their complete
+canonical owners and the same
 preflight/commit discipline before the general `update_all_seen` row can close.
 
 ## Focused gate
@@ -92,7 +105,9 @@ cargo test -p don-sim systems::game_daemon_step12 --lib
 ```
 
 The stage map was audited against `re/decomp-all/00732840.c`,
-`re/decomp-all/00651b80.c`, `re/decomp-all/0063fa50.c`,
+`re/decomp-all/00651b80.c`, `re/decomp-all/0063ed50.c`,
+`re/decomp-all/00643440.c`, `re/decomp-all/006b4bb0.c`, `re/decomp-all/0063fa50.c`,
 `re/decomp-all/006b3d30.c`, exact shipped Build/Wall vtable bytes, the existing PE/PDB
 procedure census, and the canonical sparse-object, Unit-column, World, Fog, and semaphore
-owners named above.
+owners named above. The installed retail `buildingrules.xml` independently fixes Space Program
+type `0x21E` at a 6x6 footprint for the save/resume witness.

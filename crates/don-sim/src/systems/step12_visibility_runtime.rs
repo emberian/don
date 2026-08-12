@@ -4,9 +4,10 @@
 //!
 //! This owner joins the exact type, leader-count, HeroesData, Constants, projection, and
 //! instance-detector facts required by [`super::step12_visibility_producer_frontier`].  It is
-//! extended with canonical active-complete Build rows in exact retail Build-before-Unit order.
-//! The active cohort requires an empty dedicated Wall band, disabled scenario reveal points,
-//! zero `ObjectData::visible`, and the PE-proven no-effect branch of every reached
+//! extended with canonical Build rows in exact retail Build-before-Unit order, including the
+//! complete started-Wonder `Wall::update_local_seen` footprint body. The active cohort requires
+//! an empty dedicated Wall band, disabled scenario reveal points, zero `ObjectData::visible` on
+//! every reached `Object::update_seen`, and the PE-proven no-effect branch of every reached
 //! `World::reveal_fog`. Other active maps still stop before `World::clear_seen`.
 
 use crate::systems::sparse_object_bands_authority_frontier::{
@@ -17,7 +18,11 @@ use crate::world::{Handle, World, WorldObjectIdentity};
 use super::borders_fog::{self, CircleTable, Fog, SeeingObject};
 use super::items::WFLAG_ITEM;
 use super::map_terrain::{self, tflag, wflag};
-use super::production::{self, BuildData};
+use super::production::{
+    self,
+    runtime::{LiveProductionRuntime, LiveTypeClass},
+    BuildData, Footprint,
+};
 use super::step12_visibility_producer_frontier::{
     object_init_flags, prepare_live_unit_pass, resolve_unit_los, DetectorInstanceProvenance,
     LiveStep12Preparation, LiveStep12PrepareFault, LiveStep12UnitBandSnapshot,
@@ -27,6 +32,7 @@ use super::step12_visibility_producer_frontier::{
     OBJECT_VALID, PTOLEMY_NUM_UNITS_INDEX, PTOLEMY_ROLE_MASK, SMALL_LOS_PROJECT_DISTANCE,
     SMALL_LOS_STANDARD_TYPE_FLAGS2, SMALL_LOS_STANDARD_UNIT_MASKS, THE_CEO_NUM_UNITS_INDEX,
 };
+use super::victory_score;
 
 pub const UNIT_TYPE_BASE: i32 = 0x32;
 pub const UNIT_COUNT_SLOTS: usize = 352;
@@ -263,6 +269,7 @@ pub struct ScheduledActiveProducerContext<'a> {
     pub terrain: &'a map_terrain::World,
     pub circle: &'a CircleTable,
     pub builds: &'a [BuildData],
+    pub production: &'a LiveProductionRuntime,
     pub scenario_reveal_points_enabled: bool,
 }
 
@@ -304,10 +311,32 @@ pub enum ActiveUnitProducerFault {
         actual_who: u8,
         actual_o: i16,
     },
-    InactiveBuildNeedsWonderAuthority {
+    MissingBuildType {
         row: usize,
         who: u8,
         object_o: i16,
+    },
+    InvalidBuildType {
+        row: usize,
+        type_index: i32,
+    },
+    StartedWonderNeedsVisibilityTypeFacts {
+        row: usize,
+        type_index: i32,
+    },
+    StartedWonderNeedsFortAuthority {
+        row: usize,
+        type_index: i32,
+    },
+    InvalidWonderFootprint {
+        row: usize,
+        x_size: i32,
+        y_size: i32,
+    },
+    WonderFootprintOutOfBounds {
+        row: usize,
+        tile_x: i32,
+        tile_y: i32,
     },
     NegativeBuildLos {
         row: usize,
@@ -345,7 +374,7 @@ pub enum ActiveUnitProducerFault {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedStep12ActiveUnitClear {
     build_rows_visited: usize,
-    build_stamps: Vec<PreparedStep12BuildStamp>,
+    build_actions: Vec<PreparedStep12BuildAction>,
     unit_pass: PreparedStep12UnitPass,
     expected_reveal_calls: usize,
 }
@@ -364,8 +393,35 @@ impl PreparedStep12ActiveUnitClear {
     }
 
     pub fn build_stamps(&self) -> usize {
-        self.build_stamps.len()
+        self.build_actions
+            .iter()
+            .filter(|action| matches!(action, PreparedStep12BuildAction::UpdateSeen(_)))
+            .count()
     }
+
+    pub fn wonder_local_seen_cells(&self) -> usize {
+        self.build_actions
+            .iter()
+            .map(|action| match action {
+                PreparedStep12BuildAction::UpdateSeen(_) => 0,
+                PreparedStep12BuildAction::UpdateLocalSeen(cells) => cells.len(),
+            })
+            .sum()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PreparedStep12BuildAction {
+    UpdateSeen(PreparedStep12BuildStamp),
+    UpdateLocalSeen(Vec<PreparedStep12WonderLocalSeen>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedStep12WonderLocalSeen {
+    fog_x: i32,
+    fog_y: i32,
+    player_mask: u8,
+    explored_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,8 +454,87 @@ pub struct ActiveUnitClearTrace {
     pub rows_visited: usize,
     pub build_rows_visited: usize,
     pub build_stamps: usize,
+    pub wonder_local_seen_cells: usize,
     pub unit_stamps: usize,
     pub reveal_no_effect_calls: usize,
+}
+
+fn prepare_started_wonder_local_seen(
+    row: usize,
+    build: &BuildData,
+    type_index: i32,
+    footprint: Footprint,
+    is_fort: Option<bool>,
+    terrain: &map_terrain::World,
+) -> Result<Vec<PreparedStep12WonderLocalSeen>, ActiveUnitProducerFault> {
+    if footprint.x_size <= 0
+        || footprint.y_size <= 0
+        || footprint.x_size > terrain.tile_xs
+        || footprint.y_size > terrain.tile_ys
+    {
+        return Err(ActiveUnitProducerFault::InvalidWonderFootprint {
+            row,
+            x_size: footprint.x_size,
+            y_size: footprint.y_size,
+        });
+    }
+    let (fine_x, fine_y) = build.position();
+    let (corner_x, corner_y) = footprint.tile_corner(fine_x, fine_y);
+    let (Some(end_x), Some(end_y)) = (
+        corner_x.checked_add(footprint.x_size),
+        corner_y.checked_add(footprint.y_size),
+    ) else {
+        return Err(ActiveUnitProducerFault::InvalidWonderFootprint {
+            row,
+            x_size: footprint.x_size,
+            y_size: footprint.y_size,
+        });
+    };
+    let mut player_mask = u8::MAX;
+    let mut explored_only = false;
+
+    // Exact 0x0063ED62..0x0063EDCA gate order. Captured Wonders return before the
+    // `is_fort` type virtual. An uncaptured non-fort started Wonder uses 0xFF; a fort
+    // relation uses the same explored-only mask as the captured arm.
+    if build.flags & production::flag::CAPTURED != 0 {
+        explored_only = true;
+        player_mask = build.other[production::off::VISIBLE] | build.ever_seen | (1u8 << build.who);
+    } else {
+        let is_fort = is_fort
+            .ok_or(ActiveUnitProducerFault::StartedWonderNeedsFortAuthority { row, type_index })?;
+        if is_fort {
+            explored_only = true;
+            player_mask =
+                build.other[production::off::VISIBLE] | build.ever_seen | (1u8 << build.who);
+        }
+    }
+
+    let mut prepared = Vec::with_capacity(
+        usize::try_from(footprint.x_size).expect("positive validated Wonder x footprint")
+            * usize::try_from(footprint.y_size).expect("positive validated Wonder y footprint"),
+    );
+    for tile_x in corner_x..end_x {
+        for tile_y in corner_y..end_y {
+            if !terrain.valid_t(tile_x, tile_y) {
+                return Err(ActiveUnitProducerFault::WonderFootprintOutOfBounds {
+                    row,
+                    tile_x,
+                    tile_y,
+                });
+            }
+            prepared.push(PreparedStep12WonderLocalSeen {
+                fog_x: tile_x >> 1,
+                fog_y: tile_y >> 1,
+                player_mask,
+                explored_only,
+            });
+        }
+    }
+    debug_assert!(
+        (victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
+            .contains(&type_index)
+    );
+    Ok(prepared)
 }
 
 /// The complete `GameDaemon::update_all_seen` paths that the live Sim can currently
@@ -503,7 +638,7 @@ fn prepare_active_unit_clear(
     let mut explored = context.terrain.seen2.clone();
     let mut expected_reveal_calls = 0usize;
     let mut build_rows_visited = 0usize;
-    let mut build_stamps = Vec::new();
+    let mut build_actions = Vec::new();
     for who in 0..LEADER_SLOTS {
         if !leader_active[who] {
             continue;
@@ -572,14 +707,55 @@ fn prepare_active_unit_clear(
             if !build.is_valid() {
                 continue;
             }
-            // A valid incomplete Build enters the special `is_wonder` / `is_started` /
-            // `Wall::update_local_seen` cone. Its type and Wonder owners are not guessed.
             if !build.is_active() {
-                return Err(ActiveUnitProducerFault::InactiveBuildNeedsWonderAuthority {
+                // Exact 0x00732938..0x00732992: valid incomplete buildings query
+                // `BuildData::is_wonder`; ordinary incomplete buildings then skip with no
+                // visibility effect. Only a started Wonder reaches
+                // `Wall::update_local_seen`.
+                let type_index = context
+                    .production
+                    .build_types
+                    .get(row)
+                    .copied()
+                    .flatten()
+                    .ok_or(ActiveUnitProducerFault::MissingBuildType {
+                        row,
+                        who: build.who,
+                        object_o: build.object_id(),
+                    })?;
+                let type_facts = usize::try_from(type_index)
+                    .ok()
+                    .and_then(|index| context.production.types.get(index))
+                    .and_then(Option::as_ref)
+                    .filter(|facts| {
+                        facts.type_index == type_index && facts.class == LiveTypeClass::Building
+                    })
+                    .ok_or(ActiveUnitProducerFault::InvalidBuildType { row, type_index })?;
+                if !(victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
+                    .contains(&type_index)
+                    || !build.is_started()
+                {
+                    continue;
+                }
+                let visibility = type_facts.build_visibility.ok_or(
+                    ActiveUnitProducerFault::StartedWonderNeedsVisibilityTypeFacts {
+                        row,
+                        type_index,
+                    },
+                )?;
+                let cells = prepare_started_wonder_local_seen(
                     row,
-                    who: build.who,
-                    object_o: build.object_id(),
-                });
+                    build,
+                    type_index,
+                    visibility.footprint,
+                    visibility.is_fort,
+                    context.terrain,
+                )?;
+                for cell in &cells {
+                    explored[context.terrain.f_index(cell.fog_x, cell.fog_y)] |= cell.player_mask;
+                }
+                build_actions.push(PreparedStep12BuildAction::UpdateLocalSeen(cells));
+                continue;
             }
 
             let los = build.other[production::off::MYLOS] as i8;
@@ -610,7 +786,7 @@ fn prepare_active_unit_clear(
             };
             expected_reveal_calls +=
                 preflight_seeing_cells(stamp.seeing_object(), context, &mut explored)?;
-            build_stamps.push(stamp);
+            build_actions.push(PreparedStep12BuildAction::UpdateSeen(stamp));
         }
     }
 
@@ -646,7 +822,7 @@ fn prepare_active_unit_clear(
     }
     Ok(PreparedStep12ActiveUnitClear {
         build_rows_visited,
-        build_stamps,
+        build_actions,
         unit_pass: pass,
         expected_reveal_calls,
     })
@@ -663,14 +839,27 @@ pub fn commit_active_unit_clear(
 ) -> ActiveUnitClearTrace {
     fog.begin_frame(terrain);
     let mut newly_explored = Vec::new();
-    for stamp in &prepared.build_stamps {
-        borders_fog::update_seen(
-            fog,
-            terrain,
-            circle,
-            &stamp.seeing_object(),
-            &mut newly_explored,
-        );
+    for action in &prepared.build_actions {
+        match action {
+            PreparedStep12BuildAction::UpdateSeen(stamp) => borders_fog::update_seen(
+                fog,
+                terrain,
+                circle,
+                &stamp.seeing_object(),
+                &mut newly_explored,
+            ),
+            PreparedStep12BuildAction::UpdateLocalSeen(cells) => {
+                for cell in cells {
+                    fog.set_locally_seen_mask(
+                        terrain,
+                        cell.fog_x,
+                        cell.fog_y,
+                        cell.player_mask,
+                        cell.explored_only,
+                    );
+                }
+            }
+        }
     }
     let rows_visited = prepared.build_rows_visited + prepared.unit_pass.rows().len();
     for row in prepared.unit_pass.rows() {
@@ -700,7 +889,8 @@ pub fn commit_active_unit_clear(
     ActiveUnitClearTrace {
         rows_visited,
         build_rows_visited: prepared.build_rows_visited,
-        build_stamps: prepared.build_stamps.len(),
+        build_stamps: prepared.build_stamps(),
+        wonder_local_seen_cells: prepared.wonder_local_seen_cells(),
         unit_stamps: prepared.unit_pass.stamps(),
         reveal_no_effect_calls: newly_explored.len(),
     }

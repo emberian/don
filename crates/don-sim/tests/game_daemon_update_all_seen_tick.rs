@@ -7,7 +7,15 @@ use don_sim::systems::step12_visibility_runtime::{
     ActiveUnitProducerFault, RevealFogNoEffectBlocker, Step12VisibilityAuthority,
     Step12VisibilityPreflightError, VisibilityConstants, VisibilityTypeProjection, UNIT_TYPE_BASE,
 };
-use don_sim::systems::{map_terrain::tflag, player_setup::ManualPlayerSetup, production};
+use don_sim::systems::{
+    map_terrain::tflag,
+    player_setup::ManualPlayerSetup,
+    production::{
+        self,
+        runtime::{LiveBuildVisibilityTypeFacts, LiveProductionType},
+        Footprint,
+    },
+};
 use don_sim::tick::{Gap, Sim, StepRun};
 
 fn advance_to_phase_33(sim: &mut Sim) {
@@ -167,6 +175,17 @@ fn active_build_phase33(active: bool) -> Sim {
     sim
 }
 
+fn install_build_visibility_type(
+    sim: &mut Sim,
+    type_index: i32,
+    visibility: Option<LiveBuildVisibilityTypeFacts>,
+) {
+    let mut facts = LiveProductionType::in_place_building(type_index, 1);
+    facts.build_visibility = visibility;
+    sim.production_runtime.install_type(facts);
+    sim.production_runtime.register_build(0, type_index);
+}
+
 #[test]
 fn active_unit_phase33_stamps_canonical_planes_and_roundtrips_the_resumed_frame() {
     let mut original = active_unit_phase33();
@@ -238,7 +257,7 @@ fn active_build_phase33_stamps_canonical_planes_and_roundtrips_the_resumed_frame
 }
 
 #[test]
-fn incomplete_build_refuses_before_daemon_or_plane_mutation() {
+fn incomplete_build_without_current_type_refuses_before_daemon_or_plane_mutation() {
     let mut sim = active_build_phase33(false);
     sim.game_daemon.busy = 19;
     seed_fog_planes(&mut sim);
@@ -256,10 +275,268 @@ fn incomplete_build_refuses_before_daemon_or_plane_mutation() {
     assert_eq!(
         sim.step12_visibility_error,
         Some(Step12VisibilityPreflightError::ActiveUnitCohort(
-            ActiveUnitProducerFault::InactiveBuildNeedsWonderAuthority {
+            ActiveUnitProducerFault::MissingBuildType {
                 row: 0,
                 who: 0,
                 object_o: BUILD_BAND_BASE as i16,
+            }
+        ))
+    );
+}
+
+#[test]
+fn incomplete_nonwonder_build_takes_the_exact_no_visibility_branch() {
+    let mut sim = active_build_phase33(false);
+    install_build_visibility_type(&mut sim, 0x19e, None);
+    sim.game_daemon.busy = 19;
+    let seen2_before = seed_fog_planes(&mut sim);
+
+    let trace = sim.do_frame();
+
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(sim.game_daemon.busy, 4);
+    assert_eq!(sim.step12_visibility_error, None);
+    assert!(sim.map.world.seen.iter().all(|&byte| byte == 0));
+    assert_eq!(sim.map.world.seen2, seen2_before);
+    assert!(sim.map.world.seen3.iter().all(|&byte| byte == 0));
+    assert!(sim.map.world.wcoord_seen.iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn unstarted_wonder_returns_before_footprint_authority() {
+    let mut sim = active_build_phase33(false);
+    sim.builds[0].flags &= !production::flag::STARTED;
+    install_build_visibility_type(&mut sim, 0x21e, None);
+    sim.game_daemon.busy = 19;
+    let seen2_before = seed_fog_planes(&mut sim);
+
+    let trace = sim.do_frame();
+
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(sim.step12_visibility_error, None);
+    assert!(sim.map.world.seen.iter().all(|&byte| byte == 0));
+    assert_eq!(sim.map.world.seen2, seen2_before);
+    assert!(sim.map.world.seen3.iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn started_wonder_stamps_its_exact_footprint_and_roundtrips_resumed_frame() {
+    let mut original = active_build_phase33(false);
+    install_build_visibility_type(
+        &mut original,
+        0x21e,
+        Some(LiveBuildVisibilityTypeFacts {
+            footprint: Footprint {
+                x_size: 6,
+                y_size: 6,
+            },
+            is_fort: Some(false),
+        }),
+    );
+    original.builds[0].other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    original.builds[0].other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    original.game_daemon.busy = 19;
+    seed_fog_planes(&mut original);
+    let checksum_before = original.map.world.checksum();
+
+    let trace = original.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Executed,
+        "visibility error: {:?}",
+        original.step12_visibility_error
+    );
+    assert_eq!(original.game_daemon.busy, 4);
+    assert_eq!(original.step12_visibility_error, None);
+    assert_eq!(
+        original
+            .map
+            .world
+            .seen
+            .iter()
+            .filter(|&&byte| byte == u8::MAX)
+            .count(),
+        9,
+        "the 6x6 Wonder tile footprint folds onto exactly 3x3 fog cells"
+    );
+    assert_eq!(
+        original
+            .map
+            .world
+            .seen2
+            .iter()
+            .filter(|&&byte| byte == u8::MAX)
+            .count(),
+        9
+    );
+    assert!(original.map.world.seen3.iter().all(|&byte| byte == 0));
+    assert_ne!(original.map.world.checksum(), checksum_before);
+
+    // Current type/footprint facts are reinstallable type authority. The canonical
+    // World after-image and Build row must survive without serializing that projection.
+    original.production_runtime = Default::default();
+    let saved = save_sim(&original).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    assert_eq!(resumed.map.world.checksum(), original.map.world.checksum());
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+
+    original.do_frame();
+    resumed.do_frame();
+    assert_eq!(resumed.channel_digest(), original.channel_digest());
+    assert_eq!(save_sim(&resumed).unwrap(), save_sim(&original).unwrap());
+}
+
+#[test]
+fn captured_started_wonder_takes_the_explored_only_mask_branch() {
+    let mut sim = active_build_phase33(false);
+    install_build_visibility_type(
+        &mut sim,
+        0x21e,
+        Some(LiveBuildVisibilityTypeFacts {
+            footprint: Footprint {
+                x_size: 6,
+                y_size: 6,
+            },
+            is_fort: None,
+        }),
+    );
+    sim.builds[0].flags |= production::flag::CAPTURED;
+    sim.builds[0].ever_seen = 0b0000_0010;
+    sim.builds[0].other[production::off::VISIBLE] = 0b0000_0100;
+    sim.builds[0].other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    sim.builds[0].other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    sim.map.world.seen2.fill(0);
+
+    let trace = sim.do_frame();
+
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(sim.step12_visibility_error, None);
+    assert!(sim.map.world.seen.iter().all(|&byte| byte == 0));
+    assert_eq!(
+        sim.map
+            .world
+            .seen2
+            .iter()
+            .filter(|&&byte| byte == 0b0000_0111)
+            .count(),
+        9,
+        "visible | ever_seen | owner mask is written to explored state"
+    );
+    assert!(sim.map.world.seen3.iter().all(|&byte| byte == 0));
+    assert!(sim.map.world.wcoord_seen.iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn started_wonder_without_footprint_facts_refuses_atomically() {
+    let mut sim = active_build_phase33(false);
+    install_build_visibility_type(&mut sim, 0x21e, None);
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    let daemon_before = sim.game_daemon;
+    let checksum_before = sim.map.world.checksum();
+
+    let trace = sim.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+    );
+    assert_eq!(sim.game_daemon, daemon_before);
+    assert_eq!(sim.map.world.checksum(), checksum_before);
+    assert_eq!(
+        sim.step12_visibility_error,
+        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::StartedWonderNeedsVisibilityTypeFacts {
+                row: 0,
+                type_index: 0x21e,
+            }
+        ))
+    );
+}
+
+#[test]
+fn uncaptured_started_wonder_without_fort_authority_refuses_atomically() {
+    let mut sim = active_build_phase33(false);
+    install_build_visibility_type(
+        &mut sim,
+        0x21e,
+        Some(LiveBuildVisibilityTypeFacts {
+            footprint: Footprint {
+                x_size: 6,
+                y_size: 6,
+            },
+            is_fort: None,
+        }),
+    );
+    sim.builds[0].other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    sim.builds[0].other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&(3_000i32 ^ 0x63637).to_le_bytes());
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    let daemon_before = sim.game_daemon;
+    let checksum_before = sim.map.world.checksum();
+
+    let trace = sim.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+    );
+    assert_eq!(sim.game_daemon, daemon_before);
+    assert_eq!(sim.map.world.checksum(), checksum_before);
+    assert_eq!(
+        sim.step12_visibility_error,
+        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::StartedWonderNeedsFortAuthority {
+                row: 0,
+                type_index: 0x21e,
+            }
+        ))
+    );
+}
+
+#[test]
+fn malformed_started_wonder_footprint_refuses_atomically() {
+    let mut sim = active_build_phase33(false);
+    install_build_visibility_type(
+        &mut sim,
+        0x21e,
+        Some(LiveBuildVisibilityTypeFacts {
+            footprint: Footprint {
+                x_size: i32::MAX,
+                y_size: 2,
+            },
+            is_fort: Some(false),
+        }),
+    );
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    let daemon_before = sim.game_daemon;
+    let checksum_before = sim.map.world.checksum();
+
+    let trace = sim.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+    );
+    assert_eq!(sim.game_daemon, daemon_before);
+    assert_eq!(sim.map.world.checksum(), checksum_before);
+    assert_eq!(
+        sim.step12_visibility_error,
+        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::InvalidWonderFootprint {
+                row: 0,
+                x_size: i32::MAX,
+                y_size: 2,
             }
         ))
     );

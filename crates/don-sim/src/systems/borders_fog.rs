@@ -306,6 +306,36 @@ impl Fog {
         w.seen2[i] |= mask;
     }
 
+    /// `World::set_locally_seen(FCoord,FCoord,unsigned char,int)` `0x006B4BB0`.
+    ///
+    /// Unlike [`Self::set_seen`], this body receives an already-composed player mask.
+    /// It always writes explored state and `WData::was_seen`; when `explored_only` is
+    /// false it also writes the visible plane and `wcoord_seen`. It never writes the
+    /// detector plane. The retail boolean return only schedules
+    /// `WorldMapFog::add_update` presentation work, so this canonical-state owner returns
+    /// the same change verdict without introducing a graphics sidecar.
+    pub fn set_locally_seen_mask(
+        &self,
+        w: &mut World,
+        fx: i32,
+        fy: i32,
+        mask: u8,
+        explored_only: bool,
+    ) -> bool {
+        let i = w.f_index(fx, fy);
+        let explored_before = w.seen2[i];
+        w.seen2[i] |= mask;
+        let visible_before = w.seen[i];
+        if !explored_only {
+            w.seen[i] |= mask;
+            let wi = w.w_index(fx >> 1, fy >> 1);
+            w.wcoord_seen[wi] |= mask;
+        }
+        let wi = w.w_index(fx >> 1, fy >> 1);
+        w.wdata[wi].was_seen |= mask;
+        explored_before != w.seen2[i] || visible_before != w.seen[i]
+    }
+
     /// `GameDaemon::update_all_seen` `0x00732840` also `memset`s `seen3` (detected) to zero
     /// before the object pass, after `World::clear_seen` `0x006B2250` has cleared `seen` and
     /// `wcoord_seen`. `[measured]`
@@ -1979,6 +2009,28 @@ mod tests {
         assert_eq!(w.seen3[fi], 0b100);
         assert_eq!(w.wcoord_seen[wi], 0b100);
         assert_eq!(w.wdata[wi].was_seen, 0b100);
+    }
+
+    #[test]
+    fn local_seen_uses_the_supplied_mask_and_explored_only_gate() {
+        let (fog, mut w, _) = tiny_fog();
+        let (fx, fy) = (10, 10);
+        assert!(fog.set_locally_seen_mask(&mut w, fx, fy, 0b0000_0101, false));
+        let fi = w.f_index(fx, fy);
+        let wi = w.w_index(fx >> 1, fy >> 1);
+        assert_eq!(w.seen[fi], 0b0000_0101);
+        assert_eq!(w.seen2[fi], 0b0000_0101);
+        assert_eq!(w.seen3[fi], 0);
+        assert_eq!(w.wcoord_seen[wi], 0b0000_0101);
+        assert_eq!(w.wdata[wi].was_seen, 0b0000_0101);
+
+        assert!(fog.set_locally_seen_mask(&mut w, fx, fy, 0b0010_0000, true));
+        assert_eq!(w.seen[fi], 0b0000_0101, "explored-only skips visible");
+        assert_eq!(w.seen2[fi], 0b0010_0101);
+        assert_eq!(w.seen3[fi], 0);
+        assert_eq!(w.wcoord_seen[wi], 0b0000_0101);
+        assert_eq!(w.wdata[wi].was_seen, 0b0010_0101);
+        assert!(!fog.set_locally_seen_mask(&mut w, fx, fy, 0b0010_0000, true));
     }
 
     #[test]

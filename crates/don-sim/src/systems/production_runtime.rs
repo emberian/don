@@ -104,6 +104,18 @@ pub enum LiveBuildingCompletion {
     Unsupported,
 }
 
+/// Exact BuildType projection consumed only by the started-Wonder
+/// `Wall::update_local_seen` visibility body. The footprint fields are
+/// `ObjectTypeData +0x234/+0x238`; `is_fort` is the reached non-strict
+/// `BuildTypeData::is(FORTX, 0)` result behind type-vtable slot `+0xFC`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveBuildVisibilityTypeFacts {
+    pub footprint: Footprint,
+    /// Lazy exact result of type-vtable `+0xFC`. Captured Wonders return before this
+    /// virtual, so their projection may leave it absent.
+    pub is_fort: Option<bool>,
+}
+
 /// Tech-specific regions surrounding the generic gain transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveTechEffects {
@@ -129,6 +141,10 @@ pub struct LiveProductionType {
     pub stance_type: i32,
     pub unit_placement: LiveUnitPlacement,
     pub building_completion: LiveBuildingCompletion,
+    /// Lazy visibility facts. Complete active Builds do not read them; an incomplete
+    /// non-Wonder stops after the exact TypeIndex range test. Only a started Wonder
+    /// reaches this projection.
+    pub build_visibility: Option<LiveBuildVisibilityTypeFacts>,
     pub city_pop_value: i32,
     pub build_flags: u32,
     pub is_town: bool,
@@ -169,6 +185,7 @@ impl LiveProductionType {
             stance_type: 0,
             unit_placement: LiveUnitPlacement::Unsupported,
             building_completion: LiveBuildingCompletion::Unsupported,
+            build_visibility: None,
             city_pop_value: 0,
             build_flags: 0,
             is_town: false,
