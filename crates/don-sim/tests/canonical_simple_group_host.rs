@@ -8,7 +8,7 @@ use don_sim::systems::canonical_group_move_host::{
 };
 use don_sim::systems::canonical_simple_group_host::*;
 use don_sim::systems::economy_order_payload_authority::{CastOrderPayload, EconomyOrderPayload};
-use don_sim::systems::groups_guys::FormationMember;
+use don_sim::systems::groups_guys::{FormationMember, NUM_LEADERS};
 use don_sim::systems::movement::{PathData, PathStack};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::lifecycle_host::PlayerTable;
@@ -40,6 +40,16 @@ fn halt_packet(who: u8, objects: &[i16]) -> Vec<u8> {
         bytes.extend_from_slice(&o.to_le_bytes());
     }
     bytes.push(HALT_OPCODE);
+    bytes
+}
+
+fn set_transport_packet(who: u8, objects: &[i16], flag: i32) -> Vec<u8> {
+    let mut bytes = vec![GROUP_OPCODE, objects.len() as u8, who];
+    for &o in objects {
+        bytes.extend_from_slice(&o.to_le_bytes());
+    }
+    bytes.push(SET_TRANSPORT_OPCODE);
+    bytes.extend_from_slice(&flag.to_le_bytes());
     bytes
 }
 
@@ -88,6 +98,25 @@ fn simple_authority(handles: &[Handle], revision: u64, digest: [u8; 32]) -> Grou
     }
 }
 
+fn simple_action_authority(
+    handles: &[Handle],
+    revision: u64,
+    digest: [u8; 32],
+) -> SimpleGroupActionAuthority {
+    SimpleGroupActionAuthority {
+        revision,
+        composition_digest: digest,
+        members: handles
+            .iter()
+            .copied()
+            .map(|handle| SimpleGroupActionMemberAuthority {
+                handle,
+                can_ever_transport: true,
+            })
+            .collect(),
+    }
+}
+
 struct Fixture {
     world: World,
     unit_types: Vec<i32>,
@@ -95,6 +124,8 @@ struct Fixture {
     paths: Vec<PathStack>,
     state: CommandPackageState,
     authority: GroupMoveAuthority,
+    action_authority: SimpleGroupActionAuthority,
+    leader_flags: [i32; NUM_LEADERS],
     players: [Option<u8>; NETWORK_PLAYERS],
     handles: Vec<Handle>,
     objects: Vec<i16>,
@@ -151,6 +182,7 @@ impl Fixture {
                 })
                 .collect(),
         };
+        let action_authority = simple_action_authority(&handles, 12, [0x14; 32]);
         let mut players = [None; NETWORK_PLAYERS];
         players[0] = Some(who);
         Self {
@@ -160,6 +192,8 @@ impl Fixture {
             groups: retail_fresh_groups(),
             state: CommandPackageState::default(),
             authority,
+            action_authority,
+            leader_flags: [0; NUM_LEADERS],
             players,
             handles,
             objects,
@@ -171,13 +205,15 @@ impl Fixture {
         serial: i32,
         bytes: &[u8],
     ) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
-        prepare_simple_group_package(
+        prepare_simple_group_package_with_action_authority(
             &self.world,
             &self.unit_types,
             &self.groups,
             &self.paths,
             &self.state,
             &self.authority,
+            &self.action_authority,
+            &self.leader_flags,
             &self.players,
             self.world.frame,
             0,
@@ -192,13 +228,15 @@ impl Fixture {
         bytes: &[u8],
     ) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
         let prepared = self.prepare(serial, bytes)?;
-        commit_simple_group_package(
+        commit_simple_group_package_with_action_authority(
             &mut self.world,
             &self.unit_types,
             &mut self.groups,
             &mut self.paths,
             &mut self.state,
             &self.authority,
+            &self.action_authority,
+            &self.leader_flags,
             &self.players,
             prepared,
         )
@@ -241,6 +279,16 @@ fn decoder_accepts_the_exact_retail_fixture_and_refuses_any_suffix() {
             who: 0,
             objects: RETAIL_HALT_OBJECTS.to_vec(),
             action: SimpleGroupActionWire::Halt,
+        }
+    );
+    // Playback___2024.02.23_20_49_35__Fri_.rcx, turn 119 / frame 709.
+    let retail_set_transport = [0x00, 0x01, 0x01, 0x00, 0x00, 0x0e, 1, 0, 0, 0];
+    assert_eq!(
+        decode_simple_group_package(&retail_set_transport).unwrap(),
+        SimpleGroupWire {
+            who: 1,
+            objects: vec![0],
+            action: SimpleGroupActionWire::SetTransport { flag: 1 },
         }
     );
     let mut trailing = retail.to_vec();
@@ -514,6 +562,106 @@ fn halt_malformed_special_anim_payload_refuses_before_publication() {
         fixture.world.orders(row).order_type(),
         OrderIndex::SpecialAnim
     );
+}
+
+#[test]
+fn exact_retail_set_transport_packet_uses_leader_ladder_and_handle_capability() {
+    let mut fixture = Fixture::new_for(1, 2);
+    fixture.leader_flags[1] = 0x200;
+    fixture.action_authority.members[1].can_ever_transport = false;
+    for &handle in &fixture.handles {
+        let row = fixture.world.row_of(handle).unwrap();
+        fixture.world.units.set_unit_masks(row, 0x20);
+    }
+    let retail = set_transport_packet(1, &[0], 1);
+    assert_eq!(retail, [0x00, 0x01, 0x01, 0, 0, 0x0e, 1, 0, 0, 0]);
+    let random_before = fixture.world.random.state();
+    let receipt = fixture.process(709, &retail).unwrap();
+    assert_eq!(receipt.opcode, SET_TRANSPORT_OPCODE);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::SetTransport {
+            enabled: true,
+            changed_units: 1,
+        }
+    );
+    assert_eq!(receipt.random_state_before, random_before);
+    assert_eq!(receipt.random_state_after, random_before);
+    let selected = fixture.world.row_of(fixture.handles[0]).unwrap();
+    let untouched = fixture.world.row_of(fixture.handles[1]).unwrap();
+    assert_eq!(fixture.world.units.get_unit_masks(selected), 0x0080_0020);
+    assert_eq!(fixture.world.units.get_unit_masks(untouched), 0x20);
+    assert_eq!(fixture.groups.list[receipt.group_slot].disband, 0);
+
+    let cached = set_transport_packet(1, &[], 0);
+    assert_eq!(cached, [0x00, 0x00, 0x01, 0x0e, 0, 0, 0, 0]);
+    let receipt = fixture.process(710, &cached).unwrap();
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::SetTransport {
+            enabled: false,
+            changed_units: 1,
+        }
+    );
+    assert_eq!(fixture.world.units.get_unit_masks(selected), 0x20);
+}
+
+#[test]
+fn set_transport_missing_or_stale_action_facts_publish_nothing() {
+    let mut fixture = Fixture::new(1);
+    fixture.leader_flags[0] = 0x100;
+    let handle = fixture.handles[0];
+    let row = fixture.world.row_of(handle).unwrap();
+    let bytes = set_transport_packet(0, &[0], 1);
+    fixture.action_authority.members.clear();
+    assert_eq!(
+        fixture.prepare(711, &bytes).unwrap_err(),
+        SimpleGroupPackageError::MissingSetTransportAuthority { handle }
+    );
+    assert!(fixture.state.is_empty());
+    assert_eq!(fixture.world.units.get_unit_masks(row), 0x0400_0000);
+
+    fixture.action_authority = simple_action_authority(&fixture.handles, 12, [0x14; 32]);
+    let prepared = fixture.prepare(712, &bytes).unwrap();
+    fixture.action_authority.revision += 1;
+    assert_eq!(
+        commit_simple_group_package_with_action_authority(
+            &mut fixture.world,
+            &fixture.unit_types,
+            &mut fixture.groups,
+            &mut fixture.paths,
+            &mut fixture.state,
+            &fixture.authority,
+            &fixture.action_authority,
+            &fixture.leader_flags,
+            &fixture.players,
+            prepared,
+        ),
+        Err(SimpleGroupPackageError::StaleActionAuthority)
+    );
+    assert!(fixture.state.is_empty());
+    assert_eq!(fixture.world.units.get_unit_masks(row), 0x0400_0000);
+
+    fixture.action_authority.revision -= 1;
+    let prepared = fixture.prepare(713, &bytes).unwrap();
+    fixture.leader_flags[0] ^= 0x100;
+    assert_eq!(
+        commit_simple_group_package_with_action_authority(
+            &mut fixture.world,
+            &fixture.unit_types,
+            &mut fixture.groups,
+            &mut fixture.paths,
+            &mut fixture.state,
+            &fixture.authority,
+            &fixture.action_authority,
+            &fixture.leader_flags,
+            &fixture.players,
+            prepared,
+        ),
+        Err(SimpleGroupPackageError::StaleLeaderFlags { who: 0 })
+    );
+    assert!(fixture.state.is_empty());
+    assert_eq!(fixture.world.units.get_unit_masks(row), 0x0400_0000);
 }
 
 #[test]
@@ -967,6 +1115,87 @@ fn retail_halt_survives_donsave_cached_resume_and_one_canonical_tick() {
         );
         assert_eq!(direct.paths[direct_row], resumed.paths[resumed_row]);
     }
+    assert_eq!(direct.groups.list, resumed.groups.list);
+    assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+#[test]
+fn retail_set_transport_survives_donsave_cached_resume_and_one_canonical_tick() {
+    let make = || {
+        let mut sim = don_sim::tick::Sim::new(0x140e, 4);
+        sim.world.frame = 709;
+        sim.vic_match.frame = 709;
+        let mut players = PlayerTable::new();
+        players.seat(1, 1, 1, 0);
+        sim.players = Some(players);
+        sim.vic_leaders.slots[1].leader_flags = 0x100;
+        let actor = sim.spawn_unit(1, 30, 2_000, 3_000, 3).unwrap();
+        let row = sim.world.row_of(actor).unwrap();
+        sim.world.units.group_mut()[row] = -1;
+        sim.world.units.o_down_mut()[row] = -1;
+        sim.world.units.set_unit_masks(row, 0x20);
+        sim.replace_group_move_authority(simple_authority(&[actor], 14, [0x14; 32]));
+        sim.replace_simple_group_action_authority(simple_action_authority(
+            &[actor],
+            14,
+            [0x5e; 32],
+        ));
+        (sim, actor)
+    };
+    let install = |sim: &mut don_sim::tick::Sim, actor: Handle| {
+        sim.replace_group_move_authority(simple_authority(&[actor], 14, [0x14; 32]));
+        sim.replace_simple_group_action_authority(simple_action_authority(
+            &[actor],
+            14,
+            [0x5e; 32],
+        ));
+    };
+
+    let (mut direct, direct_actor) = make();
+    let (mut resumed, resumed_actor) = make();
+    let retail = set_transport_packet(1, &[0], 1);
+    direct
+        .process_simple_group_package(1, 119, &retail)
+        .unwrap();
+    resumed
+        .process_simple_group_package(1, 119, &retail)
+        .unwrap();
+    let saved = save_sim(&resumed).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    install(&mut resumed, resumed_actor);
+
+    // Four of the five corpus packets use this empty Group plus flag-zero action image.
+    let cached = set_transport_packet(1, &[], 0);
+    let direct_receipt = direct
+        .process_simple_group_package(1, 120, &cached)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_simple_group_package(1, 120, &cached)
+        .unwrap();
+    assert_eq!(direct_receipt.action_result, resumed_receipt.action_result);
+    assert_eq!(
+        direct_receipt.action_result,
+        SimpleGroupActionResult::SetTransport {
+            enabled: false,
+            changed_units: 1,
+        }
+    );
+    assert_eq!(
+        direct_receipt.groups_checksum,
+        resumed_receipt.groups_checksum
+    );
+    let direct_row = direct.world.row_of(direct_actor).unwrap();
+    let resumed_row = resumed.world.row_of(resumed_actor).unwrap();
+    assert_eq!(direct.world.units.get_unit_masks(direct_row), 0x20);
+    assert_eq!(
+        direct.world.units.get_unit_masks(direct_row),
+        resumed.world.units.get_unit_masks(resumed_row)
+    );
+    let frame_before = direct.world.frame;
+    direct.do_frame();
+    resumed.do_frame();
+    assert_eq!(direct.world.frame, frame_before + 1);
+    assert_eq!(direct.world.frame, resumed.world.frame);
     assert_eq!(direct.groups.list, resumed.groups.list);
     assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
 }

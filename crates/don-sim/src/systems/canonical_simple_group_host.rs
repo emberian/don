@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Canonical `GroupCommand` plus one simple Group action transaction.
 //!
-//! The production arms are opcode 32 `UNITMASK`, opcode 29 `STOP_SPELL`, and opcode 12
-//! `HALT`. They reuse the fixed-`Groups`
+//! The production arms are opcode 32 `UNITMASK`, opcode 29 `STOP_SPELL`, opcode 12
+//! `HALT`, and the ordinary-Unit arm of opcode 14 `SET_TRANSPORT`. They reuse the fixed-`Groups`
 //! selector/cache/allocator from [`canonical_group_move_host`], plans the exact recovered
 //! `Group::action_unitmask` body, and publishes every reached Group, backlink, Unit, order,
 //! path, player-map, clock, and RNG surface at one stale-checked boundary. No
@@ -15,8 +15,9 @@ use crate::systems::canonical_group_move_host::{
     NETWORK_PLAYERS, RECEIVED_SELECTION_CAPACITY,
 };
 use crate::systems::groups_guys::{
-    plan_action_halt, plan_action_unitmask, CheckSum, Groups, HaltMemberFacts, HaltStep,
-    UnitMaskMemberFacts, UnitMaskStep,
+    plan_action_halt, plan_action_set_transport, plan_action_unitmask, CheckSum, Groups,
+    HaltMemberFacts, HaltStep, SetTransportMemberFacts, SetTransportStep, UnitMaskMemberFacts,
+    UnitMaskStep, NUM_LEADERS,
 };
 use crate::systems::movement::PathStack;
 use crate::systems::sparse_object_bands_authority_frontier::UNIT_BAND_LIMIT;
@@ -29,12 +30,38 @@ pub const STOP_SPELL_OPCODE: u8 = 29;
 pub const STOP_SPELL_WIRE_SIZE: usize = 1;
 pub const HALT_OPCODE: u8 = 12;
 pub const HALT_WIRE_SIZE: usize = 1;
+pub const SET_TRANSPORT_OPCODE: u8 = 14;
+pub const SET_TRANSPORT_WIRE_SIZE: usize = 5;
+
+/// Handle-bound capability facts read only by the SET_TRANSPORT arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleGroupActionMemberAuthority {
+    pub handle: Handle,
+    /// Exact `UnitData::can_ever_transport()` result. This cannot be inferred for sea Units
+    /// from the movement projection because retail also reads carry capacity and ability 0x15f.
+    pub can_ever_transport: bool,
+}
+
+/// Reinstalled action facts which are neither gameplay state nor part of DoNSave.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SimpleGroupActionAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub members: Vec<SimpleGroupActionMemberAuthority>,
+}
+
+impl SimpleGroupActionAuthority {
+    fn member(&self, handle: Handle) -> Option<&SimpleGroupActionMemberAuthority> {
+        self.members.iter().find(|member| member.handle == handle)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimpleGroupActionWire {
     UnitMask { mask: u32, set: i32 },
     StopSpell,
     Halt,
+    SetTransport { flag: i32 },
 }
 
 impl SimpleGroupActionWire {
@@ -43,6 +70,7 @@ impl SimpleGroupActionWire {
             Self::UnitMask { .. } => UNITMASK_OPCODE,
             Self::StopSpell => STOP_SPELL_OPCODE,
             Self::Halt => HALT_OPCODE,
+            Self::SetTransport { .. } => SET_TRANSPORT_OPCODE,
         }
     }
 }
@@ -52,6 +80,7 @@ pub enum SimpleGroupActionResult {
     UnitMask { final_set: bool },
     StopSpell { stopped_units: usize },
     Halt { halted_units: usize },
+    SetTransport { enabled: bool, changed_units: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +109,9 @@ pub enum SimpleGroupPackageError {
     StaleUnitSpellTime { handle: Handle },
     MissingStopSpellGpieceAuthority { handle: Handle, type_index: i32 },
     MissingSpecialAnimPayload { handle: Handle },
+    MissingSetTransportAuthority { handle: Handle },
+    StaleActionAuthority,
+    StaleLeaderFlags { who: u8 },
 }
 
 impl From<PackageError> for SimpleGroupPackageError {
@@ -103,7 +135,8 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, or HALT. Prefixes, suffixes, and a
+/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, HALT, or SET_TRANSPORT. Prefixes,
+/// suffixes, and a
 /// second action are refused.
 pub fn decode_simple_group_package(
     bytes: &[u8],
@@ -134,6 +167,7 @@ pub fn decode_simple_group_package(
         UNITMASK_OPCODE => UNITMASK_WIRE_SIZE,
         STOP_SPELL_OPCODE => STOP_SPELL_WIRE_SIZE,
         HALT_OPCODE => HALT_WIRE_SIZE,
+        SET_TRANSPORT_OPCODE => SET_TRANSPORT_WIRE_SIZE,
         _ => return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode }),
     };
     let expected = group_len + action_size;
@@ -161,6 +195,9 @@ pub fn decode_simple_group_package(
         },
         STOP_SPELL_OPCODE => SimpleGroupActionWire::StopSpell,
         HALT_OPCODE => SimpleGroupActionWire::Halt,
+        SET_TRANSPORT_OPCODE => SimpleGroupActionWire::SetTransport {
+            flag: read_i32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)?,
+        },
         _ => unreachable!("action size match admitted this opcode"),
     };
     Ok(SimpleGroupWire {
@@ -199,6 +236,8 @@ pub struct PreparedSimpleGroupPackage {
     pub authority_revision: u64,
     pub authority_digest: [u8; 32],
     pub authority_members: Vec<crate::systems::canonical_group_move_host::MoveMemberAuthority>,
+    pub action_authority_before: Option<SimpleGroupActionAuthority>,
+    pub leader_flags_before: Option<i32>,
     pub units: Vec<SimpleUnitMutation>,
     pub action_result: SimpleGroupActionResult,
 }
@@ -241,6 +280,40 @@ pub fn prepare_simple_group_package(
     paths: &[PathStack],
     command_state: &CommandPackageState,
     authority: &GroupMoveAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    frame: i32,
+    play: usize,
+    lockstep_serial: i32,
+    bytes: &[u8],
+) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
+    prepare_simple_group_package_with_action_authority(
+        world,
+        unit_types,
+        groups,
+        paths,
+        command_state,
+        authority,
+        &SimpleGroupActionAuthority::default(),
+        &[0; NUM_LEADERS],
+        player_who,
+        frame,
+        play,
+        lockstep_serial,
+        bytes,
+    )
+}
+
+/// Extended preparation entry used by production Sim for actions with extra Handle/type facts.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_simple_group_package_with_action_authority(
+    world: &World,
+    unit_types: &[i32],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    authority: &GroupMoveAuthority,
+    action_authority: &SimpleGroupActionAuthority,
+    leader_flags: &[i32; NUM_LEADERS],
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     frame: i32,
     play: usize,
@@ -314,6 +387,8 @@ pub fn prepare_simple_group_package(
         .get(group_slot)
         .ok_or(PackageError::InvalidGroupPool)?
         .clone();
+    let mut action_authority_before = None;
+    let mut leader_flags_before = None;
     let action_result = match wire.action {
         SimpleGroupActionWire::UnitMask { mask, set } => {
             let mut facts = Vec::with_capacity(selection.members.len());
@@ -529,6 +604,55 @@ pub fn prepare_simple_group_package(
             }
             SimpleGroupActionResult::Halt { halted_units }
         }
+        SimpleGroupActionWire::SetTransport { flag } => {
+            let owner_flags =
+                *leader_flags
+                    .get(usize::from(wire.who))
+                    .ok_or(PackageError::OwnerOutOfRange {
+                        who: wire.who as i8,
+                    })?;
+            let transport_level = if owner_flags & 0x100 != 0 {
+                3
+            } else if owner_flags & 0x200 != 0 {
+                2
+            } else {
+                ((owner_flags >> 10) & 1) as u8
+            };
+            let mut facts = Vec::with_capacity(selection.members.len());
+            for member in &selection.members {
+                let capability = action_authority.member(member.identity.handle).ok_or(
+                    SimpleGroupPackageError::MissingSetTransportAuthority {
+                        handle: member.identity.handle,
+                    },
+                )?;
+                let mutation = mutation_for(&mut units, member.identity.who, member.identity.o)?;
+                facts.push(SetTransportMemberFacts {
+                    o: member.identity.o,
+                    valid_unit: true,
+                    can_ever_transport: capability.can_ever_transport,
+                    unit_masks: mutation.unit.after.unit_masks,
+                });
+            }
+            let plan =
+                plan_action_set_transport(&group, flag, transport_level, &facts).map_err(|_| {
+                    SimpleGroupPackageError::BrokenPlanIdentity {
+                        who: wire.who,
+                        o: -1,
+                    }
+                })?;
+            groups_after.list[group_slot] = plan.group;
+            let changed_units = plan.steps.len();
+            for step in plan.steps {
+                let SetTransportStep::WriteUnitMasks { who, o, value } = step;
+                mutation_for(&mut units, who, o)?.unit.after.unit_masks = value;
+            }
+            action_authority_before = Some(action_authority.clone());
+            leader_flags_before = Some(owner_flags);
+            SimpleGroupActionResult::SetTransport {
+                enabled: plan.enabled,
+                changed_units,
+            }
+        }
     };
 
     Ok(PreparedSimpleGroupPackage {
@@ -551,6 +675,8 @@ pub fn prepare_simple_group_package(
         authority_revision: selection.authority_revision,
         authority_digest: selection.authority_digest,
         authority_members: selection.authority_members,
+        action_authority_before,
+        leader_flags_before,
         units,
         action_result,
     })
@@ -564,6 +690,34 @@ pub fn commit_simple_group_package(
     paths: &mut [PathStack],
     command_state: &mut CommandPackageState,
     authority: &GroupMoveAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    prepared: PreparedSimpleGroupPackage,
+) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
+    commit_simple_group_package_with_action_authority(
+        world,
+        unit_types,
+        groups,
+        paths,
+        command_state,
+        authority,
+        &SimpleGroupActionAuthority::default(),
+        &[0; NUM_LEADERS],
+        player_who,
+        prepared,
+    )
+}
+
+/// Extended commit entry which revalidates action-specific facts before any publication.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_simple_group_package_with_action_authority(
+    world: &mut World,
+    unit_types: &[i32],
+    groups: &mut Groups,
+    paths: &mut [PathStack],
+    command_state: &mut CommandPackageState,
+    authority: &GroupMoveAuthority,
+    action_authority: &SimpleGroupActionAuthority,
+    leader_flags: &[i32; NUM_LEADERS],
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     prepared: PreparedSimpleGroupPackage,
 ) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
@@ -587,6 +741,18 @@ pub fn commit_simple_group_package(
         || authority.members != prepared.authority_members
     {
         return Err(PackageError::StaleAuthority.into());
+    }
+    if let Some(action_authority_before) = &prepared.action_authority_before {
+        if action_authority != action_authority_before {
+            return Err(SimpleGroupPackageError::StaleActionAuthority);
+        }
+    }
+    if let Some(leader_flags_before) = prepared.leader_flags_before {
+        if leader_flags.get(usize::from(prepared.wire.who)).copied() != Some(leader_flags_before) {
+            return Err(SimpleGroupPackageError::StaleLeaderFlags {
+                who: prepared.wire.who,
+            });
+        }
     }
     for mutation in &prepared.units {
         if !unit_still_current(world, paths, &mutation.unit.before) {

@@ -13,6 +13,10 @@ const STOP_SPELL_REPLAY_SHA256: &str =
 const HALT_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2024.03.23_21_16_13__Sat_.rcx";
 const HALT_REPLAY_SHA256: &str = "82bfb0898209d40afd887b1a487f565446cdb154d1192435e41a43137809355a";
+const SET_TRANSPORT_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx";
+const SET_TRANSPORT_REPLAY_SHA256: &str =
+    "1690431a5ef19b38a3425d3dd7311e8e83ca0d27c56fabe49d776a9f1421b251";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -255,6 +259,54 @@ fn retail_replay_binds_halt_explicit_and_persistent_cache_wires() {
 }
 
 #[test]
+fn retail_replay_binds_set_transport_explicit_wire() {
+    let path = root().join(SET_TRANSPORT_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        SET_TRANSPORT_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let mut fixtures = Vec::new();
+    for (package_index0, turn) in replay.turns.iter().enumerate() {
+        for player in &turn.players {
+            for pair in player.commands.windows(2) {
+                if pair[0].opcode == 0 && pair[1].opcode == 14 {
+                    fixtures.push(Fixture {
+                        package_index0,
+                        turn: turn.turn,
+                        play: player.play,
+                        frame: player.stamp,
+                        opcodes: player
+                            .commands
+                            .iter()
+                            .map(|command| command.opcode)
+                            .collect(),
+                        group_hex: hex(&pair[0].bytes),
+                        action_hex: hex(&pair[1].bytes),
+                    });
+                }
+            }
+        }
+    }
+    assert_eq!(
+        fixtures,
+        [Fixture {
+            package_index0: 118,
+            turn: 119,
+            play: 1,
+            frame: 709,
+            opcodes: vec![79, 0, 14, 57, 74, 72],
+            group_hex: "0001010000".into(),
+            action_hex: "0e01000000".into(),
+        }]
+    );
+}
+
+#[test]
 #[ignore = "full retail replay corpus"]
 fn census_strict_group_unitmask_packets() {
     let mut found = Vec::new();
@@ -364,6 +416,44 @@ fn census_strict_group_halt_packets() {
     assert!(!found.is_empty());
     eprintln!("strict Group+HALT occurrences={}", found.len());
     for fixture in found.iter().take(40) {
+        eprintln!("fixture={fixture:?}");
+    }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_strict_group_set_transport_packets() {
+    let mut found = Vec::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        for (turn_index, turn) in replay.turns.iter().enumerate() {
+            for player in &turn.players {
+                for pair in player.commands.windows(2) {
+                    if pair[0].opcode == 0 && pair[1].opcode == 14 {
+                        found.push((
+                            path.clone(),
+                            turn_index,
+                            turn.turn,
+                            player.play,
+                            player.stamp,
+                            player
+                                .commands
+                                .iter()
+                                .map(|command| command.opcode)
+                                .collect::<Vec<_>>(),
+                            hex(&pair[0].bytes),
+                            hex(&pair[1].bytes),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(found.len(), 5);
+    eprintln!("strict Group+SET_TRANSPORT occurrences={}", found.len());
+    for fixture in &found {
         eprintln!("fixture={fixture:?}");
     }
 }

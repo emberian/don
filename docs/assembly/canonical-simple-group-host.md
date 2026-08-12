@@ -1,15 +1,16 @@
 # Canonical simple-Group package host
 
-Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, and HALT opcode 12 are
-mounted through `Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT
-also crosses one canonical `Sim::do_frame`. No command-table, general packet router, or closure
-status changes are made. STOP_SPELL's special type 61/62/400 graphics tail remains a typed
-whole-package refusal.
+Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, HALT opcode 12, and
+the ordinary-Unit arm of SET_TRANSPORT opcode 14 are mounted through
+`Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT and
+SET_TRANSPORT also cross one canonical `Sim::do_frame`. No command-table, general packet router,
+or closure status changes are made. STOP_SPELL's special type 61/62/400 graphics tail remains a
+typed whole-package refusal.
 
 ## First executable row
 
 `canonical_simple_group_host.rs` admits exactly `[GroupCommand]` followed by UNITMASK,
-STOP_SPELL, or HALT. It never
+STOP_SPELL, HALT, or SET_TRANSPORT. It never
 constructs `command::Bridge` and never reads or copies the Bridge-owned `command::Groups`.
 Opcode 0 reuses the fixed 512-slot `groups_guys::Groups` selector, play-keyed receive cache,
 UID/Handle revalidation, allocator, old-Group removal, and Unit backlinks already used by the
@@ -70,6 +71,23 @@ without the `unit_flags & 0x20` exception remain selected but are not halted, ex
 No order payload is installed, no RNG draw is consumed, and scenario ignore-orders remains the
 same ordinary-product no-op boundary documented for STOP_SPELL.
 
+## Fourth executable row
+
+SET_TRANSPORT consumes the complete ordinary-Unit body of `Group::action_set_transport`
+`0x007024B0..0x00702615`. Its fixed five-byte action wire retains the signed `flag` dword. The
+owner's canonical `LeaderData::leader_flags` supplies retail's exact priority ladder:
+`0x100 => 3`, else `0x200 => 2`, else `0x400 => 1`, else zero. A selected member receives mask
+bit `0x00800000` exactly when that level and the wire flag are both nonzero; flag zero clears it.
+`action_begin` also clears the fixed Group's `disband` field.
+
+The only additional type fact is the exact Handle-bound result of
+`UnitData::can_ever_transport()`. It is installed in `SimpleGroupActionAuthority` with a revision,
+composition digest, and complete member vector. The host does not infer the sea-Unit arm from
+movement facts: retail also reads carry capacity and ability 0x15f there. Missing capability,
+changed authority, changed Leader flags, or changed Unit state refuses before Group/cache/Unit
+publication. The adapter is reinstalled after load and is not a second persistent gameplay
+owner. The action changes no orders or paths and consumes zero RNG draws.
+
 ## Retail packet evidence
 
 The artifact-backed replay test freezes the shipped recording
@@ -123,6 +141,21 @@ persistent-cache form:
 
 The full-corpus census sees 69 strict Group+HALT pairs.
 
+SET_TRANSPORT is bound to
+`multi/Playback___2024.02.23_20_49_35__Fri_.rcx`, SHA-256
+`1690431a5ef19b38a3425d3dd7311e8e83ca0d27c56fabe49d776a9f1421b251`. Package index 118,
+turn 119, play 1, frame 709 carries the only explicit selection in the five-packet corpus:
+
+```text
+0001010000               Group(owner=1, object=0)
+0e01000000               SetTransport(flag=1)
+```
+
+The other four strict pairs carry `flag=0`; one uses empty Group owner 1 (`000001`) and three use
+empty Group owner 0 (`000000`), exercising the play-keyed persistent selection cache. The
+full-corpus census proves exactly five strict Group+SET_TRANSPORT pairs across four retail
+recordings.
+
 ## Integration and save boundary
 
 The module export and `Sim` sibling now construct the same present-player map as Group+Move and
@@ -131,7 +164,10 @@ exact retail packet above, saves the resulting Groups/cache/Unit/order/path imag
 reinstalls only the revision-bound authority, executes the observed empty-Group cached-selection
 wire, and proves complete after-image, Groups checksum, serialized bytes, and RNG equality.
 The HALT resume test then executes one full canonical frame on both the direct and reloaded Sims
-and proves the stopped orders remain empty and the serialized states remain identical.
+and proves the stopped orders remain empty and the serialized states remain identical. The
+SET_TRANSPORT resume test executes the explicit flag-one packet, saves/loads, reinstalls both
+external authorities, executes the observed empty-Group flag-zero packet, advances a frame, and
+proves the Unit mask, Groups checksum, RNG state, and serialized bytes remain identical.
 
 The remaining production-routing tranche is bounded:
 
@@ -139,8 +175,8 @@ The remaining production-routing tranche is bounded:
 2. compare the first executable packet's Groups/Unit channels to the retail recording; and
 3. only after that evidence update closure reporting for opcode 32.
 
-The other six audited simple actions remain red at this host.
-SET_TRANSPORT needs Leader flags; FOLLOW needs its typed payload; STANCE spans Unit and Build;
+The other five audited simple actions remain red at this host.
+FOLLOW needs its typed payload; STANCE spans Unit and Build;
 DISBAND reaches the nested Build production queue; BUILDMASK requires the canonical Build-band
 selector and feedback receipt. BEGIN has no corpus occurrence and is not used to claim execution.
 
@@ -155,9 +191,13 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   retail_replay_binds_halt_explicit_and_persistent_cache_wires
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  retail_replay_binds_set_transport_explicit_wire
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_unitmask_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_stop_spell_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_halt_packets -- --ignored --nocapture
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  census_strict_group_set_transport_packets -- --ignored --nocapture
 ```

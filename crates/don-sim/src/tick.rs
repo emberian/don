@@ -862,6 +862,10 @@ pub struct Sim {
     /// Revision/digest-bound object/type answers absent from the generated World columns.
     /// This is an installed content adapter, not a second persistent gameplay owner.
     pub group_move_authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
+    /// Reinstalled Handle-bound facts used by simple actions beyond the shared movement
+    /// projection. Gameplay mutations remain in Groups/World; this adapter is not saved.
+    pub simple_group_action_authority:
+        crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority,
     /// Revision/digest-bound Board/Repair/Trade facts and sparse object bindings. Like the
     /// movement projection, this is reinstalled after load and is not a second gameplay owner.
     pub economy_group_authority:
@@ -1578,6 +1582,8 @@ impl Sim {
                 crate::systems::canonical_diplomacy_host::DiplomacyInstalledFacts::default(),
             group_move_authority:
                 crate::systems::canonical_group_move_host::GroupMoveAuthority::default(),
+            simple_group_action_authority:
+                crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority::default(),
             economy_group_authority:
                 crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority::default(),
             air_group_authority:
@@ -1632,6 +1638,15 @@ impl Sim {
         authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
     ) {
         self.group_move_authority = authority;
+    }
+
+    /// Install action facts used by SET_TRANSPORT. Loaded simulations fail closed until the
+    /// content owner reinstalls the same Handle-bound projection.
+    pub fn replace_simple_group_action_authority(
+        &mut self,
+        authority: crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority,
+    ) {
+        self.simple_group_action_authority = authority;
     }
 
     /// Install the exact object/fact projection consumed by Board/Repair/Trade packages.
@@ -1785,7 +1800,8 @@ impl Sim {
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
-    /// UNITMASK (32), STOP_SPELL (29), or HALT (12). Selection/cache/allocation and every
+    /// UNITMASK (32), STOP_SPELL (29), HALT (12), or SET_TRANSPORT (14).
+    /// Selection/cache/allocation and every
     /// reached Unit/order/path mutation are
     /// prepared and revalidated against the canonical owners before one assignment-only commit.
     pub fn process_simple_group_package(
@@ -1799,7 +1815,8 @@ impl Sim {
     > {
         use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
         use crate::systems::canonical_simple_group_host::{
-            commit_simple_group_package, prepare_simple_group_package,
+            commit_simple_group_package_with_action_authority,
+            prepare_simple_group_package_with_action_authority,
         };
 
         let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
@@ -1811,26 +1828,31 @@ impl Sim {
                     .then_some(row.who)
             })
         });
-        let prepared = prepare_simple_group_package(
+        let leader_flags = std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags);
+        let prepared = prepare_simple_group_package_with_action_authority(
             &self.world,
             &self.unit_type,
             &self.groups,
             &self.paths,
             &self.command_package_state,
             &self.group_move_authority,
+            &self.simple_group_action_authority,
+            &leader_flags,
             &player_who,
             self.world.frame,
             play,
             lockstep_serial,
             bytes,
         )?;
-        commit_simple_group_package(
+        commit_simple_group_package_with_action_authority(
             &mut self.world,
             &self.unit_type,
             &mut self.groups,
             &mut self.paths,
             &mut self.command_package_state,
             &self.group_move_authority,
+            &self.simple_group_action_authority,
+            &leader_flags,
             &player_who,
             prepared,
         )
