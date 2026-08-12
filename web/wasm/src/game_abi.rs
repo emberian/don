@@ -11,6 +11,7 @@ use crate::wire_gen;
 use don_sim::deviations::{Deviation, ModeConfig, Surface};
 use don_sim::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::order::{Order, OrderIndex};
+use don_sim::systems::canonical_group_move_host::{GroupMovePackageReceipt, UnitIdentity};
 use don_sim::systems::player_setup::ManualPlayerSetup;
 use don_sim::systems::production::runtime::LiveProductionType;
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
@@ -35,6 +36,9 @@ const BUILD_PROJECTION_CAPACITY: usize = (WALL_BAND_BASE - BUILD_BAND_BASE) as u
 const AGE_RESEARCH_BUILDING: i32 = 435;
 /// `i32`s per player in the block [`game_players_ptr`] exposes.
 pub const PLAYER_FIELDS: usize = 34;
+/// Fixed receipt header followed by five words for each selected Unit identity.
+const PACKAGE_RECEIPT_HEADER_WORDS: usize = 11;
+const PACKAGE_RECEIPT_UNIT_WORDS: usize = 5;
 
 pub mod capability {
     pub const CORE_SAVE: u32 = 1 << 0;
@@ -74,6 +78,8 @@ pub struct Game {
     info: Vec<i32>,
     players: Vec<i32>,
     products: Vec<i32>,
+    command_identity: [i32; 3],
+    package_receipt: Vec<i32>,
     gaps: Vec<u32>,
     pending: Vec<u8>,
     selection: [Vec<u32>; PLAYERS],
@@ -205,6 +211,12 @@ impl Game {
             info: vec![0; 32],
             players: vec![0; PLAYERS * PLAYER_FIELDS],
             products: vec![0; 512],
+            command_identity: [-1; 3],
+            package_receipt: Vec::with_capacity(
+                PACKAGE_RECEIPT_HEADER_WORDS
+                    + PACKAGE_RECEIPT_UNIT_WORDS
+                        * don_sim::systems::canonical_group_move_host::RECEIVED_SELECTION_CAPACITY,
+            ),
             gaps: vec![0; gap::COUNT],
             pending: Vec::with_capacity(4096),
             selection: std::array::from_fn(|_| Vec::with_capacity(128)),
@@ -228,6 +240,58 @@ impl Game {
             .handles()
             .iter()
             .position(|&candidate| candidate == id)
+    }
+
+    /// Resolve a renderer lookup id back through the current live generational Unit identity and
+    /// canonical sparse retail address. Build projection ids and ids with no live Unit are absent.
+    fn command_identity_for_renderer_id(&self, id: u32) -> Option<UnitIdentity> {
+        let row = self.row_for_id(id)?;
+        let handle = self.core.world.handle_at_row(row)?;
+        if handle.id != id
+            || self.core.world.units.get_flags(row) & don_sim::world::OBJ_FLAG_ACTIVE == 0
+        {
+            return None;
+        }
+        let who = self.core.world.units.get_who(row);
+        let o = self.core.world.units.o()[row];
+        if o < 0 || self.core.world.unit_row_at(i32::from(who), i32::from(o)) != Some(row) {
+            return None;
+        }
+        Some(UnitIdentity {
+            handle,
+            who,
+            o,
+            uid: self.core.world.units.get_uid(row),
+        })
+    }
+
+    fn write_package_receipt(&mut self, receipt: &GroupMovePackageReceipt) {
+        self.package_receipt.clear();
+        self.package_receipt.reserve(
+            PACKAGE_RECEIPT_HEADER_WORDS + PACKAGE_RECEIPT_UNIT_WORDS * receipt.selected.len(),
+        );
+        self.package_receipt.extend_from_slice(&[
+            receipt.play as i32,
+            receipt.lockstep_serial,
+            receipt.frame,
+            i32::from(receipt.who),
+            receipt.group_slot as i32,
+            receipt.selected.len() as i32,
+            receipt.command_state_revision as u32 as i32,
+            (receipt.command_state_revision >> 32) as u32 as i32,
+            receipt.groups_checksum as i32,
+            receipt.random_state_before,
+            receipt.random_state_after,
+        ]);
+        for identity in &receipt.selected {
+            self.package_receipt.extend_from_slice(&[
+                identity.handle.id as i32,
+                identity.handle.generation as i32,
+                i32::from(identity.who),
+                i32::from(identity.o),
+                i32::from(identity.uid),
+            ]);
+        }
     }
 
     fn build_view_id(row: usize) -> Option<i32> {
@@ -1408,6 +1472,89 @@ pub unsafe extern "C" fn game_submit(g: *mut Game, who: u32, len: u32) -> u32 {
     game.pending.len() as u32
 }
 
+/// Resolve one renderer-owned Unit id to the canonical owner-local command identity.
+///
+/// The renderer id is only a lookup key. On success callers copy exactly three words from
+/// [`game_object_command_identity_ptr`]: `[who, o, uid]`. Handle/generation remains internal
+/// evidence and the renderer id is never truncated or reinterpreted as retail `o`.
+#[no_mangle]
+pub unsafe extern "C" fn game_object_command_identity(g: *mut Game, renderer_id: i32) -> u32 {
+    let game = game_ref!(g);
+    game.command_identity.fill(-1);
+    let Some(identity) = (renderer_id >= 0)
+        .then(|| game.command_identity_for_renderer_id(renderer_id as u32))
+        .flatten()
+    else {
+        return 0;
+    };
+    game.command_identity = [
+        i32::from(identity.who),
+        i32::from(identity.o),
+        i32::from(identity.uid),
+    ];
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn game_object_command_identity_ptr(g: *mut Game) -> *const i32 {
+    game_ref!(g).command_identity.as_ptr()
+}
+
+/// Apply exactly one complete command package through the landed Sim transaction.
+///
+/// Bytes are read from the existing [`game_cmd_ptr`] allocation. Split commands already queued
+/// through [`game_submit`] make this entry point fail closed: the two ingress models can never
+/// interleave. Success publishes the exact receipt words and refreshes only render projections;
+/// failure publishes no receipt and leaves Sim state to the canonical transaction's rollback.
+#[no_mangle]
+pub unsafe extern "C" fn game_process_command_package(
+    g: *mut Game,
+    play: u32,
+    lockstep_serial: i32,
+    len: u32,
+) -> u32 {
+    let game = game_ref!(g);
+    game.package_receipt.clear();
+    let len = len as usize;
+    if !game.pending.is_empty() {
+        game.set_error("command package refused: split browser commands are pending");
+        return 0;
+    }
+    if len == 0 || len > game.cmd.len() {
+        game.set_error(format!(
+            "command package refused: byte length must be 1..={}",
+            game.cmd.len()
+        ));
+        return 0;
+    }
+    let bytes = game.cmd[..len].to_vec();
+    match game
+        .core
+        .process_command_package(play as usize, lockstep_serial, &bytes)
+    {
+        Ok(receipt) => {
+            game.write_package_receipt(&receipt);
+            game.error.clear();
+            game.refresh();
+            1
+        }
+        Err(error) => {
+            game.set_error(format!("command package refused: {error:?}"));
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn game_package_receipt_ptr(g: *mut Game) -> *const i32 {
+    game_ref!(g).package_receipt.as_ptr()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn game_package_receipt_words(g: *mut Game) -> u32 {
+    game_ref!(g).package_receipt.len() as u32
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn game_pick_ptr(g: *mut Game) -> *mut i16 {
     game_ptr!(g).pick.as_mut_ptr()
@@ -1862,6 +2009,8 @@ pub unsafe extern "C" fn game_load_commit(g: *mut Game) -> u32 {
             for selection in &mut game.selection {
                 selection.clear();
             }
+            game.command_identity.fill(-1);
+            game.package_receipt.clear();
             game.commands_seen = 0;
             game.orders_applied = 0;
             game.terrain_version = game.terrain_version.wrapping_add(1).max(1);
@@ -2052,6 +2201,151 @@ mod tests {
         packet[1..5].copy_from_slice(&(-1i32).to_le_bytes());
         packet[5..9].copy_from_slice(&target.to_le_bytes());
         packet
+    }
+
+    fn group_move_packet(who: u8, o: i16, x: i32, y: i32) -> Vec<u8> {
+        let mut packet = vec![wire_gen::op::GROUP, 1, who];
+        packet.extend_from_slice(&o.to_le_bytes());
+        packet.push(wire_gen::op::MOVE_TO);
+        packet.extend_from_slice(&x.to_le_bytes());
+        packet.extend_from_slice(&y.to_le_bytes());
+        packet.extend_from_slice(&0i32.to_le_bytes());
+        packet.extend_from_slice(&0i32.to_le_bytes());
+        packet.extend_from_slice(&[1, 2, 0, 50, 0]);
+        packet
+    }
+
+    #[test]
+    fn owner_local_identity_and_whole_package_abi_bind_the_canonical_sim_receipt() {
+        use don_sim::systems::canonical_group_move_host::{
+            GroupMoveAuthority, MoveMemberAuthority,
+        };
+        use don_sim::systems::groups_guys::FormationMember;
+
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x6d0e_2026);
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x03, u32::from_le_bytes([0, 1, 8, 8]), 0, 0, 0)
+            },
+            1
+        );
+
+        let row = (0..game.core.world.live_count() as usize)
+            .find(|&row| game.core.world.units.get_who(row) == 0)
+            .expect("opening owner-zero Unit");
+        let handle = game.core.world.handle_at_row(row).unwrap();
+        let o = game.core.world.units.o()[row];
+        let uid = game.core.world.units.get_uid(row);
+        game.core.world.units.group_mut()[row] = -1;
+        game.core.world.units.o_down_mut()[row] = -1;
+        game.core.world.units.form_mut()[row] = 0;
+        game.core.world.units.form_mod_mut()[row] = 50;
+
+        let before_identity = game.core.channel_digest();
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, BUILD_VIEW_ID_BASE) },
+            0,
+            "build projection ids are not Unit command identities"
+        );
+        assert_eq!(game.command_identity, [-1; 3]);
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        assert_eq!(game.command_identity, [0, i32::from(o), i32::from(uid)]);
+        assert_eq!(game.core.channel_digest(), before_identity);
+
+        let packet = group_move_packet(0, o, 47_435, 47_486);
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        let before_refusal = game.core.channel_digest();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            0,
+            "an adapter without the retail play-to-owner lifecycle map must fail closed"
+        );
+        let refusal = String::from_utf8_lossy(&game.error);
+        assert!(refusal.contains("MissingPlayerMap"), "{refusal}");
+        assert_eq!(game.core.channel_digest(), before_refusal);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+
+        let mut players = don_sim::tick::lifecycle_host::PlayerTable::new();
+        players.seat(0, 1, 0, 0);
+        game.core.players = Some(players);
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            0,
+            "a lifecycle map without exact movement/type authority must still fail closed"
+        );
+        let refusal = String::from_utf8_lossy(&game.error);
+        assert!(refusal.contains("MissingAuthority"), "{refusal}");
+        assert_eq!(game.core.channel_digest(), before_refusal);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+
+        let angle = game.core.world.units.angle()[row];
+        let mut formation = FormationMember::default();
+        formation.angle = angle;
+        game.core.replace_group_move_authority(GroupMoveAuthority {
+            revision: 7,
+            composition_digest: [0x3c; 32],
+            destination_is_water: false,
+            force_formation_facing_zero: false,
+            members: vec![MoveMemberAuthority {
+                handle,
+                role: 0x40000,
+                on_map: true,
+                is_captain: true,
+                can_move: true,
+                can_install_order: true,
+                is_plane: false,
+                domain: 0,
+                unit_flags: 0,
+                speed: 24,
+                admits_unsplit_move_near: true,
+                land_formation: formation,
+                water_formation: formation,
+            }],
+        });
+        let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            1,
+            "{}",
+            String::from_utf8_lossy(&game.error)
+        );
+        assert_eq!(
+            unsafe { game_package_receipt_words(&mut game) },
+            (PACKAGE_RECEIPT_HEADER_WORDS + PACKAGE_RECEIPT_UNIT_WORDS) as u32
+        );
+        assert_eq!(game.package_receipt[0..6], [0, 1, 0, 0, 1, 1]);
+        assert_eq!(game.package_receipt[9], rng);
+        assert_eq!(game.package_receipt[10], rng);
+        assert_eq!(
+            game.package_receipt[11..16],
+            [
+                handle.id as i32,
+                handle.generation as i32,
+                0,
+                i32::from(o),
+                i32::from(uid),
+            ]
+        );
+        assert_eq!(game.core.world.random.state(), rng);
+
+        let stable = game.core.channel_digest();
+        game.cmd[5] = wire_gen::op::HALT;
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 2, packet.len() as u32) },
+            0
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("WrongSecondOpcode"));
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
     }
 
     #[test]
