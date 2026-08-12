@@ -85,7 +85,6 @@ pub enum CanonicalAirPackageError {
     InvalidContainment { who: i8, o: i16 },
     ContainmentCycle { who: u8, o: i16 },
     NestedContainerUnsupported { who: i8, o: i16 },
-    NoInstalls,
     Planner(crate::command::air_launch_receivers::AirLaunchBoundary),
 }
 
@@ -778,13 +777,6 @@ pub fn prepare_canonical_air_package(
                 .installs
         }
     };
-    if installs.is_empty()
-        && scenario_prune
-            .as_ref()
-            .is_none_or(|prune| prune.removals == 0)
-    {
-        return Err(CanonicalAirPackageError::NoInstalls);
-    }
     let target_orders = installs
         .iter()
         .copied()
@@ -805,6 +797,7 @@ pub fn prepare_canonical_air_package(
         canonical_group_packet: Some(transaction::CanonicalGroupPacketReceipt::for_request(
             &request,
             cache_revision,
+            selection.command_state_before.revision(),
         )),
         ignore_orders: if let Some(prune) = scenario_prune {
             transaction::IgnoreOrdersSnapshot::ArmedPrepared {

@@ -219,6 +219,60 @@ fn ignored_build_airbase_is_pruned_without_a_fabricated_unit_backlink() {
 }
 
 #[test]
+fn empty_recorded_build_scramble_commits_and_resumes_selection_without_rng() {
+    let (mut sim, planes) = fixture();
+    let plane_row = sim.world.row_of(planes[0]).unwrap();
+    sim.builds[15].other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+    sim.builds[15].other[0x3e] = 0xff;
+    sim.world.units.inside_up_mut()[plane_row] = -1;
+    sim.world.units.inside_up_who_mut()[plane_row] = -1;
+    let order_before = sim.world.orders(plane_row).clone();
+    let rng_before = sim.world.random.state();
+
+    let explicit = sim
+        .process_air_group_package(0, 0x7f1, RECORDED_ONE)
+        .unwrap();
+    assert!(explicit.validates());
+    assert!(matches!(
+        explicit.status,
+        AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()
+    ));
+    assert_eq!(&selected_group(&sim).list[..1], &[2_015]);
+    assert_eq!(
+        sim.command_package_state.selection(0),
+        Some(
+            &[CachedSelection {
+                o: 2_015,
+                uid: 0x400f,
+            }][..]
+        )
+    );
+    assert_eq!(sim.world.orders(plane_row), &order_before);
+    assert_eq!(sim.world.random.state(), rng_before);
+
+    let bytes = save_sim(&sim).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install_authorities(&mut resumed, &planes, &[2_015, 2_090, 2_091, 2_147]);
+    let revision_before = resumed.command_package_state.revision();
+    let cached = resumed
+        .process_air_group_package(0, 0x7f2, CACHED_SCRAMBLE)
+        .unwrap();
+    assert!(cached.validates());
+    assert!(matches!(
+        cached.status,
+        AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()
+    ));
+    assert!(cached.request.selection.is_cached_reselection());
+    assert_eq!(
+        resumed.command_package_state.revision(),
+        revision_before.wrapping_add(1)
+    );
+    assert_eq!(&selected_group(&resumed).list[..1], &[2_015]);
+    assert_eq!(resumed.world.random.state(), rng_before);
+}
+
+#[test]
 fn recorded_build_cache_survives_save_reload_and_empty_scramble_reselection() {
     let (mut sim, planes) = fixture();
     let first = sim

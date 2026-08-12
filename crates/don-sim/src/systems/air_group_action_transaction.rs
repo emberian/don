@@ -628,6 +628,10 @@ pub struct CanonicalGroupPacketReceipt {
     pub resolved_group: CanonicalGroupKey,
     pub group_revision: u64,
     pub group_walk_digest: u64,
+    /// Canonical `CommandPackageState` revisions around opcode 0. The selector advances
+    /// exactly once even when the following action finds no eligible target.
+    pub selection_revision_before: u64,
+    pub selection_revision_after: u64,
     pub selection_cache_revision: Option<u64>,
 }
 
@@ -635,6 +639,7 @@ impl CanonicalGroupPacketReceipt {
     pub fn for_request(
         request: &AirGroupActionRequest,
         selection_cache_revision: Option<u64>,
+        selection_revision_before: u64,
     ) -> Self {
         Self {
             position: request.position,
@@ -643,8 +648,14 @@ impl CanonicalGroupPacketReceipt {
             resolved_group: request.group_before.key,
             group_revision: request.group_before.revision,
             group_walk_digest: request.group_before.diagnostic_digest(),
+            selection_revision_before,
+            selection_revision_after: request.group_before.revision,
             selection_cache_revision,
         }
+    }
+
+    fn publishes_selection(&self) -> bool {
+        self.selection_revision_after == self.selection_revision_before.wrapping_add(1)
     }
 
     fn validates_for(&self, request: &AirGroupActionRequest) -> bool {
@@ -654,6 +665,11 @@ impl CanonicalGroupPacketReceipt {
             && self.resolved_group == request.group_before.key
             && self.group_revision == request.group_before.revision
             && self.group_walk_digest == request.group_before.diagnostic_digest()
+            && self.selection_revision_after == self.group_revision
+            && self.publishes_selection()
+            && self
+                .selection_cache_revision
+                .is_none_or(|revision| revision == self.selection_revision_before)
     }
 }
 
@@ -1131,13 +1147,15 @@ fn commit_evidence_matches(
     if evidence.installs.len() != installs.len() {
         return false;
     }
-    if installs.is_empty() {
-        if prepared.snapshot.ignore_orders.prune_changed()
-            == (evidence.state_digest_before == evidence.state_digest_after)
-        {
-            return false;
-        }
-    } else if evidence.state_digest_before == evidence.state_digest_after {
+    let selection_changed = prepared
+        .snapshot
+        .canonical_group_packet
+        .as_ref()
+        .is_some_and(CanonicalGroupPacketReceipt::publishes_selection);
+    let should_change = !installs.is_empty()
+        || prepared.snapshot.ignore_orders.prune_changed()
+        || selection_changed;
+    if should_change == (evidence.state_digest_before == evidence.state_digest_after) {
         return false;
     }
     installs

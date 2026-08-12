@@ -608,20 +608,28 @@ fn either_cast_predicate_and_enter_or_exit_special_anim_are_exact_busy_vetoes() 
         (Order::special_anim(SpecialAnimType::Exit, 0, 0), vec![]),
     ];
     for (order, busy_spells) in cases {
-        let (mut sim, plane, _carrier, _target, packet) = fixture();
+        let (mut sim, plane, carrier, _target, packet) = fixture();
         let row = sim.world.row_of(plane).unwrap();
+        let carrier_row = sim.world.row_of(carrier).unwrap();
+        let carrier_o = sim.world.units.o()[carrier_row];
         sim.world.orders_mut(row).replace(order);
         sim.air_group_authority.busy_spells = busy_spells;
         let before_groups = sim.groups.clone();
         let before_cache = sim.command_package_state.clone();
         let before_order = sim.world.orders(row).clone();
         let before_rng = sim.world.random.state();
+        let receipt = sim.process_air_group_package(0, 0x92, &packet).unwrap();
+        assert!(receipt.validates());
+        assert!(matches!(
+            receipt.status,
+            AirTransactionStatus::Applied(ref evidence) if evidence.installs.is_empty()
+        ));
+        assert_ne!(sim.groups.list, before_groups.list);
+        assert_ne!(sim.command_package_state, before_cache);
         assert_eq!(
-            sim.process_air_group_package(0, 0x92, &packet),
-            Err(don_sim::systems::canonical_air_group_host::CanonicalAirPackageError::NoInstalls)
+            &sim.groups.list[sim.groups.last_group[0] as usize].list[..1],
+            &[carrier_o]
         );
-        assert_eq!(sim.groups.list, before_groups.list);
-        assert_eq!(sim.command_package_state, before_cache);
         assert_eq!(sim.world.orders(row), &before_order);
         assert_eq!(sim.world.random.state(), before_rng);
     }

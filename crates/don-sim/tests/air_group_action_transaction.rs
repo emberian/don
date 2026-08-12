@@ -148,7 +148,8 @@ fn snapshot(plane: ContainedFacts) -> AirGroupActionSnapshot {
         authority: authority(),
         canonical_group_packet: Some(CanonicalGroupPacketReceipt::for_request(
             &binding_request,
-            Some(5),
+            None,
+            binding_request.group_before.revision.wrapping_sub(1),
         )),
         ignore_orders: IgnoreOrdersSnapshot::Clear {
             revision: authority().scenario,
@@ -468,15 +469,32 @@ fn retail_empty_group_pair_requires_the_canonical_reselection_cache_receipt() {
     )
     .unwrap();
     let mut image = snapshot(eligible_plane());
-    image.canonical_group_packet = Some(CanonicalGroupPacketReceipt::for_request(&request, None));
+    image.canonical_group_packet = Some(CanonicalGroupPacketReceipt::for_request(
+        &request,
+        None,
+        request.group_before.revision.wrapping_sub(1),
+    ));
     assert_eq!(
         prepare_air_group_action(&request, &image).unwrap_err(),
         AirTransactionBlocker::GroupReselectionCacheUnavailable
     );
 
-    image.canonical_group_packet =
-        Some(CanonicalGroupPacketReceipt::for_request(&request, Some(19)));
+    image.canonical_group_packet = Some(CanonicalGroupPacketReceipt::for_request(
+        &request,
+        Some(request.group_before.revision.wrapping_sub(1)),
+        request.group_before.revision.wrapping_sub(1),
+    ));
     assert!(prepare_air_group_action(&request, &image).is_ok());
+
+    image
+        .canonical_group_packet
+        .as_mut()
+        .unwrap()
+        .selection_revision_before = request.group_before.revision;
+    assert_eq!(
+        prepare_air_group_action(&request, &image),
+        Err(AirTransactionBlocker::CanonicalGroupPackageReceiptMismatch)
+    );
 }
 
 #[test]
@@ -513,6 +531,7 @@ fn planner_unknowns_and_identity_mutations_never_reach_commit() {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FakeState {
     installs: Vec<(CanonicalObjectIdentity, OrderIndex)>,
+    selection_revision: u64,
 }
 
 #[derive(Debug, Default)]
@@ -525,13 +544,13 @@ struct FakeHost {
 
 impl FakeHost {
     fn digest(&self) -> u64 {
-        self.state
-            .installs
-            .iter()
-            .fold(0xcbf2_9ce4_8422_2325, |h, (identity, kind)| {
+        self.state.installs.iter().fold(
+            0xcbf2_9ce4_8422_2325 ^ self.state.selection_revision,
+            |h, (identity, kind)| {
                 let word = (identity.o as u64) ^ ((*kind as u64) << 40);
                 (h ^ word).wrapping_mul(0x0000_0100_0000_01b3)
-            })
+            },
+        )
     }
 }
 
@@ -554,6 +573,12 @@ impl AtomicAirGroupActionHost for FakeHost {
         &mut self,
         prepared: &PreparedAirGroupAction,
     ) -> Result<Vec<CommittedAirInstall>, AirCommitFailure> {
+        self.state.selection_revision = prepared
+            .snapshot
+            .canonical_group_packet
+            .as_ref()
+            .expect("canonical Group receipt")
+            .selection_revision_after;
         let mut committed = Vec::new();
         for (install, before) in prepared
             .plan
@@ -687,7 +712,7 @@ fn malformed_commit_evidence_is_rolled_back_instead_of_published() {
 }
 
 #[test]
-fn empty_containment_is_a_real_no_effect_commit_not_a_guessed_aircraft() {
+fn empty_containment_commits_selection_without_a_guessed_aircraft() {
     let request = request(vec![SCRAMBLE_OPCODE]);
     let mut snapshot = snapshot(eligible_plane());
     snapshot.facts.members[0].contained.clear();
@@ -696,9 +721,13 @@ fn empty_containment_is_a_real_no_effect_commit_not_a_guessed_aircraft() {
     let mut host = FakeHost::default();
     let receipt = execute_air_group_action(&mut host, &request, &snapshot);
     let AirTransactionStatus::Applied(evidence) = &receipt.status else {
-        panic!("answered empty chain is an exact no-effect apply");
+        panic!("answered empty chain still applies the canonical Group selection");
     };
-    assert_eq!(evidence.state_digest_before, evidence.state_digest_after);
+    assert_ne!(evidence.state_digest_before, evidence.state_digest_after);
+    assert_eq!(
+        host.state.selection_revision,
+        snapshot.group_before.revision
+    );
     assert!(evidence.installs.is_empty());
     assert!(receipt.validates());
 }

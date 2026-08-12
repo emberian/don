@@ -29,6 +29,12 @@ RNG epoch and external-effect epoch. The common air-physics adapter is therefore
 into a second runtime authority. AIR_PATROL prepares a detached order/path/Unit/RNG image,
 revalidates the full World digest and authority, then publishes the after-image once.
 
+An answered containment chain with zero eligible aircraft is also a successful package, not an
+adapter error. Opcode 0 has already advanced the canonical selection revision and may have
+published a new fixed Group/cache even when Scramble installs no order. The transaction receipt
+therefore binds the exact selection revision pair; empty explicit and cached Build Scrambles
+commit that selection alone, retain every target order/path byte, and consume zero RNG.
+
 ## Retail comparison and the closure boundary
 
 The executable bodies are still the authority for the contained-object walk and the two
@@ -81,6 +87,8 @@ integration decision after the patch lands with its save-version coordination.
 `canonical_air_build_selection_save_resume` additionally proves:
 
 - all three exact explicit Build-band replay packets select the recorded airbases;
+- an empty recorded Build selection and its saved cached reselection advance only the canonical
+  Group/cache revision, with zero aircraft/order/path/RNG effects;
 - contained Unit aircraft receive AIR_PATROL while retaining `group == -1`;
 - current v15 save/load/resave retains the v13-origin Build selection cache and empty cached
   Scramble;
