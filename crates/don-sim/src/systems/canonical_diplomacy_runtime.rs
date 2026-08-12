@@ -4,9 +4,9 @@
 //! The whole declaration/acceptance body is prepared by [`super::canonical_diplomacy_host`]. This
 //! adapter projects its detached image from the existing Sim owners and publishes the remaining
 //! declaration or acceptance in one assignment-only fold. Generic alliance victory is staged
-//! through the canonical Leader/Match transaction; its defeated-player Army/Unit cleanup is
-//! admitted for exact empty owner bands. Every non-vacuous external authority remains unavailable
-//! before publication.
+//! through the canonical Leader/Match transaction; its defeated-player cleanup admits exact
+//! empty Army rosters and on-map ground Unit bands. Every broader external authority remains
+//! unavailable before publication.
 
 use super::canonical_diplomacy_host::{
     commit_diplomacy_transaction, prepare_diplomacy_transaction, CanonicalLeaderDiplomacyFields,
@@ -14,6 +14,7 @@ use super::canonical_diplomacy_host::{
     PrepareDiplomacyError, PreparedDiplomacyTransaction,
 };
 use super::leader_process_taunt;
+use super::leader_set_diplo::EjectionUnitFact;
 use super::leader_set_diplo::SetDiploAuthority;
 use super::sparse_object_bands_authority_frontier::RetailBand;
 use super::victory_score::VictoryType;
@@ -28,6 +29,7 @@ use crate::tick::leader_match_host::{
     apply_leader_match, LeaderMatchError, LeaderMatchReceipt, LeaderMatchRequest,
 };
 use crate::tick::{Sim, NUM_LEADERS};
+use crate::world::OBJ_FLAG_ACTIVE;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalDiplomacyRequest {
@@ -46,20 +48,49 @@ pub enum CanonicalDiplomacyStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CanonicalDiplomacyRuntimeError {
     UnsupportedOpcode(Option<u8>),
-    FrameMismatch { request: i32, world: i32 },
+    FrameMismatch {
+        request: i32,
+        world: i32,
+    },
     MissingPlayerSetup,
     MissingNoRushFrames,
-    ResourceMirrorMismatch { who: usize },
-    LeaderFlags2MirrorMismatch { who: usize },
-    NonEmptyObjectBand { who: usize, band: RetailBand },
-    ArmyShape { who: usize, actual: usize },
+    ResourceMirrorMismatch {
+        who: usize,
+    },
+    LeaderFlags2MirrorMismatch {
+        who: usize,
+    },
+    NonEmptyObjectBand {
+        who: usize,
+        band: RetailBand,
+    },
+    DiplomacyUnitRowOutOfRange {
+        who: usize,
+        object_id: usize,
+        row: usize,
+    },
+    ContainedDiplomacyUnit {
+        who: usize,
+        object_id: usize,
+    },
+    ArmyShape {
+        who: usize,
+        actual: usize,
+    },
     Prepare(PrepareDiplomacyError),
     ExternalAuthority(Vec<ExternalDiplomacyAuthority>),
     PendingTerminalCleanup,
     UnsupportedVictoryType(i32),
     VictoryOrderingNotIsolated,
     Victory(LeaderMatchError),
-    VictoryNeedsNonVacuousDefeatCleanup { owners: u8 },
+    VictoryNeedsNonVacuousDefeatCleanup {
+        owners: u8,
+    },
+    VictoryNeedsPlaneDefeatCleanup {
+        owner: usize,
+        object_id: usize,
+    },
+    VictoryDefeatCleanup(super::defeat_cleanup::DefeatCleanupError),
     Commit(CommitDiplomacyError),
     StaleProjection,
     BridgeDidNotReturnReceipt,
@@ -77,8 +108,8 @@ pub struct CanonicalDiplomacyReceipt {
     pub completed_authority: Vec<ExternalDiplomacyAuthority>,
     /// Exact canonical Leader/Match receipts for the completed Victory authority subset.
     pub victory_receipts: Vec<LeaderMatchReceipt>,
-    /// Typed evidence that every requested defeated-player Army/Unit sweep was empty.
-    pub defeat_cleanup: Option<VacuousDefeatCleanupReceipt>,
+    /// Typed evidence for every staged defeated-player Army/Unit sweep.
+    pub defeat_cleanup: Option<DiplomacyDefeatCleanupReceipt>,
     pub error: Option<CanonicalDiplomacyRuntimeError>,
 }
 
@@ -135,22 +166,23 @@ impl CanonicalDiplomacyReceipt {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VacuousDefeatCleanupReceipt {
+pub struct DiplomacyDefeatCleanupReceipt {
     pub owners: u8,
     pub per_owner: Vec<DefeatCleanupReceipt>,
 }
 
-impl VacuousDefeatCleanupReceipt {
+impl DiplomacyDefeatCleanupReceipt {
     fn validates(&self) -> bool {
         self.per_owner.len() == self.owners.count_ones() as usize
             && self.per_owner.iter().all(|receipt| {
                 receipt.owner < NUM_LEADERS
                     && self.owners & (1u8 << receipt.owner) != 0
-                    && receipt
-                        == &DefeatCleanupReceipt {
-                            owner: receipt.owner,
-                            ..DefeatCleanupReceipt::default()
-                        }
+                    && receipt.armies_stopped == 0
+                    && receipt.groups_stopped == 0
+                    && receipt.army_members_halted == 0
+                    && receipt.planes_killed == 0
+                    && receipt.slots_visited == receipt.invalid_skipped + receipt.orders_closed
+                    && receipt.unit_masks_cleared == receipt.orders_closed
             })
             && self
                 .per_owner
@@ -161,7 +193,7 @@ impl VacuousDefeatCleanupReceipt {
 
 fn defeat_cleanup_matches_victory(
     victories: &[LeaderMatchReceipt],
-    cleanup: Option<&VacuousDefeatCleanupReceipt>,
+    cleanup: Option<&DiplomacyDefeatCleanupReceipt>,
 ) -> bool {
     if victories.is_empty() {
         return cleanup.is_none();
@@ -358,10 +390,43 @@ fn project_owner(sim: &Sim) -> Result<DiplomacyOwnerImage, CanonicalDiplomacyRun
         if leader.leader_flags2 as u32 != sim.army_leader_flags2[who] {
             return Err(CanonicalDiplomacyRuntimeError::LeaderFlags2MirrorMismatch { who });
         }
-        for band in RetailBand::ALL {
+        for band in [RetailBand::Build, RetailBand::Wall] {
             if sim.world.object_bands().mark(who, band) != Some(band.base()) {
                 return Err(CanonicalDiplomacyRuntimeError::NonEmptyObjectBand { who, band });
             }
+        }
+        let mut ejection_units = Vec::new();
+        for (object_id, row) in sim
+            .world
+            .objects
+            .slot(who)
+            .band(Band::Unit)
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let row = row as usize;
+            if row >= sim.world.units.len() {
+                return Err(CanonicalDiplomacyRuntimeError::DiplomacyUnitRowOutOfRange {
+                    who,
+                    object_id,
+                    row,
+                });
+            }
+            if !crate::systems::air::is_on_map(sim.world.units.inside_up()[row]) {
+                return Err(CanonicalDiplomacyRuntimeError::ContainedDiplomacyUnit {
+                    who,
+                    object_id,
+                });
+            }
+            ejection_units.push(EjectionUnitFact {
+                object_id: object_id as i32,
+                is_unit: true,
+                carrier_who: None,
+                come_out_return: None,
+                domain: None,
+                has_air_patrol_order: None,
+            });
         }
         if sim.armies.lists[who].len() != super::leader_set_diplo::ARMY_SLOTS {
             return Err(CanonicalDiplomacyRuntimeError::ArmyShape {
@@ -378,6 +443,7 @@ fn project_owner(sim: &Sim) -> Result<DiplomacyOwnerImage, CanonicalDiplomacyRun
         owner.shared_vision[who] = leader.init_diplomacy.ally_mask;
         owner.valid_armies[who] =
             std::array::from_fn(|slot| sim.armies.lists[who][slot].valid != 0);
+        owner.ejection_units[who] = ejection_units;
         owner.leader_diplomacy[who] = CanonicalLeaderDiplomacyFields {
             response_314: leader.init_diplomacy.counteroffer,
             response_334: leader.init_diplomacy.tribute_demanded,
@@ -437,36 +503,110 @@ fn fold_owner(sim: &mut Sim, owner: DiplomacyOwnerImage) {
 struct StagedVictoryAuthority {
     leaders: super::victory_score::Leaders,
     game: super::victory_score::Match,
+    world: crate::world::World,
+    paths: Vec<super::movement::PathStack>,
     builds: Vec<super::production::BuildData>,
     production_runtime: super::production::runtime::LiveProductionRuntime,
     receipts: Vec<LeaderMatchReceipt>,
-    defeat_cleanup: VacuousDefeatCleanupReceipt,
+    defeat_cleanup: DiplomacyDefeatCleanupReceipt,
 }
 
-fn plan_vacuous_defeat_cleanup(
+fn stage_ground_defeat_cleanup(
     sim: &Sim,
     owners: u8,
-) -> Result<VacuousDefeatCleanupReceipt, CanonicalDiplomacyRuntimeError> {
+) -> Result<
+    (
+        crate::world::World,
+        Vec<super::movement::PathStack>,
+        DiplomacyDefeatCleanupReceipt,
+    ),
+    CanonicalDiplomacyRuntimeError,
+> {
+    use super::defeat_cleanup::{DefeatCleanupError as Error, DEFEAT_UNIT_MASK};
+
+    let mut world = sim.world.clone();
+    let mut paths = sim.paths.clone();
     let mut per_owner = Vec::with_capacity(owners.count_ones() as usize);
     for owner in 0..NUM_LEADERS {
         if owners & (1u8 << owner) == 0 {
             continue;
         }
         let armies = sim.armies.leader_defeated_targets(owner);
-        let units = sim.world.objects.slot(owner).band(Band::Unit);
-        if armies.valid_armies != 0 || !armies.groups.is_empty() || !units.is_empty() {
+        if armies.valid_armies != 0 || !armies.groups.is_empty() {
             return Err(
                 CanonicalDiplomacyRuntimeError::VictoryNeedsNonVacuousDefeatCleanup { owners },
             );
         }
-        per_owner.push(DefeatCleanupReceipt {
+
+        let object_rows = sim.world.objects.slot(owner).band(Band::Unit).to_vec();
+        let mut plan = Vec::with_capacity(object_rows.len());
+        let mut invalid_skipped = 0usize;
+        for (object_id, row) in object_rows.iter().copied().enumerate() {
+            let row = row as usize;
+            if row >= world.units.len() {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::MissingUnitType { owner, object_id },
+                ));
+            }
+            if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                invalid_skipped += 1;
+                continue;
+            }
+            let Some(&type_index) = sim.unit_type.get(row) else {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::MissingUnitType { owner, object_id },
+                ));
+            };
+            let Some(is_plane) = sim.production_runtime.installed_unit_is_plane(type_index) else {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::UnsupportedUnitType {
+                        owner,
+                        object_id,
+                        type_index,
+                    },
+                ));
+            };
+            if is_plane {
+                return Err(
+                    CanonicalDiplomacyRuntimeError::VictoryNeedsPlaneDefeatCleanup {
+                        owner,
+                        object_id,
+                    },
+                );
+            }
+            if paths.get(row).is_none() {
+                return Err(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                    Error::MissingPathState { owner, object_id },
+                ));
+            }
+            plan.push(row);
+        }
+
+        let mut receipt = DefeatCleanupReceipt {
             owner,
+            slots_visited: object_rows.len(),
+            invalid_skipped,
             ..DefeatCleanupReceipt::default()
-        });
+        };
+        for row in plan {
+            world.orders_mut(row).clear();
+            paths[row].clear();
+            let masks = world.units.get_unit_masks(row) & !(0x0400_0000 | DEFEAT_UNIT_MASK);
+            world.units.set_unit_masks(row, masks);
+            let x = world.units.x_internal()[row];
+            let y = world.units.y_internal()[row];
+            let angle = world.units.angle()[row];
+            world.units.orders_x_mut()[row] = x;
+            world.units.orders_y_mut()[row] = y;
+            world.units.dest_angle_mut()[row] = angle;
+            receipt.orders_closed += 1;
+            receipt.unit_masks_cleared += 1;
+        }
+        per_owner.push(receipt);
     }
-    let receipt = VacuousDefeatCleanupReceipt { owners, per_owner };
+    let receipt = DiplomacyDefeatCleanupReceipt { owners, per_owner };
     debug_assert!(receipt.validates());
-    Ok(receipt)
+    Ok((world, paths, receipt))
 }
 
 fn stage_victory_authority(
@@ -506,7 +646,7 @@ fn stage_victory_authority(
     }
 
     let defeated_owners = leaders.take_defeat_unit_cleanup();
-    let defeat_cleanup = plan_vacuous_defeat_cleanup(sim, defeated_owners)?;
+    let (world, paths, defeat_cleanup) = stage_ground_defeat_cleanup(sim, defeated_owners)?;
     let build_owners = leaders.take_terminal_queue_cleanup();
     for owner in 0..NUM_LEADERS {
         if build_owners & (1u8 << owner) != 0 {
@@ -523,6 +663,8 @@ fn stage_victory_authority(
     Ok(Some(StagedVictoryAuthority {
         leaders,
         game,
+        world,
+        paths,
         builds,
         production_runtime,
         receipts,
@@ -618,6 +760,8 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let victory_receipts = if let Some(staged) = staged_victory {
                 self.sim.vic_leaders = staged.leaders;
                 self.sim.vic_match = staged.game;
+                self.sim.world = staged.world;
+                self.sim.paths = staged.paths;
                 self.sim.builds = staged.builds;
                 self.sim.production_runtime = staged.production_runtime;
                 for who in 0..NUM_LEADERS {

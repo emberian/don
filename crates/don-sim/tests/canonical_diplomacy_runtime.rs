@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use don_sim::command::diplomacy_command_plans::DiplomacyProposal;
+use don_sim::order::Order;
 use don_sim::systems::canonical_diplomacy_host::{DiplomacyInstalledFacts, PreparedDiplomacyPlan};
 use don_sim::systems::canonical_diplomacy_runtime::{
     CanonicalDiplomacyRuntimeError, CanonicalDiplomacyStatus,
 };
+use don_sim::systems::defeat_cleanup;
 use don_sim::systems::diplomacy_accept_host::AcceptOutcome;
 use don_sim::systems::leader_set_diplo::Relation;
+use don_sim::systems::movement::PathData;
 use don_sim::systems::player_setup::ManualPlayerSetup;
+use don_sim::systems::production::runtime::LiveProductionType;
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::victory_score::{game_sem, leader_flag};
 use don_sim::tick::lifecycle_host::PlayerTable;
@@ -130,6 +134,22 @@ fn configured_alliance_with_defeated_opponents_sim() -> Sim {
         proposal.treaty = Relation::Ally as i32;
     }
     sim
+}
+
+fn install_defeated_ground_unit(sim: &mut Sim) -> usize {
+    let type_index = 100;
+    sim.production_runtime
+        .install_type(LiveProductionType::ordinary_unit(type_index, 1, 1));
+    let unit = sim.spawn_unit(4, type_index, 111, 222, 4).unwrap();
+    let row = sim.world.row_of(unit).unwrap();
+    sim.world
+        .orders_mut(row)
+        .replace(Order::move_to(900, 901, 48));
+    sim.paths[row].push(PathData::default());
+    sim.world
+        .units
+        .set_unit_masks(row, defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x20);
+    row
 }
 
 fn with_large_stack(f: impl FnOnce() + Send + 'static) {
@@ -406,6 +426,115 @@ fn alliance_victory_executes_vacuous_defeated_owner_cleanup_and_resumes_identica
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
         let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("coalition victory reloads");
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn alliance_victory_cleans_a_live_ground_unit_atomically_and_resumes_identically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();
+        let row = install_defeated_ground_unit(&mut uninterrupted);
+        let checkpoint = save_sim(&uninterrupted).expect("pending ground cleanup is savable");
+        let mut resumed = load_sim(&checkpoint).expect("pending ground cleanup reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let without_type = resumed
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(without_type.status, CanonicalDiplomacyStatus::Unavailable);
+        assert!(matches!(
+            without_type.error,
+            Some(CanonicalDiplomacyRuntimeError::VictoryDefeatCleanup(
+                defeat_cleanup::DefeatCleanupError::UnsupportedUnitType {
+                    owner: 4,
+                    object_id: 0,
+                    type_index: 100,
+                }
+            ))
+        ));
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
+
+        resumed
+            .production_runtime
+            .install_type(LiveProductionType::ordinary_unit(100, 1, 1));
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert!(uninterrupted_receipt.validates(&uninterrupted_receipt.request));
+
+        let cleanup = resumed_receipt
+            .defeat_cleanup
+            .as_ref()
+            .unwrap()
+            .per_owner
+            .iter()
+            .find(|cleanup| cleanup.owner == 4)
+            .unwrap();
+        assert_eq!(cleanup.slots_visited, 1);
+        assert_eq!(cleanup.invalid_skipped, 0);
+        assert_eq!(cleanup.orders_closed, 1);
+        assert_eq!(cleanup.unit_masks_cleared, 1);
+        assert_eq!(cleanup.planes_killed, 0);
+
+        assert!(resumed.world.orders(row).is_empty());
+        assert!(resumed.paths[row].is_empty());
+        assert_eq!(
+            resumed.world.units.get_unit_masks(row)
+                & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000),
+            0
+        );
+        assert_eq!(
+            (
+                resumed.world.units.orders_x()[row],
+                resumed.world.units.orders_y()[row],
+                resumed.world.units.dest_angle()[row],
+            ),
+            (
+                resumed.world.units.x_internal()[row],
+                resumed.world.units.y_internal()[row],
+                resumed.world.units.angle()[row],
+            )
+        );
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("ground cleanup reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn alliance_victory_with_a_live_defeated_plane_stays_unavailable_and_atomic() {
+    with_large_stack(|| {
+        let mut sim = configured_alliance_with_defeated_opponents_sim();
+        let type_index = 101;
+        sim.production_runtime
+            .install_type(LiveProductionType::hosted_air_unit(type_index, 1, 1));
+        sim.spawn_unit(4, type_index, 111, 222, 4).unwrap();
+        let before = save_sim(&sim).unwrap();
+        let receipt = sim
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
+        assert!(receipt.validates(&receipt.request));
+        assert!(matches!(
+            receipt.error,
+            Some(
+                CanonicalDiplomacyRuntimeError::VictoryNeedsPlaneDefeatCleanup {
+                    owner: 4,
+                    object_id: 0,
+                }
+            )
+        ));
+        assert_eq!(save_sim(&sim).unwrap(), before);
     });
 }
 

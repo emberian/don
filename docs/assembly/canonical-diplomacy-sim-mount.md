@@ -16,7 +16,7 @@ whole-body planners; it does not introduce a second `ObjectTable` or `Leader` st
 | Shared vision | `vic_leaders.slots[who].init_diplomacy.ally_mask` | `shared_vision` |
 | Victory bit 22 | `Sim.vic_match.semaphore` | `victory_mask` |
 | Armies | `Sim.armies.lists[who][slot].valid` | `valid_armies` |
-| Contained objects/orders | canonical `Sim.world` registry, stable generation, containment and order state | `ejection_units` |
+| Object identity for diplomacy ejection | canonical `Sim.world` registry and its on-map Unit band; contained rows remain fail-closed | `ejection_units` |
 
 Runtime query results—DOW costs, availability, tribute scale, console treaty, no-war gate, team
 counts, neutral classification, and shared-vision prerequisite—are installed revision-bound facts.
@@ -38,9 +38,11 @@ op41 aggregate image and executes the complete op38 or op41 planner over clones,
 5. replaces the caller's owner once.
 
 Missing or stale authority leaves resources, proposals, relations, vision, victory, armies, and
-objects unchanged. The shared Sim receiver must initially reject `ComeOut`, `KillContainedUnit`,
-`AddAirStrafeOrder`, `Victory`, and `ForceArmyProcess` unless their complete staged host has been
-mounted. `ConsiderTribute` is now executed inside the prepared owner image, including its
+objects unchanged. The shared Sim receiver still rejects `ComeOut`, `KillContainedUnit`,
+`AddAirStrafeOrder`, and `ForceArmyProcess` unless their complete staged host has been mounted;
+generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
+supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
+image, including its
 transposed positive-value tribute stamp and conditional gift stamp; even zero-valued goods emit
 the callback in retail order but take its complete no-op arm. `NotifyDeal` is now lowered to its
 complete local-only presentation envelope and does not pretend to mutate lockstep state.
@@ -71,18 +73,24 @@ layout in v14; focused tests pin byte equality and malformed-v14 refusal.
 - flip opcode closure rows only after real Bridge packets execute before and after save/load.
 
 Opcodes 38 and 41 now execute production transactions whose ordered external-authority list is
-empty. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
+empty or consists only of the staged generic-Victory authority. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
 clears publish together. Generic alliance Victory is also mounted when its staged canonical
 Leader/Match transaction has an exact empty defeated-player Army/Unit cleanup: relation rows are
 folded into the staged Leader image before `Leader::victory`, terminal Build queues are cleaned on
-staged clones, and a typed zero-mutation cleanup receipt is emitted for every defeated owner. All
-owners publish only after the diplomacy stale-owner CAS. Any non-empty defeated Army/Unit owner,
-or any reached `ComeOut`, contained-unit kill/Strafe, or forced-army call, refuses before
-publication, so both static rows remain `StateWired`.
+staged clones, and defeated owners may have empty Unit bands or active on-map ground Units while
+their Army rosters are empty. The ground arm clones `World` and every path stack, resolves all
+type/path facts first, then performs the exact `Unit::clear_orders` net transition: orders and path
+are cleared, facing latch `0x0400_0000` and defeat leash `0x0004_0000` are removed, and the empty
+action endpoint is rebuilt from current position/facing. A typed per-owner cleanup receipt records
+the whole sweep. All owners and cleanup clones publish only after the diplomacy stale-owner CAS.
+Standing Armies, planes, contained Units, missing type/path facts, `ComeOut`, contained-unit
+kill/Strafe, or forced-army calls refuse before publication, so both static rows remain
+`StateWired`.
 
-Focused status: the live opcode-38/opcode-41 runtime suite passes 8/8, including multi-opponent
-alliance Victory with empty defeated-player cleanup, save/resume, and non-empty cleanup rollback;
+Focused status: the live opcode-38/opcode-41 runtime suite passes 10/10, including multi-opponent
+alliance Victory with empty cleanup, active-ground-Unit save/resume, missing-type rollback, and
+standing-Army/plane rollback;
 the callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 42 private
