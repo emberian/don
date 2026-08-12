@@ -110,11 +110,12 @@ An error commits neither the World nor goods storage.
 inactive objects, and walks active Goods in slot order. This is deliberately different
 from the `good_mark` bound used by `World::set_oil_at` and scenario saving.
 `Good::walk_data` (`0x0066e5d0`) plus
-`SubObject::walk_data` (`0x006621d0`) contributes exactly 21 scalar bytes per active row:
+`SubObject::walk_data` (`0x006621d0`) contributes exactly 22 scalar bytes per active row:
 
 ```text
 ever_seen : u8
 flags     : u8
+must_walk : u8
 who       : u8
 o         : i16 LE
 z         : i32 LE, XOR-encoded
@@ -123,7 +124,10 @@ y         : i32 LE, XOR-encoded
 TypeIndex : i32 LE
 ```
 
-`GoodData::cur_time` is not walked.  Neither `PtrArray` length/capacity/increment nor
+`check_goods` has already filtered on `flags & 1`, so inherited
+`SubObject::must_walk` `0x006623a0` derives one; it nevertheless passes that byte to
+`CheckSum::walk_function`. `GoodData::cur_time` is not walked.  Neither `PtrArray`
+length/capacity/increment nor
 `good_mark` enters channel 11's special checker.  They still determine future slot order
 and are save/DataWalk-critical state, so the runtime and receipt retain them.
 
@@ -132,7 +136,7 @@ bit is present, section 6 (TData).  The receipt records before/after full World 
 the exact changed WData/TData indices, changed section numbers, before/after goods digests,
 walked-byte counts, and zero RNG draws.
 
-One subtle but essential point: `economy::GoodNode` is reused as the 21-byte walker row,
+One subtle but essential point: `economy::GoodNode` is reused as the 22-byte walker row,
 but its Z/X/Y values here are the internal XOR-encoded words.  Hashing decoded display
 coordinates would diverge immediately.
 

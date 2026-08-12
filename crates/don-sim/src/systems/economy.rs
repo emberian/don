@@ -3421,11 +3421,14 @@ pub fn leaders_channel(econs: &[LeaderEcon]) -> u32 {
 /// One resource node, as the **goods** channel sees it (channel 11, `0x00937710`).
 ///
 /// `Good::walk_data` (`0x0066E5D0`) contributes `ever_seen` at `Good + 0x20`, then
-/// `SubObject::walk_data` (`0x006621D0`) contributes the byte at `+0x08`, the 15-byte
-/// `[+0x09,+0x18)` identity/position window, and the `TypeIndex` obtained from the type
-/// pointer at `+0x18`. That is 21 bytes for the checksum walk used here. `GoodData` is only
-/// 48 bytes and its named own fields are `ever_seen` at `+0x20` and `cur_time` at `+0x24`;
-/// there is no remaining-amount member to approximate.
+/// `SubObject::walk_data` (`0x006621D0`) contributes the byte at `+0x08`, the explicit
+/// `SubObject::must_walk` result, the 15-byte `[+0x09,+0x18)` identity/position window,
+/// and the `TypeIndex` obtained from the type pointer at `+0x18`. `check_goods` already
+/// filtered for `flags & 1`, so inherited `SubObject::must_walk` (`0x006623A0`) derives
+/// one and passes that byte through `CheckSum::walk_function`. That is 22 bytes for the
+/// active checksum row. `GoodData` is only 48 bytes and its named own fields are
+/// `ever_seen` at `+0x20` and `cur_time` at `+0x24`; there is no remaining-amount member
+/// to approximate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct GoodNode {
     /// `SubObject + 0x08`; bit 0 is the live-object flag used by `check_goods`.
@@ -3447,16 +3450,17 @@ pub struct GoodNode {
 
 impl GoodNode {
     /// The exact scalar image passed by channel 11's live-Good path.
-    pub fn walked_bytes(self) -> [u8; 21] {
-        let mut out = [0u8; 21];
+    pub fn walked_bytes(self) -> [u8; 22] {
+        let mut out = [0u8; 22];
         out[0] = self.ever_seen;
         out[1] = self.flags;
-        out[2] = self.who;
-        out[3..5].copy_from_slice(&self.o.to_le_bytes());
-        out[5..9].copy_from_slice(&self.z.to_le_bytes());
-        out[9..13].copy_from_slice(&self.x.to_le_bytes());
-        out[13..17].copy_from_slice(&self.y.to_le_bytes());
-        out[17..21].copy_from_slice(&self.type_index.to_le_bytes());
+        out[2] = 1; // SubObject::must_walk; active bit was checked by check_goods.
+        out[3] = self.who;
+        out[4..6].copy_from_slice(&self.o.to_le_bytes());
+        out[6..10].copy_from_slice(&self.z.to_le_bytes());
+        out[10..14].copy_from_slice(&self.x.to_le_bytes());
+        out[14..18].copy_from_slice(&self.y.to_le_bytes());
+        out[18..22].copy_from_slice(&self.type_index.to_le_bytes());
         out
     }
 }
@@ -3466,7 +3470,7 @@ impl GoodNode {
 /// Node order is the checksum's order, and the engine's `PtrArray<Good>` order is creation
 /// order, so a port must preserve insertion order and must not compact on removal.
 pub fn goods_channel(nodes: &[GoodNode]) -> u32 {
-    let mut buf = Vec::with_capacity(nodes.len() * 21);
+    let mut buf = Vec::with_capacity(nodes.len() * 22);
     for n in nodes {
         buf.extend_from_slice(&n.walked_bytes());
     }
@@ -5026,8 +5030,10 @@ mod tests {
         };
         assert_eq!(
             a.walked_bytes(),
-            [1, 1, 2, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0]
+            [1, 1, 1, 2, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0]
         );
+        assert_eq!(goods_channel(&[a]), 0x00e5_0012);
+        assert_eq!(goods_channel(&[a, b]), 0x03a0_002b);
         assert_ne!(goods_channel(&[a, b]), goods_channel(&[b, a]));
         assert_eq!(goods_channel(&[a, b]), goods_channel(&[a, b]));
     }

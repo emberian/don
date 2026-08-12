@@ -253,7 +253,7 @@ class GoodsParserTests(unittest.TestCase):
         self.assertEqual(retagged.slots[0].good_tag, 0xE7)
         self.assertEqual(retagged.slots[1].subobject_tag, 0xD6)
 
-    def test_retail_checksum_projection_proves_landed_missing_must_walk_byte(self) -> None:
+    def test_retail_checksum_projection_proves_historical_missing_must_walk_byte(self) -> None:
         data = _history_fixture()
         parsed = parse_goods_section(data, 0)
         retail = _retail_checksum_rows(data, parsed)
@@ -264,7 +264,7 @@ class GoodsParserTests(unittest.TestCase):
         self.assertEqual(retail[:2] + retail[3:], landed)
 
         # A one-bit mutation of the PE-proven must_walk byte changes the retail
-        # checksum.  The landed 21-byte projection cannot observe that byte at all.
+        # checksum.  The historical 21-byte projection cannot observe that byte at all.
         mutated = bytearray(retail)
         mutated[2] ^= 1
         self.assertNotEqual(zlib.adler32(retail), zlib.adler32(mutated))
@@ -273,8 +273,8 @@ class GoodsParserTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[2]
         economy = (root / "crates/don-sim/src/systems/economy.rs").read_text()
         oil = (root / "crates/don-sim/src/systems/world_oil_goods.rs").read_text()
-        self.assertIn("pub fn walked_bytes(self) -> [u8; 21]", economy)
-        self.assertIn("pub const GOOD_WALKED_BYTES: usize = 21;", oil)
+        self.assertIn("pub fn walked_bytes(self) -> [u8; 22]", economy)
+        self.assertIn("pub const GOOD_WALKED_BYTES: usize = 22;", oil)
 
     def test_pdb_layout_and_executable_bodies_are_frozen(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[2]

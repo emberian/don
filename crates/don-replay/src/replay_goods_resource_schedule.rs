@@ -8,7 +8,7 @@
 //!
 //! The splice is intentionally bounded.  It does not port either placement body and it
 //! does not cross the open `GOODIES`/`FISH` category tail.  Consequently it can own the
-//! 21 checksum-walked bytes of every allocation present in an admitted schedule receipt,
+//! 22 checksum-walked bytes of every allocation present in an admitted schedule receipt,
 //! but it never claims the pending first replay checkpoint.
 
 use crate::map_make_resource_caller_gap_frontier::{

@@ -32,8 +32,10 @@ pub const SUBOBJECT_COORD_XOR: i32 = 0x0006_3637;
 pub const CLOSED_COORD_INTERNAL: i32 = -0x0006_3638;
 /// `Good::close` clears this otherwise-unattributed WData footprint bit.
 pub const WDATA_GOOD_FOOTPRINT: u16 = 0x0001;
-/// `Good::walk_data` plus `SubObject::walk_data` contributes 21 bytes per active node.
-pub const GOOD_WALKED_BYTES: usize = 21;
+/// `Good::walk_data` plus `SubObject::walk_data` contributes 22 bytes per active node.
+/// Byte two is inherited `SubObject::must_walk`, always one after `check_goods`' active
+/// filter and still passed through `CheckSum::walk_function`.
+pub const GOOD_WALKED_BYTES: usize = 22;
 
 /// The redundant values carried by the terrain placement request.
 ///

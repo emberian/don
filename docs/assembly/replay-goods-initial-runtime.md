@@ -6,7 +6,7 @@
 `PtrArray<Good>` state used by procedural replay reconstruction and adapts typed
 map-generation oil requests to the canonical `don-sim` Good owner. It retains
 slot order, holes, `ObjectsData::good_mark`, engine capacity history, the
-21-byte active-Good checksum rows, and the complete World/oil placement receipt.
+22-byte active-Good checksum rows, and the complete World/oil placement receipt.
 
 This is a bounded prefix, not a channel-11 compatibility claim. A replay does
 not serialize the initial object graph. `TerrainGroups::place_all` can create
@@ -98,7 +98,7 @@ whose active bit is clear. `World::set_oil_at` compares against `good_mark` at
 `0x006b2a46`/`0x006b2aab`, and scenario save does the same at
 `0x009a7399`/`0x009a73c3` and `0x009a744b`/`0x009a7572`. The canonical runtime
 enforces the initializer invariant that no active row exists at or above
-`good_mark`, so scanning either bound yields the same active 21-byte rows in
+`good_mark`, so scanning either bound yields the same active 22-byte rows in
 this prefix; only the checksum walk itself is accurately described as the
 logical-length scan.
 

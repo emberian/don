@@ -164,13 +164,12 @@ y         : i32 LE
 TypeIndex : i32 LE
 ```
 
-The currently landed `GoodNode::walked_bytes -> [u8; 21]` and
-`GOOD_WALKED_BYTES = 21` omit only `must_walk`.  The exclusive test constructs
-an independently parsed retail Good row, confirms that deleting byte 2 yields
-the landed 21-byte image exactly, and flips only byte 2 to prove that the
-retail Adler checksum changes while the landed projection cannot observe the
-mutation.  This save-parser tranche records that discrepancy but does not edit
-the shared Sim authority; its correction is a separate owner.
+The formerly landed `GoodNode::walked_bytes -> [u8; 21]` and
+`GOOD_WALKED_BYTES = 21` omitted only `must_walk`.  The exclusive save-parser
+test constructs an independently parsed retail Good row, confirms that deleting
+byte 2 yields that old 21-byte image exactly, and flips only byte 2 to prove
+that the retail Adler checksum changes while the old projection cannot observe
+the mutation.  The canonical Sim authority now emits the exact 22-byte row.
 
 ## Mutation and boundary proof
 

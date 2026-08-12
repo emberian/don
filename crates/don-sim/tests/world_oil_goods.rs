@@ -15,6 +15,7 @@ mod systems {
 mod world_oil_goods;
 
 use don_sim::checksum::adler32;
+use std::fs;
 use systems::map_terrain::{tflag, wflag, World};
 use world_oil_goods::*;
 
@@ -71,7 +72,7 @@ fn first_oil_allocates_four_slots_and_hashes_encoded_subobject_words() {
     assert!(slot.ptype_present);
 
     let mut expected = Vec::new();
-    expected.extend_from_slice(&[0, 1, u8::MAX]);
+    expected.extend_from_slice(&[0, 1, 1, u8::MAX]);
     expected.extend_from_slice(&0i16.to_le_bytes());
     expected.extend_from_slice(&SUBOBJECT_COORD_XOR.to_le_bytes());
     expected.extend_from_slice(&(request.coord_x ^ SUBOBJECT_COORD_XOR).to_le_bytes());
@@ -80,7 +81,8 @@ fn first_oil_allocates_four_slots_and_hashes_encoded_subobject_words() {
     assert_eq!(expected.len(), GOOD_WALKED_BYTES);
     assert_eq!(slot.node.walked_bytes().as_slice(), expected.as_slice());
     assert_eq!(goods.goods_checksum(), adler32(1, &expected));
-    assert_eq!(receipt.after.goods_walked_bytes, 21);
+    assert_eq!(goods.goods_checksum(), 0x2c78_0356);
+    assert_eq!(receipt.after.goods_walked_bytes, 22);
     assert_eq!(
         goods.scenario_rows(),
         vec![ScenarioGoodRow {
@@ -90,6 +92,82 @@ fn first_oil_allocates_four_slots_and_hashes_encoded_subobject_words() {
             coord_y: request.coord_y,
         }]
     );
+}
+
+fn pe_offset(image: &[u8], va: u32) -> usize {
+    let u16_at = |at| u16::from_le_bytes(image[at..at + 2].try_into().unwrap());
+    let u32_at = |at| u32::from_le_bytes(image[at..at + 4].try_into().unwrap());
+    let pe = u32_at(0x3c) as usize;
+    let sections = u16_at(pe + 6) as usize;
+    let optional_size = u16_at(pe + 20) as usize;
+    let optional = pe + 24;
+    let rva = va - u32_at(optional + 28);
+    let table = optional + optional_size;
+    for index in 0..sections {
+        let section = table + index * 40;
+        let virtual_size = u32_at(section + 8);
+        let virtual_address = u32_at(section + 12);
+        let raw_size = u32_at(section + 16);
+        let raw = u32_at(section + 20);
+        if (virtual_address..virtual_address + virtual_size.max(raw_size)).contains(&rva) {
+            return (raw + rva - virtual_address) as usize;
+        }
+    }
+    panic!("VA {va:#x} is outside the image")
+}
+
+#[test]
+fn native_must_walk_byte_is_pe_backed_and_checksum_mutation_sensitive() {
+    let node = don_sim::systems::economy::GoodNode {
+        flags: 1,
+        who: 2,
+        o: 3,
+        z: 4,
+        x: 5,
+        y: 6,
+        type_index: 7,
+        ever_seen: 8,
+    };
+    let retail = node.walked_bytes();
+    assert_eq!(retail.len(), GOOD_WALKED_BYTES);
+    assert_eq!(retail[2], 1);
+    let mut mutated = retail;
+    mutated[2] ^= 1;
+    assert_ne!(adler32(1, &retail), adler32(1, &mutated));
+
+    let old_omitting_must_walk = retail[..2]
+        .iter()
+        .chain(&retail[3..])
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(old_omitting_must_walk.len(), 21);
+    assert_ne!(adler32(1, &retail), adler32(1, &old_omitting_must_walk));
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let exe_path = root.join("ron-bin/riseofnations.exe");
+    if !exe_path.exists() {
+        return;
+    }
+    let image = fs::read(exe_path).unwrap();
+    let exact = [
+        // check_goods: active-bit filter, base-Good scalar walk, SubObject call.
+        (0x0093_7739, "f646080174348b063de847b400753ba17863c0008bcb8b138b4010054415010050ff52048b138d4621508d46208bcb50ff12538bcee85daad2ff"),
+        // SubObject::walk_data: virtual must_walk call and conditional tail walk.
+        (0x0066_21fe, "8b078bcf53ff507885c00f84930000008b038d7718568d4f09518bcbff10"),
+        // SubObject::must_walk: derives the byte, walks it, and returns it.
+        (0x0066_23a0, "558bec8b5508837a0400751483791800750af6410801c6450b007404c6450b018b028d4d0c518d4d0b518bcaff100fb6450b5dc20400"),
+        // CheckSum constructor: DataWalk::input remains zero on the output path.
+        (0x0045_dee9, "c7410400000000c7410cffffffffc745fc00000000c70120f9b300c7410801000000c7411000000000"),
+    ];
+    for (va, expected) in exact {
+        let expected = expected
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>();
+        let offset = pe_offset(&image, va);
+        assert_eq!(&image[offset..offset + expected.len()], expected);
+    }
 }
 
 #[test]

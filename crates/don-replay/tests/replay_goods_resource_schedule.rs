@@ -126,7 +126,7 @@ fn runtime_with_one_oil_and_one_hole() -> ReplayInitialGoodsRuntime {
 #[test]
 fn resource_allocations_reuse_then_append_and_add_exact_walked_rows() {
     let initial = runtime_with_one_oil_and_one_hole();
-    assert_eq!(initial.goods().summary().goods_walked_bytes, 21);
+    assert_eq!(initial.goods().summary().goods_walked_bytes, 22);
     assert_eq!(initial.goods().slots.len(), 2);
     assert!(!initial.goods().slots[0].active());
 
@@ -152,9 +152,9 @@ fn resource_allocations_reuse_then_append_and_add_exact_walked_rows() {
         receipt.goods_allocations[1].storage_kind,
         ResourceGoodAllocationKind::Appended
     );
-    assert_eq!(receipt.newly_owned_walked_bytes, 42);
-    assert_eq!(receipt.before.goods_walked_bytes, 21);
-    assert_eq!(receipt.after.goods_walked_bytes, 63);
+    assert_eq!(receipt.newly_owned_walked_bytes, 44);
+    assert_eq!(receipt.before.goods_walked_bytes, 22);
+    assert_eq!(receipt.after.goods_walked_bytes, 66);
     assert_eq!(receipt.after.active_count, 3);
     assert_eq!(receipt.after.array.length, 3);
     assert_eq!(receipt.after.array.capacity, 4);

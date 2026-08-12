@@ -491,8 +491,10 @@ execution rotates the ordered `gather_from` coordinates without debiting them, w
 `World::gather_at` is a pure six-slot terrain-value reader.
 
 The goods checksum model is now exact too: `Good::walk_data` contributes `ever_seen +0x20`,
-then `SubObject::walk_data` contributes flags, owner/object identity, position, and the
-resolved `TypeIndex`, for 21 bytes. `GoodData` has no remaining-amount member. The separate
+then `SubObject::walk_data` contributes flags, the explicit `must_walk` byte, owner/object
+identity, position, and the resolved `TypeIndex`, for 22 bytes. `check_goods` prefilters
+inactive rows, so inherited `SubObject::must_walk` derives one, but still passes that byte
+through `CheckSum::walk_function`. `GoodData` has no remaining-amount member. The separate
 rare/merchant spatial path is still unreduced, so this does not assert when or why retail
 may remove a rare Good object.
 

@@ -75,7 +75,7 @@ it is the engine telling us how much of a class is sim-critical.
 | 8 | `leaders` | inline in `check_all` | `LeaderData::walk_data` `0x006D6750` | 27182 / 28388 | `economy`, `tech_cities`, `victory_score` | partial |
 | 9 | `cities` | `check_cities` `0x00937600` | `City::walk_data` `0x00489220` | 110 / 192 | `tech_cities` | partial |
 | 10 | `items` | `check_items` `0x00937790` | `Item::walk_data` `0x00677150` | 22 bytes per live item (re-audited) / 44 | `items` | partial; compiled, no runtime producer |
-| 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 21 / 48 | `economy` (`goods_channel`) | partial |
+| 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 22 / 48 | `economy` (`goods_channel`) | partial |
 | 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | dynamic exact walk, 13 sections | `borders_fog`, `map_terrain`, `don-replay::initial` | partial; prefix dimensions/seed reach scoreboard, generated terrain/starts unsourced |
 | 13 | `rules` | inline | `Game::walk_rules_data` `0x00589550` | 997,846 bytes in the live shipped walk | `rules_channel` | partial; exact walker, incomplete checked-in inputs |
 | 14 | `scenario` | inline | `ScenarioData::walk_data` `0x00997AD0` | pointer-rich structural walk | `scenario_channel` | partial; no runtime producer |

@@ -147,8 +147,8 @@ fn oil_adapter_retains_canonical_allocation_and_world_receipts() {
     assert_eq!(prefix.state.array.capacity, 4);
     assert_eq!(prefix.state.good_mark, 1);
     assert_eq!(prefix.state.active_count, 1);
-    assert_eq!(prefix.state.goods_walked_bytes, 21);
-    assert_eq!(prefix.sourced_walked_bytes, 21);
+    assert_eq!(prefix.state.goods_walked_bytes, 22);
+    assert_eq!(prefix.sourced_walked_bytes, 22);
     assert_ne!(prefix.state.goods_checksum, 1);
     assert_eq!(prefix.oil_receipts, 1);
     assert_eq!(runtime.oil_receipts().len(), 1);
