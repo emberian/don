@@ -102,7 +102,8 @@ fn exact_member(o: i16) -> CanonicalMemberFacts {
 
 fn caps() -> EconomyOrderCapabilities {
     EconomyOrderCapabilities {
-        format_version: REQUIRED_ORDER_FORMAT_VERSION,
+        // v13 inserts the node metric before the generic order and retains v12's typed tail.
+        format_version: 13,
         typed_cast_v1: true,
         typed_trade_v1: true,
         exact_group_queue_first: true,
@@ -214,7 +215,10 @@ fn cached_zero_count_is_not_an_empty_group_and_stale_cache_can_drop_the_action()
     let receipt = CanonicalGroupSelectionReceipt {
         pair,
         cache_before: cache.clone(),
-        cache_after: cache,
+        cache_after: CanonicalSelectionCacheImage {
+            revision: cache.revision + 1,
+            entries: cache.entries,
+        },
         selected: vec![],
         group_mutations: vec![],
         member_backlinks: vec![],

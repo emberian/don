@@ -323,6 +323,10 @@ pub struct Coverage {
     pub special_anim_host_refused: u64,
     /// Malformed payload or broken host attestations rejected without publication.
     pub special_anim_malformed: u64,
+    /// Exact `Unit::do_trade` subpaths committed through the canonical typed order owner.
+    pub trade_route_committed: u64,
+    /// TRADE_ROUTE activations held before mutation because their required branch is not owned.
+    pub trade_route_refused: u64,
     pub damage_applied: u64,
     pub damage_total: i64,
     pub deaths: u64,
@@ -388,6 +392,8 @@ impl Default for Coverage {
             special_anim_working: 0,
             special_anim_host_refused: 0,
             special_anim_malformed: 0,
+            trade_route_committed: 0,
+            trade_route_refused: 0,
             damage_applied: 0,
             damage_total: 0,
             deaths: 0,
@@ -846,6 +852,20 @@ pub struct Sim {
     /// Revision/digest-bound object/type answers absent from the generated World columns.
     /// This is an installed content adapter, not a second persistent gameplay owner.
     pub group_move_authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
+    /// Revision/digest-bound Board/Repair/Trade facts and sparse object bindings. Like the
+    /// movement projection, this is reinstalled after load and is not a second gameplay owner.
+    pub economy_group_authority:
+        crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority,
+    /// Revision/digest-bound registry/caravan/terrain facts for admitted `Unit::do_trade`
+    /// branches. This is a load-time adapter, not a second persistent order owner.
+    pub trade_route_authority:
+        crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority,
+    /// Last exact production activation or refusal. Diagnostic only; canonical effects live in
+    /// World/order/path owners and this record is not part of DoNSave.
+    pub last_trade_route_receipt:
+        Option<crate::systems::canonical_trade_route_runtime::TradeRouteActivationReceipt>,
+    pub last_trade_route_error:
+        Option<crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeError>,
 
     // ---- step 13: standing AI armies -------------------------------------------------
     pub armies: crate::systems::armies::Armies,
@@ -1459,6 +1479,12 @@ impl Sim {
                 crate::systems::canonical_group_move_host::CommandPackageState::default(),
             group_move_authority:
                 crate::systems::canonical_group_move_host::GroupMoveAuthority::default(),
+            economy_group_authority:
+                crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority::default(),
+            trade_route_authority:
+                crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
+            last_trade_route_receipt: None,
+            last_trade_route_error: None,
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
@@ -1492,6 +1518,24 @@ impl Sim {
         authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
     ) {
         self.group_move_authority = authority;
+    }
+
+    /// Install the exact object/fact projection consumed by Board/Repair/Trade packages.
+    /// Loaded simulations deliberately start without it and fail closed until content installs
+    /// the same revision/digest-bound projection again.
+    pub fn replace_economy_group_authority(
+        &mut self,
+        authority: crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority,
+    ) {
+        self.economy_group_authority = authority;
+    }
+
+    /// Install the fact snapshot used by exact, fail-closed `TRADE_ROUTE` activations.
+    pub fn replace_trade_route_authority(
+        &mut self,
+        authority: crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority,
+    ) {
+        self.trade_route_authority = authority;
     }
 
     /// Process the bounded canonical command cohort: exactly opcode 0 Group followed by opcode 7
@@ -1538,6 +1582,56 @@ impl Sim {
             &mut self.paths,
             &mut self.command_package_state,
             &self.group_move_authority,
+            prepared,
+        )
+    }
+
+    /// Process exactly one opcode-0 Group followed by BoardShip (15), Repair (16), or Trade
+    /// (17). Selection/cache/allocation and every reached order/path/Group mutation publish at
+    /// one revalidated boundary; malformed or stale input consumes no RNG and writes nothing.
+    pub fn process_economy_command_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_economy_group_host::EconomyGroupPackageReceipt,
+        crate::systems::canonical_economy_group_host::EconomyPackageError,
+    > {
+        use crate::systems::canonical_economy_group_host::{
+            commit_economy_group_package, prepare_economy_group_package,
+        };
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_economy_group_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.economy_group_authority,
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_economy_group_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.economy_group_authority,
             prepared,
         )
     }
@@ -2965,9 +3059,50 @@ impl Sim {
             OrderIndex::BuildAt => self.do_build(row),
             // Arm 25, `Unit::do_spec_anim` `0x005E5880`, through its narrow atomic host.
             OrderIndex::SpecialAnim => self.do_special_anim(row),
+            // Arm 15, `Unit::do_trade` `0x005ED270`. The adapter admits only fully owned
+            // branches; every road/city/caravan/selection residual holds without mutation.
+            OrderIndex::TradeRoute => self.do_trade_route(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
+        }
+    }
+
+    fn do_trade_route(&mut self, row: usize) {
+        use crate::systems::canonical_trade_route_runtime::{
+            commit_trade_route_activation, prepare_trade_route_activation,
+        };
+
+        let prepared = match prepare_trade_route_activation(
+            &self.world,
+            &self.paths,
+            &self.trade_route_authority,
+            row,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_trade_route_receipt = None;
+                self.last_trade_route_error = Some(error);
+                self.cover.trade_route_refused += 1;
+                return;
+            }
+        };
+        match commit_trade_route_activation(
+            &mut self.world,
+            &self.paths,
+            &self.trade_route_authority,
+            prepared,
+        ) {
+            Ok(receipt) => {
+                self.last_trade_route_receipt = Some(receipt);
+                self.last_trade_route_error = None;
+                self.cover.trade_route_committed += 1;
+            }
+            Err(error) => {
+                self.last_trade_route_receipt = None;
+                self.last_trade_route_error = Some(error);
+                self.cover.trade_route_refused += 1;
+            }
         }
     }
 

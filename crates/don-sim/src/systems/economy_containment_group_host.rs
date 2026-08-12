@@ -26,7 +26,8 @@ pub const REPAIR_WIRE_SIZE: usize = 13;
 pub const TRADE_WIRE_SIZE: usize = 21;
 pub const GROUP_WIRE_PREFIX: usize = 3;
 
-/// The one DoNSave envelope version reserved for Move, Gather, Cast, and Trade payloads.
+/// First DoNSave version reserving the typed Move/Gather/Cast/Trade tail. Later formats,
+/// including v13's preceding node metric, retain this tail byte-for-byte.
 pub const REQUIRED_ORDER_FORMAT_VERSION: u32 = 12;
 
 /// Typed-v12 payload tags already reserved by the shared order-envelope owner.
@@ -441,7 +442,8 @@ impl CanonicalGroupSelectionReceipt {
         }
 
         if self.pair.group.is_cached_reselection() {
-            if self.cache_before != self.cache_after
+            if self.cache_after.revision != self.cache_before.revision.wrapping_add(1)
+                || self.cache_before.entries != self.cache_after.entries
                 || !cached_selection_is_ordered_subsequence(
                     owner,
                     &self.cache_before.entries,
@@ -451,16 +453,15 @@ impl CanonicalGroupSelectionReceipt {
                 return false;
             }
         } else {
-            let selected_cache: Vec<_> = self
-                .selected
-                .iter()
-                .map(|identity| CachedSelectionIdentity {
-                    o: identity.o,
-                    uid: identity.uid,
-                })
-                .collect();
-            if self.cache_before.revision == self.cache_after.revision
-                || self.cache_after.entries != selected_cache
+            // Retail retains every live explicit `(o,uid)` in the play-keyed cache, including
+            // duplicates. Canonical Group construction de-duplicates the effective selection,
+            // so that selection must be an ordered subsequence rather than equal to the cache.
+            if self.cache_after.revision != self.cache_before.revision.wrapping_add(1)
+                || !cached_selection_is_ordered_subsequence(
+                    owner,
+                    &self.cache_after.entries,
+                    &self.selected,
+                )
             {
                 return false;
             }
@@ -770,7 +771,7 @@ fn require_capabilities(
     plan: &Option<EconomyPlan>,
     capabilities: EconomyOrderCapabilities,
 ) -> Result<(), EconomyGroupPreflightError> {
-    if capabilities.format_version != REQUIRED_ORDER_FORMAT_VERSION {
+    if capabilities.format_version < REQUIRED_ORDER_FORMAT_VERSION {
         return Err(EconomyGroupPreflightError::OrderEnvelopeV12);
     }
     if request.action.queued() == QUEUE_FIRST && !capabilities.exact_group_queue_first {

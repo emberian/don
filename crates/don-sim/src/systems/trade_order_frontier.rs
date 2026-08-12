@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Source-only reconstruction frontier for `Unit::do_trade`.
+//! Reconstruction frontier for `Unit::do_trade`.
 //!
-//! This module deliberately stays out of `systems/mod.rs`.  It freezes the concrete
-//! `TradeOrder`, destination scan, route-establishment ordering, arrival transitions, and
-//! road/move host boundary without pretending that the caravan road A*, object registries,
-//! and production tick adapter already exist.
+//! The concrete payload, packet installer and one exact production `Unit::work` rejection
+//! branch are integrated. This module freezes the remaining destination scan,
+//! route-establishment ordering, arrival transitions, and road/move host boundary without
+//! pretending that the caravan road A*, object registries, and complete tick adapter exist.
 
 pub const TRADE_ORDER_INDEX: i32 = 15;
 pub const UNIT_ADD_TRADE_ORDER_VA: u32 = 0x005e_4dc0;
@@ -885,9 +885,7 @@ impl TradeExecutorReceipt {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TradeOpenTail {
-    ConcretePayloadSaveResume,
-    CommandWireAndGroupActionTrade,
-    GroupActionTradeAndQueueFirstCopyQuirk,
+    QueueFirstCopyQuirk,
     DestinationCityAndLeaderRegistryScan,
     TerrainTransportAndCityVirtuals,
     CaravanRoadAStarParkedStateAndRng,
@@ -900,10 +898,8 @@ pub enum TradeOpenTail {
     LiveTickAtomicCommit,
 }
 
-pub const TRADE_OPEN_TAILS: [TradeOpenTail; 13] = [
-    TradeOpenTail::ConcretePayloadSaveResume,
-    TradeOpenTail::CommandWireAndGroupActionTrade,
-    TradeOpenTail::GroupActionTradeAndQueueFirstCopyQuirk,
+pub const TRADE_OPEN_TAILS: [TradeOpenTail; 11] = [
+    TradeOpenTail::QueueFirstCopyQuirk,
     TradeOpenTail::DestinationCityAndLeaderRegistryScan,
     TradeOpenTail::TerrainTransportAndCityVirtuals,
     TradeOpenTail::CaravanRoadAStarParkedStateAndRng,

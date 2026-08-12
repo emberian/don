@@ -25,7 +25,12 @@ use crate::systems::{
         self, AirOrderPayload, AirPatrolOrderPayload, WalkedCoordArray, MAX_DECODED_PATROL_POINTS,
     },
     bhs_type_runtime::TypeBuiltinBoundaryError,
-    borders_fog, economy, game_daemon_step12, groups_guys,
+    borders_fog, economy,
+    economy_order_payload_authority::{
+        self as economy_payload, EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload,
+        StableTargetIdentity,
+    },
+    game_daemon_step12, groups_guys,
     items::Item,
     map_terrain, movement,
     player_setup::ManualPlayerSetup,
@@ -438,6 +443,49 @@ const fn order_kind_carries_move_state(kind: OrderIndex) -> bool {
     )
 }
 
+#[inline]
+const fn order_kind_carries_economy_payload(kind: OrderIndex) -> bool {
+    matches!(
+        kind,
+        OrderIndex::Gather
+            | OrderIndex::BoardShip
+            | OrderIndex::AwaitBoard
+            | OrderIndex::Repair
+            | OrderIndex::CastSpell
+            | OrderIndex::TradeRoute
+    )
+}
+
+fn economy_node(order: &Order) -> Result<Option<EconomyOrderNode>, SaveError> {
+    let Some(payload) = order.economy else {
+        if order_kind_carries_economy_payload(order.kind) {
+            return Err(SaveError::Invalid("missing economy order payload"));
+        }
+        return Ok(None);
+    };
+    if !order_kind_carries_economy_payload(order.kind) {
+        return Err(SaveError::Invalid("economy payload on foreign order kind"));
+    }
+    let node = EconomyOrderNode {
+        metric: order.node_metric,
+        header: EconomyOrderHeader {
+            kind: order.kind,
+            flags: order.flags,
+            x: order.x,
+            y: order.y,
+            primary: StableTargetIdentity {
+                o: i32::from(order.target_o),
+                who: i32::from(order.target_who),
+                uid: order.target_uid,
+                handle: order.target_handle,
+            },
+        },
+        payload,
+    };
+    node.validate().map_err(map_economy_payload_save_error)?;
+    Ok(Some(node))
+}
+
 fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), SaveError> {
     // Validate the typed envelope before appending any bytes. `save_sim` writes into a local
     // buffer too, so an invalid public order cannot leak either a partial stream or a
@@ -473,6 +521,33 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             return Err(SaveError::Invalid("multiple typed order payloads"));
         }
     }
+    // Economy payload ownership starts at v13.  Older writers must retain the exact v7--v12
+    // generic image for legacy Board/AwaitBoard/Repair/Gather/Cast/Trade orders instead of
+    // retroactively requiring a payload their format could not carry.
+    let economy_node = if format_version >= economy_payload::DON_SAVE_V13 {
+        economy_node(o)?
+    } else if o.economy.is_some() {
+        return Err(SaveError::Unsupported("economy payload before DoNSave v13"));
+    } else {
+        None
+    };
+    if economy_node.is_some() && (o.move_state.is_some() || o.air_patrol.is_some()) {
+        return Err(SaveError::Invalid("multiple typed order payloads"));
+    }
+    if o.node_metric != 0 && format_version < ORDER_NODE_METRIC_FORMAT_VERSION {
+        return Err(SaveError::Invalid("order node metric before v13"));
+    }
+    let economy_leaf = if let Some(node) = economy_node {
+        if format_version < economy_payload::DON_SAVE_V13 {
+            return Err(SaveError::Unsupported("economy payload before DoNSave v13"));
+        }
+        Some(
+            economy_payload::encode_v13_leaf(format_version, node)
+                .map_err(map_economy_payload_save_error)?,
+        )
+    } else {
+        None
+    };
     let air_patrol_leaf = if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
         o.air_patrol
             .as_ref()
@@ -525,12 +600,21 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = if o.move_state.is_some() {
             DoNSaveOrderPayloadTag::Move
+        } else if let Some(leaf) = &economy_leaf {
+            DoNSaveOrderPayloadTag::from_raw(leaf.typed_payload[0]).expect("validated economy tag")
         } else if air_patrol_leaf.is_some() {
             DoNSaveOrderPayloadTag::AirPatrol
         } else {
             DoNSaveOrderPayloadTag::None
         };
-        if let Some(leaf) = air_patrol_leaf {
+        if let Some(leaf) = economy_leaf {
+            debug_assert_eq!(leaf.metric, o.node_metric);
+            debug_assert_eq!(leaf.typed_payload[0], tag as u8);
+            debug_assert_eq!(leaf.typed_payload[1], tag.wire_version());
+            w.bytes(&leaf.typed_payload);
+        } else if let Some(leaf) = air_patrol_leaf {
+            // The canonical encoder includes tag/version so the independently tested leaf
+            // is byte-for-byte the stream body, rather than being re-spelled here.
             debug_assert_eq!(leaf[0], tag as u8);
             debug_assert_eq!(leaf[1], tag.wire_version());
             w.bytes(&leaf);
@@ -571,6 +655,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     let kind = OrderIndex::from_index(r.u8()? as usize)
         .ok_or(SaveError::Invalid("unknown unit order index"))?;
     let order = Order {
+        node_metric: 0,
         kind,
         flags: r.u8()?,
         x: r.i32()?,
@@ -592,6 +677,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         follow: None,
         form_order: None,
         air_patrol: None,
+        economy: None,
     };
     let special_anim = if r.bool()? {
         let special_type = SpecialAnimType::from_raw(r.i32()?)
@@ -631,7 +717,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     } else {
         None
     };
-    let (move_state, air_patrol) = if format_version >= TYPED_ORDER_FORMAT_VERSION {
+    let (move_state, air_patrol, economy) = if format_version >= TYPED_ORDER_FORMAT_VERSION {
         let tag = DoNSaveOrderPayloadTag::from_raw(r.u8()?).ok_or(SaveError::Invalid(
             "unknown order payload discriminator/version",
         ))?;
@@ -646,7 +732,20 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                 {
                     return Err(SaveError::Invalid("missing AIR_PATROL payload"));
                 }
-                (None, None)
+                let economy = if format_version >= economy_payload::DON_SAVE_V13
+                    && order_kind_carries_economy_payload(kind)
+                {
+                    Some(read_economy_payload(
+                        r,
+                        kind,
+                        &order,
+                        DoNSaveOrderPayloadTag::None,
+                        0,
+                    )?)
+                } else {
+                    None
+                };
+                (None, None, economy)
             }
             (DoNSaveOrderPayloadTag::Move, 1) => {
                 if !order_kind_carries_move_state(kind) {
@@ -679,8 +778,19 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                         in_group: r.i32()?,
                     }),
                     None,
+                    None,
                 )
             }
+            (
+                tag @ (DoNSaveOrderPayloadTag::Gather
+                | DoNSaveOrderPayloadTag::CastSpell
+                | DoNSaveOrderPayloadTag::TradeRoute),
+                1,
+            ) if format_version >= economy_payload::DON_SAVE_V13 => (
+                None,
+                None,
+                Some(read_economy_payload(r, kind, &order, tag, 1)?),
+            ),
             (DoNSaveOrderPayloadTag::AirPatrol, 1)
                 if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
             {
@@ -705,7 +815,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                     },
                 };
                 payload.validate().map_err(map_air_patrol_save_error)?;
-                (None, Some(payload))
+                (None, Some(payload), None)
             }
             (DoNSaveOrderPayloadTag::AirPatrol, _)
                 if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
@@ -733,7 +843,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
             }
         }
     } else {
-        (None, None)
+        (None, None, None)
     };
     if let (Some(move_state), Some(form)) = (move_state, form_order) {
         if kind == OrderIndex::ChangeForm && move_state.angle != form.angle {
@@ -746,6 +856,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         follow,
         move_state,
         air_patrol,
+        economy,
         ..order
     })
 }
@@ -758,6 +869,60 @@ fn map_air_patrol_save_error(error: air_runtime_authority::AirRuntimeAuthorityEr
         }
         _ => SaveError::Invalid("invalid AIR_PATROL payload"),
     }
+}
+
+fn map_economy_payload_save_error(error: economy_payload::EconomyOrderAuthorityError) -> SaveError {
+    match error {
+        economy_payload::EconomyOrderAuthorityError::UnsupportedDoNSaveVersion(_) => {
+            SaveError::Unsupported("economy payload before DoNSave v13")
+        }
+        _ => SaveError::Invalid("invalid economy order payload"),
+    }
+}
+
+fn read_economy_payload(
+    r: &mut Reader<'_>,
+    kind: OrderIndex,
+    order: &Order,
+    tag: DoNSaveOrderPayloadTag,
+    version: u8,
+) -> Result<EconomyOrderPayload, SaveError> {
+    let mut bytes = vec![tag as u8, version];
+    match tag {
+        DoNSaveOrderPayloadTag::None => {}
+        DoNSaveOrderPayloadTag::Gather => {
+            bytes.extend_from_slice(r.take(economy_payload::GATHER_SUFFIX_BYTES)?)
+        }
+        DoNSaveOrderPayloadTag::CastSpell => {
+            bytes.extend_from_slice(r.take(economy_payload::CAST_SUFFIX_BYTES)?)
+        }
+        DoNSaveOrderPayloadTag::TradeRoute => {
+            bytes.extend_from_slice(r.take(economy_payload::TRADE_SUFFIX_BYTES)?);
+            let present = r.u8()?;
+            bytes.push(present);
+            match present {
+                0 => {}
+                1 => bytes.extend_from_slice(r.take(8)?),
+                _ => return Err(SaveError::Invalid("invalid economy order payload")),
+            }
+        }
+        _ => return Err(SaveError::Invalid("invalid economy order payload")),
+    }
+    let header = EconomyOrderHeader {
+        kind,
+        flags: order.flags,
+        x: order.x,
+        y: order.y,
+        primary: StableTargetIdentity {
+            o: i32::from(order.target_o),
+            who: i32::from(order.target_who),
+            uid: order.target_uid,
+            handle: order.target_handle,
+        },
+    };
+    economy_payload::decode_v13_leaf(economy_payload::DON_SAVE_V13, 0, header, &bytes)
+        .map(|node| node.payload)
+        .map_err(map_economy_payload_save_error)
 }
 
 fn read_air_patrol_coord_array(r: &mut Reader<'_>) -> Result<WalkedCoordArray, SaveError> {
@@ -777,19 +942,20 @@ fn read_air_patrol_coord_array(r: &mut Reader<'_>) -> Result<WalkedCoordArray, S
 
 fn write_order_node(w: &mut Writer, order: &Order, format_version: u32) -> Result<(), SaveError> {
     if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
-        // `OrderList` does not own the retail node metric yet. Reserve its exact v13
-        // position without laundering a nonzero value: the matching reader rejects
-        // every value this producer cannot round-trip.
-        w.u8(0);
+        w.u8(order.node_metric);
     }
     write_order(w, order, format_version)
 }
 
 fn read_order_node(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveError> {
-    if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION && r.u8()? != 0 {
-        return Err(SaveError::Unsupported("nonzero order node metric"));
-    }
-    read_order(r, format_version)
+    let metric = if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION {
+        r.u8()?
+    } else {
+        0
+    };
+    let mut order = read_order(r, format_version)?;
+    order.node_metric = metric;
+    Ok(order)
 }
 
 fn write_sparse_object_bands(
@@ -3296,7 +3462,7 @@ mod tests {
     }
 
     #[test]
-    fn v13_order_node_metric_is_new_exact_and_fail_closed() {
+    fn v13_order_node_metric_is_new_exact_and_round_trips() {
         let order = Order {
             kind: OrderIndex::Think,
             flags: 0x5a,
@@ -3326,14 +3492,131 @@ mod tests {
         v13_reader.finish().unwrap();
 
         let mut nonzero = v13.0.clone();
-        nonzero[0] = 1;
+        nonzero[0] = 0xa7;
+        let mut expected_nonzero = order.clone();
+        expected_nonzero.node_metric = 0xa7;
+        let mut nonzero_reader = Reader::new(&nonzero);
         assert_eq!(
-            read_order_node(&mut Reader::new(&nonzero), FORMAT_VERSION),
-            Err(SaveError::Unsupported("nonzero order node metric"))
+            read_order_node(&mut nonzero_reader, FORMAT_VERSION).unwrap(),
+            expected_nonzero
         );
+        nonzero_reader.finish().unwrap();
         assert_eq!(
             read_order_node(&mut Reader::new(&[]), FORMAT_VERSION),
             Err(SaveError::Invalid("truncated payload"))
+        );
+    }
+
+    #[test]
+    fn v13_economy_order_tags_and_metrics_round_trip_losslessly() {
+        use crate::systems::economy_order_payload_authority::{
+            CastOrderPayload, EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload,
+            GatherOrderPayload, StableTargetIdentity, TradeOrderPayload,
+        };
+
+        let primary = StableTargetIdentity::live(
+            17,
+            2,
+            0x1234,
+            crate::Handle {
+                id: 91,
+                generation: 7,
+            },
+        );
+        let header = |kind| EconomyOrderHeader {
+            kind,
+            flags: 0x53,
+            x: -12_345,
+            y: 98_765,
+            primary,
+        };
+        let cases = [
+            EconomyOrderNode {
+                metric: 0x11,
+                header: header(OrderIndex::BoardShip),
+                payload: EconomyOrderPayload::TargetOnly,
+            },
+            EconomyOrderNode {
+                metric: 0x22,
+                header: header(OrderIndex::Gather),
+                payload: EconomyOrderPayload::Gather(GatherOrderPayload {
+                    tx: -1,
+                    ty: 2,
+                    build_type: 3,
+                    wait: -4,
+                    goto_build: 5,
+                    non_flat_gather: 6,
+                    dist_mod: 7,
+                    been_there: 8,
+                }),
+            },
+            EconomyOrderNode {
+                metric: 0x33,
+                header: EconomyOrderHeader {
+                    primary: StableTargetIdentity::NONE,
+                    ..header(OrderIndex::CastSpell)
+                },
+                payload: EconomyOrderPayload::CastSpell(CastOrderPayload {
+                    paid: -99,
+                    spell: 101,
+                }),
+            },
+            EconomyOrderNode {
+                metric: 0x44,
+                header: header(OrderIndex::TradeRoute),
+                payload: EconomyOrderPayload::TradeRoute(TradeOrderPayload {
+                    second: StableTargetIdentity::banded(2_007, 3, 0xabcd),
+                    started: -77,
+                    loaded: 88,
+                }),
+            },
+        ];
+
+        for node in cases {
+            let order = Order::economy(node).unwrap();
+            let mut writer = Writer::default();
+            write_order_node(&mut writer, &order, FORMAT_VERSION).unwrap();
+            assert_eq!(writer.0[0], node.metric);
+
+            let mut reader = Reader::new(&writer.0);
+            let decoded = read_order_node(&mut reader, FORMAT_VERSION).unwrap();
+            reader.finish().unwrap();
+            assert_eq!(decoded, order);
+
+            let mut resaved = Writer::default();
+            write_order_node(&mut resaved, &decoded, FORMAT_VERSION).unwrap();
+            assert_eq!(resaved.0, writer.0);
+        }
+    }
+
+    #[test]
+    fn legacy_economy_kinds_keep_their_payload_free_v7_through_v12_images() {
+        let legacy = Order {
+            kind: OrderIndex::BoardShip,
+            flags: 0x41,
+            target_who: 2,
+            target_o: 17,
+            target_uid: 0x1234,
+            ..Order::default()
+        };
+
+        for version in LEGACY_DENSE_OBJECTS_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION {
+            let mut writer = Writer::default();
+            write_order_node(&mut writer, &legacy, version).unwrap();
+            if version == TYPED_ORDER_FORMAT_VERSION {
+                assert_eq!(
+                    &writer.0[writer.0.len() - 2..],
+                    &[DoNSaveOrderPayloadTag::None as u8, 0]
+                );
+            }
+            let mut reader = Reader::new(&writer.0);
+            assert_eq!(read_order_node(&mut reader, version).unwrap(), legacy);
+            reader.finish().unwrap();
+        }
+
+        assert_eq!(
+            write_order_node(&mut Writer::default(), &legacy, FORMAT_VERSION),
+            Err(SaveError::Invalid("missing economy order payload"))
         );
     }
 
@@ -4090,6 +4373,7 @@ mod tests {
         );
 
         let mut allocator_flag = valid.clone();
+        // prefix 23, tag/version 2, x count 4, x increment 2, then x flags.
         allocator_flag[31] |= 0x40;
         assert_eq!(
             read_order(&mut Reader::new(&allocator_flag), FORMAT_VERSION),

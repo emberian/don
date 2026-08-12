@@ -368,7 +368,8 @@ fn road_receipt_and_whole_snapshot_are_revalidated() {
 
 #[test]
 fn closure_stays_red_until_every_runtime_tail_is_owned() {
-    assert_eq!(TRADE_OPEN_TAILS.len(), 13);
+    assert_eq!(TRADE_OPEN_TAILS.len(), 11);
+    assert!(TRADE_OPEN_TAILS.contains(&TradeOpenTail::QueueFirstCopyQuirk));
     assert!(TRADE_OPEN_TAILS.contains(&TradeOpenTail::CaravanRoadAStarParkedStateAndRng));
     assert!(TRADE_OPEN_TAILS.contains(&TradeOpenTail::LiveTickAtomicCommit));
 }

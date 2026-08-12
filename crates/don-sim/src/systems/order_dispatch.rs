@@ -396,6 +396,8 @@ pub fn is_targeted(k: OrderIndex) -> bool {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct OrderRec {
     pub kind: OrderIndex,
+    /// `RecycledOrderNode::metric`, walked before the concrete order in DoNSave v13.
+    pub node_metric: u8,
     /// `UnitOrder::flags` at `+4`. See `crate::order::ORDER_*`.
     pub flags: u8,
 
@@ -509,6 +511,9 @@ pub struct OrderRec {
     /// queue node preserves the same per-order ownership and permits routes of any length.
     pub patrol_payload: PatrolPayload,
 
+    /// Exact suffix for the typed economy-order cohort.
+    pub economy: Option<crate::systems::economy_order_payload_authority::EconomyOrderPayload>,
+
     /// Complete concrete payload for `GuardOrder` (order 12, `sizeof=56`). `dx/dy` and the
     /// snapped `guard_x/guard_y` post are not layout-compatible with `MoveOrder`'s `x/y`, and
     /// `idle`/`retry` are separate words from `MoveOrder::retry`, so GUARD gets its own node
@@ -569,6 +574,7 @@ impl Default for OrderRec {
     fn default() -> OrderRec {
         OrderRec {
             kind: OrderIndex::None,
+            node_metric: 0,
             flags: 0,
             x: 0,
             y: 0,
@@ -615,6 +621,7 @@ impl Default for OrderRec {
             form_order: None,
             targeted_payload: TargetedOrderPayload::None,
             patrol_payload: PatrolPayload::None,
+            economy: None,
             guard: None,
             garrison: None,
         }
@@ -910,6 +917,7 @@ impl From<Order> for OrderRec {
             .map_or(PatrolPayload::None, PatrolPayload::Air);
         OrderRec {
             kind: o.kind,
+            node_metric: o.node_metric,
             flags: o.flags,
             x: o.x,
             y: o.y,
@@ -946,6 +954,7 @@ impl From<Order> for OrderRec {
             form_order: o.form_order,
             targeted_payload,
             patrol_payload,
+            economy: o.economy,
             ..OrderRec::default()
         }
     }
@@ -997,6 +1006,7 @@ impl From<OrderRec> for Order {
             in_group: r.in_group,
         });
         Order {
+            node_metric: r.node_metric,
             kind: r.kind,
             flags: r.flags,
             x: r.x,
@@ -1011,6 +1021,7 @@ impl From<OrderRec> for Order {
             special_anim: r.special_anim,
             form_order: r.form_order,
             air_patrol,
+            economy: r.economy,
         }
     }
 }

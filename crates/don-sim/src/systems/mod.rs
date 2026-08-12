@@ -62,8 +62,12 @@ pub mod borders_fog;
 /// evaluation, city/Japanese scaling, and the Egyptian Wealth side output. Unsupported
 /// building types and type-data shapes fail closed.
 pub mod building_gather;
+/// Atomic Board/Repair/Trade packet planner sharing the canonical Group→Move selector.
+pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
 pub mod canonical_group_move_host;
+/// Exact fail-closed production adapter for a substantive `TRADE_ROUTE` Unit::work branch.
+pub mod canonical_trade_route_runtime;
 /// Tier-C spell-lifecycle and wildlife/RNG primitives recovered from the interrupted
 /// casters/animals lane. Full casting, object allocation, hunting, tick and checksum
 /// integration remain explicit boundaries; see `docs/mechanics/casters-animals.md`.
@@ -103,6 +107,10 @@ pub mod defeat_cleanup;
 /// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
 pub mod diplomacy_declare_host;
 pub mod economy;
+/// Canonical fixed-`Groups` contract for economy/containment action transactions.
+pub mod economy_containment_group_host;
+/// Lossless v13 economy order-node payload and metric authority.
+pub mod economy_order_payload_authority;
 /// Canonical policy-facing external Unit frame owner, including exact cloak/detection/fog
 /// projection and revision-bound target ordinals.
 pub mod external_entity_visibility_frontier;
@@ -136,6 +144,8 @@ pub mod gathering;
 /// Exact, fail-closed bridge from the supported installed `unit_graphics.xml` and a
 /// retail hierarchy resolver to checksum-visible Guy graphics/turret state.
 pub mod graphics_turret;
+/// Exact 1,022-byte `Group::action_trade` transaction and order-install chronology.
+pub mod group_action_trade_frontier;
 pub mod groups_guys;
 /// `do_job` arm 12: the snapshot-bound atomic host boundary, concrete payload and same-tick
 /// movement integration that turns [`guard_order`]'s pure transcription into a dispatched
@@ -292,6 +302,9 @@ pub mod terrain_player_mountain_retry;
 pub mod terrain_region_continuation;
 pub mod terrain_region_patterns;
 pub mod terrain_region_placement;
+/// Complete source reconstruction of `Unit::do_trade`; production adapters admit only proven
+/// subpaths whose required owners are installed.
+pub mod trade_order_frontier;
 /// Registered by lane `come-out` on 2026-08-11. `Unit::action_come_out` `0x005E20B0`, the
 /// 532-byte opcode-49 wrapper. Its `Unit::come_out(0)` call is the authority step the four
 /// `unit_come_out_*_frontier` modules below now tile completely.

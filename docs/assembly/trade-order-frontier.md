@@ -1,10 +1,11 @@
 # TRADE_ROUTE executor frontier
 
-Status: **source-only executable proof; strict order row 15 remains red**. The isolated
-planner in `crates/don-sim/src/systems/trade_order_frontier.rs` freezes the full concrete
-payload, installer ordering, owner-major destination fold, route establishment, endpoint
-transitions, road/movement boundary, and whole-frame atomic receipt for `Unit::do_trade`.
-It is intentionally absent from `systems/mod.rs` and makes no executor, save, tick, or closure
+Status: **typed production subpath integrated; strict order row 15 remains red**. The planner in
+`crates/don-sim/src/systems/trade_order_frontier.rs` freezes the full concrete payload, installer
+ordering, owner-major destination fold, route establishment, endpoint transitions,
+road/movement boundary, and whole-frame atomic receipt for `Unit::do_trade`. The concrete packet
+installer, DoNSave-v13 payload, and one exact establishment-refused branch are mounted through
+production `Unit::work`; the remaining executor cone stays fail-closed and earns no closure
 promotion.
 
 This was selected after auditing all seven red order rows. GATHER still depends on the live
@@ -146,32 +147,29 @@ The production integration should reuse these existing economy owners:
 - `end_caravan_route_in_city_pool_from_order` and `close_caravan_unit_in_city_pool` for teardown;
 - `OrderQueue` MOVE insertion, `movement::PathData/PathStack`, and `World::set_road_at` as leaves.
 
-The missing runtime ownership is larger than the reusable seam:
+The remaining runtime ownership is larger than the integrated seam:
 
-1. the 21-byte wire command and Group `action_trade`; the current bridge drops `oxx/whose`;
-2. concrete TradeOrder fields in both `Order` and `OrderRec`, exact install/save/resume, and the
-   replay generator's unresolved flags byte;
-3. the Queue-First null-copy quirk;
-4. authoritative owner-major Objects/City/Leader traversal, visibility, capacity, diplomacy, and
+1. the Queue-First null-copy quirk;
+2. authoritative owner-major Objects/City/Leader traversal, visibility, capacity, diplomacy, and
    transport facts;
-5. Caravan road stack plus `making_road`, `reset_road`, parked open/openref/closed trees, offset,
+3. Caravan road stack plus `making_road`, `reset_road`, parked open/openref/closed trees, offset,
    end coordinate, and traversed count;
-6. the 3,200-expansion road A*, exact edge RNG, validity/cost functions, road renderer effects,
+4. the 3,200-expansion road A*, exact edge RNG, validity/cost functions, road renderer effects,
    restart/verify/reset/global invalidation helpers;
-7. trade-specific path assignment/smoothing/join and nearby-spot binding;
-8. CityPool/CaravanPools/leader state in production `Sim` and one atomic lifecycle adapter;
-9. the separate `Unit::work` pre-`do_job` Caravan::build_road continuation arm;
-10. one production `Sim::do_frame` commit route.
+5. trade-specific path assignment/smoothing/join and nearby-spot binding;
+6. CityPool/CaravanPools/leader state in production `Sim` and one atomic lifecycle adapter;
+7. the separate `Unit::work` pre-`do_job` Caravan::build_road continuation arm;
+8. complete production `Sim::do_frame` commit routes beyond the exact rejection subpath.
 
 `movement::PathFinder` must not be reused as the road engine: it is the general unit A*, while
 `astar_caravan_road` is a separate parked search with distinct costs, validity, RNG, and state.
 
 ## Honest closure delta and validation
 
-`TRADE_OPEN_TAILS` names thirteen still-unowned surfaces, including wire decode, payload/save, Group insertion,
-registry scan, road A*/RNG, renderer effects, path mutation, economy atomicity, the pre-job road
-continuation, and live tick. Consequently this tranche earns **0 strict order rows**. Marking row
-15 Implemented now would be accepted-no-effect and is forbidden.
+`TRADE_OPEN_TAILS` names eleven still-unowned surfaces, including Queue-First, registry scan,
+road A*/RNG, renderer effects, path mutation, economy atomicity, the pre-job road continuation,
+and complete live-tick coverage. Consequently this tranche earns **0 strict order rows**. Marking
+row 15 Implemented now would mistake one exact branch for the full executor and is forbidden.
 
 Focused validation:
 

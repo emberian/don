@@ -415,7 +415,7 @@ fn move_field_mutations_change_the_published_state() {
             .unwrap();
         let row = fixture.world.row_of(fixture.handles[0]).unwrap();
         (
-            *fixture.world.orders(row).current().unwrap(),
+            fixture.world.orders(row).current().unwrap().clone(),
             fixture.groups.list[fixture.groups.last_group[3] as usize].clone(),
         )
     }

@@ -449,6 +449,9 @@ pub struct OrderTargetIdentity {
 /// None of that shape is load-bearing for us; the *fields* are, and this is their union.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Order {
+    /// `RecycledOrderNode::metric`, walked before the concrete order in DoNSave v13.
+    /// It belongs to this flattened queue node, not to any retail `UnitOrder` subclass.
+    pub node_metric: u8,
     pub kind: OrderIndex,
     /// `UnitOrder::flags`, a `char` at +4. See the `ORDER_*` bits.
     pub flags: u8,
@@ -483,11 +486,16 @@ pub struct Order {
     /// Complete walked payload of `AirPatrolOrder`, including both dynamic-array metadata
     /// records and the secondary `AirOrder` base. `Some` is valid only for AIR_PATROL.
     pub air_patrol: Option<crate::systems::air_runtime_authority::AirPatrolOrderPayload>,
+    /// Exact economy-order suffix for BOARD_SHIP/AWAIT_BOARD/REPAIR/GATHER/CAST_SPELL/
+    /// TRADE_ROUTE. Target-only variants are explicit so a foreign tag-0 order cannot be
+    /// mistaken for a recovered economy node.
+    pub economy: Option<crate::systems::economy_order_payload_authority::EconomyOrderPayload>,
 }
 
 impl Default for Order {
     fn default() -> Order {
         Order {
+            node_metric: 0,
             kind: OrderIndex::None,
             flags: 0,
             x: 0,
@@ -502,6 +510,7 @@ impl Default for Order {
             special_anim: None,
             form_order: None,
             air_patrol: None,
+            economy: None,
         }
     }
 }
@@ -612,6 +621,43 @@ impl Order {
         })
     }
 
+    /// Narrow one validated v13 economy node into the canonical queue representation.
+    /// Full-width retail identities are rejected when the current flattened header cannot
+    /// represent them; no clamping or truncation is permitted.
+    pub fn economy(
+        node: crate::systems::economy_order_payload_authority::EconomyOrderNode,
+    ) -> Result<Order, crate::systems::economy_order_payload_authority::EconomyOrderAuthorityError>
+    {
+        use crate::systems::economy_order_payload_authority::EconomyOrderAuthorityError;
+
+        node.validate()?;
+        let target_who = i8::try_from(node.header.primary.who).map_err(|_| {
+            EconomyOrderAuthorityError::HeaderTargetOutOfRange {
+                o: node.header.primary.o,
+                who: node.header.primary.who,
+            }
+        })?;
+        let target_o = i16::try_from(node.header.primary.o).map_err(|_| {
+            EconomyOrderAuthorityError::HeaderTargetOutOfRange {
+                o: node.header.primary.o,
+                who: node.header.primary.who,
+            }
+        })?;
+        Ok(Order {
+            node_metric: node.metric,
+            kind: node.header.kind,
+            flags: node.header.flags,
+            x: node.header.x,
+            y: node.header.y,
+            target_who,
+            target_o,
+            target_uid: node.header.primary.uid,
+            target_handle: node.header.primary.handle,
+            economy: Some(node.payload),
+            ..Order::default()
+        })
+    }
+
     /// Exact result of `UnitData::is_entering_or_exiting` for this flattened order.
     ///
     /// `None` identifies a malformed `SpecialAnim` without its concrete discriminator.
@@ -670,6 +716,13 @@ impl OrderList {
     /// `Unit::add_*_order` — append behind whatever is queued.
     pub fn push(&mut self, o: Order) {
         self.orders.push(o);
+    }
+
+    /// Retail `LinkListBase<UnitOrder*>::add` (`0x0046D5A0`): insert immediately before
+    /// the current node and publish the new node as current. Economy `QUEUE_LAST` installers
+    /// use this primitive; the command chronology, not the vector's tail, defines that name.
+    pub fn push_front(&mut self, o: Order) {
+        self.orders.insert(0, o);
     }
 
     /// Replace the whole list, which is what an un-shifted command does.

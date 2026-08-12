@@ -175,6 +175,7 @@ pub enum PackageError {
     InactiveUnit { who: u8, o: i16 },
     MissingHandle { who: u8, o: i16 },
     MissingAuthority { handle: Handle },
+    IncompleteSelectionAuthority { handle: Handle },
     IncompleteMoveAuthority { handle: Handle },
     SubordinateChainUnavailable { who: u8, o: i16 },
     InvalidGroupPool,
@@ -320,6 +321,45 @@ pub struct UnitMutation {
     pub after: UnitImage,
 }
 
+/// Which recovered consumer is asking the canonical opcode-0 selector to form a Group.
+///
+/// Economy actions need a stable, order-installable unit set but do not enter the
+/// move-near split. Group→Move additionally requires the exact split admission bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupSelectionUse {
+    EconomyOrderInstall,
+    MoveNear,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedSelectionMember {
+    pub row: usize,
+    pub identity: UnitIdentity,
+    pub authority: MoveMemberAuthority,
+}
+
+/// Detached after-images for the canonical opcode-0 selection/cache/allocation stage.
+///
+/// This is deliberately reusable by every same-package Group action. The after-images are
+/// not independently committable: the following action must finish planning first, then one
+/// outer transaction revalidates and publishes selection plus action together.
+#[derive(Clone, Debug)]
+pub struct PreparedGroupSelection {
+    pub play: usize,
+    pub frame: i32,
+    pub who: u8,
+    pub group_slot: usize,
+    pub members: Vec<PreparedSelectionMember>,
+    pub command_state_before: CommandPackageState,
+    pub command_state_after: CommandPackageState,
+    pub groups_before: Groups,
+    pub groups_after: Groups,
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub authority_members: Vec<MoveMemberAuthority>,
+    pub units: Vec<UnitMutation>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedGroupMovePackage {
     pub play: usize,
@@ -355,11 +395,11 @@ pub struct GroupMovePackageReceipt {
     pub random_state_after: i32,
 }
 
-fn groups_equal(a: &Groups, b: &Groups) -> bool {
+pub(crate) fn groups_equal(a: &Groups, b: &Groups) -> bool {
     a.last_group == b.last_group && a.proc_group == b.proc_group && a.list == b.list
 }
 
-fn capture_unit(
+pub(crate) fn capture_unit(
     world: &World,
     paths: &[PathStack],
     who: u8,
@@ -666,7 +706,7 @@ fn build_move_order(
     }
 }
 
-fn ensure_mutation_for_row(
+pub(crate) fn ensure_mutation_for_row(
     mutations: &mut Vec<UnitMutation>,
     world: &World,
     paths: &[PathStack],
@@ -686,6 +726,182 @@ fn ensure_mutation_for_row(
         after: image,
     });
     Ok(mutations.len() - 1)
+}
+
+/// Prepare the one canonical opcode-0 selection stage shared by Group→Move and the
+/// economy/containment action cohort.
+///
+/// Explicit selections refresh the play-keyed retail `(o,uid)` cache before stale entries
+/// are filtered. An empty selection reuses that cache. Group allocation, old-group removal,
+/// and every `UnitData::group` backlink are staged together; callers must append their action
+/// mutations and publish the resulting outer transaction atomically.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn prepare_group_selection(
+    world: &World,
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    authority: &GroupMoveAuthority,
+    frame: i32,
+    play: usize,
+    who: u8,
+    objects: &[i16],
+    selection_use: GroupSelectionUse,
+) -> Result<PreparedGroupSelection, PackageError> {
+    if play >= NETWORK_PLAYERS {
+        return Err(PackageError::PlayOutOfRange { play });
+    }
+    if usize::from(who) >= NUM_LEADERS {
+        return Err(PackageError::OwnerOutOfRange { who: who as i8 });
+    }
+    if objects.len() > RECEIVED_SELECTION_CAPACITY {
+        return Err(PackageError::ExplicitSelectionTooLong { len: objects.len() });
+    }
+    if let Some(&o) = objects.iter().find(|&&o| o < 0) {
+        return Err(PackageError::NegativeObject { o });
+    }
+    validate_group_pool(groups)?;
+
+    let mut command_state_after = command_state.clone();
+    let received = if objects.is_empty() {
+        command_state.last_selection_by_play[play].clone()
+    } else {
+        let mut cache = Vec::with_capacity(objects.len());
+        for &o in objects {
+            if let Some(row) = world.unit_row_at(i32::from(who), i32::from(o)) {
+                if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                    continue;
+                }
+                cache.push(CachedSelection {
+                    o,
+                    uid: world.units.get_uid(row),
+                });
+            }
+        }
+        command_state_after.last_selection_by_play[play] = cache.clone();
+        cache
+    };
+
+    let mut effective = Vec::new();
+    for entry in received {
+        let (row, handle, facts) = match unit_authority(world, authority, who, entry.o) {
+            Ok(found) => found,
+            Err(PackageError::MissingUnit { .. } | PackageError::InactiveUnit { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        if world.units.get_uid(row) != entry.uid {
+            continue;
+        }
+        if effective
+            .iter()
+            .any(|member: &PreparedSelectionMember| member.identity.o == entry.o)
+        {
+            continue;
+        }
+        if world.units.o_down()[row] >= 0 {
+            return Err(PackageError::SubordinateChainUnavailable { who, o: entry.o });
+        }
+        if !facts.can_install_order {
+            return Err(match selection_use {
+                GroupSelectionUse::EconomyOrderInstall => {
+                    PackageError::IncompleteSelectionAuthority { handle }
+                }
+                GroupSelectionUse::MoveNear => PackageError::IncompleteMoveAuthority { handle },
+            });
+        }
+        if selection_use == GroupSelectionUse::MoveNear && !facts.admits_unsplit_move_near {
+            return Err(PackageError::IncompleteMoveAuthority { handle });
+        }
+        effective.push(PreparedSelectionMember {
+            row,
+            identity: UnitIdentity {
+                handle,
+                who,
+                o: entry.o,
+                uid: entry.uid,
+            },
+            authority: facts.clone(),
+        });
+    }
+    if effective.is_empty() {
+        return Err(PackageError::EmptyEffectiveSelection);
+    }
+
+    let mut transient = GroupData {
+        id: -1,
+        army: -1,
+        form: -1,
+        stamp: frame,
+        ..GroupData::default()
+    };
+    for member in &effective {
+        transient.add(member.identity.o, who, false, member.authority.role, frame);
+    }
+
+    let mut groups_after = groups.clone();
+    let current = groups_after.last_group[usize::from(who)];
+    let n = transient.num as usize;
+    let reuse = usize::try_from(current).ok().is_some_and(|slot| {
+        groups_after.list.get(slot).is_some_and(|candidate| {
+            candidate.num == transient.num && candidate.list[..n] == transient.list[..n]
+        })
+    });
+    let group_slot = if reuse {
+        current as usize
+    } else {
+        let slot = exact_immediate_allocator_slot(&mut groups_after, who, world, authority)?;
+        let id = groups_after.list[slot].id;
+        groups_after.list[slot] = transient;
+        groups_after.list[slot].id = id;
+        groups_after.list[slot].stamp = frame;
+        groups_after.last_group[usize::from(who)] = slot as i32;
+        slot
+    };
+
+    let mut mutations = Vec::new();
+    if !reuse && groups.list[group_slot].buildings == 0 {
+        for row in 0..world.live_count() as usize {
+            if world.units.get_who(row) == who && world.units.group()[row] == group_slot as i16 {
+                let index = ensure_mutation_for_row(&mut mutations, world, paths, row)?;
+                mutations[index].after.group = -1;
+            }
+        }
+    }
+
+    for member in &effective {
+        let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, member.row)?;
+        let previous = mutations[mutation_index].after.group;
+        if previous >= 0 && previous as usize != group_slot {
+            let previous_index = previous as usize;
+            if previous_index >= groups_after.list.len() {
+                return Err(PackageError::InvalidGroupPool);
+            }
+            remove_group_member(&mut groups_after.list[previous_index], member.identity.o);
+            recompute_group(&mut groups_after.list[previous_index], world, authority)?;
+        }
+        mutations[mutation_index].after.group = group_slot as i16;
+    }
+
+    // One accepted Group+action package advances the process-local transaction revision once.
+    // The outer action may still refuse; these detached after-images are published only after
+    // that action passes, so a failed package leaves the revision untouched.
+    command_state_after.revision = command_state_after.revision.wrapping_add(1);
+
+    Ok(PreparedGroupSelection {
+        play,
+        frame,
+        who,
+        group_slot,
+        members: effective,
+        command_state_before: command_state.clone(),
+        command_state_after,
+        groups_before: groups.clone(),
+        groups_after,
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        authority_members: authority.members.clone(),
+        units: mutations,
+    })
 }
 
 /// Prepare the canonical package against detached after-images.
@@ -715,121 +931,23 @@ pub fn prepare_group_move_package(
             got: wire.who,
         });
     }
-    validate_group_pool(groups)?;
-
-    let mut command_state_after = command_state.clone();
-    let received = if wire.objects.is_empty() {
-        command_state.last_selection_by_play[play].clone()
-    } else {
-        let mut cache = Vec::with_capacity(wire.objects.len());
-        for &o in &wire.objects {
-            if let Some(row) = world.unit_row_at(i32::from(wire.who), i32::from(o)) {
-                if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
-                    continue;
-                }
-                cache.push(CachedSelection {
-                    o,
-                    uid: world.units.get_uid(row),
-                });
-            }
-        }
-        command_state_after.last_selection_by_play[play] = cache.clone();
-        cache
-    };
-
-    let mut effective: Vec<(usize, UnitIdentity, MoveMemberAuthority)> = Vec::new();
-    for entry in received {
-        let (row, handle, facts) = match unit_authority(world, authority, wire.who, entry.o) {
-            Ok(found) => found,
-            Err(PackageError::MissingUnit { .. } | PackageError::InactiveUnit { .. }) => continue,
-            Err(error) => return Err(error),
-        };
-        if world.units.get_uid(row) != entry.uid {
-            continue;
-        }
-        if effective
-            .iter()
-            .any(|(_, identity, _)| identity.o == entry.o)
-        {
-            continue;
-        }
-        if world.units.o_down()[row] >= 0 {
-            return Err(PackageError::SubordinateChainUnavailable {
-                who: wire.who,
-                o: entry.o,
-            });
-        }
-        if !facts.admits_unsplit_move_near || !facts.can_install_order {
-            return Err(PackageError::IncompleteMoveAuthority { handle });
-        }
-        effective.push((
-            row,
-            UnitIdentity {
-                handle,
-                who: wire.who,
-                o: entry.o,
-                uid: entry.uid,
-            },
-            facts.clone(),
-        ));
-    }
-    if effective.is_empty() {
-        return Err(PackageError::EmptyEffectiveSelection);
-    }
-
-    let mut transient = GroupData::default();
-    transient.id = -1;
-    transient.army = -1;
-    transient.form = -1;
-    transient.stamp = frame;
-    for (_, identity, facts) in &effective {
-        transient.add(identity.o, wire.who, false, facts.role, frame);
-    }
-
-    let mut groups_after = groups.clone();
-    let current = groups_after.last_group[usize::from(wire.who)];
-    let n = transient.num as usize;
-    let reuse = usize::try_from(current).ok().is_some_and(|slot| {
-        groups_after.list.get(slot).is_some_and(|candidate| {
-            candidate.num == transient.num && candidate.list[..n] == transient.list[..n]
-        })
-    });
-    let group_slot = if reuse {
-        current as usize
-    } else {
-        let slot = exact_immediate_allocator_slot(&mut groups_after, wire.who, world, authority)?;
-        let id = groups_after.list[slot].id;
-        groups_after.list[slot] = transient.clone();
-        groups_after.list[slot].id = id;
-        groups_after.list[slot].stamp = frame;
-        groups_after.last_group[usize::from(wire.who)] = slot as i32;
-        slot
-    };
-
-    let mut mutations = Vec::new();
-    if !reuse && groups.list[group_slot].buildings == 0 {
-        for row in 0..world.live_count() as usize {
-            if world.units.get_who(row) == wire.who && world.units.group()[row] == group_slot as i16
-            {
-                let index = ensure_mutation_for_row(&mut mutations, world, paths, row)?;
-                mutations[index].after.group = -1;
-            }
-        }
-    }
-
-    for (row, identity, _) in &effective {
-        let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, *row)?;
-        let previous = mutations[mutation_index].after.group;
-        if previous >= 0 && previous as usize != group_slot {
-            let previous_index = previous as usize;
-            if previous_index >= groups_after.list.len() {
-                return Err(PackageError::InvalidGroupPool);
-            }
-            remove_group_member(&mut groups_after.list[previous_index], identity.o);
-            recompute_group(&mut groups_after.list[previous_index], world, authority)?;
-        }
-        mutations[mutation_index].after.group = group_slot as i16;
-    }
+    let selection = prepare_group_selection(
+        world,
+        groups,
+        paths,
+        command_state,
+        authority,
+        frame,
+        play,
+        wire.who,
+        &wire.objects,
+        GroupSelectionUse::MoveNear,
+    )?;
+    let effective = &selection.members;
+    let group_slot = selection.group_slot;
+    let command_state_after = selection.command_state_after.clone();
+    let mut groups_after = selection.groups_after.clone();
+    let mut mutations = selection.units.clone();
 
     let max_x = map_tiles.0.wrapping_mul(0x300).wrapping_sub(1);
     let max_y = map_tiles.1.wrapping_mul(0x300).wrapping_sub(1);
@@ -847,16 +965,19 @@ pub fn prepare_group_move_package(
     if leader_facts.is_plane && leader_facts.domain == 2 && leader_facts.unit_flags & 0x20 == 0 {
         return Err(PackageError::PlaneLedSelection);
     }
-    if effective
-        .iter()
-        .any(|(_, _, facts)| !facts.can_move || !facts.is_captain || !facts.on_map)
-    {
+    if effective.iter().any(|member| {
+        !member.authority.can_move || !member.authority.is_captain || !member.authority.on_map
+    }) {
         return Err(PackageError::IncompleteMoveAuthority {
             handle: effective
                 .iter()
-                .find(|(_, _, facts)| !facts.can_move || !facts.is_captain || !facts.on_map)
+                .find(|member| {
+                    !member.authority.can_move
+                        || !member.authority.is_captain
+                        || !member.authority.on_map
+                })
                 .expect("predicate just matched")
-                .1
+                .identity
                 .handle,
         });
     }
@@ -868,8 +989,8 @@ pub fn prepare_group_move_package(
     };
     let resolved_form = if matches!(wire.movement.form, -1 | 9) {
         let mut common = -1i32;
-        for (row, _, _) in &effective {
-            let member_form = world.units.form()[*row] as i32;
+        for member in effective {
+            let member_form = world.units.form()[member.row] as i32;
             if member_form != common {
                 let had_form = common >= 0;
                 common = member_form;
@@ -890,14 +1011,14 @@ pub fn prepare_group_move_package(
     }
     let profiles: Vec<FormationMember> = effective
         .iter()
-        .map(|(row, _, facts)| {
+        .map(|member| {
             let mut profile = if authority.destination_is_water {
-                facts.water_formation
+                member.authority.water_formation
             } else {
-                facts.land_formation
+                member.authority.land_formation
             };
-            profile.angle = world.units.angle()[*row];
-            profile.width = i32::from(world.units.form_mod()[*row]);
+            profile.angle = world.units.angle()[member.row];
+            profile.width = i32::from(world.units.form_mod()[member.row]);
             profile
         })
         .collect();
@@ -961,7 +1082,10 @@ pub fn prepare_group_move_package(
         .wrapping_add(group.order_num);
     let group_leader = group.list[layout.leader_index];
     let ordinary_kind = movement_order_kind(wire.movement.orders);
-    for (member_index, (row, identity, facts)) in effective.iter().enumerate() {
+    for (member_index, member) in effective.iter().enumerate() {
+        let row = member.row;
+        let identity = &member.identity;
+        let facts = &member.authority;
         let angle_offset = (group.angles[member_index] as i32).wrapping_mul(0x0100_0000);
         let member_angle = actual_angle.wrapping_add(angle_offset);
         let destination = (
@@ -976,7 +1100,7 @@ pub fn prepare_group_move_package(
             .iter()
             .find(|entry| entry.before.identity.handle == identity.handle)
             .map_or_else(
-                || world.units.get_unit_masks(*row),
+                || world.units.get_unit_masks(row),
                 |entry| entry.after.unit_masks,
             );
         let promote_group = matches!(wire.movement.orders, 1 | 2)
@@ -1004,7 +1128,7 @@ pub fn prepare_group_move_package(
             wire.movement.disembark != 0,
             promote_group.then_some((group_leader, wire.who, group_order_id, member_index)),
         );
-        let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, *row)?;
+        let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, row)?;
         let mutation = &mut mutations[mutation_index];
         if queue == 2 {
             if wire.movement.orders == 2
@@ -1033,7 +1157,6 @@ pub fn prepare_group_move_package(
     group.update_positions(world.units.angle()[leader_row]);
     group.order_num = group.order_num.wrapping_add(1);
 
-    command_state_after.revision = command_state_after.revision.wrapping_add(1);
     Ok(PreparedGroupMovePackage {
         play,
         lockstep_serial,
@@ -1043,20 +1166,20 @@ pub fn prepare_group_move_package(
         group_slot,
         selected: effective
             .iter()
-            .map(|(_, identity, _)| identity.clone())
+            .map(|member| member.identity.clone())
             .collect(),
-        command_state_before: command_state.clone(),
+        command_state_before: selection.command_state_before,
         command_state_after,
-        groups_before: groups.clone(),
+        groups_before: selection.groups_before,
         groups_after,
-        authority_revision: authority.revision,
-        authority_digest: authority.composition_digest,
-        authority_members: authority.members.clone(),
+        authority_revision: selection.authority_revision,
+        authority_digest: selection.authority_digest,
+        authority_members: selection.authority_members,
         units: mutations,
     })
 }
 
-fn unit_still_current(world: &World, paths: &[PathStack], image: &UnitImage) -> bool {
+pub(crate) fn unit_still_current(world: &World, paths: &[PathStack], image: &UnitImage) -> bool {
     let Some(address_row) =
         world.unit_row_at(i32::from(image.identity.who), i32::from(image.identity.o))
     else {

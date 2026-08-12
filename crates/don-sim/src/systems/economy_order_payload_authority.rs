@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Exclusive typed authority for the economy/containment order cohort.
 //!
-//! This module is intentionally not registered in `systems/mod.rs` yet.  It freezes the
-//! lossless order-node and DoNSave-v13 leaf boundary needed before the shared `Order` and
-//! `save_load` owners can be edited atomically.  It does not invent executable state for an
-//! unknown concrete order: kind/payload mismatches, unknown tags and unknown versions all fail
-//! closed.
+//! This is the lossless order-node and DoNSave-v13 leaf boundary used by the canonical
+//! Board/Repair/Trade package host. It does not invent executable state for an unknown concrete
+//! order: kind/payload mismatches, unknown tags and unknown versions all fail closed.
 
 use crate::order::OrderIndex;
 use crate::Handle;
 
 pub const DON_SAVE_V13: u32 = 13;
 pub const ECONOMY_PAYLOAD_VERSION: u8 = 1;
+pub const RETAIL_OWNER_SLOTS: i32 = 10;
 
 pub const TARGET_ORDER_WALKED_BYTES: usize = 11;
 pub const GATHER_ORDER_WALKED_BYTES: usize = 31;
@@ -61,7 +60,9 @@ impl EconomyPayloadTag {
 
 /// Retail scalar identity plus the port's compaction-stable authority.
 ///
-/// A live retail address requires a `Handle`.  The exact no-target sentinel is also retained
+/// Unit-band addresses require a `Handle`. Build/Wall addresses are already bound by the
+/// save-owned sparse object registry to `BuildRow`/`WallRow`, so they retain their exact retail
+/// address and UID with no invented Unit handle. The exact no-target sentinel is also retained
 /// because coordinate casts and not-yet-selected trade destinations legitimately carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StableTargetIdentity {
@@ -88,6 +89,17 @@ impl StableTargetIdentity {
         }
     }
 
+    /// One canonical Build/Wall-band target. The sparse object registry, not a Unit Handle,
+    /// owns its stable row identity.
+    pub const fn banded(o: i32, who: i32, uid: u16) -> Self {
+        Self {
+            o,
+            who,
+            uid,
+            handle: None,
+        }
+    }
+
     pub const fn is_live(self) -> bool {
         self.o >= 0 && self.who >= 0
     }
@@ -95,6 +107,12 @@ impl StableTargetIdentity {
     fn validate(self) -> Result<(), EconomyOrderAuthorityError> {
         match (self.o >= 0, self.who >= 0, self.handle) {
             (true, true, Some(_)) => Ok(()),
+            (true, true, None)
+                if (2_000..=i16::MAX as i32).contains(&self.o)
+                    && (0..RETAIL_OWNER_SLOTS).contains(&self.who) =>
+            {
+                Ok(())
+            }
             (false, false, None) if self.o == -1 && self.who == -1 && self.uid == u16::MAX => {
                 Ok(())
             }
@@ -184,6 +202,10 @@ pub enum EconomyOrderAuthorityError {
         tag: EconomyPayloadTag,
     },
     IncoherentTargetIdentity,
+    HeaderTargetOutOfRange {
+        o: i32,
+        who: i32,
+    },
     MissingRequiredPrimaryTarget(OrderIndex),
     UnknownPayloadTag(u8),
     UnknownPayloadVersion {
