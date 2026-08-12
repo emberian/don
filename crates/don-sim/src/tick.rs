@@ -64,9 +64,10 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, canonical_strafe_runtime, casters_animals, collision_blocks_live, combat,
-    defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys, leaders,
-    movement, movement_driver, movement_live, order_dispatch, production,
+    ammo, borders_fog, canonical_gather_work, canonical_strafe_runtime, casters_animals,
+    collision_blocks_live, combat, defeat_cleanup, economy, game_daemon_calc_danger,
+    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
+    order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -869,6 +870,11 @@ pub struct Sim {
         Option<crate::systems::canonical_trade_route_runtime::TradeRouteActivationReceipt>,
     pub last_trade_route_error:
         Option<crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeError>,
+    /// Revision/digest-bound Build virtual and slot-zero Guy facts for Gather work.
+    /// Canonical actor/order/Build/RNG mutations remain in World/Build owners.
+    pub gather_work_authority: canonical_gather_work::GatherWorkAuthority,
+    pub last_gather_work_receipt: Option<canonical_gather_work::GatherWorkActivationReceipt>,
+    pub last_gather_work_error: Option<canonical_gather_work::GatherWorkRuntimeError>,
     /// Reinstalled content/search projection and transaction epochs for STRAFE row 16.
     pub strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority,
     /// Most recent canonical STRAFE commit or refusal. Diagnostic only; gameplay effects live
@@ -1532,6 +1538,9 @@ impl Sim {
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
             last_trade_route_error: None,
+            gather_work_authority: canonical_gather_work::GatherWorkAuthority::default(),
+            last_gather_work_receipt: None,
+            last_gather_work_error: None,
             strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority::default(),
             last_strafe_receipt: None,
             last_strafe_error: None,
@@ -1586,6 +1595,14 @@ impl Sim {
         authority: crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority,
     ) {
         self.trade_route_authority = authority;
+    }
+
+    /// Install the revision-bound Build/Guy projection used by canonical Gather work.
+    pub fn replace_gather_work_authority(
+        &mut self,
+        authority: canonical_gather_work::GatherWorkAuthority,
+    ) {
+        self.gather_work_authority = authority;
     }
 
     /// Install the revision-bound type/search projection used by canonical STRAFE activations.
@@ -1645,7 +1662,8 @@ impl Sim {
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
-    /// UNITMASK (32). Selection/cache/allocation and every reached Unit/order/path mutation are
+    /// UNITMASK (32) or STOP_SPELL (29). Selection/cache/allocation and every reached
+    /// Unit/order/path mutation are
     /// prepared and revalidated against the canonical owners before one assignment-only commit.
     pub fn process_simple_group_package(
         &mut self,
@@ -1672,6 +1690,7 @@ impl Sim {
         });
         let prepared = prepare_simple_group_package(
             &self.world,
+            &self.unit_type,
             &self.groups,
             &self.paths,
             &self.command_package_state,
@@ -1684,6 +1703,7 @@ impl Sim {
         )?;
         commit_simple_group_package(
             &mut self.world,
+            &self.unit_type,
             &mut self.groups,
             &mut self.paths,
             &mut self.command_package_state,
@@ -3181,6 +3201,8 @@ impl Sim {
             OrderIndex::Attack => self.do_attack(row),
             // Arm 6, `Unit::do_build` 0x005EEBF0 -> Wall::do_construct.
             OrderIndex::BuildAt => self.do_build(row),
+            // Arm 9, `Unit::do_gather` `0x005EF2A0`, through the exact saved-Camp adapter.
+            OrderIndex::Gather => self.do_gather_work(row),
             // Arm 25, `Unit::do_spec_anim` `0x005E5880`, through its narrow atomic host.
             OrderIndex::SpecialAnim => self.do_special_anim(row),
             // Arm 15, `Unit::do_trade` `0x005ED270`. The adapter admits only fully owned
@@ -3191,6 +3213,39 @@ impl Sim {
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
+        }
+    }
+
+    fn do_gather_work(&mut self, row: usize) {
+        let prepared = match canonical_gather_work::prepare_gather_work_activation(
+            &self.world,
+            &self.builds,
+            &self.unit_type,
+            &self.gather_work_authority,
+            row,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_gather_work_receipt = None;
+                self.last_gather_work_error = Some(error);
+                return;
+            }
+        };
+        match canonical_gather_work::commit_gather_work_activation(
+            &mut self.world,
+            &mut self.builds,
+            &self.unit_type,
+            &self.gather_work_authority,
+            prepared,
+        ) {
+            Ok(receipt) => {
+                self.last_gather_work_receipt = Some(receipt);
+                self.last_gather_work_error = None;
+            }
+            Err(error) => {
+                self.last_gather_work_receipt = None;
+                self.last_gather_work_error = Some(error);
+            }
         }
     }
 

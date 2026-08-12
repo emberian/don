@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Focused canonical `[Group][Unitmask]` transaction tests.
 
-use don_sim::order::{Order, OrderIndex};
+use don_sim::order::{Order, OrderIndex, ORDER_GROUP};
 use don_sim::systems::canonical_group_move_host::{
     retail_fresh_groups, CommandPackageState, GroupMoveAuthority, MoveMemberAuthority,
     NETWORK_PLAYERS,
 };
 use don_sim::systems::canonical_simple_group_host::*;
+use don_sim::systems::economy_order_payload_authority::{CastOrderPayload, EconomyOrderPayload};
 use don_sim::systems::groups_guys::FormationMember;
 use don_sim::systems::movement::{PathData, PathStack};
 use don_sim::systems::save_load::{load_sim, save_sim};
@@ -24,8 +25,58 @@ fn packet(who: u8, objects: &[i16], mask: u32, set: i32) -> Vec<u8> {
     bytes
 }
 
+fn stop_packet(who: u8, objects: &[i16]) -> Vec<u8> {
+    let mut bytes = vec![GROUP_OPCODE, objects.len() as u8, who];
+    for &o in objects {
+        bytes.extend_from_slice(&o.to_le_bytes());
+    }
+    bytes.push(STOP_SPELL_OPCODE);
+    bytes
+}
+
+fn cast_spell_order(spell: i32) -> Order {
+    Order {
+        kind: OrderIndex::CastSpell,
+        flags: ORDER_GROUP,
+        economy: Some(EconomyOrderPayload::CastSpell(CastOrderPayload {
+            paid: 0,
+            spell,
+        })),
+        ..Order::default()
+    }
+}
+
+fn simple_authority(handles: &[Handle], revision: u64, digest: [u8; 32]) -> GroupMoveAuthority {
+    GroupMoveAuthority {
+        revision,
+        composition_digest: digest,
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: handles
+            .iter()
+            .copied()
+            .map(|handle| MoveMemberAuthority {
+                handle,
+                role: 0,
+                on_map: true,
+                is_captain: true,
+                can_move: false,
+                can_install_order: false,
+                is_plane: false,
+                domain: 0,
+                unit_flags: 0,
+                speed: 0,
+                admits_unsplit_move_near: false,
+                land_formation: FormationMember::default(),
+                water_formation: FormationMember::default(),
+            })
+            .collect(),
+    }
+}
+
 struct Fixture {
     world: World,
+    unit_types: Vec<i32>,
     groups: don_sim::systems::groups_guys::Groups,
     paths: Vec<PathStack>,
     state: CommandPackageState,
@@ -37,18 +88,23 @@ struct Fixture {
 
 impl Fixture {
     fn new(count: usize) -> Self {
+        Self::new_for(0, count)
+    }
+
+    fn new_for(who: u8, count: usize) -> Self {
         let mut world = World::new(0x4455);
         world.frame = 25;
         let mut handles = Vec::new();
         let mut objects = Vec::new();
         for index in 0..count {
             let handle = world
-                .allocate_typed_at(0, 30 + index as i32, 2_500 + index as i32 * 100, 3_500)
+                .allocate_typed_at(who, 30 + index as i32, 2_500 + index as i32 * 100, 3_500)
                 .unwrap();
             let row = world.row_of(handle).unwrap();
             world.units.group_mut()[row] = -1;
             world.units.o_down_mut()[row] = -1;
-            world.units.angle_mut()[row] = 0x1100_0000 + index as i32 * 0x0100_0000;
+            world.units.angle_mut()[row] =
+                0x1100_0000_i32.wrapping_add((index as i32).wrapping_mul(0x0100_0000));
             world.units.dest_angle_mut()[row] = -9;
             world.units.orders_x_mut()[row] = -10;
             world.units.orders_y_mut()[row] = -11;
@@ -56,6 +112,7 @@ impl Fixture {
             handles.push(handle);
             objects.push(world.units.o()[row]);
         }
+        let unit_types = handles.iter().map(|_| 30).collect();
         let authority = GroupMoveAuthority {
             revision: 11,
             composition_digest: [0x87; 32],
@@ -81,10 +138,11 @@ impl Fixture {
                 .collect(),
         };
         let mut players = [None; NETWORK_PLAYERS];
-        players[0] = Some(0);
+        players[0] = Some(who);
         Self {
             paths: vec![PathStack::default(); world.live_count() as usize],
             world,
+            unit_types,
             groups: retail_fresh_groups(),
             state: CommandPackageState::default(),
             authority,
@@ -101,6 +159,7 @@ impl Fixture {
     ) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
         prepare_simple_group_package(
             &self.world,
+            &self.unit_types,
             &self.groups,
             &self.paths,
             &self.state,
@@ -121,6 +180,7 @@ impl Fixture {
         let prepared = self.prepare(serial, bytes)?;
         commit_simple_group_package(
             &mut self.world,
+            &self.unit_types,
             &mut self.groups,
             &mut self.paths,
             &mut self.state,
@@ -149,6 +209,16 @@ fn decoder_accepts_the_exact_retail_fixture_and_refuses_any_suffix() {
             },
         }
     );
+    // Playback___2017.07.20_20_46_23__Thu_.rcx, turn index 9162 / turn 9163 / frame 135624.
+    let retail_stop_spell = [0x00, 0x03, 0x02, 0x07, 0x00, 0x38, 0x00, 0xe3, 0x00, 0x1d];
+    assert_eq!(
+        decode_simple_group_package(&retail_stop_spell).unwrap(),
+        SimpleGroupWire {
+            who: 2,
+            objects: vec![7, 56, 227],
+            action: SimpleGroupActionWire::StopSpell,
+        }
+    );
     let mut trailing = retail.to_vec();
     trailing.push(79);
     assert_eq!(
@@ -161,12 +231,146 @@ fn decoder_accepts_the_exact_retail_fixture_and_refuses_any_suffix() {
     let unsupported = packet(0, &[1], 0x100, -1)
         .into_iter()
         .enumerate()
-        .map(|(index, byte)| if index == 5 { 29 } else { byte })
+        .map(|(index, byte)| if index == 5 { 28 } else { byte })
         .collect::<Vec<_>>();
     assert_eq!(
         decode_simple_group_package(&unsupported),
-        Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: 29 })
+        Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: 28 })
     );
+}
+
+#[test]
+fn exact_retail_stop_spell_packet_closes_the_complete_ordinary_unit_cone() {
+    let mut fixture = Fixture::new_for(2, 228);
+    let selected = [7_i16, 56, 227];
+    for &o in &selected {
+        let handle = fixture.handles[o as usize];
+        let row = fixture.world.row_of(handle).unwrap();
+        fixture.world.units.set_unit_masks(row, 0x0400_1234);
+        fixture.world.units.spell_time_mut()[row] = 91;
+        fixture.world.units.orders_x_mut()[row] = -10;
+        fixture.world.units.orders_y_mut()[row] = -11;
+        fixture.world.units.dest_angle_mut()[row] = -12;
+        fixture.world.orders_mut(row).replace(cast_spell_order(630));
+        fixture.paths[row].push(PathData {
+            to_x: 1,
+            to_y: 2,
+            tolerance: 3,
+            flags: 4,
+        });
+    }
+    let retail = stop_packet(2, &selected);
+    assert_eq!(
+        retail,
+        [0x00, 0x03, 0x02, 0x07, 0x00, 0x38, 0x00, 0xe3, 0x00, 0x1d]
+    );
+    let random_before = fixture.world.random.state();
+    let receipt = fixture.process(135_624, &retail).unwrap();
+    assert_eq!(receipt.opcode, STOP_SPELL_OPCODE);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::StopSpell { stopped_units: 3 }
+    );
+    assert_eq!(receipt.random_state_before, random_before);
+    assert_eq!(receipt.random_state_after, random_before);
+    assert_eq!(fixture.state.selection(0).unwrap().len(), 3);
+    for &o in &selected {
+        let row = fixture.world.row_of(fixture.handles[o as usize]).unwrap();
+        assert_eq!(fixture.world.units.get_unit_masks(row), 0x1234);
+        assert_eq!(fixture.world.units.spell_time()[row], 0);
+        assert!(fixture.world.orders(row).is_empty());
+        assert!(fixture.paths[row].is_empty());
+        assert_eq!(
+            fixture.world.units.orders_x()[row],
+            fixture.world.units.x_internal()[row]
+        );
+        assert_eq!(
+            fixture.world.units.orders_y()[row],
+            fixture.world.units.y_internal()[row]
+        );
+        assert_eq!(
+            fixture.world.units.dest_angle()[row],
+            fixture.world.units.angle()[row]
+        );
+    }
+}
+
+#[test]
+fn stop_spell_special_gpiece_types_refuse_before_selection_or_unit_publication() {
+    let mut fixture = Fixture::new(1);
+    fixture.unit_types[0] = 61;
+    let handle = fixture.handles[0];
+    let row = fixture.world.row_of(handle).unwrap();
+    fixture.world.orders_mut(row).replace(cast_spell_order(630));
+    fixture.world.units.spell_time_mut()[row] = 17;
+    let groups_before = fixture.groups.clone();
+    let state_before = fixture.state.clone();
+    assert_eq!(
+        fixture.prepare(136, &stop_packet(0, &[0])).unwrap_err(),
+        SimpleGroupPackageError::MissingStopSpellGpieceAuthority {
+            handle,
+            type_index: 61,
+        }
+    );
+    assert_eq!(fixture.groups.list, groups_before.list);
+    assert_eq!(fixture.state, state_before);
+    assert_eq!(fixture.world.units.spell_time()[row], 17);
+    assert_eq!(
+        fixture.world.orders(row).order_type(),
+        OrderIndex::CastSpell
+    );
+}
+
+#[test]
+fn stop_spell_spell_clock_and_type_staleness_publish_nothing() {
+    let mut fixture = Fixture::new(1);
+    let handle = fixture.handles[0];
+    let row = fixture.world.row_of(handle).unwrap();
+    fixture.world.orders_mut(row).replace(cast_spell_order(630));
+    fixture.world.units.spell_time_mut()[row] = 17;
+    let bytes = stop_packet(0, &[0]);
+    let prepared = fixture.prepare(137, &bytes).unwrap();
+    let groups_before = fixture.groups.clone();
+    let state_before = fixture.state.clone();
+    fixture.world.units.spell_time_mut()[row] = 18;
+    assert_eq!(
+        commit_simple_group_package(
+            &mut fixture.world,
+            &fixture.unit_types,
+            &mut fixture.groups,
+            &mut fixture.paths,
+            &mut fixture.state,
+            &fixture.authority,
+            &fixture.players,
+            prepared,
+        ),
+        Err(SimpleGroupPackageError::StaleUnitSpellTime { handle })
+    );
+    assert_eq!(fixture.groups.list, groups_before.list);
+    assert_eq!(fixture.state, state_before);
+    assert_eq!(
+        fixture.world.orders(row).order_type(),
+        OrderIndex::CastSpell
+    );
+
+    fixture.world.units.spell_time_mut()[row] = 17;
+    let prepared = fixture.prepare(138, &bytes).unwrap();
+    fixture.unit_types[row] = 31;
+    assert_eq!(
+        commit_simple_group_package(
+            &mut fixture.world,
+            &fixture.unit_types,
+            &mut fixture.groups,
+            &mut fixture.paths,
+            &mut fixture.state,
+            &fixture.authority,
+            &fixture.players,
+            prepared,
+        ),
+        Err(SimpleGroupPackageError::StaleUnitType { handle })
+    );
+    assert_eq!(fixture.groups.list, groups_before.list);
+    assert_eq!(fixture.state, state_before);
 }
 
 #[test]
@@ -192,7 +396,10 @@ fn retail_mask_100_commits_group_cache_flags_order_path_and_action_endpoint_once
     assert_eq!(receipt.opcode, UNITMASK_OPCODE);
     assert_eq!(receipt.random_state_before, random_before);
     assert_eq!(receipt.random_state_after, random_before);
-    assert!(receipt.final_set);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::UnitMask { final_set: true }
+    );
     assert_eq!(fixture.world.units.group()[row], receipt.group_slot as i16);
     assert_eq!(fixture.world.units.get_unit_masks(row), 0x100);
     assert_eq!(fixture.world.units.get_flags(row), OBJ_FLAG_ACTIVE | 0x10);
@@ -251,7 +458,10 @@ fn cached_empty_group_reuses_the_saved_selection_for_a_second_real_wire_shape() 
         .unwrap();
     assert_eq!(receipt.selected.len(), 1);
     assert_eq!(fixture.world.units.get_unit_masks(row), 0x0020_0000);
-    assert!(receipt.final_set);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::UnitMask { final_set: true }
+    );
 }
 
 #[test]
@@ -267,7 +477,10 @@ fn loop_carried_set_to_clear_transition_uses_the_canonical_member_order() {
         .unwrap();
     assert_eq!(fixture.world.units.get_unit_masks(first), 0x20);
     assert_eq!(fixture.world.units.get_unit_masks(second), 0);
-    assert!(!receipt.final_set);
+    assert_eq!(
+        receipt.action_result,
+        SimpleGroupActionResult::UnitMask { final_set: false }
+    );
 }
 
 #[test]
@@ -283,6 +496,7 @@ fn player_clock_rng_and_unit_scalar_staleness_publish_nothing() {
     assert_eq!(
         commit_simple_group_package(
             &mut stale.world,
+            &stale.unit_types,
             &mut stale.groups,
             &mut stale.paths,
             &mut stale.state,
@@ -302,6 +516,7 @@ fn player_clock_rng_and_unit_scalar_staleness_publish_nothing() {
     assert_eq!(
         commit_simple_group_package(
             &mut stale.world,
+            &stale.unit_types,
             &mut stale.groups,
             &mut stale.paths,
             &mut stale.state,
@@ -421,5 +636,101 @@ fn exact_retail_packet_survives_donsave_and_cached_resume() {
         direct.world.units.get_unit_masks(direct_row),
         resumed.world.units.get_unit_masks(resumed_row)
     );
+    assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+#[test]
+fn exact_retail_stop_spell_packet_survives_donsave_and_cached_resume() {
+    let make = || {
+        let mut sim = don_sim::tick::Sim::new(0x7788, 4);
+        sim.world.frame = 135_624;
+        sim.vic_match.frame = 135_624;
+        let mut players = PlayerTable::new();
+        players.seat(1, 1, 2, 0);
+        sim.players = Some(players);
+        let mut handles = Vec::new();
+        for index in 0..228 {
+            let handle = sim.spawn_unit(2, 30, 2_000 + index * 4, 3_000, 3).unwrap();
+            let row = sim.world.row_of(handle).unwrap();
+            sim.world.units.group_mut()[row] = -1;
+            sim.world.units.o_down_mut()[row] = -1;
+            handles.push(handle);
+        }
+        sim.replace_group_move_authority(simple_authority(&handles, 29, [0x29; 32]));
+        (sim, handles)
+    };
+    let arm_cast = |sim: &mut don_sim::tick::Sim, handles: &[Handle]| {
+        for o in [7_usize, 56, 227] {
+            let row = sim.world.row_of(handles[o]).unwrap();
+            sim.world.units.set_unit_masks(row, 0x0400_0040);
+            sim.world.units.spell_time_mut()[row] = 33;
+            sim.world.orders_mut(row).replace(cast_spell_order(630));
+            sim.paths[row].push(PathData {
+                to_x: 4,
+                to_y: 5,
+                tolerance: 6,
+                flags: 7,
+            });
+        }
+    };
+
+    let (mut direct, direct_handles) = make();
+    let (mut resumed, resumed_handles) = make();
+    arm_cast(&mut direct, &direct_handles);
+    arm_cast(&mut resumed, &resumed_handles);
+    let retail = stop_packet(2, &[7, 56, 227]);
+    direct
+        .process_simple_group_package(1, 9_163, &retail)
+        .unwrap();
+    resumed
+        .process_simple_group_package(1, 9_163, &retail)
+        .unwrap();
+    let saved = save_sim(&resumed).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    resumed.replace_group_move_authority(simple_authority(&resumed_handles, 29, [0x29; 32]));
+
+    arm_cast(&mut direct, &direct_handles);
+    arm_cast(&mut resumed, &resumed_handles);
+    let cached = stop_packet(2, &[]);
+    let direct_receipt = direct
+        .process_simple_group_package(1, 9_164, &cached)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_simple_group_package(1, 9_164, &cached)
+        .unwrap();
+    assert_eq!(
+        direct_receipt.action_result,
+        SimpleGroupActionResult::StopSpell { stopped_units: 3 }
+    );
+    assert_eq!(direct_receipt.action_result, resumed_receipt.action_result);
+    assert_eq!(
+        direct_receipt.groups_checksum,
+        resumed_receipt.groups_checksum
+    );
+    assert_eq!(
+        direct_receipt.random_state_before,
+        direct_receipt.random_state_after
+    );
+    assert_eq!(
+        resumed_receipt.random_state_before,
+        resumed_receipt.random_state_after
+    );
+    for o in [7_usize, 56, 227] {
+        let direct_row = direct.world.row_of(direct_handles[o]).unwrap();
+        let resumed_row = resumed.world.row_of(resumed_handles[o]).unwrap();
+        assert_eq!(direct.world.units.get_unit_masks(direct_row), 0x40);
+        assert_eq!(direct.world.units.spell_time()[direct_row], 0);
+        assert!(direct.world.orders(direct_row).is_empty());
+        assert_eq!(
+            direct.world.units.get_unit_masks(direct_row),
+            resumed.world.units.get_unit_masks(resumed_row)
+        );
+        assert_eq!(
+            direct.world.units.spell_time()[direct_row],
+            resumed.world.units.spell_time()[resumed_row]
+        );
+        assert_eq!(direct.paths[direct_row], resumed.paths[resumed_row]);
+    }
+    assert_eq!(direct.groups.list, resumed.groups.list);
     assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
 }

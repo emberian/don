@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Canonical `GroupCommand` plus one simple Group action transaction.
 //!
-//! The initial production arm is opcode 32, `UNITMASK`. It reuses the fixed-`Groups`
+//! The production arms are opcode 32, `UNITMASK`, and opcode 29, `STOP_SPELL`. They reuse the fixed-`Groups`
 //! selector/cache/allocator from [`canonical_group_move_host`], plans the exact recovered
 //! `Group::action_unitmask` body, and publishes every reached Group, backlink, Unit, order,
 //! path, player-map, clock, and RNG surface at one stale-checked boundary. No
 //! `command::Bridge` or shadow `command::Groups` state is observed.
 
+use crate::command::group_action_frontier::{plan_stop_spell, StopSpellMemberFacts, StopSpellStep};
 use crate::systems::canonical_group_move_host::{
     groups_equal, prepare_group_selection, unit_still_current, CommandPackageState,
     GroupMoveAuthority, GroupSelectionUse, PackageError, UnitIdentity, UnitMutation,
@@ -22,18 +23,28 @@ use crate::world::{Handle, World};
 pub const GROUP_OPCODE: u8 = 0;
 pub const UNITMASK_OPCODE: u8 = 32;
 pub const UNITMASK_WIRE_SIZE: usize = 9;
+pub const STOP_SPELL_OPCODE: u8 = 29;
+pub const STOP_SPELL_WIRE_SIZE: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimpleGroupActionWire {
     UnitMask { mask: u32, set: i32 },
+    StopSpell,
 }
 
 impl SimpleGroupActionWire {
     pub const fn opcode(self) -> u8 {
         match self {
             Self::UnitMask { .. } => UNITMASK_OPCODE,
+            Self::StopSpell => STOP_SPELL_OPCODE,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimpleGroupActionResult {
+    UnitMask { final_set: bool },
+    StopSpell { stopped_units: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +68,10 @@ pub enum SimpleGroupPackageError {
     StaleRng,
     StaleUnitFlags { handle: Handle },
     StaleUnitDestination { handle: Handle },
+    MissingUnitType { handle: Handle },
+    StaleUnitType { handle: Handle },
+    StaleUnitSpellTime { handle: Handle },
+    MissingStopSpellGpieceAuthority { handle: Handle, type_index: i32 },
 }
 
 impl From<PackageError> for SimpleGroupPackageError {
@@ -80,7 +95,8 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Decode exactly `[Group][Unitmask]`. Prefixes, suffixes, and a second action are refused.
+/// Decode exactly `[Group][Unitmask]` or `[Group][StopSpell]`. Prefixes, suffixes, and a
+/// second action are refused.
 pub fn decode_simple_group_package(
     bytes: &[u8],
 ) -> Result<SimpleGroupWire, SimpleGroupPackageError> {
@@ -106,10 +122,12 @@ pub fn decode_simple_group_package(
     let Some(&opcode) = bytes.get(group_len) else {
         return Err(SimpleGroupPackageError::Truncated);
     };
-    if opcode != UNITMASK_OPCODE {
-        return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode });
-    }
-    let expected = group_len + UNITMASK_WIRE_SIZE;
+    let action_size = match opcode {
+        UNITMASK_OPCODE => UNITMASK_WIRE_SIZE,
+        STOP_SPELL_OPCODE => STOP_SPELL_WIRE_SIZE,
+        _ => return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode }),
+    };
+    let expected = group_len + action_size;
     if bytes.len() < expected {
         return Err(SimpleGroupPackageError::Truncated);
     }
@@ -127,13 +145,18 @@ pub fn decode_simple_group_package(
         }
         objects.push(o);
     }
-    Ok(SimpleGroupWire {
-        who,
-        objects,
-        action: SimpleGroupActionWire::UnitMask {
+    let action = match opcode {
+        UNITMASK_OPCODE => SimpleGroupActionWire::UnitMask {
             mask: read_u32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)?,
             set: read_i32(bytes, group_len + 5).ok_or(SimpleGroupPackageError::Truncated)?,
         },
+        STOP_SPELL_OPCODE => SimpleGroupActionWire::StopSpell,
+        _ => unreachable!("action size match admitted this opcode"),
+    };
+    Ok(SimpleGroupWire {
+        who,
+        objects,
+        action,
     })
 }
 
@@ -144,6 +167,9 @@ pub struct SimpleUnitMutation {
     pub flags_after: u8,
     pub dest_angle_before: i32,
     pub dest_angle_after: i32,
+    pub spell_time_before: Option<i16>,
+    pub spell_time_after: Option<i16>,
+    pub type_index_before: Option<i32>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,7 +190,7 @@ pub struct PreparedSimpleGroupPackage {
     pub authority_digest: [u8; 32],
     pub authority_members: Vec<crate::systems::canonical_group_move_host::MoveMemberAuthority>,
     pub units: Vec<SimpleUnitMutation>,
-    pub final_set: bool,
+    pub action_result: SimpleGroupActionResult,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,7 +206,7 @@ pub struct SimpleGroupPackageReceipt {
     pub groups_checksum: u32,
     pub random_state_before: i32,
     pub random_state_after: i32,
-    pub final_set: bool,
+    pub action_result: SimpleGroupActionResult,
 }
 
 fn mutation_for(
@@ -200,6 +226,7 @@ fn mutation_for(
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_simple_group_package(
     world: &World,
+    unit_types: &[i32],
     groups: &Groups,
     paths: &[PathStack],
     command_state: &CommandPackageState,
@@ -265,6 +292,9 @@ pub fn prepare_simple_group_package(
             flags_after: flags,
             dest_angle_before: dest_angle,
             dest_angle_after: dest_angle,
+            spell_time_before: None,
+            spell_time_after: None,
+            type_index_before: None,
         });
     }
 
@@ -274,50 +304,154 @@ pub fn prepare_simple_group_package(
         .get(group_slot)
         .ok_or(PackageError::InvalidGroupPool)?
         .clone();
-    let SimpleGroupActionWire::UnitMask { mask, set } = wire.action;
-    let mut facts = Vec::with_capacity(selection.members.len());
-    for member in &selection.members {
-        let mutation = mutation_for(&mut units, member.identity.who, member.identity.o)?;
-        facts.push(UnitMaskMemberFacts {
-            o: member.identity.o,
-            valid_unit: true,
-            is_plane: member.authority.is_plane,
-            unit_masks: mutation.unit.after.unit_masks,
-        });
-    }
-    let plan = plan_action_unitmask(&group, mask, set, &facts).map_err(|_| {
-        SimpleGroupPackageError::BrokenPlanIdentity {
-            who: wire.who,
-            o: -1,
-        }
-    })?;
-    groups_after.list[group_slot] = plan.group;
-    for step in plan.steps {
-        let (who, o) = match step {
-            UnitMaskStep::WriteUnitMasks { who, o, .. }
-            | UnitMaskStep::SetObjectFlag { who, o, .. }
-            | UnitMaskStep::ClearUnitMasks { who, o, .. }
-            | UnitMaskStep::ClearPathAnchor { who, o }
-            | UnitMaskStep::CloseOrders { who, o, .. }
-            | UnitMaskStep::ClearPartialPath { who, o }
-            | UnitMaskStep::UpdateAction { who, o } => (who, o),
-        };
-        let mutation = mutation_for(&mut units, who, o)?;
-        match step {
-            UnitMaskStep::WriteUnitMasks { value, .. } => mutation.unit.after.unit_masks = value,
-            UnitMaskStep::SetObjectFlag { mask, .. } => mutation.flags_after |= mask,
-            UnitMaskStep::ClearUnitMasks { mask, .. } => mutation.unit.after.unit_masks &= !mask,
-            UnitMaskStep::ClearPathAnchor { .. } | UnitMaskStep::ClearPartialPath { .. } => {
-                mutation.unit.after.path.clear()
+    let action_result = match wire.action {
+        SimpleGroupActionWire::UnitMask { mask, set } => {
+            let mut facts = Vec::with_capacity(selection.members.len());
+            for member in &selection.members {
+                let mutation = mutation_for(&mut units, member.identity.who, member.identity.o)?;
+                facts.push(UnitMaskMemberFacts {
+                    o: member.identity.o,
+                    valid_unit: true,
+                    is_plane: member.authority.is_plane,
+                    unit_masks: mutation.unit.after.unit_masks,
+                });
             }
-            UnitMaskStep::CloseOrders { .. } => mutation.unit.after.orders.clear(),
-            UnitMaskStep::UpdateAction { .. } => {
-                mutation.unit.after.orders_x = mutation.unit.after.x;
-                mutation.unit.after.orders_y = mutation.unit.after.y;
-                mutation.dest_angle_after = mutation.unit.after.angle;
+            let plan = plan_action_unitmask(&group, mask, set, &facts).map_err(|_| {
+                SimpleGroupPackageError::BrokenPlanIdentity {
+                    who: wire.who,
+                    o: -1,
+                }
+            })?;
+            groups_after.list[group_slot] = plan.group;
+            for step in plan.steps {
+                let (who, o) = match step {
+                    UnitMaskStep::WriteUnitMasks { who, o, .. }
+                    | UnitMaskStep::SetObjectFlag { who, o, .. }
+                    | UnitMaskStep::ClearUnitMasks { who, o, .. }
+                    | UnitMaskStep::ClearPathAnchor { who, o }
+                    | UnitMaskStep::CloseOrders { who, o, .. }
+                    | UnitMaskStep::ClearPartialPath { who, o }
+                    | UnitMaskStep::UpdateAction { who, o } => (who, o),
+                };
+                let mutation = mutation_for(&mut units, who, o)?;
+                match step {
+                    UnitMaskStep::WriteUnitMasks { value, .. } => {
+                        mutation.unit.after.unit_masks = value
+                    }
+                    UnitMaskStep::SetObjectFlag { mask, .. } => mutation.flags_after |= mask,
+                    UnitMaskStep::ClearUnitMasks { mask, .. } => {
+                        mutation.unit.after.unit_masks &= !mask
+                    }
+                    UnitMaskStep::ClearPathAnchor { .. }
+                    | UnitMaskStep::ClearPartialPath { .. } => mutation.unit.after.path.clear(),
+                    UnitMaskStep::CloseOrders { .. } => mutation.unit.after.orders.clear(),
+                    UnitMaskStep::UpdateAction { .. } => {
+                        mutation.unit.after.orders_x = mutation.unit.after.x;
+                        mutation.unit.after.orders_y = mutation.unit.after.y;
+                        mutation.dest_angle_after = mutation.unit.after.angle;
+                    }
+                }
+            }
+            SimpleGroupActionResult::UnitMask {
+                final_set: plan.final_set,
             }
         }
-    }
+        SimpleGroupActionWire::StopSpell => {
+            let mut facts = Vec::with_capacity(selection.members.len());
+            for member in &selection.members {
+                let mutation = mutation_for(&mut units, member.identity.who, member.identity.o)?;
+                let current_order = mutation.unit.after.orders.current().map(|order| order.kind);
+                let reached = member.authority.on_map
+                    && current_order == Some(crate::order::OrderIndex::CastSpell);
+                let type_index = if reached {
+                    let row = world
+                        .row_of(mutation.unit.before.identity.handle)
+                        .expect("selection preparation resolved this handle");
+                    let type_index = unit_types.get(row).copied().ok_or(
+                        SimpleGroupPackageError::MissingUnitType {
+                            handle: mutation.unit.before.identity.handle,
+                        },
+                    )?;
+                    let spell_time = world.units.spell_time()[row];
+                    mutation.spell_time_before = Some(spell_time);
+                    mutation.spell_time_after = Some(spell_time);
+                    mutation.type_index_before = Some(type_index);
+                    type_index
+                } else {
+                    -1
+                };
+                facts.push(StopSpellMemberFacts {
+                    o: member.identity.o,
+                    valid_unit: true,
+                    on_map: member.authority.on_map,
+                    current_order,
+                    unit_masks: mutation.unit.after.unit_masks,
+                    type_index,
+                });
+            }
+            if let Some(facts) = facts.iter().find(|facts| {
+                facts.on_map
+                    && facts.current_order == Some(crate::order::OrderIndex::CastSpell)
+                    && matches!(facts.type_index, 61 | 62 | 400)
+            }) {
+                let mutation = mutation_for(&mut units, wire.who, facts.o)?;
+                return Err(SimpleGroupPackageError::MissingStopSpellGpieceAuthority {
+                    handle: mutation.unit.before.identity.handle,
+                    type_index: mutation
+                        .type_index_before
+                        .expect("STOP_SPELL preparation captured the type owner"),
+                });
+            }
+            let plan = plan_stop_spell(&group, &facts).map_err(|_| {
+                SimpleGroupPackageError::BrokenPlanIdentity {
+                    who: wire.who,
+                    o: -1,
+                }
+            })?;
+            groups_after.list[group_slot] = plan.group;
+            let stopped_units = facts
+                .iter()
+                .filter(|facts| {
+                    facts.on_map && facts.current_order == Some(crate::order::OrderIndex::CastSpell)
+                })
+                .count();
+            for step in plan.steps {
+                match step {
+                    StopSpellStep::SetUnitMasks { o, value } => {
+                        mutation_for(&mut units, wire.who, o)?.unit.after.unit_masks = value;
+                    }
+                    StopSpellStep::ClearPathAnchor { o }
+                    | StopSpellStep::ClearPartialPath { o } => {
+                        mutation_for(&mut units, wire.who, o)?
+                            .unit
+                            .after
+                            .path
+                            .clear();
+                    }
+                    StopSpellStep::CloseOrders { o, .. } => {
+                        mutation_for(&mut units, wire.who, o)?
+                            .unit
+                            .after
+                            .orders
+                            .clear();
+                    }
+                    StopSpellStep::UpdateAction { o } => {
+                        let mutation = mutation_for(&mut units, wire.who, o)?;
+                        mutation.unit.after.orders_x = mutation.unit.after.x;
+                        mutation.unit.after.orders_y = mutation.unit.after.y;
+                        mutation.dest_angle_after = mutation.unit.after.angle;
+                    }
+                    StopSpellStep::ClearSpellWord98 { o } => {
+                        mutation_for(&mut units, wire.who, o)?.spell_time_after = Some(0);
+                    }
+                    StopSpellStep::SetObjectsFlag22c | StopSpellStep::UpdateGpiece => {
+                        unreachable!("special-type graphics tails were refused before planning")
+                    }
+                }
+            }
+            SimpleGroupActionResult::StopSpell { stopped_units }
+        }
+    };
 
     Ok(PreparedSimpleGroupPackage {
         play,
@@ -340,13 +474,14 @@ pub fn prepare_simple_group_package(
         authority_digest: selection.authority_digest,
         authority_members: selection.authority_members,
         units,
-        final_set: plan.final_set,
+        action_result,
     })
 }
 
 /// Revalidate every reached owner and then publish only assignments.
 pub fn commit_simple_group_package(
     world: &mut World,
+    unit_types: &[i32],
     groups: &mut Groups,
     paths: &mut [PathStack],
     command_state: &mut CommandPackageState,
@@ -395,6 +530,20 @@ pub fn commit_simple_group_package(
                 handle: mutation.unit.before.identity.handle,
             });
         }
+        if let Some(spell_time_before) = mutation.spell_time_before {
+            if world.units.spell_time()[row] != spell_time_before {
+                return Err(SimpleGroupPackageError::StaleUnitSpellTime {
+                    handle: mutation.unit.before.identity.handle,
+                });
+            }
+        }
+        if let Some(type_index_before) = mutation.type_index_before {
+            if unit_types.get(row).copied() != Some(type_index_before) {
+                return Err(SimpleGroupPackageError::StaleUnitType {
+                    handle: mutation.unit.before.identity.handle,
+                });
+            }
+        }
     }
 
     let mut checksum = CheckSum::default();
@@ -411,7 +560,7 @@ pub fn commit_simple_group_package(
         groups_checksum: checksum.value,
         random_state_before: prepared.random_state,
         random_state_after: prepared.random_state,
-        final_set: prepared.final_set,
+        action_result: prepared.action_result,
     };
     *groups = prepared.groups_after;
     *command_state = prepared.command_state_after;
@@ -427,6 +576,9 @@ pub fn commit_simple_group_package(
         world.units.orders_x_mut()[row] = mutation.unit.after.orders_x;
         world.units.orders_y_mut()[row] = mutation.unit.after.orders_y;
         world.units.dest_angle_mut()[row] = mutation.dest_angle_after;
+        if let Some(spell_time_after) = mutation.spell_time_after {
+            world.units.spell_time_mut()[row] = spell_time_after;
+        }
         *world.orders_mut(row) = mutation.unit.after.orders;
         paths[row] = mutation.unit.after.path;
     }
