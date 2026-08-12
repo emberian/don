@@ -384,6 +384,25 @@ impl BhsCreateUnitRuntime {
         leader.graft.get(current).copied().flatten()
     }
 
+    /// Read `LeaderData::current_upgrade(source)` without applying `get_graft`.
+    ///
+    /// `ScenarioFuncSet::research_tech_with_cost` uses this narrower projection for the
+    /// requested tech's `where` type.  The source type and the type-count cohort's grafted
+    /// answer are not equivalent producer identities.
+    pub fn current_upgrade_for_production(
+        &self,
+        leader_slot: usize,
+        source_type: usize,
+    ) -> Option<i32> {
+        self.leaders
+            .get(leader_slot)?
+            .as_ref()?
+            .current_upgrade
+            .get(source_type)
+            .copied()
+            .flatten()
+    }
+
     pub fn shipped_prefix_reachable_calls(&self) -> u32 {
         CREATE_UNIT_COHORT_CALLS
     }

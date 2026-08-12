@@ -2425,6 +2425,579 @@ pub fn apply_sim_unqueue_fleet_transaction(
     }
 }
 
+/// Retail addresses in the single-Library path reached by builtin 357.
+pub mod single_library_research_va {
+    pub const RESEARCH_TECH_WITH_COST: u32 = 0x009e_e700;
+    pub const FIND_BUILD: u32 = 0x009e_2970;
+    pub const BUILD_CAN_QUEUE: u32 = 0x004d_2030;
+    pub const GROUP_CLEAR: u32 = 0x0071_3e80;
+    pub const GROUP_ADD: u32 = 0x0071_4350;
+    pub const GROUPS_PUSH_GROUP: u32 = 0x0070_f9e0;
+    pub const GROUP_ACTION_QUEUE_UP: u32 = 0x006f_dbb0;
+    pub const BUILD_ACTION_QUEUE: u32 = 0x0062_0f40;
+}
+
+/// `Groups::get_open_slot` searches this prefix of each 64-slot owner band.
+pub const RETAIL_TRANSIENT_GROUP_SLOTS: usize = 46;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SingleLibraryResearchRequest {
+    pub owner: u8,
+    /// Absolute object index in the owner's Build band.
+    pub object_index: i16,
+    pub producer_type: i32,
+    pub research_type: i32,
+    /// Exact six-good `TypeData::get_cost` result from the canonical type owner.
+    pub cost: [i32; NUM_RES],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleLibraryResearchStep {
+    BuildCanQueue,
+    TemporaryGroupClear,
+    TemporaryGroupAdd,
+    GroupsPushGroup { slot: usize, reused: bool },
+    GroupActionQueueUp,
+    BuildActionQueue { queue_slot: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleLibraryResearchStatus {
+    Applied,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleLibraryResearchQueueResult {
+    Enqueued,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SingleLibraryResearchReceipt {
+    pub request: SingleLibraryResearchRequest,
+    pub status: SingleLibraryResearchStatus,
+    pub steps: Vec<SingleLibraryResearchStep>,
+    pub resources_before: Option<[i32; NUM_RES]>,
+    pub resources_after: Option<[i32; NUM_RES]>,
+    pub group_slot: Option<usize>,
+    pub queue_slot: Option<usize>,
+    pub queue_result: Option<SingleLibraryResearchQueueResult>,
+    pub frame: Option<i32>,
+    pub group_before: Option<crate::systems::groups_guys::GroupData>,
+    pub group_after: Option<crate::systems::groups_guys::GroupData>,
+    pub last_group_before: Option<i32>,
+    pub last_group_after: Option<i32>,
+    pub build_queued_before: Option<u8>,
+    pub build_queued_after: Option<u8>,
+    pub queue_entry_before: Option<crate::systems::production::BuildQueueEntry>,
+    pub queue_entry_after: Option<crate::systems::production::BuildQueueEntry>,
+    pub leader_queued_before: Option<i32>,
+    pub leader_queued_after: Option<i32>,
+    pub vic_queued_before: Option<u16>,
+    pub vic_queued_after: Option<u16>,
+    pub ages_queued_before: Option<u8>,
+    pub ages_queued_after: Option<u8>,
+    pub epochs_queued_before: Option<u8>,
+    pub epochs_queued_after: Option<u8>,
+}
+
+impl SingleLibraryResearchReceipt {
+    pub fn unavailable(request: SingleLibraryResearchRequest) -> Self {
+        Self {
+            request,
+            status: SingleLibraryResearchStatus::Unavailable,
+            steps: Vec::new(),
+            resources_before: None,
+            resources_after: None,
+            group_slot: None,
+            queue_slot: None,
+            queue_result: None,
+            frame: None,
+            group_before: None,
+            group_after: None,
+            last_group_before: None,
+            last_group_after: None,
+            build_queued_before: None,
+            build_queued_after: None,
+            queue_entry_before: None,
+            queue_entry_after: None,
+            leader_queued_before: None,
+            leader_queued_after: None,
+            vic_queued_before: None,
+            vic_queued_after: None,
+            ages_queued_before: None,
+            ages_queued_after: None,
+            epochs_queued_before: None,
+            epochs_queued_after: None,
+        }
+    }
+
+    pub fn validates(&self, expected: SingleLibraryResearchRequest) -> bool {
+        if self.request != expected {
+            return false;
+        }
+        match self.status {
+            SingleLibraryResearchStatus::Unavailable => {
+                self.steps.is_empty()
+                    && self.resources_before.is_none()
+                    && self.resources_after.is_none()
+                    && self.group_slot.is_none()
+                    && self.queue_slot.is_none()
+                    && self.queue_result.is_none()
+                    && self.frame.is_none()
+                    && self.group_before.is_none()
+                    && self.group_after.is_none()
+                    && self.last_group_before.is_none()
+                    && self.last_group_after.is_none()
+                    && self.build_queued_before.is_none()
+                    && self.build_queued_after.is_none()
+                    && self.queue_entry_before.is_none()
+                    && self.queue_entry_after.is_none()
+                    && self.leader_queued_before.is_none()
+                    && self.leader_queued_after.is_none()
+                    && self.vic_queued_before.is_none()
+                    && self.vic_queued_after.is_none()
+                    && self.ages_queued_before.is_none()
+                    && self.ages_queued_after.is_none()
+                    && self.epochs_queued_before.is_none()
+                    && self.epochs_queued_after.is_none()
+            }
+            SingleLibraryResearchStatus::Applied => {
+                let (
+                    Some(before),
+                    Some(after),
+                    Some(group_slot),
+                    Some(queue_result),
+                    Some(frame),
+                    Some(group_before),
+                    Some(group_after),
+                    Some(last_before),
+                    Some(last_after),
+                    Some(build_queued_before),
+                    Some(build_queued_after),
+                    Some(_queue_entry_before),
+                    Some(queue_entry_after),
+                    Some(leader_queued_before),
+                    Some(leader_queued_after),
+                    Some(vic_queued_before),
+                    Some(vic_queued_after),
+                    Some(ages_before),
+                    Some(ages_after),
+                    Some(epochs_before),
+                    Some(epochs_after),
+                ) = (
+                    self.resources_before,
+                    self.resources_after,
+                    self.group_slot,
+                    self.queue_result,
+                    self.frame,
+                    self.group_before.as_ref(),
+                    self.group_after.as_ref(),
+                    self.last_group_before,
+                    self.last_group_after,
+                    self.build_queued_before,
+                    self.build_queued_after,
+                    self.queue_entry_before,
+                    self.queue_entry_after,
+                    self.leader_queued_before,
+                    self.leader_queued_after,
+                    self.vic_queued_before,
+                    self.vic_queued_after,
+                    self.ages_queued_before,
+                    self.ages_queued_after,
+                    self.epochs_queued_before,
+                    self.epochs_queued_after,
+                )
+                else {
+                    return false;
+                };
+                let Some(SingleLibraryResearchStep::GroupsPushGroup { slot, reused }) =
+                    self.steps.get(3)
+                else {
+                    return false;
+                };
+                let mut expected_group = group_before.clone();
+                if *reused {
+                    if !research_group_matches(group_before, &expected)
+                        || usize::try_from(last_before).ok() != Some(group_slot)
+                    {
+                        return false;
+                    }
+                } else {
+                    expected_group.who = expected.owner;
+                    expected_group.num = 1;
+                    expected_group.ox = 0;
+                    expected_group.oy = 0;
+                    expected_group.o_dist = 0;
+                    expected_group.o_angle = 0;
+                    expected_group.buildings = 1;
+                    expected_group.speed = 0;
+                    expected_group.stamp = frame;
+                    expected_group.list[0] = expected.object_index;
+                    expected_group.angles[0] = 0;
+                    expected_group.off_x[0] = 0;
+                    expected_group.off_y[0] = 0;
+                    expected_group.curr_x[0] = 0;
+                    expected_group.curr_y[0] = 0;
+                }
+                // `Group::action_begin` is the only queue-up write outside copy_group.
+                expected_group.disband = 0;
+                if *slot != group_slot
+                    || *group_after != expected_group
+                    || last_after
+                        != if *reused {
+                            last_before
+                        } else {
+                            group_slot as i32
+                        }
+                    || self.steps.first() != Some(&SingleLibraryResearchStep::BuildCanQueue)
+                    || self.steps.get(1) != Some(&SingleLibraryResearchStep::TemporaryGroupClear)
+                    || self.steps.get(2) != Some(&SingleLibraryResearchStep::TemporaryGroupAdd)
+                    || self.steps.get(4) != Some(&SingleLibraryResearchStep::GroupActionQueueUp)
+                {
+                    return false;
+                }
+
+                if queue_result != SingleLibraryResearchQueueResult::Enqueued {
+                    return false;
+                }
+                let Some(queue_slot) = self.queue_slot else {
+                    return false;
+                };
+                let mut expected_entry = crate::systems::production::BuildQueueEntry {
+                    type_index: expected.research_type as i16,
+                    res: [-1; 3],
+                    ..crate::systems::production::BuildQueueEntry::default()
+                };
+                let mut cost_slot = 0usize;
+                for (good, amount) in expected.cost.into_iter().enumerate() {
+                    if amount == 0 {
+                        continue;
+                    }
+                    if cost_slot == expected_entry.res.len() {
+                        continue;
+                    }
+                    expected_entry.res[cost_slot] = good as i16;
+                    expected_entry.amt[cost_slot] = amount as i16;
+                    cost_slot += 1;
+                }
+                after == std::array::from_fn(|good| before[good].wrapping_sub(expected.cost[good]))
+                    && build_queued_after == build_queued_before.wrapping_add(1)
+                    && queue_slot == usize::from(build_queued_before)
+                    && queue_entry_after == expected_entry
+                    && leader_queued_after == leader_queued_before.wrapping_add(1)
+                    && vic_queued_after == vic_queued_before.wrapping_add(1)
+                    && ages_after
+                        == ages_before.wrapping_add(u8::from(
+                            (0x220..0x227).contains(&expected.research_type),
+                        ))
+                    && epochs_after
+                        == epochs_before.wrapping_add(u8::from(
+                            (0x227..0x243).contains(&expected.research_type),
+                        ))
+                    && self.steps.get(5)
+                        == Some(&SingleLibraryResearchStep::BuildActionQueue { queue_slot })
+                    && self.steps.len() == 6
+            }
+        }
+    }
+}
+
+fn research_group_matches(
+    group: &crate::systems::groups_guys::GroupData,
+    request: &SingleLibraryResearchRequest,
+) -> bool {
+    group.who == request.owner
+        && group.num == 1
+        && group.buildings != 0
+        && group.list[0] == request.object_index
+}
+
+fn research_group_slot(
+    groups: &crate::systems::groups_guys::Groups,
+    request: &SingleLibraryResearchRequest,
+) -> Option<(usize, bool)> {
+    use crate::systems::groups_guys::{GROUPS_PER_PLAYER, NUM_GROUPS};
+
+    let owner = usize::from(request.owner);
+    let first = owner.checked_mul(GROUPS_PER_PLAYER)?;
+    let end = first.checked_add(GROUPS_PER_PLAYER)?;
+    let last = usize::try_from(*groups.last_group.get(owner)?).ok()?;
+    if end > NUM_GROUPS || groups.list.len() != NUM_GROUPS || !(first..end).contains(&last) {
+        return None;
+    }
+    if research_group_matches(groups.list.get(last)?, request) {
+        return Some((last, true));
+    }
+    (first..first + RETAIL_TRANSIENT_GROUP_SLOTS)
+        .find(|&slot| {
+            slot != last
+                && groups
+                    .list
+                    .get(slot)
+                    .is_some_and(|group| group.num == 0 || group.buildings != 0)
+        })
+        .map(|slot| (slot, false))
+}
+
+/// Execute the exact state-changing core reached after builtin 357 has resolved a type,
+/// upgraded its `where` producer, and selected one live Library.
+///
+/// Every type, owner, queue, cost, resource mirror, counter, and Groups-allocation fact is
+/// preflighted before the first assignment. Every refusal therefore preserves every
+/// Sim/production field this transaction owns. The BHS adapter owns the rotating
+/// `find_build` cursor and rolls this core back if a later VM operation rejects the
+/// surrounding script call.
+pub fn apply_sim_single_library_research_transaction(
+    sim: &mut Sim,
+    runtime: &mut LiveProductionRuntime,
+    request: SingleLibraryResearchRequest,
+) -> SingleLibraryResearchReceipt {
+    use crate::command::direct_entity_command_integration::build_action_unqueue::{
+        FIRST_TECH_TYPE, LAST_TECH_TYPE,
+    };
+    use crate::systems::production::{flag, BuildQueueEntry};
+
+    let unavailable = || SingleLibraryResearchReceipt::unavailable(request);
+    let owner = usize::from(request.owner);
+    if owner >= RETAIL_LEADER_SLOTS
+        || i32::from(request.object_index) < BUILD_BAND_BASE as i32
+        || !(FIRST_TECH_TYPE..=LAST_TECH_TYPE).contains(&request.research_type)
+        || request
+            .cost
+            .iter()
+            .any(|&amount| amount < 0 || amount > i16::MAX as i32)
+    {
+        return unavailable();
+    }
+    let Some(research) = runtime.facts(request.research_type) else {
+        return unavailable();
+    };
+    if research.class != LiveTypeClass::Research
+        || !research.type_eligible
+        || research.repeat_cost != Some(request.cost)
+    {
+        return unavailable();
+    }
+    let Some(producer) = runtime.facts(request.producer_type) else {
+        return unavailable();
+    };
+    if producer.class != LiveTypeClass::Building || !producer.is_library {
+        return unavailable();
+    }
+    let Some(leader) = runtime.leaders.get(owner) else {
+        return unavailable();
+    };
+    if prerequisite_held(&leader.tech, request.research_type)
+        || !research
+            .prerequisites
+            .iter()
+            .all(|&preq| prerequisite_held(&leader.tech, preq))
+    {
+        return unavailable();
+    }
+    let Ok(research_slot) = usize::try_from(request.research_type) else {
+        return unavailable();
+    };
+    let Some(&queued_before) = leader.queued_counts.get(research_slot) else {
+        return unavailable();
+    };
+    let Some(vic_leader) = sim.vic_leaders.slots.get(owner) else {
+        return unavailable();
+    };
+    let Some(&vic_queued_before) = vic_leader.num_queued.get(research_slot) else {
+        return unavailable();
+    };
+    let Some(&vic_has_research) = vic_leader.has_tech.get(research_slot) else {
+        return unavailable();
+    };
+    if queued_before != 0
+        || u16::try_from(queued_before).ok() != Some(vic_queued_before)
+        || vic_has_research != prerequisite_held(&leader.tech, request.research_type)
+        || leader.resources != sim.leaders[owner].econ.stockpile
+        || leader.resources != sim.step8.leaders[owner].econ.stockpile
+        || leader.resources != vic_leader.economy.bucket
+    {
+        return unavailable();
+    }
+    for &preq in &research.prerequisites {
+        let Ok(preq_slot) = usize::try_from(preq) else {
+            return unavailable();
+        };
+        if vic_leader.has_tech.get(preq_slot).copied()
+            != Some(prerequisite_held(&leader.tech, preq))
+        {
+            return unavailable();
+        }
+    }
+    let Some(object_slot) = usize::try_from(request.object_index)
+        .ok()
+        .and_then(|object| object.checked_sub(BUILD_BAND_BASE as usize))
+    else {
+        return unavailable();
+    };
+    let Some(&build_row) = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Build)
+        .get(object_slot)
+    else {
+        return unavailable();
+    };
+    let build_row = build_row as usize;
+    let Some(build) = sim.builds.get(build_row) else {
+        return unavailable();
+    };
+    if build.who != request.owner
+        || build.flags & (flag::VALID | flag::ACTIVE) != (flag::VALID | flag::ACTIVE)
+        || build.object_id() != request.object_index
+        || runtime.build_types.get(build_row).copied().flatten() != Some(request.producer_type)
+    {
+        return unavailable();
+    }
+    let queue_slot = usize::from(build.queue.queued);
+    if queue_slot >= build.queue.entries.len() || build.queue.queued == u8::MAX {
+        return unavailable();
+    }
+    let Some((group_slot, reused_group)) = research_group_slot(&sim.groups, &request) else {
+        return unavailable();
+    };
+
+    let resources_before = leader.resources;
+    // `research_tech_with_cost` calls `BuildData::can_queue` before it stores the
+    // successful cursor or constructs/pushes the transient Group. Its first operation
+    // is the same `TypeData::can_pay_cost` virtual used by `Build::queue_up`, so a stable
+    // single-threaded transaction cannot reach the Group with insufficient resources.
+    if !request
+        .cost
+        .iter()
+        .enumerate()
+        .all(|(good, &amount)| resources_before[good] >= amount)
+    {
+        return unavailable();
+    }
+    let resources_after =
+        std::array::from_fn(|good| resources_before[good].wrapping_sub(request.cost[good]));
+    let mut queue_entry = BuildQueueEntry {
+        type_index: request.research_type as i16,
+        res: [-1; 3],
+        ..BuildQueueEntry::default()
+    };
+    let mut cost_slot = 0usize;
+    for (good, &amount) in request.cost.iter().enumerate() {
+        if amount == 0 {
+            continue;
+        }
+        if cost_slot == queue_entry.res.len() {
+            continue;
+        }
+        queue_entry.res[cost_slot] = good as i16;
+        queue_entry.amt[cost_slot] = amount as i16;
+        cost_slot += 1;
+    }
+
+    let frame = sim.world.frame;
+    let group_before = sim.groups.list[group_slot].clone();
+    let last_group_before = sim.groups.last_group[owner];
+    let build_queued_before = sim.builds[build_row].queue.queued;
+    let queue_entry_before = sim.builds[build_row].queue.entries[queue_slot];
+    let ages_queued_before = leader.ages_queued;
+    let epochs_queued_before = leader.epochs_queued;
+
+    if !reused_group {
+        // `Groups::copy_group` copies exactly this final transient singleton projection.
+        // Destination identity/army/formation and every other unlisted field survive.
+        let destination = &mut sim.groups.list[group_slot];
+        destination.who = request.owner;
+        destination.num = 1;
+        destination.ox = 0;
+        destination.oy = 0;
+        destination.o_dist = 0;
+        destination.o_angle = 0;
+        destination.buildings = 1;
+        destination.speed = 0;
+        destination.stamp = frame;
+        destination.list[0] = request.object_index;
+        destination.angles[0] = 0;
+        destination.off_x[0] = 0;
+        destination.off_y[0] = 0;
+        destination.curr_x[0] = 0;
+        destination.curr_y[0] = 0;
+        sim.groups.last_group[owner] = group_slot as i32;
+    }
+    // `Group::action_queue_up` enters through `Group::action_begin` even when the
+    // subsequent resource payment fails.
+    sim.groups.list[group_slot].disband = 0;
+
+    sim.builds[build_row].queue.entries[queue_slot] = queue_entry;
+    sim.builds[build_row].queue.queued = sim.builds[build_row].queue.queued.wrapping_add(1);
+    let leader = &mut runtime.leaders[owner];
+    leader.resources = resources_after;
+    leader.queued_counts[research_slot] = queued_before.wrapping_add(1);
+    if (0x220..0x227).contains(&request.research_type) {
+        leader.ages_queued = leader.ages_queued.wrapping_add(1);
+    }
+    if (0x227..0x243).contains(&request.research_type) {
+        leader.epochs_queued = leader.epochs_queued.wrapping_add(1);
+    }
+    sim.leaders[owner].econ.stockpile = resources_after;
+    sim.step8.leaders[owner].econ.stockpile = resources_after;
+    sim.vic_leaders.slots[owner].economy.bucket = resources_after;
+    sim.vic_leaders.slots[owner].num_queued[research_slot] = vic_queued_before.wrapping_add(1);
+
+    let group_after = sim.groups.list[group_slot].clone();
+    let last_group_after = sim.groups.last_group[owner];
+    let build_queued_after = sim.builds[build_row].queue.queued;
+    let queue_entry_after = sim.builds[build_row].queue.entries[queue_slot];
+    let leader_queued_after = runtime.leaders[owner].queued_counts[research_slot];
+    let vic_queued_after = sim.vic_leaders.slots[owner].num_queued[research_slot];
+    let ages_queued_after = runtime.leaders[owner].ages_queued;
+    let epochs_queued_after = runtime.leaders[owner].epochs_queued;
+
+    let mut steps = vec![
+        SingleLibraryResearchStep::BuildCanQueue,
+        SingleLibraryResearchStep::TemporaryGroupClear,
+        SingleLibraryResearchStep::TemporaryGroupAdd,
+        SingleLibraryResearchStep::GroupsPushGroup {
+            slot: group_slot,
+            reused: reused_group,
+        },
+        SingleLibraryResearchStep::GroupActionQueueUp,
+    ];
+    steps.push(SingleLibraryResearchStep::BuildActionQueue { queue_slot });
+
+    let receipt = SingleLibraryResearchReceipt {
+        request,
+        status: SingleLibraryResearchStatus::Applied,
+        steps,
+        resources_before: Some(resources_before),
+        resources_after: Some(resources_after),
+        group_slot: Some(group_slot),
+        queue_slot: Some(queue_slot),
+        queue_result: Some(SingleLibraryResearchQueueResult::Enqueued),
+        frame: Some(frame),
+        group_before: Some(group_before),
+        group_after: Some(group_after),
+        last_group_before: Some(last_group_before),
+        last_group_after: Some(last_group_after),
+        build_queued_before: Some(build_queued_before),
+        build_queued_after: Some(build_queued_after),
+        queue_entry_before: Some(queue_entry_before),
+        queue_entry_after: Some(queue_entry_after),
+        leader_queued_before: Some(queued_before),
+        leader_queued_after: Some(leader_queued_after),
+        vic_queued_before: Some(vic_queued_before),
+        vic_queued_after: Some(vic_queued_after),
+        ages_queued_before: Some(ages_queued_before),
+        ages_queued_after: Some(ages_queued_after),
+        epochs_queued_before: Some(epochs_queued_before),
+        epochs_queued_after: Some(epochs_queued_after),
+    };
+    debug_assert!(receipt.validates(request));
+    receipt
+}
+
 /// Execute opcode 24's admitted ordinary-Unit receiver over the canonical Sim Build band.
 ///
 /// The installed type profile must identify an armed Unit with one of retail's four fixed

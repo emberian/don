@@ -135,6 +135,9 @@ pub struct ScriptOutput {
     pub newline: bool,
 }
 
+/// Number of `ScenarioData::find_counters` cells at `0x00CC2210`.
+pub const SCENARIO_FIND_COUNTER_COUNT: usize = 31;
+
 /// The scalar `ScenarioData` policy state currently owned by the script host.
 ///
 /// `ScenarioData::pop_cap[8]` lives at `0x00cc21f0`. Retail reset paths at
@@ -145,12 +148,17 @@ pub struct ScriptOutput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScenarioDataState {
     pub population_caps: [i32; 8],
+    /// Rotating object-search cursors. Unlike `pop_cap`, these cells are inside
+    /// `ScenarioData::walk_data` and therefore checksum-visible. Builtin 357 owns cell 30
+    /// at `0x00CC2288`.
+    pub find_counters: [i32; SCENARIO_FIND_COUNTER_COUNT],
 }
 
 impl Default for ScenarioDataState {
     fn default() -> Self {
         Self {
             population_caps: [-1; 8],
+            find_counters: [-1; SCENARIO_FIND_COUNTER_COUNT],
         }
     }
 }
