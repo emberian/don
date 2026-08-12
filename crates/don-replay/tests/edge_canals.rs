@@ -224,6 +224,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             regions_find_all,
             territory_limits,
             next_mutator_va,
+            ..
         } = &prefix.stop
         else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
