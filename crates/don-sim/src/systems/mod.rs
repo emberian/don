@@ -77,6 +77,8 @@ pub mod canonical_economy_group_host;
 pub mod canonical_group_move_host;
 /// Installed, revision-bound production adapter for exact saved Camp Gather work.
 pub mod canonical_gather_work;
+/// Installed, revision-bound production adapter for the fresh Fishermen DEPLOY wait frame.
+pub mod canonical_cast_work;
 /// Canonical fixed-Group transaction for the strict Group plus UNITMASK packet cohort.
 pub mod canonical_simple_group_host;
 /// Canonical live-World/path/RNG/animation/ammo adapter for STRAFE row 16.

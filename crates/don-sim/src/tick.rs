@@ -64,7 +64,7 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, canonical_air_patrol_runtime, canonical_gather_work,
+    ammo, borders_fog, canonical_air_patrol_runtime, canonical_cast_work, canonical_gather_work,
     canonical_strafe_runtime, casters_animals,
     collision_blocks_live, combat, defeat_cleanup, economy, game_daemon_calc_danger,
     game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
@@ -884,6 +884,9 @@ pub struct Sim {
     pub gather_work_authority: canonical_gather_work::GatherWorkAuthority,
     pub last_gather_work_receipt: Option<canonical_gather_work::GatherWorkActivationReceipt>,
     pub last_gather_work_error: Option<canonical_gather_work::GatherWorkRuntimeError>,
+    pub cast_work_authority: canonical_cast_work::CastWorkAuthority,
+    pub last_cast_work_receipt: Option<canonical_cast_work::CastWorkActivationReceipt>,
+    pub last_cast_work_error: Option<canonical_cast_work::CastWorkRuntimeError>,
     /// Reinstalled content/search projection and transaction epochs for STRAFE row 16.
     pub strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority,
     /// Most recent canonical STRAFE commit or refusal. Diagnostic only; gameplay effects live
@@ -1586,6 +1589,9 @@ impl Sim {
             gather_work_authority: canonical_gather_work::GatherWorkAuthority::default(),
             last_gather_work_receipt: None,
             last_gather_work_error: None,
+            cast_work_authority: canonical_cast_work::CastWorkAuthority::default(),
+            last_cast_work_receipt: None,
+            last_cast_work_error: None,
             strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority::default(),
             last_strafe_receipt: None,
             last_strafe_error: None,
@@ -1661,6 +1667,14 @@ impl Sim {
         authority: canonical_gather_work::GatherWorkAuthority,
     ) {
         self.gather_work_authority = authority;
+    }
+
+    /// Install the revision-bound spell/type projection used by canonical CAST work.
+    pub fn replace_cast_work_authority(
+        &mut self,
+        authority: canonical_cast_work::CastWorkAuthority,
+    ) {
+        self.cast_work_authority = authority;
     }
 
     /// Install the revision-bound type/search projection used by canonical STRAFE activations.
@@ -3382,6 +3396,8 @@ impl Sim {
             OrderIndex::BuildAt => self.do_build(row),
             // Arm 9, `Unit::do_gather` `0x005EF2A0`, through the exact saved-Camp adapter.
             OrderIndex::Gather => self.do_gather_work(row),
+            // Arm 14, `Unit::do_cast` `0x005EBFE0`, through the exact saved-Deploy adapter.
+            OrderIndex::CastSpell => self.do_cast_work(row),
             // Arm 25, `Unit::do_spec_anim` `0x005E5880`, through its narrow atomic host.
             OrderIndex::SpecialAnim => self.do_special_anim(row),
             // Arm 15, `Unit::do_trade` `0x005ED270`. The adapter admits only fully owned
@@ -3427,6 +3443,37 @@ impl Sim {
             Err(error) => {
                 self.last_gather_work_receipt = None;
                 self.last_gather_work_error = Some(error);
+            }
+        }
+    }
+
+    fn do_cast_work(&mut self, row: usize) {
+        let prepared = match canonical_cast_work::prepare_cast_work_activation(
+            &self.world,
+            &self.unit_type,
+            &self.cast_work_authority,
+            row,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_cast_work_receipt = None;
+                self.last_cast_work_error = Some(error);
+                return;
+            }
+        };
+        match canonical_cast_work::commit_cast_work_activation(
+            &mut self.world,
+            &self.unit_type,
+            &self.cast_work_authority,
+            prepared,
+        ) {
+            Ok(receipt) => {
+                self.last_cast_work_receipt = Some(receipt);
+                self.last_cast_work_error = None;
+            }
+            Err(error) => {
+                self.last_cast_work_receipt = None;
+                self.last_cast_work_error = Some(error);
             }
         }
     }
