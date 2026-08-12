@@ -865,7 +865,7 @@ pub struct Sim {
     /// Revision/digest-bound object/type answers absent from the generated World columns.
     /// This is an installed content adapter, not a second persistent gameplay owner.
     pub group_move_authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
-    /// Reinstalled Handle-bound facts used by simple actions beyond the shared movement
+    /// Reinstalled Handle-bound facts used by simple actions and the bounded FOLLOW runtime
     /// projection. Gameplay mutations remain in Groups/World; this adapter is not saved.
     pub simple_group_action_authority:
         crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority,
@@ -1658,8 +1658,8 @@ impl Sim {
         self.group_move_authority = authority;
     }
 
-    /// Install action facts used by SET_TRANSPORT and BUILDMASK. Loaded simulations fail closed
-    /// until the content owner reinstalls the same revision-bound projection.
+    /// Install action facts used by SET_TRANSPORT, BUILDMASK, and FOLLOW. Loaded simulations
+    /// fail closed until the content owner reinstalls the same revision-bound projection.
     pub fn replace_simple_group_action_authority(
         &mut self,
         authority: crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority,
@@ -1830,7 +1830,8 @@ impl Sim {
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
-    /// UNITMASK (32), STOP_SPELL (29), HALT (12), SET_TRANSPORT (14), or BUILDMASK (33).
+    /// UNITMASK (32), STOP_SPELL (29), HALT (12), SET_TRANSPORT (14), BUILDMASK (33),
+    /// or FOLLOW (30).
     /// Selection/cache/allocation and every
     /// reached Unit/order/path mutation are
     /// prepared and revalidated against the canonical owners before one assignment-only commit.
@@ -1869,6 +1870,7 @@ impl Sim {
             &self.command_package_state,
             &self.group_move_authority,
             &self.simple_group_action_authority,
+            &self.scenario_ignore_orders,
             &leader_flags,
             local_who,
             &player_who,
@@ -1886,6 +1888,7 @@ impl Sim {
             &mut self.command_package_state,
             &self.group_move_authority,
             &self.simple_group_action_authority,
+            &self.scenario_ignore_orders,
             &leader_flags,
             local_who,
             &player_who,
@@ -3466,10 +3469,29 @@ impl Sim {
             // Arm 17, `Unit::do_air_patrol` `0x005EA620`, through the same canonical
             // air-physics/type/search/RNG authority consumed by STRAFE.
             OrderIndex::AirPatrol => self.do_air_patrol(row),
+            // Arm 11, bounded to the receipt-proven nearby-target branch. The movement/search
+            // and containment-promotion cones remain fail-closed in the canonical adapter.
+            OrderIndex::Follow => self.do_follow_near(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
         }
+    }
+
+    fn do_follow_near(&mut self, row: usize) {
+        use crate::systems::canonical_simple_group_host::{
+            commit_simple_follow_activation, prepare_simple_follow_activation,
+        };
+        let Ok(prepared) =
+            prepare_simple_follow_activation(&self.world, &self.simple_group_action_authority, row)
+        else {
+            return;
+        };
+        let _ = commit_simple_follow_activation(
+            &mut self.world,
+            &self.simple_group_action_authority,
+            prepared,
+        );
     }
 
     fn do_gather_work(&mut self, row: usize) {

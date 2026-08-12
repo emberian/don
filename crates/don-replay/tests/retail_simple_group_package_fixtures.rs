@@ -17,6 +17,14 @@ const SET_TRANSPORT_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx";
 const SET_TRANSPORT_REPLAY_SHA256: &str =
     "1690431a5ef19b38a3425d3dd7311e8e83ca0d27c56fabe49d776a9f1421b251";
+const FOLLOW_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2024.03.18_18_18_49__Mon_.rcx";
+const FOLLOW_REPLAY_SHA256: &str =
+    "d27e34aa6ac40fbab3948a3f0f2bfbf35058fe463e42604e1e375b26467360f9";
+const FOLLOW_CACHE_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2017.07.15_00_10_31__Sat_.rcx";
+const FOLLOW_CACHE_REPLAY_SHA256: &str =
+    "c9180d5f82666dd6fad304527f65a6a39a97f2e59c9a562940d526c66f6d7f57";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -370,6 +378,93 @@ fn retail_replay_binds_buildmask_explicit_and_persistent_cache_wires() {
 }
 
 #[test]
+fn retail_replays_bind_follow_queue_new_explicit_and_cached_wires() {
+    let path = root().join(FOLLOW_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        FOLLOW_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[7_353];
+    let player = turn.players.iter().find(|player| player.play == 1).unwrap();
+    let pair = player
+        .commands
+        .windows(2)
+        .find(|pair| pair[0].opcode == 0 && pair[1].opcode == 30)
+        .unwrap();
+    assert_eq!(
+        Fixture {
+            package_index0: 7_353,
+            turn: turn.turn,
+            play: player.play,
+            frame: player.stamp,
+            opcodes: player
+                .commands
+                .iter()
+                .map(|command| command.opcode)
+                .collect(),
+            group_hex: hex(&pair[0].bytes),
+            action_hex: hex(&pair[1].bytes),
+        },
+        Fixture {
+            package_index0: 7_353,
+            turn: 7_354,
+            play: 1,
+            frame: 29_421,
+            opcodes: vec![0, 30, 57, 74, 72],
+            group_hex: "0001023e00".into(),
+            action_hex: "1e0a0000000700000002000000".into(),
+        }
+    );
+
+    let path = root().join(FOLLOW_CACHE_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        FOLLOW_CACHE_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[9_656];
+    let player = turn.players.iter().find(|player| player.play == 0).unwrap();
+    let pair = player
+        .commands
+        .windows(2)
+        .find(|pair| pair[0].opcode == 0 && pair[1].opcode == 30)
+        .unwrap();
+    assert_eq!(
+        Fixture {
+            package_index0: 9_656,
+            turn: turn.turn,
+            play: player.play,
+            frame: player.stamp,
+            opcodes: player
+                .commands
+                .iter()
+                .map(|command| command.opcode)
+                .collect(),
+            group_hex: hex(&pair[0].bytes),
+            action_hex: hex(&pair[1].bytes),
+        },
+        Fixture {
+            package_index0: 9_656,
+            turn: 9_657,
+            play: 0,
+            frame: 55_825,
+            opcodes: vec![79, 0, 30, 58, 74, 72],
+            group_hex: "000001".into(),
+            action_hex: "1e2a0000000200000002000000".into(),
+        }
+    );
+}
+
+#[test]
 #[ignore = "full retail replay corpus"]
 fn census_strict_group_unitmask_packets() {
     let mut found = Vec::new();
@@ -555,6 +650,44 @@ fn census_strict_group_buildmask_packets() {
     assert_eq!(found.len(), 329);
     eprintln!("strict Group+BUILDMASK occurrences={}", found.len());
     for fixture in found.iter().take(24) {
+        eprintln!("fixture={fixture:?}");
+    }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_strict_group_follow_packets() {
+    let mut found = Vec::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        for (turn_index, turn) in replay.turns.iter().enumerate() {
+            for player in &turn.players {
+                for pair in player.commands.windows(2) {
+                    if pair[0].opcode == 0 && pair[1].opcode == 30 {
+                        found.push((
+                            path.clone(),
+                            turn_index,
+                            turn.turn,
+                            player.play,
+                            player.stamp,
+                            player
+                                .commands
+                                .iter()
+                                .map(|command| command.opcode)
+                                .collect::<Vec<_>>(),
+                            hex(&pair[0].bytes),
+                            hex(&pair[1].bytes),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(found.len(), 7);
+    eprintln!("strict Group+FOLLOW occurrences={}", found.len());
+    for fixture in &found {
         eprintln!("fixture={fixture:?}");
     }
 }

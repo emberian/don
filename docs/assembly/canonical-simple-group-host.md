@@ -1,16 +1,19 @@
 # Canonical simple-Group package host
 
 Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, HALT opcode 12,
-the ordinary-Unit arm of SET_TRANSPORT opcode 14, and BUILDMASK opcode 33 are mounted through
-`Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT,
-SET_TRANSPORT, and BUILDMASK also cross one canonical `Sim::do_frame`. No command-table, general packet router,
-or closure status changes are made. STOP_SPELL's special type 61/62/400 graphics tail remains a
-typed whole-package refusal.
+the ordinary-Unit arm of SET_TRANSPORT opcode 14, BUILDMASK opcode 33, and the observed
+QUEUE_NEW arm of FOLLOW opcode 30 are mounted through `Sim::process_simple_group_package` and
+covered by DoNSave v13 resume tests. HALT, SET_TRANSPORT, BUILDMASK, and the bounded
+nearby-visible FOLLOW executor also cross one canonical `Sim::do_frame`. No command-table,
+general packet router, or closure status changes are made. STOP_SPELL's special type 61/62/400
+graphics tail remains a typed whole-package refusal. FOLLOW's QUEUE_FIRST replay, scenario
+prune, non-FOLLOW order epilogues, far/search movement, and distinct containment fallback also
+remain typed refusals.
 
 ## First executable row
 
 `canonical_simple_group_host.rs` admits exactly `[GroupCommand]` followed by UNITMASK,
-STOP_SPELL, HALT, SET_TRANSPORT, or BUILDMASK. It never
+STOP_SPELL, HALT, SET_TRANSPORT, BUILDMASK, or FOLLOW. It never
 constructs `command::Bridge` and never reads or copies the Bridge-owned `command::Groups`.
 Opcode 0 reuses the fixed 512-slot `groups_guys::Groups` selector, play-keyed receive cache,
 UID/Handle revalidation, allocator, old-Group removal, and Unit backlinks already used by the
@@ -108,6 +111,31 @@ one commit. Mask `0x40` for the local presentation owner additionally emits a ty
 in the receipt; it does not create saved gameplay state. A stale registry, UID, row, flags, mask,
 authority, local owner, Groups pool, cache, frame, or RNG refuses before publication.
 
+## Sixth executable row
+
+FOLLOW consumes the recovered complete `Group::action_follow` planner at `0x006FD510` for the
+only wire arm present in the replay corpus: queue dword `2`, retail `QUEUE_NEW`. The transaction
+requires the persisted canonical scenario prelude to be clear (`ignore_orders == 0`), resolves the addressed
+target and any `inside_down` fallback through canonical generational Unit identity, captures both
+target UIDs in `FollowOrderPayload`, and installs the typed FOLLOW node. The common installer
+writes mask/path/action surfaces and replaces an empty queue or queues containing FOLLOW and
+MOVE_TO nodes. The latter is needed by the real cached witness: `close_orders(0)` suppresses
+MOVE_TO arrival bookkeeping, so both kinds reach only the owned common retirement prologue.
+Any other current-order kind refuses because its type epilogue is outside this compact owner.
+Group, cache, selected Units, target/fallback Units, order lists,
+paths, frame, RNG, the complete scenario ignore-orders owner, and revision-bound virtual facts
+are revalidated before atomic publication. An armed scenario refuses before selection/cache
+publication because its recursive Group-kill cone is not owned here.
+
+`Sim::unit_work` also admits one exact executor branch from `Unit::do_follow` `0x005E65D0`: a
+valid, visible target already within the planner's near threshold, with primary and containment
+fallback identities equal. The recovered executor plan emits only `set_anim(0,0,1)`, so commit
+revalidates the actor, target position/angle, complete order, and authority before setting the
+canonical idle animation. A far target which would enter movement/search, or a target requiring
+a distinct containment root, returns a typed runtime refusal and leaves the frame state intact.
+The generic FOLLOW row therefore remains red even though this observed packet and bounded frame
+subcone execute canonically.
+
 ## Retail packet evidence
 
 The artifact-backed replay test freezes the shipped recording
@@ -190,6 +218,27 @@ the later persistent-cache form:
 The mutable local corpus gate sees 329 strict pairs; the frozen 61-recording validation artifact
 records 320. Both values are packet evidence, not a closure-table promotion.
 
+FOLLOW is bound to
+`multi/Playback___2024.03.18_18_18_49__Mon_.rcx`, SHA-256
+`d27e34aa6ac40fbab3948a3f0f2bfbf35058fe463e42604e1e375b26467360f9`. Package index 7,353,
+turn 7,354, play 1, frame 29,421 is the explicit witness:
+
+```text
+0001023e00                  Group(owner=2, Unit object=62)
+1e0a0000000700000002000000 Follow(target object=10, owner=7, QUEUE_NEW=2)
+```
+
+The current 64-path census opens 62 recordings and finds exactly seven strict Group+FOLLOW
+pairs: four explicit selections and three persistent-cache forms, all resolving to the Unit
+band. Every action carries queue dword `2`; no observed packet reaches QUEUE_FIRST or QUEUE_LAST.
+The cached fixture from `multi/Playback___2017.07.15_00_10_31__Sat_.rcx`, SHA-256
+`c9180d5f82666dd6fad304527f65a6a39a97f2e59c9a562940d526c66f6d7f57`, is:
+
+```text
+000001                     Group(owner=1, cache reuse)
+1e2a0000000200000002000000 Follow(target object=42, owner=2, QUEUE_NEW=2)
+```
+
 ## Integration and save boundary
 
 The module export and `Sim` sibling now construct the same present-player map as Group+Move and
@@ -207,6 +256,14 @@ and reloads the mask plus selection cache, reinstalls only the Build virtual aut
 the observed empty-Group packet, and advances both direct and resumed Sims one frame. A separate
 gate mutates `BuildData::build_masks` between prepare and commit and proves zero Group/cache
 publication.
+The FOLLOW test executes the exact 2024 explicit wire, saves and reloads the complete typed
+FOLLOW order plus Groups/cache image, reinstalls only virtual authority, and advances direct and
+resumed Sims through the bounded near-target frame branch. A second path executes the 2017
+cache-origin Group+MoveTo packet through the canonical move host, saves/reloads that shared cache,
+then executes the exact later empty-Group FOLLOW wire and retires its MOVE_TO. It proves equal
+order payloads, Groups checksum, animation state, and RNG state. Separate refusal coverage proves
+queue zero, armed scenario ignore-orders, and a CAST_SPELL retirement cannot publish even the
+selection cache.
 
 The remaining production-routing tranche is bounded:
 
@@ -214,10 +271,10 @@ The remaining production-routing tranche is bounded:
 2. compare the first executable packet's Groups/Unit channels to the retail recording; and
 3. only after that evidence update closure reporting for opcode 32.
 
-The other four audited simple actions remain red at this host. DISBAND reaches the nested Build
+The other three audited simple actions remain red at this host. DISBAND reaches the nested Build
 production queue. BEGIN has no corpus occurrence and is not used to claim execution. STANCE is
-blocked by arbitrary-order mandatory/repath/kill tails, and FOLLOW queue-first is blocked on
-heterogeneous `finish_insert` replay.
+blocked by arbitrary-order mandatory/repath/kill tails. FOLLOW itself also remains red for the
+unobserved action and executor cones listed above.
 
 ## Gates
 
@@ -234,6 +291,8 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   retail_replay_binds_buildmask_explicit_and_persistent_cache_wires
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  retail_replays_bind_follow_queue_new_explicit_and_cached_wires
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_unitmask_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_stop_spell_packets -- --ignored --nocapture
@@ -243,4 +302,6 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_set_transport_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_buildmask_packets -- --ignored --nocapture
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  census_strict_group_follow_packets -- --ignored --nocapture
 ```

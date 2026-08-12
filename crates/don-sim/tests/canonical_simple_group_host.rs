@@ -66,6 +66,18 @@ fn buildmask_packet(who: u8, objects: &[i16], mask: u32, set: i32) -> Vec<u8> {
     bytes
 }
 
+fn follow_packet(who: u8, objects: &[i16], target_o: i32, target_who: i32, queued: i32) -> Vec<u8> {
+    let mut bytes = vec![GROUP_OPCODE, objects.len() as u8, who];
+    for &o in objects {
+        bytes.extend_from_slice(&o.to_le_bytes());
+    }
+    bytes.push(FOLLOW_OPCODE);
+    bytes.extend_from_slice(&target_o.to_le_bytes());
+    bytes.extend_from_slice(&target_who.to_le_bytes());
+    bytes.extend_from_slice(&queued.to_le_bytes());
+    bytes
+}
+
 const RETAIL_HALT_OBJECTS: [i16; 24] = [
     0x55, 0x74, 0x42, 0x44, 0x45, 0x5e, 0x69, 0x71, 0x75, 0x7d, 0x7c, 0x80, 0x40, 0x4b, 0x5d, 0x01,
     0x03, 0x05, 0x06, 0x0a, 0x0c, 0x5c, 0x6e, 0x87,
@@ -128,6 +140,7 @@ fn simple_action_authority(
             })
             .collect(),
         builds: Vec::new(),
+        follows: Vec::new(),
     }
 }
 
@@ -1249,6 +1262,7 @@ fn buildmask_authority(row: usize, o: i16, uid: u16) -> SimpleGroupActionAuthori
             admits_0x40: true,
             admits_0x80: true,
         }],
+        follows: Vec::new(),
     }
 }
 
@@ -1395,6 +1409,7 @@ fn buildmask_revalidates_the_canonical_build_before_any_group_or_cache_write() {
         &sim.command_package_state,
         &sim.group_move_authority,
         &sim.simple_group_action_authority,
+        &sim.scenario_ignore_orders,
         &[0; NUM_LEADERS],
         Some(2),
         &player_who,
@@ -1417,6 +1432,7 @@ fn buildmask_revalidates_the_canonical_build_before_any_group_or_cache_write() {
             &mut sim.command_package_state,
             &sim.group_move_authority,
             &sim.simple_group_action_authority,
+            &sim.scenario_ignore_orders,
             &[0; NUM_LEADERS],
             Some(2),
             &player_who,
@@ -1427,4 +1443,381 @@ fn buildmask_revalidates_the_canonical_build_before_any_group_or_cache_write() {
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(sim.command_package_state, cache_before);
     assert_eq!(sim.builds[0].build_masks, 0x20);
+}
+
+#[test]
+fn retail_follow_queue_new_survives_donsave_cache_resume_and_near_target_frame() {
+    const ACTOR_O: i16 = 0x3e;
+    const TARGET_O: i16 = 10;
+    let make = || {
+        let mut sim = don_sim::tick::Sim::new(0x301e, 4);
+        sim.world.frame = 29_421;
+        sim.vic_match.frame = 29_421;
+        let mut players = PlayerTable::new();
+        players.seat(1, 1, 2, 0);
+        sim.players = Some(players);
+        let mut actor = None;
+        for o in 0..=ACTOR_O {
+            let handle = sim.spawn_unit(2, 30, 4_000, 4_000, 4).unwrap();
+            assert_eq!(sim.world.units.o()[sim.world.row_of(handle).unwrap()], o);
+            actor = Some(handle);
+        }
+        let actor = actor.unwrap();
+        let mut target = None;
+        for o in 0..=TARGET_O {
+            let handle = sim.spawn_unit(7, 30, 4_010, 4_010, 4).unwrap();
+            assert_eq!(sim.world.units.o()[sim.world.row_of(handle).unwrap()], o);
+            target = Some(handle);
+        }
+        let target = target.unwrap();
+        let actor_row = sim.world.row_of(actor).unwrap();
+        let target_row = sim.world.row_of(target).unwrap();
+        sim.world.units.o_down_mut()[actor_row] = -1;
+        sim.world.units.inside_down_mut()[target_row] = -1;
+        sim.world.units.inside_down_who_mut()[target_row] = -1;
+        sim.world.units.set_idle(actor_row, 0);
+        let install = |sim: &mut don_sim::tick::Sim| {
+            sim.replace_group_move_authority(simple_authority(&[actor], 30, [0x30; 32]));
+            sim.replace_simple_group_action_authority(SimpleGroupActionAuthority {
+                revision: 30,
+                composition_digest: [0x1e; 32],
+                members: Vec::new(),
+                builds: Vec::new(),
+                follows: vec![
+                    SimpleFollowUnitAuthority {
+                        handle: actor,
+                        canonical_o: i32::from(ACTOR_O),
+                        is_plane: false,
+                        speed: 0,
+                        los: 4,
+                        seen: true,
+                        moving: false,
+                        admits_idle_animation: true,
+                    },
+                    SimpleFollowUnitAuthority {
+                        handle: target,
+                        canonical_o: i32::from(TARGET_O),
+                        is_plane: false,
+                        speed: 0,
+                        los: 4,
+                        seen: true,
+                        moving: false,
+                        admits_idle_animation: false,
+                    },
+                ],
+            });
+        };
+        install(&mut sim);
+        (sim, actor, target)
+    };
+    let reinstall = |sim: &mut don_sim::tick::Sim, actor: Handle, target: Handle| {
+        let mut move_authority = simple_authority(&[actor], 30, [0x30; 32]);
+        move_authority.members[0].can_move = true;
+        move_authority.members[0].can_install_order = true;
+        move_authority.members[0].admits_unsplit_move_near = true;
+        sim.replace_group_move_authority(move_authority);
+        sim.replace_simple_group_action_authority(SimpleGroupActionAuthority {
+            revision: 30,
+            composition_digest: [0x1e; 32],
+            members: Vec::new(),
+            builds: Vec::new(),
+            follows: vec![
+                SimpleFollowUnitAuthority {
+                    handle: actor,
+                    canonical_o: i32::from(ACTOR_O),
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: true,
+                },
+                SimpleFollowUnitAuthority {
+                    handle: target,
+                    canonical_o: i32::from(TARGET_O),
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: false,
+                },
+            ],
+        });
+    };
+
+    let (mut direct, actor, target) = make();
+    let (mut resumed, resumed_actor, resumed_target) = make();
+    // Playback___2017.07.15_00_10_31__Sat_.rcx package 9635: the actual cache origin
+    // immediately before its later empty-Group FOLLOW package. The shared command state is
+    // therefore seeded by the canonical Group+Move host, not by a synthetic FOLLOW packet.
+    let retail_cache_seed = [
+        0x00, 0x01, 0x01, 0x63, 0x00, 0x07, 0xb0, 0xda, 0x00, 0x00, 0xd4, 0xc9, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x32, 0x00,
+    ];
+    let make_cached = || {
+        let mut sim = don_sim::tick::Sim::new(0x301e, 4);
+        sim.world.frame = 55_699;
+        sim.vic_match.frame = 55_699;
+        let mut players = PlayerTable::new();
+        players.seat(0, 1, 1, 0);
+        sim.players = Some(players);
+        let mut actor = None;
+        for o in 0..=0x63 {
+            actor = Some(sim.spawn_unit(1, 30, 4_000, 4_000, 4).unwrap());
+            assert_eq!(
+                sim.world.units.o()[sim.world.row_of(actor.unwrap()).unwrap()],
+                o
+            );
+        }
+        let actor = actor.unwrap();
+        let actor_row = sim.world.row_of(actor).unwrap();
+        sim.world.units.o_down_mut()[actor_row] = -1;
+        let mut target = None;
+        for o in 0..=42 {
+            target = Some(sim.spawn_unit(2, 30, 4_010, 4_010, 4).unwrap());
+            assert_eq!(
+                sim.world.units.o()[sim.world.row_of(target.unwrap()).unwrap()],
+                o
+            );
+        }
+        let target = target.unwrap();
+        let target_row = sim.world.row_of(target).unwrap();
+        sim.world.units.inside_down_mut()[target_row] = -1;
+        sim.world.units.inside_down_who_mut()[target_row] = -1;
+        let mut move_authority = simple_authority(&[actor], 30, [0x30; 32]);
+        move_authority.members[0].can_move = true;
+        move_authority.members[0].can_install_order = true;
+        move_authority.members[0].admits_unsplit_move_near = true;
+        sim.replace_group_move_authority(move_authority);
+        sim.replace_simple_group_action_authority(SimpleGroupActionAuthority {
+            revision: 30,
+            composition_digest: [0x1e; 32],
+            members: Vec::new(),
+            builds: Vec::new(),
+            follows: vec![
+                SimpleFollowUnitAuthority {
+                    handle: actor,
+                    canonical_o: 0x63,
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: true,
+                },
+                SimpleFollowUnitAuthority {
+                    handle: target,
+                    canonical_o: 42,
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: false,
+                },
+            ],
+        });
+        (sim, actor, target)
+    };
+    let reinstall_cached = |sim: &mut don_sim::tick::Sim, actor: Handle, target: Handle| {
+        sim.replace_group_move_authority(simple_authority(&[actor], 30, [0x30; 32]));
+        sim.replace_simple_group_action_authority(SimpleGroupActionAuthority {
+            revision: 30,
+            composition_digest: [0x1e; 32],
+            members: Vec::new(),
+            builds: Vec::new(),
+            follows: vec![
+                SimpleFollowUnitAuthority {
+                    handle: actor,
+                    canonical_o: 0x63,
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: true,
+                },
+                SimpleFollowUnitAuthority {
+                    handle: target,
+                    canonical_o: 42,
+                    is_plane: false,
+                    speed: 0,
+                    los: 4,
+                    seen: true,
+                    moving: false,
+                    admits_idle_animation: false,
+                },
+            ],
+        });
+    };
+    let (mut cached_direct, cached_actor, cached_target) = make_cached();
+    let (mut cached_resumed, cached_resumed_actor, cached_resumed_target) = make_cached();
+    cached_direct
+        .process_command_package(0, 9_636, &retail_cache_seed)
+        .unwrap();
+    cached_resumed
+        .process_command_package(0, 9_636, &retail_cache_seed)
+        .unwrap();
+    let saved_cache_seed = save_sim(&cached_resumed).unwrap();
+    let mut cached_resumed = load_sim(&saved_cache_seed).unwrap();
+    reinstall_cached(
+        &mut cached_resumed,
+        cached_resumed_actor,
+        cached_resumed_target,
+    );
+    let retail_cached = follow_packet(1, &[], 42, 2, 2);
+    assert_eq!(
+        retail_cached,
+        [0x00, 0x00, 0x01, 0x1e, 0x2a, 0, 0, 0, 0x02, 0, 0, 0, 0x02, 0, 0, 0]
+    );
+    let cached_direct_receipt = cached_direct
+        .process_simple_group_package(0, 9_657, &retail_cached)
+        .unwrap();
+    let cached_resumed_receipt = cached_resumed
+        .process_simple_group_package(0, 9_657, &retail_cached)
+        .unwrap();
+    assert_eq!(
+        cached_direct_receipt.action_result,
+        SimpleGroupActionResult::Follow { installed_units: 1 }
+    );
+    assert_eq!(
+        cached_direct_receipt.groups_checksum,
+        cached_resumed_receipt.groups_checksum
+    );
+    assert_eq!(
+        cached_direct
+            .world
+            .orders(cached_direct.world.row_of(cached_actor).unwrap()),
+        cached_resumed
+            .world
+            .orders(cached_resumed.world.row_of(cached_resumed_actor).unwrap())
+    );
+    assert!(cached_direct.world.row_of(cached_target).is_some());
+
+    // Playback___2024.03.18_18_18_49__Mon_.rcx, package 7353 / frame 29421.
+    let retail = follow_packet(2, &[ACTOR_O], 10, 7, 2);
+    assert_eq!(
+        retail,
+        [0x00, 0x01, 0x02, 0x3e, 0x00, 0x1e, 0x0a, 0, 0, 0, 0x07, 0, 0, 0, 0x02, 0, 0, 0]
+    );
+    let (mut ignored, ignored_actor, _) = make();
+    ignored.scenario_ignore_orders.ignore_orders = true;
+    let ignored_groups = ignored.groups.clone();
+    let ignored_cache = ignored.command_package_state.clone();
+    assert_eq!(
+        ignored.process_simple_group_package(1, 7_354, &retail),
+        Err(SimpleGroupPackageError::FollowIgnoreOrdersPrelude)
+    );
+    assert_eq!(ignored.groups.list, ignored_groups.list);
+    assert_eq!(ignored.command_package_state, ignored_cache);
+    assert!(ignored
+        .world
+        .orders(ignored.world.row_of(ignored_actor).unwrap())
+        .is_empty());
+    let (mut unsupported, unsupported_actor, _) = make();
+    let unsupported_row = unsupported.world.row_of(unsupported_actor).unwrap();
+    unsupported
+        .world
+        .orders_mut(unsupported_row)
+        .push(cast_spell_order(0x293));
+    let unsupported_groups = unsupported.groups.clone();
+    let unsupported_cache = unsupported.command_package_state.clone();
+    assert_eq!(
+        unsupported.process_simple_group_package(1, 7_354, &retail),
+        Err(SimpleGroupPackageError::UnsupportedFollowOrderRetirement {
+            handle: unsupported_actor,
+            kind: OrderIndex::CastSpell,
+        })
+    );
+    assert_eq!(unsupported.groups.list, unsupported_groups.list);
+    assert_eq!(unsupported.command_package_state, unsupported_cache);
+    assert_eq!(
+        unsupported.world.orders(unsupported_row).order_type(),
+        OrderIndex::CastSpell
+    );
+    let first = direct
+        .process_simple_group_package(1, 7_354, &retail)
+        .unwrap();
+    resumed
+        .process_simple_group_package(1, 7_354, &retail)
+        .unwrap();
+    assert_eq!(
+        first.action_result,
+        SimpleGroupActionResult::Follow { installed_units: 1 }
+    );
+    let actor_row = direct.world.row_of(actor).unwrap();
+    let payload = direct
+        .world
+        .orders(actor_row)
+        .current()
+        .unwrap()
+        .follow
+        .unwrap();
+    assert_eq!(
+        (payload.ox, payload.whom, payload.oxx, payload.whose),
+        (10, 7, 10, 7)
+    );
+    assert_eq!(direct.groups.list[first.group_slot].form, -1);
+
+    let saved = save_sim(&resumed).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    reinstall(&mut resumed, resumed_actor, resumed_target);
+    let cached = follow_packet(2, &[], 10, 7, 2);
+    let direct_cached = direct
+        .process_simple_group_package(1, 7_355, &cached)
+        .unwrap();
+    let resumed_cached = resumed
+        .process_simple_group_package(1, 7_355, &cached)
+        .unwrap();
+    assert_eq!(direct_cached.action_result, resumed_cached.action_result);
+    assert_eq!(
+        direct_cached.groups_checksum,
+        resumed_cached.groups_checksum
+    );
+    assert_eq!(direct.world.random.state(), resumed.world.random.state());
+    prepare_simple_follow_activation(
+        &direct.world,
+        &direct.simple_group_action_authority,
+        direct.world.row_of(actor).unwrap(),
+    )
+    .unwrap();
+    prepare_simple_follow_activation(
+        &resumed.world,
+        &resumed.simple_group_action_authority,
+        resumed.world.row_of(resumed_actor).unwrap(),
+    )
+    .unwrap();
+
+    direct.do_frame();
+    resumed.do_frame();
+    let direct_row = direct.world.row_of(actor).unwrap();
+    let resumed_row = resumed.world.row_of(resumed_actor).unwrap();
+    assert_eq!(direct.world.units.get_idle(direct_row), 1);
+    assert_eq!(resumed.world.units.get_idle(resumed_row), 1);
+    assert_eq!(
+        direct.world.orders(direct_row),
+        resumed.world.orders(resumed_row)
+    );
+    assert_eq!(direct.groups.list, resumed.groups.list);
+    assert_eq!(direct.world.random.state(), resumed.world.random.state());
+    assert_eq!(direct.world.row_of(target).is_some(), true);
+}
+
+#[test]
+fn follow_queue_first_refuses_before_group_cache_or_unit_publication() {
+    let fixture = Fixture::new(2);
+    let actor_o = fixture.objects[0];
+    let bytes = follow_packet(0, &[actor_o], i32::from(actor_o), 0, 0);
+    let groups_before = fixture.groups.clone();
+    let state_before = fixture.state.clone();
+    let group_before = fixture.world.units.group()[0];
+    assert_eq!(
+        fixture.prepare(30, &bytes).unwrap_err(),
+        SimpleGroupPackageError::UnsupportedFollowQueue { queued: 0 }
+    );
+    assert_eq!(fixture.groups.list, groups_before.list);
+    assert_eq!(fixture.state, state_before);
+    assert_eq!(fixture.world.units.group()[0], group_before);
+    assert!(fixture.world.orders(0).is_empty());
 }

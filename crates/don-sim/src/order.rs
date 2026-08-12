@@ -588,6 +588,7 @@ impl Order {
             flags: ORDER_GROUP,
             target_who: payload.whom.clamp(i8::MIN as i32, i8::MAX as i32) as i8,
             target_o: payload.ox.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            target_uid: payload.uid,
             follow: Some(payload),
             ..Order::default()
         }
@@ -949,6 +950,7 @@ mod tests {
         let order = Order::follow(payload);
         assert_eq!(order.kind, OrderIndex::Follow);
         assert_eq!(order.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!(order.target_uid, payload.uid);
         assert_eq!(order.follow, Some(payload));
     }
 

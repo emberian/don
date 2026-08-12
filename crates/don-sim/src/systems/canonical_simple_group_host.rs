@@ -2,19 +2,30 @@
 //! Canonical `GroupCommand` plus one simple Group action transaction.
 //!
 //! The production arms are opcode 32 `UNITMASK`, opcode 29 `STOP_SPELL`, opcode 12
-//! `HALT`, the ordinary-Unit arm of opcode 14 `SET_TRANSPORT`, and opcode 33 `BUILDMASK`.
+//! `HALT`, the ordinary-Unit arm of opcode 14 `SET_TRANSPORT`, opcode 33 `BUILDMASK`, and the
+//! observed QUEUE_NEW arm of opcode 30 `FOLLOW`.
 //! They reuse the fixed-`Groups` selector/cache/allocator from [`canonical_group_move_host`], plan the exact recovered
 //! `Group::action_unitmask` body, and publishes every reached Group, backlink, Unit, order,
 //! path, player-map, clock, and RNG surface at one stale-checked boundary. No
 //! `command::Bridge` or shadow `command::Groups` state is observed.
 
+use crate::command::follow_action::{
+    plan_follow, FollowCommand, FollowEffect, FollowMemberFacts, FollowRequest, FollowTargetFacts,
+};
 use crate::command::group_action_frontier::{plan_stop_spell, StopSpellMemberFacts, StopSpellStep};
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
+use crate::order::{FollowOrderPayload, Order, OrderIndex};
+use crate::systems::air_runtime_authority::ScenarioIgnoreOrdersAuthority;
 use crate::systems::canonical_group_move_host::{
     ensure_mutation_for_row, exact_immediate_allocator_slot, groups_equal, prepare_group_selection,
     unit_still_current, CachedSelection, CommandPackageState, GroupMoveAuthority,
     GroupSelectionUse, PackageError, UnitIdentity, UnitMutation, NETWORK_PLAYERS,
     RECEIVED_SELECTION_CAPACITY,
+};
+use crate::systems::follow_executor::{
+    plan_follow_executor, FollowActorFacts, FollowExecutorBranch, FollowExecutorEffect,
+    FollowExecutorFacts, FollowExecutorPlan, FollowExecutorRequest, FollowIdentity,
+    FollowObjectFacts, FollowOrderState,
 };
 use crate::systems::groups_guys::{
     plan_action_buildmask, plan_action_halt, plan_action_set_transport, plan_action_unitmask,
@@ -23,6 +34,7 @@ use crate::systems::groups_guys::{
     NUM_LEADERS,
 };
 use crate::systems::movement::PathStack;
+use crate::systems::order_dispatch::masks;
 use crate::systems::production::BuildData;
 use crate::systems::sparse_object_bands_authority_frontier::UNIT_BAND_LIMIT;
 use crate::world::{Handle, World};
@@ -38,6 +50,8 @@ pub const SET_TRANSPORT_OPCODE: u8 = 14;
 pub const SET_TRANSPORT_WIRE_SIZE: usize = 5;
 pub const BUILDMASK_OPCODE: u8 = 33;
 pub const BUILDMASK_WIRE_SIZE: usize = 9;
+pub const FOLLOW_OPCODE: u8 = 30;
+pub const FOLLOW_WIRE_SIZE: usize = 13;
 
 /// Handle-bound capability facts read only by the SET_TRANSPORT arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +79,19 @@ pub struct SimpleBuildMaskMemberAuthority {
     pub admits_0x80: bool,
 }
 
+/// Reinstalled virtual/type facts used by FOLLOW installation and its bounded live executor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleFollowUnitAuthority {
+    pub handle: Handle,
+    pub canonical_o: i32,
+    pub is_plane: bool,
+    pub speed: i32,
+    pub los: i32,
+    pub seen: bool,
+    pub moving: bool,
+    pub admits_idle_animation: bool,
+}
+
 impl SimpleBuildMaskMemberAuthority {
     fn valid_buildmask(self, mask: u16) -> bool {
         (mask & 0x40 != 0 && self.admits_0x40) || (mask & 0x80 != 0 && self.admits_0x80)
@@ -78,6 +105,7 @@ pub struct SimpleGroupActionAuthority {
     pub composition_digest: [u8; 32],
     pub members: Vec<SimpleGroupActionMemberAuthority>,
     pub builds: Vec<SimpleBuildMaskMemberAuthority>,
+    pub follows: Vec<SimpleFollowUnitAuthority>,
 }
 
 impl SimpleGroupActionAuthority {
@@ -97,15 +125,35 @@ impl SimpleGroupActionAuthority {
             .copied()
             .find(|member| (member.who, member.o, member.uid, member.row) == (who, o, uid, row))
     }
+
+    fn follow_member(&self, handle: Handle) -> Option<SimpleFollowUnitAuthority> {
+        self.follows
+            .iter()
+            .copied()
+            .find(|member| member.handle == handle)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimpleGroupActionWire {
-    UnitMask { mask: u32, set: i32 },
+    UnitMask {
+        mask: u32,
+        set: i32,
+    },
     StopSpell,
     Halt,
-    SetTransport { flag: i32 },
-    BuildMask { mask: u16, set: i32 },
+    SetTransport {
+        flag: i32,
+    },
+    BuildMask {
+        mask: u16,
+        set: i32,
+    },
+    Follow {
+        target_o: i32,
+        target_who: i32,
+        queued: i32,
+    },
 }
 
 impl SimpleGroupActionWire {
@@ -116,6 +164,7 @@ impl SimpleGroupActionWire {
             Self::Halt => HALT_OPCODE,
             Self::SetTransport { .. } => SET_TRANSPORT_OPCODE,
             Self::BuildMask { .. } => BUILDMASK_OPCODE,
+            Self::Follow { .. } => FOLLOW_OPCODE,
         }
     }
 }
@@ -139,6 +188,9 @@ pub enum SimpleGroupActionResult {
         final_set: bool,
         changed_builds: usize,
         feedback: bool,
+    },
+    Follow {
+        installed_units: usize,
     },
 }
 
@@ -177,6 +229,14 @@ pub enum SimpleGroupPackageError {
     MissingBuildMaskAuthority { who: u8, o: i16, uid: u16 },
     StaleBuildRegistry,
     StaleLocalWho,
+    UnsupportedFollowQueue { queued: i32 },
+    FollowIgnoreOrdersPrelude,
+    StaleScenarioIgnoreOrders,
+    MissingFollowTarget { who: i32, o: i32 },
+    MissingFollowAuthority { handle: Handle },
+    MissingFollowSecondary { who: i32, o: i32 },
+    UnsupportedFollowOrderRetirement { handle: Handle, kind: OrderIndex },
+    BrokenFollowPlan,
 }
 
 impl From<PackageError> for SimpleGroupPackageError {
@@ -200,7 +260,7 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, HALT, SET_TRANSPORT, or BUILDMASK. Prefixes,
+/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, HALT, SET_TRANSPORT, BUILDMASK, or FOLLOW. Prefixes,
 /// suffixes, and a
 /// second action are refused.
 pub fn decode_simple_group_package(
@@ -234,6 +294,7 @@ pub fn decode_simple_group_package(
         HALT_OPCODE => HALT_WIRE_SIZE,
         SET_TRANSPORT_OPCODE => SET_TRANSPORT_WIRE_SIZE,
         BUILDMASK_OPCODE => BUILDMASK_WIRE_SIZE,
+        FOLLOW_OPCODE => FOLLOW_WIRE_SIZE,
         _ => return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode }),
     };
     let expected = group_len + action_size;
@@ -267,6 +328,11 @@ pub fn decode_simple_group_package(
         BUILDMASK_OPCODE => SimpleGroupActionWire::BuildMask {
             mask: read_u32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)? as u16,
             set: read_i32(bytes, group_len + 5).ok_or(SimpleGroupPackageError::Truncated)?,
+        },
+        FOLLOW_OPCODE => SimpleGroupActionWire::Follow {
+            target_o: read_i32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)?,
+            target_who: read_i32(bytes, group_len + 5).ok_or(SimpleGroupPackageError::Truncated)?,
+            queued: read_i32(bytes, group_len + 9).ok_or(SimpleGroupPackageError::Truncated)?,
         },
         _ => unreachable!("action size match admitted this opcode"),
     };
@@ -305,6 +371,13 @@ pub struct SimpleBuildMutation {
     pub build_masks_after: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleFollowLinkObservation {
+    pub handle: Handle,
+    pub inside_down: i16,
+    pub inside_down_who: i8,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedSimpleGroupPackage {
     pub play: usize,
@@ -324,10 +397,12 @@ pub struct PreparedSimpleGroupPackage {
     pub authority_digest: [u8; 32],
     pub authority_members: Vec<crate::systems::canonical_group_move_host::MoveMemberAuthority>,
     pub action_authority_before: Option<SimpleGroupActionAuthority>,
+    pub scenario_ignore_orders_before: Option<ScenarioIgnoreOrdersAuthority>,
     pub leader_flags_before: Option<i32>,
     pub local_who_before: Option<u8>,
     pub units: Vec<SimpleUnitMutation>,
     pub builds: Vec<SimpleBuildMutation>,
+    pub follow_links: Vec<SimpleFollowLinkObservation>,
     pub action_result: SimpleGroupActionResult,
 }
 
@@ -359,6 +434,58 @@ fn mutation_for(
             mutation.unit.after.identity.who == who && mutation.unit.after.identity.o == o
         })
         .ok_or(SimpleGroupPackageError::BrokenPlanIdentity { who, o })
+}
+
+fn ensure_simple_mutation_for_row(
+    mutations: &mut Vec<SimpleUnitMutation>,
+    world: &World,
+    paths: &[PathStack],
+    row: usize,
+) -> Result<usize, SimpleGroupPackageError> {
+    let handle = world
+        .handle_at_row(row)
+        .ok_or(PackageError::MissingHandle {
+            who: world.units.get_who(row),
+            o: world.units.o()[row],
+        })?;
+    if let Some(index) = mutations
+        .iter()
+        .position(|mutation| mutation.unit.before.identity.handle == handle)
+    {
+        return Ok(index);
+    }
+    let mut raw = Vec::new();
+    ensure_mutation_for_row(&mut raw, world, paths, row)?;
+    let unit = raw.pop().expect("one requested Unit mutation");
+    let flags = world.units.get_flags(row);
+    let dest_angle = world.units.dest_angle()[row];
+    mutations.push(SimpleUnitMutation {
+        unit,
+        flags_before: flags,
+        flags_after: flags,
+        dest_angle_before: dest_angle,
+        dest_angle_after: dest_angle,
+        spell_time_before: None,
+        spell_time_after: None,
+        type_index_before: None,
+    });
+    Ok(mutations.len() - 1)
+}
+
+fn follow_unit_row(world: &World, who: i32, o: i32) -> Result<usize, SimpleGroupPackageError> {
+    let (Ok(who8), Ok(o16)) = (u8::try_from(who), i16::try_from(o)) else {
+        return Err(SimpleGroupPackageError::MissingFollowTarget { who, o });
+    };
+    let row = world
+        .unit_row_at(who, o)
+        .ok_or(SimpleGroupPackageError::MissingFollowTarget { who, o })?;
+    if world.units.get_who(row) != who8
+        || world.units.o()[row] != o16
+        || world.units.get_flags(row) & crate::world::OBJ_FLAG_ACTIVE == 0
+    {
+        return Err(SimpleGroupPackageError::MissingFollowTarget { who, o });
+    }
+    Ok(row)
 }
 
 fn build_identity(
@@ -611,10 +738,12 @@ fn prepare_buildmask_package(
         authority_digest: authority.composition_digest,
         authority_members: authority.members.clone(),
         action_authority_before: Some(action_authority.clone()),
+        scenario_ignore_orders_before: None,
         leader_flags_before: None,
         local_who_before: local_who,
         units,
         builds: build_mutations,
+        follow_links: Vec::new(),
         action_result: SimpleGroupActionResult::BuildMask {
             final_set: plan.final_set,
             changed_builds,
@@ -672,6 +801,7 @@ pub fn prepare_simple_group_package_with_action_authority(
     lockstep_serial: i32,
     bytes: &[u8],
 ) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
+    let scenario = ScenarioIgnoreOrdersAuthority::default();
     prepare_simple_group_package_with_builds(
         world,
         unit_types,
@@ -681,6 +811,7 @@ pub fn prepare_simple_group_package_with_action_authority(
         command_state,
         authority,
         action_authority,
+        &scenario,
         leader_flags,
         None,
         player_who,
@@ -702,6 +833,7 @@ pub fn prepare_simple_group_package_with_builds(
     command_state: &CommandPackageState,
     authority: &GroupMoveAuthority,
     action_authority: &SimpleGroupActionAuthority,
+    scenario_ignore_orders: &ScenarioIgnoreOrdersAuthority,
     leader_flags: &[i32; NUM_LEADERS],
     local_who: Option<u8>,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
@@ -812,6 +944,7 @@ pub fn prepare_simple_group_package_with_builds(
         .ok_or(PackageError::InvalidGroupPool)?
         .clone();
     let mut action_authority_before = None;
+    let mut scenario_ignore_orders_before = None;
     let mut leader_flags_before = None;
     let action_result = match wire.action {
         SimpleGroupActionWire::UnitMask { mask, set } => {
@@ -1077,6 +1210,137 @@ pub fn prepare_simple_group_package_with_builds(
                 changed_units,
             }
         }
+        SimpleGroupActionWire::Follow {
+            target_o,
+            target_who,
+            queued,
+        } => {
+            if queued != 2 {
+                return Err(SimpleGroupPackageError::UnsupportedFollowQueue { queued });
+            }
+            if scenario_ignore_orders.ignore_orders {
+                return Err(SimpleGroupPackageError::FollowIgnoreOrdersPrelude);
+            }
+            scenario_ignore_orders_before = Some(scenario_ignore_orders.clone());
+            let target_row = follow_unit_row(world, target_who, target_o)?;
+            let target_handle = world
+                .handle_at_row(target_row)
+                .expect("live target row has a Handle");
+            let target_authority = action_authority.follow_member(target_handle).ok_or(
+                SimpleGroupPackageError::MissingFollowAuthority {
+                    handle: target_handle,
+                },
+            )?;
+            let target_inside_down = world.units.inside_down()[target_row];
+            let target_inside_down_who = world.units.inside_down_who()[target_row];
+            let primary_uid = world.units.get_uid(target_row);
+            ensure_simple_mutation_for_row(&mut units, world, paths, target_row)?;
+            let (secondary_o, secondary_who, secondary_uid) =
+                if target_inside_down >= 0 {
+                    let secondary_who = i32::from(target_inside_down_who);
+                    let secondary_o = i32::from(target_inside_down);
+                    let secondary_row = follow_unit_row(world, secondary_who, secondary_o)
+                        .map_err(|_| SimpleGroupPackageError::MissingFollowSecondary {
+                            who: secondary_who,
+                            o: secondary_o,
+                        })?;
+                    ensure_simple_mutation_for_row(&mut units, world, paths, secondary_row)?;
+                    (
+                        secondary_o,
+                        secondary_who,
+                        world.units.get_uid(secondary_row),
+                    )
+                } else {
+                    (target_o, target_who, primary_uid)
+                };
+            let target = FollowTargetFacts {
+                queried_o: target_o,
+                queried_who: target_who,
+                valid_unit: true,
+                on_map: crate::systems::air::is_on_map(world.units.inside_up()[target_row]),
+                is_plane: target_authority.is_plane,
+                canonical_o: target_authority.canonical_o,
+            };
+            let members = selection
+                .members
+                .iter()
+                .map(|member| FollowMemberFacts {
+                    o: member.identity.o,
+                    valid_unit: true,
+                    on_map: member.authority.on_map,
+                    is_plane: member.authority.is_plane,
+                })
+                .collect::<Vec<_>>();
+            let request = FollowRequest {
+                group: group.clone(),
+                command: FollowCommand {
+                    target_o,
+                    target_who,
+                    queued,
+                },
+            };
+            let plan = plan_follow(&request, &group, Some(target), &members)
+                .map_err(|_| SimpleGroupPackageError::BrokenFollowPlan)?;
+            groups_after.list[group_slot] = plan.group;
+            let mut installed_units = 0usize;
+            for effect in plan.effects {
+                let FollowEffect::AddFollowOrder {
+                    actor_who,
+                    actor_o,
+                    target_o: effect_target_o,
+                    target_who: effect_target_who,
+                    queued: effect_queue,
+                } = effect
+                else {
+                    return Err(SimpleGroupPackageError::BrokenFollowPlan);
+                };
+                if effect_queue != 2
+                    || effect_target_o != target_o
+                    || effect_target_who != target_who
+                {
+                    return Err(SimpleGroupPackageError::BrokenFollowPlan);
+                }
+                let mutation = mutation_for(&mut units, actor_who, actor_o)?;
+                if let Some(order) =
+                    mutation.unit.after.orders.iter().find(|order| {
+                        !matches!(order.kind, OrderIndex::Follow | OrderIndex::MoveTo)
+                    })
+                {
+                    return Err(SimpleGroupPackageError::UnsupportedFollowOrderRetirement {
+                        handle: mutation.unit.after.identity.handle,
+                        kind: order.kind,
+                    });
+                }
+                mutation.unit.after.unit_masks &= !0x0400_0000;
+                if !mutation.unit.after.orders.is_empty() {
+                    // `close_orders(0)` suppresses MOVE_TO arrival bookkeeping. FOLLOW and
+                    // MOVE_TO therefore reach only kill_current_order's common prologue here.
+                    // Other kinds are refused above because their type epilogues are not part
+                    // of this compact transaction.
+                    mutation.unit.after.unit_masks &= !masks::ORDER_TRANSIENT;
+                }
+                mutation.unit.after.path.clear();
+                mutation.unit.after.orders.clear();
+                mutation
+                    .unit
+                    .after
+                    .orders
+                    .push(Order::follow(FollowOrderPayload {
+                        ox: target_o,
+                        whom: target_who,
+                        uid: primary_uid,
+                        oxx: secondary_o,
+                        whose: secondary_who,
+                        uid2: secondary_uid,
+                    }));
+                mutation.unit.after.orders_x = mutation.unit.after.x;
+                mutation.unit.after.orders_y = mutation.unit.after.y;
+                mutation.dest_angle_after = mutation.unit.after.angle;
+                installed_units += 1;
+            }
+            action_authority_before = Some(action_authority.clone());
+            SimpleGroupActionResult::Follow { installed_units }
+        }
         SimpleGroupActionWire::BuildMask { mask, set } => {
             // A Unit-band selection is an exact early no-op: action_buildmask tests the
             // Group building discriminator before walking any Build virtual or mask column.
@@ -1095,6 +1359,23 @@ pub fn prepare_simple_group_package_with_builds(
         }
     };
 
+    let follow_links = if let SimpleGroupActionWire::Follow {
+        target_o,
+        target_who,
+        ..
+    } = wire.action
+    {
+        let row = follow_unit_row(world, target_who, target_o)?;
+        vec![SimpleFollowLinkObservation {
+            handle: world
+                .handle_at_row(row)
+                .expect("live FOLLOW target has Handle"),
+            inside_down: world.units.inside_down()[row],
+            inside_down_who: world.units.inside_down_who()[row],
+        }]
+    } else {
+        Vec::new()
+    };
     Ok(PreparedSimpleGroupPackage {
         play,
         lockstep_serial,
@@ -1117,10 +1398,12 @@ pub fn prepare_simple_group_package_with_builds(
         authority_digest: selection.authority_digest,
         authority_members: selection.authority_members,
         action_authority_before,
+        scenario_ignore_orders_before,
         leader_flags_before,
         local_who_before: local_who,
         units,
         builds: Vec::new(),
+        follow_links,
         action_result,
     })
 }
@@ -1164,6 +1447,7 @@ pub fn commit_simple_group_package_with_action_authority(
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     prepared: PreparedSimpleGroupPackage,
 ) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
+    let scenario = ScenarioIgnoreOrdersAuthority::default();
     commit_simple_group_package_with_builds(
         world,
         unit_types,
@@ -1173,6 +1457,7 @@ pub fn commit_simple_group_package_with_action_authority(
         command_state,
         authority,
         action_authority,
+        &scenario,
         leader_flags,
         None,
         player_who,
@@ -1191,6 +1476,7 @@ pub fn commit_simple_group_package_with_builds(
     command_state: &mut CommandPackageState,
     authority: &GroupMoveAuthority,
     action_authority: &SimpleGroupActionAuthority,
+    scenario_ignore_orders: &ScenarioIgnoreOrdersAuthority,
     leader_flags: &[i32; NUM_LEADERS],
     local_who: Option<u8>,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
@@ -1204,6 +1490,13 @@ pub fn commit_simple_group_package_with_builds(
     }
     if world.random.state() != prepared.random_state {
         return Err(SimpleGroupPackageError::StaleRng);
+    }
+    if prepared
+        .scenario_ignore_orders_before
+        .as_ref()
+        .is_some_and(|before| before != scenario_ignore_orders)
+    {
+        return Err(SimpleGroupPackageError::StaleScenarioIgnoreOrders);
     }
     if command_state != &prepared.command_state_before {
         return Err(PackageError::StaleCommandState.into());
@@ -1265,6 +1558,21 @@ pub fn commit_simple_group_package_with_builds(
                     handle: mutation.unit.before.identity.handle,
                 });
             }
+        }
+    }
+    for observed in &prepared.follow_links {
+        let row = world
+            .row_of(observed.handle)
+            .ok_or(PackageError::StaleUnit {
+                handle: observed.handle,
+            })?;
+        if world.units.inside_down()[row] != observed.inside_down
+            || world.units.inside_down_who()[row] != observed.inside_down_who
+        {
+            return Err(PackageError::StaleUnit {
+                handle: observed.handle,
+            }
+            .into());
         }
     }
     if !prepared.builds.is_empty() && !world.object_bands_are_dense_equivalent() {
@@ -1334,4 +1642,202 @@ pub fn commit_simple_group_package_with_builds(
         builds[mutation.identity.row].build_masks = mutation.build_masks_after;
     }
     Ok(receipt)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimpleFollowRuntimeError {
+    MissingActor,
+    MissingOrder,
+    MalformedOrder,
+    MissingTarget,
+    MissingAuthority { handle: Handle },
+    UnsupportedCone,
+    StaleCanonicalState,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedSimpleFollowActivation {
+    frame: i32,
+    random_state: i32,
+    actor: Handle,
+    target: Handle,
+    actor_flags: u8,
+    target_flags: u8,
+    actor_idle: u8,
+    actor_xy: (i32, i32),
+    target_xy_angle: (i32, i32, i32),
+    order_before: Order,
+    authority_before: SimpleGroupActionAuthority,
+    plan: FollowExecutorPlan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimpleFollowActivationReceipt {
+    pub frame: i32,
+    pub actor: Handle,
+    pub target: Handle,
+    pub branch: FollowExecutorBranch,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+}
+
+/// Prepare the currently owned FOLLOW executor cone: a valid, visible, nearby target with
+/// no distinct containment fallback. Farther-target movement/search and containment promotion
+/// remain typed refusals instead of being approximated by the compact frame host.
+pub fn prepare_simple_follow_activation(
+    world: &World,
+    authority: &SimpleGroupActionAuthority,
+    row: usize,
+) -> Result<PreparedSimpleFollowActivation, SimpleFollowRuntimeError> {
+    let actor = world
+        .handle_at_row(row)
+        .ok_or(SimpleFollowRuntimeError::MissingActor)?;
+    let actor_flags = world.units.get_flags(row);
+    if actor_flags & crate::world::OBJ_FLAG_ACTIVE == 0 {
+        return Err(SimpleFollowRuntimeError::MissingActor);
+    }
+    let order_before = world
+        .orders(row)
+        .current()
+        .cloned()
+        .ok_or(SimpleFollowRuntimeError::MissingOrder)?;
+    if order_before.kind != OrderIndex::Follow {
+        return Err(SimpleFollowRuntimeError::MissingOrder);
+    }
+    let payload = order_before
+        .follow
+        .ok_or(SimpleFollowRuntimeError::MalformedOrder)?;
+    if i32::from(order_before.target_o) != payload.ox
+        || i32::from(order_before.target_who) != payload.whom
+        || order_before.target_uid != payload.uid
+    {
+        return Err(SimpleFollowRuntimeError::MalformedOrder);
+    }
+    let actor_authority = authority
+        .follow_member(actor)
+        .ok_or(SimpleFollowRuntimeError::MissingAuthority { handle: actor })?;
+    let target_row = follow_unit_row(world, payload.whom, payload.ox)
+        .map_err(|_| SimpleFollowRuntimeError::MissingTarget)?;
+    let target = world
+        .handle_at_row(target_row)
+        .ok_or(SimpleFollowRuntimeError::MissingTarget)?;
+    let target_authority = authority
+        .follow_member(target)
+        .ok_or(SimpleFollowRuntimeError::MissingAuthority { handle: target })?;
+    if world.units.get_uid(target_row) != payload.uid
+        || (payload.oxx, payload.whose, payload.uid2) != (payload.ox, payload.whom, payload.uid)
+    {
+        return Err(SimpleFollowRuntimeError::UnsupportedCone);
+    }
+    let actor_xy = (world.units.x_internal()[row], world.units.y_internal()[row]);
+    let target_xy_angle = (
+        world.units.x_internal()[target_row],
+        world.units.y_internal()[target_row],
+        world.units.angle()[target_row],
+    );
+    let identity = FollowIdentity {
+        o: payload.ox,
+        who: payload.whom,
+        uid: payload.uid,
+    };
+    let request = FollowExecutorRequest {
+        actor: FollowActorFacts {
+            o: world.units.o()[row],
+            who: world.units.get_who(row),
+            x: actor_xy.0,
+            y: actor_xy.1,
+            speed: actor_authority.speed,
+            los: actor_authority.los,
+        },
+        order: FollowOrderState {
+            primary: identity,
+            fallback: identity,
+        },
+    };
+    let facts = FollowExecutorFacts {
+        primary: Some(FollowObjectFacts {
+            identity,
+            valid_unit: true,
+            on_map: crate::systems::air::is_on_map(world.units.inside_up()[target_row]),
+            active: true,
+            inside_up: world.units.inside_up()[target_row],
+            seen_by_actor: target_authority.seen,
+            x: target_xy_angle.0,
+            y: target_xy_angle.1,
+            angle: target_xy_angle.2,
+            speed: target_authority.speed,
+            is_moving: target_authority.moving,
+            captain_o: target_authority.canonical_o,
+        }),
+        ..FollowExecutorFacts::default()
+    };
+    let plan = plan_follow_executor(&request, &facts)
+        .map_err(|_| SimpleFollowRuntimeError::UnsupportedCone)?;
+    if plan.branch != FollowExecutorBranch::HoldNearTarget
+        || plan.effects
+            != [FollowExecutorEffect::SetAnim {
+                anim: 0,
+                mode: 0,
+                choose: 1,
+            }]
+        || !actor_authority.admits_idle_animation
+    {
+        return Err(SimpleFollowRuntimeError::UnsupportedCone);
+    }
+    Ok(PreparedSimpleFollowActivation {
+        frame: world.frame,
+        random_state: world.random.state(),
+        actor,
+        target,
+        actor_flags,
+        target_flags: world.units.get_flags(target_row),
+        actor_idle: world.units.get_idle(row),
+        actor_xy,
+        target_xy_angle,
+        order_before,
+        authority_before: authority.clone(),
+        plan,
+    })
+}
+
+/// Publish the bounded FOLLOW animation after every canonical and installed fact is rechecked.
+pub fn commit_simple_follow_activation(
+    world: &mut World,
+    authority: &SimpleGroupActionAuthority,
+    prepared: PreparedSimpleFollowActivation,
+) -> Result<SimpleFollowActivationReceipt, SimpleFollowRuntimeError> {
+    let actor_row = world
+        .row_of(prepared.actor)
+        .ok_or(SimpleFollowRuntimeError::StaleCanonicalState)?;
+    let target_row = world
+        .row_of(prepared.target)
+        .ok_or(SimpleFollowRuntimeError::StaleCanonicalState)?;
+    if world.frame != prepared.frame
+        || world.random.state() != prepared.random_state
+        || authority != &prepared.authority_before
+        || world.units.get_flags(actor_row) != prepared.actor_flags
+        || world.units.get_flags(target_row) != prepared.target_flags
+        || world.units.get_idle(actor_row) != prepared.actor_idle
+        || (
+            world.units.x_internal()[actor_row],
+            world.units.y_internal()[actor_row],
+        ) != prepared.actor_xy
+        || (
+            world.units.x_internal()[target_row],
+            world.units.y_internal()[target_row],
+            world.units.angle()[target_row],
+        ) != prepared.target_xy_angle
+        || world.orders(actor_row).current() != Some(&prepared.order_before)
+    {
+        return Err(SimpleFollowRuntimeError::StaleCanonicalState);
+    }
+    world.units.set_idle(actor_row, 1);
+    Ok(SimpleFollowActivationReceipt {
+        frame: prepared.frame,
+        actor: prepared.actor,
+        target: prepared.target,
+        branch: prepared.plan.branch,
+        random_state_before: prepared.random_state,
+        random_state_after: prepared.random_state,
+    })
 }
