@@ -25,6 +25,10 @@ const FOLLOW_CACHE_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2017.07.15_00_10_31__Sat_.rcx";
 const FOLLOW_CACHE_REPLAY_SHA256: &str =
     "c9180d5f82666dd6fad304527f65a6a39a97f2e59c9a562940d526c66f6d7f57";
+const AIR_LAUNCH_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2017.07.20_20_24_10__Thu_.rcx";
+const AIR_LAUNCH_REPLAY_SHA256: &str =
+    "e8c0103f21dbdb97ecd083c1899065209bdb055581daaceff0c3ee547100ef8d";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,6 +51,47 @@ struct Fixture {
     opcodes: Vec<u8>,
     group_hex: String,
     action_hex: String,
+}
+
+#[test]
+fn retail_replay_binds_build_launch_patrol_single_best_wire_and_shell_chronology() {
+    let path = root().join(AIR_LAUNCH_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        AIR_LAUNCH_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[2_304];
+    let player = turn.players.iter().find(|player| player.play == 1).unwrap();
+    assert_eq!(turn.turn, 2_305);
+    assert_eq!(player.stamp, 66_809);
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [79, 0, 11, 58, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "4f0008000000000000",
+            "0004022d082e082f083008",
+            "0bebb20000a77d000002000000000000000000000000000000",
+            "3a03ce217829",
+            "4a48001000000000000000",
+            "4804f7af00005c6f0000",
+        ],
+    );
 }
 
 #[test]

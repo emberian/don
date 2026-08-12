@@ -4,7 +4,8 @@
 use don_sim::order::{Order, OrderIndex, SpecialAnimType};
 use don_sim::systems::air_busy_authority::{AirBusyAuthorityError, AirBusySpellAuthority};
 use don_sim::systems::air_group_action_transaction::{
-    AirGroupCommand, AirTransactionStatus, LAUNCH_PATROL_OPCODE, SCRAMBLE_OPCODE,
+    AirGroupActionPlan, AirGroupCommand, AirTransactionStatus, CommandPackagePosition,
+    LAUNCH_PATROL_OPCODE, SCRAMBLE_OPCODE,
 };
 use don_sim::systems::canonical_air_group_host::{
     commit_canonical_air_package, prepare_canonical_air_package, AirGroupRuntimeAuthority,
@@ -14,13 +15,15 @@ use don_sim::systems::canonical_air_patrol_runtime::{
     commit_air_patrol_activation, prepare_air_patrol_activation, CanonicalAirPatrolRuntimeError,
 };
 use don_sim::systems::canonical_group_move_host::{
-    GroupMoveAuthority, MoveMemberAuthority, GROUP_OPCODE,
+    BuildSelectionAuthority, BuildSelectionIdentity, GroupMoveAuthority, MoveMemberAuthority,
+    GROUP_OPCODE,
 };
 use don_sim::systems::canonical_strafe_runtime::{
     StrafeFireMode, StrafeRuntimeAuthority, StrafeSearchObservation, StrafeTypeFacts,
 };
 use don_sim::systems::economy_order_payload_authority::{CastOrderPayload, EconomyOrderPayload};
 use don_sim::systems::groups_guys::FormationMember;
+use don_sim::systems::production::{self, BuildData};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::strafe_order_frontier::{AirTargetSearchKind, ObjectIdentity};
 use don_sim::tick::lifecycle_host::PlayerTable;
@@ -28,6 +31,25 @@ use don_sim::tick::Sim;
 use don_sim::Handle;
 
 const PLANE_TYPE: i32 = 77;
+
+// Exact package 2,304 / turn serial 2,305 from retail replay SHA-256
+// e8c0103f21dbdb97ecd083c1899065209bdb055581daaceff0c3ee547100ef8d.
+// The full opcode chronology is [79, 0, 11, 58, 74, 72]; this bounded transaction consumes
+// the adjacent Group/LaunchPatrol pair at indices 1/2 against the canonical pre-Group state.
+const RETAIL_BUILD_LAUNCH_GROUP: &[u8] = &[
+    0x00, 0x04, 0x02, 0x2d, 0x08, 0x2e, 0x08, 0x2f, 0x08, 0x30, 0x08,
+];
+const RETAIL_BUILD_LAUNCH_ACTION: &[u8] = &[
+    0x0b, 0xeb, 0xb2, 0x00, 0x00, 0xa7, 0x7d, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+const RETAIL_BUILD_LAUNCH_POSITION: CommandPackagePosition = CommandPackagePosition {
+    game_frame: 66_809,
+    package_serial: 2_305,
+    play: 1,
+    group_command_index: 1,
+    action_command_index: 2,
+};
 
 fn scramble_packet(owner: u8, carrier_o: i16) -> Vec<u8> {
     let mut packet = vec![GROUP_OPCODE, 1, owner];
@@ -137,11 +159,152 @@ fn install_runtime_authority(sim: &mut Sim, actor: ObjectIdentity, target: Objec
     );
     authority.searches.push(StrafeSearchObservation {
         actor,
-        frame: 0,
+        frame: sim.world.frame,
         kind: AirTargetSearchKind::AirFirst,
         result: Some(target),
     });
     sim.replace_strafe_runtime_authority(authority);
+}
+
+fn launch_build_record(
+    o: i16,
+    uid: u16,
+    position: (i32, i32),
+    child: Option<(u8, i16)>,
+) -> BuildData {
+    let mut build = BuildData {
+        flags: production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE,
+        uid,
+        gather_down: -1,
+        city: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..BuildData::default()
+    };
+    build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+        .copy_from_slice(&o.to_le_bytes());
+    build.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+        .copy_from_slice(&(position.0 ^ 0x63637).to_le_bytes());
+    build.other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&(position.1 ^ 0x63637).to_le_bytes());
+    build.other[0x2a..0x2c].copy_from_slice(&(-1i16).to_le_bytes());
+    match child {
+        Some((who, o)) => {
+            build.other[0x28..0x2a].copy_from_slice(&o.to_le_bytes());
+            build.other[0x3e] = who;
+        }
+        None => {
+            build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+            build.other[0x3e] = 0xff;
+        }
+    }
+    build
+}
+
+fn retail_build_launch_fixture() -> (Sim, Vec<Handle>, Handle) {
+    let mut sim = Sim::new(0x11a0_2305, 32);
+    let mut players = PlayerTable::new();
+    players.seat(1, 1, 2, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_BUILD_LAUNCH_POSITION.game_frame;
+    sim.vic_match.frame = RETAIL_BUILD_LAUNCH_POSITION.game_frame;
+
+    // Frame 66,809 is 9 mod 16. Seven inactive-for-this-cohort owner-local rows make the
+    // cheapest reached aircraft object 7, so `(o + frame) % 16 == 0` on the first resumed
+    // AIR_PATROL tick without changing the recorded package frame.
+    for index in 0..7 {
+        sim.spawn_unit(2, 90, 10_000 + index * 20, 10_000, 4)
+            .unwrap();
+    }
+    let planes: Vec<_> = (0..4)
+        .map(|index| {
+            sim.spawn_unit(2, PLANE_TYPE, 40_000 + index * 100, 30_000, 4)
+                .unwrap()
+        })
+        .collect();
+    let target = sim.spawn_unit(3, 91, 45_700, 32_100, 4).unwrap();
+    let builds = [2_093i16, 2_094, 2_095, 2_096];
+    let target_coord = (45_803, 32_167);
+    let positions = [
+        (target_coord.0 - 200, target_coord.1 - 100),
+        (target_coord.0 - 5_000, target_coord.1),
+        (target_coord.0 + 8_000, target_coord.1),
+        (target_coord.0, target_coord.1 + 11_000),
+    ];
+    for (plane, &build_o) in planes.iter().zip(&builds) {
+        let row = sim.world.row_of(*plane).unwrap();
+        sim.world.units.group_mut()[row] = -1;
+        sim.world.units.o_down_mut()[row] = -1;
+        sim.world.units.inside_up_mut()[row] = build_o;
+        sim.world.units.inside_up_who_mut()[row] = 2;
+        sim.world.units.inside_down_mut()[row] = -1;
+        sim.world.units.inside_down_who_mut()[row] = -1;
+    }
+    for row in 0..=96usize {
+        let o = 2_000 + row as i16;
+        let child = builds
+            .iter()
+            .position(|&candidate| candidate == o)
+            .map(|index| {
+                let plane_row = sim.world.row_of(planes[index]).unwrap();
+                (2, sim.world.units.o()[plane_row])
+            });
+        let position = builds
+            .iter()
+            .position(|&candidate| candidate == o)
+            .map_or((20_000 + row as i32, 20_000), |index| positions[index]);
+        let spawned = sim.spawn_build(
+            2,
+            launch_build_record(o, 0x5200 + row as u16, position, child),
+        );
+        assert_eq!(spawned, row);
+    }
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x2305,
+        composition_digest: [0x23; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: planes
+            .iter()
+            .copied()
+            .map(|plane| move_member(plane, 2))
+            .collect(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x66809,
+        composition_digest: [0x11; 32],
+        units: planes
+            .iter()
+            .copied()
+            .map(|handle| AirGroupUnitAuthority {
+                handle,
+                object_masks: 0,
+                is_biplane: true,
+                is_bomber: false,
+                is_helicopter: false,
+            })
+            .collect(),
+        builds: builds
+            .iter()
+            .map(|&o| {
+                let row = u32::try_from(o - 2_000).unwrap();
+                BuildSelectionAuthority {
+                    identity: BuildSelectionIdentity {
+                        row,
+                        who: 2,
+                        o,
+                        uid: sim.builds[row as usize].uid,
+                    },
+                    role: 0x200,
+                }
+            })
+            .collect(),
+        busy_spells: Vec::new(),
+    });
+    (sim, planes, target)
 }
 
 fn fixture() -> (Sim, Handle, Handle, Handle, Vec<u8>) {
@@ -338,6 +501,161 @@ fn launch_patrol_six_dword_packet_commits_the_same_typed_air_order_owner() {
 }
 
 #[test]
+fn retail_build_launch_single_best_current_reload_resumes_real_air_tick() {
+    let (mut control, planes, target) = retail_build_launch_fixture();
+    let before_rng = control.world.random.state();
+    let receipt = control
+        .process_air_group_packet_pair(
+            RETAIL_BUILD_LAUNCH_POSITION,
+            RETAIL_BUILD_LAUNCH_GROUP,
+            RETAIL_BUILD_LAUNCH_ACTION,
+        )
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.request.position, RETAIL_BUILD_LAUNCH_POSITION);
+    assert!(matches!(
+        receipt.request.command,
+        AirGroupCommand::LaunchPatrol(request)
+            if (request.to_x, request.to_y, request.queue, request.force_all,
+                request.bombers_only, request.fighters_only)
+                == (45_803, 32_167, 2, 0, 0, 0)
+    ));
+    let AirGroupActionPlan::LaunchPatrol(plan) = receipt.plan.as_ref().unwrap() else {
+        panic!("retail opcode 11 must retain its single-best plan");
+    };
+    let winner = planes[0];
+    let winner_row = control.world.row_of(winner).unwrap();
+    let winner_o = control.world.units.o()[winner_row];
+    assert_eq!(winner_o, 7);
+    assert_eq!(plan.best.unwrap().plane, (2, winner_o));
+    assert_eq!(plan.installs.len(), 1);
+    assert!(!plan.launched_any, "queue 2 does not enter launch-all");
+    assert_eq!(control.world.random.state(), before_rng);
+    assert_eq!(
+        control.world.orders(winner_row).order_type(),
+        OrderIndex::AirPatrol
+    );
+    let payload = control
+        .world
+        .orders(winner_row)
+        .current()
+        .unwrap()
+        .air_patrol
+        .as_ref()
+        .unwrap();
+    assert_eq!(payload.x.values, vec![200]);
+    assert_eq!(payload.y.values, vec![100]);
+    assert_eq!((payload.air.home_o, payload.air.home_who), (2_093, 2));
+    for plane in &planes[1..] {
+        let row = control.world.row_of(*plane).unwrap();
+        assert_eq!(control.world.orders(row).order_type(), OrderIndex::None);
+    }
+
+    let bytes = save_sim(&control).unwrap();
+    // Magic, root ChunkHeader, CORE ChunkHeader, then CoreState::format_version.
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 17);
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    let actor = actor_identity(&control, winner);
+    let target_id = target_identity(&control, target);
+    install_runtime_authority(&mut control, actor, target_id);
+    install_runtime_authority(&mut resumed, actor, target_id);
+
+    control.do_frame();
+    resumed.do_frame();
+    assert_air_state(&control, &resumed, winner);
+    assert_eq!(
+        control.world.orders(winner_row).order_type(),
+        OrderIndex::Strafe,
+        "error={:?} receipt={:?}",
+        control.last_air_patrol_error,
+        control.last_air_patrol_receipt,
+    );
+    assert!(control.last_air_patrol_error.is_none());
+    assert!(control
+        .last_air_patrol_receipt
+        .as_ref()
+        .is_some_and(|air| air.inserted_strafe));
+
+    let after_patrol = (
+        control.world.units.x_internal()[winner_row],
+        control.world.units.y_internal()[winner_row],
+    );
+    control.do_frame();
+    resumed.do_frame();
+    assert_air_state(&control, &resumed, winner);
+    assert!(control.last_strafe_error.is_none());
+    assert!(control.last_strafe_receipt.is_some());
+    assert_ne!(
+        (
+            control.world.units.x_internal()[winner_row],
+            control.world.units.y_internal()[winner_row],
+        ),
+        after_patrol,
+    );
+}
+
+#[test]
+fn changed_build_home_between_air_prepare_and_commit_publishes_nothing() {
+    let (mut sim, planes, target) = retail_build_launch_fixture();
+    let receipt = sim
+        .process_air_group_packet_pair(
+            RETAIL_BUILD_LAUNCH_POSITION,
+            RETAIL_BUILD_LAUNCH_GROUP,
+            RETAIL_BUILD_LAUNCH_ACTION,
+        )
+        .unwrap();
+    assert!(receipt.validates());
+    let winner = planes[0];
+    let row = sim.world.row_of(winner).unwrap();
+    let actor = actor_identity(&sim, winner);
+    let target = target_identity(&sim, target);
+    install_runtime_authority(&mut sim, actor, target);
+    let prepared = prepare_air_patrol_activation(
+        &sim.world,
+        &sim.builds,
+        &sim.paths,
+        &sim.unit_type,
+        &sim.strafe_runtime_authority,
+        row,
+        (sim.map.world.xs * 4, sim.map.world.ys * 4),
+    )
+    .unwrap();
+    let before_order = sim.world.orders(row).clone();
+    let before_path = sim.paths[row].clone();
+    let before_position = (
+        sim.world.units.x_internal()[row],
+        sim.world.units.y_internal()[row],
+    );
+    let before_rng = sim.world.random.state();
+    let before_authority = sim.strafe_runtime_authority.clone();
+    sim.builds[93].uid ^= 1;
+
+    assert_eq!(
+        commit_air_patrol_activation(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.paths,
+            &sim.unit_type,
+            &mut sim.strafe_runtime_authority,
+            prepared,
+        ),
+        Err(CanonicalAirPatrolRuntimeError::StaleHome),
+    );
+    assert_eq!(sim.world.orders(row), &before_order);
+    assert_eq!(sim.paths[row], before_path);
+    assert_eq!(
+        (
+            sim.world.units.x_internal()[row],
+            sim.world.units.y_internal()[row],
+        ),
+        before_position,
+    );
+    assert_eq!(sim.world.random.state(), before_rng);
+    assert_eq!(sim.strafe_runtime_authority, before_authority);
+}
+
+#[test]
 fn scramble_helicopter_branch_publishes_the_exact_move_facing_action_columns() {
     let (mut sim, plane, _carrier, _target, packet) = fixture();
     let row = sim.world.row_of(plane).unwrap();
@@ -380,6 +698,7 @@ fn air_patrol_commit_rejects_a_changed_canonical_world_without_publishing_after_
     let row = sim.world.row_of(plane).unwrap();
     let prepared = prepare_air_patrol_activation(
         &sim.world,
+        &sim.builds,
         &sim.paths,
         &sim.unit_type,
         &sim.strafe_runtime_authority,
@@ -392,6 +711,7 @@ fn air_patrol_commit_rejects_a_changed_canonical_world_without_publishing_after_
     assert_eq!(
         commit_air_patrol_activation(
             &mut sim.world,
+            &sim.builds,
             &mut sim.paths,
             &sim.unit_type,
             &mut sim.strafe_runtime_authority,

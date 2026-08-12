@@ -9,14 +9,17 @@
 use crate::checksum::adler32;
 use crate::order::OrderIndex;
 use crate::systems::air_physics_frontier as air_physics;
+use crate::systems::canonical_group_move_host::{build_still_current, BuildSelectionImage};
 use crate::systems::canonical_strafe_runtime::{
     self, PreparedAirPhysics, StrafeRuntimeAuthority, StrafeRuntimeEffect, StrafeTypeFacts,
 };
 use crate::systems::movement::{PathData, PathStack};
 use crate::systems::order_dispatch::{self, OrderQueue, PatrolPayload};
 use crate::systems::patrol::{self, AirPatrolAction, AirPatrolAfterPhysics, AirPatrolTarget};
+use crate::systems::production::{BuildData, BUILDDATA_SIZE};
+use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use crate::systems::strafe_order_frontier::{ActorSnapshot, AirTargetSearchKind, ObjectIdentity};
-use crate::world::{World, OBJ_FLAG_ACTIVE};
+use crate::world::{World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AirPatrolImage {
@@ -39,6 +42,7 @@ pub struct PreparedCanonicalAirPatrol {
     actor_type: i32,
     world_digest_before: u64,
     authority_before: StrafeRuntimeAuthority,
+    build_home_before: Option<BuildSelectionImage>,
     image_before: AirPatrolImage,
     image_after: AirPatrolImage,
     rng_state_before: i32,
@@ -147,23 +151,64 @@ fn live_unit(
     Ok(row)
 }
 
+fn build_home_image(
+    world: &World,
+    builds: &[BuildData],
+    who: u8,
+    o: i16,
+) -> Result<BuildSelectionImage, CanonicalAirPatrolRuntimeError> {
+    let address = RetailObjectAddress::new(who, RetailBand::Build, i32::from(o));
+    let WorldObjectIdentity::BuildRow(row) = world
+        .object_bands()
+        .live_identity(address)
+        .ok_or(CanonicalAirPatrolRuntimeError::MissingHome)?
+    else {
+        return Err(CanonicalAirPatrolRuntimeError::MissingHome);
+    };
+    let build = builds
+        .get(row as usize)
+        .ok_or(CanonicalAirPatrolRuntimeError::MissingHome)?;
+    if build.who != who || build.object_id() != o || !build.is_valid() {
+        return Err(CanonicalAirPatrolRuntimeError::StaleHome);
+    }
+    let bytes: [u8; BUILDDATA_SIZE] = build.image();
+    Ok(BuildSelectionImage {
+        identity: crate::systems::canonical_group_move_host::BuildSelectionIdentity {
+            row,
+            who,
+            o,
+            uid: build.uid,
+        },
+        bytes,
+        position: build.position(),
+        inside_down: i16::from_le_bytes([build.other[0x28], build.other[0x29]]),
+        inside_down_who: build.other[0x3e] as i8,
+    })
+}
+
 fn home_position(
     world: &World,
+    builds: &[BuildData],
     order: &patrol::AirPatrolOrder,
-) -> Result<Option<(i32, i32)>, CanonicalAirPatrolRuntimeError> {
+) -> Result<(Option<(i32, i32)>, Option<BuildSelectionImage>), CanonicalAirPatrolRuntimeError> {
     match (order.air.whose >= 0, order.air.oxx >= 0) {
-        (false, false) => Ok(None),
+        (false, false) => Ok((None, None)),
         (true, true) => {
-            let row = world
-                .unit_row_at(order.air.whose, order.air.oxx)
-                .ok_or(CanonicalAirPatrolRuntimeError::MissingHome)?;
-            if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
-                return Err(CanonicalAirPatrolRuntimeError::StaleHome);
+            if let Some(row) = world.unit_row_at(order.air.whose, order.air.oxx) {
+                if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                    return Err(CanonicalAirPatrolRuntimeError::StaleHome);
+                }
+                return Ok((
+                    Some((world.units.x_internal()[row], world.units.y_internal()[row])),
+                    None,
+                ));
             }
-            Ok(Some((
-                world.units.x_internal()[row],
-                world.units.y_internal()[row],
-            )))
+            let who = u8::try_from(order.air.whose)
+                .map_err(|_| CanonicalAirPatrolRuntimeError::MissingHome)?;
+            let o = i16::try_from(order.air.oxx)
+                .map_err(|_| CanonicalAirPatrolRuntimeError::MissingHome)?;
+            let build = build_home_image(world, builds, who, o)?;
+            Ok((Some(build.position), Some(build)))
         }
         _ => Err(CanonicalAirPatrolRuntimeError::MalformedAirPatrolOrder),
     }
@@ -224,6 +269,7 @@ fn update_action(image: &mut AirPatrolImage, actor: ObjectIdentity) {
 /// Preflight one ordinary AIR_PATROL activation against detached order/path/Unit/RNG images.
 pub fn prepare_air_patrol_activation(
     world: &World,
+    builds: &[BuildData],
     paths: &[PathStack],
     unit_types: &[i32],
     authority: &StrafeRuntimeAuthority,
@@ -261,7 +307,7 @@ pub fn prepare_air_patrol_activation(
         attack_latch: world.units.get_recharging(row),
         spell_time: before.spell_time,
     };
-    let home = home_position(world, &order)?;
+    let (home, build_home_before) = home_position(world, builds, &order)?;
     let max_x = map_tiles.0.saturating_mul(crate::systems::movement::TILE);
     let max_y = map_tiles.1.saturating_mul(crate::systems::movement::TILE);
     let flight_target = patrol::air_patrol_target(&mut order, false, home, max_x, max_y);
@@ -372,6 +418,7 @@ pub fn prepare_air_patrol_activation(
         actor_type,
         world_digest_before: world.digest(),
         authority_before: authority.clone(),
+        build_home_before,
         image_before: before,
         image_after: after,
         rng_state_before: before_rng.state(),
@@ -384,6 +431,7 @@ pub fn prepare_air_patrol_activation(
 /// Revalidate and publish one detached AIR_PATROL after-image.
 pub fn commit_air_patrol_activation(
     world: &mut World,
+    builds: &[BuildData],
     paths: &mut [PathStack],
     unit_types: &[i32],
     authority: &mut StrafeRuntimeAuthority,
@@ -399,6 +447,13 @@ pub fn commit_air_patrol_activation(
         || world.digest() != prepared.world_digest_before
     {
         return Err(CanonicalAirPatrolRuntimeError::StaleCanonicalState);
+    }
+    if prepared
+        .build_home_before
+        .as_ref()
+        .is_some_and(|home| !build_still_current(world, builds, home))
+    {
+        return Err(CanonicalAirPatrolRuntimeError::StaleHome);
     }
     let current = image(world, paths, authority, prepared.row)?;
     if current != prepared.image_before || world.random.state() != prepared.rng_state_before {

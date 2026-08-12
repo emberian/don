@@ -16,7 +16,7 @@ exact [Group][11|36] bytes
   -> exact Cast/SpecialAnim busy + Handle-bound aircraft type snapshot
   -> persisted ordered scenario-ignore prune image
   -> checkpointed World/order/path/Group publish
-  -> typed v13 AIR_PATROL tag 6
+  -> current v17 root with typed AIR_PATROL tag 6
   -> canonical Unit::work row 17
   -> shared air physics + revision-bound Unit search
   -> typed queue-first STRAFE tag 8
@@ -28,6 +28,13 @@ Both package commands consume zero RNG. AIR_PATROL and STRAFE share one
 RNG epoch and external-effect epoch. The common air-physics adapter is therefore not copied
 into a second runtime authority. AIR_PATROL prepares a detached order/path/Unit/RNG image,
 revalidates the full World digest and authority, then publishes the after-image once.
+
+LaunchPatrol's single-best arm retains the selected container as the AIR_PATROL home. A real
+Build-carried launch therefore cannot be projected through `World::unit_row_at`: row 17 resolves
+the sparse Build address, binds its `BuildRow`, owner/object id, uid, full 220-byte image,
+position and containment head, and revalidates that image immediately before publishing the
+detached AIR after-image. A changed Build home rejects as `StaleHome` without order, path, Unit,
+RNG or authority mutation.
 
 An answered containment chain with zero eligible aircraft is also a successful package, not an
 adapter error. Opcode 0 has already advanced the canonical selection revision and may have
@@ -49,6 +56,15 @@ containment head. Commit revalidates that image, and Build members never receive
 `UnitData::group` backlink. The persisted retail `(o,uid)` cache also resumes the recorded empty
 `00000024` reselection. DoNSave already retained both sides of the containment link; it now admits
 only reciprocal, active, acyclic Build-to-Unit chains.
+
+The strongest reached opcode-11 witness is package index 2,304 / serial 2,305 / frame 66,809 /
+play 1 from retail replay SHA-256
+`e8c0103f21dbdb97ecd083c1899065209bdb055581daaceff0c3ee547100ef8d`. Its exact opcode
+chronology is `[79, 0, 11, 58, 74, 72]`; command indices 1/2 are Group
+`0004022d082e082f083008` (owner 2, Build objects 2093–2096) and LaunchPatrol
+`0bebb20000a77d000002000000000000000000000000000000`. The six unaligned dwords decode to
+target `(45803,32167)`, queue `2`, force-all `0`, bombers-only `0`, fighters-only `0`, which
+enters the executable's single-best scoring arm rather than launch-all.
 
 Replay decoding no longer has to collapse every admitted pair to command indices 0/1. The
 canonical pair entrypoint consumes the exact decoded Group and Scramble/LaunchPatrol slices plus
@@ -85,6 +101,10 @@ integration decision after the patch lands with its save-version coordination.
 - the following row-16 tick executes the landed STRAFE runtime with identical loaded and
   uninterrupted World/order/path/RNG state;
 - opcode 11 retains all six dwords and installs the expected relative patrol waypoint;
+- the exact Build-carried retail opcode-11 witness selects one cheapest/closest aircraft,
+  preserves its Build home across v17 load/resave, inserts STRAFE on the first resumed row-17
+  tick and executes the same STRAFE/RNG state on the next row-16 tick;
+- a changed Build uid/image between AIR_PATROL prepare and commit rejects with no publication;
 - exact Cast predicate and SpecialAnim busy vetoes, including malformed-state gates;
 - v15 duplicate/tombstone scenario persistence, captain/down recursion and stale-list rollback;
 - an armed partial prune followed by AIR_PATROL save/load and identical resumed row-17 STRAFE

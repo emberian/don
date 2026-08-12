@@ -3793,6 +3793,7 @@ impl Sim {
     fn do_air_patrol(&mut self, row: usize) {
         let prepared = match canonical_air_patrol_runtime::prepare_air_patrol_activation(
             &self.world,
+            &self.builds,
             &self.paths,
             &self.unit_type,
             &self.strafe_runtime_authority,
@@ -3808,6 +3809,7 @@ impl Sim {
         };
         let receipt = match canonical_air_patrol_runtime::commit_air_patrol_activation(
             &mut self.world,
+            &self.builds,
             &mut self.paths,
             &self.unit_type,
             &mut self.strafe_runtime_authority,
