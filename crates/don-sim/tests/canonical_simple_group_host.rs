@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Focused canonical `[Group][one simple action]` transaction tests.
 
+use don_sim::objects::BUILD_BAND_BASE;
 use don_sim::order::{Order, OrderIndex, SpecialAnimType, ORDER_GROUP};
 use don_sim::systems::canonical_group_move_host::{
     retail_fresh_groups, CommandPackageState, GroupMoveAuthority, MoveMemberAuthority,
@@ -10,6 +11,7 @@ use don_sim::systems::canonical_simple_group_host::*;
 use don_sim::systems::economy_order_payload_authority::{CastOrderPayload, EconomyOrderPayload};
 use don_sim::systems::groups_guys::{FormationMember, NUM_LEADERS};
 use don_sim::systems::movement::{PathData, PathStack};
+use don_sim::systems::production::{self, BuildData};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::lifecycle_host::PlayerTable;
 use don_sim::world::{Handle, World, OBJ_FLAG_ACTIVE};
@@ -50,6 +52,17 @@ fn set_transport_packet(who: u8, objects: &[i16], flag: i32) -> Vec<u8> {
     }
     bytes.push(SET_TRANSPORT_OPCODE);
     bytes.extend_from_slice(&flag.to_le_bytes());
+    bytes
+}
+
+fn buildmask_packet(who: u8, objects: &[i16], mask: u32, set: i32) -> Vec<u8> {
+    let mut bytes = vec![GROUP_OPCODE, objects.len() as u8, who];
+    for &o in objects {
+        bytes.extend_from_slice(&o.to_le_bytes());
+    }
+    bytes.push(BUILDMASK_OPCODE);
+    bytes.extend_from_slice(&mask.to_le_bytes());
+    bytes.extend_from_slice(&set.to_le_bytes());
     bytes
 }
 
@@ -114,6 +127,7 @@ fn simple_action_authority(
                 can_ever_transport: true,
             })
             .collect(),
+        builds: Vec::new(),
     }
 }
 
@@ -1128,6 +1142,7 @@ fn retail_set_transport_survives_donsave_cached_resume_and_one_canonical_tick() 
         let mut players = PlayerTable::new();
         players.seat(1, 1, 1, 0);
         sim.players = Some(players);
+        sim.production_runtime.local_player = 1;
         sim.vic_leaders.slots[1].leader_flags = 0x100;
         let actor = sim.spawn_unit(1, 30, 2_000, 3_000, 3).unwrap();
         let row = sim.world.row_of(actor).unwrap();
@@ -1143,6 +1158,7 @@ fn retail_set_transport_survives_donsave_cached_resume_and_one_canonical_tick() 
         (sim, actor)
     };
     let install = |sim: &mut don_sim::tick::Sim, actor: Handle| {
+        sim.production_runtime.local_player = 1;
         sim.replace_group_move_authority(simple_authority(&[actor], 14, [0x14; 32]));
         sim.replace_simple_group_action_authority(simple_action_authority(
             &[actor],
@@ -1198,4 +1214,217 @@ fn retail_set_transport_survives_donsave_cached_resume_and_one_canonical_tick() 
     assert_eq!(direct.world.frame, resumed.world.frame);
     assert_eq!(direct.groups.list, resumed.groups.list);
     assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+fn savable_build_for_object(object: i16, uid: u16) -> BuildData {
+    let mut build = BuildData {
+        flags: production::flag::VALID,
+        uid,
+        gather_down: -1,
+        city: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..BuildData::default()
+    };
+    build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+        .copy_from_slice(&object.to_le_bytes());
+    build.other[0x28..0x2a].copy_from_slice(&(-1_i16).to_le_bytes());
+    build
+}
+
+fn buildmask_authority(row: usize, o: i16, uid: u16) -> SimpleGroupActionAuthority {
+    SimpleGroupActionAuthority {
+        revision: 33,
+        composition_digest: [0x33; 32],
+        members: Vec::new(),
+        builds: vec![SimpleBuildMaskMemberAuthority {
+            who: 2,
+            o,
+            uid,
+            row,
+            role: 0x0240,
+            admits_0x40: true,
+            admits_0x80: true,
+        }],
+    }
+}
+
+#[test]
+fn retail_buildmask_survives_donsave_cached_resume_and_one_canonical_tick() {
+    const RETAIL_O: i16 = 0x0837;
+    const TARGET_ROW: usize = (RETAIL_O as u32 - BUILD_BAND_BASE) as usize;
+    const TARGET_UID: u16 = 0x4337;
+
+    let make = || {
+        let mut sim = don_sim::tick::Sim::new(0x3321, 4);
+        sim.world.frame = 105_512;
+        sim.vic_match.frame = 105_512;
+        let mut players = PlayerTable::new();
+        players.seat(1, 1, 2, 0);
+        sim.players = Some(players);
+        sim.production_runtime.local_player = 2;
+        for row in 0..=TARGET_ROW {
+            let o = BUILD_BAND_BASE as i16 + row as i16;
+            let uid = if row == TARGET_ROW {
+                TARGET_UID
+            } else {
+                0x2000 + row as u16
+            };
+            assert_eq!(sim.spawn_build(2, savable_build_for_object(o, uid)), row);
+        }
+        sim.builds[TARGET_ROW].flags |= production::flag::STARTED | production::flag::ACTIVE;
+        sim.builds[TARGET_ROW].queue = production::BuildQueue {
+            queued: 1,
+            entries: vec![production::BuildQueueEntry {
+                type_index: 30,
+                res: [-1; 3],
+                ..production::BuildQueueEntry::default()
+            }],
+        };
+        sim.replace_simple_group_action_authority(buildmask_authority(
+            TARGET_ROW, RETAIL_O, TARGET_UID,
+        ));
+        sim
+    };
+    let reinstall = |sim: &mut don_sim::tick::Sim| {
+        sim.production_runtime.local_player = 2;
+        sim.replace_simple_group_action_authority(buildmask_authority(
+            TARGET_ROW, RETAIL_O, TARGET_UID,
+        ));
+    };
+
+    let mut direct = make();
+    let mut resumed = make();
+    // Playback___2017.07.20_20_46_23__Thu_.rcx, package index 5297 / frame 105512.
+    let retail = buildmask_packet(2, &[RETAIL_O], 0x40, 1);
+    assert_eq!(
+        retail,
+        [0x00, 0x01, 0x02, 0x37, 0x08, 0x21, 0x40, 0, 0, 0, 1, 0, 0, 0]
+    );
+    let first = direct
+        .process_simple_group_package(1, 5_298, &retail)
+        .unwrap();
+    resumed
+        .process_simple_group_package(1, 5_298, &retail)
+        .unwrap();
+    assert_eq!(
+        first.action_result,
+        SimpleGroupActionResult::BuildMask {
+            final_set: true,
+            changed_builds: 1,
+            feedback: true,
+        }
+    );
+    assert_eq!(first.selected_builds[0].o, RETAIL_O);
+    assert_eq!(direct.groups.list[first.group_slot].role, 0x0240);
+    assert_eq!(direct.builds[TARGET_ROW].build_masks & 0x40, 0x40);
+
+    let saved = save_sim(&resumed).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    reinstall(&mut resumed);
+
+    // The same artifact repeatedly uses the persistent empty Group wire for mask 0x40.
+    let cached = buildmask_packet(2, &[], 0x40, 1);
+    assert_eq!(cached, [0x00, 0x00, 0x02, 0x21, 0x40, 0, 0, 0, 1, 0, 0, 0]);
+    let direct_receipt = direct
+        .process_simple_group_package(1, 5_332, &cached)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_simple_group_package(1, 5_332, &cached)
+        .unwrap();
+    assert_eq!(direct_receipt.action_result, resumed_receipt.action_result);
+    assert_eq!(
+        direct_receipt.action_result,
+        SimpleGroupActionResult::BuildMask {
+            final_set: false,
+            changed_builds: 1,
+            feedback: true,
+        }
+    );
+    assert_eq!(direct.builds[TARGET_ROW].build_masks & 0x40, 0);
+    assert_eq!(
+        direct.builds[TARGET_ROW].build_masks,
+        resumed.builds[TARGET_ROW].build_masks
+    );
+    assert_eq!(
+        direct_receipt.groups_checksum,
+        resumed_receipt.groups_checksum
+    );
+    assert_eq!(
+        direct_receipt.random_state_before,
+        direct_receipt.random_state_after
+    );
+    assert_eq!(
+        resumed_receipt.random_state_before,
+        resumed_receipt.random_state_after
+    );
+
+    let frame_before = direct.world.frame;
+    direct.do_frame();
+    resumed.do_frame();
+    assert_eq!(direct.world.frame, frame_before + 1);
+    assert_eq!(direct.world.frame, resumed.world.frame);
+    assert_eq!(direct.groups.list, resumed.groups.list);
+    assert_eq!(
+        direct.builds[TARGET_ROW].build_masks,
+        resumed.builds[TARGET_ROW].build_masks
+    );
+    assert_eq!(direct.world.random.state(), resumed.world.random.state());
+}
+
+#[test]
+fn buildmask_revalidates_the_canonical_build_before_any_group_or_cache_write() {
+    let o = BUILD_BAND_BASE as i16;
+    let uid = 0x3344;
+    let mut sim = don_sim::tick::Sim::new(0x3344, 4);
+    sim.world.frame = 44;
+    assert_eq!(sim.spawn_build(2, savable_build_for_object(o, uid)), 0);
+    sim.replace_simple_group_action_authority(buildmask_authority(0, o, uid));
+    let mut player_who = [None; NETWORK_PLAYERS];
+    player_who[1] = Some(2);
+    let bytes = buildmask_packet(2, &[o], 0x80, 1);
+    let prepared = prepare_simple_group_package_with_builds(
+        &sim.world,
+        &sim.unit_type,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.simple_group_action_authority,
+        &[0; NUM_LEADERS],
+        Some(2),
+        &player_who,
+        sim.world.frame,
+        1,
+        44,
+        &bytes,
+    )
+    .unwrap();
+    let groups_before = sim.groups.clone();
+    let cache_before = sim.command_package_state.clone();
+    sim.builds[0].build_masks = 0x20;
+    assert_eq!(
+        commit_simple_group_package_with_builds(
+            &mut sim.world,
+            &sim.unit_type,
+            &mut sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.simple_group_action_authority,
+            &[0; NUM_LEADERS],
+            Some(2),
+            &player_who,
+            prepared,
+        ),
+        Err(SimpleGroupPackageError::StaleBuild { who: 2, o })
+    );
+    assert_eq!(sim.groups.list, groups_before.list);
+    assert_eq!(sim.command_package_state, cache_before);
+    assert_eq!(sim.builds[0].build_masks, 0x20);
 }

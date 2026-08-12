@@ -1,16 +1,16 @@
 # Canonical simple-Group package host
 
-Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, HALT opcode 12, and
-the ordinary-Unit arm of SET_TRANSPORT opcode 14 are mounted through
-`Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT and
-SET_TRANSPORT also cross one canonical `Sim::do_frame`. No command-table, general packet router,
+Status: UNITMASK opcode 32, the ordinary-Unit arm of STOP_SPELL opcode 29, HALT opcode 12,
+the ordinary-Unit arm of SET_TRANSPORT opcode 14, and BUILDMASK opcode 33 are mounted through
+`Sim::process_simple_group_package` and covered by DoNSave v13 resume tests. HALT,
+SET_TRANSPORT, and BUILDMASK also cross one canonical `Sim::do_frame`. No command-table, general packet router,
 or closure status changes are made. STOP_SPELL's special type 61/62/400 graphics tail remains a
 typed whole-package refusal.
 
 ## First executable row
 
 `canonical_simple_group_host.rs` admits exactly `[GroupCommand]` followed by UNITMASK,
-STOP_SPELL, HALT, or SET_TRANSPORT. It never
+STOP_SPELL, HALT, SET_TRANSPORT, or BUILDMASK. It never
 constructs `command::Bridge` and never reads or copies the Bridge-owned `command::Groups`.
 Opcode 0 reuses the fixed 512-slot `groups_guys::Groups` selector, play-keyed receive cache,
 UID/Handle revalidation, allocator, old-Group removal, and Unit backlinks already used by the
@@ -88,6 +88,26 @@ changed authority, changed Leader flags, or changed Unit state refuses before Gr
 publication. The adapter is reinstalled after load and is not a second persistent gameplay
 owner. The action changes no orders or paths and consumes zero RNG draws.
 
+## Fifth executable row
+
+BUILDMASK consumes `plan_action_buildmask`, the recovered complete body at
+`0x006FC9A0..0x006FCB87`. Build-band selection resolves the canonical dense/sparse object
+registry, `Sim::builds`, `(who,o,uid,row)`, and the same persisted play-keyed `(o,uid)` cache.
+It constructs a fixed building Group and reuses the exact immediate allocator; an old building
+slot which would require the still-open all-band normalization arm remains the existing typed
+`BuildingAllocatorBoundary` rather than a guessed cleanup. Build objects have no
+`UnitData::group` column, so the host does not invent a Build backlink; replacing an ordinary
+Unit group still detaches every reached canonical Unit backlink atomically.
+
+`WallData::valid_buildmask` is a 100-byte shipped predicate which tests only input bits `0x40`
+and `0x80`. Its two virtual/type results and the Build type's Group role are
+revision/digest-bound per Build in
+`SimpleGroupActionAuthority`. The canonical `BuildData::build_masks` before-image is then
+revalidated and the recovered loop-carried set-to-clear writes publish with Groups and cache in
+one commit. Mask `0x40` for the local presentation owner additionally emits a typed feedback bit
+in the receipt; it does not create saved gameplay state. A stale registry, UID, row, flags, mask,
+authority, local owner, Groups pool, cache, frame, or RNG refuses before publication.
+
 ## Retail packet evidence
 
 The artifact-backed replay test freezes the shipped recording
@@ -156,6 +176,20 @@ empty Group owner 0 (`000000`), exercising the play-keyed persistent selection c
 full-corpus census proves exactly five strict Group+SET_TRANSPORT pairs across four retail
 recordings.
 
+BUILDMASK uses the same 2017-07-20 artifact as STOP_SPELL. Package index 5,297, turn 5,298,
+play 1, frame 105,512 carries the explicit Build-band witness, and package index 5,331 carries
+the later persistent-cache form:
+
+```text
+0001023708               Group(owner=2, Build object=0x0837)
+214000000001000000       Buildmask(mask=0x40, set=1)
+000002                   Group(owner=2, cache reuse)
+214000000001000000       Buildmask(mask=0x40, set=1)
+```
+
+The mutable local corpus gate sees 329 strict pairs; the frozen 61-recording validation artifact
+records 320. Both values are packet evidence, not a closure-table promotion.
+
 ## Integration and save boundary
 
 The module export and `Sim` sibling now construct the same present-player map as Group+Move and
@@ -168,6 +202,11 @@ and proves the stopped orders remain empty and the serialized states remain iden
 SET_TRANSPORT resume test executes the explicit flag-one packet, saves/loads, reinstalls both
 external authorities, executes the observed empty-Group flag-zero packet, advances a frame, and
 proves the Unit mask, Groups checksum, RNG state, and serialized bytes remain identical.
+The BUILDMASK test executes the exact object-`0x0837` packet against canonical `BuildData`, saves
+and reloads the mask plus selection cache, reinstalls only the Build virtual authority, executes
+the observed empty-Group packet, and advances both direct and resumed Sims one frame. A separate
+gate mutates `BuildData::build_masks` between prepare and commit and proves zero Group/cache
+publication.
 
 The remaining production-routing tranche is bounded:
 
@@ -175,10 +214,10 @@ The remaining production-routing tranche is bounded:
 2. compare the first executable packet's Groups/Unit channels to the retail recording; and
 3. only after that evidence update closure reporting for opcode 32.
 
-The other five audited simple actions remain red at this host.
-FOLLOW needs its typed payload; STANCE spans Unit and Build;
-DISBAND reaches the nested Build production queue; BUILDMASK requires the canonical Build-band
-selector and feedback receipt. BEGIN has no corpus occurrence and is not used to claim execution.
+The other four audited simple actions remain red at this host. DISBAND reaches the nested Build
+production queue. BEGIN has no corpus occurrence and is not used to claim execution. STANCE is
+blocked by arbitrary-order mandatory/repath/kill tails, and FOLLOW queue-first is blocked on
+heterogeneous `finish_insert` replay.
 
 ## Gates
 
@@ -193,6 +232,8 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   retail_replay_binds_set_transport_explicit_wire
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  retail_replay_binds_buildmask_explicit_and_persistent_cache_wires
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_unitmask_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_stop_spell_packets -- --ignored --nocapture
@@ -200,4 +241,6 @@ cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_halt_packets -- --ignored --nocapture
 cargo test -p don-replay --test retail_simple_group_package_fixtures \
   census_strict_group_set_transport_packets -- --ignored --nocapture
+cargo test -p don-replay --test retail_simple_group_package_fixtures \
+  census_strict_group_buildmask_packets -- --ignored --nocapture
 ```

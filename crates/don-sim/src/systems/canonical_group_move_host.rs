@@ -84,6 +84,30 @@ impl CommandPackageState {
     pub fn saved_selections(&self) -> [Vec<CachedSelection>; NETWORK_PLAYERS] {
         self.last_selection_by_play.clone()
     }
+
+    /// Stage one exact receive-cache row and the enclosing package revision.
+    ///
+    /// Build-band Group actions share the retail `(o,uid)` cache but do not use the
+    /// Unit-only selector below. Keeping this mutation primitive here preserves one owner
+    /// for the persisted cache without exposing its arrays for unrelated writes.
+    pub(crate) fn staged_selection(
+        &self,
+        play: usize,
+        selection: Vec<CachedSelection>,
+    ) -> Result<Self, PackageError> {
+        if play >= NETWORK_PLAYERS {
+            return Err(PackageError::PlayOutOfRange { play });
+        }
+        if selection.len() > RECEIVED_SELECTION_CAPACITY {
+            return Err(PackageError::ExplicitSelectionTooLong {
+                len: selection.len(),
+            });
+        }
+        let mut after = self.clone();
+        after.last_selection_by_play[play] = selection;
+        after.revision = after.revision.wrapping_add(1);
+        Ok(after)
+    }
 }
 
 pub fn validate_saved_selections(
@@ -664,7 +688,7 @@ fn validate_group_pool(groups: &Groups) -> Result<(), PackageError> {
     Ok(())
 }
 
-fn exact_immediate_allocator_slot(
+pub(crate) fn exact_immediate_allocator_slot(
     groups: &mut Groups,
     who: u8,
     world: &World,

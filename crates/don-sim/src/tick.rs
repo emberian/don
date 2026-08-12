@@ -1648,8 +1648,8 @@ impl Sim {
         self.group_move_authority = authority;
     }
 
-    /// Install action facts used by SET_TRANSPORT. Loaded simulations fail closed until the
-    /// content owner reinstalls the same Handle-bound projection.
+    /// Install action facts used by SET_TRANSPORT and BUILDMASK. Loaded simulations fail closed
+    /// until the content owner reinstalls the same revision-bound projection.
     pub fn replace_simple_group_action_authority(
         &mut self,
         authority: crate::systems::canonical_simple_group_host::SimpleGroupActionAuthority,
@@ -1818,7 +1818,7 @@ impl Sim {
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
-    /// UNITMASK (32), STOP_SPELL (29), HALT (12), or SET_TRANSPORT (14).
+    /// UNITMASK (32), STOP_SPELL (29), HALT (12), SET_TRANSPORT (14), or BUILDMASK (33).
     /// Selection/cache/allocation and every
     /// reached Unit/order/path mutation are
     /// prepared and revalidated against the canonical owners before one assignment-only commit.
@@ -1833,8 +1833,7 @@ impl Sim {
     > {
         use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
         use crate::systems::canonical_simple_group_host::{
-            commit_simple_group_package_with_action_authority,
-            prepare_simple_group_package_with_action_authority,
+            commit_simple_group_package_with_builds, prepare_simple_group_package_with_builds,
         };
 
         let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
@@ -1847,30 +1846,36 @@ impl Sim {
             })
         });
         let leader_flags = std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags);
-        let prepared = prepare_simple_group_package_with_action_authority(
+        let local_who = (usize::from(self.production_runtime.local_player) < NUM_LEADERS)
+            .then_some(self.production_runtime.local_player);
+        let prepared = prepare_simple_group_package_with_builds(
             &self.world,
             &self.unit_type,
+            &self.builds,
             &self.groups,
             &self.paths,
             &self.command_package_state,
             &self.group_move_authority,
             &self.simple_group_action_authority,
             &leader_flags,
+            local_who,
             &player_who,
             self.world.frame,
             play,
             lockstep_serial,
             bytes,
         )?;
-        commit_simple_group_package_with_action_authority(
+        commit_simple_group_package_with_builds(
             &mut self.world,
             &self.unit_type,
+            &mut self.builds,
             &mut self.groups,
             &mut self.paths,
             &mut self.command_package_state,
             &self.group_move_authority,
             &self.simple_group_action_authority,
             &leader_flags,
+            local_who,
             &player_who,
             prepared,
         )

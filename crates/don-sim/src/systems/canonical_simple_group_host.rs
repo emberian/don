@@ -2,24 +2,28 @@
 //! Canonical `GroupCommand` plus one simple Group action transaction.
 //!
 //! The production arms are opcode 32 `UNITMASK`, opcode 29 `STOP_SPELL`, opcode 12
-//! `HALT`, and the ordinary-Unit arm of opcode 14 `SET_TRANSPORT`. They reuse the fixed-`Groups`
-//! selector/cache/allocator from [`canonical_group_move_host`], plans the exact recovered
+//! `HALT`, the ordinary-Unit arm of opcode 14 `SET_TRANSPORT`, and opcode 33 `BUILDMASK`.
+//! They reuse the fixed-`Groups` selector/cache/allocator from [`canonical_group_move_host`], plan the exact recovered
 //! `Group::action_unitmask` body, and publishes every reached Group, backlink, Unit, order,
 //! path, player-map, clock, and RNG surface at one stale-checked boundary. No
 //! `command::Bridge` or shadow `command::Groups` state is observed.
 
 use crate::command::group_action_frontier::{plan_stop_spell, StopSpellMemberFacts, StopSpellStep};
+use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use crate::systems::canonical_group_move_host::{
-    groups_equal, prepare_group_selection, unit_still_current, CommandPackageState,
-    GroupMoveAuthority, GroupSelectionUse, PackageError, UnitIdentity, UnitMutation,
-    NETWORK_PLAYERS, RECEIVED_SELECTION_CAPACITY,
+    ensure_mutation_for_row, exact_immediate_allocator_slot, groups_equal, prepare_group_selection,
+    unit_still_current, CachedSelection, CommandPackageState, GroupMoveAuthority,
+    GroupSelectionUse, PackageError, UnitIdentity, UnitMutation, NETWORK_PLAYERS,
+    RECEIVED_SELECTION_CAPACITY,
 };
 use crate::systems::groups_guys::{
-    plan_action_halt, plan_action_set_transport, plan_action_unitmask, CheckSum, Groups,
-    HaltMemberFacts, HaltStep, SetTransportMemberFacts, SetTransportStep, UnitMaskMemberFacts,
-    UnitMaskStep, NUM_LEADERS,
+    plan_action_buildmask, plan_action_halt, plan_action_set_transport, plan_action_unitmask,
+    BuildMaskMemberFacts, BuildMaskStep, CheckSum, GroupData, Groups, HaltMemberFacts, HaltStep,
+    SetTransportMemberFacts, SetTransportStep, UnitMaskMemberFacts, UnitMaskStep, NUM_GROUPS,
+    NUM_LEADERS,
 };
 use crate::systems::movement::PathStack;
+use crate::systems::production::BuildData;
 use crate::systems::sparse_object_bands_authority_frontier::UNIT_BAND_LIMIT;
 use crate::world::{Handle, World};
 
@@ -32,6 +36,8 @@ pub const HALT_OPCODE: u8 = 12;
 pub const HALT_WIRE_SIZE: usize = 1;
 pub const SET_TRANSPORT_OPCODE: u8 = 14;
 pub const SET_TRANSPORT_WIRE_SIZE: usize = 5;
+pub const BUILDMASK_OPCODE: u8 = 33;
+pub const BUILDMASK_WIRE_SIZE: usize = 9;
 
 /// Handle-bound capability facts read only by the SET_TRANSPORT arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,17 +48,54 @@ pub struct SimpleGroupActionMemberAuthority {
     pub can_ever_transport: bool,
 }
 
+/// Stable Build-band capability facts read by `WallData::valid_buildmask`.
+///
+/// The shipped 100-byte body tests only input bits `0x40` and `0x80`, in that order.
+/// Their virtual/type cascades are reinstalled facts; the canonical mask itself remains in
+/// [`BuildData`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleBuildMaskMemberAuthority {
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub row: usize,
+    /// Exact `ObjectTypeData::role` folded by `Group::add` into the checksum-visible Group.
+    pub role: i32,
+    pub admits_0x40: bool,
+    pub admits_0x80: bool,
+}
+
+impl SimpleBuildMaskMemberAuthority {
+    fn valid_buildmask(self, mask: u16) -> bool {
+        (mask & 0x40 != 0 && self.admits_0x40) || (mask & 0x80 != 0 && self.admits_0x80)
+    }
+}
+
 /// Reinstalled action facts which are neither gameplay state nor part of DoNSave.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SimpleGroupActionAuthority {
     pub revision: u64,
     pub composition_digest: [u8; 32],
     pub members: Vec<SimpleGroupActionMemberAuthority>,
+    pub builds: Vec<SimpleBuildMaskMemberAuthority>,
 }
 
 impl SimpleGroupActionAuthority {
     fn member(&self, handle: Handle) -> Option<&SimpleGroupActionMemberAuthority> {
         self.members.iter().find(|member| member.handle == handle)
+    }
+
+    fn build_member(
+        &self,
+        who: u8,
+        o: i16,
+        uid: u16,
+        row: usize,
+    ) -> Option<SimpleBuildMaskMemberAuthority> {
+        self.builds
+            .iter()
+            .copied()
+            .find(|member| (member.who, member.o, member.uid, member.row) == (who, o, uid, row))
     }
 }
 
@@ -62,6 +105,7 @@ pub enum SimpleGroupActionWire {
     StopSpell,
     Halt,
     SetTransport { flag: i32 },
+    BuildMask { mask: u16, set: i32 },
 }
 
 impl SimpleGroupActionWire {
@@ -71,16 +115,31 @@ impl SimpleGroupActionWire {
             Self::StopSpell => STOP_SPELL_OPCODE,
             Self::Halt => HALT_OPCODE,
             Self::SetTransport { .. } => SET_TRANSPORT_OPCODE,
+            Self::BuildMask { .. } => BUILDMASK_OPCODE,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimpleGroupActionResult {
-    UnitMask { final_set: bool },
-    StopSpell { stopped_units: usize },
-    Halt { halted_units: usize },
-    SetTransport { enabled: bool, changed_units: usize },
+    UnitMask {
+        final_set: bool,
+    },
+    StopSpell {
+        stopped_units: usize,
+    },
+    Halt {
+        halted_units: usize,
+    },
+    SetTransport {
+        enabled: bool,
+        changed_units: usize,
+    },
+    BuildMask {
+        final_set: bool,
+        changed_builds: usize,
+        feedback: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +171,12 @@ pub enum SimpleGroupPackageError {
     MissingSetTransportAuthority { handle: Handle },
     StaleActionAuthority,
     StaleLeaderFlags { who: u8 },
+    MissingBuild { who: u8, o: i16 },
+    InactiveBuild { who: u8, o: i16 },
+    StaleBuild { who: u8, o: i16 },
+    MissingBuildMaskAuthority { who: u8, o: i16, uid: u16 },
+    StaleBuildRegistry,
+    StaleLocalWho,
 }
 
 impl From<PackageError> for SimpleGroupPackageError {
@@ -135,7 +200,7 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, HALT, or SET_TRANSPORT. Prefixes,
+/// Decode exactly `[Group]` plus UNITMASK, STOP_SPELL, HALT, SET_TRANSPORT, or BUILDMASK. Prefixes,
 /// suffixes, and a
 /// second action are refused.
 pub fn decode_simple_group_package(
@@ -168,6 +233,7 @@ pub fn decode_simple_group_package(
         STOP_SPELL_OPCODE => STOP_SPELL_WIRE_SIZE,
         HALT_OPCODE => HALT_WIRE_SIZE,
         SET_TRANSPORT_OPCODE => SET_TRANSPORT_WIRE_SIZE,
+        BUILDMASK_OPCODE => BUILDMASK_WIRE_SIZE,
         _ => return Err(SimpleGroupPackageError::UnsupportedActionOpcode { got: opcode }),
     };
     let expected = group_len + action_size;
@@ -198,6 +264,10 @@ pub fn decode_simple_group_package(
         SET_TRANSPORT_OPCODE => SimpleGroupActionWire::SetTransport {
             flag: read_i32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)?,
         },
+        BUILDMASK_OPCODE => SimpleGroupActionWire::BuildMask {
+            mask: read_u32(bytes, group_len + 1).ok_or(SimpleGroupPackageError::Truncated)? as u16,
+            set: read_i32(bytes, group_len + 5).ok_or(SimpleGroupPackageError::Truncated)?,
+        },
         _ => unreachable!("action size match admitted this opcode"),
     };
     Ok(SimpleGroupWire {
@@ -219,6 +289,22 @@ pub struct SimpleUnitMutation {
     pub type_index_before: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleBuildIdentity {
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub row: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleBuildMutation {
+    pub identity: SimpleBuildIdentity,
+    pub flags_before: u8,
+    pub build_masks_before: u16,
+    pub build_masks_after: u16,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedSimpleGroupPackage {
     pub play: usize,
@@ -229,6 +315,7 @@ pub struct PreparedSimpleGroupPackage {
     pub wire: SimpleGroupWire,
     pub group_slot: usize,
     pub selected: Vec<UnitIdentity>,
+    pub selected_builds: Vec<SimpleBuildIdentity>,
     pub command_state_before: CommandPackageState,
     pub command_state_after: CommandPackageState,
     pub groups_before: Groups,
@@ -238,7 +325,9 @@ pub struct PreparedSimpleGroupPackage {
     pub authority_members: Vec<crate::systems::canonical_group_move_host::MoveMemberAuthority>,
     pub action_authority_before: Option<SimpleGroupActionAuthority>,
     pub leader_flags_before: Option<i32>,
+    pub local_who_before: Option<u8>,
     pub units: Vec<SimpleUnitMutation>,
+    pub builds: Vec<SimpleBuildMutation>,
     pub action_result: SimpleGroupActionResult,
 }
 
@@ -251,6 +340,7 @@ pub struct SimpleGroupPackageReceipt {
     pub opcode: u8,
     pub group_slot: usize,
     pub selected: Vec<UnitIdentity>,
+    pub selected_builds: Vec<SimpleBuildIdentity>,
     pub command_state_revision: u64,
     pub groups_checksum: u32,
     pub random_state_before: i32,
@@ -269,6 +359,268 @@ fn mutation_for(
             mutation.unit.after.identity.who == who && mutation.unit.after.identity.o == o
         })
         .ok_or(SimpleGroupPackageError::BrokenPlanIdentity { who, o })
+}
+
+fn build_identity(
+    world: &World,
+    builds: &[BuildData],
+    who: u8,
+    o: i16,
+) -> Result<SimpleBuildIdentity, SimpleGroupPackageError> {
+    if i32::from(o) < BUILD_BAND_BASE as i32 || i32::from(o) >= WALL_BAND_BASE as i32 {
+        return Err(SimpleGroupPackageError::MissingBuild { who, o });
+    }
+    let offset = usize::try_from(i32::from(o) - BUILD_BAND_BASE as i32)
+        .expect("Build-band range was checked");
+    let row = world
+        .objects
+        .slot(usize::from(who))
+        .band(Band::Build)
+        .get(offset)
+        .copied()
+        .map(|row| row as usize)
+        .ok_or(SimpleGroupPackageError::MissingBuild { who, o })?;
+    let build = builds
+        .get(row)
+        .ok_or(SimpleGroupPackageError::MissingBuild { who, o })?;
+    if build.who != who || build.object_id() != o {
+        return Err(SimpleGroupPackageError::MissingBuild { who, o });
+    }
+    if build.flags & crate::world::OBJ_FLAG_ACTIVE == 0 {
+        return Err(SimpleGroupPackageError::InactiveBuild { who, o });
+    }
+    Ok(SimpleBuildIdentity {
+        who,
+        o,
+        uid: build.uid,
+        row,
+    })
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn prepare_buildmask_package(
+    world: &World,
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    authority: &GroupMoveAuthority,
+    action_authority: &SimpleGroupActionAuthority,
+    local_who: Option<u8>,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    frame: i32,
+    play: usize,
+    lockstep_serial: i32,
+    wire: SimpleGroupWire,
+) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
+    if !world.object_bands_are_dense_equivalent() {
+        return Err(SimpleGroupPackageError::StaleBuildRegistry);
+    }
+    if groups.list.len() != NUM_GROUPS
+        || groups
+            .list
+            .iter()
+            .enumerate()
+            .any(|(slot, group)| group.id != slot as i32)
+    {
+        return Err(PackageError::InvalidGroupPool.into());
+    }
+
+    let received = if wire.objects.is_empty() {
+        command_state.selection(play).unwrap_or_default().to_vec()
+    } else {
+        let cache = wire
+            .objects
+            .iter()
+            .filter_map(|&o| match build_identity(world, builds, wire.who, o) {
+                Ok(identity) => Some(CachedSelection {
+                    o,
+                    uid: identity.uid,
+                }),
+                Err(
+                    SimpleGroupPackageError::MissingBuild { .. }
+                    | SimpleGroupPackageError::InactiveBuild { .. },
+                ) => None,
+                Err(_) => unreachable!("Build identity has only typed lookup refusals"),
+            })
+            .collect::<Vec<_>>();
+        cache
+    };
+    let command_state_after = command_state.staged_selection(play, received.clone())?;
+
+    let mut selected = Vec::new();
+    for entry in received {
+        let identity = match build_identity(world, builds, wire.who, entry.o) {
+            Ok(identity) if identity.uid == entry.uid => identity,
+            Ok(_)
+            | Err(SimpleGroupPackageError::MissingBuild { .. })
+            | Err(SimpleGroupPackageError::InactiveBuild { .. }) => continue,
+            Err(_) => unreachable!("Build identity has only typed lookup refusals"),
+        };
+        if selected
+            .iter()
+            .any(|member: &SimpleBuildIdentity| member.o == identity.o)
+        {
+            continue;
+        }
+        if action_authority
+            .build_member(identity.who, identity.o, identity.uid, identity.row)
+            .is_none()
+        {
+            return Err(SimpleGroupPackageError::MissingBuildMaskAuthority {
+                who: identity.who,
+                o: identity.o,
+                uid: identity.uid,
+            });
+        }
+        selected.push(identity);
+    }
+    if selected.is_empty() {
+        return Err(PackageError::EmptyEffectiveSelection.into());
+    }
+
+    let mut transient = GroupData {
+        id: -1,
+        army: -1,
+        form: -1,
+        stamp: frame,
+        ..GroupData::default()
+    };
+    for member in &selected {
+        let role = action_authority
+            .build_member(member.who, member.o, member.uid, member.row)
+            .expect("selection preflight bound every Build authority member")
+            .role;
+        transient.add(member.o, wire.who, true, role, frame);
+    }
+
+    let mut groups_after = groups.clone();
+    let current = groups_after.last_group[usize::from(wire.who)];
+    let n = transient.num as usize;
+    let reuse = usize::try_from(current).ok().is_some_and(|slot| {
+        groups_after.list.get(slot).is_some_and(|candidate| {
+            candidate.num == transient.num && candidate.list[..n] == transient.list[..n]
+        })
+    });
+    let group_slot = if reuse {
+        current as usize
+    } else {
+        let slot = exact_immediate_allocator_slot(&mut groups_after, wire.who, world, authority)?;
+        let id = groups_after.list[slot].id;
+        groups_after.list[slot] = transient;
+        groups_after.list[slot].id = id;
+        groups_after.list[slot].stamp = frame;
+        groups_after.last_group[usize::from(wire.who)] = slot as i32;
+        slot
+    };
+
+    // Replacing an ordinary-Unit group must detach its old canonical backlinks. Builds have
+    // no UnitData::group column and therefore require no invented shadow backlink.
+    let mut unit_mutations = Vec::new();
+    if !reuse && groups.list[group_slot].buildings == 0 {
+        for row in 0..world.live_count() as usize {
+            if world.units.get_who(row) == wire.who && world.units.group()[row] == group_slot as i16
+            {
+                let index = ensure_mutation_for_row(&mut unit_mutations, world, paths, row)?;
+                unit_mutations[index].after.group = -1;
+            }
+        }
+    }
+    let units = unit_mutations
+        .into_iter()
+        .map(|unit| {
+            let row = world
+                .row_of(unit.before.identity.handle)
+                .expect("selection cleanup resolved this Unit");
+            let flags = world.units.get_flags(row);
+            let dest_angle = world.units.dest_angle()[row];
+            SimpleUnitMutation {
+                unit,
+                flags_before: flags,
+                flags_after: flags,
+                dest_angle_before: dest_angle,
+                dest_angle_after: dest_angle,
+                spell_time_before: None,
+                spell_time_after: None,
+                type_index_before: None,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let SimpleGroupActionWire::BuildMask { mask, set } = wire.action else {
+        unreachable!("Build-band selector is exclusive to BUILDMASK")
+    };
+    let mut facts = Vec::with_capacity(selected.len());
+    let mut build_mutations = Vec::with_capacity(selected.len());
+    for identity in &selected {
+        let build = &builds[identity.row];
+        let capability = action_authority
+            .build_member(identity.who, identity.o, identity.uid, identity.row)
+            .expect("selection preflight bound every Build authority member");
+        facts.push(BuildMaskMemberFacts {
+            o: identity.o,
+            valid_build: true,
+            valid_buildmask: capability.valid_buildmask(mask),
+            build_masks: build.build_masks,
+        });
+        build_mutations.push(SimpleBuildMutation {
+            identity: *identity,
+            flags_before: build.flags,
+            build_masks_before: build.build_masks,
+            build_masks_after: build.build_masks,
+        });
+    }
+    let group = groups_after.list[group_slot].clone();
+    let plan = plan_action_buildmask(&group, mask, set, local_who == Some(wire.who), &facts)
+        .map_err(|_| SimpleGroupPackageError::BrokenPlanIdentity {
+            who: wire.who,
+            o: -1,
+        })?;
+    groups_after.list[group_slot] = plan.group;
+    let mut feedback = false;
+    let mut changed_builds = 0usize;
+    for step in plan.steps {
+        match step {
+            BuildMaskStep::WriteBuildMasks { who, o, value } => {
+                let mutation = build_mutations
+                    .iter_mut()
+                    .find(|mutation| (mutation.identity.who, mutation.identity.o) == (who, o))
+                    .ok_or(SimpleGroupPackageError::BrokenPlanIdentity { who, o })?;
+                mutation.build_masks_after = value;
+                changed_builds += 1;
+            }
+            BuildMaskStep::Feedback { .. } => feedback = true,
+        }
+    }
+
+    Ok(PreparedSimpleGroupPackage {
+        play,
+        lockstep_serial,
+        frame,
+        random_state: world.random.state(),
+        player_who_before: *player_who,
+        wire,
+        group_slot,
+        selected: Vec::new(),
+        selected_builds: selected,
+        command_state_before: command_state.clone(),
+        command_state_after,
+        groups_before: groups.clone(),
+        groups_after,
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        authority_members: authority.members.clone(),
+        action_authority_before: Some(action_authority.clone()),
+        leader_flags_before: None,
+        local_who_before: local_who,
+        units,
+        builds: build_mutations,
+        action_result: SimpleGroupActionResult::BuildMask {
+            final_set: plan.final_set,
+            changed_builds,
+            feedback,
+        },
+    })
 }
 
 /// Prepare opcode-0 selection and one admitted simple action against detached after-images.
@@ -320,6 +672,44 @@ pub fn prepare_simple_group_package_with_action_authority(
     lockstep_serial: i32,
     bytes: &[u8],
 ) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
+    prepare_simple_group_package_with_builds(
+        world,
+        unit_types,
+        &[],
+        groups,
+        paths,
+        command_state,
+        authority,
+        action_authority,
+        leader_flags,
+        None,
+        player_who,
+        frame,
+        play,
+        lockstep_serial,
+        bytes,
+    )
+}
+
+/// Production preparation entry with canonical Build-band state and local presentation owner.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_simple_group_package_with_builds(
+    world: &World,
+    unit_types: &[i32],
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    authority: &GroupMoveAuthority,
+    action_authority: &SimpleGroupActionAuthority,
+    leader_flags: &[i32; NUM_LEADERS],
+    local_who: Option<u8>,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    frame: i32,
+    play: usize,
+    lockstep_serial: i32,
+    bytes: &[u8],
+) -> Result<PreparedSimpleGroupPackage, SimpleGroupPackageError> {
     let wire = decode_simple_group_package(bytes)?;
     if play >= NETWORK_PLAYERS {
         return Err(PackageError::PlayOutOfRange { play }.into());
@@ -333,11 +723,45 @@ pub fn prepare_simple_group_package_with_action_authority(
         }
         .into());
     }
+    if usize::from(wire.who) >= NUM_LEADERS {
+        return Err(PackageError::OwnerOutOfRange {
+            who: wire.who as i8,
+        }
+        .into());
+    }
     let admitted_objects = if wire.objects.is_empty() {
         command_state.selection(play).unwrap_or_default()
     } else {
         &[]
     };
+    let addresses = wire
+        .objects
+        .iter()
+        .copied()
+        .chain(admitted_objects.iter().map(|entry| entry.o))
+        .collect::<Vec<_>>();
+    let build_selection = matches!(wire.action, SimpleGroupActionWire::BuildMask { .. })
+        && !addresses.is_empty()
+        && addresses
+            .iter()
+            .all(|&o| (BUILD_BAND_BASE as i32..WALL_BAND_BASE as i32).contains(&i32::from(o)));
+    if build_selection {
+        return prepare_buildmask_package(
+            world,
+            builds,
+            groups,
+            paths,
+            command_state,
+            authority,
+            action_authority,
+            local_who,
+            player_who,
+            frame,
+            play,
+            lockstep_serial,
+            wire,
+        );
+    }
     if let Some(o) = wire
         .objects
         .iter()
@@ -653,6 +1077,22 @@ pub fn prepare_simple_group_package_with_action_authority(
                 changed_units,
             }
         }
+        SimpleGroupActionWire::BuildMask { mask, set } => {
+            // A Unit-band selection is an exact early no-op: action_buildmask tests the
+            // Group building discriminator before walking any Build virtual or mask column.
+            let plan = plan_action_buildmask(&group, mask, set, false, &[]).map_err(|_| {
+                SimpleGroupPackageError::BrokenPlanIdentity {
+                    who: wire.who,
+                    o: -1,
+                }
+            })?;
+            groups_after.list[group_slot] = plan.group;
+            SimpleGroupActionResult::BuildMask {
+                final_set: plan.final_set,
+                changed_builds: 0,
+                feedback: false,
+            }
+        }
     };
 
     Ok(PreparedSimpleGroupPackage {
@@ -668,6 +1108,7 @@ pub fn prepare_simple_group_package_with_action_authority(
             .iter()
             .map(|member| member.identity.clone())
             .collect(),
+        selected_builds: Vec::new(),
         command_state_before: selection.command_state_before,
         command_state_after: selection.command_state_after,
         groups_before: selection.groups_before,
@@ -677,7 +1118,9 @@ pub fn prepare_simple_group_package_with_action_authority(
         authority_members: selection.authority_members,
         action_authority_before,
         leader_flags_before,
+        local_who_before: local_who,
         units,
+        builds: Vec::new(),
         action_result,
     })
 }
@@ -721,6 +1164,38 @@ pub fn commit_simple_group_package_with_action_authority(
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     prepared: PreparedSimpleGroupPackage,
 ) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
+    commit_simple_group_package_with_builds(
+        world,
+        unit_types,
+        &mut [],
+        groups,
+        paths,
+        command_state,
+        authority,
+        action_authority,
+        leader_flags,
+        None,
+        player_who,
+        prepared,
+    )
+}
+
+/// Production commit entry which includes canonical Build-band before-images.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_simple_group_package_with_builds(
+    world: &mut World,
+    unit_types: &[i32],
+    builds: &mut [BuildData],
+    groups: &mut Groups,
+    paths: &mut [PathStack],
+    command_state: &mut CommandPackageState,
+    authority: &GroupMoveAuthority,
+    action_authority: &SimpleGroupActionAuthority,
+    leader_flags: &[i32; NUM_LEADERS],
+    local_who: Option<u8>,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    prepared: PreparedSimpleGroupPackage,
+) -> Result<SimpleGroupPackageReceipt, SimpleGroupPackageError> {
     if player_who != &prepared.player_who_before {
         return Err(SimpleGroupPackageError::StalePlayerMap);
     }
@@ -753,6 +1228,9 @@ pub fn commit_simple_group_package_with_action_authority(
                 who: prepared.wire.who,
             });
         }
+    }
+    if local_who != prepared.local_who_before {
+        return Err(SimpleGroupPackageError::StaleLocalWho);
     }
     for mutation in &prepared.units {
         if !unit_still_current(world, paths, &mutation.unit.before) {
@@ -789,6 +1267,31 @@ pub fn commit_simple_group_package_with_action_authority(
             }
         }
     }
+    if !prepared.builds.is_empty() && !world.object_bands_are_dense_equivalent() {
+        return Err(SimpleGroupPackageError::StaleBuildRegistry);
+    }
+    for mutation in &prepared.builds {
+        let current = build_identity(world, builds, mutation.identity.who, mutation.identity.o)
+            .map_err(|_| SimpleGroupPackageError::StaleBuild {
+                who: mutation.identity.who,
+                o: mutation.identity.o,
+            })?;
+        let build = builds
+            .get(current.row)
+            .ok_or(SimpleGroupPackageError::StaleBuild {
+                who: mutation.identity.who,
+                o: mutation.identity.o,
+            })?;
+        if current != mutation.identity
+            || build.flags != mutation.flags_before
+            || build.build_masks != mutation.build_masks_before
+        {
+            return Err(SimpleGroupPackageError::StaleBuild {
+                who: mutation.identity.who,
+                o: mutation.identity.o,
+            });
+        }
+    }
 
     let mut checksum = CheckSum::default();
     prepared.groups_after.check_groups(&mut checksum);
@@ -800,6 +1303,7 @@ pub fn commit_simple_group_package_with_action_authority(
         opcode: prepared.wire.action.opcode(),
         group_slot: prepared.group_slot,
         selected: prepared.selected.clone(),
+        selected_builds: prepared.selected_builds.clone(),
         command_state_revision: prepared.command_state_after.revision(),
         groups_checksum: checksum.value,
         random_state_before: prepared.random_state,
@@ -825,6 +1329,9 @@ pub fn commit_simple_group_package_with_action_authority(
         }
         *world.orders_mut(row) = mutation.unit.after.orders;
         paths[row] = mutation.unit.after.path;
+    }
+    for mutation in prepared.builds {
+        builds[mutation.identity.row].build_masks = mutation.build_masks_after;
     }
     Ok(receipt)
 }

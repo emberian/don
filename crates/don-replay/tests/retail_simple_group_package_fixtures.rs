@@ -307,6 +307,69 @@ fn retail_replay_binds_set_transport_explicit_wire() {
 }
 
 #[test]
+fn retail_replay_binds_buildmask_explicit_and_persistent_cache_wires() {
+    let path = root().join(STOP_SPELL_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        STOP_SPELL_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let wanted = [5_297_usize, 5_331];
+    let mut fixtures = Vec::new();
+    for (package_index0, turn) in replay.turns.iter().enumerate() {
+        if !wanted.contains(&package_index0) {
+            continue;
+        }
+        for player in &turn.players {
+            for pair in player.commands.windows(2) {
+                if pair[0].opcode == 0 && pair[1].opcode == 33 {
+                    fixtures.push(Fixture {
+                        package_index0,
+                        turn: turn.turn,
+                        play: player.play,
+                        frame: player.stamp,
+                        opcodes: player
+                            .commands
+                            .iter()
+                            .map(|command| command.opcode)
+                            .collect(),
+                        group_hex: hex(&pair[0].bytes),
+                        action_hex: hex(&pair[1].bytes),
+                    });
+                }
+            }
+        }
+    }
+    assert_eq!(
+        fixtures,
+        [
+            Fixture {
+                package_index0: 5_297,
+                turn: 5_298,
+                play: 1,
+                frame: 105_512,
+                opcodes: vec![79, 0, 33, 0, 24, 58, 74, 72],
+                group_hex: "0001023708".into(),
+                action_hex: "214000000001000000".into(),
+            },
+            Fixture {
+                package_index0: 5_331,
+                turn: 5_332,
+                play: 1,
+                frame: 105_732,
+                opcodes: vec![79, 0, 33, 58, 74, 72],
+                group_hex: "000002".into(),
+                action_hex: "214000000001000000".into(),
+            },
+        ]
+    );
+}
+
+#[test]
 #[ignore = "full retail replay corpus"]
 fn census_strict_group_unitmask_packets() {
     let mut found = Vec::new();
@@ -454,6 +517,44 @@ fn census_strict_group_set_transport_packets() {
     assert_eq!(found.len(), 5);
     eprintln!("strict Group+SET_TRANSPORT occurrences={}", found.len());
     for fixture in &found {
+        eprintln!("fixture={fixture:?}");
+    }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_strict_group_buildmask_packets() {
+    let mut found = Vec::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        for (turn_index, turn) in replay.turns.iter().enumerate() {
+            for player in &turn.players {
+                for pair in player.commands.windows(2) {
+                    if pair[0].opcode == 0 && pair[1].opcode == 33 {
+                        found.push((
+                            path.clone(),
+                            turn_index,
+                            turn.turn,
+                            player.play,
+                            player.stamp,
+                            player
+                                .commands
+                                .iter()
+                                .map(|command| command.opcode)
+                                .collect::<Vec<_>>(),
+                            hex(&pair[0].bytes),
+                            hex(&pair[1].bytes),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(found.len(), 329);
+    eprintln!("strict Group+BUILDMASK occurrences={}", found.len());
+    for fixture in found.iter().take(24) {
         eprintln!("fixture={fixture:?}");
     }
 }
