@@ -19,6 +19,10 @@ use don_sim::systems::bhs_create_unit_runtime::{
     BhsCreateUnitRuntime, CreateUnitLeaderProjection, CreateUnitProjectionWitness,
     CreateUnitRuntimeInput,
 };
+use don_sim::systems::bhs_place_building_runtime::{
+    apply_sim_place_building_with_cost_prefix, PlaceBuildingCostAuthority, PlaceBuildingCostEntry,
+    PlaceBuildingCostSource, PlaceBuildingRequest, PlaceBuildingStatus, LEADER_PRODUCE_BUILDING_VA,
+};
 use don_sim::systems::bhs_type_factory::{
     produce_type_builtin_state, ComposedTypeRow, RulesCompositionId, Sha256Digest,
     TypeBuiltinFactoryInput, TypeSourceRole, TypeSourceWitness, WitnessedTypeSource,
@@ -30,6 +34,7 @@ use don_sim::systems::production::runtime::{
     LiveProductionRuntime, LiveProductionType, SingleLibraryResearchStatus,
 };
 use don_sim::systems::production::{flag, off, BuildData, BuildQueue, BuildQueueEntry};
+use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::Sim;
 
 const OWNER: usize = 0;
@@ -92,6 +97,10 @@ fn canonical_type_owners(owner: usize) -> (TypeBuiltinState, BhsCreateUnitRuntim
                 row.common.job_time = 200;
                 row.common.preq = [-1; 3];
                 row.where_type = LIBRARY;
+            }
+            if slot == 417 {
+                // Installed Farm COST=4t; buildingrules.xml costs are scaled by ten.
+                row.common.costs = [0, 40, 0, 0, 0, 0];
             }
             Some(ComposedTypeRow {
                 index: row.index,
@@ -182,6 +191,11 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
         who: owner as u8,
         city: 0,
         city_down: -1,
+        gather_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
         queue: BuildQueue {
             queued: 0,
             entries: vec![BuildQueueEntry::default(); 2],
@@ -190,6 +204,7 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     };
     build.other[off::OBJECT_ID..off::OBJECT_ID + 2]
         .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
+    build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
     let row = sim.spawn_build(owner, build);
     sim.cities.city_mark[owner] = 1;
     let city = &mut sim.cities.slots[owner][0];
@@ -211,6 +226,7 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut city_state = LiveProductionType::research(CITY_STATE, 200);
     city_state.repeat_cost = Some([12, 0, 0, 0, 0, 0]);
     production.install_type(city_state);
+    production.install_type(LiveProductionType::in_place_building(417, 150));
     production.leaders[owner].resources = [100; 6];
     sim.leaders[owner].econ.stockpile = [100; 6];
     sim.step8.leaders[owner].econ.stockpile = [100; 6];
@@ -227,8 +243,108 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     (sim, production, row)
 }
 
+fn place_building_costs(owner: usize) -> PlaceBuildingCostAuthority {
+    PlaceBuildingCostAuthority {
+        revision: 7,
+        composition_digest: [0x52; 32],
+        entries: vec![PlaceBuildingCostEntry {
+            owner: owner as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            city_constraint: -1,
+            source: PlaceBuildingCostSource::TypeDataCanPayCostPeAfterImage,
+            possible_goods: [true; 6],
+            resolved_costs: [0, 40, 0, 0, 0, 0],
+        }],
+    }
+}
+
 fn game_seconds(seconds: i32) -> ExternalGameSeconds {
     ExternalGameSeconds::admit(Some(seconds), Some(seconds)).unwrap()
+}
+
+#[test]
+fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
+    let (types, _) = canonical_type_owners(OWNER);
+    let (mut sim, production, row) = production_owners(OWNER);
+    let authority = place_building_costs(OWNER);
+    let request = PlaceBuildingRequest {
+        who: 1,
+        type_name: "fArM".into(),
+        city_name: "aThEnS".into(),
+    };
+    let builds_before: Vec<_> = sim.builds.iter().map(BuildData::image).collect();
+    let cities_before = sim.cities.clone();
+    let groups_before = sim.groups.clone();
+    let resources_before = production.leaders[OWNER].resources;
+
+    let receipt = apply_sim_place_building_with_cost_prefix(
+        &sim,
+        &production,
+        &types,
+        &authority,
+        request.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipt.status,
+        PlaceBuildingStatus::ReadyForLeaderProduceBuilding
+    );
+    assert_eq!(receipt.origin_build_row, Some(row));
+    assert_eq!(receipt.city_constraint, Some(-1));
+    assert_eq!(receipt.resolved_costs, Some([0, 40, 0, 0, 0, 0]));
+    assert_eq!(receipt.can_pay_result, Some(2));
+    assert_eq!(receipt.returned, None);
+    assert_eq!(receipt.continuation.unwrap().va, LEADER_PRODUCE_BUILDING_VA);
+    assert_eq!(
+        sim.builds.iter().map(BuildData::image).collect::<Vec<_>>(),
+        builds_before
+    );
+    assert_eq!(sim.cities.slots, cities_before.slots);
+    assert_eq!(sim.cities.city_mark, cities_before.city_mark);
+    assert_eq!(sim.groups.list, groups_before.list);
+    assert_eq!(production.leaders[OWNER].resources, resources_before);
+
+    // Activation/type/cost projections are external runtime inputs. Preserve the canonical
+    // City/Build/resource owners, save with those mirrors uninstalled, then reinstall them.
+    sim.step8.leaders[OWNER].flags = 0;
+    sim.vic_leaders.slots[OWNER].leader_flags = 0;
+    let sim_before = save_sim(&sim).unwrap();
+    let mut loaded = load_sim(&sim_before).unwrap();
+    loaded.step8.leaders[OWNER].flags = 3;
+    loaded.vic_leaders.slots[OWNER].leader_flags = 3;
+    loaded.step8.leaders[OWNER].econ.stockpile = resources_before;
+    loaded.vic_leaders.slots[OWNER].economy.bucket = resources_before;
+    let resumed = apply_sim_place_building_with_cost_prefix(
+        &loaded,
+        &production,
+        &types,
+        &authority,
+        request,
+    )
+    .unwrap();
+    assert_eq!(resumed, receipt);
+
+    let (mut poor_sim, mut poor_production, _) = production_owners(OWNER);
+    poor_production.leaders[OWNER].resources = [0; 6];
+    poor_sim.leaders[OWNER].econ.stockpile = [0; 6];
+    poor_sim.step8.leaders[OWNER].econ.stockpile = [0; 6];
+    poor_sim.vic_leaders.slots[OWNER].economy.bucket = [0; 6];
+    let poor = apply_sim_place_building_with_cost_prefix(
+        &poor_sim,
+        &poor_production,
+        &types,
+        &authority,
+        PlaceBuildingRequest {
+            who: 1,
+            type_name: "Farm".into(),
+            city_name: "capital_0".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(poor.status, PlaceBuildingStatus::Unaffordable);
+    assert_eq!(poor.returned, Some(0));
+    assert!(poor.continuation.is_none());
 }
 
 #[test]
@@ -276,6 +392,7 @@ fn insufficient_resources_return_zero_before_cursor_group_or_queue_commit() {
         &image,
         &types,
         &upgrades,
+        &PlaceBuildingCostAuthority::default(),
         &mut sim,
         &mut production,
         game_seconds(0),
@@ -359,6 +476,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         &image,
         &types,
         &upgrades,
+        &PlaceBuildingCostAuthority::default(),
         &mut sim,
         &mut production,
         game_seconds(0),
@@ -531,6 +649,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
         &image,
         &types,
         &upgrades,
+        &place_building_costs(content_owner),
         &mut failure_sim,
         &mut failure_production,
         game_seconds(0),
@@ -595,6 +714,27 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let binding = binding.expect("AI replay carries an economic binding");
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
+    let installed_place = apply_sim_place_building_with_cost_prefix(
+        &sim,
+        &production,
+        &types,
+        &place_building_costs(content_owner),
+        PlaceBuildingRequest {
+            who: content_owner as i32 + 1,
+            type_name: "Farm".into(),
+            city_name: "Athens".into(),
+        },
+    )
+    .expect("admit the exact first installed Farm/Athens placement prefix");
+    assert_eq!(
+        installed_place.status,
+        PlaceBuildingStatus::ReadyForLeaderProduceBuilding
+    );
+    assert_eq!(installed_place.can_pay_result, Some(2));
+    assert_eq!(
+        installed_place.continuation.unwrap().va,
+        LEADER_PRODUCE_BUILDING_VA
+    );
 
     let error = run_production_research_call(
         &mut script_runtime,
@@ -603,6 +743,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
         &image,
         &types,
         &upgrades,
+        &place_building_costs(content_owner),
         &mut sim,
         &mut production,
         game_seconds(0),

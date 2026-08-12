@@ -25,6 +25,10 @@ use don_sim::systems::bhs_idle_unit_runtime::{
     apply_sim_idle_unit_census_transaction, IdleUnitCensusReceipt, IdleUnitCensusRequest,
     FIND_NUM_IDLE_UNIT_BUILTIN,
 };
+use don_sim::systems::bhs_place_building_runtime::{
+    apply_sim_place_building_with_cost_prefix, PlaceBuildingCostAuthority, PlaceBuildingReceipt,
+    PlaceBuildingRequest, PLACE_BUILDING_WITH_COST_BUILTIN,
+};
 use don_sim::systems::bhs_type_queue_runtime::{
     apply_sim_type_queue_count_transaction, TypeQueueCountReceipt, TypeQueueCountRequest,
     NUM_TYPE_QUEUED_BUILTIN,
@@ -48,6 +52,7 @@ pub struct ProductionResearchRunReceipt {
     pub idle_units: Vec<IdleUnitCensusReceipt>,
     pub city_buildings: Vec<CityBuildingCountReceipt>,
     pub type_queues: Vec<TypeQueueCountReceipt>,
+    pub place_buildings: Vec<PlaceBuildingReceipt>,
 }
 
 struct ResearchHost<'a> {
@@ -55,6 +60,7 @@ struct ResearchHost<'a> {
     image: &'a ProductionBuiltinImage,
     types: &'a TypeBuiltinState,
     upgrades: &'a BhsCreateUnitRuntime,
+    place_building_costs: &'a PlaceBuildingCostAuthority,
     sim: &'a mut Sim,
     production: &'a mut LiveProductionRuntime,
     trace: Vec<ProductionBuiltinCall>,
@@ -62,6 +68,7 @@ struct ResearchHost<'a> {
     idle_units: Vec<IdleUnitCensusReceipt>,
     city_buildings: Vec<CityBuildingCountReceipt>,
     type_queues: Vec<TypeQueueCountReceipt>,
+    place_buildings: Vec<PlaceBuildingReceipt>,
 }
 
 impl<'a> ResearchHost<'a> {
@@ -69,6 +76,7 @@ impl<'a> ResearchHost<'a> {
         image: &'a ProductionBuiltinImage,
         types: &'a TypeBuiltinState,
         upgrades: &'a BhsCreateUnitRuntime,
+        place_building_costs: &'a PlaceBuildingCostAuthority,
         sim: &'a mut Sim,
         production: &'a mut LiveProductionRuntime,
     ) -> Self {
@@ -77,6 +85,7 @@ impl<'a> ResearchHost<'a> {
             image,
             types,
             upgrades,
+            place_building_costs,
             sim,
             production,
             trace: Vec::new(),
@@ -84,6 +93,7 @@ impl<'a> ResearchHost<'a> {
             idle_units: Vec::new(),
             city_buildings: Vec::new(),
             type_queues: Vec::new(),
+            place_buildings: Vec::new(),
         }
     }
 
@@ -366,6 +376,27 @@ impl<'a> ResearchHost<'a> {
         Ok(Value::Int(returned))
     }
 
+    fn place_building_with_cost(&mut self, args: &[Value]) -> HostResult {
+        let request = PlaceBuildingRequest {
+            who: Self::int_arg(args, 0)?,
+            type_name: Self::str_arg(args, 1)?.to_owned(),
+            city_name: Self::str_arg(args, 2)?.to_owned(),
+        };
+        let receipt = apply_sim_place_building_with_cost_prefix(
+            self.sim,
+            self.production,
+            self.types,
+            self.place_building_costs,
+            request,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        let returned = receipt.returned;
+        self.place_buildings.push(receipt);
+        // A ready prefix is not a scalar success. The VM must retain builtin 520 as the
+        // exact stop until Leader::produce_building is one atomic canonical transaction.
+        returned.map(Value::Int).ok_or(HostError::Unimplemented)
+    }
+
     fn record(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
         self.trace.push(ProductionBuiltinCall {
             index: decl.index,
@@ -383,6 +414,7 @@ impl Host for ResearchHost<'_> {
             FIND_NUM_IDLE_UNIT_BUILTIN => self.find_num_idle_unit(args),
             NUM_CITY_BUILDINGS_BUILTIN => self.num_city_buildings(args),
             NUM_TYPE_QUEUED_BUILTIN => self.num_type_queued(args),
+            PLACE_BUILDING_WITH_COST_BUILTIN => self.place_building_with_cost(args),
             AT_LEAST_TYPE_BUILTIN => self.at_least_type(args),
             245 | 246 => self.population(decl.index, args),
             _ => {
@@ -413,6 +445,7 @@ pub fn run_production_research_call(
     image: &ProductionBuiltinImage,
     types: &TypeBuiltinState,
     upgrades: &BhsCreateUnitRuntime,
+    place_building_costs: &PlaceBuildingCostAuthority,
     sim: &mut Sim,
     production: &mut LiveProductionRuntime,
     game_seconds: ExternalGameSeconds,
@@ -461,8 +494,15 @@ pub fn run_production_research_call(
         std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].econ.stockpile);
     let victory_before = sim.vic_leaders.clone();
 
-    let (result, trace, research, idle_units, city_buildings, type_queues) = {
-        let mut host = ResearchHost::new(image, types, upgrades, sim, production);
+    let (result, trace, research, idle_units, city_buildings, type_queues, place_buildings) = {
+        let mut host = ResearchHost::new(
+            image,
+            types,
+            upgrades,
+            place_building_costs,
+            sim,
+            production,
+        );
         let result = script_runtime.run_external_timer_transaction(
             binding.file,
             script,
@@ -489,6 +529,7 @@ pub fn run_production_research_call(
             host.idle_units,
             host.city_buildings,
             host.type_queues,
+            host.place_buildings,
         )
     };
 
@@ -531,5 +572,6 @@ pub fn run_production_research_call(
         idle_units,
         city_buildings,
         type_queues,
+        place_buildings,
     })
 }
