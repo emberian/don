@@ -10,8 +10,11 @@
 
 use std::fmt;
 
+use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
 use don_sim::systems::map_terrain::{Coord, WCoord};
 use don_sim::systems::production::Footprint;
+use don_sim::tick::Sim;
+use don_sim::world::OBJ_FLAG_ACTIVE;
 
 use crate::groups_build_history::{
     strict_group_build_history_before, GroupBuildHistoryError, ReplayGroupBuildPackage,
@@ -24,7 +27,9 @@ use crate::groups_pre_pair_unit_authority::{
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
 use crate::setup_units_producer::{
-    starting_citizen_counts, CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
+    starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
+    BuildUnitsPrefixReceipt, BuildUnitsReceiptError, PlacementOutcomeReceipt, PlacementRngEvent,
+    StableUnitIdentityReceipt, StartingUnitPhase, CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
 };
 use crate::wire::CommandView;
 use crate::world_owner_frontier::sha256;
@@ -39,6 +44,7 @@ pub const FIRST_PLAY: usize = 1;
 pub const FIRST_OWNER: u8 = 0;
 pub const FIRST_SELECTED_O: i16 = 4;
 pub const FARM_TYPE: i32 = 0x1a1;
+pub const FIRST_BUILDER_SETUP_ORDINAL: usize = 4;
 
 /// Exact setup schedule facts which precede object allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +173,243 @@ impl From<PrePairUnitAuthorityError> for FirstFarmAuthorityError {
     fn from(value: PrePairUnitAuthorityError) -> Self {
         Self::Content(value)
     }
+}
+
+/// External state provenance admitted by the frame-79 join.
+///
+/// This is intentionally narrower than "loaded Sim": the state must be the output of the
+/// validated setup receipts followed by the complete canonical frame/package schedule up to the
+/// first opcode-25 package stamp. The join checks every owner it can inspect, but it cannot turn a
+/// caller-created frame-79 snapshot into retail chronology merely because its scalar frame is 79.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFarmFrame79Source {
+    ValidatedSetupAndCanonicalReplayExecution,
+}
+
+/// Revisioned external authority for the canonical frame-79 Sim supplied to the builder join.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstFarmFrame79Authority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: FirstFarmFrame79Source,
+}
+
+/// Exact read-only join of the fifth setup allocation to the live canonical Unit row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmBuilderBindingReceipt {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub source: FirstFarmFrame79Source,
+    pub setup_ordinal: usize,
+    pub allocation: StableUnitIdentityReceipt,
+    pub frame: i32,
+    pub row: usize,
+    pub current_type: i32,
+    pub unit: UnitImage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmBuilderBindingError {
+    Discovery(FirstFarmAuthorityError),
+    MissingAuthorityRevision,
+    MissingCompositionDigest,
+    WrongFrame { expected: i32, actual: i32 },
+    WrongSetupPlan,
+    SetupReceipt(BuildUnitsReceiptError),
+    MissingDirectPlacementDraw { ordinal: usize },
+    WrongAllocationSequence { ordinal: usize },
+    MissingBuilderAllocation,
+    MissingCanonicalUnit,
+    InactiveCanonicalUnit,
+    MissingCanonicalHandle,
+    StaleCanonicalHandle,
+    MissingCanonicalType,
+    CanonicalTypeMismatch,
+    MissingCanonicalPath,
+}
+
+impl fmt::Display for FirstFarmBuilderBindingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "first 2018 Farm builder binding refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FirstFarmBuilderBindingError {}
+
+impl From<FirstFarmAuthorityError> for FirstFarmBuilderBindingError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<BuildUnitsReceiptError> for FirstFarmBuilderBindingError {
+    fn from(value: BuildUnitsReceiptError) -> Self {
+        Self::SetupReceipt(value)
+    }
+}
+
+fn strict_first_builder_plan(
+    plan: &BuildUnitsPlan,
+    discovery: &FirstFarmAuthorityDiscovery,
+) -> bool {
+    if plan.stop.is_some()
+        || plan.calls.len() != FIRST_BUILDER_SETUP_ORDINAL + 1
+        || plan.citizens_after_modifiers != 4
+    {
+        return false;
+    }
+    plan.calls.iter().enumerate().all(|(ordinal, call)| {
+        let expected_phase = if ordinal == 0 {
+            StartingUnitPhase::BaseScout
+        } else {
+            StartingUnitPhase::Citizen {
+                index: ordinal as i32 - 1,
+            }
+        };
+        call.ordinal == ordinal as u32
+            && call.owner == i32::from(FIRST_OWNER)
+            && call.center_city_o == discovery.center_build_o as i32
+            && call.phase == expected_phase
+            && call.call_va
+                == if ordinal == 0 {
+                    SCOUT_BASE_CALL_VA
+                } else {
+                    CITIZEN_SIMPLE_CALL_VA
+                }
+            && call.place_unit_upgrade
+                == if ordinal == 0 {
+                    discovery.scout.type_index
+                } else {
+                    discovery.citizen.type_index
+                }
+            && call.uber_size == 1
+            && call.squad_size == 1
+            && call.crew_size == 0
+    })
+}
+
+/// Bind the exact setup-produced object 4 to its current canonical Unit/Handle at frame 79.
+///
+/// This function is read-only. It first validates the complete five-call setup receipt and
+/// requires every call to have spawned exactly one consecutive owner-0 captain (`o=0..4`). It
+/// then resolves the fifth allocation's generational identity against `Sim::world`, requires the
+/// Unit to remain active with the same type, and captures the full current order/path image. A
+/// stale/recycled object-4 slot therefore cannot pass by address alone.
+pub fn bind_first_farm_builder_at_frame79(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    setup: &BuildUnitsPrefixReceipt,
+    sim: &Sim,
+    authority: FirstFarmFrame79Authority,
+) -> Result<FirstFarmBuilderBindingReceipt, FirstFarmBuilderBindingError> {
+    if authority.revision == 0 {
+        return Err(FirstFarmBuilderBindingError::MissingAuthorityRevision);
+    }
+    if authority.composition_digest == [0; 32] {
+        return Err(FirstFarmBuilderBindingError::MissingCompositionDigest);
+    }
+    if sim.world.frame != FIRST_FRAME {
+        return Err(FirstFarmBuilderBindingError::WrongFrame {
+            expected: FIRST_FRAME,
+            actual: sim.world.frame,
+        });
+    }
+    let discovery = discover_first_2018_farm(replay)?;
+    if !strict_first_builder_plan(plan, &discovery) {
+        return Err(FirstFarmBuilderBindingError::WrongSetupPlan);
+    }
+    validate_build_units_prefix_receipt(plan, setup)?;
+
+    let mut builder_allocation = None;
+    for (ordinal, placement) in setup.placements.iter().enumerate() {
+        if !placement
+            .rng_events
+            .iter()
+            .any(|event| matches!(event, PlacementRngEvent::DirectOffset(_)))
+        {
+            return Err(FirstFarmBuilderBindingError::MissingDirectPlacementDraw { ordinal });
+        }
+        let PlacementOutcomeReceipt::Spawned(init) = &placement.outcome else {
+            return Err(FirstFarmBuilderBindingError::WrongAllocationSequence { ordinal });
+        };
+        let [member] = init.members.as_slice() else {
+            return Err(FirstFarmBuilderBindingError::WrongAllocationSequence { ordinal });
+        };
+        if init.returned_captain_o != ordinal as i32
+            || member.identity.owner != i32::from(FIRST_OWNER)
+            || member.identity.o != ordinal as i32
+            || member.ptype_index != plan.calls[ordinal].place_unit_upgrade
+        {
+            return Err(FirstFarmBuilderBindingError::WrongAllocationSequence { ordinal });
+        }
+        if ordinal == FIRST_BUILDER_SETUP_ORDINAL {
+            builder_allocation = Some(member.identity);
+        }
+    }
+    let allocation =
+        builder_allocation.ok_or(FirstFarmBuilderBindingError::MissingBuilderAllocation)?;
+    let row = sim
+        .world
+        .unit_row_at(i32::from(FIRST_OWNER), i32::from(FIRST_SELECTED_O))
+        .ok_or(FirstFarmBuilderBindingError::MissingCanonicalUnit)?;
+    if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+        return Err(FirstFarmBuilderBindingError::InactiveCanonicalUnit);
+    }
+    let handle = sim
+        .world
+        .handle_at_row(row)
+        .ok_or(FirstFarmBuilderBindingError::MissingCanonicalHandle)?;
+    if (handle.id, handle.generation) != (allocation.id, allocation.generation) {
+        return Err(FirstFarmBuilderBindingError::StaleCanonicalHandle);
+    }
+    let world_type = sim
+        .world
+        .unit_type_id(row)
+        .ok_or(FirstFarmBuilderBindingError::MissingCanonicalType)?;
+    let sim_type = sim
+        .unit_type
+        .get(row)
+        .copied()
+        .ok_or(FirstFarmBuilderBindingError::MissingCanonicalType)?;
+    if world_type != discovery.citizen.type_index || sim_type != world_type {
+        return Err(FirstFarmBuilderBindingError::CanonicalTypeMismatch);
+    }
+    let path = sim
+        .paths
+        .get(row)
+        .cloned()
+        .ok_or(FirstFarmBuilderBindingError::MissingCanonicalPath)?;
+    let unit = UnitImage {
+        identity: UnitIdentity {
+            handle,
+            who: FIRST_OWNER,
+            o: FIRST_SELECTED_O,
+            uid: sim.world.units.get_uid(row),
+        },
+        group: sim.world.units.group()[row],
+        unit_masks: sim.world.units.get_unit_masks(row),
+        form: sim.world.units.form()[row],
+        form_mod: sim.world.units.form_mod()[row],
+        angle: sim.world.units.angle()[row],
+        x: sim.world.units.x_internal()[row],
+        y: sim.world.units.y_internal()[row],
+        orders_x: sim.world.units.orders_x()[row],
+        orders_y: sim.world.units.orders_y()[row],
+        dest_angle: sim.world.units.dest_angle()[row],
+        orders: sim.world.orders(row).clone(),
+        path,
+    };
+    Ok(FirstFarmBuilderBindingReceipt {
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        source: authority.source,
+        setup_ordinal: FIRST_BUILDER_SETUP_ORDINAL,
+        allocation,
+        frame: sim.world.frame,
+        row,
+        current_type: world_type,
+        unit,
+    })
 }
 
 /// Discover every exact source-owned input for serial 14 without fitting recorded checksums.

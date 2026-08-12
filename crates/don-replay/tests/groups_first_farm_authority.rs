@@ -1,13 +1,27 @@
 use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
-    discover_first_2018_farm, FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FIRST_FRAME,
-    FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
+    bind_first_farm_builder_at_frame79, discover_first_2018_farm, FirstFarmAuthorityBlocker,
+    FirstFarmAuthorityError, FirstFarmBuilderBindingError, FirstFarmFrame79Authority,
+    FirstFarmFrame79Source, FIRST_FRAME, FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL,
+    STRICT_REPLAY_SHA256,
 };
 use don_replay::groups_pre_pair_unit_authority::{
     replay_build_type_facts, PrePairUnitAuthorityError,
 };
 use don_replay::replay::{load_payload, Replay};
+use don_replay::setup_units_producer::{
+    build_units_plan, BuildUnitsInputs, BuildUnitsPlan, BuildUnitsPrefixReceipt,
+    DirectRandomDrawReceipt, EngineContainerShapeReceipt, GuyIdentityReceipt,
+    InitUnitAuthorityReceipt, InitUnitRngSpan, PlaceUnitCall, PlaceUnitReceipt,
+    PlacementOutcomeReceipt, PlacementRngEvent, StableUnitIdentityReceipt, StartingUnitBonuses,
+    StartingUnitRuleFacts, StartingUnitTypeFacts, TypeResolutionFacts, UnitMemberAuthorityReceipt,
+    DUTCH_MERCHANT_TYPE, OBJECTS_INIT_UNIT_BYTES, OBJECTS_INIT_UNIT_VA,
+    PLACE_UNIT_DIRECT_RANDOM_CALL_VA,
+};
+use don_sim::rng::Random;
+use don_sim::tick::Sim;
+use don_sim::world::Handle;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -19,6 +33,157 @@ fn repo_root() -> PathBuf {
 
 fn replay_path() -> PathBuf {
     repo_root().join("ron-data/replays/multi/Playback___2018.11.17_13_21_42__Sat_.rcx")
+}
+
+fn type_facts(base: i32) -> TypeResolutionFacts {
+    TypeResolutionFacts {
+        base,
+        tribe_can_base: true,
+        nation_variant: base,
+        build_units_upgrade: base,
+        place_unit_upgrade: base,
+        uber_size: 1,
+        squad_size: 1,
+        crew_size: 0,
+    }
+}
+
+fn first_farm_plan() -> BuildUnitsPlan {
+    build_units_plan(BuildUnitsInputs {
+        owner: i32::from(FIRST_OWNER),
+        start_index: 0,
+        center_city_o: 2_000,
+        start_tile_x: 28,
+        start_tile_y: 84,
+        starting_town: 1,
+        starting_resources: 2,
+        reveal_map: 1,
+        bonuses: StartingUnitBonuses::default(),
+        rules: StartingUnitRuleFacts::default(),
+        types: StartingUnitTypeFacts {
+            scout: type_facts(69),
+            citizen: type_facts(50),
+            dutch_merchant: type_facts(DUTCH_MERCHANT_TYPE),
+        },
+    })
+    .unwrap()
+}
+
+fn member(call: PlaceUnitCall, handle: Handle, o: i32) -> UnitMemberAuthorityReceipt {
+    UnitMemberAuthorityReceipt {
+        identity: StableUnitIdentityReceipt {
+            id: handle.id,
+            generation: handle.generation,
+            owner: call.owner,
+            o,
+        },
+        ptype_index: call.place_unit_upgrade,
+        launching_is_null: true,
+        path: EngineContainerShapeReceipt {
+            length: 0,
+            capacity: 10,
+            increment: -1,
+            flags: 0,
+        },
+        order_count: 0,
+        guys: EngineContainerShapeReceipt {
+            length: 1,
+            capacity: 1,
+            increment: 1,
+            flags: 0,
+        },
+        guy_mark: 1,
+        guy_identities: vec![GuyIdentityReceipt {
+            slot: 0,
+            who: FIRST_OWNER as i8,
+            o: o as i16,
+            guy_num: 0,
+        }],
+        units_authority_key: (handle.id, handle.generation),
+        guys_authority_key: (handle.id, handle.generation),
+    }
+}
+
+fn synthetic_frame79_setup() -> (BuildUnitsPlan, BuildUnitsPrefixReceipt, Sim) {
+    let plan = first_farm_plan();
+    let mut sim = Sim::new(7, 128);
+    let handles: Vec<_> = plan
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(ordinal, call)| {
+            sim.spawn_unit(
+                FIRST_OWNER as usize,
+                call.place_unit_upgrade,
+                21_600 + ordinal as i32 * 32,
+                64_608,
+                1,
+            )
+            .unwrap()
+        })
+        .collect();
+    sim.world.frame = FIRST_FRAME;
+
+    let rng_initial = 0x12345;
+    let mut rng_state = rng_initial;
+    let placements = plan
+        .calls
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(ordinal, call)| {
+            let rng_before = rng_state;
+            let mut rng = Random::new(rng_state);
+            let returned = rng.get(0, 0xffff);
+            let direct_after = rng.state();
+            let rng_after = direct_after.wrapping_add(0x101 + ordinal as i32);
+            rng_state = rng_after;
+            PlaceUnitReceipt {
+                call,
+                rng_before,
+                rng_after,
+                rng_events: vec![
+                    PlacementRngEvent::DirectOffset(DirectRandomDrawReceipt {
+                        call_va: PLACE_UNIT_DIRECT_RANDOM_CALL_VA,
+                        state_before: rng_before,
+                        returned,
+                        state_after: direct_after,
+                    }),
+                    PlacementRngEvent::InitUnit(InitUnitRngSpan {
+                        body_va: OBJECTS_INIT_UNIT_VA,
+                        body_bytes: OBJECTS_INIT_UNIT_BYTES,
+                        state_before: direct_after,
+                        state_after: rng_after,
+                    }),
+                ],
+                outcome: PlacementOutcomeReceipt::Spawned(InitUnitAuthorityReceipt {
+                    validated_body_va: OBJECTS_INIT_UNIT_VA,
+                    validated_body_bytes: OBJECTS_INIT_UNIT_BYTES,
+                    unit_mark_before: ordinal as i32,
+                    unit_mark_after: ordinal as i32 + 1,
+                    returned_captain_o: ordinal as i32,
+                    members: vec![member(call, handles[ordinal], ordinal as i32)],
+                }),
+            }
+        })
+        .collect();
+    (
+        plan,
+        BuildUnitsPrefixReceipt {
+            rng_initial,
+            rng_final: rng_state,
+            placements,
+        },
+        sim,
+    )
+}
+
+fn authority() -> FirstFarmFrame79Authority {
+    FirstFarmFrame79Authority {
+        revision: 1,
+        composition_digest: [0x79; 32],
+        source: FirstFarmFrame79Source::ValidatedSetupAndCanonicalReplayExecution,
+    }
 }
 
 #[test]
@@ -148,5 +313,100 @@ fn in_memory_wire_or_rules_mutation_cannot_be_promoted_to_first_packet_authority
     assert_eq!(
         replay_build_type_facts(&payload, &rules, 0x1a1),
         Err(PrePairUnitAuthorityError::RulesSha256Mismatch)
+    );
+}
+
+#[test]
+fn fifth_setup_allocation_binds_generationally_to_the_frame79_builder() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let (plan, setup, sim) = synthetic_frame79_setup();
+
+    let bound =
+        bind_first_farm_builder_at_frame79(&replay, &plan, &setup, &sim, authority()).unwrap();
+    assert_eq!(bound.setup_ordinal, 4);
+    assert_eq!((bound.frame, bound.row, bound.current_type), (79, 4, 50));
+    assert_eq!(
+        (
+            bound.allocation.owner,
+            bound.allocation.o,
+            bound.unit.identity.who,
+            bound.unit.identity.o,
+            bound.unit.identity.handle.id,
+            bound.unit.identity.handle.generation,
+        ),
+        (0, 4, 0, 4, bound.allocation.id, bound.allocation.generation,)
+    );
+    assert_eq!(bound.authority_digest, [0x79; 32]);
+}
+
+#[test]
+fn frame79_builder_join_rejects_unversioned_stale_or_malformed_authority() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let (plan, setup, mut sim) = synthetic_frame79_setup();
+
+    let mut missing_revision = authority();
+    missing_revision.revision = 0;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &setup, &sim, missing_revision),
+        Err(FirstFarmBuilderBindingError::MissingAuthorityRevision)
+    );
+
+    sim.world.frame -= 1;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &setup, &sim, authority()),
+        Err(FirstFarmBuilderBindingError::WrongFrame {
+            expected: 79,
+            actual: 78,
+        })
+    );
+    sim.world.frame += 1;
+
+    let mut no_direct_draw = setup.clone();
+    let last = no_direct_draw.placements.last_mut().unwrap();
+    last.rng_events.remove(0);
+    let PlacementRngEvent::InitUnit(span) = &mut last.rng_events[0] else {
+        unreachable!()
+    };
+    span.state_before = last.rng_before;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &no_direct_draw, &sim, authority()),
+        Err(FirstFarmBuilderBindingError::MissingDirectPlacementDraw { ordinal: 4 })
+    );
+
+    let mut wrong_sequence = setup.clone();
+    let PlacementOutcomeReceipt::Spawned(last) =
+        &mut wrong_sequence.placements.last_mut().unwrap().outcome
+    else {
+        unreachable!()
+    };
+    last.returned_captain_o = 3;
+    last.members[0].identity.o = 3;
+    last.members[0].guy_identities[0].o = 3;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &wrong_sequence, &sim, authority()),
+        Err(FirstFarmBuilderBindingError::WrongAllocationSequence { ordinal: 4 })
+    );
+
+    let mut stale = setup.clone();
+    let PlacementOutcomeReceipt::Spawned(last) = &mut stale.placements.last_mut().unwrap().outcome
+    else {
+        unreachable!()
+    };
+    last.members[0].identity.generation += 1;
+    last.members[0].units_authority_key.1 += 1;
+    last.members[0].guys_authority_key.1 += 1;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &stale, &sim, authority()),
+        Err(FirstFarmBuilderBindingError::StaleCanonicalHandle)
+    );
+
+    sim.unit_type[4] = 51;
+    assert_eq!(
+        bind_first_farm_builder_at_frame79(&replay, &plan, &setup, &sim, authority()),
+        Err(FirstFarmBuilderBindingError::CanonicalTypeMismatch)
     );
 }

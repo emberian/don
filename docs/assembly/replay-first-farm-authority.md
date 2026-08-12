@@ -38,6 +38,26 @@ producer four times. Thus object 4 corresponds to the fourth Citizen only after 
 individual allocation receipts and intervening lifetime are bound. The adapter records
 that conditional provenance but does not promote it to a Unit identity.
 
+## Frame-79 builder receipt join
+
+The adapter now provides a read-only, fail-closed join for a future genuine setup/replay
+execution owner. It first validates the complete five-call `BuildUnitsPrefixReceipt`, requires
+one direct placement draw and one spawned member at each ordinal, and requires the native
+allocation sequence `(owner=0,o=0..4)` with types `[Scout 69, Citizen 50 x4]`. It then resolves
+the fifth receipt's minted `{id,generation}` through the canonical Sim object bands at frame 79.
+
+Admission captures the live UID, Group/form/masks, position/angle/order coordinates, full order
+list, and path image. A recycled object-4 slot, mismatched Sim/World type, failed/queued setup
+call, sparse allocation, or missing canonical path is rejected. The caller must also supply a
+nonzero revision and composition digest for state produced by the validated setup followed by
+the complete canonical replay schedule. These are external provenance, not facts inferred from
+the frame scalar or recorded checksum.
+
+This receipt producer does **not** make the real 2018 join green by itself: the recording still
+lacks the post-worldgen RNG/map inputs needed to produce the five actual placement receipts and
+the intervening 79-tick canonical state. A fresh save can exercise the same native address shape,
+but cannot authorize this different 2018 match.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking
@@ -63,5 +83,6 @@ atomic opcode-25 host without defaults.
 
 `groups_first_farm_authority.rs` runs the strict recording through the complete discovery
 path, asserts the stage map and both recorded checksums, and asserts the ordered red
-boundary. Its mutation case changes the in-memory opcode-25 body and the replay-carried
-Farm footprint byte; both are rejected before runtime promotion.
+boundary. Its mutations change the in-memory opcode-25 body and replay-carried Farm footprint,
+then exercise wrong frame, missing direct placement draw, nonconsecutive setup allocation,
+stale Handle generation, and split Sim/World types. All are rejected before runtime promotion.
