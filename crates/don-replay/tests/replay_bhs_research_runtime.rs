@@ -30,6 +30,11 @@ use don_sim::systems::bhs_type_factory::{
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
+use don_sim::systems::leader_produce_building_prefix::{
+    apply_sim_leader_produce_building_prefix, LeaderProduceBuildingPrefixRequest,
+    LeaderProduceBuildingPrefixStatus, BUILD_FLAG_NO_ACTIVE_CITY_REQUIRED,
+    LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA,
+};
 use don_sim::systems::production::runtime::{
     LiveProductionRuntime, LiveProductionType, SingleLibraryResearchStatus,
 };
@@ -226,7 +231,10 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut city_state = LiveProductionType::research(CITY_STATE, 200);
     city_state.repeat_cost = Some([12, 0, 0, 0, 0, 0]);
     production.install_type(city_state);
-    production.install_type(LiveProductionType::in_place_building(417, 150));
+    let mut farm = LiveProductionType::in_place_building(417, 150);
+    // Installed FARM BuildTypeData::build_flags, schema/live/live-tables-building.tsv.
+    farm.build_flags = 0x1000_0049;
+    production.install_type(farm);
     production.leaders[owner].resources = [100; 6];
     sim.leaders[owner].econ.stockpile = [100; 6];
     sim.step8.leaders[owner].econ.stockpile = [100; 6];
@@ -247,15 +255,18 @@ fn place_building_costs(owner: usize) -> PlaceBuildingCostAuthority {
     PlaceBuildingCostAuthority {
         revision: 7,
         composition_digest: [0x52; 32],
-        entries: vec![PlaceBuildingCostEntry {
-            owner: owner as u8,
-            type_index: 417,
-            origin_build_object: BUILD_BAND_BASE as i16,
-            city_constraint: -1,
-            source: PlaceBuildingCostSource::TypeDataCanPayCostPeAfterImage,
-            possible_goods: [true; 6],
-            resolved_costs: [0, 40, 0, 0, 0, 0],
-        }],
+        entries: [-1, 0]
+            .into_iter()
+            .map(|city_constraint| PlaceBuildingCostEntry {
+                owner: owner as u8,
+                type_index: 417,
+                origin_build_object: BUILD_BAND_BASE as i16,
+                city_constraint,
+                source: PlaceBuildingCostSource::TypeDataCanPayCostPeAfterImage,
+                possible_goods: [true; 6],
+                resolved_costs: [0, 40, 0, 0, 0, 0],
+            })
+            .collect(),
     }
 }
 
@@ -305,6 +316,97 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(production.leaders[OWNER].resources, resources_before);
 
+    let rejected_produce = apply_sim_leader_produce_building_prefix(
+        &sim,
+        &production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: OWNER as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rejected_produce.status,
+        LeaderProduceBuildingPrefixStatus::RejectedBeforePlacementSearch
+    );
+    assert_eq!(rejected_produce.native_returned, Some(1));
+    assert_eq!(rejected_produce.scenario_returned, Some(0));
+
+    let mut standalone_production = production.clone();
+    standalone_production.types[417]
+        .as_mut()
+        .unwrap()
+        .build_flags |= BUILD_FLAG_NO_ACTIVE_CITY_REQUIRED;
+    let standalone_produce = apply_sim_leader_produce_building_prefix(
+        &sim,
+        &standalone_production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: OWNER as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        standalone_produce.status,
+        LeaderProduceBuildingPrefixStatus::ReadyForPlacementSearch
+    );
+    assert!(!standalone_produce.active_city_origin);
+    assert!(standalone_produce.used_target_fallback);
+    assert!(standalone_produce.target_allows_without_active_city);
+
+    let (mut city_sim, city_production, city_row) = production_owners(OWNER);
+    city_sim.builds[city_row].flags |= flag::CAPTURED;
+    let admitted_produce = apply_sim_leader_produce_building_prefix(
+        &city_sim,
+        &city_production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: OWNER as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        admitted_produce.status,
+        LeaderProduceBuildingPrefixStatus::ReadyForPlacementSearch
+    );
+    assert!(admitted_produce.active_city_origin);
+    assert!(!admitted_produce.used_target_fallback);
+    assert_eq!(
+        admitted_produce.continuation.unwrap().va,
+        LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA
+    );
+
+    let mut inactive_city_sim = city_sim;
+    inactive_city_sim.cities.slots[OWNER][0].city_flags = 0;
+    let mut inactive_city_production = city_production;
+    inactive_city_production.types[417]
+        .as_mut()
+        .unwrap()
+        .build_flags |= BUILD_FLAG_NO_ACTIVE_CITY_REQUIRED;
+    let inactive_city = apply_sim_leader_produce_building_prefix(
+        &inactive_city_sim,
+        &inactive_city_production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: OWNER as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        inactive_city.status,
+        LeaderProduceBuildingPrefixStatus::RejectedBeforePlacementSearch,
+        "a selected inactive City does not fall through to the target-Type bit"
+    );
+    assert!(!inactive_city.used_target_fallback);
+
     // Activation/type/cost projections are external runtime inputs. Preserve the canonical
     // City/Build/resource owners, save with those mirrors uninstalled, then reinstall them.
     sim.step8.leaders[OWNER].flags = 0;
@@ -324,6 +426,18 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     )
     .unwrap();
     assert_eq!(resumed, receipt);
+    let resumed_produce = apply_sim_leader_produce_building_prefix(
+        &loaded,
+        &production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: OWNER as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(resumed_produce, rejected_produce);
 
     let (mut poor_sim, mut poor_production, _) = production_owners(OWNER);
     poor_production.leaders[OWNER].resources = [0; 6];
@@ -345,6 +459,76 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     assert_eq!(poor.status, PlaceBuildingStatus::Unaffordable);
     assert_eq!(poor.returned, Some(0));
     assert!(poor.continuation.is_none());
+}
+
+#[test]
+fn produce_building_city_gate_terminal_is_mounted_and_returns_scenario_zero() {
+    let fixture = repo_root().join("crates/don-replay/tests/fixtures/bhs_research_rollback.bhs");
+    let inc = don_bhs_cc::load::install_include_path(repo_root());
+    let loaded = don_bhs_cc::load::load_script_file(&inc, &fixture).unwrap();
+    let mut script_runtime = ScriptRuntime::new(loaded.program, None, None).unwrap();
+    let binding = ReplayBhsBinding {
+        file: 0,
+        name: "place_prefix_only".into(),
+    };
+    let mut call = ReplayProductionCall {
+        who: 1,
+        step: 99,
+        boom_vs_rush: 1,
+        num_loops: 5,
+    };
+    let image = ProductionBuiltinImage {
+        leaders: std::array::from_fn(|who| {
+            if who == OWNER {
+                ProductionLeaderImage {
+                    flags: 3,
+                    ..ProductionLeaderImage::default()
+                }
+            } else {
+                ProductionLeaderImage::default()
+            }
+        }),
+        ..ProductionBuiltinImage::default()
+    };
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, row) = production_owners(OWNER);
+    let groups_before = sim.groups.clone();
+    let build_before = sim.builds[row].image();
+    let resources_before = production.leaders[OWNER].resources;
+
+    let receipt = run_production_research_call(
+        &mut script_runtime,
+        &binding,
+        &mut call,
+        &image,
+        &types,
+        &upgrades,
+        &place_building_costs(OWNER),
+        &mut sim,
+        &mut production,
+        game_seconds(0),
+    )
+    .unwrap();
+
+    assert_eq!(call.step, 0);
+    assert_eq!(receipt.production.returned, 0);
+    assert_eq!(receipt.production.trace.len(), 1);
+    assert_eq!(receipt.production.trace[0].index, 520);
+    assert_eq!(
+        receipt.production.trace[0].returned,
+        ProductionBuiltinValue::Int(0)
+    );
+    assert_eq!(receipt.place_buildings.len(), 1);
+    assert_eq!(receipt.produce_buildings.len(), 1);
+    assert_eq!(
+        receipt.produce_buildings[0].status,
+        LeaderProduceBuildingPrefixStatus::RejectedBeforePlacementSearch
+    );
+    assert_eq!(receipt.produce_buildings[0].native_returned, Some(1));
+    assert_eq!(receipt.produce_buildings[0].scenario_returned, Some(0));
+    assert_eq!(sim.builds[row].image(), build_before);
+    assert_eq!(sim.groups.list, groups_before.list);
+    assert_eq!(production.leaders[OWNER].resources, resources_before);
 }
 
 #[test]
@@ -581,6 +765,8 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let call_before = call;
     let (types, upgrades) = canonical_type_owners(content_owner);
     let (mut sim, mut production, row) = production_owners(content_owner);
+    // The replay's Athens center is an active City Build (native Object CITY bit 0x20).
+    sim.builds[row].flags |= flag::CAPTURED;
     let installed_style = don_replay::map_style::MapStyleStaticData::load_from_ron_data(
         &repo_root().join("ron-data"),
         12,
@@ -714,6 +900,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let binding = binding.expect("AI replay carries an economic binding");
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
+    let city_build_before = sim.builds[row].image();
     let installed_place = apply_sim_place_building_with_cost_prefix(
         &sim,
         &production,
@@ -734,6 +921,27 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(
         installed_place.continuation.unwrap().va,
         LEADER_PRODUCE_BUILDING_VA
+    );
+    let installed_produce = apply_sim_leader_produce_building_prefix(
+        &sim,
+        &production,
+        LeaderProduceBuildingPrefixRequest {
+            owner: content_owner as u8,
+            type_index: 417,
+            origin_build_object: BUILD_BAND_BASE as i16,
+            mode: 0,
+        },
+    )
+    .expect("admit the installed active-City origin into native placement search");
+    assert_eq!(
+        installed_produce.status,
+        LeaderProduceBuildingPrefixStatus::ReadyForPlacementSearch
+    );
+    assert!(installed_produce.active_city_origin);
+    assert_eq!(installed_produce.city_slot, Some(0));
+    assert_eq!(
+        installed_produce.continuation.unwrap().va,
+        LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA
     );
 
     let error = run_production_research_call(
@@ -857,6 +1065,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(sim.groups.last_group, groups_before.last_group);
     assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+    assert_eq!(sim.builds[row].image(), city_build_before);
     assert_eq!(
         production.leaders[content_owner].queued_counts[WRITTEN_WORD as usize],
         0

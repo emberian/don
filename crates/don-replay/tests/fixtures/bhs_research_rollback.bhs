@@ -14,3 +14,9 @@ int scenario research_only(int who, ref int step, int boom_vs_rush, int num_loop
     step = research_tech_with_cost(who, "Written Word");
     return step;
 }
+
+int scenario place_prefix_only(int who, ref int step, int boom_vs_rush, int num_loops)
+{
+    step = place_building_with_cost(who, "Farm", "Athens");
+    return step;
+}

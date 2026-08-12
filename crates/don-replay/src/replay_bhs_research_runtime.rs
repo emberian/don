@@ -34,6 +34,10 @@ use don_sim::systems::bhs_type_queue_runtime::{
     NUM_TYPE_QUEUED_BUILTIN,
 };
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::leader_produce_building_prefix::{
+    apply_sim_leader_produce_building_prefix, LeaderProduceBuildingPrefixReceipt,
+    LeaderProduceBuildingPrefixRequest,
+};
 use don_sim::systems::production::flag;
 use don_sim::systems::production::runtime::{
     apply_sim_single_library_research_transaction, LiveProductionRuntime,
@@ -53,6 +57,7 @@ pub struct ProductionResearchRunReceipt {
     pub city_buildings: Vec<CityBuildingCountReceipt>,
     pub type_queues: Vec<TypeQueueCountReceipt>,
     pub place_buildings: Vec<PlaceBuildingReceipt>,
+    pub produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
 }
 
 struct ResearchHost<'a> {
@@ -69,6 +74,7 @@ struct ResearchHost<'a> {
     city_buildings: Vec<CityBuildingCountReceipt>,
     type_queues: Vec<TypeQueueCountReceipt>,
     place_buildings: Vec<PlaceBuildingReceipt>,
+    produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
 }
 
 impl<'a> ResearchHost<'a> {
@@ -94,6 +100,7 @@ impl<'a> ResearchHost<'a> {
             city_buildings: Vec::new(),
             type_queues: Vec::new(),
             place_buildings: Vec::new(),
+            produce_buildings: Vec::new(),
         }
     }
 
@@ -391,9 +398,27 @@ impl<'a> ResearchHost<'a> {
         )
         .map_err(|_| HostError::Unimplemented)?;
         let returned = receipt.returned;
+        let continuation = receipt.continuation;
         self.place_buildings.push(receipt);
-        // A ready prefix is not a scalar success. The VM must retain builtin 520 as the
-        // exact stop until Leader::produce_building is one atomic canonical transaction.
+        if let Some(returned) = returned {
+            return Ok(Value::Int(returned));
+        }
+        let continuation = continuation.ok_or(HostError::Unimplemented)?;
+        let produce = apply_sim_leader_produce_building_prefix(
+            self.sim,
+            self.production,
+            LeaderProduceBuildingPrefixRequest {
+                owner: continuation.owner,
+                type_index: continuation.type_index,
+                origin_build_object: continuation.origin_build_object,
+                mode: continuation.mode,
+            },
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        let returned = produce.scenario_returned;
+        self.produce_buildings.push(produce);
+        // A ready search prefix is not a scalar success. The VM must retain builtin 520
+        // until placement search and the native mutation tail are one atomic transaction.
         returned.map(Value::Int).ok_or(HostError::Unimplemented)
     }
 
@@ -494,7 +519,16 @@ pub fn run_production_research_call(
         std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].econ.stockpile);
     let victory_before = sim.vic_leaders.clone();
 
-    let (result, trace, research, idle_units, city_buildings, type_queues, place_buildings) = {
+    let (
+        result,
+        trace,
+        research,
+        idle_units,
+        city_buildings,
+        type_queues,
+        place_buildings,
+        produce_buildings,
+    ) = {
         let mut host = ResearchHost::new(
             image,
             types,
@@ -530,6 +564,7 @@ pub fn run_production_research_call(
             host.city_buildings,
             host.type_queues,
             host.place_buildings,
+            host.produce_buildings,
         )
     };
 
@@ -573,5 +608,6 @@ pub fn run_production_research_call(
         city_buildings,
         type_queues,
         place_buildings,
+        produce_buildings,
     })
 }

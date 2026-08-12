@@ -218,6 +218,8 @@ pub mod leader_tech_sync;
 /// the six `LeaderData` AI build-priority scalars. Presentation leaves through a typed
 /// outbox. `Leader::action_respond` `0x006D03C0` is the one named boundary.
 pub mod leader_process_taunt;
+/// Exact read-only City/target-Type gate at the start of `Leader::produce_building`.
+pub mod leader_produce_building_prefix;
 /// Added by `economy-step8`. `Leaders::process_all` `0x006ED2A0` — step 8 of `do_frame`,
 /// the caller `economy.rs` never had, plus the second level `Leader::gather` reaches:
 /// the `BitMask<44>` union that arms the two stat-dirty bits, `calc_wall_stats`,
