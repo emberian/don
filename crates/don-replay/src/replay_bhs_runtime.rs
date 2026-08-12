@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use don_bhs::program::{Program, ProgramWalkMeta};
+use don_bhs::ScriptTimers;
 use don_bhs_cc::load;
 use don_sim::script_runtime::{ScriptBindError, ScriptBinding, ScriptRuntime};
 
@@ -63,8 +64,25 @@ impl ReplayBhsProgram {
     pub fn into_script_runtime(
         self,
     ) -> Result<(ScriptRuntime, Option<ReplayBhsBinding>), ScriptBindError> {
+        self.into_script_runtime_with_timers(ScriptTimers::default())
+    }
+
+    /// Transfer the loaded image while retaining an exact caller-supplied timer owner.
+    ///
+    /// Production AI invokes timer builtins through the same persistent runtime as channel 15;
+    /// replay integration must therefore install its admitted timer image at construction rather
+    /// than mutating a detached timer container after the program has been bound.
+    pub fn into_script_runtime_with_timers(
+        self,
+        timers: ScriptTimers,
+    ) -> Result<(ScriptRuntime, Option<ReplayBhsBinding>), ScriptBindError> {
         let binding = |value: ReplayBhsBinding| ScriptBinding::new(value.file, value.name);
-        let runtime = ScriptRuntime::new(self.program, None, self.general_powers.map(binding))?;
+        let runtime = ScriptRuntime::new_with_timers(
+            self.program,
+            None,
+            self.general_powers.map(binding),
+            timers,
+        )?;
         Ok((runtime, self.production))
     }
 }

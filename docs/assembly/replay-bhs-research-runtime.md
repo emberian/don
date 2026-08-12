@@ -57,11 +57,22 @@ City State is type 565 on the same producer with cost `[12, 0, 0, 0, 0, 0]`.
 The installed `economic.bhs` Romans/Mediterranean success trace is asserted, not inferred:
 the positive Written Word 357 call is immediately followed by builtin 258 `num_cities`,
 builtin 362 `have_tech("City State")`, and a second builtin 357 for City State. The replay
-test compiles the shipped BHS file and loads the installed Mediterranean map-style owner.
+test selects the three-file stock registry through the canonical
+`load_replay_bhs_program` / `ReplayBhsProgram::into_script_runtime_with_timers` path, using
+the AI-bearing replay `Playback___2020.07.25_19_30_12__Sat_.rcx` (SHA-256
+`ed507b7e0b9bee0fae0c611e24d6c51545ca6cf2cc265634d55ca3660a2c0d61`), and loads the
+installed Mediterranean map-style owner. After both successful research calls, execution
+stops at the first genuinely unowned call, builtin 455 `find_num_idle_unit`; the whole
+Program/timer/Sim/production candidate is rolled back.
 
 The measured Written Word miss arm is builtin 332
 `at_least_type(who, 75, "Wealth")`. The exclusive wrapper implements only the six-primary-good
-form over reconciled production/Sim/step-8/victory resource mirrors.
+form over reconciled production/Sim/step-8/victory resource mirrors. The installed-content
+test also executes this refusal arm with zero resources: Written Word returns 0, the next
+trace entry is exactly builtin 332 with `(3, 75, "Wealth")` for the witness replay's
+zero-based AI slot 2, and the script returns normally
+without allocating a Group or changing a Build queue. That normally returned refusal call
+retains only the negative-cursor normalization to object id 2000.
 
 ## Atomic boundary
 
@@ -96,3 +107,7 @@ the ref step, timer plus cursor, ScenarioData cursor, Group pool, Build queue, r
 
 - `cargo test -p don-sim --test bhs_research_queue_runtime`
 - `cargo test -p don-replay --test replay_bhs_research_runtime`
+
+The installed-content test prints `SKIPPED — NOT A PASS` unless both the private BHS corpus
+and its AI replay witness are present. A remote pass through that branch is compilation and
+rollback coverage only, not shipped-content evidence.

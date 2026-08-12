@@ -98,6 +98,7 @@ pub mod post_nubify_transition_frontier;
 pub mod region_centroid;
 pub mod replay;
 pub mod replay_bhs_live_bindings;
+pub mod replay_bhs_research_runtime;
 pub mod replay_bhs_runtime;
 pub mod replay_goods_initial;
 pub mod replay_goods_resource_schedule;

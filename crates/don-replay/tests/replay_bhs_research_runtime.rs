@@ -2,28 +2,17 @@
 
 use std::path::{Path, PathBuf};
 
-mod initial {
-    pub use don_replay::initial::*;
-}
-mod leader_initial_prefix {
-    pub use don_replay::leader_initial_prefix::*;
-}
-#[path = "../src/leaders_runtime_frontier.rs"]
-mod leaders_runtime_frontier;
-mod map_style {
-    pub use don_replay::map_style::*;
-}
-mod script_channel {
-    pub use don_replay::script_channel::*;
-}
-#[path = "../src/replay_bhs_live_bindings.rs"]
-mod replay_bhs_live_bindings;
-#[path = "../src/replay_bhs_research_runtime.rs"]
-mod replay_bhs_research_runtime;
-#[path = "../src/replay_bhs_runtime.rs"]
-mod replay_bhs_runtime;
-
 use don_bhs::{ScriptTimers, VmError};
+use don_replay::replay::Replay;
+use don_replay::replay_bhs_live_bindings::{
+    bind_production_map_style, bind_production_type_counts, ProductionBuiltinImage,
+    ProductionBuiltinValue, ProductionCityImage, ProductionLeaderImage, ProductionRunFailure,
+    ProductionSetupImage, ReplayProductionCall,
+};
+use don_replay::replay_bhs_research_runtime::run_production_research_call;
+use don_replay::replay_bhs_runtime::{
+    load_replay_bhs_program, ReplayBhsBinding, LEADER_FLAG_HUMAN,
+};
 use don_sim::objects::BUILD_BAND_BASE;
 use don_sim::script_runtime::{ExternalGameSeconds, ScriptRuntime};
 use don_sim::systems::bhs_create_unit_runtime::{
@@ -42,13 +31,6 @@ use don_sim::systems::production::runtime::{
 };
 use don_sim::systems::production::{flag, off, BuildData, BuildQueue, BuildQueueEntry};
 use don_sim::tick::Sim;
-use replay_bhs_live_bindings::{
-    bind_production_map_style, bind_production_type_counts, ProductionBuiltinImage,
-    ProductionCityImage, ProductionLeaderImage, ProductionRunFailure, ProductionSetupImage,
-    ReplayProductionCall,
-};
-use replay_bhs_research_runtime::run_production_research_call;
-use replay_bhs_runtime::ReplayBhsBinding;
 
 const OWNER: usize = 0;
 const LIBRARY: i32 = 435;
@@ -73,7 +55,7 @@ fn witness(role: TypeSourceRole, component: u8) -> TypeSourceWitness {
     }
 }
 
-fn canonical_type_owners() -> (TypeBuiltinState, BhsCreateUnitRuntime) {
+fn canonical_type_owners(owner: usize) -> (TypeBuiltinState, BhsCreateUnitRuntime) {
     let rows = (0..NUM_TYPES)
         .map(|slot| {
             let mut row = TypeRow::empty(slot);
@@ -138,7 +120,7 @@ fn canonical_type_owners() -> (TypeBuiltinState, BhsCreateUnitRuntime) {
             value: (0..NUM_LEADERS)
                 .map(|slot| {
                     Some(LeaderTypeMasks {
-                        leader_flags: if slot == OWNER { 3 } else { 0 },
+                        leader_flags: if slot == owner { 3 } else { 0 },
                         ..LeaderTypeMasks::default()
                     })
                 })
@@ -161,7 +143,7 @@ fn canonical_type_owners() -> (TypeBuiltinState, BhsCreateUnitRuntime) {
                         leader_slot,
                         current_upgrade: (0..NUM_TYPES)
                             .map(|slot| {
-                                Some(if leader_slot == OWNER && slot == 50 {
+                                Some(if leader_slot == owner && slot == 50 {
                                     52
                                 } else {
                                     slot as i32
@@ -170,7 +152,7 @@ fn canonical_type_owners() -> (TypeBuiltinState, BhsCreateUnitRuntime) {
                             .collect(),
                         graft: (0..NUM_TYPES)
                             .map(|slot| {
-                                Some(if leader_slot == OWNER && slot == 52 {
+                                Some(if leader_slot == owner && slot == 52 {
                                     53
                                 } else {
                                     slot as i32
@@ -189,11 +171,11 @@ fn canonical_type_owners() -> (TypeBuiltinState, BhsCreateUnitRuntime) {
     (state, upgrades)
 }
 
-fn production_owners() -> (Sim, LiveProductionRuntime, usize) {
+fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut sim = Sim::new(0x357, 8);
     let mut build = BuildData {
         flags: flag::VALID | flag::ACTIVE,
-        who: OWNER as u8,
+        who: owner as u8,
         queue: BuildQueue {
             queued: 0,
             entries: vec![BuildQueueEntry::default(); 2],
@@ -202,7 +184,7 @@ fn production_owners() -> (Sim, LiveProductionRuntime, usize) {
     };
     build.other[off::OBJECT_ID..off::OBJECT_ID + 2]
         .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
-    let row = sim.spawn_build(OWNER, build);
+    let row = sim.spawn_build(owner, build);
 
     let mut production = std::mem::take(&mut sim.production_runtime);
     production.register_build(row, LIBRARY);
@@ -215,19 +197,19 @@ fn production_owners() -> (Sim, LiveProductionRuntime, usize) {
     let mut city_state = LiveProductionType::research(CITY_STATE, 200);
     city_state.repeat_cost = Some([12, 0, 0, 0, 0, 0]);
     production.install_type(city_state);
-    production.leaders[OWNER].resources = [100; 6];
-    sim.leaders[OWNER].econ.stockpile = [100; 6];
-    sim.step8.leaders[OWNER].econ.stockpile = [100; 6];
-    sim.vic_leaders.slots[OWNER].leader_flags = 3;
-    sim.vic_leaders.slots[OWNER].economy.bucket = [100; 6];
-    sim.step8.leaders[OWNER].flags = 3;
-    sim.vic_leaders.slots[OWNER].num_units[0] = 3;
-    sim.vic_leaders.slots[OWNER].num_units[53 - 50] = 7;
-    sim.vic_leaders.slots[OWNER].num_buildings[427 - 414] = 4;
-    sim.vic_leaders.slots[OWNER].num_queued[53] = 5;
-    sim.vic_leaders.slots[OWNER].num_queued[427] = 6;
-    sim.vic_leaders.slots[OWNER].num_queued[0] = 9;
-    sim.vic_leaders.slots[OWNER].num_queued[402] = 11;
+    production.leaders[owner].resources = [100; 6];
+    sim.leaders[owner].econ.stockpile = [100; 6];
+    sim.step8.leaders[owner].econ.stockpile = [100; 6];
+    sim.vic_leaders.slots[owner].leader_flags = 3;
+    sim.vic_leaders.slots[owner].economy.bucket = [100; 6];
+    sim.step8.leaders[owner].flags = 3;
+    sim.vic_leaders.slots[owner].num_units[0] = 3;
+    sim.vic_leaders.slots[owner].num_units[53 - 50] = 7;
+    sim.vic_leaders.slots[owner].num_buildings[427 - 414] = 4;
+    sim.vic_leaders.slots[owner].num_queued[53] = 5;
+    sim.vic_leaders.slots[owner].num_queued[427] = 6;
+    sim.vic_leaders.slots[owner].num_queued[0] = 9;
+    sim.vic_leaders.slots[owner].num_queued[402] = 11;
     (sim, production, row)
 }
 
@@ -264,8 +246,8 @@ fn insufficient_resources_return_zero_before_cursor_group_or_queue_commit() {
         }),
         ..ProductionBuiltinImage::default()
     };
-    let (types, upgrades) = canonical_type_owners();
-    let (mut sim, mut production, row) = production_owners();
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, row) = production_owners(OWNER);
     production.leaders[OWNER].resources = [0; 6];
     sim.leaders[OWNER].econ.stockpile = [0; 6];
     sim.step8.leaders[OWNER].econ.stockpile = [0; 6];
@@ -340,8 +322,8 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         }),
         ..ProductionBuiltinImage::default()
     };
-    let (types, upgrades) = canonical_type_owners();
-    let (mut sim, mut production, row) = production_owners();
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, row) = production_owners(OWNER);
     let scenario_before = sim.scenario_data;
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
@@ -422,23 +404,31 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         );
         return;
     }
-    let inc = don_bhs_cc::load::install_include_path(&content_root);
-    let loaded = don_bhs_cc::load::load_script(&inc, replay_bhs_runtime::STANDARD_AI_SCRIPT_FILE)
-        .expect("compile installed economic.bhs");
-    let pristine_program = don_replay::script_channel::checksum_program(&loaded.program).unwrap();
-    let binding = ReplayBhsBinding {
-        file: 0,
-        name: loaded.entry,
-    };
+    let replay_path =
+        repo_root().join("ron-data/replays/multi/Playback___2020.07.25_19_30_12__Sat_.rcx");
+    if !replay_path.is_file() {
+        eprintln!(
+            "\n  SKIPPED — NOT A PASS. The installed AI replay witness is absent; the canonical replay-selected BHS path was not established.\n"
+        );
+        return;
+    }
+    let replay = Replay::open(&replay_path).expect("decode installed AI replay witness");
+    let content_owner = 2usize;
+    assert!(replay.initial.active_players().any(|player| {
+        player.slot as usize == content_owner && player.flags & LEADER_FLAG_HUMAN == 0
+    }));
+    let loaded = load_replay_bhs_program(&replay.initial, &content_root)
+        .expect("select installed economic.bhs from the replay's AI roster");
+    let pristine_program = loaded.checksum;
     let mut call = ReplayProductionCall {
-        who: 1,
+        who: content_owner as i32 + 1,
         step: 1,
         boom_vs_rush: 1,
         num_loops: 5,
     };
     let call_before = call;
-    let (types, upgrades) = canonical_type_owners();
-    let (mut sim, mut production, row) = production_owners();
+    let (types, upgrades) = canonical_type_owners(content_owner);
+    let (mut sim, mut production, row) = production_owners(content_owner);
     let installed_style = don_replay::map_style::MapStyleStaticData::load_from_ron_data(
         &repo_root().join("ron-data"),
         12,
@@ -454,7 +444,7 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
             semaphore: [0; 32],
         }),
         leaders: std::array::from_fn(|who| {
-            if who == OWNER {
+            if who == content_owner {
                 ProductionLeaderImage {
                     flags: 3,
                     flags2: 0,
@@ -484,8 +474,91 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
     let mut timers = ScriptTimers::default();
     timers.add_timer("1", 300).unwrap();
     let pristine_timers = timers.clone();
-    let mut script_runtime =
-        ScriptRuntime::new_with_timers(loaded.program, None, None, timers).unwrap();
+
+    let (mut failure_sim, mut failure_production, failure_row) = production_owners(content_owner);
+    failure_production.leaders[content_owner].resources = [0; 6];
+    failure_sim.leaders[content_owner].econ.stockpile = [0; 6];
+    failure_sim.step8.leaders[content_owner].econ.stockpile = [0; 6];
+    failure_sim.vic_leaders.slots[content_owner].economy.bucket = [0; 6];
+    let failure_scenario_before = failure_sim.scenario_data;
+    let failure_groups_before = failure_sim.groups.clone();
+    let failure_queue_before = failure_sim.builds[failure_row].queue.clone();
+    let mut failure_call = call;
+    let failure_loaded = load_replay_bhs_program(&replay.initial, &content_root)
+        .expect("reload the installed replay-selected program for the refusal arm");
+    let (mut failure_runtime, failure_binding) = failure_loaded
+        .into_script_runtime_with_timers(timers.clone())
+        .expect("bind the installed refusal runtime");
+    let failure_binding = failure_binding.expect("AI replay carries an economic binding");
+    let refusal = run_production_research_call(
+        &mut failure_runtime,
+        &failure_binding,
+        &mut failure_call,
+        &image,
+        &types,
+        &upgrades,
+        &mut failure_sim,
+        &mut failure_production,
+        game_seconds(0),
+    )
+    .expect("the installed insufficient-resource path returns from economic.bhs");
+    let refused = refusal
+        .production
+        .trace
+        .iter()
+        .position(|entry| {
+            entry.index == 357
+                && entry.args.get(1) == Some(&ProductionBuiltinValue::Str("Written Word".into()))
+        })
+        .expect("installed stock execution reaches the refused Written Word builtin 357");
+    assert_eq!(
+        refusal.production.trace[refused].returned,
+        ProductionBuiltinValue::Int(0)
+    );
+    assert_eq!(
+        refusal.production.trace[refused + 1].index,
+        332,
+        "the installed insufficient-resource continuation is at_least_type"
+    );
+    assert_eq!(
+        refusal.production.trace[refused + 1].args,
+        [
+            ProductionBuiltinValue::Int(content_owner as i32 + 1),
+            ProductionBuiltinValue::Int(75),
+            ProductionBuiltinValue::Str("Wealth".into()),
+        ]
+    );
+    assert_eq!(
+        refusal.production.trace[refused + 1].returned,
+        ProductionBuiltinValue::Int(0)
+    );
+    assert_eq!(refusal.production.returned, 1);
+    assert_eq!(failure_call.step, 7);
+    assert_eq!(failure_call.who, call_before.who);
+    assert_eq!(failure_call.boom_vs_rush, call_before.boom_vs_rush);
+    assert_eq!(failure_call.num_loops, call_before.num_loops);
+    let mut expected_failure_scenario = failure_scenario_before;
+    expected_failure_scenario.find_counters[30] = BUILD_BAND_BASE as i32;
+    assert_eq!(failure_sim.scenario_data, expected_failure_scenario);
+    assert_eq!(failure_sim.groups.list, failure_groups_before.list);
+    assert_eq!(
+        failure_sim.builds[failure_row].queue.queued,
+        failure_queue_before.queued
+    );
+    assert_eq!(
+        failure_sim.builds[failure_row].queue.entries,
+        failure_queue_before.entries
+    );
+    assert_eq!(failure_production.leaders[content_owner].resources, [0; 6]);
+    assert!(refusal
+        .research
+        .iter()
+        .all(|receipt| receipt.status == SingleLibraryResearchStatus::Unavailable));
+
+    let (mut script_runtime, binding) = loaded
+        .into_script_runtime_with_timers(timers)
+        .expect("bind the installed success runtime");
+    let binding = binding.expect("AI replay carries an economic binding");
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
 
@@ -501,21 +574,25 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
         game_seconds(0),
     )
     .expect_err("the next unowned production builtin must keep the whole call red");
+    assert!(matches!(
+        &error.failure,
+        ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
+            index: 455,
+            name: "find_num_idle_unit"
+        })
+    ));
 
     let ww = error
         .trace
         .iter()
         .position(|entry| {
             entry.index == 357
-                && entry.args.get(1)
-                    == Some(&replay_bhs_live_bindings::ProductionBuiltinValue::Str(
-                        "Written Word".into(),
-                    ))
+                && entry.args.get(1) == Some(&ProductionBuiltinValue::Str("Written Word".into()))
         })
         .expect("installed stock execution reaches Written Word builtin 357");
     assert_eq!(
         error.trace[ww].returned,
-        replay_bhs_live_bindings::ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32)
+        ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32)
     );
     assert_eq!(
         error.trace[ww + 1..ww + 4]
@@ -527,13 +604,11 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
     );
     assert_eq!(
         error.trace[ww + 3].args.get(1),
-        Some(&replay_bhs_live_bindings::ProductionBuiltinValue::Str(
-            "City State".into(),
-        ))
+        Some(&ProductionBuiltinValue::Str("City State".into()))
     );
     assert_eq!(
         error.trace[ww + 3].returned,
-        replay_bhs_live_bindings::ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32)
+        ProductionBuiltinValue::Int(BUILD_BAND_BASE as i32)
     );
 
     assert_eq!(call, call_before);
@@ -547,13 +622,13 @@ fn shipped_economic_program_reaches_written_word_then_the_measured_city_state_co
     assert_eq!(sim.groups.last_group, groups_before.last_group);
     assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
     assert_eq!(
-        production.leaders[OWNER].queued_counts[WRITTEN_WORD as usize],
+        production.leaders[content_owner].queued_counts[WRITTEN_WORD as usize],
         0
     );
     assert_eq!(
-        production.leaders[OWNER].queued_counts[CITY_STATE as usize],
+        production.leaders[content_owner].queued_counts[CITY_STATE as usize],
         0
     );
-    assert_eq!(production.leaders[OWNER].ages_queued, 0);
-    assert_eq!(production.leaders[OWNER].epochs_queued, 0);
+    assert_eq!(production.leaders[content_owner].ages_queued, 0);
+    assert_eq!(production.leaders[content_owner].epochs_queued, 0);
 }
