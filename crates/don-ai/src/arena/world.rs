@@ -4512,6 +4512,7 @@ impl World {
             // The no-water Arena cannot faithfully execute the measured transport arm.
             return false;
         }
+        let approach = self.construction_approach(unit, target);
 
         self.detach(unit);
         let Some(e) = self.ent_mut(unit) else {
@@ -4533,10 +4534,117 @@ impl World {
                 leader_flags: 0,
             },
         );
+        // `Group::action_swarm_around` installs a coordinate move before BUILD_AT.  The
+        // chosen point is outside the target footprint, so the later `Unit::do_build`
+        // covered-tile gate can reach its ready arm for buildings larger than 3x3.
+        if let Some((approach_x, approach_y)) = approach {
+            motion
+                .orders
+                .push_front(OrderRec::move_to(approach_x, approach_y, UCELL));
+            order_dispatch::clear_partial_path(motion);
+            order_dispatch::update_action(motion);
+        }
         debug_assert_eq!(receipt.rng_draws, 0);
         e.build_order = Some(receipt.target);
         e.job = Job::Work { target };
         true
+    }
+
+    /// Deterministic land-only host for the free-position product consumed by retail's
+    /// `Group::action_swarm_around(BUILD_AT)` (`0x0070FBE0`).
+    ///
+    /// The full shipped group body also owns formations, multiple builders and collision
+    /// retry state. Arena has a single-founder command here, so it retains the source
+    /// invariant that matters at this boundary: select a passable, building-free tile on
+    /// the one-tile ring outside the exact target footprint, nearest to the founder, and
+    /// keep that destination stable in the queued MOVE_TO record.
+    fn construction_approach(&self, founder: EntId, site: EntId) -> Option<(i32, i32)> {
+        let founder = self.ent(founder)?;
+        let site = self.ent(site)?;
+        let ty = self.types.get(site.type_id)?;
+        if ty.x_size <= 0 || ty.y_size <= 0 {
+            return None;
+        }
+        let (site_tx, site_ty) = site.tile();
+        let corner_x = site_tx - ty.x_size / 2;
+        let corner_y = site_ty - ty.y_size / 2;
+        let end_x = corner_x + ty.x_size;
+        let end_y = corner_y + ty.y_size;
+        let (founder_tx, founder_ty) = founder.tile();
+
+        let occupied_by_other_building = |tx: i32, ty: i32| {
+            self.ents.iter().any(|other| {
+                if !other.alive || !other.building || other.id == site.id {
+                    return false;
+                }
+                let Some(other_ty) = self.types.get(other.type_id) else {
+                    return true;
+                };
+                let (other_tx, other_ty_coord) = other.tile();
+                let other_corner_x = other_tx - other_ty.x_size / 2;
+                let other_corner_y = other_ty_coord - other_ty.y_size / 2;
+                tx >= other_corner_x
+                    && tx < other_corner_x + other_ty.x_size
+                    && ty >= other_corner_y
+                    && ty < other_corner_y + other_ty.y_size
+            })
+        };
+
+        let mut best = None;
+        for tx in corner_x - 1..=end_x {
+            for ty in corner_y - 1..=end_y {
+                let on_ring =
+                    tx == corner_x - 1 || tx == end_x || ty == corner_y - 1 || ty == end_y;
+                if !on_ring
+                    || tx < 0
+                    || ty < 0
+                    || tx >= self.map.w
+                    || ty >= self.map.h
+                    || !self.map.at(tx, ty).passable()
+                    || occupied_by_other_building(tx, ty)
+                {
+                    continue;
+                }
+                let dx = i64::from(tx - founder_tx);
+                let dy = i64::from(ty - founder_ty);
+                let key = (dx * dx + dy * dy, tx, ty);
+                if best.is_none_or(|(old, _, _)| key < old) {
+                    best = Some((key, tx, ty));
+                }
+            }
+        }
+        best.map(|(_, tx, ty)| {
+            (
+                tx * RANGE_UNITS_PER_TILE + HALF,
+                ty * RANGE_UNITS_PER_TILE + HALF,
+            )
+        })
+    }
+
+    /// Exact footprint-relative predicates passed to `Unit::do_build`'s recovered gate.
+    /// Center distance is not equivalent: a 5x5 target has no tile which is both within
+    /// one center tile and outside its footprint.
+    fn construction_contact(&self, builder_index: usize, site_index: usize) -> (bool, bool) {
+        let builder = &self.ents[builder_index];
+        let site = &self.ents[site_index];
+        let Some(ty) = self.types.get(site.type_id) else {
+            return (false, false);
+        };
+        let (builder_tx, builder_ty) = builder.tile();
+        let (site_tx, site_ty) = site.tile();
+        let corner_x = site_tx - ty.x_size / 2;
+        let corner_y = site_ty - ty.y_size / 2;
+        let end_x = corner_x + ty.x_size;
+        let end_y = corner_y + ty.y_size;
+        let covered = builder_tx >= corner_x
+            && builder_tx < end_x
+            && builder_ty >= corner_y
+            && builder_ty < end_y;
+        let adjacent = builder_tx >= corner_x - 1
+            && builder_tx <= end_x
+            && builder_ty >= corner_y - 1
+            && builder_ty <= end_y;
+        (adjacent, covered)
     }
 
     fn retire_exact_gather(&mut self, owner: u8, unit: EntId) {
@@ -5370,7 +5478,26 @@ impl World {
                     };
                     return;
                 }
-                match self.step_toward(i, b.x, b.y, RANGE_UNITS_PER_TILE) {
+                // A construction command owns the MOVE_TO chosen by the swarm-around
+                // approach planner. Execute that stable prefix instead of replacing it
+                // every frame with the occupied building centre. Repair keeps its old
+                // direct target because it has no BUILD_AT tail.
+                let approach = self.ents[i]
+                    .build_order
+                    .and_then(|_| self.ents[i].motion.as_ref())
+                    .and_then(|motion| motion.orders.front())
+                    .filter(|order| order.kind == don_sim::order::OrderIndex::MoveTo)
+                    .map(|order| (order.x, order.y, order.tolerance.max(UCELL)));
+                if self.ents[i].build_order.is_some() && approach.is_none() {
+                    // MOVE_TO has retired and exposed the retained BUILD_AT. Enter the
+                    // recovered contact gate directly; if collision displaced the unit,
+                    // its Reswarm arm will enqueue a fresh approach without credit.
+                    self.preflight_construction_builder(i, target);
+                    return;
+                }
+                let (goal_x, goal_y, tolerance) =
+                    approach.unwrap_or((b.x, b.y, RANGE_UNITS_PER_TILE));
+                match self.step_toward(i, goal_x, goal_y, tolerance) {
                     MoveProgress::Arrived => {
                         if !b.complete {
                             self.preflight_construction_builder(i, target);
@@ -5410,21 +5537,13 @@ impl World {
         let Some(site_build) = site.build.as_ref() else {
             panic!("construction target {} has no BuildData", target.0);
         };
-        let target_type = self
-            .types
-            .get(site.type_id)
-            .expect("live construction target keeps its type row");
         let builder = &self.ents[i];
         let builder_key = ObjectKey {
             who: i32::from(builder.who),
             o: i32::from(builder.object_o),
             uid: builder.object_uid,
         };
-        let (btx, bty) = builder.tile();
-        let (ttx, tty) = site.tile();
-        let half_x = (target_type.x_size / 2).max(0);
-        let half_y = (target_type.y_size / 2).max(0);
-        let builder_tile_is_covered = (btx - ttx).abs() <= half_x && (bty - tty).abs() <= half_y;
+        let (adjacent, builder_tile_is_covered) = self.construction_contact(i, site_index);
         let order_flags = builder
             .motion
             .as_ref()
@@ -5445,7 +5564,7 @@ impl World {
             target_is_valid_wall: site.alive && site_build.is_valid(),
             target_is_active: site_build.is_active(),
             has_next_action_after_retire: false,
-            adjacent: Map::tile_dist((btx, bty), (ttx, tty)) <= 1,
+            adjacent,
             builder_tile_is_covered,
             target_is_farm: site.type_id == self.ids.farm,
             order_flags,
@@ -5457,60 +5576,67 @@ impl World {
             unit_decoy,
         });
 
-        let refusal = match plan {
-            PreflightPlan::Reswarm { .. } => {
-                if self.params.construction_mode == ConstructionMode::ResearchModel {
-                    // MODEL: the playable arena has no temporary Group/reswarm host. Its
-                    // old one-tile approach is retained only as the prerequisite to the
-                    // recovered lifecycle transaction; the receipt begins after that
-                    // explicitly non-retail projection.
-                    self.apply_research_construction_lifecycle(
-                        i,
-                        site_index,
-                        PreflightPlan::AnimateFace {
-                            animation: construction_builder::CHAR_BUILD,
-                            set_angle: None,
-                            contribute: true,
-                        },
-                    );
+        let refusal =
+            match plan {
+                PreflightPlan::Reswarm { .. } => {
+                    if self.params.construction_mode == ConstructionMode::ResearchModel {
+                        // Retail bare-kills this BUILD_AT, creates a temporary one-member
+                        // Group, and invokes action_swarm_around(FIRST, BUILD_AT). Arena's
+                        // single-founder host retains the same executable order product. It
+                        // never converts a failed contact gate into construction credit.
+                        if let Some((x, y)) =
+                            self.construction_approach(self.ents[i].id, self.ents[site_index].id)
+                        {
+                            let motion = self.ents[i]
+                                .motion
+                                .as_mut()
+                                .expect("live builder owns UnitWork");
+                            if motion.orders.front().is_some_and(|order| {
+                                order.kind == don_sim::order::OrderIndex::BuildAt
+                            }) {
+                                motion.orders.push_front(OrderRec::move_to(x, y, UCELL));
+                                order_dispatch::clear_partial_path(motion);
+                                order_dispatch::update_action(motion);
+                                return;
+                            }
+                        }
+                    }
+                    ConstructionRefusal::MissingReswarmTransaction
+                }
+                PreflightPlan::AnimateFace {
+                    animation,
+                    set_angle,
+                    contribute,
+                } => {
+                    if self.params.construction_mode == ConstructionMode::ResearchModel {
+                        self.apply_research_construction_lifecycle(
+                            i,
+                            site_index,
+                            PreflightPlan::AnimateFace {
+                                animation,
+                                set_angle,
+                                contribute,
+                            },
+                        );
+                        return;
+                    }
+                    // `Unit::set_anim` 0x00616F40 calls the 4,723-byte Guy::set_anim body for
+                    // every squad/crew member before `Unit::set_angle`. The current don-sim
+                    // primitive returns this ordered plan but does not own that transaction;
+                    // setting only `GuyData::cur_anim` would be an invented shortcut.
+                    ConstructionRefusal::MissingBuilderAnimationTransaction
+                }
+                PreflightPlan::RetireInvalid { .. } => {
+                    self.detach_without_construction_interrupt(self.ents[i].id);
+                    self.ents[i].job = Job::Idle;
                     return;
                 }
-                ConstructionRefusal::MissingReswarmTransaction
-            }
-            PreflightPlan::AnimateFace {
-                animation,
-                set_angle,
-                contribute,
-            } => {
-                if self.params.construction_mode == ConstructionMode::ResearchModel {
-                    self.apply_research_construction_lifecycle(
-                        i,
-                        site_index,
-                        PreflightPlan::AnimateFace {
-                            animation,
-                            set_angle,
-                            contribute,
-                        },
-                    );
+                PreflightPlan::RetireActive => {
+                    self.detach_without_construction_interrupt(self.ents[i].id);
+                    self.ents[i].job = Job::Idle;
                     return;
                 }
-                // `Unit::set_anim` 0x00616F40 calls the 4,723-byte Guy::set_anim body for
-                // every squad/crew member before `Unit::set_angle`. The current don-sim
-                // primitive returns this ordered plan but does not own that transaction;
-                // setting only `GuyData::cur_anim` would be an invented shortcut.
-                ConstructionRefusal::MissingBuilderAnimationTransaction
-            }
-            PreflightPlan::RetireInvalid { .. } => {
-                self.detach_without_construction_interrupt(self.ents[i].id);
-                self.ents[i].job = Job::Idle;
-                return;
-            }
-            PreflightPlan::RetireActive => {
-                self.detach_without_construction_interrupt(self.ents[i].id);
-                self.ents[i].job = Job::Idle;
-                return;
-            }
-        };
+            };
         self.ents[site_index].construction_refusal = Some(refusal);
     }
 

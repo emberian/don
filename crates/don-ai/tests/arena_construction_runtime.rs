@@ -9,6 +9,7 @@ use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BAS
 use don_sim::systems::construction::{BuildOutcome, ChecksumEffects, ObjectKey};
 use don_sim::systems::construction_lifecycle::LEADER_ACTIVATION_DIRTY;
 use don_sim::systems::map_terrain::tflag;
+use don_sim::systems::order_dispatch;
 use don_sim::systems::production::{flag, mask};
 
 fn world(mode: ConstructionMode) -> Option<don_ai::arena::World> {
@@ -109,11 +110,27 @@ fn put_builder_at(w: &mut World, builder: EntId, x: i32, y: i32) {
 }
 
 fn put_builder_in_construction_range(w: &mut World, builder: EntId, site: EntId) {
-    let (site_x, site_y) = {
-        let site = w.ent(site).expect("construction site is live");
-        (site.x, site.y)
-    };
-    put_builder_at(w, builder, site_x + 192, site_y);
+    let target = w
+        .ent(builder)
+        .and_then(|ent| ent.motion.as_ref())
+        .and_then(|motion| {
+            motion
+                .orders
+                .front()
+                .filter(|order| order.kind == don_sim::order::OrderIndex::MoveTo)
+                .map(|order| (order.x, order.y))
+        });
+    let (x, y) = target.expect("construction command retains its swarm MOVE_TO prefix");
+    assert!(w.ent(site).is_some(), "construction site is live");
+    put_builder_at(w, builder, x, y);
+    let motion = w.ents[builder.index().unwrap()]
+        .motion
+        .as_mut()
+        .expect("builder retains UnitWork");
+    // This helper deliberately relocates the builder between object passes. Retire any
+    // path generated from its former position so the next pass evaluates the queued
+    // approach coordinate, just as a naturally walking builder would on arrival.
+    order_dispatch::clear_partial_path(motion);
 }
 
 #[test]
@@ -539,26 +556,9 @@ fn plain_site_start_reject_and_completion_keep_live_identities_and_effects() {
     rejected_world.ents[blocker_index].x = site_x;
     rejected_world.ents[blocker_index].y = site_y;
 
-    // Put the builder exactly one tile from the target so the next object pass enters
-    // do_build; this mutates every Arena position view consumed by that pass.
-    let builder_index = rejected_builder.index().unwrap();
-    rejected_world.ents[builder_index].x = site_x + 192;
-    rejected_world.ents[builder_index].y = site_y;
-    if let Some(motion) = rejected_world.ents[builder_index].motion.as_mut() {
-        motion.body.x = site_x + 192;
-        motion.body.y = site_y;
-    }
-    for guy in rejected_world.ents[builder_index]
-        .guys
-        .guys
-        .iter_mut()
-        .flatten()
-    {
-        guy.x = site_x + 192;
-        guy.y = site_y;
-        guy.des_x = site_x + 192;
-        guy.des_y = site_y;
-    }
+    // Put the builder at the source-owned uncovered approach, so this pass legitimately
+    // retires MOVE_TO and enters do_build rather than relying on Reswarm for credit.
+    put_builder_in_construction_range(&mut rejected_world, rejected_builder, rejected_site);
     rejected_world.players[0].stock = [1_000; 6];
     let stock_before = rejected_world.players[0].stock;
     rejected_world.step();
