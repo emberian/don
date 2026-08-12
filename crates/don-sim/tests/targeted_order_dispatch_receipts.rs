@@ -434,22 +434,26 @@ fn air_attack_ground_preflights_physics_and_commits_recharge_and_mana_tail() {
 }
 
 #[test]
-fn newly_issued_descriptive_orders_widen_to_concrete_targeted_payloads() {
-    let ground = OrderRec::from(Order {
+fn typed_ground_and_legacy_air_orders_widen_without_inventing_ground_suffixes() {
+    let ground_state = AttackGroundOrderState {
+        att_x: 123,
+        att_y: 456,
+        accuracy: 0,
+        attack_unit: 0,
+    };
+    let ground = OrderRec::from(Order::attack_ground(ground_state));
+    assert_eq!(
+        ground.targeted_payload,
+        TargetedOrderPayload::AttackGround(ground_state)
+    );
+
+    let legacy_ground = OrderRec::from(Order {
         kind: OrderIndex::AttackGround,
         x: 123,
         y: 456,
         ..Order::default()
     });
-    assert_eq!(
-        ground.targeted_payload,
-        TargetedOrderPayload::AttackGround(AttackGroundOrderState {
-            att_x: 123,
-            att_y: 456,
-            accuracy: 0,
-            attack_unit: 0,
-        })
-    );
+    assert_eq!(legacy_ground.targeted_payload, TargetedOrderPayload::None);
 
     let air = OrderRec::from(Order {
         kind: OrderIndex::AirAttackGround,

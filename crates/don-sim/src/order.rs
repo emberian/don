@@ -507,6 +507,9 @@ pub struct Order {
     /// Complete checksum-visible `GuardOrder` payload. The flattened target header is a
     /// second view of the same identity and must agree with `guard.target`.
     pub guard: Option<crate::systems::guard_order::GuardOrderState>,
+    /// Exact four-word `AttackGroundOrder` payload. The generic `x/y` view must agree with
+    /// `att_x/att_y`; accuracy and attack-unit state must never be reconstructed from it.
+    pub attack_ground: Option<crate::systems::targeted_order_plans::AttackGroundOrderState>,
     /// Exact economy-order suffix for BOARD_SHIP/AWAIT_BOARD/REPAIR/GATHER/CAST_SPELL/
     /// TRADE_ROUTE. Target-only variants are explicit so a foreign tag-0 order cannot be
     /// mistaken for a recovered economy node.
@@ -533,6 +536,7 @@ impl Default for Order {
             air_patrol: None,
             strafe: None,
             guard: None,
+            attack_ground: None,
             economy: None,
         }
     }
@@ -611,6 +615,20 @@ impl Order {
             guard: Some(payload),
             ..Order::default()
         })
+    }
+
+    /// Construct the exact ordinary-ground coordinate order installed by opcode 9.
+    pub fn attack_ground(
+        payload: crate::systems::targeted_order_plans::AttackGroundOrderState,
+    ) -> Order {
+        Order {
+            kind: OrderIndex::AttackGround,
+            flags: ORDER_GROUP,
+            x: payload.att_x,
+            y: payload.att_y,
+            attack_ground: Some(payload),
+            ..Order::default()
+        }
     }
 
     /// `Unit::add_spec_anim_order(type, data1, data2, QueuePos)` `0x005E4160`.

@@ -888,17 +888,19 @@ impl From<Order> for OrderRec {
     /// Widen a descriptive [`crate::order::Order`]. The retry state machine starts clean.
     fn from(o: Order) -> OrderRec {
         let follow = o.follow;
-        let attack = AttackGroundOrderState {
-            att_x: o.x,
-            att_y: o.y,
-            accuracy: 0,
-            attack_unit: 0,
-        };
         let targeted_payload = match o.kind {
-            OrderIndex::AttackGround => TargetedOrderPayload::AttackGround(attack),
+            OrderIndex::AttackGround => o.attack_ground.map_or(
+                TargetedOrderPayload::None,
+                TargetedOrderPayload::AttackGround,
+            ),
             OrderIndex::AirAttackGround => {
                 TargetedOrderPayload::AirAttackGround(AirAttackGroundOrderState {
-                    attack,
+                    attack: AttackGroundOrderState {
+                        att_x: o.x,
+                        att_y: o.y,
+                        accuracy: 0,
+                        attack_unit: 0,
+                    },
                     air: crate::systems::air::AirOrderWalk::default(),
                     total_time: 0,
                     sx: 0,
@@ -1013,6 +1015,10 @@ impl From<OrderRec> for Order {
             group_angle: r.group_angle,
             in_group: r.in_group,
         });
+        let attack_ground = match r.targeted_payload {
+            TargetedOrderPayload::AttackGround(state) => Some(state),
+            TargetedOrderPayload::None | TargetedOrderPayload::AirAttackGround(_) => None,
+        };
         Order {
             node_metric: r.node_metric,
             kind: r.kind,
@@ -1031,6 +1037,7 @@ impl From<OrderRec> for Order {
             air_patrol,
             strafe,
             guard: r.guard,
+            attack_ground,
             economy: r.economy,
         }
     }

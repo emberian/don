@@ -885,6 +885,9 @@ pub struct Sim {
     pub air_group_authority: crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority,
     /// Revision-bound singleton-formation and target virtual facts for the bounded GUARD cone.
     pub guard_authority: crate::systems::canonical_guard_runtime::CanonicalGuardAuthority,
+    /// Reinstalled ordinary-ground type/animation facts for the bounded opcode-9 cone.
+    pub attack_ground_authority:
+        crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority,
     /// Revision/digest-bound registry/caravan/terrain facts for admitted `Unit::do_trade`
     /// branches. This is a load-time adapter, not a second persistent order owner.
     pub trade_route_authority:
@@ -1622,6 +1625,8 @@ impl Sim {
                 crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority::default(),
             guard_authority:
                 crate::systems::canonical_guard_runtime::CanonicalGuardAuthority::default(),
+            attack_ground_authority:
+                crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority::default(),
             trade_route_authority:
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
@@ -1684,6 +1689,14 @@ impl Sim {
         authority: crate::systems::canonical_guard_runtime::CanonicalGuardAuthority,
     ) {
         self.guard_authority = authority;
+    }
+
+    /// Install the exact ordinary-ground receiver and recharge-hold facts for opcode 9.
+    pub fn replace_attack_ground_authority(
+        &mut self,
+        authority: crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority,
+    ) {
+        self.attack_ground_authority = authority;
     }
 
     /// Install action facts used by SET_TRANSPORT, BUILDMASK, and FOLLOW. Loaded simulations
@@ -2007,6 +2020,60 @@ impl Sim {
             &mut self.command_package_state,
             &self.group_move_authority,
             &self.guard_authority,
+            &self.scenario_ignore_orders,
+            &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
+            prepared,
+        )
+    }
+
+    /// Process the bounded retail opcode-9 cone: one ordinary Unit, QueuePos::New, and an
+    /// unowned clamped terrain target. Aircraft and owned-terrain diplomacy remain refused.
+    pub fn process_attack_ground_group_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_attack_ground_runtime::AttackGroundPackageReceipt,
+        crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundError,
+    > {
+        use crate::systems::canonical_attack_ground_runtime::{
+            commit_attack_ground_package, prepare_attack_ground_package,
+        };
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_attack_ground_package(
+            &self.world,
+            &self.map.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.attack_ground_authority,
+            &self.scenario_ignore_orders,
+            &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_attack_ground_package(
+            &mut self.world,
+            &self.map.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.attack_ground_authority,
             &self.scenario_ignore_orders,
             &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
             prepared,
@@ -3709,6 +3776,9 @@ impl Sim {
             // Arm 12, bounded to the exact nonmoving periodic idle pulse. All spatial,
             // movement, CAST and RNG branches remain fail-closed in the canonical adapter.
             OrderIndex::Guard => self.do_guard_idle(row),
+            // Arm 23, bounded to the exact recharge-hold branch. Firing, repositioning,
+            // foreign terrain/diplomacy, and the aircraft arm stay fail-closed.
+            OrderIndex::AttackGround => self.do_attack_ground_hold(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
@@ -3740,6 +3810,26 @@ impl Sim {
             return;
         };
         let _ = commit_guard_idle_activation(&mut self.world, &self.guard_authority, prepared);
+    }
+
+    fn do_attack_ground_hold(&mut self, row: usize) {
+        use crate::systems::canonical_attack_ground_runtime::{
+            commit_attack_ground_hold, prepare_attack_ground_hold,
+        };
+        let Ok(prepared) = prepare_attack_ground_hold(
+            &self.world,
+            &self.map.world,
+            &self.attack_ground_authority,
+            row,
+        ) else {
+            return;
+        };
+        let _ = commit_attack_ground_hold(
+            &self.world,
+            &self.map.world,
+            &self.attack_ground_authority,
+            prepared,
+        );
     }
 
     fn do_gather_work(&mut self, row: usize) {

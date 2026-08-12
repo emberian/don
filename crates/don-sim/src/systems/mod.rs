@@ -79,6 +79,8 @@ pub mod canonical_air_group_host;
 pub mod canonical_air_package_shell;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
+/// Canonical bounded opcode-9 receiver and resumed ground-order hold frame.
+pub mod canonical_attack_ground_runtime;
 /// Installed, revision-bound production adapter for the fresh saved Village BUILD_AT tick.
 pub mod canonical_build_at_work;
 /// Atomic Board/Repair/Trade packet planner sharing the canonical Group→Move selector.

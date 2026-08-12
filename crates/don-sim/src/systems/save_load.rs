@@ -526,6 +526,11 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     if format_version < ORDER_NODE_METRIC_FORMAT_VERSION && o.guard.is_some() {
         return Err(SaveError::Unsupported("GUARD payload before DoNSave v13"));
     }
+    if format_version < ORDER_NODE_METRIC_FORMAT_VERSION && o.attack_ground.is_some() {
+        return Err(SaveError::Unsupported(
+            "ATTACK_GROUND payload before DoNSave v13",
+        ));
+    }
     if format_version >= TYPED_ORDER_FORMAT_VERSION {
         if o.move_state.is_some() && !order_kind_carries_move_state(o.kind) {
             return Err(SaveError::Invalid("movement payload on foreign order kind"));
@@ -568,11 +573,22 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             }) {
                 return Err(SaveError::Invalid("invalid GUARD payload"));
             }
+            if o.attack_ground.is_some() && o.kind != OrderIndex::AttackGround {
+                return Err(SaveError::Invalid(
+                    "ATTACK_GROUND payload on foreign order kind",
+                ));
+            }
+            if o.attack_ground
+                .is_some_and(|attack| (o.x, o.y) != (attack.att_x, attack.att_y))
+            {
+                return Err(SaveError::Invalid("invalid ATTACK_GROUND payload"));
+            }
         }
         let typed_payloads = usize::from(o.move_state.is_some())
             + usize::from(o.air_patrol.is_some())
             + usize::from(o.strafe.is_some())
-            + usize::from(o.guard.is_some());
+            + usize::from(o.guard.is_some())
+            + usize::from(o.attack_ground.is_some());
         if typed_payloads > 1 {
             return Err(SaveError::Invalid("multiple typed order payloads"));
         }
@@ -591,7 +607,8 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
         && (o.move_state.is_some()
             || o.air_patrol.is_some()
             || o.strafe.is_some()
-            || o.guard.is_some())
+            || o.guard.is_some()
+            || o.attack_ground.is_some())
     {
         return Err(SaveError::Invalid("multiple typed order payloads"));
     }
@@ -678,6 +695,8 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             DoNSaveOrderPayloadTag::Strafe
         } else if o.guard.is_some() {
             DoNSaveOrderPayloadTag::Guard
+        } else if o.attack_ground.is_some() {
+            DoNSaveOrderPayloadTag::AttackGround
         } else {
             DoNSaveOrderPayloadTag::None
         };
@@ -708,6 +727,13 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             w.i32(guard.guard_y);
             w.i32(guard.idle);
             w.i32(guard.retry);
+        } else if let Some(attack) = o.attack_ground {
+            w.u8(tag as u8);
+            w.u8(tag.wire_version());
+            w.i32(attack.att_x);
+            w.i32(attack.att_y);
+            w.i32(attack.accuracy);
+            w.i32(attack.attack_unit);
         } else {
             w.u8(tag as u8);
             w.u8(tag.wire_version());
@@ -769,6 +795,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         air_patrol: None,
         strafe: None,
         guard: None,
+        attack_ground: None,
         economy: None,
     };
     let special_anim = if r.bool()? {
@@ -809,6 +836,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     } else {
         None
     };
+    let mut attack_ground = None;
     let (move_state, air_patrol, strafe, guard, economy) = if format_version
         >= TYPED_ORDER_FORMAT_VERSION
     {
@@ -993,6 +1021,33 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                     "unknown order payload discriminator/version",
                 ));
             }
+            (DoNSaveOrderPayloadTag::AttackGround, 1)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                if kind != OrderIndex::AttackGround {
+                    return Err(SaveError::Invalid(
+                        "ATTACK_GROUND payload on foreign order kind",
+                    ));
+                }
+                let payload = crate::systems::targeted_order_plans::AttackGroundOrderState {
+                    att_x: r.i32()?,
+                    att_y: r.i32()?,
+                    accuracy: r.i32()?,
+                    attack_unit: r.i32()?,
+                };
+                if (order.x, order.y) != (payload.att_x, payload.att_y) {
+                    return Err(SaveError::Invalid("invalid ATTACK_GROUND payload"));
+                }
+                attack_ground = Some(payload);
+                (None, None, None, None, None)
+            }
+            (DoNSaveOrderPayloadTag::AttackGround, _)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                return Err(SaveError::Invalid(
+                    "unknown order payload discriminator/version",
+                ));
+            }
             (
                 DoNSaveOrderPayloadTag::Gather
                 | DoNSaveOrderPayloadTag::CastSpell
@@ -1027,6 +1082,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         air_patrol,
         strafe,
         guard,
+        attack_ground,
         economy,
         ..order
     })
