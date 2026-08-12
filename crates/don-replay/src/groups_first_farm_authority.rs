@@ -15,8 +15,8 @@ use don_sim::systems::casters_animals::ManaCapacityInput;
 use don_sim::systems::groups_guys::UnitTypeStats;
 use don_sim::systems::map_terrain::{Coord, WCoord};
 use don_sim::systems::objects_init_unit_authority_frontier::{
-    normalize_unit_init_coordinate, BhsInitUnitRequest, DetailedInitUnitReceipt,
-    InitUnitReceiptError, InitUnitStep, ValidatedInitUnitEffects,
+    normalize_unit_init_coordinate, BhsInitUnitRequest, CompleteBody, DetailedInitUnitReceipt,
+    InitUnitReceiptError, InitUnitStep, UnitAfterInit, UnitInitReceipt, ValidatedInitUnitEffects,
 };
 use don_sim::systems::production::{self, Footprint};
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
@@ -43,12 +43,14 @@ use crate::setup_place_unit_deep_re::{
 };
 use crate::setup_unit_visibility_deep_re::{
     produce_setup_unit_visibility, SetupUnitVisibilityAuthority, SetupUnitVisibilityError,
-    SetupUnitVisibilityReceipt,
+    SetupUnitVisibilityReceipt, SetupVisibilityExternalResidual,
 };
 use crate::setup_units_producer::{
     starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
-    BuildUnitsPrefixReceipt, BuildUnitsReceiptError, PlacementOutcomeReceipt, PlacementRngEvent,
-    StableUnitIdentityReceipt, StartingUnitPhase, CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
+    BuildUnitsPrefixReceipt, BuildUnitsReceiptError, EngineContainerShapeReceipt,
+    GuyIdentityReceipt, InitUnitAuthorityReceipt, PlacementOutcomeReceipt, PlacementRngEvent,
+    StableUnitIdentityReceipt, StartingUnitPhase, UnitMemberAuthorityReceipt,
+    CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
 };
 use crate::unit_init_collision_tail_deep_re::{
     produce_unit_init_collision_tail, UnitInitCollisionTailError, UnitInitCollisionTailInputs,
@@ -489,6 +491,72 @@ pub struct FirstFarmFirstScoutVisibilityReceipt {
     pub collision: FirstFarmFirstScoutCollisionReceipt,
     pub visibility: SetupUnitVisibilityReceipt,
     pub world_checksum_after_visibility: don_sim::systems::map_terrain::WorldChecksum,
+}
+
+/// The source-owned completion of the first setup Scout's complete initializer transaction.
+///
+/// Unlike [`FirstFarmFirstInitUnitAuthority`], this is not an opaque assertion that the nested
+/// body ran. It retains the admitted 3,732-byte `Unit::init` step, exact outer 1,603-byte
+/// `Objects::init_unit` effects, canonical after-image, collision/visibility receipt, and the
+/// setup-schedule member receipt needed to advance ordinal zero.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstScoutCompleteInitReceipt {
+    pub visibility: FirstFarmFirstScoutVisibilityReceipt,
+    pub unit_init: UnitInitReceipt,
+    pub effects: ValidatedInitUnitEffects,
+    pub canonical_after_row: usize,
+    pub canonical_after: UnitAfterInit,
+    pub setup_init: InitUnitAuthorityReceipt,
+    pub world_checksum_after: don_sim::systems::map_terrain::WorldChecksum,
+    pub rng_after: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstScoutCompleteInitError {
+    Visibility(FirstFarmFirstScoutVisibilityError),
+    Discovery(FirstFarmAuthorityError),
+    DetailedReceipt(InitUnitReceiptError),
+    WrongEffects,
+    MissingUnitInitStep,
+    WrongUnitInitExtent,
+    UnitAfterImageMismatch,
+    TailAfterImageMismatch,
+    CanonicalUnitTailMismatch,
+    MissingFinalCaptain,
+    FinalCaptainMismatch,
+    ExternalGroupsResidual,
+    CanonicalWorldAfterMismatch,
+    CanonicalRngAfterMismatch,
+    CanonicalContainerMismatch,
+}
+
+impl fmt::Display for FirstFarmFirstScoutCompleteInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "first 2018 Farm Scout complete initializer refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for FirstFarmFirstScoutCompleteInitError {}
+
+impl From<FirstFarmFirstScoutVisibilityError> for FirstFarmFirstScoutCompleteInitError {
+    fn from(value: FirstFarmFirstScoutVisibilityError) -> Self {
+        Self::Visibility(value)
+    }
+}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstScoutCompleteInitError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<InitUnitReceiptError> for FirstFarmFirstScoutCompleteInitError {
+    fn from(value: InitUnitReceiptError) -> Self {
+        Self::DetailedReceipt(value)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1477,6 +1545,253 @@ pub fn produce_first_farm_first_scout_visibility(
         collision,
         visibility,
         world_checksum_after_visibility,
+    })
+}
+
+fn canonical_unit_tail_matches(
+    sim: &Sim,
+    row: usize,
+    unit: &crate::unit_init_collision_tail_deep_re::UnitPostLocationStateReceipt,
+) -> bool {
+    let units = &sim.world.units;
+    units.collide_frame()[row] == unit.collide_frame
+        && units.collide()[row] == unit.collide
+        && units.collide_o()[row] == unit.collide_o
+        && units.collide_guy()[row] == unit.collide_guy
+        && units.collide_who()[row] == unit.collide_who
+        && units.o_up()[row] == unit.o_up
+        && units.o_down()[row] == unit.o_down
+        && units.cavarch_o()[row] == unit.cavarch_o
+        && units.cavarch_uid()[row] as u16 == unit.cavarch_uid
+        && units.cavarch_who()[row] == unit.cavarch_who
+        && units.play()[row] == unit.play
+        && units.avoid_x()[row] == unit.avoid_x
+        && units.avoid_y()[row] == unit.avoid_y
+        && units.start_dist()[row] == unit.start_dist
+        && units.avoid_land()[row] == unit.avoid_land
+        && units.avoid_sea()[row] == unit.avoid_sea
+        && units.announce_frame()[row] == unit.announce_frame
+        && units.myhits()[row] == unit.myhits
+        && units.mylos()[row] == unit.mylos
+        && units.myspeed()[row] == unit.myspeed
+        && units.myarmor()[row] == unit.myarmor
+        && units.spell_time()[row] == unit.spell_time
+        && units.stance()[row] == unit.stance
+        && units.get_unit_masks(row) == unit.unit_masks
+        && units.get_unit_masks2(row) == unit.unit_masks2
+}
+
+/// Finish the first setup Scout as one atomic, source-produced `Objects::init_unit` receipt.
+///
+/// This outer transaction closes the earlier opaque full-body assertion: it independently
+/// composes Guy allocation, location, collision, common Unit tail, visibility, and the exact
+/// outer receiver chronology, then requires their synchronized after-image to equal the supplied
+/// canonical Sim. The mutable World/Good/Item/Leader owners are committed only after those final
+/// checks pass, so a bad 3,732-byte step, captain, tail scalar, or after-image rolls visibility and
+/// collision back together.
+///
+/// The returned `setup_init` is the exact ordinal-zero member receipt consumed by the setup
+/// schedule owner. It does not attest the four later Citizen calls, frame-79 ticking, or that the
+/// caller's graphics/terrain/World authorities came from the 2018 run.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_scout_complete_init(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    placement_authority: &FirstFarmSetupEntryAuthority,
+    detailed: &DetailedInitUnitReceipt,
+    canonical_after: &Sim,
+    init_authority: &FirstFarmFirstInitUnitAuthority,
+    world: &mut don_sim::systems::map_terrain::World,
+    canonical_world: &don_sim::systems::map_terrain::World,
+    goods: &mut OilGoodRuntime,
+    items: &mut Items,
+    dynamic: &mut DynamicLeadersAuthority,
+    collision_authority: &FirstFarmFirstScoutCollisionAuthority,
+    collision_inputs: FirstFarmFirstScoutCollisionInputs,
+    visibility_authority: &FirstFarmFirstScoutVisibilityAuthority,
+) -> Result<FirstFarmFirstScoutCompleteInitReceipt, FirstFarmFirstScoutCompleteInitError> {
+    let effects = detailed.validate()?;
+    if effects.initialized_members.as_slice() != [0]
+        || effects.terminal_find_free_failure.is_some()
+        || effects.returned_captain_or_failure != 0
+        || effects.unit_mark_before != 0
+        || effects.unit_mark_after != 1
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::WrongEffects);
+    }
+    let unit_init = detailed
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            InitUnitStep::UnitInit(receipt) => Some(*receipt),
+            _ => None,
+        })
+        .ok_or(FirstFarmFirstScoutCompleteInitError::MissingUnitInitStep)?;
+    if unit_init.extent != CompleteBody::UnitInit3732Bytes {
+        return Err(FirstFarmFirstScoutCompleteInitError::WrongUnitInitExtent);
+    }
+
+    let mut next_world = world.clone();
+    let mut next_goods = goods.clone();
+    let mut next_items = items.clone();
+    let mut next_dynamic = dynamic.clone();
+    let visibility = produce_first_farm_first_scout_visibility(
+        replay,
+        plan,
+        before,
+        placement_authority,
+        detailed,
+        canonical_after,
+        init_authority,
+        &mut next_world,
+        canonical_world,
+        &mut next_goods,
+        &mut next_items,
+        &mut next_dynamic,
+        collision_authority,
+        collision_inputs,
+        visibility_authority,
+    )?;
+    if visibility.visibility.next_external_residual != SetupVisibilityExternalResidual::None {
+        return Err(FirstFarmFirstScoutCompleteInitError::ExternalGroupsResidual);
+    }
+
+    let init = &visibility.collision.location.guy.init;
+    if init.effects != effects
+        || init.request.owner != unit_init.owner
+        || init.request.type_index != unit_init.type_index
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::UnitAfterImageMismatch);
+    }
+    let tail = &visibility.collision.tail;
+    let tail_after = UnitAfterInit {
+        owner: tail.identity.owner,
+        o: tail.identity.o,
+        type_index: tail.identity.type_index,
+        x: visibility.collision.location.location.unit.x,
+        y: visibility.collision.location.location.unit.y,
+        angle: visibility.collision.location.location.unit.angle,
+        unit_masks: tail.unit.unit_masks,
+    };
+    if unit_init.after != tail_after {
+        return Err(FirstFarmFirstScoutCompleteInitError::TailAfterImageMismatch);
+    }
+    let row = init.row;
+    let after_image = UnitAfterInit {
+        owner: i32::from(init.unit.identity.who),
+        o: i32::from(init.unit.identity.o),
+        type_index: init.request.type_index,
+        x: init.unit.x,
+        y: init.unit.y,
+        angle: init.unit.angle,
+        unit_masks: init.unit.unit_masks,
+    };
+    if after_image != tail_after {
+        return Err(FirstFarmFirstScoutCompleteInitError::UnitAfterImageMismatch);
+    }
+    if !canonical_unit_tail_matches(canonical_after, row, &tail.unit) {
+        return Err(FirstFarmFirstScoutCompleteInitError::CanonicalUnitTailMismatch);
+    }
+
+    let captain = detailed
+        .steps
+        .last()
+        .and_then(|step| match step {
+            InitUnitStep::ResolveCaptain(receipt) => Some(*receipt),
+            _ => None,
+        })
+        .ok_or(FirstFarmFirstScoutCompleteInitError::MissingFinalCaptain)?;
+    let scout = discover_first_2018_farm(replay)?.scout;
+    if captain.ordinal != 1
+        || captain.from_owner != tail_after.owner
+        || captain.from_o != tail_after.o
+        || captain.returned != tail_after.o
+        || detailed.returned != tail_after.o
+        || captain.captain.owner != tail_after.owner
+        || captain.captain.o != tail_after.o
+        || captain.captain.x != tail_after.x
+        || captain.captain.y != tail_after.y
+        || captain.captain.angle != tail_after.angle
+        || captain.captain.new_block_radius != scout.new_block_radius
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::FinalCaptainMismatch);
+    }
+    let world_checksum_after = next_world.checksum_sections();
+    if world_checksum_after != init_authority.map_checksum_after
+        || world_checksum_after != canonical_after.map.world.checksum_sections()
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::CanonicalWorldAfterMismatch);
+    }
+    if visibility.visibility.rng_after != init_authority.rng_after
+        || canonical_after.world.random.state() != init_authority.rng_after
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::CanonicalRngAfterMismatch);
+    }
+    if !init.unit.orders.is_empty()
+        || !init.unit.path.is_empty()
+        || visibility.collision.location.location.guys.guys.len()
+            != visibility.collision.location.location.stable_guys.len()
+    {
+        return Err(FirstFarmFirstScoutCompleteInitError::CanonicalContainerMismatch);
+    }
+
+    let stable_guys = &visibility.collision.location.location.stable_guys;
+    let member = UnitMemberAuthorityReceipt {
+        identity: init.allocation,
+        ptype_index: init.request.type_index,
+        launching_is_null: true,
+        path: EngineContainerShapeReceipt {
+            length: 0,
+            capacity: 10,
+            increment: -1,
+            flags: 0,
+        },
+        order_count: 0,
+        guys: EngineContainerShapeReceipt {
+            length: stable_guys.len() as i32,
+            capacity: stable_guys.len() as i32,
+            increment: 1,
+            flags: 0,
+        },
+        guy_mark: visibility.collision.location.location.guys.guy_mark,
+        guy_identities: stable_guys
+            .iter()
+            .enumerate()
+            .map(|(slot, guy)| GuyIdentityReceipt {
+                slot: slot as i32,
+                who: guy.owner,
+                o: guy.o,
+                guy_num: guy.guy_num,
+            })
+            .collect(),
+        units_authority_key: (init.allocation.id, init.allocation.generation),
+        guys_authority_key: (init.allocation.id, init.allocation.generation),
+    };
+    let setup_init = InitUnitAuthorityReceipt {
+        validated_body_va:
+            don_sim::systems::objects_init_unit_authority_frontier::OBJECTS_INIT_UNIT_VA,
+        validated_body_bytes:
+            don_sim::systems::objects_init_unit_authority_frontier::OBJECTS_INIT_UNIT_BYTES,
+        unit_mark_before: effects.unit_mark_before,
+        unit_mark_after: effects.unit_mark_after,
+        returned_captain_o: effects.returned_captain_or_failure,
+        members: vec![member],
+    };
+
+    *world = next_world;
+    *goods = next_goods;
+    *items = next_items;
+    *dynamic = next_dynamic;
+    Ok(FirstFarmFirstScoutCompleteInitReceipt {
+        visibility,
+        unit_init,
+        effects,
+        canonical_after_row: row,
+        canonical_after: after_image,
+        setup_init,
+        world_checksum_after,
+        rng_after: init_authority.rng_after,
     })
 }
 

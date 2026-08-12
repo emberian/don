@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use don_replay::groups_first_farm_authority::{
     bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
     produce_first_farm_first_placement, produce_first_farm_first_scout_collision_tail,
-    produce_first_farm_first_scout_guy_prefix, produce_first_farm_first_scout_location,
-    produce_first_farm_first_scout_visibility, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
-    FirstFarmBuilderBindingError, FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError,
-    FirstFarmFirstInitUnitSource, FirstFarmFirstPlacementError,
-    FirstFarmFirstScoutCollisionAuthority, FirstFarmFirstScoutCollisionError,
-    FirstFarmFirstScoutCollisionInputs, FirstFarmFirstScoutCollisionSource,
+    produce_first_farm_first_scout_complete_init, produce_first_farm_first_scout_guy_prefix,
+    produce_first_farm_first_scout_location, produce_first_farm_first_scout_visibility,
+    FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FirstFarmBuilderBindingError,
+    FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError, FirstFarmFirstInitUnitSource,
+    FirstFarmFirstPlacementError, FirstFarmFirstScoutCollisionAuthority,
+    FirstFarmFirstScoutCollisionError, FirstFarmFirstScoutCollisionInputs,
+    FirstFarmFirstScoutCollisionSource, FirstFarmFirstScoutCompleteInitError,
     FirstFarmFirstScoutGuyError, FirstFarmFirstScoutLocationError,
     FirstFarmFirstScoutLocationInputs, FirstFarmFirstScoutVisibilityAuthority,
     FirstFarmFirstScoutVisibilityError, FirstFarmFirstScoutVisibilitySource,
@@ -647,6 +648,95 @@ fn first_scout_visibility_authority(
             type_avail_calls: Vec::new(),
         },
     }
+}
+
+fn install_first_scout_tail_after_image(
+    after: &mut Sim,
+    tail: &don_replay::unit_init_collision_tail_deep_re::UnitPostLocationStateReceipt,
+) {
+    let row = after.world.unit_row_at(i32::from(FIRST_OWNER), 0).unwrap();
+    let units = &mut after.world.units;
+    units.collide_frame_mut()[row] = tail.collide_frame;
+    units.collide_mut()[row] = tail.collide;
+    units.collide_o_mut()[row] = tail.collide_o;
+    units.collide_guy_mut()[row] = tail.collide_guy;
+    units.collide_who_mut()[row] = tail.collide_who;
+    units.o_up_mut()[row] = tail.o_up;
+    units.o_down_mut()[row] = tail.o_down;
+    units.cavarch_o_mut()[row] = tail.cavarch_o;
+    units.cavarch_uid_mut()[row] = tail.cavarch_uid as i16;
+    units.cavarch_who_mut()[row] = tail.cavarch_who;
+    units.play_mut()[row] = tail.play;
+    units.avoid_x_mut()[row] = tail.avoid_x;
+    units.avoid_y_mut()[row] = tail.avoid_y;
+    units.start_dist_mut()[row] = tail.start_dist;
+    units.avoid_land_mut()[row] = tail.avoid_land;
+    units.avoid_sea_mut()[row] = tail.avoid_sea;
+    units.announce_frame_mut()[row] = tail.announce_frame;
+    units.myhits_mut()[row] = tail.myhits;
+    units.mylos_mut()[row] = tail.mylos;
+    units.myspeed_mut()[row] = tail.myspeed;
+    units.myarmor_mut()[row] = tail.myarmor;
+    units.spell_time_mut()[row] = tail.spell_time;
+    units.stance_mut()[row] = tail.stance;
+    units.set_unit_masks(row, tail.unit_masks);
+    units.set_unit_masks2(row, tail.unit_masks2);
+}
+
+fn prepare_complete_first_scout_after_image(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    placement_authority: &FirstFarmSetupEntryAuthority,
+    detailed: &mut DetailedInitUnitReceipt,
+    after: &mut Sim,
+    init_authority: &mut FirstFarmFirstInitUnitAuthority,
+) -> (
+    don_sim::systems::map_terrain::World,
+    don_sim::systems::map_terrain::World,
+    FirstFarmFirstScoutCollisionAuthority,
+) {
+    let seam_world = after.map.world.clone();
+    let canonical_world = seam_world.clone();
+    let collision_authority = FirstFarmFirstScoutCollisionAuthority {
+        revision: 1,
+        composition_digest: [0x68; 32],
+        source: FirstFarmFirstScoutCollisionSource::CanonicalUnitInitLocationSeam,
+        world_checksum_before: seam_world.checksum_sections(),
+    };
+    let mut final_world = seam_world.clone();
+    let mut goods = OilGoodRuntime::default();
+    let mut items = Items::new();
+    let mut dynamic = DynamicLeadersAuthority::default();
+    let visibility_authority =
+        first_scout_visibility_authority(&canonical_world, &goods, &items, &dynamic);
+    let completed = produce_first_farm_first_scout_visibility(
+        replay,
+        plan,
+        before,
+        placement_authority,
+        detailed,
+        after,
+        init_authority,
+        &mut final_world,
+        &canonical_world,
+        &mut goods,
+        &mut items,
+        &mut dynamic,
+        &collision_authority,
+        first_scout_collision_inputs(replay, plan, before, placement_authority),
+        &visibility_authority,
+    )
+    .unwrap();
+
+    after.map.world = final_world;
+    install_first_scout_tail_after_image(after, &completed.collision.tail.unit);
+    let InitUnitStep::UnitInit(unit) = &mut detailed.steps[1] else {
+        unreachable!()
+    };
+    unit.after.unit_masks = completed.collision.tail.unit.unit_masks;
+    init_authority.map_checksum_after = after.map.world.checksum_sections();
+    (seam_world, canonical_world, collision_authority)
 }
 
 fn synthetic_first_scout_predicates() -> GuyInitPredicateFacts {
@@ -1557,6 +1647,131 @@ fn first_scout_visibility_failure_rolls_back_the_prior_collision_stage() {
         ),
         Err(FirstFarmFirstScoutVisibilityError::Visibility(_))
     ));
+    assert_eq!(world.checksum_sections(), world_before.checksum_sections());
+    assert_eq!(world.seen, world_before.seen);
+    assert_eq!(goods, visibility_authority.goods_before);
+    assert_eq!(items, visibility_authority.items_before);
+    assert_eq!(dynamic, visibility_authority.dynamic_before);
+}
+
+#[test]
+fn first_scout_complete_init_emits_the_exact_first_setup_member_receipt() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, mut detailed, mut after, mut init_authority) =
+        synthetic_first_scout_init(&replay, &plan);
+    let (mut world, canonical_world, collision_authority) =
+        prepare_complete_first_scout_after_image(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &mut detailed,
+            &mut after,
+            &mut init_authority,
+        );
+    let mut goods = OilGoodRuntime::default();
+    let mut items = Items::new();
+    let mut dynamic = DynamicLeadersAuthority::default();
+    let visibility_authority =
+        first_scout_visibility_authority(&canonical_world, &goods, &items, &dynamic);
+    let receipt = produce_first_farm_first_scout_complete_init(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &init_authority,
+        &mut world,
+        &canonical_world,
+        &mut goods,
+        &mut items,
+        &mut dynamic,
+        &collision_authority,
+        first_scout_collision_inputs(&replay, &plan, &before, &placement_authority),
+        &visibility_authority,
+    )
+    .unwrap();
+
+    assert_eq!(receipt.effects.initialized_members, [0]);
+    assert_eq!(receipt.effects.unit_mark_before, 0);
+    assert_eq!(receipt.effects.unit_mark_after, 1);
+    assert_eq!(receipt.canonical_after.unit_masks, 0x0206_8024);
+    assert_eq!(receipt.unit_init.extent, CompleteBody::UnitInit3732Bytes);
+    assert_eq!(receipt.setup_init.validated_body_va, OBJECTS_INIT_UNIT_VA);
+    assert_eq!(
+        receipt.setup_init.validated_body_bytes,
+        OBJECTS_INIT_UNIT_BYTES
+    );
+    assert_eq!(receipt.setup_init.returned_captain_o, 0);
+    assert_eq!(receipt.setup_init.members.len(), 1);
+    let member = &receipt.setup_init.members[0];
+    assert_eq!((member.identity.owner, member.identity.o), (0, 0));
+    assert_eq!(member.ptype_index, 69);
+    assert_eq!((member.path.length, member.path.capacity), (0, 10));
+    assert_eq!((member.guys.length, member.guys.capacity), (2, 2));
+    assert_eq!(member.guy_mark, 1);
+    assert_eq!(member.guy_identities.len(), 2);
+    assert_eq!(
+        receipt.world_checksum_after,
+        after.map.world.checksum_sections()
+    );
+    assert_eq!(
+        world.checksum_sections(),
+        after.map.world.checksum_sections()
+    );
+}
+
+#[test]
+fn complete_init_after_image_failure_rolls_back_collision_and_visibility() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, mut detailed, mut after, mut init_authority) =
+        synthetic_first_scout_init(&replay, &plan);
+    let (mut world, canonical_world, collision_authority) =
+        prepare_complete_first_scout_after_image(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &mut detailed,
+            &mut after,
+            &mut init_authority,
+        );
+    let row = after.world.unit_row_at(i32::from(FIRST_OWNER), 0).unwrap();
+    after.world.units.mylos_mut()[row] ^= 1;
+    let world_before = world.clone();
+    let mut goods = OilGoodRuntime::default();
+    let mut items = Items::new();
+    let mut dynamic = DynamicLeadersAuthority::default();
+    let visibility_authority =
+        first_scout_visibility_authority(&canonical_world, &goods, &items, &dynamic);
+
+    assert_eq!(
+        produce_first_farm_first_scout_complete_init(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &init_authority,
+            &mut world,
+            &canonical_world,
+            &mut goods,
+            &mut items,
+            &mut dynamic,
+            &collision_authority,
+            first_scout_collision_inputs(&replay, &plan, &before, &placement_authority),
+            &visibility_authority,
+        ),
+        Err(FirstFarmFirstScoutCompleteInitError::CanonicalUnitTailMismatch)
+    );
     assert_eq!(world.checksum_sections(), world_before.checksum_sections());
     assert_eq!(world.seen, world_before.seen);
     assert_eq!(goods, visibility_authority.goods_before);

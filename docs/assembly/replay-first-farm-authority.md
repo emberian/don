@@ -198,6 +198,38 @@ Again, the repository has no historical 2018 preimages for these owners. Synthet
 and fog planes prove atomic composition, not the recorded match. The real first-Scout setup and
 first Farm package therefore remain red despite the now-runnable nested transaction.
 
+### Complete first-Scout initializer receipt
+
+The outer adapter now closes the source-owned chronology back through the complete
+`Objects::init_unit` receiver instead of leaving the nested visibility transaction detached from
+its caller receipt. It independently validates the detailed 1,603-byte receiver, retains the
+admitted 3,732-byte `Unit::init` step, and requires its after-image to equal the collision/common
+tail's final position, angle, identity, and complete `unit_masks` word. This caught a meaningful
+seam distinction: Scout 69 starts the location body with replay-Rules `obj_masks`, and the common
+tail subsequently adds the default-map bit. The completed after-image must carry the latter word;
+it cannot be fed back as an earlier location default.
+
+The canonical after-Sim is also checked field by field for every synchronized Unit tail scalar
+represented by the engine store: collision sentinels, links, cavalry-archer backlink, play,
+pathfinding coordinates, announcement frame, hits/LOS/speed/armor, spell time, stance, and both
+mask words. The final captain must be native object 0 at the same normalized location with the
+strict replay-Rules collision radius. The post-visibility World checksum and unchanged RNG must
+equal the independently admitted complete after-image.
+
+Only after all of those checks pass does the adapter publish collision/fog and the heterogeneous
+Good/Item/Leader mutations. A late canonical-tail mismatch therefore rolls the entire nested
+transaction back. Success emits an exact `InitUnitAuthorityReceipt` for setup ordinal zero,
+including the stable Unit/Guys authority key, two Guy identities, empty ten-entry path stack,
+empty orders, and Unit mark `0 -> 1`. This is the first receipt needed by the five-call setup
+schedule; it does not fabricate the four Citizen receipts.
+
+This remains an executable evidence adapter rather than historical execution. The contract tests
+still use synthetic graphics hierarchy outputs, terrain-height answers, collision World, and
+visibility registries. Neither the RCX nor its checksum tuple supplies those preimages, and no
+completed-worldgen/setup attestation currently binds them to the 2018 run. Consequently the
+`ObjectsInitUnitReceipts` blocker is narrowed to the remaining setup calls but not cleared, and no
+frame-79 state, opcode-25 execution, or checksum-channel match is claimed.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking
