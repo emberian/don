@@ -2,11 +2,11 @@
 //
 // The two browser clients receive an exact seed/epoch/roster only after the configured
 // native peers prove Create/Find/Join/ready/StartGame -> MatchStart agreement. An opt-in,
-// one-HaltCommand turn barrier then keeps those peers alive: a browser frame advances only
+// canonical singleton Group -> Move turn barrier then keeps those peers alive: a browser frame advances only
 // after both native ServiceMatch owners return the same ordered TurnPackage set, and the
 // next stamp stays closed until both paused browser Sims acknowledge the exact package-set hash
-// and equal state. Halt remains the advertised live cohort; the bounded validator and gateway
-// are also prepared for the exact 27-byte singleton Group -> Move cohort.
+// and equal state. The advertised live cohort is the exact 27-byte singleton Group -> Move
+// package; the bounded validator retains canonical Halt as a fail-closed compatibility input.
 
 import { spawn as spawnChild } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -19,7 +19,7 @@ import {
 } from './public/js/play/canonical-command-package.mjs';
 
 export const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
-export const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
+export const LOCAL_MATCH_TURN_RELAY = 'canonical-group-move-v1';
 export const LOCAL_MATCH_PLAYERS = 2;
 export const MAX_LOCAL_MATCH_LOBBIES = 16;
 export const MAX_LOCAL_MATCH_BODY_BYTES = 16 * 1024;

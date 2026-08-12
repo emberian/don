@@ -444,7 +444,7 @@
         <button id="local-match-create" type="button">create 2-seat lobby</button>
         <button id="local-match-join" type="button">join lobby</button>
         <button id="local-match-ready" type="button" disabled>ready</button>
-        <button id="local-match-turn" type="button" disabled>submit next Halt turn</button>
+        <button id="local-match-turn" type="button" disabled>submit next Group→Move turn</button>
         <button id="local-match-leave" type="button" disabled>leave</button>
       </div>
       <div id="local-match-roster" class="hint" aria-label="Local multiplayer roster">
@@ -456,12 +456,13 @@
       <div class="hint" style="margin-top:4px">
         This loopback-only path admits a seed and two-player roster only after the native
         <code>don-crossplay</code> directory and <code>don-net</code> transport agree on
-        StartGame and the authoritative MatchStart. Each seat reconstructs the exact one-byte
-        retail-layout <code>HaltCommand</code> (<code>0x0c</code>); both native peers validate it
-        through <code>don-net</code> and must return the same ordered <code>TurnPackage</code> set.
-        Both paused browser Sims then re-decode/re-encode the bytes, submit in player order, and
-        acknowledge the same frame, digest, and RNG state. Other commands and free-running
-        multiplayer remain unavailable.
+        StartGame and the authoritative MatchStart. Each seat constructs one exact 27-byte
+        owner-local <code>GroupCommand</code> plus <code>MoveToCommand</code> package; both native
+        peers validate it through <code>don-net</code> and must return the same ordered
+        <code>TurnPackage</code> set. Both paused browser Sims then re-decode/re-encode the bytes,
+        apply them through the receipt-bearing Wasm package ABI in player order, and acknowledge
+        the same frame, digest, and RNG state. Other commands and free-running multiplayer remain
+        unavailable.
       </div>
 
       <div id="session-summary" aria-label="Pregame summary">

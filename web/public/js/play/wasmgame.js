@@ -504,8 +504,8 @@ export class GameModule {
 
   /**
    * Capture, stage and submit one leased canonical package synchronously, then copy and bind the
-   * authoritative Sim receipt. The checked exports are source-only until a separately evidenced
-   * Wasm artifact is published; calling this against the current artifact fails explicitly.
+   * authoritative Sim receipt. Calling this against an older artifact without the evidenced
+   * canonical package exports fails explicitly.
    */
   processCanonicalCommandPackage(play, lockstepSerial, rendererId, input) {
     this._requireCanonicalPackageSourceAbi();

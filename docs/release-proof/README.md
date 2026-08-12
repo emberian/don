@@ -20,7 +20,7 @@ whole-game/product readiness; gameplay completion remains governed by `GOAL.md` 
   and mechanically captures both registry packages' archive-carried declarations/texts, but every
   record remains pending review and the graph is not a linked-code SBOM. The exact checked-in Wasm
   is now reproduced byte-for-byte by the canonical build from a clean public source archive; its
-  174 build-produced source inputs are hash-bound, the retail/live unit table is absent, and 1,736
+  222 build-produced source inputs are hash-bound, the retail/live unit table is absent, and 1,797
   archive `don-sim` library tests pass. There is no standalone
   product payload/installer and no human-cleared manifest for independently licensed art, audio,
   fonts, and presentation data. The recorded retail-controller incident retained no dump and its
@@ -52,8 +52,8 @@ The pack also preserves narrow positive conclusions already supported elsewhere:
 - the checked-in browser Wasm component and exact five-package lock graph are hash-bound, while
   checksum-matching registry archives supply retained declaration and license-text evidence for
   `memchr 2.8.3` and `quick-xml 0.38.4`; all package obligation decisions remain explicitly pending.
-- the public source archive reproduces the exact 869,993-byte browser Wasm at SHA-256
-  `f7fb5c47…1181`; the rustc depfile, generator/ABI pipeline, raw and optimized outputs, toolchain,
+- the public source archive reproduces the exact 1,190,735-byte browser Wasm at SHA-256
+  `def395ff…9d40`; the rustc depfile, generator/ABI pipeline, raw and optimized outputs, toolchain,
   live-input exclusion, and clean-archive `don-sim --lib` result are hash-bound.
 
 None of those claims a finished installer, independent content, a retained live minidump, or an
@@ -88,7 +88,7 @@ python3 tools/release-proof/archive_reproducibility.py verify \
 ```
 
 The normal checker does not compile, download, access a retail installation, copy content, or
-modify the tree. Its archive-reproducibility verifier re-hashes the recorded 174-file depfile
+modify the tree. Its archive-reproducibility verifier re-hashes the recorded 222-file depfile
 closure and pipeline inputs; the separate `probe` command performs the isolated build and tests.
 A changed hash, newly
 added Cargo manifest/workspace template/lockfile, changed license

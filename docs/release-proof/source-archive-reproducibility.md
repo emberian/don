@@ -5,10 +5,10 @@ source projection and the checked-in browser Wasm candidate. Capture extracts a 
 `git archive HEAD`, runs the repository's canonical `web/build.sh`, and refuses unless the final
 post-optimization bytes exactly equal `web/public/wasm/don_web.wasm` from that archive.
 
-The current exact result is a 1,092,753-byte raw rustc module at SHA-256
-`ac6c4100a23e760ffae81bc518adbd4119545f10b1957c2218b0e7ff5ce1f388`, transformed by
-Binaryen 130 into the 869,993-byte checked-in candidate at SHA-256
-`f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181`.
+The current exact result is a 1,443,169-byte raw rustc module at SHA-256
+`078e936cd860fb63d62f6dfe4ea9a5c8f4281cd9dc05749b79d1838ae4042029`, transformed by
+Binaryen 130 into the 1,190,735-byte checked-in candidate at SHA-256
+`def395ffc247d3a4a561c1d110b22b9f7ef8988a2637f9db79fde1d9c5339d40`.
 
 The artifact binds:
 
@@ -16,12 +16,12 @@ The artifact binds:
   inputs, generated contracts, ABI checker inputs, Rust/Cargo/Node/Binaryen toolchain, and both the
   raw rustc and final optimized Wasm identities;
 - every repository source file named by rustc's build-produced `don_web.d`, with an aggregate
-  source-closure digest (174 files in the current build);
+  source-closure digest (222 files in the current build);
 - the absence of `schema/live/live-tables-unit.tsv` from both `git archive` and the depfile, plus
   the removal of its former compile-time `include_str!` consumer;
 - an isolated `cargo test --locked -p don-sim --lib` result from that same clean source archive.
 
-The exact product Wasm and 1,736 passing `don-sim` library tests (2 ignored) therefore build without live or owned
+The exact product Wasm and 1,797 passing `don-sim` library tests (2 ignored) therefore build without live or owned
 retail inputs. This is not a whole-workspace/all-targets archive test, and the artifact forces
 that broader claim false. It supplies no legal review, third-party obligation decision, independent
 presentation-content clearance, installer proof, or whole-product payload claim.

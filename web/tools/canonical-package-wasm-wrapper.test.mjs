@@ -83,7 +83,7 @@ test('receipt decoder rejects altered identity, random consumption and malformed
   assert.throws(() => decodeCanonicalPackageReceipt(valid.subarray(0, 15)), /extent/);
 });
 
-test('unpublished artifact and invalid wrapper inputs fail before staging', () => {
+test('missing artifact exports and invalid wrapper inputs fail before staging', () => {
   const absent = Object.create(GameModule.prototype);
   Object.assign(absent, { x: {}, g: 1, playerCount: 4 });
   assert.throws(

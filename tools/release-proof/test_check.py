@@ -276,9 +276,9 @@ class ReleaseProofTests(unittest.TestCase):
     def test_current_manifest_is_internally_consistent_but_not_release_ready(self) -> None:
         report = release_proof.validate(ROOT, MANIFEST)
         self.assertTrue(report["ok"])
-        self.assertEqual(report["cargo_manifests"], 23)
-        self.assertEqual(report["lockfiles"], 7)
-        self.assertEqual(report["lock_package_records"], 179)
+        self.assertEqual(report["cargo_manifests"], 25)
+        self.assertEqual(report["lockfiles"], 9)
+        self.assertEqual(report["lock_package_records"], 184)
         self.assertFalse(report["readiness"]["source"])
         self.assertFalse(report["readiness"]["distribution"])
         self.assertEqual(

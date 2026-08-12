@@ -24,9 +24,8 @@
 // A bounded same-origin JSON API also owns the browser side of the local MatchStart handoff.
 // It invokes the configured native service-match-peer, and exposes seed/epoch/roster only after
 // both of that program's independent processes agree on StartGame and MatchStart. The API never
-// binds beyond 127.0.0.1. Its turn endpoint preserves canonical HaltCommand and prepares the
-// exact 27-byte singleton Group -> Move package; the public capability remains Halt-only until
-// the native peer and Wasm whole-package host are both mounted and browser-proven.
+// binds beyond 127.0.0.1. Its turn endpoint preserves the exact 27-byte canonical singleton
+// Group -> Move package through the native peer and receipt-bearing Wasm whole-package host.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';

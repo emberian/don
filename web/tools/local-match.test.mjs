@@ -40,7 +40,7 @@ test('Halt turn schema admits only the exact reconstructed one-byte command', ()
   }
 });
 
-test('long-lived native peers admit only identical ordered HaltCommand packages', async () => {
+test('long-lived native peers preserve the canonical ordered Halt fallback', async () => {
   const started = await startServiceMatchRelay('/unused/service-match-peer', 0x89abcdef, {
     spawn: fixtureSpawn,
     timeoutMs: 2_000,
@@ -48,7 +48,7 @@ test('long-lived native peers admit only identical ordered HaltCommand packages'
   try {
     assert.equal(started.handoff.turnRelay, LOCAL_MATCH_TURN_RELAY);
     await assert.rejects(
-      () => started.relay.completeTurn(0, ['00', '0c']), /canonical Halt/);
+      () => started.relay.completeTurn(0, ['00', '0c']), /canonical/);
     const turn = await started.relay.completeTurn(0, ['0c', '0c']);
     assert.equal(turn.stamp, 0);
     assert.deepEqual(turn.packages.map(({ play, payload }) => ({ play, payload })), [
@@ -159,6 +159,7 @@ test('browser state disagreement fails closed and closes the relay', async () =>
 });
 
 test('canonical request and native relay preserve two distinct 27-byte Group+Move packages', async () => {
+  assert.equal(LOCAL_MATCH_TURN_RELAY, 'canonical-group-move-v1');
   const payloads = [
     encodeCanonicalSingletonGroupMove({ who: 0, o: 1, uid: 0x101 }, 47_435, 47_486).hex,
     encodeCanonicalSingletonGroupMove({ who: 1, o: 9, uid: 0x202 }, 12_000, 16_000).hex,

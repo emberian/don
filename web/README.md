@@ -133,14 +133,14 @@ increments the non-hostile gap without installing an order. The inactive 600-fra
 `61e14d1ab48d964f`. These replace the prior pair because sparse Object-band owner activity and
 marks are now deliberately inside the canonical World digest.
 
-The supported-active-save and opcode-48 source closure was rebuilt from exact archived HEAD on
-2026-08-11. The canonical optimized module is 869,993 bytes at SHA-256
-`f7fb5c4767537352cc9bc043e34e76856f0e60630e234548beaa4fbc7a031181`; its 76 required exports
-remain present and both raw setup setters remain absent. The full Chrome/WebGPU smoke read back
-42,496 non-black pixels and exercised an active alternating 2v2 save at frame 2, advancement to
-frame 3, and exact load restoration of frame, digest, RNG, roster, leaders, and diplomacy. The
-current 600-frame inactive and active-roster digests are respectively `ccbb1d1c6a39cd14` and
-`3ddcc500b43780fe`, matching the native `playcheck` projections.
+The canonical Group→Move candidate was rebuilt twice from exact archived commit `41828a6` on
+2026-08-12. Both optimized modules are 1,190,735 bytes at SHA-256
+`def395ffc247d3a4a561c1d110b22b9f7ef8988a2637f9db79fde1d9c5339d40`; all 81 required exports
+are present and both raw setup setters remain absent. Two independent native Wasm instances
+produced equal package receipts and frame/digest/RNG after-images, moved both initially selected
+land Units, saved exact DoNSave v16 roots carrying all 14 sections through `FARMS`, loaded at frame
+32 without divergence, accepted equal fresh receipts, and moved again to equal frame-64 state.
+Chrome evidence remains unavailable on this host and is not claimed by this candidate record.
 
 `web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
 checks the fresh Wasm export table both before and after optional optimization. The same three
@@ -187,13 +187,14 @@ bounded same-origin JSON API and invokes the configured native `service-match-pe
 returns seed, epoch, or roster until the independent host and joining processes agree on
 Crossplay StartGame and the `don-net` MatchStart. Each browser then reconstructs the exact
 two-player Sim setup from that handoff. The opt-in native `--relay` mode keeps both `ServiceMatch`
-owners alive. Each browser independently generates the one-byte retail-layout `HaltCommand`
-(`0x0c`). The native peer validates that exact command boundary with `don-net::decode_commands`,
-and the server exposes it only when both peers return the identical ordered `TurnPackage` set.
-Both tabs independently decode and re-encode the bytes, submit P0 then P1 to Wasm, step exactly
-once, and acknowledge frame/digest/RNG. The next stamp opens only when those acknowledgements are
-equal. The tabs remain pause-locked throughout; every other command and free-running multiplayer
-remain refused rather than being presented as synchronized.
+owners alive. Each browser independently generates an exact 27-byte owner-local `GroupCommand`
+plus `MoveToCommand` package. The native peer validates that exact command boundary with
+`don-net::decode_commands`, and the server exposes it only when both peers return the identical
+ordered `TurnPackage` set. Both tabs independently decode and re-encode the bytes, apply P0 then
+P1 through the receipt-bearing Wasm package ABI, step exactly once, and acknowledge
+frame/digest/RNG. The next stamp opens only when those acknowledgements are equal. The tabs remain
+pause-locked throughout; every other command and free-running multiplayer remain refused rather
+than being presented as synchronized.
 
 Build the native seam and run the Web server with its explicit path:
 

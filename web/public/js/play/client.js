@@ -144,7 +144,7 @@ async function boot() {
   mod.gateCommands(() => {
     const local = state.localMatch;
     if (!local.pauseLocked || local.applyingPackages) return true;
-    local.error = 'local command refused — submit the synchronized Halt turn instead';
+    local.error = 'local command refused — submit the synchronized Group→Move turn instead';
     renderLocalMatchPanel();
     say(local.error, 'warn');
     return false;
@@ -1312,7 +1312,7 @@ function initializeSessionPanel() {
 }
 
 const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
-const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
+const LOCAL_MATCH_TURN_RELAY = 'canonical-group-move-v1';
 const LOCAL_MATCH_GROUP_MOVE_RELAY = 'canonical-group-move-v1';
 const HALT_COMMAND_HEX = '0c';
 
@@ -1723,7 +1723,7 @@ function applyLocalMatchHandoff(handoff) {
   }
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
-    'core save/load ready — local MatchStart roster is authoritative; Halt turns use native lockstep';
+    'core save/load ready — local MatchStart roster is authoritative; Group→Move turns use native lockstep';
   $('core-save-status').textContent = state.coreSaveStatus;
   startReplayJournal();
   local.applied = true;
@@ -1738,7 +1738,7 @@ function applyLocalMatchHandoff(handoff) {
   renderObjectivesPanel();
   renderLocalMatchPanel();
   say(`local MatchStart confirmed at epoch ${handoff.epoch}; both browser clients are paused ` +
-    'at frame 0 and may advance only through equal native HaltCommand barriers', 'ok');
+    'at frame 0 and may advance only through equal native Group→Move barriers', 'ok');
   return localMatchPublicSnapshot();
 }
 
@@ -2445,7 +2445,7 @@ function startReplayJournal({ nativeBaseline = null } = {}) {
     : 'recording exact browser command packets from this new-session baseline';
   state.mod.observeCommands(({ frame: at, who, bytes }) => {
     const source = state.localMatch.applyingPackages
-      ? 'native Halt turn relay' : state.replay.applying ? 'journal replay' : 'player';
+      ? 'native canonical turn relay' : state.replay.applying ? 'journal replay' : 'player';
     recordCommandIssued({ frame: at, who, bytes }, source);
     if (state.replay.applying) return;
     recordReplayEvent({
@@ -2694,7 +2694,7 @@ function applyReplayEventsAt(frame) {
 
 async function restoreReplayFrame(targetFrame) {
   if (state.localMatch.pauseLocked) {
-    throw new Error('journal seek refused while the native Halt turn relay owns frame advance');
+    throw new Error('journal seek refused while the native canonical turn relay owns frame advance');
   }
   const target = Number(targetFrame);
   if (state.replay.restoring) throw new Error('a journal restore is already running');
@@ -2810,7 +2810,7 @@ async function importReplayJournal(input) {
 
 function advanceSimulationFrame(localMatchAuthorized = false) {
   if (state.localMatch.pauseLocked && !localMatchAuthorized) {
-    say('local frame step refused — only an agreed native Halt turn may advance the Sim', 'warn');
+    say('local frame step refused — only an agreed native canonical turn may advance the Sim', 'warn');
     return false;
   }
   if (state.replay.playback) {
@@ -2932,7 +2932,7 @@ function downloadCoreSave() {
 
 function importCoreSave(input) {
   if (state.localMatch.pauseLocked) {
-    throw new Error('core load refused while the native Halt turn relay owns frame advance');
+    throw new Error('core load refused while the native canonical turn relay owns frame advance');
   }
   try {
     const baseline = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);

@@ -110,8 +110,18 @@
     },
     {
       "path": "Cargo.lock",
-      "sha256": "722ecb69996476899711ab5c8f4d6e6d6fc877f22d02869d3618270b16567b6a",
+      "sha256": "4379f727a9926c3bf6e6ee05f80a4634e244d9a0986a83f57a78beb1f2c4cc40",
       "role": "root workspace dependency snapshot"
+    },
+    {
+      "path": "crates/don-crossplay/Cargo.lock",
+      "sha256": "19e485140f9fb32ffcff64ce030f34d063124bbb8af58c3592dd39e4c11d08f3",
+      "role": "don-crossplay dependency snapshot"
+    },
+    {
+      "path": "crates/don-crossplay/dll/Cargo.lock",
+      "sha256": "668d90f7c48ada705d179319b11061286e0c6ca7fee2cad9a85a116047b56554",
+      "role": "CrossplayProxy DLL dependency snapshot"
     },
     {
       "path": "crates/donscan/Cargo.lock",
@@ -125,7 +135,7 @@
     },
     {
       "path": "crates/oracle/Cargo.lock",
-      "sha256": "83173a16933ea3e8968ef44dfdbc49687f67a70ef7650c5343c033952ead23e9",
+      "sha256": "15be65a4e68c2b75506a4223009b6f0e885935a21c140a911f67418b3e9d7ff4",
       "role": "oracle dependency snapshot"
     },
     {
@@ -160,12 +170,12 @@
     },
     {
       "path": "docs/release-proof/web-wasm-component-provenance.md",
-      "sha256": "a24d94abb9bdc35350e6d02df0b10af31a05d42971105a5469740ed9778adc44",
+      "sha256": "044890738937389df0ab1bccd68dbf6780b82952a4944e4e571fbe8bc00bedb7",
       "role": "scope and explicit non-claims for the browser Wasm dependency precursor"
     },
     {
       "path": "release/web-wasm-component-provenance.json",
-      "sha256": "23fd23c1fb3134c7c0823d432616ee9d158389e5a98b5ca18a0b642ed4c69b4d",
+      "sha256": "61523e935d3b10f3b9d8b04743980fdd74658a5de34c8a6cbf6c2d66ad864446",
       "role": "exact browser Wasm component, lock graph, and pending-review package provenance"
     },
     {
@@ -185,12 +195,12 @@
     },
     {
       "path": "docs/release-proof/source-archive-reproducibility.md",
-      "sha256": "e0e97fc4c855dc2bd6e7b099a15be555a33d328b049a3bf354b03dac7cde2448",
+      "sha256": "09188d54dd25d13ceaa5c292238d55fce13f5df2d10e7b1e6f6bcccc634041f1",
       "role": "source-archive product-Wasm linkage, depfile closure, and scope contract"
     },
     {
       "path": "release/source-archive-reproducibility.json",
-      "sha256": "b9938a00a3ca52d084a32a9333785577c1deaaf8d53c2d1fbdf2928033521dc6",
+      "sha256": "2ca6db688e6ee0c10c7e744fd3e07c85d06a46ed0bf67fc8ed8d259d27360349",
       "role": "exact clean-archive Wasm build closure, byte identity, exclusion, and test result"
     },
     {
@@ -287,6 +297,22 @@
       "path": "crates/don-content/Cargo.toml",
       "kind": "package",
       "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-crossplay/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-crossplay/dll/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
       "effective": "GPL-3.0-or-later",
       "license_text": "LICENSE",
       "state": "covered"
@@ -427,6 +453,16 @@
       "notice_inventory": null
     },
     {
+      "path": "crates/don-crossplay/Cargo.lock",
+      "package_records": 2,
+      "notice_inventory": null
+    },
+    {
+      "path": "crates/don-crossplay/dll/Cargo.lock",
+      "package_records": 2,
+      "notice_inventory": null
+    },
+    {
       "path": "crates/donscan/Cargo.lock",
       "package_records": 1,
       "notice_inventory": null
@@ -438,7 +474,7 @@
     },
     {
       "path": "crates/oracle/Cargo.lock",
-      "package_records": 7,
+      "package_records": 8,
       "notice_inventory": null
     },
     {
@@ -563,6 +599,8 @@
       "claim": "Every dependency conveyed in a binary product has an audited license expression, required notice/text, and source treatment bound to the exact assembled artifact/SBOM and its contributing lock identities.",
       "evidence": [
         "Cargo.lock",
+        "crates/don-crossplay/Cargo.lock",
+        "crates/don-crossplay/dll/Cargo.lock",
         "crates/donscan/Cargo.lock",
         "crates/netsys-shim/Cargo.lock",
         "crates/oracle/Cargo.lock",

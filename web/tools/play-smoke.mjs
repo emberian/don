@@ -396,12 +396,12 @@ try {
     ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
     ['team layout is frame-zero mutable while victory remains read-only',
       out.ui.sessionTeamEnabled && out.ui.sessionVictoryReadOnly],
-    ['the local lobby surface exposes the bounded canonical HaltCommand barrier',
+    ['the local lobby surface exposes the bounded canonical Group→Move barrier',
       out.ui.localMatchProtocol === 'don.local-match-handoff.v1' && out.ui.localMatchControls &&
-      out.ui.localMatchTurnRelay === 'canonical-halt-v1' &&
-      out.ui.localMatchBoundary.includes('HaltCommand') &&
-      out.ui.localMatchBoundary.includes('0x0c') &&
-      out.ui.localMatchBoundary.includes('submit in player order')],
+      out.ui.localMatchTurnRelay === 'canonical-group-move-v1' &&
+      out.ui.localMatchBoundary.includes('GroupCommand') &&
+      out.ui.localMatchBoundary.includes('MoveToCommand') &&
+      out.ui.localMatchBoundary.includes('receipt-bearing')],
     ['the configured local MatchStart service is available for this smoke',
       !LOCAL_MATCH || out.ui.localMatchAvailable],
     ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
@@ -1789,11 +1789,12 @@ try {
     }
   }
 
-  // ---- 4c. two browser seats consume MatchStart and one native HaltCommand turn --------
+  // ---- 4c. two browser seats consume MatchStart and native Group→Move turns ------------
   //
   // The local gateway invokes the existing Rust two-process lifecycle. It exposes no seed,
-  // epoch, or roster until both native peers agree. They then submit one canonical Halt each;
-  // neither paused Sim advances until both native peers expose an identical package set.
+  // epoch, or roster until both native peers agree. They then submit canonical singleton
+  // Group→Move packages; neither paused Sim advances until both native peers expose an identical
+  // package set. Thirty-two barriers prove the receipt-bearing orders produce actual motion.
   if (LOCAL_MATCH) {
     const cleanSecondUrl = `http://127.0.0.1:${PORT}/play.html?seed=0x2468ace0&player=1`;
     const created = await c.send('Target.createTarget', { url: cleanSecondUrl });
@@ -1854,36 +1855,65 @@ try {
       const d = window.don, m = d.state.mod, before = m.transport();
       const refused = m.halt(d.state.who);
       const step = d.replay.step();
+      const units = [0, 1].map((who) => {
+        for (let row = 0; row < m.live; row++) {
+          const rendererId = m.idAtRow(row);
+          try {
+            const identity = m.commandIdentity(rendererId);
+            if (identity.who !== who) continue;
+            const info = m.info(rendererId);
+            return { rendererId, who, o: identity.o, uid: identity.uid, x: info.x, y: info.y };
+          } catch { /* renderer row has no authoritative owner-local Unit identity */ }
+        }
+        throw new Error('missing authoritative command Unit for P' + who);
+      });
       return JSON.stringify({
         frame: m.frame, digest: m.digest(), rngState: m.rngState,
+        units,
         gate: { refused: refused === null, before, after: m.transport(), stepFrame: step.frame },
       });
     })()`).then(JSON.parse)));
-    await Promise.all([
-      c.eval('window.don.localMatch.turn().then(JSON.stringify)'),
-      c2.eval('window.don.localMatch.turn().then(JSON.stringify)'),
-    ]);
-    for (let attempt = 0; attempt < 600; attempt++) {
-      const facts = await Promise.all([c, c2].map((client) => client.eval(`(() => {
-        const d = window.don, local = d.localMatch.snapshot();
-        return JSON.stringify({
-          phase: local.phase, error: local.error, frame: d.state.mod.frame,
-          confirmed: local.lastConfirmed?.stamp ?? -1, next: local.turn?.stamp ?? -1,
-        });
-      })()`).then(JSON.parse)));
-      if (facts.every((fact) =>
-        fact.phase === 'started' && fact.frame === 1 && fact.confirmed === 0 && fact.next === 1)) break;
-      if (facts.some((fact) => fact.phase === 'failed')) {
-        throw new Error(`local turn barrier failed: ${facts.map((fact) => fact.error).join(' | ')}`);
+    for (let expectedFrame = 1; expectedFrame <= 32; expectedFrame++) {
+      await Promise.all([
+        c.eval('window.don.localMatch.turn().then(JSON.stringify)'),
+        c2.eval('window.don.localMatch.turn().then(JSON.stringify)'),
+      ]);
+      for (let attempt = 0; attempt < 600; attempt++) {
+        const facts = await Promise.all([c, c2].map((client) => client.eval(`(() => {
+          const d = window.don, local = d.localMatch.snapshot();
+          return JSON.stringify({
+            phase: local.phase, error: local.error, frame: d.state.mod.frame,
+            confirmed: local.lastConfirmed?.stamp ?? -1, next: local.turn?.stamp ?? -1,
+          });
+        })()`).then(JSON.parse)));
+        if (facts.every((fact) => fact.phase === 'started' && fact.frame === expectedFrame &&
+            fact.confirmed === expectedFrame - 1 && fact.next === expectedFrame)) break;
+        if (facts.some((fact) => fact.phase === 'failed')) {
+          throw new Error(`local turn barrier failed: ${facts.map((fact) => fact.error).join(' | ')}`);
+        }
+        if (attempt === 599) {
+          throw new Error(`local turn barrier did not confirm frame ${expectedFrame} in both tabs`);
+        }
+        await sleep(100);
       }
-      if (attempt === 599) throw new Error(`local turn barrier did not confirm in both tabs`);
-      await sleep(100);
     }
 
     const clientEvidence = async (client) => client.eval(`(() => {
       const d = window.don, local = d.localMatch.snapshot(), mod = d.state.mod;
       const beforeResume = { frame: mod.frame, digest: mod.digest(), paused: d.state.paused };
       d.replay.play();
+      const units = [0, 1].map((who) => {
+        for (let row = 0; row < mod.live; row++) {
+          const rendererId = mod.idAtRow(row);
+          try {
+            const identity = mod.commandIdentity(rendererId);
+            if (identity.who !== who) continue;
+            const info = mod.info(rendererId);
+            return { rendererId, who, o: identity.o, uid: identity.uid, x: info.x, y: info.y };
+          } catch { /* renderer row has no authoritative owner-local Unit identity */ }
+        }
+        throw new Error('missing authoritative command Unit for P' + who);
+      });
       return JSON.stringify({
         local,
         setup: d.session.setup(),
@@ -1893,6 +1923,7 @@ try {
         activePlayers: mod.activePlayers(),
         leaders: [mod.leader(0), mod.leader(1)],
         match: mod.match(),
+        units,
         commands: d.commands.snapshot(),
         paused: d.state.paused,
         beforeResume,
@@ -1924,25 +1955,25 @@ try {
       ['pause lock refuses direct command submission and local replay stepping before agreement',
         frameZero.every((fact) => fact.gate.refused && fact.gate.stepFrame === 0 &&
           JSON.stringify(fact.gate.before) === JSON.stringify(fact.gate.after))],
-      ['one strict native package barrier applies P0/P1 Halt packets in order and reaches equal frame one',
-        hostBrowser.frame === 1 && peerBrowser.frame === 1 &&
+      ['strict native Group→Move barriers preserve receipts and produce equal actual motion',
+        hostBrowser.frame === 32 && peerBrowser.frame === 32 &&
         hostBrowser.digest === peerBrowser.digest && hostBrowser.rngState === peerBrowser.rngState &&
-        hostBrowser.local.lastConfirmed.stamp === 0 && peerBrowser.local.lastConfirmed.stamp === 0 &&
+        hostBrowser.local.lastConfirmed.stamp === 31 && peerBrowser.local.lastConfirmed.stamp === 31 &&
         hostBrowser.local.lastConfirmed.hash === peerBrowser.local.lastConfirmed.hash &&
-        hostBrowser.local.turn.stamp === 1 && peerBrowser.local.turn.stamp === 1 &&
-        hostBrowser.local.turnRelay === 'canonical-halt-v1' &&
-        peerBrowser.local.turnRelay === 'canonical-halt-v1' &&
-        [hostBrowser, peerBrowser].every((browser) => {
-          const relayed = browser.commands.entries.filter((entry) =>
-            entry.source === 'native Halt turn relay');
-          return relayed.length === 2 && relayed[0].who === 0 && relayed[1].who === 1 &&
-            relayed.every((entry) => entry.op === 0x0c && entry.hex === '0c');
-        })],
+        hostBrowser.local.turn.stamp === 32 && peerBrowser.local.turn.stamp === 32 &&
+        hostBrowser.local.turnRelay === 'canonical-group-move-v1' &&
+        peerBrowser.local.turnRelay === 'canonical-group-move-v1' &&
+        JSON.stringify(hostBrowser.local.lastReceipts) ===
+          JSON.stringify(peerBrowser.local.lastReceipts) &&
+        hostBrowser.local.lastReceipts.length === 2 &&
+        JSON.stringify(hostBrowser.units) === JSON.stringify(peerBrowser.units) &&
+        hostBrowser.units.every((unit, index) =>
+          unit.x !== frameZero[0].units[index].x || unit.y !== frameZero[0].units[index].y)],
       ['both clients remain paused and refuse free-running resume after the agreed turn',
         hostBrowser.paused && peerBrowser.paused &&
         hostBrowser.beforeResume.paused && peerBrowser.beforeResume.paused &&
-        hostBrowser.status.includes('turn 1 waiting for both seats') &&
-        peerBrowser.status.includes('turn 1 waiting for both seats')],
+        hostBrowser.status.includes('turn 32 waiting for both seats') &&
+        peerBrowser.status.includes('turn 32 waiting for both seats')],
     ]) {
       if (!ok) { console.error(`FAIL: ${name}`); bad++; }
     }
