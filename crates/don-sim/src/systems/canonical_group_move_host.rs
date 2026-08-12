@@ -311,6 +311,7 @@ pub struct UnitImage {
     pub y: i32,
     pub orders_x: i32,
     pub orders_y: i32,
+    pub dest_angle: i32,
     pub orders: OrderList,
     pub path: PathStack,
 }
@@ -332,6 +333,7 @@ pub enum GroupSelectionUse {
     SimpleUnitState,
     EconomyOrderInstall,
     ConstructionPlacement,
+    AirOrderInstall,
     MoveNear,
 }
 
@@ -441,6 +443,7 @@ pub(crate) fn capture_unit(
             y: world.units.y_internal()[row],
             orders_x: world.units.orders_x()[row],
             orders_y: world.units.orders_y()[row],
+            dest_angle: world.units.dest_angle()[row],
             orders: world.orders(row).clone(),
             path,
         },
@@ -813,6 +816,9 @@ pub fn prepare_group_selection(
                     PackageError::IncompleteSelectionAuthority { handle }
                 }
                 GroupSelectionUse::ConstructionPlacement => {
+                    PackageError::IncompleteSelectionAuthority { handle }
+                }
+                GroupSelectionUse::AirOrderInstall => {
                     PackageError::IncompleteSelectionAuthority { handle }
                 }
                 GroupSelectionUse::MoveNear => PackageError::IncompleteMoveAuthority { handle },
@@ -1210,6 +1216,7 @@ pub fn unit_still_current(world: &World, paths: &[PathStack], image: &UnitImage)
         || world.units.y_internal()[address_row] != image.y
         || world.units.orders_x()[address_row] != image.orders_x
         || world.units.orders_y()[address_row] != image.orders_y
+        || world.units.dest_angle()[address_row] != image.dest_angle
         || world.orders(address_row) != &image.orders
         || paths.get(address_row) != Some(&image.path)
     {
@@ -1271,6 +1278,7 @@ pub fn commit_group_move_package(
         world.units.set_unit_masks(row, mutation.after.unit_masks);
         world.units.orders_x_mut()[row] = mutation.after.orders_x;
         world.units.orders_y_mut()[row] = mutation.after.orders_y;
+        world.units.dest_angle_mut()[row] = mutation.after.dest_angle;
         *world.orders_mut(row) = mutation.after.orders;
         paths[row] = mutation.after.path;
     }

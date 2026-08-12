@@ -64,7 +64,8 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, canonical_gather_work, canonical_strafe_runtime, casters_animals,
+    ammo, borders_fog, canonical_air_patrol_runtime, canonical_gather_work,
+    canonical_strafe_runtime, casters_animals,
     collision_blocks_live, combat, defeat_cleanup, economy, game_daemon_calc_danger,
     game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
     order_dispatch, production,
@@ -865,6 +866,9 @@ pub struct Sim {
     /// movement projection, this is reinstalled after load and is not a second gameplay owner.
     pub economy_group_authority:
         crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority,
+    /// Revision/digest-bound type, containment, and scenario facts for the admitted
+    /// Unit-carrier LaunchPatrol/Scramble package cone.
+    pub air_group_authority: crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority,
     /// Revision/digest-bound registry/caravan/terrain facts for admitted `Unit::do_trade`
     /// branches. This is a load-time adapter, not a second persistent order owner.
     pub trade_route_authority:
@@ -893,6 +897,11 @@ pub struct Sim {
     >,
     pub last_strategy_error:
         Option<crate::systems::leader_production_ai::strategy_runtime::StrategyRuntimeError>,
+    /// Most recent canonical AIR_PATROL commit or refusal. The order/path/Unit/RNG owners
+    /// carry every gameplay effect; these records are diagnostics only.
+    pub last_air_patrol_receipt:
+        Option<canonical_air_patrol_runtime::CanonicalAirPatrolCommitReceipt>,
+    pub last_air_patrol_error: Option<canonical_air_patrol_runtime::CanonicalAirPatrolRuntimeError>,
 
     // ---- step 13: standing AI armies -------------------------------------------------
     pub armies: crate::systems::armies::Armies,
@@ -1568,6 +1577,8 @@ impl Sim {
                 crate::systems::canonical_group_move_host::GroupMoveAuthority::default(),
             economy_group_authority:
                 crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority::default(),
+            air_group_authority:
+                crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority::default(),
             trade_route_authority:
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
@@ -1580,6 +1591,8 @@ impl Sim {
             last_strafe_error: None,
             last_strategy_receipt: None,
             last_strategy_error: None,
+            last_air_patrol_receipt: None,
+            last_air_patrol_error: None,
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
@@ -1623,6 +1636,15 @@ impl Sim {
         authority: crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority,
     ) {
         self.economy_group_authority = authority;
+    }
+
+    /// Install the exact containment/type/scenario projection consumed by the bounded
+    /// canonical LaunchPatrol/Scramble package host.
+    pub fn replace_air_group_authority(
+        &mut self,
+        authority: crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority,
+    ) {
+        self.air_group_authority = authority;
     }
 
     /// Install the fact snapshot used by exact, fail-closed `TRADE_ROUTE` activations.
@@ -1695,6 +1717,57 @@ impl Sim {
             &self.group_move_authority,
             prepared,
         )
+    }
+
+    /// Process exactly one opcode-0 Unit-band Group followed by LaunchPatrol (11) or
+    /// Scramble (36). The fixed Group/cache, containment, target orders and paths publish
+    /// through one checkpointed transaction. Build-band airbase selection and armed
+    /// scenario-ignore pruning remain explicit fail-closed boundaries.
+    pub fn process_air_group_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::air_group_action_transaction::AirGroupActionReceipt,
+        crate::systems::canonical_air_group_host::CanonicalAirPackageError,
+    > {
+        use crate::systems::canonical_air_group_host::{
+            commit_canonical_air_package, prepare_canonical_air_package,
+        };
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_canonical_air_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        Ok(commit_canonical_air_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            prepared,
+        ))
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
@@ -3316,6 +3389,9 @@ impl Sim {
             OrderIndex::TradeRoute => self.do_trade_route(row),
             // Arm 16, `Unit::do_strafe` `0x005EAB00`, through the atomic canonical adapter.
             OrderIndex::Strafe => self.do_strafe(row),
+            // Arm 17, `Unit::do_air_patrol` `0x005EA620`, through the same canonical
+            // air-physics/type/search/RNG authority consumed by STRAFE.
+            OrderIndex::AirPatrol => self.do_air_patrol(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
@@ -3483,6 +3559,59 @@ impl Sim {
         }
         self.last_strafe_error = None;
         self.last_strafe_receipt = Some(receipt);
+    }
+
+    fn do_air_patrol(&mut self, row: usize) {
+        let prepared = match canonical_air_patrol_runtime::prepare_air_patrol_activation(
+            &self.world,
+            &self.paths,
+            &self.unit_type,
+            &self.strafe_runtime_authority,
+            row,
+            (self.map.world.xs * 4, self.map.world.ys * 4),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_air_patrol_receipt = None;
+                self.last_air_patrol_error = Some(error);
+                return;
+            }
+        };
+        let receipt = match canonical_air_patrol_runtime::commit_air_patrol_activation(
+            &mut self.world,
+            &mut self.paths,
+            &self.unit_type,
+            &mut self.strafe_runtime_authority,
+            prepared,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.last_air_patrol_receipt = None;
+                self.last_air_patrol_error = Some(error);
+                return;
+            }
+        };
+        for effect in &receipt.effects {
+            match *effect {
+                canonical_strafe_runtime::StrafeRuntimeEffect::SetAnimation(animation) => {
+                    self.world.units.set_idle(
+                        row,
+                        u8::from(animation == crate::systems::strafe_order_frontier::IDLE_ANIM),
+                    );
+                }
+                canonical_strafe_runtime::StrafeRuntimeEffect::FireAmmo(_) => {
+                    self.last_air_patrol_receipt = None;
+                    self.last_air_patrol_error = Some(
+                        canonical_air_patrol_runtime::CanonicalAirPatrolRuntimeError::UnsupportedCone(
+                            "AIR_PATROL air physics emitted ammo",
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+        self.last_air_patrol_error = None;
+        self.last_air_patrol_receipt = Some(receipt);
     }
 
     /// Build the SPECIAL_ANIM dispatch view from canonical row-owned state.

@@ -21,6 +21,8 @@
 /// slice of the `units` channel plus the `Ammo::init` anti-air gate that the `ammo`
 /// channel depends on. Uses [`crate::rng::Random`], so it needs the crate to build.
 pub mod air;
+/// Atomic LaunchPatrol/Scramble transaction over an exact Group packet pair.
+pub mod air_group_action_transaction;
 /// Exact snapshot owner for AIR_PATROL's mod-32 `find_building_at` traversal and dynamic
 /// `BuildData::ever_seen` gate. Product adapters still require one coherent spatial host.
 pub mod air_patrol_building_search_frontier;
@@ -64,6 +66,9 @@ pub mod borders_fog;
 /// evaluation, city/Japanese scaling, and the Egyptian Wealth side output. Unsupported
 /// building types and type-data shapes fail closed.
 pub mod building_gather;
+pub mod canonical_air_group_host;
+/// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
+pub mod canonical_air_patrol_runtime;
 /// Atomic Board/Repair/Trade packet planner sharing the canonical Group→Move selector.
 pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.

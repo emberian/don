@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use crate::checksum::adler32;
 use crate::order::OrderIndex;
 use crate::rng::Random;
+use crate::systems::air::AirOrderWalk;
 use crate::systems::air_physics_frontier as air_physics;
 use crate::systems::groups_guys::{angle_diff, cosx, sinx};
 use crate::systems::movement::{PathData, PathStack};
@@ -263,30 +264,30 @@ fn search_observation(
     }
 }
 
-struct PreparedPhysics {
-    plan: air_physics::AirPhysicsPlan,
-    rng_state_after: i32,
-    final_x: i32,
-    final_y: i32,
-    final_angle: i32,
+pub(crate) struct PreparedAirPhysics {
+    pub(crate) plan: air_physics::AirPhysicsPlan,
+    pub(crate) rng_state_after: i32,
+    pub(crate) final_x: i32,
+    pub(crate) final_y: i32,
+    pub(crate) final_angle: i32,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_air_physics(
+pub(crate) fn prepare_canonical_air_physics(
     transaction_id: u64,
     frame: i32,
     map_tiles: (i32, i32),
     before_rng: Random,
     rng_epoch: u64,
     actor: frontier::ActorSnapshot,
-    order: &crate::systems::patrol::StrafeOrder,
+    order: &AirOrderWalk,
     aim: (i32, i32),
     type_index: i32,
     type_facts: StrafeTypeFacts,
     queue_digest: u64,
     path_digest: u64,
     external_effect_epoch: u64,
-) -> Result<PreparedPhysics, CanonicalStrafeRuntimeError> {
+) -> Result<PreparedAirPhysics, CanonicalStrafeRuntimeError> {
     if type_facts.animal || type_facts.helicopter || type_facts.speed <= 0 {
         return Err(CanonicalStrafeRuntimeError::UnsupportedCone(
             "animal/helicopter/nonmoving air physics",
@@ -309,12 +310,12 @@ fn prepare_air_physics(
         first_guy_z: 0,
     };
     let physics_order = air_physics::AirOrderState {
-        home_o: order.air.oxx,
-        home_who: order.air.whose,
-        cruising_alt: order.air.cruising_alt,
-        sharp_turn: order.air.sharp_turn,
-        old: order.air.old,
-        returning: order.air.returning,
+        home_o: order.oxx,
+        home_who: order.whose,
+        cruising_alt: order.cruising_alt,
+        sharp_turn: order.sharp_turn,
+        old: order.old,
+        returning: order.returning,
     };
     let mut rng = before_rng;
     let cruise_draw =
@@ -403,7 +404,7 @@ fn prepare_air_physics(
             "air physics did not continue",
         ));
     }
-    Ok(PreparedPhysics {
+    Ok(PreparedAirPhysics {
         plan,
         rng_state_after: rng.state(),
         final_x,
@@ -444,7 +445,7 @@ fn apply_local_for_receipts(
 
 fn apply_physics_image(
     image: &mut transaction::CanonicalStrafeImage,
-    physics: &PreparedPhysics,
+    physics: &PreparedAirPhysics,
     aim: (i32, i32),
 ) -> Result<(), CanonicalStrafeRuntimeError> {
     image.path.clear();
@@ -529,14 +530,14 @@ pub fn prepare_strafe_activation(
         ^ authority.external_effect_epoch;
     let host_snapshot = snapshot(world, &before);
     let before_rng = world.random;
-    let physics = prepare_air_physics(
+    let physics = prepare_canonical_air_physics(
         transaction_id,
         world.frame,
         map_tiles,
         before_rng,
         before.rng_epoch,
         actor,
-        &strafe,
+        &strafe.air,
         (target.x, target.y),
         actor_type,
         type_facts,
