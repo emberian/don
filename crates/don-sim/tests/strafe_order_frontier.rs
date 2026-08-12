@@ -147,6 +147,8 @@ fn mod16_hit_inserts_before_physics_and_returns() {
         p.steps[p.steps.len() - 2],
         StrafeStep::InsertStrafeFirst {
             target: id(12, 3, 120),
+            target_x: 700,
+            target_y: 800,
             home_o: 8,
             home_who: 1,
         }

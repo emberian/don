@@ -281,6 +281,8 @@ pub enum StrafeStep {
     },
     InsertStrafeFirst {
         target: ObjectIdentity,
+        target_x: i32,
+        target_y: i32,
         home_o: i32,
         home_who: i32,
     },
@@ -579,6 +581,8 @@ pub fn plan_strafe_frame(facts: &StrafeFrameFacts) -> Result<StrafeFramePlan, St
                 }
                 steps.push(StrafeStep::InsertStrafeFirst {
                     target: found.identity,
+                    target_x: found.x,
+                    target_y: found.y,
                     home_o: facts.order.air.oxx,
                     home_who: facts.order.air.whose,
                 });

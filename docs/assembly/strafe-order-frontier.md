@@ -59,7 +59,9 @@ When `returning==0`, retail enters the target cone:
    toward its action point by `(distance-0xC00)/3`; both projections are world-restricted.
 3. `(actor.o + Game::frame) % 16 == 0` performs the first target search.  BOMBER (`0x130`) chooses
    `find_new_bomber_target` first; other aircraft choose `find_new_air_target`.  A valid hit
-   inserts a new STRAFE at Queue-First with the preserved home pair and returns before physics.
+   inserts a new STRAFE at Queue-First with the complete hit identity, hit coordinates, and
+   preserved home pair, then returns before physics. The coordinates are required because
+   `StrafeOrder.xx/yy` are walked state; an identity-only insertion is not admissible.
 
 The invalid-target cone is not a common kill:
 
