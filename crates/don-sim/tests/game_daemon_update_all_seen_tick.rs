@@ -331,6 +331,7 @@ fn started_wonder_stamps_its_exact_footprint_and_roundtrips_resumed_frame() {
         &mut original,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: 6,
                 y_size: 6,
@@ -401,6 +402,7 @@ fn captured_started_wonder_takes_the_explored_only_mask_branch() {
         &mut sim,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: 6,
                 y_size: 6,
@@ -445,6 +447,7 @@ fn started_wonder_without_footprint_facts_refuses_atomically() {
         &mut sim,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: None,
             is_fort: Some(false),
         }),
@@ -480,6 +483,7 @@ fn uncaptured_started_wonder_without_fort_authority_refuses_atomically() {
         &mut sim,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: 6,
                 y_size: 6,
@@ -522,6 +526,7 @@ fn malformed_started_wonder_footprint_refuses_atomically() {
         &mut sim,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: i32::MAX,
                 y_size: 2,
@@ -561,6 +566,7 @@ fn active_build_visible_local_seen_executes_before_its_ordinary_stamp() {
         &mut original,
         0x19e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: 4,
                 y_size: 4,
@@ -615,6 +621,7 @@ fn active_complete_wonder_implicitly_runs_local_seen_with_zero_visible_byte() {
         &mut sim,
         0x21e,
         Some(LiveBuildVisibilityTypeFacts {
+            domain: None,
             footprint: Some(Footprint {
                 x_size: 6,
                 y_size: 6,

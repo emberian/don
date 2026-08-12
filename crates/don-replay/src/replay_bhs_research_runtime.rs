@@ -34,6 +34,9 @@ use don_sim::systems::bhs_type_queue_runtime::{
     NUM_TYPE_QUEUED_BUILTIN,
 };
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::leader_produce_building_candidate_prefix::{
+    apply_sim_leader_produce_building_candidate_prefix, LeaderProduceBuildingCandidatePrefixReceipt,
+};
 use don_sim::systems::leader_produce_building_prefix::{
     apply_sim_leader_produce_building_prefix, LeaderProduceBuildingPrefixReceipt,
     LeaderProduceBuildingPrefixRequest,
@@ -62,6 +65,7 @@ pub struct ProductionResearchRunReceipt {
     pub place_buildings: Vec<PlaceBuildingReceipt>,
     pub produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
     pub produce_building_search_setups: Vec<LeaderProduceBuildingSearchSetupReceipt>,
+    pub produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
 }
 
 struct ResearchHost<'a> {
@@ -80,6 +84,7 @@ struct ResearchHost<'a> {
     place_buildings: Vec<PlaceBuildingReceipt>,
     produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
     produce_building_search_setups: Vec<LeaderProduceBuildingSearchSetupReceipt>,
+    produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
 }
 
 impl<'a> ResearchHost<'a> {
@@ -107,6 +112,7 @@ impl<'a> ResearchHost<'a> {
             place_buildings: Vec::new(),
             produce_buildings: Vec::new(),
             produce_building_search_setups: Vec::new(),
+            produce_building_candidate_prefixes: Vec::new(),
         }
     }
 
@@ -436,9 +442,23 @@ impl<'a> ResearchHost<'a> {
         )
         .map_err(|_| HostError::Unimplemented)?;
         let returned = search.scenario_returned;
+        let candidate_boundary = search.continuation;
         self.produce_building_search_setups.push(search);
-        // Reaching the candidate loop is not a scalar success. Builtin 520 remains red
-        // until candidate selection and the native placement/mutation tail are atomic.
+        if let Some(returned) = returned {
+            return Ok(Value::Int(returned));
+        }
+        let candidate_boundary = candidate_boundary.ok_or(HostError::Unimplemented)?;
+        let candidate = apply_sim_leader_produce_building_candidate_prefix(
+            self.sim,
+            self.production,
+            self.types,
+            candidate_boundary,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        let returned = candidate.scenario_returned;
+        self.produce_building_candidate_prefixes.push(candidate);
+        // Reaching `BuildTypeData::blocked_site` is not scalar placement success. Builtin
+        // 520 remains red until that call and the native mutation tail are atomic.
         returned.map(Value::Int).ok_or(HostError::Unimplemented)
     }
 
@@ -549,6 +569,7 @@ pub fn run_production_research_call(
         place_buildings,
         produce_buildings,
         produce_building_search_setups,
+        produce_building_candidate_prefixes,
     ) = {
         let mut host = ResearchHost::new(
             image,
@@ -587,6 +608,7 @@ pub fn run_production_research_call(
             host.place_buildings,
             host.produce_buildings,
             host.produce_building_search_setups,
+            host.produce_building_candidate_prefixes,
         )
     };
 
@@ -632,5 +654,6 @@ pub fn run_production_research_call(
         place_buildings,
         produce_buildings,
         produce_building_search_setups,
+        produce_building_candidate_prefixes,
     })
 }

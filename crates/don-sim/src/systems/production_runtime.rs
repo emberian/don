@@ -104,12 +104,15 @@ pub enum LiveBuildingCompletion {
     Unsupported,
 }
 
-/// Exact BuildType projection consumed only by the started-Wonder
-/// `Wall::update_local_seen` visibility body. The footprint fields are
-/// `ObjectTypeData +0x234/+0x238`; `is_fort` is the reached non-strict
-/// `BuildTypeData::is(FORTX, 0)` result behind type-vtable slot `+0xFC`.
+/// Exact lazy BuildType projection consumed by placement and started-Wonder visibility.
+/// The fields are `ObjectTypeData::domain` (`+0x218`), `x_size/y_size`
+/// (`+0x234/+0x238`), and the reached non-strict `BuildTypeData::is(FORTX, 0)` result
+/// behind type-vtable slot `+0xFC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiveBuildVisibilityTypeFacts {
+    /// Lazy exact `ObjectTypeData::domain`. `Leader::produce_building` reads it only after
+    /// a candidate has passed the W-cell grade and building-allowance gates.
+    pub domain: Option<i32>,
     /// Lazy exact `ObjectTypeData +0x234/+0x238` pair. A reached Build
     /// `Object::update_seen` preamble can consume `is_fort` and then return on zero LOS
     /// without reading the footprint.

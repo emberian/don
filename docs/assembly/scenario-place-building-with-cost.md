@@ -32,8 +32,9 @@ bytes and performs the native placement search, City association, resource payme
 allocation, builder selection, and BUILD_AT order installation. It eventually calls
 `Objects::init_build` (call site `0x006E2CA3`) and `Group::action_swarm_around` (call site
 `0x006E2EB2`). The exact mounted entry/City gate owns `0x006E1400..0x006E150D`; the next
-1,492-byte frame-zero setup owns `0x006E150D..0x006E1AE1`. The candidate loop and mutation tail
-remain 5,645 bytes.
+1,492-byte frame-zero setup owns `0x006E150D..0x006E1AE1`; and the first 604-byte candidate
+prefix owns `0x006E1AE1..0x006E1D3D`. The first still-unowned call and mutation tail are 5,041
+bytes.
 
 The existing package-driven Group Build runtime is therefore not interchangeable with this
 call: it begins after a site and builders have already been selected, while
@@ -51,6 +52,25 @@ SHA-256 `334a3ea1f96e65c0bd7d045449e2cc68d81c51923020f9728e80d1e508d9bff5`. PDB 
 - the distinct Oil Well (`type 421`) existing-object scan, also excluded; and
 - `0x006E1ACE..0x006E1AE0`: compare first offset with `circle_radius[radius_index]` and jump
   to the common failure epilogue when exhausted. The next instruction is `0x006E1AE1`.
+
+The next retail tranche, `0x006E1AE1..0x006E1D3D`, walks `circle_x/y` and applies these gates in
+order:
+
+- reject an out-of-bounds W coordinate or a `WData::flags & 0x4000` cell (the bit's writer and
+  semantic name remain unidentified, so the implementation preserves the literal rather than
+  inventing an authority);
+- call canonical `WorldData::check_building_wcoord(..., need_city=1)`, require at least partial
+  space, and for a maximum footprint dimension at most four require both sufficient grade and a
+  non-edge W cell;
+- except for Oil Platform (`type 422`), require canonical `WorldData::buildings_allowed`;
+- require `WorldData::is_ocean` to equal the exact `ObjectTypeData::domain == 1` comparison; and
+- convert the survivor to Coord-unit center coordinates, zero the local detail word, push the
+  literal City constraint `-1`, and call `BuildTypeData::blocked_site` at `0x00636A50` from
+  `0x006E1D3D`.
+
+The domain read is `ObjectTypeData +0x218`, established by the PDB layout and the retail dword
+comparison. It extends the existing lazy production Build-Type projection alongside the already
+mounted footprint; it is not a second Type owner.
 
 ## Canonical prefixes and receipts
 
@@ -89,11 +109,21 @@ cell/region, radius and circle-table endpoint, Dock/footprint search arguments, 
 resource-sensitive search flag. A non-exhausted scan returns no scalar: its continuation is
 `{ va: 0x006E1AE1, bytes_remaining: 5645, ...exact live locals }`.
 
-The replay host records terminal receipts from the earlier gates and both native-prefix receipts
-on admitted execution. Reaching the candidate loop raises the existing unimplemented host
+The candidate-prefix tranche revalidates that boundary and the same origin Build, footprint,
+domain, search shape, and frame-zero policy. It reads only canonical map predicates and the
+canonical circle table. Every rejected offset is recorded with its W coordinate, reached space
+grade, and exact rejection reason. Exhausting the bounded ring returns native one / scenario
+zero exactly as retail does. A surviving candidate records its center coordinates and all
+reached `blocked_site` arguments in a typed continuation
+`{ va: 0x006E1D3D, callee: 0x00636A50, bytes_remaining: 5041, ... }`; it returns no scalar and
+does not guess the virtual call's answer.
+
+The replay host records terminal receipts from the earlier gates and all three native-prefix
+receipts on admitted execution. A fully rejected ring returns scenario zero from the mounted
+builtin without mutation. Reaching `blocked_site` raises the existing unimplemented host
 boundary, so `ScriptRuntime` rolls back Program/ref/timers, BHS cursor, research queues,
-resources, Cities, Groups, and all Leader mirrors. This preserves builtin 520 as the externally
-visible stop until candidate selection and the placement mutation tail are one atomic
+resources, Cities, Groups, Builds, and all Leader mirrors. This preserves builtin 520 as the
+externally visible stop until the virtual site check and placement mutation tail are one atomic
 transaction.
 
 ## Installed-content evidence
@@ -103,16 +133,20 @@ The replay-selected installed `economic.bhs` success path reaches builtin 520 af
 AI owner. The fixture admits the installed Farm cost (`4t`, decoded to 40 Timber) and reconciles
 100 units of every Leader resource. The cost result is nonzero (`100 / 40 = 2`); the active
 Athens Build passes the City gate; and the 4x4 Farm advances through radius 20 / circle index 5
-to the exact candidate-loop boundary. The test still stops at builtin 520, proving that no false
-placement result leaks past the native boundary.
+to the first retail circle candidate. Existing canonical map predicates accept W cell `(2, 2)`
+with space grade four; the exact center is `(1920, 1920)` Coord units, and execution stops before
+the `BuildTypeData::blocked_site` virtual. The test still stops at builtin 520 and rolls back,
+proving that no false placement result leaks past the native boundary. A separate mounted test
+marks the bounded candidate ring with the exact `WData 0x4000` bit and proves the retail terminal
+zero return without Build, Group, or resource mutation.
 
 The focused gate is:
 
 ```text
-CARGO_TARGET_DIR=/Users/ember/.cache/don-bhs520c9-target \
+CARGO_TARGET_DIR=/Users/ember/.cache/don-bhs520c10-target \
   cargo test -p don-replay --test replay_bhs_research_runtime -- --nocapture
 ```
 
-All five tests pass with installed `ron-data`: terminal refusal, later-VM rollback, direct
-read-only/save-resume receipts, insufficient-resource refusal, and replay-selected shipped
-economic continuation.
+All six tests pass with installed `ron-data`: City-gate refusal, candidate-ring exhaustion,
+later-VM rollback, direct read-only/save-resume receipts, insufficient-resource refusal, and
+replay-selected shipped economic continuation.

@@ -30,6 +30,13 @@ use don_sim::systems::bhs_type_factory::{
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
+use don_sim::systems::leader_produce_building_candidate_prefix::{
+    apply_sim_leader_produce_building_candidate_prefix, CandidatePrefixRejection,
+    LeaderProduceBuildingCandidatePrefixError, LeaderProduceBuildingCandidatePrefixStatus,
+    BUILD_TYPE_BLOCKED_SITE_VA, LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING,
+    LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA, LEADER_PRODUCE_BUILDING_CANDIDATE_PREFIX_BYTES,
+    WDATA_BUILD_CANDIDATE_EXCLUDED,
+};
 use don_sim::systems::leader_produce_building_prefix::{
     apply_sim_leader_produce_building_prefix, LeaderProduceBuildingPrefixRequest,
     LeaderProduceBuildingPrefixStatus, BUILD_FLAG_NO_ACTIVE_CITY_REQUIRED,
@@ -40,6 +47,7 @@ use don_sim::systems::leader_produce_building_search_setup::{
     LeaderProduceBuildingSearchSetupStatus, LEADER_PRODUCE_BUILDING_CANDIDATE_BYTES_REMAINING,
     LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA, LEADER_PRODUCE_BUILDING_SEARCH_SETUP_BYTES,
 };
+use don_sim::systems::map_terrain::{land, tflag};
 use don_sim::systems::production::runtime::{
     LiveBuildVisibilityTypeFacts, LiveProductionRuntime, LiveProductionType,
     SingleLibraryResearchStatus,
@@ -197,6 +205,14 @@ fn canonical_type_owners(owner: usize) -> (TypeBuiltinState, BhsCreateUnitRuntim
 
 fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut sim = Sim::new(0x357, 8);
+    // Coherent frame-zero Athens placement terrain: dry W cells and the City tile mask
+    // consumed by `WorldData::check_building_wcoord(..., need_city=1)`.
+    for cell in &mut sim.map.world.wdata {
+        cell.land = land::FERTILE;
+    }
+    for mask in &mut sim.map.world.tdata {
+        *mask |= tflag::CITY;
+    }
     let mut build = BuildData {
         flags: flag::VALID | flag::ACTIVE,
         who: owner as u8,
@@ -247,6 +263,8 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     // Installed FARM BuildTypeData::build_flags, schema/live/live-tables-building.tsv.
     farm.build_flags = 0x1000_0049;
     farm.build_visibility = Some(LiveBuildVisibilityTypeFacts {
+        // Installed FARM ObjectTypeData::domain, schema/live/live-tables-building.tsv.
+        domain: Some(0),
         footprint: Some(Footprint {
             x_size: 4,
             y_size: 4,
@@ -444,6 +462,77 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     assert_eq!(city_sim.groups.list, search_groups_before.list);
     assert_eq!(city_production.leaders[OWNER].resources, resources_before);
 
+    let candidate_prefix = apply_sim_leader_produce_building_candidate_prefix(
+        &city_sim,
+        &city_production,
+        &types,
+        candidate,
+    )
+    .unwrap();
+    assert_eq!(LEADER_PRODUCE_BUILDING_CANDIDATE_PREFIX_BYTES, 0x25c);
+    assert_eq!(
+        candidate_prefix.status,
+        LeaderProduceBuildingCandidatePrefixStatus::ReadyForBlockedSite
+    );
+    assert!(candidate_prefix.probes.is_empty());
+    assert_eq!(candidate_prefix.target_domain, 0);
+    let blocked_site = candidate_prefix.continuation.unwrap();
+    assert_eq!(
+        blocked_site.va,
+        LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA
+    );
+    assert_eq!(blocked_site.callee_va, BUILD_TYPE_BLOCKED_SITE_VA);
+    assert_eq!(
+        blocked_site.bytes_remaining,
+        LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING
+    );
+    assert_eq!(blocked_site.circle_offset, 1);
+    assert_eq!(blocked_site.candidate_world_cell, [2, 2]);
+    assert_eq!(blocked_site.space_grade, 4);
+    assert_eq!(blocked_site.placement_coord, [2 * 768 + 384, 2 * 768 + 384]);
+    assert_eq!(blocked_site.city_constraint, -1);
+    assert_eq!(blocked_site.blocked_detail_initial, 0);
+    assert_eq!(city_sim.builds[city_row].image(), search_build_before);
+    assert_eq!(city_sim.groups.list, search_groups_before.list);
+    assert_eq!(city_production.leaders[OWNER].resources, resources_before);
+
+    let mut missing_domain = city_production.clone();
+    missing_domain.types[417]
+        .as_mut()
+        .unwrap()
+        .build_visibility
+        .as_mut()
+        .unwrap()
+        .domain = None;
+    assert_eq!(
+        apply_sim_leader_produce_building_candidate_prefix(
+            &city_sim,
+            &missing_domain,
+            &types,
+            candidate,
+        ),
+        Err(LeaderProduceBuildingCandidatePrefixError::MissingTargetDomain)
+    );
+
+    let (mut skipped_sim, skipped_production, skipped_row) = production_owners(OWNER);
+    skipped_sim.builds[skipped_row].flags |= flag::CAPTURED;
+    let first = blocked_site.candidate_world_cell;
+    skipped_sim.map.world.wdata_mut(first[0], first[1]).flags |= WDATA_BUILD_CANDIDATE_EXCLUDED;
+    let skipped = apply_sim_leader_produce_building_candidate_prefix(
+        &skipped_sim,
+        &skipped_production,
+        &types,
+        candidate,
+    )
+    .unwrap();
+    assert_eq!(skipped.probes.len(), 1);
+    assert_eq!(skipped.probes[0].circle_offset, 1);
+    assert!(matches!(
+        skipped.probes[0].rejection,
+        CandidatePrefixRejection::WDataExcluded { .. }
+    ));
+    assert_eq!(skipped.continuation.unwrap().circle_offset, 2);
+
     city_sim.step8.leaders[OWNER].flags = 0;
     city_sim.vic_leaders.slots[OWNER].leader_flags = 0;
     let saved_search_sim = save_sim(&city_sim).unwrap();
@@ -460,6 +549,14 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     )
     .unwrap();
     assert_eq!(resumed_search, search_setup);
+    let resumed_candidate = apply_sim_leader_produce_building_candidate_prefix(
+        &resumed_search_sim,
+        &city_production,
+        &types,
+        resumed_search.continuation.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resumed_candidate, candidate_prefix);
 
     city_sim.world.frame = 1;
     assert_eq!(
@@ -631,6 +728,93 @@ fn produce_building_city_gate_terminal_is_mounted_and_returns_scenario_zero() {
     );
     assert_eq!(receipt.produce_buildings[0].native_returned, Some(1));
     assert_eq!(receipt.produce_buildings[0].scenario_returned, Some(0));
+    assert_eq!(sim.builds[row].image(), build_before);
+    assert_eq!(sim.groups.list, groups_before.list);
+    assert_eq!(production.leaders[OWNER].resources, resources_before);
+}
+
+#[test]
+fn produce_building_candidate_exhaustion_is_mounted_and_returns_scenario_zero() {
+    let fixture = repo_root().join("crates/don-replay/tests/fixtures/bhs_research_rollback.bhs");
+    let inc = don_bhs_cc::load::install_include_path(repo_root());
+    let loaded = don_bhs_cc::load::load_script_file(&inc, &fixture).unwrap();
+    let mut script_runtime = ScriptRuntime::new(loaded.program, None, None).unwrap();
+    let binding = ReplayBhsBinding {
+        file: 0,
+        name: "place_prefix_only".into(),
+    };
+    let mut call = ReplayProductionCall {
+        who: 1,
+        step: 99,
+        boom_vs_rush: 1,
+        num_loops: 5,
+    };
+    let image = ProductionBuiltinImage {
+        leaders: std::array::from_fn(|who| {
+            if who == OWNER {
+                ProductionLeaderImage {
+                    flags: 3,
+                    ..ProductionLeaderImage::default()
+                }
+            } else {
+                ProductionLeaderImage::default()
+            }
+        }),
+        ..ProductionBuiltinImage::default()
+    };
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, row) = production_owners(OWNER);
+    sim.builds[row].flags |= flag::CAPTURED;
+    for cell in &mut sim.map.world.wdata {
+        cell.flags |= WDATA_BUILD_CANDIDATE_EXCLUDED;
+    }
+    let groups_before = sim.groups.clone();
+    let build_before = sim.builds[row].image();
+    let resources_before = production.leaders[OWNER].resources;
+
+    let receipt = run_production_research_call(
+        &mut script_runtime,
+        &binding,
+        &mut call,
+        &image,
+        &types,
+        &upgrades,
+        &place_building_costs(OWNER),
+        &mut sim,
+        &mut production,
+        game_seconds(0),
+    )
+    .unwrap();
+
+    assert_eq!(call.step, 0);
+    assert_eq!(receipt.production.returned, 0);
+    assert_eq!(receipt.production.trace.len(), 1);
+    assert_eq!(receipt.production.trace[0].index, 520);
+    assert_eq!(
+        receipt.production.trace[0].returned,
+        ProductionBuiltinValue::Int(0)
+    );
+    assert_eq!(receipt.place_buildings.len(), 1);
+    assert_eq!(receipt.produce_buildings.len(), 1);
+    assert_eq!(receipt.produce_building_search_setups.len(), 1);
+    assert_eq!(receipt.produce_building_candidate_prefixes.len(), 1);
+    let candidate = &receipt.produce_building_candidate_prefixes[0];
+    assert_eq!(
+        candidate.status,
+        LeaderProduceBuildingCandidatePrefixStatus::ExhaustedBeforeBlockedSite
+    );
+    assert_eq!(candidate.native_returned, Some(1));
+    assert_eq!(candidate.scenario_returned, Some(0));
+    assert!(candidate.continuation.is_none());
+    assert!(!candidate.probes.is_empty());
+    assert!(candidate.probes.iter().any(|probe| matches!(
+        probe.rejection,
+        CandidatePrefixRejection::WDataExcluded { .. }
+    )));
+    assert!(candidate.probes.iter().all(|probe| matches!(
+        probe.rejection,
+        CandidatePrefixRejection::OutOfBounds | CandidatePrefixRejection::WDataExcluded { .. }
+    )));
     assert_eq!(sim.builds[row].image(), build_before);
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(production.leaders[OWNER].resources, resources_before);
@@ -1072,6 +1256,25 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(
         installed_search.continuation.unwrap().va,
         LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA
+    );
+    let installed_candidate = apply_sim_leader_produce_building_candidate_prefix(
+        &sim,
+        &production,
+        &types,
+        installed_search.continuation.unwrap(),
+    )
+    .expect("advance installed Farm to the first blocked_site virtual");
+    assert_eq!(
+        installed_candidate.status,
+        LeaderProduceBuildingCandidatePrefixStatus::ReadyForBlockedSite
+    );
+    let installed_blocked_site = installed_candidate.continuation.unwrap();
+    assert_eq!(installed_blocked_site.circle_offset, 1);
+    assert_eq!(installed_blocked_site.candidate_world_cell, [2, 2]);
+    assert_eq!(installed_blocked_site.space_grade, 4);
+    assert_eq!(
+        installed_blocked_site.va,
+        LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA
     );
 
     let error = run_production_research_call(
