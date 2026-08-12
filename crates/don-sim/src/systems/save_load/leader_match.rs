@@ -8,6 +8,9 @@
 
 use super::{Reader, SaveError, Writer};
 use crate::systems::leader_init_diplomacy_loop::LeaderInitDiplomacyRow;
+use crate::systems::leader_production_ai::strategy_runtime::{
+    CanonicalProductionAi, LEADER_MATCH_AI_EXTENSION_VALUES, LEADER_MATCH_AI_FORMAT_VERSION,
+};
 use crate::systems::tech_cities::{
     CaravanLink, CaravanLinkArray, CityPool, CityRecord, CITIES_PER_PLAYER,
     NUM_PLAYERS as CITY_PLAYERS,
@@ -605,6 +608,19 @@ fn write_leader(w: &mut Writer, row: &LeaderState, format_version: u32) -> Resul
     w.i32(row.economic);
     w.bool(row.has_preq_2b0);
     w.bool(row.has_preq_2b9);
+    let production_ai = CanonicalProductionAi {
+        leader_flags2: row.leader_flags2,
+        production_step: row.production_step,
+        prod_script_run: row.prod_script_run,
+        script_step: row.script_step,
+        control: row.control,
+        effective_pop: row.effective_pop,
+    };
+    if format_version >= LEADER_MATCH_AI_FORMAT_VERSION {
+        write_i32s(w, &production_ai.extension_values());
+    } else if production_ai.extension_values() != [0; LEADER_MATCH_AI_EXTENSION_VALUES] {
+        return Err(SaveError::Unsupported("production AI Leader extension"));
+    }
     Ok(())
 }
 
@@ -663,6 +679,17 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
     for value in &mut resource_avail {
         *value = r.bool()?;
     }
+    let economic = r.i32()?;
+    let has_preq_2b0 = r.bool()?;
+    let has_preq_2b9 = r.bool()?;
+    let extension = if format_version >= LEADER_MATCH_AI_FORMAT_VERSION {
+        Some(read_i32_array(r)?)
+    } else {
+        None
+    };
+    let production_ai =
+        CanonicalProductionAi::for_save_version(format_version, leader_flags2, extension)
+            .map_err(|_| SaveError::Invalid("production AI Leader extension"))?;
     Ok(LeaderState {
         leader_flags,
         leader_flags2,
@@ -689,6 +716,9 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
         wonderwin_timer,
         lost_capital_stamp,
         lost_capital_timer,
+        production_step: production_ai.production_step,
+        prod_script_run: production_ai.prod_script_run,
+        script_step: production_ai.script_step,
         victory_type,
         defeat_type,
         population_cap,
@@ -699,19 +729,21 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
         building_attrition_disabled,
         cities_captured,
         cities_lost,
+        control: production_ai.control,
         num_buildings,
         num_units,
         num_queued,
         tech_at_start,
         rare,
         territory,
+        effective_pop: production_ai.effective_pop,
         economy,
         has_tech,
         researching,
         resource_avail,
-        economic: r.i32()?,
-        has_preq_2b0: r.bool()?,
-        has_preq_2b9: r.bool()?,
+        economic,
+        has_preq_2b0,
+        has_preq_2b9,
     })
 }
 
@@ -813,7 +845,7 @@ fn read_players(r: &mut Reader<'_>) -> Result<Option<PlayerTable>, SaveError> {
 }
 
 pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
-    write_for_version(sim, CITY_POOL_FORMAT_VERSION)
+    write_for_version(sim, LEADER_MATCH_AI_FORMAT_VERSION)
 }
 
 pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {

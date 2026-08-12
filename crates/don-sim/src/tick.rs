@@ -853,6 +853,11 @@ pub struct Sim {
     /// Receive-side opcode-0 selection cache, keyed by network `play`. This is persisted in
     /// DoNSave v13; package-local Group scratch and transport serials are not.
     pub command_package_state: crate::systems::canonical_group_move_host::CommandPackageState,
+    /// Diplomacy-only retained `LeaderData` fields introduced in DoNSave v14. Resource,
+    /// relation, victory, army, object, and existing Leader rows stay in their canonical owners.
+    pub diplomacy: crate::systems::canonical_diplomacy_host::DiplomacyPersistentState,
+    /// Reinstalled content/query answers for the complete opcode-38/41 transaction.
+    pub diplomacy_authority: crate::systems::canonical_diplomacy_host::DiplomacyInstalledFacts,
     /// Revision/digest-bound object/type answers absent from the generated World columns.
     /// This is an installed content adapter, not a second persistent gameplay owner.
     pub group_move_authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
@@ -881,6 +886,13 @@ pub struct Sim {
     /// in World/order/path/RNG/Unit/ammo owners.
     pub last_strafe_receipt: Option<canonical_strafe_runtime::CanonicalStrafeCommitReceipt>,
     pub last_strafe_error: Option<canonical_strafe_runtime::CanonicalStrafeRuntimeError>,
+    /// Most recent atomic step-11 transaction. The receipt is diagnostic; its after-image is
+    /// committed to the canonical `victory_score::LeaderState` fields below this boundary.
+    pub last_strategy_receipt: Option<
+        crate::systems::leader_production_ai::strategy_runtime::StrategyTransactionReceipt,
+    >,
+    pub last_strategy_error:
+        Option<crate::systems::leader_production_ai::strategy_runtime::StrategyRuntimeError>,
 
     // ---- step 13: standing AI armies -------------------------------------------------
     pub armies: crate::systems::armies::Armies,
@@ -1548,6 +1560,10 @@ impl Sim {
             groups: crate::systems::canonical_group_move_host::retail_fresh_groups(),
             command_package_state:
                 crate::systems::canonical_group_move_host::CommandPackageState::default(),
+            diplomacy:
+                crate::systems::canonical_diplomacy_host::DiplomacyPersistentState::default(),
+            diplomacy_authority:
+                crate::systems::canonical_diplomacy_host::DiplomacyInstalledFacts::default(),
             group_move_authority:
                 crate::systems::canonical_group_move_host::GroupMoveAuthority::default(),
             economy_group_authority:
@@ -1562,6 +1578,8 @@ impl Sim {
             strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority::default(),
             last_strafe_receipt: None,
             last_strafe_error: None,
+            last_strategy_receipt: None,
+            last_strategy_error: None,
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
@@ -2362,6 +2380,15 @@ impl Sim {
             dst.neutral_attrition = policy.neutral_attrition;
             dst.building_attrition_off = policy.building_attrition_disabled;
             dst.pop_cap = policy.population_cap;
+            crate::systems::leader_production_ai::strategy_runtime::CanonicalProductionAi {
+                leader_flags2: policy.leader_flags2,
+                production_step: policy.production_step,
+                prod_script_run: policy.prod_script_run,
+                script_step: policy.script_step,
+                control: policy.control,
+                effective_pop: policy.effective_pop,
+            }
+            .project_into(&mut dst.ai);
 
             let env = &mut self.step8_env.leaders[who];
             env.gather = src.gather_inputs.clone();
@@ -2879,7 +2906,9 @@ impl Sim {
 
     /// `Leaders::strategy_all` `0x006ED430` — `check_explore`, `plan_strategy`,
     /// `compute_score`, `diplomacy`, `Game::check_victory`. The exact dispatcher and
-    /// exploration body run here; only the two large AI bodies remain call-counted gaps.
+    /// exploration and recovered production-AI bodies run here. `queued_units` is projected
+    /// from the canonical Build queues and live type table before any Leader byte changes.
+    /// Only the still-unrecovered AI arms remain call-counted gaps.
     fn leaders_strategy_all(&mut self) -> (StepRun, u32) {
         let has_explore_preq = std::array::from_fn(|who| {
             self.vic_leaders.slots[who]
@@ -2887,26 +2916,62 @@ impl Sim {
                 .get(leaders::EXPLORE_ALL_PREREQ)
                 .copied()
         });
-        let trace = leaders::strategy_all(
+        let ai_off = self.step8.ai_off;
+        let result = crate::systems::leader_production_ai::strategy_runtime::execute_strategy_all(
             &mut self.step8,
-            leaders::StrategyInputs {
-                frame: self.world.frame,
-                // `GameAccess::ai_speed` is global. Step 8's shared adapter mirrors it in
-                // every gather context; slot zero is the canonical copy.
-                ai_speed: self.step8_env.leaders[0].payout.ai_speed,
-                world: leaders::ExploreWorld {
-                    reg_xs: self.map.world.reg_xs,
-                    reg_ys: self.map.world.reg_ys,
-                    reg_size: self.map.world.reg_size,
-                    fog_xs: self.map.world.fog_xs,
-                    seen2: &self.map.world.seen2,
+            &self.world.objects,
+            &self.builds,
+            &self.production_runtime,
+            crate::systems::leader_production_ai::strategy_runtime::StrategyCanonicalInputs {
+                dispatcher: leaders::StrategyInputs {
+                    frame: self.world.frame,
+                    // `GameAccess::ai_speed` is global. Step 8's shared adapter mirrors it in
+                    // every gather context; slot zero is the canonical copy.
+                    ai_speed: self.step8_env.leaders[0].payout.ai_speed,
+                    world: leaders::ExploreWorld {
+                        reg_xs: self.map.world.reg_xs,
+                        reg_ys: self.map.world.reg_ys,
+                        reg_size: self.map.world.reg_size,
+                        fog_xs: self.map.world.fog_xs,
+                        seen2: &self.map.world.seen2,
+                    },
+                    has_explore_preq,
+                    check_victory_mode: self
+                        .vic_match
+                        .sem(victory_score::game_sem::CHECK_VICTORY_MODE),
                 },
-                has_explore_preq,
-                check_victory_mode: self
-                    .vic_match
-                    .sem(victory_score::game_sem::CHECK_VICTORY_MODE),
+                // The step-8 adapter is the currently installed projection of the global.
+                // The transaction restores it after dispatch rather than making a save owner.
+                ai_off,
+                starting_resources: self.vic_match.options.starting_resources,
             },
         );
+        let receipt = match result {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.last_strategy_receipt = None;
+                self.last_strategy_error = Some(error);
+                self.cover.gaps[Gap::LeaderPlanStrategy.index()] += 1;
+                return (StepRun::Unimplemented(Gap::LeaderPlanStrategy), 0);
+            }
+        };
+        self.last_strategy_error = None;
+
+        // Step 8 is an execution layout. Commit only the six PDB-owned production-AI
+        // scalars back to the canonical Leader rows; host answers remain temporary.
+        for who in 0..NUM_LEADERS {
+            let ai = crate::systems::leader_production_ai::strategy_runtime::CanonicalProductionAi::capture(
+                &self.step8.leaders[who].ai,
+            );
+            let policy = &mut self.vic_leaders.slots[who];
+            policy.leader_flags2 = ai.leader_flags2;
+            policy.production_step = ai.production_step;
+            policy.prod_script_run = ai.prod_script_run;
+            policy.script_step = ai.script_step;
+            policy.control = ai.control;
+            policy.effective_pop = ai.effective_pop;
+        }
+        let trace = &receipt.trace;
 
         for call in trace.calls.iter().copied() {
             match call {
@@ -2932,6 +2997,7 @@ impl Sim {
         self.flush_terminal_queue_cleanup();
 
         let work = trace.calls.len() as u32;
+        self.last_strategy_receipt = Some(receipt);
         if work == 0 {
             (StepRun::Vacuous, 0)
         } else {

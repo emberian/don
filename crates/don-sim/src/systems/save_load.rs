@@ -25,7 +25,12 @@ use crate::systems::{
         self, AirOrderPayload, AirPatrolOrderPayload, WalkedCoordArray, MAX_DECODED_PATROL_POINTS,
     },
     bhs_type_runtime::TypeBuiltinBoundaryError,
-    borders_fog, economy,
+    borders_fog,
+    canonical_diplomacy_host::{
+        decode_diplomacy_for_save, encode_diplomacy_payload, DIPLOMACY_SAVE_FORMAT_VERSION,
+        PRE_DIPLOMACY_SAVE_FORMAT_VERSION,
+    },
+    economy,
     economy_order_payload_authority::{
         self as economy_payload, EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload,
         StableTargetIdentity,
@@ -52,7 +57,7 @@ mod leader_match;
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 13;
+const FORMAT_VERSION: u32 = DIPLOMACY_SAVE_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -145,8 +150,9 @@ const PLAYER_SETUP: u16 = 0x0008;
 const GROUPS: u16 = 0x0009;
 const LEADER_MATCH: u16 = 0x000a;
 const COMMAND_PACKAGE_STATE: u16 = 0x000b;
+const DIPLOMACY: u16 = 0x000c;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 11] = [
+const REQUIRED: [u16; 12] = [
     CORE,
     MAP,
     OBJECTS,
@@ -158,11 +164,13 @@ const REQUIRED: [u16; 11] = [
     GROUPS,
     LEADER_MATCH,
     COMMAND_PACKAGE_STATE,
+    DIPLOMACY,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
         FORMAT_VERSION => &REQUIRED,
+        PRE_DIPLOMACY_SAVE_FORMAT_VERSION => &REQUIRED[..11],
         LEGACY_ORDER_FORMAT_VERSION..=TYPED_ORDER_FORMAT_VERSION => &REQUIRED[..10],
         GROUPS_FORMAT_VERSION => &REQUIRED[..9],
         PLAYER_SETUP_FORMAT_VERSION => &REQUIRED[..8],
@@ -1496,6 +1504,143 @@ fn validate_build_state(
             "BuildData vector contains an unregistered row".into(),
         ));
     }
+    validate_build_city_links(builds, world)?;
+    Ok(())
+}
+
+fn build_row_for_object(world: &WorldSaveState, owner: usize, o: i16) -> Option<usize> {
+    let slot = i32::from(o).checked_sub(crate::objects::BUILD_BAND_BASE as i32)?;
+    let slot = usize::try_from(slot).ok()?;
+    world
+        .build_rows
+        .get(owner)?
+        .get(slot)
+        .map(|&row| row as usize)
+}
+
+/// Validate the Build-owned half of `BuildData::city_down` before a CityPool is available.
+/// Every edge must stay inside the same owner's Build band and the same City slot; every node
+/// has at most one predecessor and every chain is acyclic.
+fn validate_build_city_links(
+    builds: &[production::BuildData],
+    world: &WorldSaveState,
+) -> Result<(), SaveError> {
+    let mut predecessors = vec![0u8; builds.len()];
+    for build in builds {
+        if build.city < 0 && build.city_down >= 0 {
+            return Err(SaveError::Builds(
+                "unlinked Build has a city_down successor".into(),
+            ));
+        }
+        if build.city_down < 0 {
+            continue;
+        }
+        let row = build_row_for_object(world, build.who as usize, build.city_down).ok_or(
+            SaveError::Builds("city_down points outside the owner's Build band".into()),
+        )?;
+        let successor = &builds[row];
+        if successor.who != build.who || successor.city != build.city {
+            return Err(SaveError::Builds(
+                "city_down crosses an owner or City boundary".into(),
+            ));
+        }
+        predecessors[row] = predecessors[row].saturating_add(1);
+        if predecessors[row] > 1 {
+            return Err(SaveError::Builds(
+                "Build has more than one city_down predecessor".into(),
+            ));
+        }
+    }
+
+    for start in 0..builds.len() {
+        let mut seen = vec![false; builds.len()];
+        let mut row = start;
+        loop {
+            if std::mem::replace(&mut seen[row], true) {
+                return Err(SaveError::Builds("city_down chain contains a cycle".into()));
+            }
+            let next = builds[row].city_down;
+            if next < 0 {
+                break;
+            }
+            row = build_row_for_object(world, builds[row].who as usize, next).ok_or(
+                SaveError::Builds("city_down points outside the owner's Build band".into()),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Bind every nonnegative Build City link to the checksum-owned CityPool and prove that every
+/// chain is rooted at that City's center Build. This closes the save/load boundary opened by
+/// canonical opcode-25 construction without admitting arbitrary serialized links.
+fn validate_build_city_pool(
+    builds: &[production::BuildData],
+    world: &WorldSaveState,
+    cities: &crate::systems::tech_cities::CityPool,
+) -> Result<(), SaveError> {
+    validate_build_city_links(builds, world)?;
+    let mut reached = vec![false; builds.len()];
+    for owner in 0..crate::objects::BANDED_SLOTS {
+        let mark = usize::try_from(cities.city_mark[owner])
+            .map_err(|_| SaveError::Builds("negative City high-water mark".into()))?;
+        if mark > cities.slots[owner].len() {
+            return Err(SaveError::Builds(
+                "City high-water mark exceeds its canonical pool".into(),
+            ));
+        }
+        for (slot, city) in cities.slots[owner][..mark].iter().enumerate() {
+            if !city.active() {
+                continue;
+            }
+            if city.who != owner as i8 || city.city != slot as i16 {
+                return Err(SaveError::Builds(
+                    "active City identity disagrees with its canonical pool slot".into(),
+                ));
+            }
+            // A retained City record may outlive every Build in its old chain (for example the
+            // former-capital record used by defeat/capture history). It has no Build-owned edge
+            // to validate. Once any Build names this City, however, the saved center must root
+            // the whole exact chain below.
+            if !builds
+                .iter()
+                .any(|build| build.who as usize == owner && build.city == slot as i16)
+            {
+                continue;
+            }
+            let mut row = build_row_for_object(world, owner, city.o).ok_or(SaveError::Builds(
+                "active City center is missing from its owner's Build band".into(),
+            ))?;
+            loop {
+                let build = &builds[row];
+                if build.who as usize != owner || build.city != slot as i16 {
+                    return Err(SaveError::Builds(
+                        "City chain Build disagrees with its root City".into(),
+                    ));
+                }
+                if std::mem::replace(&mut reached[row], true) {
+                    return Err(SaveError::Builds(
+                        "Build is reachable from more than one active City".into(),
+                    ));
+                }
+                if build.city_down < 0 {
+                    break;
+                }
+                row = build_row_for_object(world, owner, build.city_down).ok_or(
+                    SaveError::Builds("City chain leaves its owner's Build band".into()),
+                )?;
+            }
+        }
+    }
+    if builds
+        .iter()
+        .enumerate()
+        .any(|(row, build)| build.city >= 0 && !reached[row])
+    {
+        return Err(SaveError::Builds(
+            "City-linked Build is not reachable from an active City center".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -1547,8 +1692,6 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         || build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
         || build.demolition != 0
         || build.gather_down >= 0
-        || build.city >= 0
-        || build.city_down >= 0
         || build.wonder >= 0
         || build.dock >= 0
         || build.attack_ox >= 0
@@ -2897,6 +3040,7 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
 pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
     reject_unsupported(sim)?;
     let state = sim.world.export_save_state()?;
+    validate_build_city_pool(&sim.builds, &state, &sim.cities)?;
     let builds = write_builds(&sim.builds, &state)?;
     let map = write_map(sim)?;
     // Validate the producer through the same bounded decoder used for untrusted input.
@@ -2920,6 +3064,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
                 COMMAND_PACKAGE_STATE,
                 command_package_state::write(&sim.command_package_state)?,
             ),
+            Chunk::leaf(DIPLOMACY, encode_diplomacy_payload(&sim.diplomacy)),
         ],
     )
     .encode()?;
@@ -3031,6 +3176,8 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         Some(data) => command_package_state::read(data)?,
         None => crate::systems::canonical_group_move_host::CommandPackageState::default(),
     };
+    let diplomacy = decode_diplomacy_for_save(core.format_version, sections[11])
+        .map_err(|_| SaveError::Invalid("diplomacy payload"))?;
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
             return Err(SaveError::Invalid("player setup outside frame zero"));
@@ -3101,6 +3248,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         );
     sim.groups = group_pool;
     sim.command_package_state = command_state;
+    sim.diplomacy = diplomacy;
     if let Some(state) = leader_match {
         leader_match::restore(&mut sim, state)?;
     } else {
@@ -3110,6 +3258,8 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         sim.vic_match.frame = sim.world.frame;
         sim.vic_match.tick = sim.world.seconds;
     }
+    let restored_world = sim.world.export_save_state()?;
+    validate_build_city_pool(&sim.builds, &restored_world, &sim.cities)?;
     if !sim.command_package_state.is_empty() && sim.players.is_none() {
         return Err(SaveError::Invalid(
             "command selection cache without player mapping",
@@ -3271,6 +3421,13 @@ mod tests {
         prior_format_stream(sim, LEGACY_ORDER_FORMAT_VERSION)
     }
 
+    fn encoded_root(children: Vec<Chunk>) -> Vec<u8> {
+        let root = Chunk::branch(ROOT, children).encode().unwrap();
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&root);
+        bytes
+    }
+
     fn sim_with_stable_items() -> Sim {
         let mut sim = supported_sim();
         for (wx, wy) in [(0, 0), (1, 1), (2, 2)] {
@@ -3417,6 +3574,25 @@ mod tests {
         (sim, site, producer)
     }
 
+    fn sim_with_city_build_chain() -> (Sim, usize, usize) {
+        let mut sim = supported_sim();
+        let center = install_build(&mut sim, 2, ordinary_build(true));
+        let farm = install_build(&mut sim, 2, ordinary_build(false));
+        let center_o = sim.builds[center].object_id();
+        let farm_o = sim.builds[farm].object_id();
+        sim.builds[center].city = 0;
+        sim.builds[center].city_down = farm_o;
+        sim.builds[farm].city = 0;
+        sim.builds[farm].city_down = -1;
+        let city = &mut sim.cities.slots[2][0];
+        city.city_flags = 1;
+        city.city = 0;
+        city.o = center_o;
+        city.who = 2;
+        sim.cities.city_mark[2] = 1;
+        (sim, center, farm)
+    }
+
     #[test]
     fn chunk_headers_use_retail_size_and_child_count_semantics() {
         let bytes = save_sim(&supported_sim()).unwrap();
@@ -3517,7 +3693,169 @@ mod tests {
     }
 
     #[test]
-    fn format_twelve_typed_orders_load_with_empty_cache_and_upgrade_to_v13() {
+    fn v13_root_and_leader_rows_roundtrip_exactly_with_only_new_v14_state_defaulted() {
+        let mut original = supported_sim();
+        original.vic_leaders.slots[2].leader_flags2 = 0x1357_2468;
+
+        let v13 = prior_format_stream(&original, PRE_DIPLOMACY_SAVE_FORMAT_VERSION);
+        let parsed = parse_chunk(&v13[MAGIC.len()..]).unwrap();
+        assert_eq!(parsed.children.len(), 11);
+        assert!(parsed
+            .children
+            .iter()
+            .all(|child| child.header.id != DIPLOMACY));
+
+        let loaded = load_sim(&v13).unwrap();
+        let row = &loaded.vic_leaders.slots[2];
+        assert_eq!(row.leader_flags2, 0x1357_2468);
+        assert_eq!(
+            [
+                row.production_step,
+                row.prod_script_run,
+                row.script_step,
+                row.control,
+                row.effective_pop,
+            ],
+            [0; 5]
+        );
+        assert_eq!(
+            loaded.diplomacy,
+            crate::systems::canonical_diplomacy_host::DiplomacyPersistentState::default()
+        );
+        assert_eq!(
+            prior_format_stream(&loaded, PRE_DIPLOMACY_SAVE_FORMAT_VERSION),
+            v13
+        );
+
+        let mut unrepresentable = loaded;
+        unrepresentable.vic_leaders.slots[2].production_step = 1;
+        assert_eq!(
+            leader_match::write_for_version(&unrepresentable, PRE_DIPLOMACY_SAVE_FORMAT_VERSION),
+            Err(SaveError::Unsupported("production AI Leader extension"))
+        );
+    }
+
+    #[test]
+    fn rooted_city_build_chain_roundtrips_exactly_in_v13_and_v14() {
+        let (original, center, farm) = sim_with_city_build_chain();
+
+        let v14 = save_sim(&original).unwrap();
+        let loaded_v14 = load_sim(&v14).unwrap();
+        assert_eq!(loaded_v14.builds[center].city, 0);
+        assert_eq!(loaded_v14.builds[center].city_down, 2001);
+        assert_eq!(loaded_v14.builds[farm].city, 0);
+        assert_eq!(loaded_v14.builds[farm].city_down, -1);
+        assert_eq!(save_sim(&loaded_v14).unwrap(), v14);
+
+        let v13 = prior_format_stream(&original, PRE_DIPLOMACY_SAVE_FORMAT_VERSION);
+        let loaded_v13 = load_sim(&v13).unwrap();
+        assert_eq!(loaded_v13.builds[center].city_down, 2001);
+        assert_eq!(loaded_v13.builds[farm].city, 0);
+        assert_eq!(
+            prior_format_stream(&loaded_v13, PRE_DIPLOMACY_SAVE_FORMAT_VERSION),
+            v13
+        );
+    }
+
+    #[test]
+    fn malformed_city_build_links_refuse_without_loosening_other_build_boundaries() {
+        let (valid, center, _farm) = sim_with_city_build_chain();
+
+        let mut dangling = valid;
+        dangling.builds[center].city_down = 2_777;
+        assert!(matches!(save_sim(&dangling), Err(SaveError::Builds(_))));
+
+        let (mut cycle, center, farm) = sim_with_city_build_chain();
+        cycle.builds[farm].city_down = cycle.builds[center].object_id();
+        assert!(matches!(save_sim(&cycle), Err(SaveError::Builds(_))));
+
+        let (mut cross_city, _, farm) = sim_with_city_build_chain();
+        cross_city.builds[farm].city = 1;
+        assert!(matches!(save_sim(&cross_city), Err(SaveError::Builds(_))));
+
+        let (mut wrong_owner, _, _) = sim_with_city_build_chain();
+        wrong_owner.cities.slots[2][0].who = 3;
+        assert!(matches!(save_sim(&wrong_owner), Err(SaveError::Builds(_))));
+
+        let (mut duplicate, _, farm) = sim_with_city_build_chain();
+        let fork = install_build(&mut duplicate, 2, ordinary_build(false));
+        duplicate.builds[fork].city = 0;
+        duplicate.builds[fork].city_down = duplicate.builds[farm].object_id();
+        assert!(matches!(save_sim(&duplicate), Err(SaveError::Builds(_))));
+
+        let (mut still_unsupported, _, _) = sim_with_city_build_chain();
+        still_unsupported.builds[center].wonder = 0;
+        assert!(matches!(
+            save_sim(&still_unsupported),
+            Err(SaveError::Builds(_))
+        ));
+    }
+
+    #[test]
+    fn v14_diplomacy_leaf_resumes_and_malformed_root_variants_fail_closed() {
+        let mut original = supported_sim();
+        let retained = &mut original.diplomacy.leaders[3];
+        retained.proposals[5].agreement_pending = 1;
+        retained.proposals[5].proposal_open = -7;
+        retained.proposals[5].treaty = 2;
+        retained.proposals[5].offers = [11, -12, 13, -14, 15, -16];
+        retained.proposals[5].declaration_costs = [21, 22, 23, 24, 25, 26];
+        retained.proposals[5].attacks[1] = 91;
+        retained.reserved_resources = [31, 32, 33, 34, 35, 36];
+        retained.repeated_targets = 41;
+        retained.sent_raw = 42;
+        retained.received_scaled = 43;
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.diplomacy, original.diplomacy);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        let parsed = parse_chunk(&bytes[MAGIC.len()..]).unwrap();
+        let without = parsed
+            .children
+            .iter()
+            .filter(|child| child.header.id != DIPLOMACY)
+            .map(|child| Chunk::leaf(child.header.id, child.data.to_vec()))
+            .collect();
+        assert_eq!(
+            load_error(&encoded_root(without)),
+            SaveError::InvalidChunk("root child count does not match format version")
+        );
+
+        let trailing = parsed
+            .children
+            .iter()
+            .map(|child| {
+                let mut data = child.data.to_vec();
+                if child.header.id == DIPLOMACY {
+                    data.push(0);
+                }
+                Chunk::leaf(child.header.id, data)
+            })
+            .collect();
+        assert_eq!(
+            load_error(&encoded_root(trailing)),
+            SaveError::Invalid("diplomacy payload")
+        );
+
+        let mut duplicate: Vec<Chunk> = parsed
+            .children
+            .iter()
+            .map(|child| Chunk::leaf(child.header.id, child.data.to_vec()))
+            .collect();
+        duplicate.push(Chunk::leaf(
+            DIPLOMACY,
+            encode_diplomacy_payload(&original.diplomacy),
+        ));
+        assert_eq!(
+            load_error(&encoded_root(duplicate)),
+            SaveError::InvalidChunk("root id/child count")
+        );
+    }
+
+    #[test]
+    fn format_twelve_typed_orders_load_with_empty_cache_and_upgrade_to_v14() {
         let mut original = supported_sim();
         let row = 0;
         original
@@ -3532,7 +3870,7 @@ mod tests {
         let parsed = parse_chunk(&upgraded[MAGIC.len()..]).unwrap();
         assert_eq!(
             read_core(parsed.children[0].data).unwrap().format_version,
-            13
+            FORMAT_VERSION
         );
         assert!(parsed
             .children
@@ -3541,7 +3879,7 @@ mod tests {
     }
 
     #[test]
-    fn v13_order_node_metric_is_new_exact_and_round_trips() {
+    fn v13_order_node_metric_is_reused_exactly_by_v14_and_round_trips() {
         let order = Order {
             kind: OrderIndex::Think,
             flags: 0x5a,
@@ -3552,10 +3890,13 @@ mod tests {
         let mut v12 = Writer::default();
         write_order_node(&mut v12, &order, TYPED_ORDER_FORMAT_VERSION).unwrap();
         let mut v13 = Writer::default();
-        write_order_node(&mut v13, &order, FORMAT_VERSION).unwrap();
+        write_order_node(&mut v13, &order, PRE_DIPLOMACY_SAVE_FORMAT_VERSION).unwrap();
+        let mut v14 = Writer::default();
+        write_order_node(&mut v14, &order, FORMAT_VERSION).unwrap();
 
         assert_eq!(v13.0.first(), Some(&0));
         assert_eq!(&v13.0[1..], v12.0.as_slice());
+        assert_eq!(v14.0, v13.0);
 
         let mut v12_reader = Reader::new(&v12.0);
         assert_eq!(
@@ -3587,7 +3928,7 @@ mod tests {
     }
 
     #[test]
-    fn v13_economy_order_tags_and_metrics_round_trip_losslessly() {
+    fn v13_economy_order_tags_and_metrics_are_byte_identical_in_v14() {
         use crate::systems::economy_order_payload_authority::{
             CastOrderPayload, EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload,
             GatherOrderPayload, StableTargetIdentity, TradeOrderPayload,
@@ -3653,8 +3994,11 @@ mod tests {
 
         for node in cases {
             let order = Order::economy(node).unwrap();
+            let mut v13 = Writer::default();
+            write_order_node(&mut v13, &order, PRE_DIPLOMACY_SAVE_FORMAT_VERSION).unwrap();
             let mut writer = Writer::default();
             write_order_node(&mut writer, &order, FORMAT_VERSION).unwrap();
+            assert_eq!(writer.0, v13.0);
             assert_eq!(writer.0[0], node.metric);
 
             let mut reader = Reader::new(&writer.0);
@@ -3711,7 +4055,7 @@ mod tests {
             .filter(|child| {
                 !matches!(
                     child.header.id,
-                    PLAYER_SETUP | GROUPS | LEADER_MATCH | COMMAND_PACKAGE_STATE
+                    PLAYER_SETUP | GROUPS | LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY
                 )
             })
             .map(|child| {
@@ -3755,7 +4099,12 @@ mod tests {
         let children = parsed
             .children
             .iter()
-            .filter(|child| !matches!(child.header.id, LEADER_MATCH | COMMAND_PACKAGE_STATE))
+            .filter(|child| {
+                !matches!(
+                    child.header.id,
+                    LEADER_MATCH | COMMAND_PACKAGE_STATE | DIPLOMACY
+                )
+            })
             .map(|child| {
                 let mut data = child.data.to_vec();
                 if child.header.id == CORE {

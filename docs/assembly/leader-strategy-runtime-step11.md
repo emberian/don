@@ -68,19 +68,40 @@ expense, displayed income, and breakdown, but not the distinct rate block. Subst
 `displayed` or stockpile would make a green test around an aliased PDB field. This tranche
 therefore keeps `ProductionAiSetup` as the named stage boundary.
 
-## Canonical-owner integration boundary
+## Canonical-owner integration
 
-The current `step8.leaders[*].ai` structure is an execution adapter, not a valid save
-owner. `victory_score::LeaderState` already owns and serializes the canonical LeaderData
-record, including `leader_flags2`, `multi_diff`, per-type queue counts, and economy state.
-Before the transaction is hooked into `Sim::leaders_strategy_all`, its six persistent AI
-scalars must move to (or be mirrored from) that canonical owner and the `LEADER_MATCH`
-DoNSave section must carry them. The tick hook should then only:
+`step8.leaders[*].ai` remains an execution adapter rather than a save owner.
+`victory_score::LeaderState` owns the six persistent scalars, and the step-8 synchronization
+projects only those fields into the adapter. Tick step 11 now:
 
-1. project `command::InlineState::ai_off` and
+1. projects the installed `ai_off` adapter value and
    `vic_match.options.starting_resources`;
 2. run this transaction with the canonical ObjectRegistry/Build/type owners;
 3. commit the owned after-image to `victory_score::LeaderState`;
-4. preserve the existing compute-score and diplomacy interleaving.
+4. preserves the existing compute-score and diplomacy interleaving.
 
-No tick or DoNSave hook is claimed by this isolated tranche.
+The atomic receipt is retained for replay-visible inspection, while only its six canonical
+after-fields enter the checksum/save owner. Structural queue/type failures leave all Leader
+bytes unchanged and return the named step-11 gap.
+
+### v14 codec/projection contract
+
+`CanonicalProductionAi` now pins the single-owner mapping ahead of the shared mount. Its six
+fields are `leader_flags2`, `production_step`, `prod_script_run`, `script_step`, `control`,
+and `effective_pop`. `leader_flags2` is already canonical and serialized near the head of
+every `LEADER_MATCH` Leader row, so v14 appends exactly five little-endian i32s per row in
+the remaining order; it does not duplicate flags2 and does not add a chunk. A v7..v13 load
+retains the old saved flags2 and initializes only those five absent fields to zero. A v14+
+row missing the extension fails closed.
+
+Projection into `step8.leaders[*].ai` mutates only those six owned scalars. The five external
+answers on `ProductionState` survive projection, so reinstalling content/runtime facts after
+load cannot overwrite canonical gameplay progress and canonical progress cannot accidentally
+become a saved copy of an external adapter.
+
+The natural integration gate configures four seats with ordinary queued Unit rows, executes a
+real `Sim::do_frame`, saves and reloads v14, reinstalls only the external production type facts,
+and executes the next frame. Across three seeds the resumed canonical AI rows, channel digest,
+transaction after-image, and complete strategy trace equal uninterrupted execution. A separate
+four-seed gate checks the first natural tick and exact per-seat stage map. No resource injection
+or build-completion shortcut participates in either gate.

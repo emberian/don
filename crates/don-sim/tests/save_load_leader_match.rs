@@ -92,11 +92,11 @@ fn a_commanded_match_round_trips_after_frame_zero_and_resaves_identically() {
     let before_digest = original.channel_digest();
     let before_players = original.players.clone();
     let before_setup = original.vic_leaders.setup_owner.applied().cloned();
-    let bytes = save_sim(&original).expect("v12 owns the configured mid-match pair");
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 12);
+    let bytes = save_sim(&original).expect("v14 owns the configured mid-match pair");
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 14);
     assert!(!section_range(&bytes, LEADER_MATCH).is_empty());
 
-    let loaded = load_sim(&bytes).expect("v12 leader/match state loads");
+    let loaded = load_sim(&bytes).expect("v14 leader/match state loads");
     assert_eq!(walked(&loaded), before_walk);
     assert_eq!(loaded.channel_digest(), before_digest);
     assert_eq!(loaded.players, before_players);

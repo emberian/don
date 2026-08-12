@@ -10,7 +10,10 @@
 //! remains refused.
 
 use crate::objects::Band;
-use crate::systems::{economy, leader_process_taunt, leaders, production};
+use crate::systems::{
+    economy, leader_process_taunt, leader_production_ai::strategy_runtime::CanonicalProductionAi,
+    leaders, production,
+};
 use crate::tick::{Sim, NUM_LEADERS};
 use crate::world::OBJ_FLAG_ACTIVE;
 
@@ -38,6 +41,21 @@ fn leader_has_only_mirrors(
         && actual.building_attrition_off == policy.building_attrition_disabled;
     let population_cap_is_empty = actual.pop_cap == fresh.pop_cap;
     let population_cap_is_synchronized = actual.pop_cap == policy.population_cap;
+    let canonical_ai = CanonicalProductionAi {
+        leader_flags2: policy.leader_flags2,
+        production_step: policy.production_step,
+        prod_script_run: policy.prod_script_run,
+        script_step: policy.script_step,
+        control: policy.control,
+        effective_pop: policy.effective_pop,
+    };
+    let ai_is_empty = actual.ai == fresh.ai;
+    let ai_is_synchronized = CanonicalProductionAi::capture(&actual.ai) == canonical_ai
+        && actual.ai.pers_arg == fresh.ai.pers_arg
+        && actual.ai.queued_units == fresh.ai.queued_units
+        && actual.ai.make_list_head == fresh.ai.make_list_head
+        && actual.ai.script_result == fresh.ai.script_result
+        && actual.ai.make_stuff_result == fresh.ai.make_stuff_result;
 
     let expected_flags = if sim.vic_leaders.setup_owner.is_configured(who) {
         fresh.flags | leaders::flag::IN_GAME | leaders::flag::PROCESS
@@ -58,6 +76,7 @@ fn leader_has_only_mirrors(
         && (population_cap_is_empty || population_cap_is_synchronized)
         && actual.pop_issues == fresh.pop_issues
         && actual.frame_counter_b == fresh.frame_counter_b
+        && (ai_is_empty || ai_is_synchronized)
         && actual.attrition == fresh.attrition
         && actual.anti_attrition.to_bits() == fresh.anti_attrition.to_bits()
         && actual.explored == fresh.explored

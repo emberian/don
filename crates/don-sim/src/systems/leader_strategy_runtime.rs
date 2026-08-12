@@ -15,7 +15,7 @@
 
 use crate::checksum::adler32;
 use crate::objects::{Band, ObjectRegistry};
-use crate::systems::leader_production_ai::{flags, flags2};
+use crate::systems::leader_production_ai::{flags, flags2, ProductionState};
 use crate::systems::leaders::{self, Leaders, StrategyInputs, StrategyTrace, NUM_LEADER_SLOTS};
 use crate::systems::production::runtime::{LiveProductionRuntime, LiveTypeClass};
 use crate::systems::production::BuildData;
@@ -26,9 +26,142 @@ pub const STRATEGY_ALL_VA: u32 = 0x006e_d430;
 pub const BUILD_BAND_BASE: usize = 2000;
 pub const SNAPSHOT_MAGIC: &[u8; 8] = b"DoNAI11\0";
 pub const SNAPSHOT_VERSION: u32 = 1;
+/// First DoNSave version that carries the five previously-unsaved production-AI scalars in
+/// each existing `LEADER_MATCH` Leader row. `leader_flags2` is already present in every row.
+pub const LEADER_MATCH_AI_FORMAT_VERSION: u32 = 14;
+/// Additional i32 values per Leader row at the v14 edge. `leader_flags2` is not duplicated.
+pub const LEADER_MATCH_AI_EXTENSION_VALUES: usize = 5;
+pub const LEADER_MATCH_AI_EXTENSION_BYTES: usize = LEADER_MATCH_AI_EXTENSION_VALUES * 4;
 const SNAPSHOT_VALUES_PER_LEADER: usize = 9;
 const SNAPSHOT_BYTES: usize = 8 + 4 + NUM_LEADER_SLOTS * SNAPSHOT_VALUES_PER_LEADER * 4;
 const OWNED_IMAGE_LEN: usize = 0x9e4;
+
+/// Canonical six-scalar `LeaderData` production-AI owner.
+///
+/// The first field is already owned and saved by `victory_score::LeaderState::leader_flags2`.
+/// The remaining five form the v14 `LEADER_MATCH` extension. Host answers on
+/// [`ProductionState`] (`queued_units`, MakeList head, script result, make-stuff result and
+/// personality argument) are intentionally not represented here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CanonicalProductionAi {
+    pub leader_flags2: i32,
+    pub production_step: i32,
+    pub prod_script_run: i32,
+    pub script_step: i32,
+    pub control: i32,
+    pub effective_pop: i32,
+}
+
+impl CanonicalProductionAi {
+    /// Capture only the six retail-owned scalars from the current execution view.
+    pub fn capture(view: &ProductionState) -> Self {
+        Self {
+            leader_flags2: view.flags2 as i32,
+            production_step: view.production_step,
+            prod_script_run: view.prod_script_run,
+            script_step: view.script_step,
+            control: view.control,
+            effective_pop: view.effective_pop,
+        }
+    }
+
+    /// Project the canonical owner into step 11 without disturbing external host answers.
+    pub fn project_into(self, view: &mut ProductionState) {
+        view.flags2 = self.leader_flags2 as u32;
+        view.production_step = self.production_step;
+        view.prod_script_run = self.prod_script_run;
+        view.script_step = self.script_step;
+        view.control = self.control;
+        view.effective_pop = self.effective_pop;
+    }
+
+    /// Values appended to each v14 `LEADER_MATCH` Leader row. The already-present
+    /// `leader_flags2` remains in its original position near the head of the row.
+    pub const fn extension_values(self) -> [i32; LEADER_MATCH_AI_EXTENSION_VALUES] {
+        [
+            self.production_step,
+            self.prod_script_run,
+            self.script_step,
+            self.control,
+            self.effective_pop,
+        ]
+    }
+
+    /// Rejoin the pre-existing `leader_flags2` field and the new v14 extension.
+    pub const fn from_extension_values(
+        leader_flags2: i32,
+        values: [i32; LEADER_MATCH_AI_EXTENSION_VALUES],
+    ) -> Self {
+        Self {
+            leader_flags2,
+            production_step: values[0],
+            prod_script_run: values[1],
+            script_step: values[2],
+            control: values[3],
+            effective_pop: values[4],
+        }
+    }
+
+    /// Standalone little-endian fixture for the exact v14 extension. The shared
+    /// `leader_match` writer can emit [`Self::extension_values`] through its own private
+    /// `Writer`; this helper pins the wire order without introducing another save chunk.
+    pub fn extension_bytes(self) -> [u8; LEADER_MATCH_AI_EXTENSION_BYTES] {
+        let mut out = [0; LEADER_MATCH_AI_EXTENSION_BYTES];
+        for (index, value) in self.extension_values().into_iter().enumerate() {
+            out[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn from_extension_bytes(
+        leader_flags2: i32,
+        bytes: &[u8],
+    ) -> Result<Self, CanonicalAiCodecError> {
+        if bytes.len() != LEADER_MATCH_AI_EXTENSION_BYTES {
+            return Err(CanonicalAiCodecError::Length {
+                expected: LEADER_MATCH_AI_EXTENSION_BYTES,
+                actual: bytes.len(),
+            });
+        }
+        let mut values = [0; LEADER_MATCH_AI_EXTENSION_VALUES];
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = i32::from_le_bytes(
+                bytes[index * 4..index * 4 + 4]
+                    .try_into()
+                    .expect("extension length checked"),
+            );
+        }
+        Ok(Self::from_extension_values(leader_flags2, values))
+    }
+
+    /// Decode policy for the shared save reader. v7..v13 rows have no extension and restore
+    /// the five fields to retail initialization zero while retaining their saved flags2.
+    pub fn for_save_version(
+        format_version: u32,
+        leader_flags2: i32,
+        extension: Option<[i32; LEADER_MATCH_AI_EXTENSION_VALUES]>,
+    ) -> Result<Self, CanonicalAiCodecError> {
+        if format_version < LEADER_MATCH_AI_FORMAT_VERSION {
+            if extension.is_some() {
+                return Err(CanonicalAiCodecError::UnexpectedLegacyExtension { format_version });
+            }
+            return Ok(Self {
+                leader_flags2,
+                ..Self::default()
+            });
+        }
+        let values =
+            extension.ok_or(CanonicalAiCodecError::MissingV14Extension { format_version })?;
+        Ok(Self::from_extension_values(leader_flags2, values))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanonicalAiCodecError {
+    Length { expected: usize, actual: usize },
+    UnexpectedLegacyExtension { format_version: u32 },
+    MissingV14Extension { format_version: u32 },
+}
 
 /// One admitted queued Unit row from an active production building.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

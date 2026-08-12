@@ -341,7 +341,10 @@ fn push_trade_suffix(out: &mut Vec<u8>, payload: TradeOrderPayload) {
 }
 
 fn require_v13(format_version: u32) -> Result<(), EconomyOrderAuthorityError> {
-    if format_version == DON_SAVE_V13 {
+    // v13 introduced this leaf layout. Later additive root formats retain it byte-for-byte;
+    // rejecting v14 here would make every existing Gather/Cast/Trade order unsaveable merely
+    // because an unrelated top-level section was appended.
+    if format_version >= DON_SAVE_V13 {
         Ok(())
     } else {
         Err(EconomyOrderAuthorityError::UnsupportedDoNSaveVersion(

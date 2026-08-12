@@ -354,14 +354,33 @@ fn malformed_or_missing_handles_are_not_normalized() {
 }
 
 #[test]
-fn codec_accepts_only_the_proven_v13_envelope() {
+fn codec_reuses_the_v13_envelope_in_v14_and_rejects_legacy_or_malformed_input() {
     let node = gather_node(0);
     assert_eq!(
         encode_v13_leaf(12, node),
         Err(EconomyOrderAuthorityError::UnsupportedDoNSaveVersion(12))
     );
+
+    let v13 = encode_v13_leaf(13, node).unwrap();
+    let v14 = encode_v13_leaf(14, node).unwrap();
+    assert_eq!(v14, v13);
     assert_eq!(
-        decode_v13_leaf(14, node.metric, node.header, &[2, 1]),
-        Err(EconomyOrderAuthorityError::UnsupportedDoNSaveVersion(14))
+        decode_v13_leaf(13, node.metric, node.header, &v13.typed_payload),
+        Ok(node)
     );
+    assert_eq!(
+        decode_v13_leaf(14, node.metric, node.header, &v14.typed_payload),
+        Ok(node)
+    );
+
+    let mut wrong_version = v14.typed_payload.clone();
+    wrong_version[1] = 2;
+    assert_eq!(
+        decode_v13_leaf(14, node.metric, node.header, &wrong_version),
+        Err(EconomyOrderAuthorityError::UnknownPayloadVersion {
+            tag: EconomyPayloadTag::Gather,
+            version: 2,
+        })
+    );
+    assert!(decode_v13_leaf(14, node.metric, node.header, &v14.typed_payload[..2]).is_err());
 }

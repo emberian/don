@@ -820,6 +820,13 @@ pub struct LeaderState {
     /// `+0x418` `lost_capital_timer`.
     pub lost_capital_timer: i32,
 
+    /// `+0x788` `production_step`, the persistent 12-stage production-AI cursor.
+    pub production_step: i32,
+    /// `+0x78C` `prod_script_run`, set once the production script has been entered.
+    pub prod_script_run: i32,
+    /// `+0x790` `script_step`, the persistent production-script cursor.
+    pub script_step: i32,
+
     /// `+0x7D8` `victory_type`.
     pub victory_type: i32,
     /// `+0x7DC` `defeat_type`.
@@ -846,6 +853,9 @@ pub struct LeaderState {
     /// swap is attempted.
     pub cities_lost: i32,
 
+    /// `+0x940` `control`, included in production AI's effective-population value.
+    pub control: i32,
+
     /// `+0x555E` `num_buildings[129]`, indexed by `TypeIndex - 414`.
     pub num_buildings: Vec<u16>,
     /// `+0x5762` `num_units[352]`, indexed by `TypeIndex - 50`.
@@ -860,6 +870,8 @@ pub struct LeaderState {
 
     /// `+0x9D8` `territory` — owned tiles; numerator of the territory score.
     pub territory: i32,
+    /// `+0x9E0` `effective_pop`, the most recent queued-units plus control result.
+    pub effective_pop: i32,
 
     pub economy: EncryptedEconomy,
 
@@ -911,6 +923,9 @@ impl Default for LeaderState {
             wonderwin_timer: 0,
             lost_capital_stamp: 0,
             lost_capital_timer: 0,
+            production_step: 0,
+            prod_script_run: 0,
+            script_step: 0,
             victory_type: 0,
             defeat_type: 0,
             population_cap: 0,
@@ -921,12 +936,14 @@ impl Default for LeaderState {
             building_attrition_disabled: 0,
             cities_captured: 0,
             cities_lost: 0,
+            control: 0,
             num_buildings: vec![0; NUM_BUILD_SLOTS],
             num_units: vec![0; NUM_UNIT_SLOTS],
             num_queued: vec![0; NUM_TYPES],
             tech_at_start: vec![0; NUM_TYPES.div_ceil(8)],
             rare: 0,
             territory: 0,
+            effective_pop: 0,
             economy: EncryptedEconomy::default(),
             has_tech: vec![false; NUM_TYPES],
             researching: [vec![false; NUM_TYPES], vec![false; NUM_TYPES]],
@@ -1018,6 +1035,9 @@ impl LeaderState {
             self.wonderwin_timer,
             self.lost_capital_stamp,
             self.lost_capital_timer,
+            self.production_step,
+            self.prod_script_run,
+            self.script_step,
             self.victory_type,
             self.defeat_type,
             self.population_cap,
@@ -1028,7 +1048,9 @@ impl LeaderState {
             self.building_attrition_disabled,
             self.cities_captured,
             self.cities_lost,
+            self.control,
             self.territory,
+            self.effective_pop,
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }
@@ -2570,21 +2592,47 @@ mod tests {
     }
 
     #[test]
-    fn attrition_policy_words_are_walked_in_leaderdata_order() {
+    fn production_ai_and_attrition_words_are_walked_in_leaderdata_order() {
         let mut leader = LeaderState::default();
+        leader.production_step = 0x0102_0304;
+        leader.prod_script_run = 0x1112_1314;
+        leader.script_step = 0x2122_2324;
+        leader.victory_type = 0x3132_3334;
         leader.give_attrition_disabled = 0x1122_3344;
         leader.take_attrition_disabled = 0x2132_4354;
         leader.neutral_attrition = 0x3142_5364;
         leader.building_attrition_disabled = 0x4152_6374;
         leader.cities_captured = 0x4556_6778;
         leader.cities_lost = 0x495A_6B7C;
+        leader.control = 0x4D5E_6F70;
         leader.territory = 0x5162_7384;
+        leader.effective_pop = 0x5566_7788;
 
         let mut walked = Vec::new();
         leader.walk_bytes(&mut walked);
-        // `ally_mask` at +0x6929 is the final currently-owned field, after these
-        // +0x7F8..+0x9D8 policy/territory words.
-        let tail = &walked[walked.len() - 29..walked.len() - 1];
+        // The three adjacent +0x788..+0x790 words precede `victory_type`. Seven compact
+        // words then separate that marker from the +0x7F8 attrition start.
+        let ally_mask = walked.len() - 1;
+        let attrition_start = ally_mask - 9 * 4;
+        let production_start = attrition_start - 7 * 4;
+        let mut production_expected = Vec::new();
+        for value in [
+            leader.production_step,
+            leader.prod_script_run,
+            leader.script_step,
+            leader.victory_type,
+        ] {
+            production_expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            &walked[production_start..production_start + production_expected.len()],
+            production_expected.as_slice()
+        );
+
+        // `ally_mask` at +0x6929 remains the final currently-owned field. The later
+        // canonical AI words retain their real PDB order around `territory`:
+        // control +0x940, territory +0x9D8, effective_pop +0x9E0.
+        let tail = &walked[attrition_start..ally_mask];
         let mut expected = Vec::new();
         for value in [
             leader.give_attrition_disabled,
@@ -2593,7 +2641,9 @@ mod tests {
             leader.building_attrition_disabled,
             leader.cities_captured,
             leader.cities_lost,
+            leader.control,
             leader.territory,
+            leader.effective_pop,
         ] {
             expected.extend_from_slice(&value.to_le_bytes());
         }

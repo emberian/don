@@ -40,8 +40,10 @@ op41 aggregate image and executes the complete op38 or op41 planner over clones,
 Missing or stale authority leaves resources, proposals, relations, vision, victory, armies, and
 objects unchanged. The shared Sim receiver must initially reject `ComeOut`, `KillContainedUnit`,
 `AddAirStrafeOrder`, `Victory`, and `ForceArmyProcess` unless their complete staged host has been
-mounted. Opcode 41 likewise remains fail-closed until each emitted `ConsiderTribute` and
-`NotifyDeal` call is acknowledged; even zero-valued goods emit the former in retail order.
+mounted. `ConsiderTribute` is now executed inside the prepared owner image, including its
+transposed positive-value tribute stamp and conditional gift stamp; even zero-valued goods emit
+the callback in retail order but take its complete no-op arm. `NotifyDeal` is now lowered to its
+complete local-only presentation envelope and does not pretend to mutate lockstep state.
 
 ## DoNSave v14 leaf
 
@@ -50,19 +52,23 @@ only proposal records, escrow, repeated-DOW count, and tribute sent/received. Re
 interaction rows, resources, shared vision, victory, armies, and objects remain in their existing
 sections. The codec rejects truncation, trailing data, slot drift, and payload-version drift.
 
-The coordinated shared change should make v14 require top-level chunk `0x000c`; a v13 stream with
-no such chunk restores constructor diplomacy state and retains its original bytes. This helper
-deliberately does not bump the shared format constant by itself so STRAFE/order authority and
-diplomacy can take one version edge.
+DoNSave v14 now requires top-level chunk `0x000c`; a v13 stream with no such chunk restores
+constructor diplomacy state and re-encodes byte-for-byte as v13. The same edge extends each
+existing `LEADER_MATCH` row by the five production-AI scalars not already saved beside
+`leader_flags2`. AIR, STRAFE, command-cache, metric, and economy order leaves retain their v13
+layout in v14; focused tests pin byte equality and malformed-v14 refusal.
 
-## Remaining surgical mount
+## Mounted and remaining boundary
 
-- export `canonical_diplomacy_host` and the already-landed `diplomacy_accept_host`;
-- add the small homeless retained state plus transient installed authority to `Sim`;
+- exported `canonical_diplomacy_host`, `diplomacy_accept_host`, and the two callback bodies;
+- added the small homeless retained state plus transient installed authority to `Sim`;
+- mounted v14 chunk `0x000c` and the coordinated production-AI Leader row extension;
+- retained exact v13 root/order bytes and v7-v13 load behavior;
 - project/fold all canonical owners and rebuild step-8 mirrors;
 - add a Bridge whole-body receipt for opcodes 38/41 without weakening the old boundary receipt;
-- add the v14 chunk and adjust step-8 save-view validation;
 - flip opcode closure rows only after real Bridge packets execute before and after save/load.
 
-Focused status: six tests pass, covering real op38/op41 packets, stale-owner and missing-authority
-rollback, complete retained-state round-trip, v13 absence semantics, and malformed-leaf rejection.
+Focused status: the callback/aggregate suites pass 12/12; the economy forward-compatibility suite
+passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 42 private
+save/load tests pass. Opcodes 38/41 deliberately remain command-table red until the live Sim/Bridge
+adapter can execute every reached external authority rather than acknowledging scalar stubs.

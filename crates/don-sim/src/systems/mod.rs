@@ -113,6 +113,11 @@ pub mod death_inctime;
 pub mod defeat_cleanup;
 /// Atomic opcode-38 declaration transaction over command, resource, relation, vision,
 /// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
+pub mod canonical_diplomacy_host;
+/// Full `Leader::action_respond(target, 1)` transaction reached by synchronized opcode 41.
+pub mod diplomacy_accept_host;
+/// Exact simulation/presentation split for the ordinary accepted-deal callbacks.
+pub mod diplomacy_deal_callbacks;
 pub mod diplomacy_declare_host;
 pub mod economy;
 /// Canonical fixed-`Groups` contract for economy/containment action transactions.

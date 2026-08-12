@@ -11,6 +11,8 @@ pub mod command {
 mod canonical_diplomacy_host;
 #[path = "../src/systems/diplomacy_accept_host.rs"]
 mod diplomacy_accept_host;
+#[path = "../src/systems/diplomacy_deal_callbacks.rs"]
+mod diplomacy_deal_callbacks;
 #[path = "../src/systems/diplomacy_declare_host.rs"]
 mod diplomacy_declare_host;
 #[path = "../src/systems/leader_set_diplo.rs"]
@@ -63,6 +65,7 @@ fn complete_facts() -> DiplomacyInstalledFacts {
         is_neutral: [Some(false); DIPLO_SLOTS],
         team_members_mode_one: [Some(1); DIPLO_SLOTS],
         num_allies: [Some(0); DIPLO_SLOTS],
+        tribute_econ: [[Some(4); NUM_GOODS]; DIPLO_SLOTS],
     }
 }
 
@@ -72,7 +75,8 @@ fn retail_opcode_38_projects_resources_relations_armies_objects_and_commits_once
     let before = owner.clone();
     let prepared =
         prepare_diplomacy_transaction(&owner, &complete_facts(), &RETAIL_DECLARE_2_5_WAR).unwrap();
-    assert!(prepared.required_authority.is_empty());
+    assert!(prepared.planned_authority.is_empty());
+    assert!(prepared.required_external_authority.is_empty());
     let canonical_diplomacy_host::PreparedDiplomacyPlan::Declare(plan) = &prepared.plan else {
         panic!("wrong plan")
     };
@@ -114,9 +118,9 @@ fn retail_opcode_41_rolls_back_all_owners_until_exact_authority_is_acknowledged(
         panic!("wrong plan")
     };
     assert_eq!(plan.outcome, AcceptOutcome::Accepted);
-    assert_eq!(prepared.required_authority.len(), NUM_GOODS * 2 + 2);
+    assert_eq!(prepared.planned_authority.len(), NUM_GOODS * 2 + 2);
     assert!(matches!(
-        prepared.required_authority[1],
+        prepared.planned_authority[1],
         CanonicalDiplomacyAuthority::Accept(AcceptAuthority::ConsiderTribute {
             receiver: 3,
             sender: 2,
@@ -125,7 +129,7 @@ fn retail_opcode_41_rolls_back_all_owners_until_exact_authority_is_acknowledged(
         })
     ));
     assert_eq!(
-        &prepared.required_authority[NUM_GOODS * 2..],
+        &prepared.planned_authority[NUM_GOODS * 2..],
         &[
             CanonicalDiplomacyAuthority::Accept(AcceptAuthority::NotifyDeal {
                 leader: 2,
@@ -139,17 +143,13 @@ fn retail_opcode_41_rolls_back_all_owners_until_exact_authority_is_acknowledged(
             }),
         ]
     );
+    // `consider_tribute` and `notify_deal` are now internal: no ordinary-accept simulation
+    // authority remains for this peace transaction.
+    assert!(prepared.required_external_authority.is_empty());
+    assert_eq!(prepared.consider_tribute.len(), NUM_GOODS * 2);
+    assert_eq!(prepared.notify_deal.len(), 1); // only local leader 2's body presents
 
-    assert_eq!(
-        commit_diplomacy_transaction(&mut owner, &prepared, &[]),
-        Err(CommitDiplomacyError::AuthorityMismatch)
-    );
-    assert_eq!(
-        owner, before,
-        "no resource/proposal/relation prefix escaped"
-    );
-
-    commit_diplomacy_transaction(&mut owner, &prepared, &prepared.required_authority).unwrap();
+    commit_diplomacy_transaction(&mut owner, &prepared, &[]).unwrap();
     assert_eq!(owner.setup.leaders[2].diplos[3], Relation::Peace as i32);
     assert_eq!(owner.setup.leaders[3].diplos[2], Relation::Peace as i32);
     assert_eq!(owner.resources[3][0], before.resources[3][0] + 25);
@@ -158,6 +158,8 @@ fn retail_opcode_41_rolls_back_all_owners_until_exact_authority_is_acknowledged(
     assert_eq!(owner.retained.leaders[3].received_scaled, 25);
     assert_eq!(owner.leader_diplomacy[2].peace_frames[3], 700);
     assert_eq!(owner.leader_diplomacy[3].peace_frames[2], 700);
+    assert_eq!(owner.leader_diplomacy[2].tribute_stamp[3], 700);
+    assert_eq!(owner.leader_diplomacy[3].gift_stamp[2], 700);
     assert_eq!(
         owner.retained.leaders[2].proposals[3],
         command::diplomacy_command_plans::DiplomacyProposal::default()

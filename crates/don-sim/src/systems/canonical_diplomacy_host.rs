@@ -20,6 +20,11 @@ use super::diplomacy_accept_host::{
     plan_accept, required_accept_authority, validate_accept_projection, AcceptAuthority,
     AcceptAuthorityImage, AcceptHostError, AcceptLeaderImage, AcceptPlan,
 };
+use super::diplomacy_deal_callbacks::{
+    plan_consider_tribute, plan_notify_deal, ConsiderTributePlan, ConsiderTributeRequest,
+    DealCallbackFacts, DealCallbackImage, DealCallbackLeaderState, NotifyDealEnvelope,
+    NotifyDealRequest,
+};
 use super::diplomacy_declare_host::{
     plan_declare, DeclarationStatistics, DeclareHostError, DeclarePlan, DeclareStep,
 };
@@ -98,6 +103,9 @@ pub struct CanonicalLeaderDiplomacyFields {
     pub peace_frames: [i32; DIPLO_SLOTS],
     pub attack_frames: [i32; DIPLO_SLOTS],
     pub attack_peers: [i32; DIPLO_SLOTS],
+    /// Existing `LeaderData+0x174/+0x194` rows; both are already in `LEADER_MATCH`.
+    pub tribute_stamp: [i32; DIPLO_SLOTS],
+    pub gift_stamp: [i32; DIPLO_SLOTS],
 }
 
 impl Default for CanonicalLeaderDiplomacyFields {
@@ -111,6 +119,8 @@ impl Default for CanonicalLeaderDiplomacyFields {
             peace_frames: [0; DIPLO_SLOTS],
             attack_frames: [0; DIPLO_SLOTS],
             attack_peers: [-1; DIPLO_SLOTS],
+            tribute_stamp: [0; DIPLO_SLOTS],
+            gift_stamp: [0; DIPLO_SLOTS],
         }
     }
 }
@@ -169,6 +179,8 @@ pub struct DiplomacyInstalledFacts {
     pub is_neutral: [Option<bool>; DIPLO_SLOTS],
     pub team_members_mode_one: [Option<i32>; DIPLO_SLOTS],
     pub num_allies: [Option<i32>; DIPLO_SLOTS],
+    /// PDB `LeaderData::econ[6]` at `+0x450`; AI bookkeeping flags, not resource buckets.
+    pub tribute_econ: [[Option<i32>; NUM_GOODS]; DIPLO_SLOTS],
 }
 
 impl Default for DiplomacyInstalledFacts {
@@ -184,6 +196,7 @@ impl Default for DiplomacyInstalledFacts {
             is_neutral: [None; DIPLO_SLOTS],
             team_members_mode_one: [None; DIPLO_SLOTS],
             num_allies: [None; DIPLO_SLOTS],
+            tribute_econ: [[None; NUM_GOODS]; DIPLO_SLOTS],
         }
     }
 }
@@ -316,6 +329,15 @@ pub enum CanonicalDiplomacyAuthority {
     Accept(AcceptAuthority),
 }
 
+/// Unowned simulation authorities that must still be completed by the Sim host.  The two deal
+/// callbacks are deliberately absent: this adapter now executes `consider_tribute` against its
+/// retained frame-stamp rows and lowers `notify_deal` into presentation envelopes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalDiplomacyAuthority {
+    Declare(SetDiploAuthority),
+    Accept(AcceptAuthority),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparedDiplomacyPlan {
     Declare(DeclarePlan),
@@ -328,8 +350,18 @@ pub struct PreparedDiplomacyTransaction {
     pub before_owner: DiplomacyOwnerImage,
     pub before_authority: AcceptAuthorityImage,
     pub after_authority: AcceptAuthorityImage,
+    /// Fully folded owner after internal `consider_tribute` callbacks. This is computed during
+    /// prepare so commit performs only stale-CAS validation and infallible replacement.
+    pub after_owner: DiplomacyOwnerImage,
     pub plan: PreparedDiplomacyPlan,
-    pub required_authority: Vec<CanonicalDiplomacyAuthority>,
+    /// Complete planner call sequence, retained for source-order validation and diagnostics.
+    pub planned_authority: Vec<CanonicalDiplomacyAuthority>,
+    /// Only calls which still require a separate simulation owner.
+    pub required_external_authority: Vec<ExternalDiplomacyAuthority>,
+    /// Complete plans for each reached `consider_tribute`, including zero-valued early returns.
+    pub consider_tribute: Vec<ConsiderTributePlan>,
+    /// Local-only presentation selected by reached `notify_deal` calls.
+    pub notify_deal: Vec<NotifyDealEnvelope>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -338,6 +370,113 @@ pub enum PrepareDiplomacyError {
     Projection(AcceptHostError),
     Declare(DeclareHostError),
     Accept(AcceptHostError),
+    DealCallback(super::diplomacy_deal_callbacks::DealCallbackError),
+}
+
+fn callback_image(owner: &DiplomacyOwnerImage) -> DealCallbackImage {
+    DealCallbackImage {
+        leaders: std::array::from_fn(|who| DealCallbackLeaderState {
+            tribute_stamp: owner.leader_diplomacy[who].tribute_stamp,
+            gift_stamp: owner.leader_diplomacy[who].gift_stamp,
+        }),
+        frame: owner.setup.frame,
+        local_who: owner.local_who,
+    }
+}
+
+fn callback_facts(
+    owner: &DiplomacyOwnerImage,
+    after_authority: &AcceptAuthorityImage,
+    facts: &DiplomacyInstalledFacts,
+) -> DealCallbackFacts {
+    DealCallbackFacts {
+        // Both fields already belong to the canonical Leader projection. `+0x20c` is the same
+        // PDB `blacken` scalar opcode 38 increments; treating either as an installed answer would
+        // permit the callback decision to diverge from the transaction's own snapshot.
+        receiver_flag_four: std::array::from_fn(|who| {
+            Some(owner.setup.leaders[who].leader_flags & 4 != 0)
+        }),
+        sender_blacken: std::array::from_fn(|who| {
+            Some(owner.retained.leaders[who].repeated_targets)
+        }),
+        // `consider_tribute` runs after each receiver credit in the accepted-resource loop. The
+        // completed resource planner's bucket is the exact value visible at callback time for
+        // the same good because later goods cannot modify it.
+        receiver_resources: std::array::from_fn(|who| {
+            std::array::from_fn(|good| Some(after_authority.resources.leaders[who].buckets[good]))
+        }),
+        receiver_econ: facts.tribute_econ,
+    }
+}
+
+fn execute_deal_callbacks(
+    owner: &DiplomacyOwnerImage,
+    facts: &DiplomacyInstalledFacts,
+    after_authority: &AcceptAuthorityImage,
+    authority: &[CanonicalDiplomacyAuthority],
+) -> Result<
+    (
+        DealCallbackImage,
+        Vec<ConsiderTributePlan>,
+        Vec<NotifyDealEnvelope>,
+        Vec<ExternalDiplomacyAuthority>,
+    ),
+    PrepareDiplomacyError,
+> {
+    let mut image = callback_image(owner);
+    let callback_facts = callback_facts(owner, after_authority, facts);
+    let mut consider = Vec::new();
+    let mut notify = Vec::new();
+    let mut external = Vec::new();
+    for call in authority {
+        match call {
+            CanonicalDiplomacyAuthority::Accept(AcceptAuthority::ConsiderTribute {
+                receiver,
+                sender,
+                good,
+                raw,
+            }) => {
+                let plan = plan_consider_tribute(
+                    &image,
+                    &callback_facts,
+                    ConsiderTributeRequest {
+                        receiver: *receiver,
+                        sender: *sender,
+                        raw: *raw,
+                        good: *good,
+                    },
+                )
+                .map_err(PrepareDiplomacyError::DealCallback)?;
+                image = plan.after.clone();
+                consider.push(plan);
+            }
+            CanonicalDiplomacyAuthority::Accept(AcceptAuthority::NotifyDeal {
+                leader,
+                other,
+                treaty,
+            }) => {
+                if let Some(envelope) = plan_notify_deal(
+                    &image,
+                    NotifyDealRequest {
+                        leader: *leader,
+                        other: *other,
+                        treaty: *treaty,
+                    },
+                )
+                .map_err(PrepareDiplomacyError::DealCallback)?
+                {
+                    notify.push(envelope);
+                }
+            }
+            CanonicalDiplomacyAuthority::Declare(call) => {
+                external.push(ExternalDiplomacyAuthority::Declare(*call));
+            }
+            CanonicalDiplomacyAuthority::Accept(call) => {
+                external.push(ExternalDiplomacyAuthority::Accept(*call));
+            }
+        }
+    }
+    Ok((image, consider, notify, external))
 }
 
 /// Prepare either complete transaction from the real fixed-wire command body.
@@ -351,7 +490,7 @@ pub fn prepare_diplomacy_transaction(
         Some(DECLARE_OPCODE) => {
             let plan =
                 plan_declare(&before.declaration, wire).map_err(PrepareDiplomacyError::Declare)?;
-            let authority = declare_authority(&plan)
+            let authority: Vec<CanonicalDiplomacyAuthority> = declare_authority(&plan)
                 .into_iter()
                 .map(CanonicalDiplomacyAuthority::Declare)
                 .collect();
@@ -360,23 +499,36 @@ pub fn prepare_diplomacy_transaction(
         }
         Some(ACCEPT_OPCODE) => {
             let plan = plan_accept(&before, wire).map_err(PrepareDiplomacyError::Accept)?;
-            let authority = required_accept_authority(&plan.steps)
-                .into_iter()
-                .map(CanonicalDiplomacyAuthority::Accept)
-                .collect();
+            let authority: Vec<CanonicalDiplomacyAuthority> =
+                required_accept_authority(&plan.steps)
+                    .into_iter()
+                    .map(CanonicalDiplomacyAuthority::Accept)
+                    .collect();
             let after = plan.after.clone();
             (PreparedDiplomacyPlan::Accept(plan), after, authority)
         }
         opcode => return Err(PrepareDiplomacyError::UnsupportedOpcode(opcode)),
     };
     validate_accept_projection(&after).map_err(PrepareDiplomacyError::Projection)?;
+    let (callback_after, consider_tribute, notify_deal, required_external_authority) =
+        execute_deal_callbacks(owner, facts, &after, &authority)?;
+    let mut after_owner = owner.clone();
+    fold_after(&mut after_owner, &after);
+    for who in 0..DIPLO_SLOTS {
+        after_owner.leader_diplomacy[who].tribute_stamp = callback_after.leaders[who].tribute_stamp;
+        after_owner.leader_diplomacy[who].gift_stamp = callback_after.leaders[who].gift_stamp;
+    }
     Ok(PreparedDiplomacyTransaction {
         wire: wire.to_vec(),
         before_owner: owner.clone(),
         before_authority: before,
         after_authority: after,
+        after_owner,
         plan,
-        required_authority: authority,
+        planned_authority: authority,
+        required_external_authority,
+        consider_tribute,
+        notify_deal,
     })
 }
 
@@ -412,6 +564,8 @@ fn fold_after(owner: &mut DiplomacyOwnerImage, image: &AcceptAuthorityImage) {
             peace_frames: image.leaders[who].peace_frames,
             attack_frames: image.leaders[who].attack_frames,
             attack_peers: image.leaders[who].attack_peers,
+            tribute_stamp: owner.leader_diplomacy[who].tribute_stamp,
+            gift_stamp: owner.leader_diplomacy[who].gift_stamp,
         };
     }
 }
@@ -420,19 +574,17 @@ fn fold_after(owner: &mut DiplomacyOwnerImage, image: &AcceptAuthorityImage) {
 pub fn commit_diplomacy_transaction(
     current: &mut DiplomacyOwnerImage,
     prepared: &PreparedDiplomacyTransaction,
-    completed_authority: &[CanonicalDiplomacyAuthority],
+    completed_authority: &[ExternalDiplomacyAuthority],
 ) -> Result<(), CommitDiplomacyError> {
     if current != &prepared.before_owner {
         return Err(CommitDiplomacyError::StaleOwner);
     }
-    if completed_authority != prepared.required_authority {
+    if completed_authority != prepared.required_external_authority {
         return Err(CommitDiplomacyError::AuthorityMismatch);
     }
     validate_accept_projection(&prepared.after_authority)
         .map_err(CommitDiplomacyError::InvalidAfter)?;
-    let mut after_owner = current.clone();
-    fold_after(&mut after_owner, &prepared.after_authority);
-    *current = after_owner;
+    *current = prepared.after_owner.clone();
     Ok(())
 }
 
@@ -548,8 +700,10 @@ pub fn decode_diplomacy_for_save(
     payload: Option<&[u8]>,
 ) -> Result<DiplomacyPersistentState, DiplomacyCodecError> {
     match (save_format, payload) {
-        (PRE_DIPLOMACY_SAVE_FORMAT_VERSION, None) => Ok(DiplomacyPersistentState::default()),
-        (PRE_DIPLOMACY_SAVE_FORMAT_VERSION, Some(_)) => {
+        (version, None) if version <= PRE_DIPLOMACY_SAVE_FORMAT_VERSION => {
+            Ok(DiplomacyPersistentState::default())
+        }
+        (version, Some(_)) if version <= PRE_DIPLOMACY_SAVE_FORMAT_VERSION => {
             Err(DiplomacyCodecError::UnexpectedForLegacyFormat)
         }
         (DIPLOMACY_SAVE_FORMAT_VERSION, Some(bytes)) => decode_diplomacy_payload(bytes),
