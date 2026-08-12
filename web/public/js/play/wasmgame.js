@@ -49,7 +49,7 @@ export const CORE_CAP = Object.freeze({
 const PACKAGE_RECEIPT_HEADER_WORDS = 11;
 const PACKAGE_RECEIPT_UNIT_WORDS = 5;
 
-/** Decode and validate a copied source-ABI receipt. This does not advertise artifact support. */
+/** Decode and validate a copied source-ABI receipt. */
 export function decodeCanonicalPackageReceipt(input, expected = {}) {
   const words = Array.from(input, (word) => word | 0);
   if (words.length < PACKAGE_RECEIPT_HEADER_WORDS) {
@@ -475,6 +475,13 @@ export class GameModule {
     }
   }
 
+  /** Runtime prerequisite check; capability publication remains a separate evidenced step. */
+  canonicalPackageReady() {
+    try { this._requireCanonicalPackageSourceAbi(); }
+    catch { return false; }
+    return !!this.g && this.hasGameData;
+  }
+
   /** Capture a one-shot, generation-safe owner-local identity from a renderer lookup id. */
   commandIdentity(rendererId) {
     this._requireCanonicalPackageSourceAbi();
@@ -502,6 +509,9 @@ export class GameModule {
    */
   processCanonicalCommandPackage(play, lockstepSerial, rendererId, input) {
     this._requireCanonicalPackageSourceAbi();
+    if (!this.hasGameData) {
+      throw new Error('canonical command package authority requires installed DONPACK4 game data');
+    }
     if (!this.g || !Number.isInteger(play) || play < 0 || play >= this.playerCount ||
         !Number.isInteger(lockstepSerial) || lockstepSerial < -0x8000_0000 ||
         lockstepSerial > 0x7fff_ffff) {

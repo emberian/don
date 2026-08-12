@@ -13,6 +13,10 @@ import { GameModule, RES_NAMES, GAP_NAMES, COMMANDS, OP, TAG } from './wasmgame.
 import { makeRenderer } from './gfx.js';
 import { REPLAY_EVIDENCE } from './readiness.gen.js';
 import { decode, encode } from '../wire.gen.js';
+import {
+  decodeCanonicalCommandPackage,
+  encodeCanonicalSingletonGroupMove,
+} from './canonical-command-package.mjs';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -1309,6 +1313,7 @@ function initializeSessionPanel() {
 
 const LOCAL_MATCH_PROTOCOL = 'don.local-match-handoff.v1';
 const LOCAL_MATCH_TURN_RELAY = 'canonical-halt-v1';
+const LOCAL_MATCH_GROUP_MOVE_RELAY = 'canonical-group-move-v1';
 const HALT_COMMAND_HEX = '0c';
 
 async function localMatchRequest(path, method = 'GET', body = null) {
@@ -1352,6 +1357,58 @@ function localMatchPublicSnapshot() {
       }) : null,
     }) : null,
     lastConfirmed: local.lastConfirmed ? Object.freeze({ ...local.lastConfirmed }) : null,
+    lastReceipts: Object.freeze(local.lastReceipts.map((receipt) => Object.freeze({
+      ...receipt,
+      selected: Object.freeze(receipt.selected.map((identity) => Object.freeze({ ...identity }))),
+    }))),
+  });
+}
+
+function groupMoveRelaySelected() {
+  return LOCAL_MATCH_TURN_RELAY === LOCAL_MATCH_GROUP_MOVE_RELAY;
+}
+
+function canonicalRendererIdentity(who, ownerLocal = null) {
+  if (!state.mod.canonicalPackageReady()) {
+    throw new Error('canonical Group→Move requires the evidenced Wasm source ABI and DONPACK4');
+  }
+  const views = state.mod.views();
+  for (let row = 0; row < state.mod.live; row++) {
+    const tag = views.tag[row] >>> 0;
+    if ((tag & TAG.occupied) === 0 || (tag & 0xf) !== who || (tag & TAG.building) !== 0) continue;
+    const rendererId = state.mod.idAtRow(row);
+    try {
+      const identity = state.mod.commandIdentity(rendererId);
+      if (identity.who === who && (ownerLocal === null || identity.o === ownerLocal)) {
+        return Object.freeze({ rendererId, identity, info: state.mod.info(rendererId) });
+      }
+    } catch { /* a non-Unit renderer row is not a command identity */ }
+  }
+  throw new Error(`no live authoritative land Unit identity exists for P${who}`);
+}
+
+function canonicalLocalGroupMove(play) {
+  const selected = canonicalRendererIdentity(play);
+  if (!selected.info) throw new Error(`P${play} command Unit disappeared before package construction`);
+  const direction = play % 2 === 0 ? 1 : -1;
+  const margin = state.mod.subtile * 2;
+  const x = clamp(selected.info.x + direction * state.mod.subtile * 8, margin, state.mod.span - margin);
+  const y = clamp(selected.info.y + state.mod.subtile * 4, margin, state.mod.span - margin);
+  return encodeCanonicalSingletonGroupMove(selected.identity, x, y);
+}
+
+function receiptEvidence(receipt) {
+  return Object.freeze({
+    play: receipt.play,
+    lockstepSerial: receipt.lockstepSerial,
+    opcode: receipt.opcode,
+    who: receipt.who,
+    commandBytes: receipt.commandBytes,
+    commandStateRevision: `0x${receipt.commandStateRevision.toString(16).padStart(16, '0')}`,
+    groupsChecksum: receipt.groupsChecksum >>> 0,
+    randomStateBefore: receipt.randomStateBefore >>> 0,
+    randomStateAfter: receipt.randomStateAfter >>> 0,
+    selected: receipt.selected.map((identity) => ({ ...identity })),
   });
 }
 
@@ -1368,8 +1425,9 @@ function renderLocalMatchPanel() {
   const turnOpen = local.phase === 'started' && local.applied && local.turn?.phase === 'waiting' &&
     local.turn.stamp === state.mod.frame && !local.turn.submitted[local.seat];
   $('local-match-turn').disabled = !turnOpen;
+  const turnKind = groupMoveRelaySelected() ? 'Group→Move' : 'Halt';
   $('local-match-turn').textContent = local.turn
-    ? `submit Halt turn ${local.turn.stamp}` : 'submit next Halt turn';
+    ? `submit ${turnKind} turn ${local.turn.stamp}` : `submit next ${turnKind} turn`;
   $('local-match-leave').disabled = !joined || local.phase === 'starting';
   $('session-new').disabled = local.pauseLocked;
   $('session-activate').disabled = local.pauseLocked;
@@ -1394,7 +1452,8 @@ function renderLocalMatchPanel() {
     const turnStatus = local.turn?.phase === 'waiting'
       ? `turn ${local.turn.stamp} waiting for both seats`
       : local.turn?.phase === 'agreeing'
-        ? `Halt turn ${local.turn.stamp} converging through native TurnPackage relay…`
+        ? `${groupMoveRelaySelected() ? 'Group→Move' : 'Halt'} turn ${local.turn.stamp} ` +
+          'converging through native TurnPackage relay…'
         : `turn ${local.turn?.stamp ?? '?'} agreed · applying and checking browser state…`;
     status = `MatchStart confirmed · epoch ${local.handoff.epoch} · ` +
       `${formatSeed(local.handoff.seed)} · paused frame ${state.mod.frame} · ${turnStatus}`;
@@ -1459,11 +1518,16 @@ async function readyLocalTurn() {
     throw new Error('no applied local MatchStart is ready for a turn');
   }
   if (!local.turn || local.turn.phase !== 'waiting' || local.turn.stamp !== state.mod.frame) {
-    throw new Error('the next HaltCommand turn barrier is not open at this frame');
+    throw new Error('the next canonical command turn barrier is not open at this frame');
   }
-  const command = encode(OP.HALT, {});
-  if (command.length !== 1 || command[0] !== OP.HALT || bytesToHex(command) !== HALT_COMMAND_HEX) {
-    throw new Error('generated codec did not reconstruct canonical one-byte HaltCommand 0x0c');
+  let command;
+  if (groupMoveRelaySelected()) {
+    command = canonicalLocalGroupMove(local.seat).bytes;
+  } else {
+    command = encode(OP.HALT, {});
+    if (command.length !== 1 || command[0] !== OP.HALT || bytesToHex(command) !== HALT_COMMAND_HEX) {
+      throw new Error('generated codec did not reconstruct canonical one-byte HaltCommand 0x0c');
+    }
   }
   const result = await localMatchRequest(
     `/api/local-match/lobbies/${local.code}/turn`, 'POST', {
@@ -1492,14 +1556,23 @@ function validateAgreedLocalTurn(turn) {
       throw new Error('native turn relay exposed a misordered browser command package');
     }
     const bytes = hexToBytes(package_.payload);
-    const decoded = decode(bytes);
-    const reconstructed = decoded.op === OP.HALT ? encode(OP.HALT, {}) : null;
-    if (!reconstructed || bytes.length !== COMMANDS[OP.HALT].size ||
-        bytesToHex(bytes) !== HALT_COMMAND_HEX ||
-        bytesToHex(reconstructed) !== package_.payload) {
-      throw new Error('native turn relay exposed a noncanonical HaltCommand payload');
-    }
-    packets.push({ play, bytes });
+    const decoded = decodeCanonicalCommandPackage(bytes);
+    if (decoded.kind === 'halt') {
+      const reconstructed = encode(OP.HALT, {});
+      if (bytes.length !== COMMANDS[OP.HALT].size || bytesToHex(bytes) !== HALT_COMMAND_HEX ||
+          bytesToHex(reconstructed) !== package_.payload) {
+        throw new Error('native turn relay exposed a noncanonical HaltCommand payload');
+      }
+    } else {
+      if (decoded.who !== play) {
+        throw new Error(`native Group→Move package P${play} carries owner P${decoded.who}`);
+      }
+      const reconstructed = encodeCanonicalSingletonGroupMove(
+        { who: decoded.who, o: decoded.o, uid: 0 }, decoded.x, decoded.y);
+      if (reconstructed.hex !== package_.payload) {
+        throw new Error('native turn relay exposed a noncanonical Group→Move payload');
+      }
+    packets.push({ play, bytes, decoded, lockstepSerial });
   }
   return packets;
 }
@@ -1517,17 +1590,23 @@ async function maybeApplyLocalTurn() {
         throw new Error(`paused Sim frame ${state.mod.frame} does not match agreed turn ${turn.stamp}`);
       }
       local.applyingPackages = true;
+      const receipts = [];
       try {
         for (const packet of packets) {
-          if (!state.mod.submit(packet.play, packet.bytes)) {
+          if (packet.decoded.kind === 'group-move-singleton') {
+            const selected = canonicalRendererIdentity(packet.play, packet.decoded.o);
+            receipts.push(receiptEvidence(state.mod.processCanonicalCommandPackage(
+              packet.play, packet.lockstepSerial, selected.rendererId, packet.bytes)));
+          } else if (!state.mod.submit(packet.play, packet.bytes)) {
             throw new Error(`Wasm command gate refused agreed P${packet.play} HaltCommand`);
           }
         }
       } finally {
         local.applyingPackages = false;
       }
+      local.lastReceipts = receipts;
       if (!advanceSimulationFrame(true)) {
-        throw new Error(`paused Sim refused agreed Halt turn ${turn.stamp}`);
+        throw new Error(`paused Sim refused agreed canonical turn ${turn.stamp}`);
       }
       local.lastAppliedStamp = turn.stamp;
       local.pendingAck = {
@@ -1600,6 +1679,7 @@ async function leaveLocalMatch() {
     turn: null, lastConfirmed: null, lastAppliedStamp: -1,
     applyingTurn: false, pendingAck: null,
     applyingPackages: false,
+    lastReceipts: [],
   });
   if (resetWorld) {
     if (!state.mod.restart(seed)) throw new Error('could not leave the local MatchStart world');
@@ -1645,6 +1725,7 @@ function applyLocalMatchHandoff(handoff) {
   local.pauseLocked = true;
   local.lastAppliedStamp = -1;
   local.pendingAck = null;
+  local.lastReceipts = [];
   setPaused(true, false);
   syncSessionUrl();
   renderSessionStatus();

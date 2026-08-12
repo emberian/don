@@ -19,6 +19,7 @@ function fakeModule() {
     memory,
     game_cmd_capacity: () => 16 * 1024,
     game_cmd_ptr: () => COMMAND_PTR,
+    game_has_gamedata: () => 1,
     game_object_command_identity: (_game, rendererId) => {
       captures++;
       assert.equal(rendererId >>> 0, 0x710000);
@@ -94,4 +95,13 @@ test('unpublished artifact and invalid wrapper inputs fail before staging', () =
     () => game.processCanonicalCommandPackage(4, 41, 0x710000, expectedBytes),
     /in-range play/);
   assert.deepEqual(counts(), { captures: 0, processes: 0 });
+
+  const missingData = fakeModule();
+  missingData.game.x.game_has_gamedata = () => 0;
+  assert.equal(missingData.game.canonicalPackageReady(), false);
+  assert.throws(
+    () => missingData.game.processCanonicalCommandPackage(
+      3, 41, 0x710000, missingData.expectedBytes),
+    /DONPACK4/);
+  assert.deepEqual(missingData.counts(), { captures: 0, processes: 0 });
 });
