@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Production Bridge/Sim mount for the authority-complete opcode-38 cohort.
+//! Production Bridge/Sim mount for authority-complete opcode-38 and opcode-41 transactions.
 //!
-//! The whole declaration body is prepared by [`super::canonical_diplomacy_host`]. This
+//! The whole declaration/acceptance body is prepared by [`super::canonical_diplomacy_host`]. This
 //! adapter projects its detached image from the existing Sim owners, refuses any transaction
 //! which reaches an external object/army/victory authority, and publishes the remaining
-//! declaration in one assignment-only fold. It deliberately does not admit opcode 41.
+//! declaration or acceptance in one assignment-only fold. Any transaction which reaches an
+//! authority outside this aggregate remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
     commit_diplomacy_transaction, prepare_diplomacy_transaction, CanonicalLeaderDiplomacyFields,
@@ -13,7 +14,10 @@ use super::canonical_diplomacy_host::{
 };
 use super::leader_process_taunt;
 use super::sparse_object_bands_authority_frontier::RetailBand;
-use crate::command::{diplomacy_command_plans::DECLARE_OPCODE, Bridge, Fleet, Package, WireError};
+use crate::command::{
+    diplomacy_command_plans::{ACCEPT_OPCODE, DECLARE_OPCODE},
+    Bridge, Fleet, Package, WireError,
+};
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::{Sim, NUM_LEADERS};
 
@@ -286,7 +290,10 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
         request: CanonicalDiplomacyRequest,
     ) -> CanonicalDiplomacyReceipt {
         let result = (|| {
-            if request.wire.first().copied() != Some(DECLARE_OPCODE) {
+            if !matches!(
+                request.wire.first().copied(),
+                Some(DECLARE_OPCODE | ACCEPT_OPCODE)
+            ) {
                 return Err(CanonicalDiplomacyRuntimeError::UnsupportedOpcode(
                     request.wire.first().copied(),
                 ));
@@ -337,15 +344,15 @@ impl Sim {
         self.diplomacy_authority = authority;
     }
 
-    /// Execute one real opcode-38 command through `Bridge::process_all` and the canonical Sim
-    /// owner. Opcode 41 remains outside this production mount.
+    /// Execute one real opcode-38 or opcode-41 command through `Bridge::process_all` and the
+    /// canonical Sim owner. Reached object/army/victory authority remains fail-closed.
     pub fn process_diplomacy_package(
         &mut self,
         play: i32,
         package_stamp: u32,
         bytes: &[u8],
     ) -> Result<CanonicalDiplomacyReceipt, CanonicalDiplomacyRuntimeError> {
-        if bytes.first().copied() != Some(DECLARE_OPCODE) {
+        if !matches!(bytes.first().copied(), Some(DECLARE_OPCODE | ACCEPT_OPCODE)) {
             return Err(CanonicalDiplomacyRuntimeError::UnsupportedOpcode(
                 bytes.first().copied(),
             ));

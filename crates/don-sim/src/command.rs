@@ -1521,8 +1521,8 @@ pub trait Fleet {
         DiplomacyCommandReceipt::unavailable(request)
     }
 
-    /// Whole-body opcode-38 boundary over the canonical Sim owners. The default host has no
-    /// such owner and remains unavailable; opcode 41 deliberately does not enter this edge.
+    /// Whole-body opcode-38/opcode-41 boundary over the canonical Sim owners. The default host
+    /// has no such owner and remains unavailable.
     fn apply_canonical_diplomacy_transaction(
         &mut self,
         request: CanonicalDiplomacyRequest,
@@ -4502,7 +4502,7 @@ impl Bridge {
     /// receipt validator rejects every planner boundary, so incomplete declaration and
     /// acceptance branches cannot partially mutate state here.
     fn process_diplomacy(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
-        if cmd.first().copied() == Some(38) {
+        if matches!(cmd.first().copied(), Some(38 | 41)) {
             let request = CanonicalDiplomacyRequest {
                 frame: self.frame,
                 package_stamp: pkg.stamp,
