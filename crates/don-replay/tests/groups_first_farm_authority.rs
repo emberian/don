@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
     bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
-    produce_first_farm_first_placement, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
-    FirstFarmBuilderBindingError, FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError,
-    FirstFarmFirstInitUnitSource, FirstFarmFirstPlacementError, FirstFarmFrame79Authority,
+    produce_first_farm_first_placement, produce_first_farm_first_scout_guy_prefix,
+    FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FirstFarmBuilderBindingError,
+    FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError, FirstFarmFirstInitUnitSource,
+    FirstFarmFirstPlacementError, FirstFarmFirstScoutGuyError, FirstFarmFrame79Authority,
     FirstFarmFrame79Source, FirstFarmSetupEntryAuthority, FirstFarmSetupEntrySource, FIRST_FRAME,
     FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
 };
@@ -24,10 +25,14 @@ use don_replay::setup_units_producer::{
 use don_replay::{
     build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest},
     setup_cities_builds::CITY_CENTER_TYPE,
-    setup_place_unit_deep_re::{PlaceUnitExternalResidual, ProbeDisposition},
+    setup_place_unit_deep_re::{
+        GuyGraphicsInitReceipt, GuyInitPredicateFacts, PlaceUnitExternalResidual, ProbeDisposition,
+        UnitGuyInitError,
+    },
 };
 use don_sim::rng::Random;
 use don_sim::systems::{
+    graphics_turret::{ExtractedGuyGraphics, GraphicsProvenance},
     map_terrain::land,
     objects_init_unit_authority_frontier::{
         BhsInitUnitRequest, CaptainFacts, CompleteBody, DetailedInitUnitReceipt,
@@ -36,6 +41,7 @@ use don_sim::systems::{
         UnitBandStorageClass, UnitInitReceipt, UnitTypeAuthorityFacts,
     },
     production,
+    unit_inctime::{SUPPORTED_RETAIL_EXE_SHA256, SUPPORTED_UNIT_GRAPHICS_SHA256},
 };
 use don_sim::tick::Sim;
 use don_sim::world::Handle;
@@ -66,6 +72,8 @@ fn type_facts(base: i32) -> TypeResolutionFacts {
 }
 
 fn first_farm_plan() -> BuildUnitsPlan {
+    let mut scout = type_facts(69);
+    scout.crew_size = 1;
     build_units_plan(BuildUnitsInputs {
         owner: i32::from(FIRST_OWNER),
         start_index: 0,
@@ -78,7 +86,7 @@ fn first_farm_plan() -> BuildUnitsPlan {
         bonuses: StartingUnitBonuses::default(),
         rules: StartingUnitRuleFacts::default(),
         types: StartingUnitTypeFacts {
-            scout: type_facts(69),
+            scout,
             citizen: type_facts(50),
             dutch_merchant: type_facts(DUTCH_MERCHANT_TYPE),
         },
@@ -87,6 +95,7 @@ fn first_farm_plan() -> BuildUnitsPlan {
 }
 
 fn member(call: PlaceUnitCall, handle: Handle, o: i32) -> UnitMemberAuthorityReceipt {
+    let guy_count = call.squad_size + call.crew_size;
     UnitMemberAuthorityReceipt {
         identity: StableUnitIdentityReceipt {
             id: handle.id,
@@ -104,18 +113,20 @@ fn member(call: PlaceUnitCall, handle: Handle, o: i32) -> UnitMemberAuthorityRec
         },
         order_count: 0,
         guys: EngineContainerShapeReceipt {
-            length: 1,
-            capacity: 1,
+            length: guy_count,
+            capacity: guy_count,
             increment: 1,
             flags: 0,
         },
-        guy_mark: 1,
-        guy_identities: vec![GuyIdentityReceipt {
-            slot: 0,
-            who: FIRST_OWNER as i8,
-            o: o as i16,
-            guy_num: 0,
-        }],
+        guy_mark: call.squad_size as i8,
+        guy_identities: (0..guy_count)
+            .map(|slot| GuyIdentityReceipt {
+                slot,
+                who: FIRST_OWNER as i8,
+                o: o as i16,
+                guy_num: slot as i8,
+            })
+            .collect(),
         units_authority_key: (handle.id, handle.generation),
         guys_authority_key: (handle.id, handle.generation),
     }
@@ -134,7 +145,7 @@ fn synthetic_frame79_setup() -> (BuildUnitsPlan, BuildUnitsPrefixReceipt, Sim) {
                 call.place_unit_upgrade,
                 21_600 + ordinal as i32 * 32,
                 64_608,
-                1,
+                (call.squad_size + call.crew_size) as i8,
             )
             .unwrap()
         })
@@ -363,10 +374,13 @@ fn synthetic_first_scout_init(
             request.type_index,
             request.x,
             request.y,
-            1,
+            2,
         )
         .unwrap();
-    let rng_after = placement.placement.rng_after_probes.wrapping_add(0x404);
+    let mut init_rng = Random::new(placement.placement.rng_after_probes);
+    init_rng.get(0, 0xffff);
+    init_rng.get(0, 0xffff);
+    let rng_after = init_rng.state();
     after.world.random.reseed(rng_after);
     let detailed = first_scout_detailed_receipt(request, &after);
     let authority = FirstFarmFirstInitUnitAuthority {
@@ -377,6 +391,43 @@ fn synthetic_first_scout_init(
         rng_after,
     };
     (before, placement_authority, detailed, after, authority)
+}
+
+fn synthetic_first_scout_graphics(slot: i8) -> GuyGraphicsInitReceipt {
+    GuyGraphicsInitReceipt {
+        provenance: GraphicsProvenance {
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            installed_unit_graphics_sha256: SUPPORTED_UNIT_GRAPHICS_SHA256,
+            coherent_capture: true,
+        },
+        extracted: ExtractedGuyGraphics {
+            guy_num: slot,
+            gpiece: 100 + i32::from(slot),
+            pivot_graph_name: None,
+            track_dx: 300,
+            track_dy: -400,
+            turret_angles: [0; 4],
+            des_turret_angles: [0; 4],
+            node_flags: 0,
+            des_node_flags: 0,
+        },
+        restriction_count: 0,
+    }
+}
+
+fn synthetic_first_scout_predicates() -> GuyInitPredicateFacts {
+    GuyInitPredicateFacts {
+        valid_animation: [true, false, false, true],
+        has_pivot_restrictions: false,
+        animation_22_loaded: false,
+        unit_flags2_bit_4: false,
+        type_is_0x20: false,
+        type_is_0x1000: false,
+        unit_flags_bit_0x10: false,
+        unit_flags_bit_0x2: false,
+        air_predicate: false,
+        base_type_is_52_or_53: false,
+    }
 }
 
 #[test]
@@ -415,6 +466,17 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
             discovered.citizen.type_index,
         ),
         (1, 14, 14, 69, 50)
+    );
+    assert_eq!(
+        (
+            discovered.scout.squad_size,
+            discovered.scout.crew_size,
+            discovered.scout.uber_size,
+            discovered.citizen.squad_size,
+            discovered.citizen.crew_size,
+            discovered.citizen.uber_size,
+        ),
+        (1, 1, 1, 1, 0, 1)
     );
 
     assert_eq!(
@@ -772,6 +834,124 @@ fn first_scout_init_join_rejects_extent_request_rng_type_and_mark_mutations() {
             expected: 1,
             actual: 2,
         })
+    );
+}
+
+#[test]
+fn first_scout_guy_prefix_binds_exact_rules_identity_graphics_and_rng() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, after, authority) =
+        synthetic_first_scout_init(&replay, &plan);
+    let receipt = produce_first_farm_first_scout_guy_prefix(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &authority,
+        vec![
+            synthetic_first_scout_graphics(0),
+            synthetic_first_scout_graphics(1),
+        ],
+        vec![
+            synthetic_first_scout_predicates(),
+            synthetic_first_scout_predicates(),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!((receipt.squad_size, receipt.crew_size), (1, 1));
+    assert_eq!(receipt.prefix.array_length, 2);
+    assert_eq!(receipt.prefix.guy_mark, 1);
+    assert_eq!(receipt.prefix.rng_initial, receipt.init.rng_before);
+    assert_eq!(receipt.prefix.rng_after_guys, receipt.init.rng_after);
+    assert_eq!(receipt.prefix.stable_guys.len(), 2);
+    assert_eq!(
+        (
+            receipt.prefix.identity.id,
+            receipt.prefix.identity.generation,
+            receipt.prefix.identity.owner,
+            receipt.prefix.identity.o,
+            receipt.prefix.identity.type_index,
+        ),
+        (
+            receipt.init.allocation.id,
+            receipt.init.allocation.generation,
+            0,
+            0,
+            69,
+        )
+    );
+    let guy = receipt.prefix.guys.guys[0].as_ref().unwrap();
+    assert_eq!((guy.ty, guy.who, guy.o, guy.guy_num), (69, 0, 0, 0));
+    assert_eq!(guy.gpiece, 100);
+    let crew = receipt.prefix.guys.guys[1].as_ref().unwrap();
+    assert_eq!((crew.ty, crew.who, crew.o, crew.guy_num), (69, 0, 0, 1));
+    assert_eq!(crew.gpiece, 101);
+}
+
+#[test]
+fn first_scout_guy_prefix_rejects_unbound_graphics_and_full_body_rng_disagreement() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (before, placement_authority, detailed, mut after, mut authority) =
+        synthetic_first_scout_init(&replay, &plan);
+
+    let mut graphics = synthetic_first_scout_graphics(0);
+    graphics.provenance.coherent_capture = false;
+    assert_eq!(
+        produce_first_farm_first_scout_guy_prefix(
+            &replay,
+            &plan,
+            &before,
+            &placement_authority,
+            &detailed,
+            &after,
+            &authority,
+            vec![graphics, synthetic_first_scout_graphics(1)],
+            vec![
+                synthetic_first_scout_predicates(),
+                synthetic_first_scout_predicates(),
+            ],
+        ),
+        Err(FirstFarmFirstScoutGuyError::Guy(
+            UnitGuyInitError::IncoherentGraphicsCapture { slot: 0 }
+        ))
+    );
+
+    let prefix_after = authority.rng_after;
+    authority.rng_after ^= 1;
+    after.world.random.reseed(authority.rng_after);
+    let error = produce_first_farm_first_scout_guy_prefix(
+        &replay,
+        &plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &authority,
+        vec![
+            synthetic_first_scout_graphics(0),
+            synthetic_first_scout_graphics(1),
+        ],
+        vec![
+            synthetic_first_scout_predicates(),
+            synthetic_first_scout_predicates(),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        FirstFarmFirstScoutGuyError::InitializerRngMismatch {
+            prefix_after,
+            init_after: authority.rng_after,
+        }
     );
 }
 

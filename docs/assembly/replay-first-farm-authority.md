@@ -102,6 +102,26 @@ The actual 2018 chain remains red until a completed-worldgen authority and a ret
 initializer/after-image receipt are captured or executed. Consequently no replay channel is
 installed and the `ObjectsInitUnitReceipts` blocker remains in the ordered discovery ledger.
 
+### Nested first-Scout Guy prefix
+
+The first nested segment is now executable once those two authorities exist. The adapter reads
+the strict replay Rules row for Scout 69 and requires its exact one-squad/one-crew shape. It
+converts the complete initializer join's minted Unit Handle plus native `(owner=0,o=0)` address
+into the stable identity consumed by `produce_unit_guy_init_prefix`, then requires two coherent,
+hash-gated installed-graphics extractions and their PE-derived animation/flag predicates.
+
+That producer allocates the exact two-entry Guy array, constructs both synchronized Guy images,
+and consumes the two `Guy::init_real` main-RNG draws in slot order. The calculated RNG after-state
+must equal the complete `Objects::init_unit` after-image authority. This joins the exact nested
+chronology and detects a fabricated graphics receipt or inconsistent full-body RNG span; it does
+not mutate the canonical Sim or infer graphics from replay bytes.
+
+The local test graphics and `Sim::spawn_unit` after-image are explicitly synthetic API fixtures.
+The recording has neither the installed `.bh3` hierarchy nor completed-worldgen/setup state, so
+it cannot construct either upstream authority for the 2018 match. The segment therefore remains
+a source-only receipt producer: no replay channel is installed and the real first-Farm execution
+boundary remains red.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking

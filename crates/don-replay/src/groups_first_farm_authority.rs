@@ -32,9 +32,11 @@ use crate::groups_pre_pair_unit_authority::{
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
 use crate::setup_place_unit_deep_re::{
-    produce_place_unit_probe_prefix, CenterBuildFacts, ObjectsInitUnitRequest,
+    produce_place_unit_probe_prefix, produce_unit_guy_init_prefix, CenterBuildFacts,
+    GuyGraphicsInitReceipt, GuyInitPredicateFacts, ObjectsInitUnitRequest,
     PlaceUnitExternalResidual, PlaceUnitInputs, PlaceUnitProducerError, PlaceUnitProducerReceipt,
-    PlacementMapSnapshot, PlacementTileFacts,
+    PlacementMapSnapshot, PlacementTileFacts, StableUnitIdentity, UnitGuyInitError,
+    UnitGuyInitInputs, UnitGuyInitPrefixReceipt,
 };
 use crate::setup_units_producer::{
     starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
@@ -350,6 +352,61 @@ impl From<InitUnitReceiptError> for FirstFarmFirstInitUnitError {
     }
 }
 
+/// Exact source-produced Guy allocation/initializer segment nested inside the first Scout.
+///
+/// The complete initializer receipt remains attached because native `(owner,o)` is not a stable
+/// host identity by itself. The prefix is the independently reproduced synchronized Guy image,
+/// including its two game-RNG draws; it is not an assertion that graphics or the 2018 setup state
+/// can be recovered from replay bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstScoutGuyReceipt {
+    pub init: FirstFarmFirstInitUnitReceipt,
+    pub squad_size: i32,
+    pub crew_size: i32,
+    pub prefix: UnitGuyInitPrefixReceipt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstScoutGuyError {
+    Init(FirstFarmFirstInitUnitError),
+    Discovery(FirstFarmAuthorityError),
+    WrongScoutGuyCounts,
+    Guy(UnitGuyInitError),
+    /// The first Scout's only game-RNG calls inside the complete initializer are the two direct
+    /// draws in `Guy::init_real`. A disagreement therefore invalidates either the graphics-bound
+    /// prefix or the externally attested complete-body chronology.
+    InitializerRngMismatch {
+        prefix_after: i32,
+        init_after: i32,
+    },
+}
+
+impl fmt::Display for FirstFarmFirstScoutGuyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "first 2018 Farm Scout Guy prefix refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FirstFarmFirstScoutGuyError {}
+
+impl From<FirstFarmFirstInitUnitError> for FirstFarmFirstScoutGuyError {
+    fn from(value: FirstFarmFirstInitUnitError) -> Self {
+        Self::Init(value)
+    }
+}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstScoutGuyError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<UnitGuyInitError> for FirstFarmFirstScoutGuyError {
+    fn from(value: UnitGuyInitError) -> Self {
+        Self::Guy(value)
+    }
+}
+
 /// External state provenance admitted by the frame-79 join.
 ///
 /// This is intentionally narrower than "loaded Sim": the state must be the output of the
@@ -441,6 +498,11 @@ fn strict_first_builder_plan(
                 index: ordinal as i32 - 1,
             }
         };
+        let expected_type = if ordinal == 0 {
+            discovery.scout
+        } else {
+            discovery.citizen
+        };
         call.ordinal == ordinal as u32
             && call.owner == i32::from(FIRST_OWNER)
             && call.center_city_o == discovery.center_build_o as i32
@@ -457,9 +519,9 @@ fn strict_first_builder_plan(
                 } else {
                     discovery.citizen.type_index
                 }
-            && call.uber_size == 1
-            && call.squad_size == 1
-            && call.crew_size == 0
+            && call.uber_size == expected_type.uber_size
+            && call.squad_size == expected_type.squad_size
+            && call.crew_size == expected_type.crew_size
     })
 }
 
@@ -814,6 +876,74 @@ pub fn bind_first_farm_first_init_unit(
         },
         row,
         unit,
+    })
+}
+
+/// Reproduce the exact `Unit::init` Guy-allocation prefix for the first setup Scout.
+///
+/// This composes, rather than replaces, the complete externally authorized initializer join. The
+/// replay-carried Rules row supplies the exact one-squad/one-crew shape; the caller must supply
+/// coherent installed-graphics extraction and PE predicate receipts for both Guys. The
+/// producer begins at the placement receipt's `Objects::init_unit` RNG state and requires its
+/// independently computed end state to equal the complete initializer after-image authority.
+///
+/// No Unit/Guy state is written here. In particular, a caller-created `Sim`, guessed gpiece, or
+/// checksum match cannot manufacture either of the two upstream authority digests.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_scout_guy_prefix(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    before: &Sim,
+    placement_authority: &FirstFarmSetupEntryAuthority,
+    detailed: &DetailedInitUnitReceipt,
+    after: &Sim,
+    init_authority: &FirstFarmFirstInitUnitAuthority,
+    graphics: Vec<GuyGraphicsInitReceipt>,
+    predicates: Vec<GuyInitPredicateFacts>,
+) -> Result<FirstFarmFirstScoutGuyReceipt, FirstFarmFirstScoutGuyError> {
+    let init = bind_first_farm_first_init_unit(
+        replay,
+        plan,
+        before,
+        placement_authority,
+        detailed,
+        after,
+        init_authority,
+    )?;
+    let discovery = discover_first_2018_farm(replay)?;
+    if discovery.scout.squad_size != 1
+        || discovery.scout.crew_size != 1
+        || discovery.scout.uber_size != 1
+    {
+        return Err(FirstFarmFirstScoutGuyError::WrongScoutGuyCounts);
+    }
+    let prefix = produce_unit_guy_init_prefix(
+        UnitGuyInitInputs {
+            identity: StableUnitIdentity {
+                id: init.allocation.id,
+                generation: init.allocation.generation,
+                owner: init.allocation.owner,
+                o: init.allocation.o,
+                type_index: init.request.type_index,
+            },
+            squad_size: discovery.scout.squad_size,
+            crew_size: discovery.scout.crew_size,
+            graphics,
+            predicates,
+        },
+        init.rng_before,
+    )?;
+    if prefix.rng_after_guys != init.rng_after {
+        return Err(FirstFarmFirstScoutGuyError::InitializerRngMismatch {
+            prefix_after: prefix.rng_after_guys,
+            init_after: init.rng_after,
+        });
+    }
+    Ok(FirstFarmFirstScoutGuyReceipt {
+        init,
+        squad_size: discovery.scout.squad_size,
+        crew_size: discovery.scout.crew_size,
+        prefix,
     })
 }
 
