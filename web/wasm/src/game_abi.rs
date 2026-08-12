@@ -11,13 +11,17 @@ use crate::wire_gen;
 use don_sim::deviations::{Deviation, ModeConfig, Surface};
 use don_sim::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::order::{Order, OrderIndex};
-use don_sim::systems::canonical_group_move_host::{GroupMovePackageReceipt, UnitIdentity};
+use don_sim::systems::canonical_group_move_host::{
+    decode_group_move_package, GroupMovePackageReceipt, UnitIdentity,
+};
+use don_sim::systems::player_lifecycle_tails::PLAYER_PRESENT;
 use don_sim::systems::player_setup::ManualPlayerSetup;
 use don_sim::systems::production::runtime::LiveProductionType;
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::setup_diplomacy::TEAM_AUTO;
 use don_sim::systems::victory_score;
+use don_sim::tick::lifecycle_host::PlayerTable;
 use don_sim::tick::Sim as CoreSim;
 use don_sim::Handle;
 use std::cell::UnsafeCell;
@@ -78,7 +82,8 @@ pub struct Game {
     info: Vec<i32>,
     players: Vec<i32>,
     products: Vec<i32>,
-    command_identity: [i32; 3],
+    command_identity: [i32; 4],
+    command_identity_lease: Option<UnitIdentity>,
     package_receipt: Vec<i32>,
     gaps: Vec<u32>,
     pending: Vec<u8>,
@@ -211,7 +216,8 @@ impl Game {
             info: vec![0; 32],
             players: vec![0; PLAYERS * PLAYER_FIELDS],
             products: vec![0; 512],
-            command_identity: [-1; 3],
+            command_identity: [-1; 4],
+            command_identity_lease: None,
             package_receipt: Vec::with_capacity(
                 PACKAGE_RECEIPT_HEADER_WORDS
                     + PACKAGE_RECEIPT_UNIT_WORDS
@@ -1356,7 +1362,26 @@ pub unsafe extern "C" fn game_start_manual_teams(
         shared_vision_preq_mask: 0,
     };
     match game.core.start_manual_player_setup(request) {
-        Ok(_) => {
+        Ok(applied) => {
+            // Browser play slots and Sim leader owners are the same bounded cohort. Install
+            // the live lifecycle table from the applied setup result, not from the request:
+            // team-style transforms (notably style 3) have already resolved at this point.
+            let mut players = PlayerTable::new();
+            for play in 0..PLAYERS {
+                if applied.active_mask & (1u8 << play) == 0 {
+                    continue;
+                }
+                let team = applied
+                    .state
+                    .setup
+                    .team_of(play)
+                    .expect("applied browser setup has an in-range leader")
+                    as i8;
+                players.seat(play, PLAYER_PRESENT, play as u8, team);
+            }
+            players.console_play = local_player as i32;
+            players.console_who = local_player as i32;
+            game.core.players = Some(players);
             game.error.clear();
             game.refresh();
             1
@@ -1474,13 +1499,16 @@ pub unsafe extern "C" fn game_submit(g: *mut Game, who: u32, len: u32) -> u32 {
 
 /// Resolve one renderer-owned Unit id to the canonical owner-local command identity.
 ///
-/// The renderer id is only a lookup key. On success callers copy exactly three words from
-/// [`game_object_command_identity_ptr`]: `[who, o, uid]`. Handle/generation remains internal
-/// evidence and the renderer id is never truncated or reinterpreted as retail `o`.
+/// The renderer id is only a lookup key. On success callers copy exactly four words from
+/// [`game_object_command_identity_ptr`]: `[generation, who, o, uid]`. The full Handle and
+/// owner-local identity are also retained as a one-shot package lease. The renderer id is never
+/// truncated or reinterpreted as retail `o`, and an id reissued at a later generation cannot use
+/// this lease.
 #[no_mangle]
 pub unsafe extern "C" fn game_object_command_identity(g: *mut Game, renderer_id: i32) -> u32 {
     let game = game_ref!(g);
     game.command_identity.fill(-1);
+    game.command_identity_lease = None;
     let Some(identity) = (renderer_id >= 0)
         .then(|| game.command_identity_for_renderer_id(renderer_id as u32))
         .flatten()
@@ -1488,10 +1516,12 @@ pub unsafe extern "C" fn game_object_command_identity(g: *mut Game, renderer_id:
         return 0;
     };
     game.command_identity = [
+        identity.handle.generation as i32,
         i32::from(identity.who),
         i32::from(identity.o),
         i32::from(identity.uid),
     ];
+    game.command_identity_lease = Some(identity);
     1
 }
 
@@ -1502,10 +1532,13 @@ pub unsafe extern "C" fn game_object_command_identity_ptr(g: *mut Game) -> *cons
 
 /// Apply exactly one complete command package through the landed Sim transaction.
 ///
-/// Bytes are read from the existing [`game_cmd_ptr`] allocation. Split commands already queued
-/// through [`game_submit`] make this entry point fail closed: the two ingress models can never
-/// interleave. Success publishes the exact receipt words and refreshes only render projections;
-/// failure publishes no receipt and leaves Sim state to the canonical transaction's rollback.
+/// Bytes are read from the existing [`game_cmd_ptr`] allocation. The caller must first capture one
+/// live Unit with [`game_object_command_identity`]. That generational identity is a one-shot lease:
+/// every attempt consumes it, requires an explicit singleton Group matching its owner-local
+/// address, and revalidates Handle/who/o/uid immediately before entering Sim. Split commands
+/// already queued through [`game_submit`] make this entry point fail closed: the two ingress models
+/// can never interleave. Success publishes the exact receipt words and refreshes only render
+/// projections; failure publishes no receipt and leaves Sim state unchanged.
 #[no_mangle]
 pub unsafe extern "C" fn game_process_command_package(
     g: *mut Game,
@@ -1515,6 +1548,11 @@ pub unsafe extern "C" fn game_process_command_package(
 ) -> u32 {
     let game = game_ref!(g);
     game.package_receipt.clear();
+    game.command_identity.fill(-1);
+    let Some(lease) = game.command_identity_lease.take() else {
+        game.set_error("command package refused: no one-shot command identity lease");
+        return 0;
+    };
     let len = len as usize;
     if !game.pending.is_empty() {
         game.set_error("command package refused: split browser commands are pending");
@@ -1528,6 +1566,38 @@ pub unsafe extern "C" fn game_process_command_package(
         return 0;
     }
     let bytes = game.cmd[..len].to_vec();
+    let wire = match decode_group_move_package(&bytes) {
+        Ok(wire) => wire,
+        Err(error) => {
+            game.set_error(format!(
+                "command package refused: leased package decode failed: {error:?}"
+            ));
+            return 0;
+        }
+    };
+    let Some(row) = game.core.world.row_of(lease.handle) else {
+        game.set_error("command package refused: leased renderer identity is stale");
+        return 0;
+    };
+    let live_matches = game.core.world.units.get_flags(row) & don_sim::world::OBJ_FLAG_ACTIVE != 0
+        && game.core.world.units.get_who(row) == lease.who
+        && game.core.world.units.o()[row] == lease.o
+        && game.core.world.units.get_uid(row) == lease.uid
+        && game
+            .core
+            .world
+            .unit_row_at(i32::from(lease.who), i32::from(lease.o))
+            == Some(row);
+    if !live_matches {
+        game.set_error("command package refused: leased owner-local identity changed");
+        return 0;
+    }
+    if wire.who != lease.who || wire.objects.as_slice() != [lease.o] {
+        game.set_error(
+            "command package refused: explicit singleton selection does not match its lease",
+        );
+        return 0;
+    }
     match game
         .core
         .process_command_package(play as usize, lockstep_serial, &bytes)
@@ -2010,6 +2080,7 @@ pub unsafe extern "C" fn game_load_commit(g: *mut Game) -> u32 {
                 selection.clear();
             }
             game.command_identity.fill(-1);
+            game.command_identity_lease = None;
             game.package_receipt.clear();
             game.commands_seen = 0;
             game.orders_applied = 0;
@@ -2234,6 +2305,14 @@ mod tests {
             },
             1
         );
+        let players = game.core.players.as_ref().expect("browser lifecycle table");
+        assert_eq!(players.players[0].flags, PLAYER_PRESENT);
+        assert_eq!((players.players[0].play, players.players[0].who), (0, 0));
+        assert_eq!(players.players[0].team, 0);
+        assert_eq!(players.players[1].flags, PLAYER_PRESENT);
+        assert_eq!((players.players[1].play, players.players[1].who), (1, 1));
+        assert_eq!(players.players[1].team, 1);
+        assert_eq!((players.console_play, players.console_who), (0, 0));
 
         let row = (0..game.core.world.live_count() as usize)
             .find(|&row| game.core.world.units.get_who(row) == 0)
@@ -2252,12 +2331,17 @@ mod tests {
             0,
             "build projection ids are not Unit command identities"
         );
-        assert_eq!(game.command_identity, [-1; 3]);
+        assert_eq!(game.command_identity, [-1; 4]);
+        assert!(game.command_identity_lease.is_none());
         assert_eq!(
             unsafe { game_object_command_identity(&mut game, handle.id as i32) },
             1
         );
-        assert_eq!(game.command_identity, [0, i32::from(o), i32::from(uid)]);
+        assert_eq!(
+            game.command_identity,
+            [handle.generation as i32, 0, i32::from(o), i32::from(uid)]
+        );
+        assert_eq!(game.command_identity_lease.as_ref().unwrap().handle, handle);
         assert_eq!(game.core.channel_digest(), before_identity);
 
         let packet = group_move_packet(0, o, 47_435, 47_486);
@@ -2266,29 +2350,23 @@ mod tests {
         assert_eq!(
             unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
             0,
-            "an adapter without the retail play-to-owner lifecycle map must fail closed"
-        );
-        let refusal = String::from_utf8_lossy(&game.error);
-        assert!(refusal.contains("MissingPlayerMap"), "{refusal}");
-        assert_eq!(game.core.channel_digest(), before_refusal);
-        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
-
-        let mut players = don_sim::tick::lifecycle_host::PlayerTable::new();
-        players.seat(0, 1, 0, 0);
-        game.core.players = Some(players);
-        assert_eq!(
-            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
-            0,
-            "a lifecycle map without exact movement/type authority must still fail closed"
+            "a lifecycle map without exact movement/type authority must fail closed"
         );
         let refusal = String::from_utf8_lossy(&game.error);
         assert!(refusal.contains("MissingAuthority"), "{refusal}");
         assert_eq!(game.core.channel_digest(), before_refusal);
         assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+        assert!(
+            game.command_identity_lease.is_none(),
+            "a refusal consumes the lease"
+        );
+        assert_eq!(game.command_identity, [-1; 4]);
 
         let angle = game.core.world.units.angle()[row];
-        let mut formation = FormationMember::default();
-        formation.angle = angle;
+        let formation = FormationMember {
+            angle,
+            ..FormationMember::default()
+        };
         game.core.replace_group_move_authority(GroupMoveAuthority {
             revision: 7,
             composition_digest: [0x3c; 32],
@@ -2311,6 +2389,10 @@ mod tests {
             }],
         });
         let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
         assert_eq!(
             unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
             1,
@@ -2335,8 +2417,23 @@ mod tests {
             ]
         );
         assert_eq!(game.core.world.random.state(), rng);
+        assert!(game.command_identity_lease.is_none());
+        assert_eq!(game.command_identity, [-1; 4]);
 
         let stable = game.core.channel_digest();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 2, packet.len() as u32) },
+            0,
+            "a successful lease cannot be used twice"
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("no one-shot"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
         game.cmd[5] = wire_gen::op::HALT;
         assert_eq!(
             unsafe { game_process_command_package(&mut game, 0, 2, packet.len() as u32) },
@@ -2346,6 +2443,166 @@ mod tests {
         assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
         assert_eq!(game.core.channel_digest(), stable);
         assert_eq!(game.core.world.random.state(), rng);
+
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        game.cmd[3..5].copy_from_slice(&(o + 1).to_le_bytes());
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 2, packet.len() as u32) },
+            0,
+            "altering the explicit owner-local object cannot escape its captured lease"
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("does not match its lease"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 1, 2, packet.len() as u32) },
+            0,
+            "play one cannot command play zero's leased owner"
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("PlayerOwnerMismatch"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+    }
+
+    #[test]
+    fn renderer_id_reuse_cannot_rebind_a_captured_generation() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x49_2026);
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x0f, u32::from_le_bytes([0, 1, 2, 3]), 0, 3, 0)
+            },
+            1
+        );
+
+        let last = game.core.world.live_count() as usize - 1;
+        let stale = game.core.world.handle_at_row(last).unwrap();
+        let who = game.core.world.units.get_who(last);
+        let o = game.core.world.units.o()[last];
+        let type_id = game.core.unit_type[last];
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, stale.id as i32) },
+            1
+        );
+        assert!(game.core.world.despawn(stale));
+        let replacement = game
+            .core
+            .spawn_unit(usize::from(who), type_id, 31_000, 32_000, 4)
+            .expect("the freed final row is immediately reusable");
+        assert_eq!(replacement.id, stale.id);
+        assert_ne!(replacement.generation, stale.generation);
+
+        let packet = group_move_packet(who, o, 47_435, 47_486);
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        let stable = game.core.channel_digest();
+        let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe {
+                game_process_command_package(&mut game, u32::from(who), 1, packet.len() as u32)
+            },
+            0
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("identity is stale"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert!(game.command_identity_lease.is_none());
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
+    }
+
+    #[test]
+    fn save_load_preserves_play_owner_rows_but_invalidates_adapter_identity() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x5a_2026);
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x0f, u32::from_le_bytes([0, 1, 2, 3]), 3, 2, 0)
+            },
+            1
+        );
+        let before_players = game
+            .core
+            .players
+            .clone()
+            .expect("installed lifecycle table");
+        assert_eq!(
+            (before_players.console_play, before_players.console_who),
+            (2, 2)
+        );
+        assert_eq!(
+            before_players
+                .players
+                .iter()
+                .take(PLAYERS)
+                .map(|row| (row.play, row.who, row.team, row.flags))
+                .collect::<Vec<_>>(),
+            vec![(0, 0, 1, 1), (1, 1, 1, 1), (2, 2, 0, 1), (3, 3, 1, 1)]
+        );
+
+        let row = (0..game.core.world.live_count() as usize)
+            .find(|&row| game.core.world.units.get_who(row) == 0)
+            .unwrap();
+        let handle = game.core.world.handle_at_row(row).unwrap();
+        let o = game.core.world.units.o()[row];
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        game.package_receipt.push(123);
+        game.load_bytes = save_sim(&game.core).expect("browser Sim saves");
+        assert_eq!(unsafe { game_load_commit(&mut game) }, 1);
+        assert_eq!(game.core.players.as_ref(), Some(&before_players));
+        assert_eq!(game.command_identity, [-1; 4]);
+        assert!(game.command_identity_lease.is_none());
+        assert!(game.package_receipt.is_empty());
+
+        let packet = group_move_packet(0, o, 47_435, 47_486);
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        let stable = game.core.channel_digest();
+        let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            0,
+            "load invalidates every adapter-side identity lease"
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("no one-shot"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            0,
+            "the persisted play map reaches the intentionally non-persisted content authority"
+        );
+        let refusal = String::from_utf8_lossy(&game.error);
+        assert!(refusal.contains("MissingAuthority"), "{refusal}");
+        assert!(!refusal.contains("MissingPlayerMap"), "{refusal}");
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert_eq!(unsafe { game_package_receipt_words(&mut game) }, 0);
     }
 
     #[test]
@@ -2540,6 +2797,7 @@ mod tests {
             assert_eq!(game.core.world.random.state(), rng);
             assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0);
             assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0);
+            assert!(game.core.players.is_none());
         }
     }
 

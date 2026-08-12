@@ -46,6 +46,67 @@ export const CORE_CAP = Object.freeze({
   train: 1 << 5, research: 1 << 6, build: 1 << 7,
 });
 
+const PACKAGE_RECEIPT_HEADER_WORDS = 11;
+const PACKAGE_RECEIPT_UNIT_WORDS = 5;
+
+/** Decode and validate a copied source-ABI receipt. This does not advertise artifact support. */
+export function decodeCanonicalPackageReceipt(input, expected = {}) {
+  const words = Array.from(input, (word) => word | 0);
+  if (words.length < PACKAGE_RECEIPT_HEADER_WORDS) {
+    throw new Error(`canonical package receipt is truncated (${words.length} words)`);
+  }
+  const selectedLength = words[5];
+  if (!Number.isInteger(selectedLength) || selectedLength < 0 ||
+      words.length !== PACKAGE_RECEIPT_HEADER_WORDS + selectedLength * PACKAGE_RECEIPT_UNIT_WORDS) {
+    throw new Error('canonical package receipt has an invalid selected-unit extent');
+  }
+  const selected = [];
+  for (let index = 0; index < selectedLength; index++) {
+    const at = PACKAGE_RECEIPT_HEADER_WORDS + index * PACKAGE_RECEIPT_UNIT_WORDS;
+    selected.push(Object.freeze({
+      rendererId: words[at] >>> 0,
+      generation: words[at + 1] >>> 0,
+      who: words[at + 2],
+      o: words[at + 3],
+      uid: words[at + 4],
+    }));
+  }
+  const receipt = Object.freeze({
+    play: words[0],
+    lockstepSerial: words[1],
+    frame: words[2],
+    who: words[3],
+    groupSlot: words[4],
+    commandStateRevision: (BigInt(words[7] >>> 0) << 32n) | BigInt(words[6] >>> 0),
+    groupsChecksum: words[8] >>> 0,
+    randomStateBefore: words[9],
+    randomStateAfter: words[10],
+    selected: Object.freeze(selected),
+  });
+  if (expected.play !== undefined && receipt.play !== expected.play) {
+    throw new Error(`canonical package receipt play ${receipt.play} != ${expected.play}`);
+  }
+  if (expected.lockstepSerial !== undefined &&
+      receipt.lockstepSerial !== expected.lockstepSerial) {
+    throw new Error('canonical package receipt lockstep serial does not match the submission');
+  }
+  if (receipt.randomStateBefore !== receipt.randomStateAfter) {
+    throw new Error('canonical Group→Move receipt consumed random state');
+  }
+  if (expected.identity) {
+    const [selectedIdentity] = receipt.selected;
+    if (receipt.selected.length !== 1 || !selectedIdentity ||
+        selectedIdentity.rendererId !== expected.identity.rendererId ||
+        selectedIdentity.generation !== expected.identity.generation ||
+        selectedIdentity.who !== expected.identity.who ||
+        selectedIdentity.o !== expected.identity.o ||
+        selectedIdentity.uid !== expected.identity.uid || receipt.who !== expected.identity.who) {
+      throw new Error('canonical package receipt does not match the leased Unit identity');
+    }
+  }
+  return receipt;
+}
+
 export class GameModule {
   constructor(instance) {
     this.x = instance.exports;
@@ -403,6 +464,70 @@ export class GameModule {
   }
 
   // ---- commands ------------------------------------------------------------------------
+
+  _requireCanonicalPackageSourceAbi() {
+    const names = [
+      'game_object_command_identity', 'game_object_command_identity_ptr',
+      'game_process_command_package', 'game_package_receipt_ptr', 'game_package_receipt_words',
+    ];
+    if (names.some((name) => typeof this.x[name] !== 'function')) {
+      throw new Error('canonical command package source ABI is absent from this compiled artifact');
+    }
+  }
+
+  /** Capture a one-shot, generation-safe owner-local identity from a renderer lookup id. */
+  commandIdentity(rendererId) {
+    this._requireCanonicalPackageSourceAbi();
+    if (!this.g || !Number.isInteger(rendererId) || rendererId < 0 || rendererId > 0x7fff_ffff) {
+      throw new RangeError('renderer command identity requires one live non-negative i32 id');
+    }
+    if (this.x.game_object_command_identity(this.g, rendererId | 0) !== 1) {
+      throw new Error('renderer id has no live owner-local Unit identity');
+    }
+    const ptr = this.x.game_object_command_identity_ptr(this.g) >>> 0;
+    const identity = new Int32Array(this.mem.buffer, ptr, 4);
+    return Object.freeze({
+      rendererId: rendererId >>> 0,
+      generation: identity[0] >>> 0,
+      who: identity[1],
+      o: identity[2],
+      uid: identity[3],
+    });
+  }
+
+  /**
+   * Capture, stage and submit one leased canonical package synchronously, then copy and bind the
+   * authoritative Sim receipt. The checked exports are source-only until a separately evidenced
+   * Wasm artifact is published; calling this against the current artifact fails explicitly.
+   */
+  processCanonicalCommandPackage(play, lockstepSerial, rendererId, input) {
+    this._requireCanonicalPackageSourceAbi();
+    if (!this.g || !Number.isInteger(play) || play < 0 || play >= this.playerCount ||
+        !Number.isInteger(lockstepSerial) || lockstepSerial < -0x8000_0000 ||
+        lockstepSerial > 0x7fff_ffff) {
+      throw new RangeError('canonical package requires an in-range play and i32 lockstep serial');
+    }
+    const bytes = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
+    const capacity = this.x.game_cmd_capacity() >>> 0;
+    if (!bytes.length || bytes.length > capacity) {
+      throw new RangeError(`canonical package length must be 1..=${capacity}`);
+    }
+    const identity = this.commandIdentity(rendererId);
+    const commandPtr = this.x.game_cmd_ptr(this.g) >>> 0;
+    new Uint8Array(this.mem.buffer, commandPtr, bytes.length).set(bytes);
+    if (this.x.game_process_command_package(
+      this.g, play >>> 0, lockstepSerial | 0, bytes.length) !== 1) {
+      throw new Error(this._lastError());
+    }
+    const words = this.x.game_package_receipt_words(this.g) >>> 0;
+    if (words !== PACKAGE_RECEIPT_HEADER_WORDS + PACKAGE_RECEIPT_UNIT_WORDS) {
+      throw new Error(`canonical singleton package returned ${words} receipt words`);
+    }
+    const receiptPtr = this.x.game_package_receipt_ptr(this.g) >>> 0;
+    // Processing may allocate and grow memory. Copy only from the current buffer afterward.
+    const copied = new Int32Array(new Int32Array(this.mem.buffer, receiptPtr, words));
+    return decodeCanonicalPackageReceipt(copied, { play, lockstepSerial, identity });
+  }
 
   /**
    * Post one engine command. `bytes` is the exact wire packet — byte 0 the opcode, the
