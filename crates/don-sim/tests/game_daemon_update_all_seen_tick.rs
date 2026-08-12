@@ -1,12 +1,13 @@
-//! Real-tick proof for the exact all-leaders-inactive path through
-//! `GameDaemon::update_all_seen` `0x00732840`.
+//! Real-tick proof for the exact all-leaders-inactive and bounded active Build-plus-Unit
+//! paths through `GameDaemon::update_all_seen` `0x00732840`.
 
+use don_sim::objects::BUILD_BAND_BASE;
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::step12_visibility_runtime::{
     ActiveUnitProducerFault, RevealFogNoEffectBlocker, Step12VisibilityAuthority,
     Step12VisibilityPreflightError, VisibilityConstants, VisibilityTypeProjection, UNIT_TYPE_BASE,
 };
-use don_sim::systems::{map_terrain::tflag, player_setup::ManualPlayerSetup};
+use don_sim::systems::{map_terrain::tflag, player_setup::ManualPlayerSetup, production};
 use don_sim::tick::{Gap, Sim, StepRun};
 
 fn advance_to_phase_33(sim: &mut Sim) {
@@ -122,6 +123,50 @@ fn active_unit_phase33() -> Sim {
     sim
 }
 
+fn active_build_phase33(active: bool) -> Sim {
+    let mut sim = Sim::new(0x7328_4233, 8);
+    let mut setup = ManualPlayerSetup {
+        active_mask: 1,
+        local_player_setup_slot: 0,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[0] = 0;
+    sim.start_manual_player_setup(setup).unwrap();
+    advance_to_phase_33(&mut sim);
+
+    let mut flags = production::flag::VALID | production::flag::STARTED | 0x40;
+    if active {
+        flags |= production::flag::ACTIVE;
+    }
+    let mut build = production::BuildData {
+        flags,
+        myhits: 640,
+        construct_hits: 640,
+        gather_down: -1,
+        city: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..production::BuildData::default()
+    };
+    build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+        .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
+    build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+    build.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+        .copy_from_slice(&(6_000i32 ^ 0x63637).to_le_bytes());
+    build.other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&(6_000i32 ^ 0x63637).to_le_bytes());
+    build.other[production::off::MYLOS] = 6;
+    sim.spawn_build(0, build);
+
+    for tile in &mut sim.map.world.tdata {
+        *tile &= !tflag::RESOURCE;
+    }
+    sim
+}
+
 #[test]
 fn active_unit_phase33_stamps_canonical_planes_and_roundtrips_the_resumed_frame() {
     let mut original = active_unit_phase33();
@@ -158,6 +203,109 @@ fn active_unit_phase33_stamps_canonical_planes_and_roundtrips_the_resumed_frame(
     resumed.do_frame();
     assert_eq!(resumed.channel_digest(), original.channel_digest());
     assert_eq!(save_sim(&resumed).unwrap(), save_sim(&original).unwrap());
+}
+
+#[test]
+fn active_build_phase33_stamps_canonical_planes_and_roundtrips_the_resumed_frame() {
+    let mut original = active_build_phase33(true);
+    original.game_daemon.busy = 19;
+    seed_fog_planes(&mut original);
+    let checksum_before = original.map.world.checksum();
+
+    let trace = original.do_frame();
+
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(original.game_daemon.busy, 4);
+    assert_eq!(original.cover.gaps[Gap::GameDaemonUpdateAllSeen.index()], 0);
+    assert_eq!(original.step12_visibility_error, None);
+    assert!(original.map.world.seen.iter().any(|&byte| byte & 1 != 0));
+    assert!(original.map.world.seen2.iter().any(|&byte| byte == 0xa3));
+    assert!(
+        original.map.world.seen3.iter().any(|&byte| byte & 1 != 0),
+        "Build ObjectData flags bit 0x40 owns the detector stamp"
+    );
+    assert_ne!(original.map.world.checksum(), checksum_before);
+
+    let saved = save_sim(&original).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    assert_eq!(resumed.map.world.checksum(), original.map.world.checksum());
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+
+    original.do_frame();
+    resumed.do_frame();
+    assert_eq!(resumed.channel_digest(), original.channel_digest());
+    assert_eq!(save_sim(&resumed).unwrap(), save_sim(&original).unwrap());
+}
+
+#[test]
+fn incomplete_build_refuses_before_daemon_or_plane_mutation() {
+    let mut sim = active_build_phase33(false);
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    let daemon_before = sim.game_daemon;
+    let checksum_before = sim.map.world.checksum();
+
+    let trace = sim.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+    );
+    assert_eq!(sim.game_daemon, daemon_before);
+    assert_eq!(sim.map.world.checksum(), checksum_before);
+    assert_eq!(
+        sim.step12_visibility_error,
+        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::InactiveBuildNeedsWonderAuthority {
+                row: 0,
+                who: 0,
+                object_o: BUILD_BAND_BASE as i16,
+            }
+        ))
+    );
+}
+
+#[test]
+fn active_build_visible_local_seen_refuses_before_plane_clear() {
+    let mut sim = active_build_phase33(true);
+    sim.game_daemon.busy = 19;
+    seed_fog_planes(&mut sim);
+    sim.builds[0].other[production::off::VISIBLE] = 1;
+    let daemon_before = sim.game_daemon;
+    let checksum_before = sim.map.world.checksum();
+
+    let trace = sim.do_frame();
+
+    assert_eq!(
+        trace.steps[12],
+        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
+    );
+    assert_eq!(sim.game_daemon, daemon_before);
+    assert_eq!(sim.map.world.checksum(), checksum_before);
+    assert_eq!(
+        sim.step12_visibility_error,
+        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::BuildVisibleLocalSeen { row: 0, visible: 1 }
+        ))
+    );
+}
+
+#[test]
+fn zero_los_build_returns_before_visible_is_read() {
+    let mut sim = active_build_phase33(true);
+    sim.game_daemon.busy = 19;
+    let seen2_before = seed_fog_planes(&mut sim);
+    sim.builds[0].other[production::off::MYLOS] = 0;
+    sim.builds[0].other[production::off::VISIBLE] = 1;
+
+    let trace = sim.do_frame();
+
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(sim.game_daemon.busy, 4);
+    assert_eq!(sim.step12_visibility_error, None);
+    assert!(sim.map.world.seen.iter().all(|&byte| byte == 0));
+    assert_eq!(sim.map.world.seen2, seen2_before);
+    assert!(sim.map.world.seen3.iter().all(|&byte| byte == 0));
 }
 
 #[test]

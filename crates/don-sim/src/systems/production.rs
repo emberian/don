@@ -140,8 +140,14 @@ pub mod off {
     pub const DAMAGE: usize = 36; // 0x24
     /// `ObjectData::uid` — index of this object inside its owner's list.
     pub const UID: usize = 48; // 0x30
+    /// `ObjectData::infiltrated` — optional second explored-state recipient.
+    pub const INFILTRATED: usize = 58; // 0x3A
     /// `ObjectData::damage_frac` — sub-integer damage carry; cleared by `repair_damage`.
     pub const DAMAGE_FRAC: usize = 59; // 0x3B
+    /// `ObjectData::mylos` — signed LOS returned by `WallData::los`.
+    pub const MYLOS: usize = 60; // 0x3C
+    /// `ObjectData::visible` — nonzero reaches virtual `Wall::update_local_seen`.
+    pub const VISIBLE: usize = 64; // 0x40
 
     // -- WallData -----------------------------------------------------------------------
     /// `WallData::job_counter` — construction progress, in the same units as `constr_time`.

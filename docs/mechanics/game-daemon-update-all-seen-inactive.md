@@ -3,10 +3,10 @@
 ## Scope
 
 The shipped `GameDaemon::update_all_seen` body is `0x00732840`, 1,221 bytes.  The general
-active-player producer is still open. A later tranche now executes the bounded empty-Build/Wall
-Unit-only cohort documented in `game-daemon-update-all-seen-active-units.md`; populated
-Build/Wall vision, started-Wonder local vision, effectful `World::reveal_fog`, scenario reveal
-points, and frame-zero explored sharing remain outside both cohorts.
+active-player producer is still open. A later tranche now executes the bounded active-complete
+Build-plus-Unit cohort documented in `game-daemon-update-all-seen-active-units.md`; incomplete
+Build/Wonder and Wall vision, local-seen, effectful `World::reveal_fog`, scenario reveal points,
+and frame-zero explored sharing remain outside both cohorts.
 
 This tranche executes a different complete PE path through the same body.  When all eight
 `LeaderData::flags & 1` gates are clear, retail reaches the following replay-visible mutations:
