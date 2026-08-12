@@ -13,6 +13,21 @@ import { encodeCanonicalSingletonGroupMove } from '../public/js/play/canonical-c
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-service-match-peer.mjs', import.meta.url));
 const fixtureSpawn = (_command, args, options) => spawn(process.execPath, [FIXTURE, ...args], options);
 
+function receiptImages(stamp, checksumBias = 0) {
+  return [0, 1].map((play) => ({
+    play,
+    lockstepSerial: packageLockstepSerial(stamp, play),
+    frame: stamp,
+    who: play,
+    groupSlot: play ? 65 : 1,
+    commandStateRevision: `0x${BigInt(stamp * 2 + play + 1).toString(16).padStart(16, '0')}`,
+    groupsChecksum: (0x12345678 + checksumBias + play) >>> 0,
+    randomStateBefore: 99,
+    randomStateAfter: 99,
+    selected: [{ rendererId: play ? 8 : 0, generation: 0, who: play, o: 0, uid: play ? 8 : 0 }],
+  }));
+}
+
 test('native lifecycle facts are admitted only after both peers agree', async () => {
   const handoff = await runServiceMatch('/unused/service-match-peer', 0x89abcdef, {
     spawn: fixtureSpawn,
@@ -103,9 +118,11 @@ test('two browser seats cannot see a handoff until both are ready', async () => 
   assert.equal(hostView.turn.agreement.packages.length, 2);
   const agreementHash = hostView.turn.agreement.hash;
   assert.equal(gateway.acknowledgeTurn(
-    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99).turn.stamp, 0);
+    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99,
+    receiptImages(0)).turn.stamp, 0);
   const advanced = gateway.acknowledgeTurn(
-    host.lobby.code, join.token, 0, agreementHash, 1, '1111222233334444', 99);
+    host.lobby.code, join.token, 0, agreementHash, 1, '1111222233334444', 99,
+    receiptImages(0));
   assert.equal(advanced.turn.stamp, 1);
   assert.equal(advanced.lastConfirmed.stamp, 0);
   gateway.leave(host.lobby.code, host.token);
@@ -146,15 +163,104 @@ test('browser state disagreement fails closed and closes the relay', async () =>
   }
   const agreementHash = gateway.snapshot(host.lobby.code, host.token).turn.agreement.hash;
   assert.throws(() => gateway.acknowledgeTurn(
-    host.lobby.code, host.token, 0, 'ffffffffffffffff', 1, '1111222233334444', 99),
+    host.lobby.code, host.token, 0, 'ffffffffffffffff', 1, '1111222233334444', 99,
+    receiptImages(0)),
   /package hash/);
   gateway.acknowledgeTurn(
-    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99);
+    host.lobby.code, host.token, 0, agreementHash, 1, '1111222233334444', 99,
+    receiptImages(0));
   assert.throws(() => gateway.acknowledgeTurn(
-    host.lobby.code, join.token, 0, agreementHash, 1, '9999222233334444', 99), /disagreed/);
+    host.lobby.code, join.token, 0, agreementHash, 1, '9999222233334444', 99,
+    receiptImages(0)), /disagreed/);
   const failed = gateway.snapshot(host.lobby.code, host.token);
   assert.equal(failed.phase, 'failed');
   assert.match(failed.error, /disagreed/);
+  gateway.leave(host.lobby.code, host.token);
+});
+
+test('duplicate package retry is idempotent only for identical bytes', async () => {
+  const gateway = new LocalMatchGateway('/usr/bin/true', {
+    spawn: fixtureSpawn, timeoutMs: 2_000,
+  });
+  const host = gateway.create(0x89abcdef, 'Host');
+  const peer = gateway.join(host.lobby.code, 'Peer');
+  gateway.ready(host.lobby.code, host.token);
+  gateway.ready(host.lobby.code, peer.token);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const first = encodeCanonicalSingletonGroupMove(
+    { who: 0, o: 1, uid: 1 }, 4_000, 5_000).hex;
+  const changed = encodeCanonicalSingletonGroupMove(
+    { who: 0, o: 1, uid: 1 }, 4_001, 5_000).hex;
+  const submitted = gateway.submitTurn(host.lobby.code, host.token, 0, first);
+  assert.equal(submitted.turn.submitted[0], true);
+  assert.equal(gateway.submitTurn(
+    host.lobby.code, host.token, 0, first).turn.submitted[0], true);
+  assert.throws(
+    () => gateway.submitTurn(host.lobby.code, host.token, 0, changed),
+    /contradicted its turn 0 package/);
+  const failed = gateway.snapshot(host.lobby.code, host.token);
+  assert.equal(failed.phase, 'failed');
+  assert.match(failed.error, /contradicted/);
+  gateway.leave(host.lobby.code, host.token);
+});
+
+test('identical seat retry remains idempotent after the native agreement starts', async () => {
+  const gateway = new LocalMatchGateway('/usr/bin/true', {
+    spawn: fixtureSpawn, timeoutMs: 2_000,
+  });
+  const host = gateway.create(0x89abcdef, 'Host');
+  const peer = gateway.join(host.lobby.code, 'Peer');
+  gateway.ready(host.lobby.code, host.token);
+  gateway.ready(host.lobby.code, peer.token);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const payloads = [
+    encodeCanonicalSingletonGroupMove({ who: 0, o: 1, uid: 1 }, 4_000, 5_000).hex,
+    encodeCanonicalSingletonGroupMove({ who: 1, o: 2, uid: 2 }, 5_000, 6_000).hex,
+  ];
+  gateway.submitTurn(host.lobby.code, host.token, 0, payloads[0]);
+  const agreeing = gateway.submitTurn(host.lobby.code, peer.token, 0, payloads[1]);
+  assert.equal(agreeing.turn.phase, 'agreeing');
+  const retry = gateway.submitTurn(host.lobby.code, host.token, 0, payloads[0]);
+  assert.equal(retry.turn.submitted[0], true);
+  assert.equal(retry.turn.payloads, undefined);
+  gateway.leave(host.lobby.code, host.token);
+});
+
+test('coordinator ACK requires and compares both exact authoritative receipt images', async () => {
+  const gateway = new LocalMatchGateway('/usr/bin/true', {
+    spawn: fixtureSpawn, timeoutMs: 2_000,
+  });
+  const host = gateway.create(0x89abcdef, 'Host');
+  const peer = gateway.join(host.lobby.code, 'Peer');
+  gateway.ready(host.lobby.code, host.token);
+  gateway.ready(host.lobby.code, peer.token);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (gateway.snapshot(host.lobby.code, host.token).phase === 'started') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  gateway.submitTurn(host.lobby.code, host.token, 0, '0c');
+  gateway.submitTurn(host.lobby.code, peer.token, 0, '0c');
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (gateway.snapshot(host.lobby.code, host.token).turn?.phase === 'agreed') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const agreement = gateway.snapshot(host.lobby.code, host.token).turn.agreement;
+  assert.throws(() => gateway.acknowledgeTurn(
+    host.lobby.code, host.token, 0, agreement.hash, 1, '1111222233334444', 99),
+  /two canonical receipt images/);
+  const receipts = receiptImages(0);
+  gateway.acknowledgeTurn(
+    host.lobby.code, host.token, 0, agreement.hash, 1, '1111222233334444', 99, receipts);
+  assert.throws(() => gateway.acknowledgeTurn(
+    host.lobby.code, peer.token, 0, agreement.hash, 1, '1111222233334444', 99,
+    receiptImages(0, 1)), /disagreed/);
+  assert.equal(gateway.snapshot(host.lobby.code, host.token).phase, 'failed');
   gateway.leave(host.lobby.code, host.token);
 });
 
@@ -229,9 +335,11 @@ test('two-seat gateway locks, orders, and ACKs the generalized package set', asy
   ]);
   const agreementHash = view.turn.agreement.hash;
   gateway.acknowledgeTurn(
-    host.lobby.code, host.token, 0, agreementHash, 1, '2222333344445555', 0x1234);
+    host.lobby.code, host.token, 0, agreementHash, 1, '2222333344445555', 0x1234,
+    receiptImages(0));
   const advanced = gateway.acknowledgeTurn(
-    host.lobby.code, peer.token, 0, agreementHash, 1, '2222333344445555', 0x1234);
+    host.lobby.code, peer.token, 0, agreementHash, 1, '2222333344445555', 0x1234,
+    receiptImages(0));
   assert.equal(advanced.lastConfirmed.hash, agreementHash);
   assert.equal(advanced.lastConfirmed.agreementHash, agreementHash);
   assert.equal(advanced.turn.stamp, 1);

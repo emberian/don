@@ -91,6 +91,78 @@ export function validateCanonicalTurnRequest(value) {
   };
 }
 
+const RECEIPT_FIELDS = [
+  'play', 'lockstepSerial', 'frame', 'who', 'groupSlot', 'commandStateRevision',
+  'groupsChecksum', 'randomStateBefore', 'randomStateAfter', 'selected',
+];
+const RECEIPT_IDENTITY_FIELDS = ['rendererId', 'generation', 'who', 'o', 'uid'];
+
+function exactFields(value, fields, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== fields.length ||
+      Object.keys(value).some((key) => !fields.includes(key))) {
+    throw new Error(`${label} fields are not canonical`);
+  }
+  return value;
+}
+
+function unsigned32(value, label) {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new Error(`${label} must be a u32`);
+  }
+  return value >>> 0;
+}
+
+/** Exact JSON-safe receipt images that both browser Sims must ACK byte-for-byte. */
+export function validateCanonicalReceiptImages(value, stamp) {
+  if (!Number.isSafeInteger(stamp) || stamp < 0 ||
+      !Array.isArray(value) || value.length !== LOCAL_MATCH_PLAYERS) {
+    throw new Error('turn acknowledgement requires exactly two canonical receipt images');
+  }
+  return Object.freeze(value.map((input, play) => {
+    const receipt = exactFields(input, RECEIPT_FIELDS, `receipt P${play}`);
+    if (receipt.play !== play || receipt.who !== play || receipt.frame !== stamp ||
+        receipt.lockstepSerial !== packageLockstepSerial(stamp, play) ||
+        !Number.isInteger(receipt.groupSlot) || receipt.groupSlot < 0 ||
+        receipt.groupSlot > 0x7fff_ffff ||
+        typeof receipt.commandStateRevision !== 'string' ||
+        !/^0x[0-9a-f]{16}$/.test(receipt.commandStateRevision) ||
+        !Array.isArray(receipt.selected) || receipt.selected.length !== 1) {
+      throw new Error(`receipt P${play} does not bind its turn/play/selection`);
+    }
+    const identity = exactFields(
+      receipt.selected[0], RECEIPT_IDENTITY_FIELDS, `receipt P${play} identity`);
+    if (identity.who !== play || !Number.isInteger(identity.o) || identity.o < 0 ||
+        identity.o > 0x7fff || !Number.isInteger(identity.uid) ||
+        identity.uid < -0x8000_0000 || identity.uid > 0x7fff_ffff) {
+      throw new Error(`receipt P${play} has a noncanonical owner-local identity`);
+    }
+    const selected = Object.freeze([Object.freeze({
+      rendererId: unsigned32(identity.rendererId, `receipt P${play} rendererId`),
+      generation: unsigned32(identity.generation, `receipt P${play} generation`),
+      who: identity.who,
+      o: identity.o,
+      uid: identity.uid,
+    })]);
+    const normalized = Object.freeze({
+      play: receipt.play,
+      lockstepSerial: receipt.lockstepSerial,
+      frame: receipt.frame,
+      who: receipt.who,
+      groupSlot: receipt.groupSlot,
+      commandStateRevision: receipt.commandStateRevision,
+      groupsChecksum: unsigned32(receipt.groupsChecksum, `receipt P${play} groupsChecksum`),
+      randomStateBefore: unsigned32(receipt.randomStateBefore, `receipt P${play} randomStateBefore`),
+      randomStateAfter: unsigned32(receipt.randomStateAfter, `receipt P${play} randomStateAfter`),
+      selected,
+    });
+    if (normalized.randomStateBefore !== normalized.randomStateAfter) {
+      throw new Error(`receipt P${play} consumed random state`);
+    }
+    return normalized;
+  }));
+}
+
 function processLine(line) {
   try { return JSON.parse(line); }
   catch { return null; }
@@ -537,7 +609,13 @@ function publicLobby(lobby, token) {
     handoff: lobby.handoff ? { ...lobby.handoff, player: member.seat } : null,
     turnRelay: lobby.handoff?.turnRelay ?? LOCAL_MATCH_TURN_RELAY,
     turn,
-    lastConfirmed: lobby.lastConfirmed ? { ...lobby.lastConfirmed } : null,
+    lastConfirmed: lobby.lastConfirmed ? {
+      ...lobby.lastConfirmed,
+      receipts: lobby.lastConfirmed.receipts.map((receipt) => ({
+        ...receipt,
+        selected: receipt.selected.map((identity) => ({ ...identity })),
+      })),
+    } : null,
   };
 }
 
@@ -631,11 +709,18 @@ export class LocalMatchGateway {
       throw new Error('turn stamp must be a nonnegative integer');
     }
     packageLockstepSerial(stamp, LOCAL_MATCH_PLAYERS - 1);
-    if (!lobby.turn || lobby.turn.stamp !== stamp || lobby.turn.phase !== 'waiting') {
+    if (!lobby.turn || lobby.turn.stamp !== stamp) {
       throw new Error(`turn ${stamp} is not the open native barrier`);
     }
     commandHex = validateCanonicalCommandHex(commandHex);
-    if (lobby.turn.submitted[member.seat]) return publicLobby(lobby, token);
+    if (lobby.turn.submitted[member.seat]) {
+      if (lobby.turn.payloads[member.seat] === commandHex) return publicLobby(lobby, token);
+      this.#fail(lobby, `seat ${member.seat} contradicted its turn ${stamp} package`);
+      throw new Error(lobby.error);
+    }
+    if (lobby.turn.phase !== 'waiting') {
+      throw new Error(`turn ${stamp} is not the open native barrier`);
+    }
     lobby.turn.submitted[member.seat] = true;
     lobby.turn.payloads[member.seat] = commandHex;
     this.#armTimeout(lobby, `turn ${stamp} timed out waiting for both browser seats`);
@@ -647,7 +732,7 @@ export class LocalMatchGateway {
     return publicLobby(lobby, token);
   }
 
-  acknowledgeTurn(code, token, stamp, agreementHash, frame, digest, rngState) {
+  acknowledgeTurn(code, token, stamp, agreementHash, frame, digest, rngState, receipts) {
     const { lobby, member } = this.#startedMember(code, token);
     if (!Number.isInteger(stamp) || lobby.turn?.stamp !== stamp ||
         lobby.turn.phase !== 'agreed') {
@@ -659,7 +744,13 @@ export class LocalMatchGateway {
         !Number.isInteger(rngState) || rngState < 0 || rngState > 0xffff_ffff) {
       throw new Error('browser turn acknowledgement has an invalid package hash/frame/digest/RNG witness');
     }
-    const ack = { agreementHash, frame, digest, rngState: rngState >>> 0 };
+    const ack = {
+      agreementHash,
+      frame,
+      digest,
+      rngState: rngState >>> 0,
+      receipts: validateCanonicalReceiptImages(receipts, stamp),
+    };
     const previous = lobby.turn.acks[member.seat];
     if (previous && JSON.stringify(previous) !== JSON.stringify(ack)) {
       this.#fail(lobby, `seat ${member.seat} contradicted its turn ${stamp} acknowledgement`);

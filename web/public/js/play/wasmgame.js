@@ -107,6 +107,38 @@ export function decodeCanonicalPackageReceipt(input, expected = {}) {
   return receipt;
 }
 
+/** Exact JSON-safe receipt image accepted by the native two-seat ACK boundary. */
+export function canonicalPackageReceiptImage(receipt) {
+  if (!receipt || !Number.isInteger(receipt.play) || !Number.isInteger(receipt.lockstepSerial) ||
+      !Number.isInteger(receipt.frame) || !Number.isInteger(receipt.who) ||
+      !Number.isInteger(receipt.groupSlot) || typeof receipt.commandStateRevision !== 'bigint' ||
+      receipt.commandStateRevision < 0n || receipt.commandStateRevision > 0xffff_ffff_ffff_ffffn ||
+      !Array.isArray(receipt.selected) || receipt.selected.length !== 1 ||
+      receipt.randomStateBefore !== receipt.randomStateAfter) {
+    throw new Error('canonical package receipt cannot form an authoritative ACK image');
+  }
+  const selected = Object.freeze(receipt.selected.map((identity) => Object.freeze({
+    rendererId: identity.rendererId >>> 0,
+    generation: identity.generation >>> 0,
+    who: identity.who,
+    o: identity.o,
+    uid: identity.uid,
+  })));
+  return Object.freeze({
+    play: receipt.play,
+    lockstepSerial: receipt.lockstepSerial,
+    frame: receipt.frame,
+    who: receipt.who,
+    groupSlot: receipt.groupSlot,
+    commandStateRevision:
+      `0x${receipt.commandStateRevision.toString(16).padStart(16, '0')}`,
+    groupsChecksum: receipt.groupsChecksum >>> 0,
+    randomStateBefore: receipt.randomStateBefore >>> 0,
+    randomStateAfter: receipt.randomStateAfter >>> 0,
+    selected,
+  });
+}
+
 export class GameModule {
   constructor(instance) {
     this.x = instance.exports;
@@ -463,6 +495,16 @@ export class GameModule {
     this._commandGate = typeof gate === 'function' ? gate : null;
   }
 
+  _observeAcceptedCommand({ frame, who, bytes, canonicalReceipt = null }) {
+    if (!this._commandObserver) return;
+    this._commandObserver(Object.freeze({
+      frame,
+      who: who >>> 0,
+      bytes: new Uint8Array(bytes),
+      canonicalReceipt,
+    }));
+  }
+
   // ---- commands ------------------------------------------------------------------------
 
   _requireCanonicalPackageSourceAbi() {
@@ -507,7 +549,7 @@ export class GameModule {
    * authoritative Sim receipt. Calling this against an older artifact without the evidenced
    * canonical package exports fails explicitly.
    */
-  processCanonicalCommandPackage(play, lockstepSerial, rendererId, input) {
+  processCanonicalCommandPackage(play, lockstepSerial, rendererId, input, options = {}) {
     this._requireCanonicalPackageSourceAbi();
     if (!this.hasGameData) {
       throw new Error('canonical command package authority requires installed DONPACK5 game data');
@@ -536,7 +578,100 @@ export class GameModule {
     const receiptPtr = this.x.game_package_receipt_ptr(this.g) >>> 0;
     // Processing may allocate and grow memory. Copy only from the current buffer afterward.
     const copied = new Int32Array(new Int32Array(this.mem.buffer, receiptPtr, words));
-    return decodeCanonicalPackageReceipt(copied, { play, lockstepSerial, identity });
+    const receipt = decodeCanonicalPackageReceipt(copied, { play, lockstepSerial, identity });
+    if (options.observe !== false) this.observeCanonicalCommandPackage(bytes, receipt);
+    return receipt;
+  }
+
+  /** Publish one already-applied canonical package to the observer without executing it again. */
+  observeCanonicalCommandPackage(input, receipt) {
+    const bytes = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
+    if (!receipt || !Number.isInteger(receipt.play) ||
+        !Number.isInteger(receipt.lockstepSerial) || !Number.isInteger(receipt.frame) ||
+        receipt.randomStateBefore !== receipt.randomStateAfter ||
+        !Array.isArray(receipt.selected) || receipt.selected.length !== 1) {
+      throw new Error('canonical observer publication requires one authoritative receipt');
+    }
+    this._observeAcceptedCommand({
+      frame: receipt.frame,
+      who: receipt.play,
+      bytes,
+      canonicalReceipt: receipt,
+    });
+  }
+
+  /** Publish one committed canonical package set to the observer as a single notification. */
+  observeCanonicalCommandBatch(applied) {
+    if (!this._commandObserver || !Array.isArray(applied) || !applied.length) return;
+    const canonicalBatch = Object.freeze(applied.map(({ entry, receipt }) => Object.freeze({
+      frame: receipt.frame,
+      who: receipt.play,
+      bytes: new Uint8Array(entry.bytes),
+      canonicalReceipt: receipt,
+    })));
+    this._commandObserver(Object.freeze({ canonicalBatch }));
+  }
+
+  /**
+   * Apply a package set under one exact core-save transaction. The optional synchronous commit
+   * callback may advance the frame; observers publish only after every package and that callback
+   * succeed. A later failure restores the pre-batch image before control returns to JavaScript.
+   */
+  processCanonicalCommandBatch(entries, commit = () => true, options = {}) {
+    if (!Array.isArray(entries) || !entries.length || typeof commit !== 'function') {
+      throw new Error('canonical package batch requires entries and a synchronous commit callback');
+    }
+    const batch = entries.map((entry, index) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error(`canonical package batch entry ${index} is malformed`);
+      }
+      return Object.freeze({
+        play: entry.play,
+        lockstepSerial: entry.lockstepSerial,
+        rendererId: entry.rendererId,
+        bytes: entry.bytes instanceof Uint8Array
+          ? new Uint8Array(entry.bytes) : new Uint8Array(entry.bytes),
+      });
+    });
+    const before = Object.freeze({
+      frame: this.frame,
+      digest: this.digest(),
+      rngState: this.rngState,
+      submitted: this._submitted,
+      save: this.saveCore(),
+    });
+    const applied = [];
+    try {
+      for (const entry of batch) {
+        const receipt = this.processCanonicalCommandPackage(
+          entry.play, entry.lockstepSerial, entry.rendererId, entry.bytes, { observe: false });
+        applied.push(Object.freeze({ entry, receipt }));
+      }
+      if (commit(Object.freeze(applied.map(({ receipt }) => receipt))) !== true) {
+        throw new Error('canonical package batch commit callback refused the transaction');
+      }
+    } catch (cause) {
+      let rollbackFailure = null;
+      try {
+        const restored = this.loadCore(before.save);
+        if (restored.frame !== before.frame || restored.digest !== before.digest ||
+            restored.rngState !== before.rngState) {
+          throw new Error('loaded rollback image does not match its pre-batch witness');
+        }
+        this._submitted = before.submitted;
+      } catch (error) {
+        rollbackFailure = error;
+      }
+      const message = rollbackFailure
+        ? `canonical package batch rollback failed: ${rollbackFailure.message}; cause: ${cause.message}`
+        : `canonical package batch rolled back: ${cause.message}`;
+      const error = new Error(message, { cause });
+      error.rollbackFailed = rollbackFailure !== null;
+      error.rollbackFailure = rollbackFailure;
+      throw error;
+    }
+    if (options.observe !== false) this.observeCanonicalCommandBatch(applied);
+    return Object.freeze(applied.map(({ receipt }) => receipt));
   }
 
   /**
@@ -552,13 +687,7 @@ export class GameModule {
     v.cmd.set(packet, 0);
     this.x.game_submit(this.g, who, packet.length);
     this._submitted++;
-    if (this._commandObserver) {
-      this._commandObserver({
-        frame: this.frame,
-        who: who >>> 0,
-        bytes: packet,
-      });
-    }
+    this._observeAcceptedCommand({ frame: this.frame, who, bytes: packet });
     return packet;
   }
 

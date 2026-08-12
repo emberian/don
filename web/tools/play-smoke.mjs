@@ -1925,6 +1925,7 @@ try {
         match: mod.match(),
         units,
         commands: d.commands.snapshot(),
+        journal: JSON.parse(d.replay.export()),
         paused: d.state.paused,
         beforeResume,
         status: document.getElementById('local-match-status').textContent,
@@ -1966,6 +1967,20 @@ try {
         JSON.stringify(hostBrowser.local.lastReceipts) ===
           JSON.stringify(peerBrowser.local.lastReceipts) &&
         hostBrowser.local.lastReceipts.length === 2 &&
+        JSON.stringify(hostBrowser.local.lastConfirmed.receipts) ===
+          JSON.stringify(peerBrowser.local.lastConfirmed.receipts) &&
+        hostBrowser.local.lastConfirmed.receipts.length === 2 &&
+        JSON.stringify(hostBrowser.journal.events) === JSON.stringify(peerBrowser.journal.events) &&
+        hostBrowser.journal.events.length === 64 &&
+        hostBrowser.journal.events.every((event) =>
+          event.kind === 'command' && event.canonical && event.hex.length === 54) &&
+        hostBrowser.commands.entries.filter((entry) =>
+          entry.source === 'native canonical turn relay').length === 64 &&
+        hostBrowser.commands.entries.filter((entry) =>
+          entry.source === 'native canonical turn relay').every((entry, index) =>
+          entry.status === 'applied' &&
+            JSON.stringify(entry.selection) ===
+              JSON.stringify(hostBrowser.journal.events[index].selection)) &&
         JSON.stringify(hostBrowser.units) === JSON.stringify(peerBrowser.units) &&
         hostBrowser.units.every((unit, index) =>
           unit.x !== frameZero[0].units[index].x || unit.y !== frameZero[0].units[index].y)],

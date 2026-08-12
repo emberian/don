@@ -148,12 +148,12 @@ async function serveLocalMatch(req, res, url) {
     if (action === 'turn-ack' && req.method === 'POST') {
       const body = await readJson(req);
       if (Object.keys(body).some((key) =>
-        !['token', 'stamp', 'agreementHash', 'frame', 'digest', 'rngState'].includes(key))) {
+        !['token', 'stamp', 'agreementHash', 'frame', 'digest', 'rngState', 'receipts'].includes(key))) {
         throw new Error('turn acknowledgement contains unsupported fields');
       }
       sendJson(res, 200, localMatches.acknowledgeTurn(
         code, body.token, body.stamp, body.agreementHash,
-        body.frame, body.digest, body.rngState));
+        body.frame, body.digest, body.rngState, body.receipts));
       return true;
     }
     sendJson(res, 405, { protocol: LOCAL_MATCH_PROTOCOL, error: 'method not allowed' });

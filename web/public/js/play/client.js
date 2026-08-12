@@ -9,7 +9,15 @@
 // something, the wasm side counts it in `game_gaps_ptr` and the coverage panel shows it
 // live, with the reason.
 
-import { GameModule, RES_NAMES, GAP_NAMES, COMMANDS, OP, TAG } from './wasmgame.js';
+import {
+  canonicalPackageReceiptImage,
+  GameModule,
+  RES_NAMES,
+  GAP_NAMES,
+  COMMANDS,
+  OP,
+  TAG,
+} from './wasmgame.js';
 import { makeRenderer } from './gfx.js';
 import { REPLAY_EVIDENCE } from './readiness.gen.js';
 import { decode, encode } from '../wire.gen.js';
@@ -952,7 +960,9 @@ function controlGroupsSnapshot() {
   }
   return Object.freeze({
     active: state.activeGroup,
-    selection: state.selection.slice(),
+    selection: canonicalReceipt
+      ? canonicalReceipt.selected.map((identity) => identity.rendererId)
+      : state.selection.slice(),
     groups: Object.freeze(groups),
     status: state.groupStatus,
     nativePersistence: 'unavailable',
@@ -1356,7 +1366,13 @@ function localMatchPublicSnapshot() {
           Object.freeze({ ...package_ }))),
       }) : null,
     }) : null,
-    lastConfirmed: local.lastConfirmed ? Object.freeze({ ...local.lastConfirmed }) : null,
+    lastConfirmed: local.lastConfirmed ? Object.freeze({
+      ...local.lastConfirmed,
+      receipts: Object.freeze(local.lastConfirmed.receipts.map((receipt) => Object.freeze({
+        ...receipt,
+        selected: Object.freeze(receipt.selected.map((identity) => Object.freeze({ ...identity }))),
+      }))),
+    }) : null,
     lastReceipts: Object.freeze(local.lastReceipts.map((receipt) => Object.freeze({
       ...receipt,
       selected: Object.freeze(receipt.selected.map((identity) => Object.freeze({ ...identity }))),
@@ -1402,18 +1418,42 @@ function canonicalLocalGroupMove(play) {
 }
 
 function receiptEvidence(receipt) {
-  return Object.freeze({
-    play: receipt.play,
-    lockstepSerial: receipt.lockstepSerial,
-    opcode: receipt.opcode,
-    who: receipt.who,
-    commandBytes: receipt.commandBytes,
-    commandStateRevision: `0x${receipt.commandStateRevision.toString(16).padStart(16, '0')}`,
-    groupsChecksum: receipt.groupsChecksum >>> 0,
-    randomStateBefore: receipt.randomStateBefore >>> 0,
-    randomStateAfter: receipt.randomStateAfter >>> 0,
-    selected: receipt.selected.map((identity) => ({ ...identity })),
+  return canonicalPackageReceiptImage(receipt);
+}
+
+function emitCanonicalRelayJournal(packet, receipt) {
+  const selection = receipt.selected.map((identity) => identity.rendererId);
+  recordCommandIssued(
+    { frame: receipt.frame, who: receipt.play, bytes: packet.bytes, canonicalReceipt: receipt },
+    'native canonical turn relay');
+  recordCommittedReplayEvent({
+    frame: receipt.frame,
+    kind: 'command',
+    who: receipt.play,
+    hex: bytesToHex(packet.bytes),
+    selection,
+    canonical: Object.freeze({
+      lockstepSerial: receipt.lockstepSerial,
+      rendererId: selection[0],
+    }),
   });
+}
+
+function emitCanonicalRelayJournalBatch(events) {
+  if (!Array.isArray(events) || events.length !== 2) {
+    throw new Error('canonical relay observer requires one committed two-package batch');
+  }
+  const prepared = events.map((event, play) => {
+    const receipt = receiptEvidence(event.canonicalReceipt);
+    if (receipt.play !== play || event.who !== play || receipt.frame !== event.frame ||
+        !(event.bytes instanceof Uint8Array) || event.bytes.length !== 27) {
+      throw new Error(`canonical relay observer event P${play} is malformed`);
+    }
+    return { event, receipt };
+  });
+  for (const { event, receipt } of prepared) {
+    emitCanonicalRelayJournal({ bytes: event.bytes }, receipt);
+  }
 }
 
 function renderLocalMatchPanel() {
@@ -1582,6 +1622,34 @@ function validateAgreedLocalTurn(turn) {
   return packets;
 }
 
+async function failResetCanonicalLocalTurn(error) {
+  const message = `canonical turn transaction aborted: ${error.message}`;
+  let resetFailure = null;
+  try {
+    await leaveLocalMatch();
+  } catch (resetError) {
+    resetFailure = resetError;
+    const local = state.localMatch;
+    if (local.polling !== null) clearTimeout(local.polling);
+    local.polling = null;
+    local.pauseLocked = false;
+    local.applied = false;
+    local.pendingAck = null;
+    local.lastReceipts = [];
+    if (state.mod.restart(state.sessionSeed)) {
+      resetClientForWorld(state.sessionSeed, true, 'failed canonical turn reset');
+      startReplayJournal();
+    }
+  }
+  state.localMatch.phase = 'failed';
+  state.localMatch.error = resetFailure
+    ? `${message}; local reset also failed: ${resetFailure.message}` : message;
+  state.localMatch.pauseLocked = false;
+  setPaused(true, false);
+  renderLocalMatchPanel();
+  return new Error(state.localMatch.error, { cause: error });
+}
+
 async function maybeApplyLocalTurn() {
   const local = state.localMatch;
   if (local.phase !== 'started' || !local.applied || !local.pauseLocked ||
@@ -1595,24 +1663,33 @@ async function maybeApplyLocalTurn() {
         throw new Error(`paused Sim frame ${state.mod.frame} does not match agreed turn ${turn.stamp}`);
       }
       local.applyingPackages = true;
-      const receipts = [];
+      let receipts;
       try {
-        for (const packet of packets) {
-          if (packet.decoded.kind === 'group-move-singleton') {
-            const selected = canonicalRendererIdentity(packet.play, packet.decoded.o);
-            receipts.push(receiptEvidence(state.mod.processCanonicalCommandPackage(
-              packet.play, packet.lockstepSerial, selected.rendererId, packet.bytes)));
-          } else if (!state.mod.submit(packet.play, packet.bytes)) {
-            throw new Error(`Wasm command gate refused agreed P${packet.play} HaltCommand`);
-          }
+        if (packets.some((packet) => packet.decoded.kind !== 'group-move-singleton')) {
+          throw new Error('active canonical Group→Move relay received a non-Group→Move package');
         }
+        const batch = packets.map((packet) => {
+          const selected = canonicalRendererIdentity(packet.play, packet.decoded.o);
+          return {
+            play: packet.play,
+            lockstepSerial: packet.lockstepSerial,
+            rendererId: selected.rendererId,
+            bytes: packet.bytes,
+          };
+        });
+        const authoritative = state.mod.processCanonicalCommandBatch(batch, () => {
+          if (!advanceSimulationFrame(true)) {
+            throw new Error(`paused Sim refused agreed canonical turn ${turn.stamp}`);
+          }
+          return true;
+        });
+        receipts = authoritative.map(receiptEvidence);
+      } catch (error) {
+        throw await failResetCanonicalLocalTurn(error);
       } finally {
         local.applyingPackages = false;
       }
       local.lastReceipts = receipts;
-      if (!advanceSimulationFrame(true)) {
-        throw new Error(`paused Sim refused agreed canonical turn ${turn.stamp}`);
-      }
       local.lastAppliedStamp = turn.stamp;
       local.pendingAck = {
         stamp: turn.stamp,
@@ -1620,6 +1697,7 @@ async function maybeApplyLocalTurn() {
         frame: state.mod.frame,
         digest: state.mod.digest(),
         rngState: state.mod.rngState >>> 0,
+        receipts,
       };
       renderHud();
       renderObjectivesPanel();
@@ -2222,14 +2300,14 @@ function resetCommandFeedback() {
   renderCommandFeedback();
 }
 
-function recordCommandIssued({ frame, who, bytes }, source = 'player') {
+function recordCommandIssued({ frame, who, bytes, canonicalReceipt = null }, source = 'player') {
   reconcileCommandFeedback();
   const decoded = decode(bytes);
   const entry = {
     id: state.commandFeedback.nextId++,
     kind: 'packet',
     issuedFrame: frame,
-    drainedFrame: null,
+    drainedFrame: canonicalReceipt ? state.mod.frame : null,
     who,
     op: decoded.op,
     struct: decoded.struct ?? `unknown opcode 0x${decoded.op.toString(16).padStart(2, '0')}`,
@@ -2237,11 +2315,15 @@ function recordCommandIssued({ frame, who, bytes }, source = 'player') {
     hex: bytesToHex(bytes),
     selection: state.selection.slice(),
     source,
-    status: 'pending',
-    reason: 'issued to the exported command buffer; waiting for a tick',
+    status: canonicalReceipt ? 'applied' : 'pending',
+    reason: canonicalReceipt
+      ? `canonical receipt serial ${canonicalReceipt.lockstepSerial} · ` +
+        `group checksum 0x${canonicalReceipt.groupsChecksum.toString(16).padStart(8, '0')}`
+      : 'issued to the exported command buffer; waiting for a tick',
   };
   state.commandFeedback.entries.push(entry);
   state.commandFeedback.issuedTotal++;
+  if (canonicalReceipt) state.commandFeedback.appliedTotal++;
   trimCommandFeedback();
   renderCommandFeedback();
   return entry;
@@ -2443,9 +2525,17 @@ function startReplayJournal({ nativeBaseline = null } = {}) {
   state.replay.status = state.replay.nativeBaseline
     ? `recording exact browser command packets from loaded DoNSave frame ${state.replay.baseFrame}`
     : 'recording exact browser command packets from this new-session baseline';
-  state.mod.observeCommands(({ frame: at, who, bytes }) => {
-    const source = state.localMatch.applyingPackages
-      ? 'native canonical turn relay' : state.replay.applying ? 'journal replay' : 'player';
+  state.mod.observeCommands(({ frame: at, who, bytes, canonicalReceipt, canonicalBatch }) => {
+    if (canonicalBatch) {
+      emitCanonicalRelayJournalBatch(canonicalBatch);
+      return;
+    }
+    if (canonicalReceipt) {
+      const packet = { bytes };
+      emitCanonicalRelayJournal(packet, receiptEvidence(canonicalReceipt));
+      return;
+    }
+    const source = state.replay.applying ? 'journal replay' : 'player';
     recordCommandIssued({ frame: at, who, bytes }, source);
     if (state.replay.applying) return;
     recordReplayEvent({
@@ -2473,6 +2563,16 @@ function recordReplayEvent(event) {
   }
   state.replay.events.push(Object.freeze({ ...event, frame }));
   state.replay.headFrame = Math.max(state.replay.headFrame, frame);
+  renderReplayPanel();
+}
+
+function recordCommittedReplayEvent(event) {
+  if (!Number.isInteger(event.frame) || event.frame < state.replay.baseFrame ||
+      event.frame > state.mod.frame || event.frame < (state.replay.events.at(-1)?.frame ?? -1)) {
+    throw new Error('committed canonical journal event is outside the current ordered frame range');
+  }
+  state.replay.events.push(Object.freeze({ ...event, frame: event.frame }));
+  state.replay.headFrame = Math.max(state.replay.headFrame, state.mod.frame);
   renderReplayPanel();
 }
 
@@ -2610,23 +2710,60 @@ function normalizeReplayJournal(input) {
     if (bytes.length > state.mod.views().cmd.length) {
       throw new Error(`journal event ${index} exceeds the exported command buffer`);
     }
-    let decoded;
-    try { decoded = decode(bytes); } catch (error) {
-      throw new Error(`journal event ${index} is not a supported wire packet: ${error.message}`);
-    }
-    const command = COMMANDS[decoded.op];
-    const expectedBytes = decoded.op === OP.GROUP ? 3 + (decoded.num * 2) : command?.size;
-    if (!command || bytes.length !== expectedBytes) {
-      throw new Error(`journal event ${index} has an unknown opcode or non-canonical packet length`);
+    let canonical = null;
+    if (entry.canonical !== undefined) {
+      const decoded = decodeCanonicalCommandPackage(bytes);
+      if (decoded.kind !== 'group-move-singleton' || decoded.who !== who ||
+          !entry.canonical || typeof entry.canonical !== 'object' ||
+          Array.isArray(entry.canonical) ||
+          Object.keys(entry.canonical).length !== 2 ||
+          !Number.isInteger(entry.canonical.lockstepSerial) ||
+          entry.canonical.lockstepSerial <= 0 ||
+          !Number.isInteger(entry.canonical.rendererId) || entry.canonical.rendererId < 0) {
+        throw new Error(`journal event ${index} has malformed canonical package authority`);
+      }
+      canonical = Object.freeze({
+        lockstepSerial: entry.canonical.lockstepSerial,
+        rendererId: entry.canonical.rendererId,
+      });
+    } else {
+      let decoded;
+      try { decoded = decode(bytes); } catch (error) {
+        throw new Error(`journal event ${index} is not a supported wire packet: ${error.message}`);
+      }
+      const command = COMMANDS[decoded.op];
+      const expectedBytes = decoded.op === OP.GROUP ? 3 + (decoded.num * 2) : command?.size;
+      if (!command || bytes.length !== expectedBytes) {
+        throw new Error(`journal event ${index} has an unknown opcode or non-canonical packet length`);
+      }
     }
     if (!Array.isArray(entry.selection) || entry.selection.length > 255 ||
         entry.selection.some((id) => !Number.isInteger(id) || id < 0 || id > 0x7fffffff)) {
       throw new Error(`journal event ${index} has an invalid selection snapshot`);
     }
+    if (canonical && (canonical.lockstepSerial !== frame * 2 + who + 1 ||
+        entry.selection.length !== 1 || entry.selection[0] !== canonical.rendererId)) {
+      throw new Error(`journal event ${index} does not bind canonical frame/play/selection`);
+    }
     return Object.freeze({
       frame, kind: 'command', who, hex: bytesToHex(bytes), selection: entry.selection.slice(),
+      ...(canonical ? { canonical } : {}),
     });
   });
+  const canonicalFrames = new Map();
+  for (const event of events) {
+    if (event.kind !== 'command') continue;
+    const frameEvents = canonicalFrames.get(event.frame) ?? [];
+    frameEvents.push(event);
+    canonicalFrames.set(event.frame, frameEvents);
+  }
+  for (const [frame, frameEvents] of canonicalFrames) {
+    const canonical = frameEvents.filter((event) => event.canonical);
+    if (canonical.length && (canonical.length !== 2 || frameEvents.length !== 2 ||
+        canonical[0].who !== 0 || canonical[1].who !== 1)) {
+      throw new Error(`journal frame ${frame} is not one complete ordered canonical package set`);
+    }
+  }
   const normalized = Object.freeze({
     protocol: JOURNAL_PROTOCOL,
     setup: Object.freeze({
@@ -2676,10 +2813,25 @@ function scratchReplayBaselineDigest(setup) {
 }
 
 function applyReplayEventsAt(frame) {
+  const frameEvents = [];
   for (const event of state.replay.events) {
     if (event.frame < frame) continue;
     if (event.frame > frame) break;
+    frameEvents.push(event);
+  }
+  const canonical = frameEvents.filter((event) => event.kind === 'command' && event.canonical);
+  if (canonical.length) {
+    state.mod.processCanonicalCommandBatch(canonical.map((event) => ({
+      play: event.who,
+      lockstepSerial: event.canonical.lockstepSerial,
+      rendererId: event.canonical.rendererId,
+      bytes: hexToBytes(event.hex),
+    })), () => true, { observe: false });
+    state.selection = canonical.at(-1).selection.slice();
+  }
+  for (const event of frameEvents) {
     if (event.kind === 'command') {
+      if (event.canonical) continue;
       state.selection = event.selection.slice();
       state.mod.submit(event.who, hexToBytes(event.hex));
     } else if (event.kind === 'income') {
