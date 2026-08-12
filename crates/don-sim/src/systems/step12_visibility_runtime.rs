@@ -251,6 +251,19 @@ pub enum Step12VisibilityPreflightError {
     },
 }
 
+/// The two complete `GameDaemon::update_all_seen` paths that the live Sim can currently
+/// authorize before the step-12 shell mutates anything.
+///
+/// `InactiveLeadersClear` is not a claim about the active-object producer.  In the retail PE,
+/// every Build/Wall, Unit, scenario-point, and frame-zero alliance loop begins with the same
+/// `LeaderData::flags & 1` gate.  With all eight gates clear, the whole reached body is exactly
+/// `busy = 4`, `World::clear_seen`, and the `seen3` clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedStep12FullProducer {
+    NoMutation(Step12VisibilityCadence),
+    InactiveLeadersClear,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LiveJoinRow {
     state: LiveStep12UnitState,
@@ -664,12 +677,20 @@ impl Step12VisibilityAuthority {
         leader_active: [bool; LEADER_SLOTS],
         fog_option: u8,
         trigger: Step12VisibilityTrigger,
-    ) -> Result<(), Step12VisibilityPreflightError> {
+    ) -> Result<PreparedStep12FullProducer, Step12VisibilityPreflightError> {
         match self
             .prepare_unit_pass(world, unit_types, leader_active, fog_option, trigger)
             .map_err(Step12VisibilityPreflightError::Authority)?
         {
-            LiveStep12Preparation::NoMutation(_) => Ok(()),
+            LiveStep12Preparation::NoMutation(cadence) => {
+                Ok(PreparedStep12FullProducer::NoMutation(cadence))
+            }
+            LiveStep12Preparation::UnitPass(pass)
+                if !leader_active.iter().copied().any(|active| active) =>
+            {
+                debug_assert_eq!(pass.stamps(), 0);
+                Ok(PreparedStep12FullProducer::InactiveLeadersClear)
+            }
             LiveStep12Preparation::UnitPass(pass) => {
                 Err(Step12VisibilityPreflightError::IncompleteProducer {
                     prepared_unit_stamps: pass.stamps(),
@@ -1086,14 +1107,31 @@ mod tests {
     }
 
     #[test]
-    fn full_producer_boundary_never_turns_a_unit_pass_into_clear_permission() {
+    fn full_producer_admits_the_exact_all_inactive_clear_path() {
         let world = World::new(9);
+        let authority = Step12VisibilityAuthority::default();
+        let prepared = authority
+            .preflight_full_producer(
+                &world,
+                &[],
+                [false; LEADER_SLOTS],
+                0,
+                Step12VisibilityTrigger::GameRun,
+            )
+            .unwrap();
+        assert_eq!(prepared, PreparedStep12FullProducer::InactiveLeadersClear);
+    }
+
+    #[test]
+    fn active_leader_still_never_turns_a_unit_pass_into_clear_permission() {
+        let mut world = World::new(9);
+        assert!(world.set_object_owner_active(0, true));
         let authority = Step12VisibilityAuthority::default();
         let error = authority
             .preflight_full_producer(
                 &world,
                 &[],
-                [false; LEADER_SLOTS],
+                [true, false, false, false, false, false, false, false],
                 0,
                 Step12VisibilityTrigger::GameRun,
             )

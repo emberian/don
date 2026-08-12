@@ -162,7 +162,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger 0x00732D10 - exact body/tick adapter execute; reached UnitData::attack and late Airbase/Dock/basic-type building strength remain fail-closed",
-    "step 12 GameDaemon::update_all_seen 0x00732840 - exact Unit pass preflights; plane clear remains blocked on Build/Wall/reveal_fog ownership",
+    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive full clear executes; active leaders still fail closed on Build/Wall/reveal_fog ownership",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
@@ -1288,6 +1288,12 @@ struct SimGameDaemonHost<'a> {
     sim: &'a mut Sim,
     expected_empty_colls: i32,
     danger: Option<Result<PreparedSimCalcDangerHost, SimCalcDangerPreflightFault>>,
+    visibility: Option<
+        Result<
+            step12_visibility_runtime::PreparedStep12FullProducer,
+            step12_visibility_runtime::Step12VisibilityPreflightError,
+        >,
+    >,
     work: u32,
 }
 
@@ -1320,17 +1326,11 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
                 .map_err(|error| SimGameDaemonBridgeFault::Danger(error.clone()))?;
         }
         if schedule.contains(game_daemon_step12::GameDaemonCall::UpdateAllSeen) {
-            let leader_active = std::array::from_fn(|who| self.sim.leaders[who].active);
-            self.sim
-                .step12_visibility
-                .preflight_full_producer(
-                    &self.sim.world,
-                    &self.sim.unit_type,
-                    leader_active,
-                    self.sim.map.fog.option.0,
-                    step12_visibility_producer_frontier::Step12VisibilityTrigger::ScheduledStep12,
-                )
-                .map_err(SimGameDaemonBridgeFault::Visibility)?;
+            self.visibility
+                .as_ref()
+                .expect("scheduled update_all_seen has a prepared image")
+                .as_ref()
+                .map_err(|error| SimGameDaemonBridgeFault::Visibility(error.clone()))?;
         }
         Ok(())
     }
@@ -1394,11 +1394,29 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
             .saturating_add(trace.cells_written);
     }
 
-    fn update_all_seen(&mut self) {
-        // A successful scheduled callback is currently possible only through the producer's
-        // `fog_option == 3` early return. Every ordinary full refresh was rejected by preflight
-        // before the GameDaemon shell or any channel-12 plane could mutate.
-        debug_assert_eq!(self.sim.map.fog.option.0, 3);
+    fn update_all_seen(&mut self, busy: &mut i32) {
+        let prepared = *self
+            .visibility
+            .as_ref()
+            .expect("scheduled update_all_seen has a prepared image")
+            .as_ref()
+            .expect("step-12 preflight rejected every failed visibility image");
+        match prepared {
+            step12_visibility_runtime::PreparedStep12FullProducer::NoMutation(cadence) => {
+                debug_assert_eq!(
+                    cadence,
+                    step12_visibility_producer_frontier::Step12VisibilityCadence::SuppressedByFogOptionThree
+                );
+            }
+            step12_visibility_runtime::PreparedStep12FullProducer::InactiveLeadersClear => {
+                // Exact 0x0073285D order: the body stores four before either plane clear.
+                // Every later object/scenario/alliance loop is gated off by the prepared
+                // all-inactive LeaderData image.
+                *busy = 4;
+                self.sim.map.fog.begin_frame(&mut self.sim.map.world);
+                self.work = self.work.saturating_add(1);
+            }
+        }
     }
 
     fn calc_markets(&mut self) {
@@ -2953,11 +2971,22 @@ impl Sim {
     fn game_daemon_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
         let danger = (frame % 200 == 0).then(|| game_daemon_calc_danger_host::prepare(self));
+        let visibility = (frame % 100 == 33).then(|| {
+            let leader_active = std::array::from_fn(|who| self.leaders[who].active);
+            self.step12_visibility.preflight_full_producer(
+                &self.world,
+                &self.unit_type,
+                leader_active,
+                self.map.fog.option.0,
+                step12_visibility_producer_frontier::Step12VisibilityTrigger::ScheduledStep12,
+            )
+        });
         let mut daemon = std::mem::take(&mut self.game_daemon);
         let mut regions = std::mem::take(&mut self.map.regions);
         let mut host = SimGameDaemonHost {
             expected_empty_colls: daemon.empty_colls,
             danger,
+            visibility,
             sim: self,
             work: 0,
         };

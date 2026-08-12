@@ -128,7 +128,10 @@ pub trait GameDaemonProcessAllHost {
     fn preflight(&self, schedule: &CallSchedule) -> Result<(), Self::Fault>;
     fn process_victory(&mut self);
     fn calc_danger(&mut self);
-    fn update_all_seen(&mut self);
+    /// Execute `GameDaemon::update_all_seen` against the daemon-owned `busy` field.  The
+    /// callback receives the field because the exact fog-option-three return must leave it
+    /// untouched, while every entered producer path stores four before clearing a World plane.
+    fn update_all_seen(&mut self, busy: &mut i32);
     fn calc_markets(&mut self);
 
     /// Run `GameDaemon::check_borders` `0x00732060` and return the final value of
@@ -200,7 +203,7 @@ pub fn process_all<H: GameDaemonProcessAllHost>(
         host.calc_danger();
     }
     if schedule.contains(GameDaemonCall::UpdateAllSeen) {
-        host.update_all_seen();
+        host.update_all_seen(&mut daemon.busy);
     }
     host.calc_markets();
 
@@ -266,8 +269,9 @@ mod tests {
             self.calls.push(GameDaemonCall::CalcDanger);
         }
 
-        fn update_all_seen(&mut self) {
+        fn update_all_seen(&mut self, busy: &mut i32) {
             self.calls.push(GameDaemonCall::UpdateAllSeen);
+            *busy = 4;
         }
 
         fn calc_markets(&mut self) {
@@ -376,6 +380,21 @@ mod tests {
         let mut host = Host::default();
         process_all(&mut daemon, 1, &mut rs, &mut host).unwrap();
         assert_eq!(daemon.busy, i32::MAX);
+    }
+
+    #[test]
+    fn reached_visibility_child_owns_the_post_decrement_busy_store() {
+        let mut daemon = GameDaemonState {
+            busy: 19,
+            ..Default::default()
+        };
+        let mut rs = regions();
+        let mut host = Host::default();
+
+        process_all(&mut daemon, 33, &mut rs, &mut host).unwrap();
+
+        assert_eq!(daemon.busy, 4);
+        assert!(host.calls.contains(&GameDaemonCall::UpdateAllSeen));
     }
 
     #[test]
