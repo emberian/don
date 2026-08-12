@@ -61,6 +61,7 @@ pub mod fractal_boundary;
 pub mod groups_channel;
 pub mod growth;
 pub mod groups_dynamic;
+pub mod groups_pre_pair_unit_authority;
 pub mod groups_sim_channel;
 pub mod guys_runtime;
 pub mod harness;
