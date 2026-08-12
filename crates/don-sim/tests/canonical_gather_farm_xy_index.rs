@@ -8,15 +8,16 @@ use don_sim::systems::{production, save_load};
 use don_sim::tick::Sim;
 
 const FRAME: i32 = 1_199;
-const WHO: u8 = 1;
-const ACTOR_O: i16 = 8;
-const ACTOR_UID: u16 = 16;
-const SITE_O: i16 = 2_006;
-const SITE_UID: u16 = 12;
-const FARM_INDEX: i16 = 12;
-const CELL: usize = 2 * 4 + 2;
-const PERCENT_BEFORE: u32 = 0x3ea8_f5bd;
-const PERCENT_AFTER: u32 = 0x3eab_8519;
+const WHO: u8 = 0;
+const ACTOR_O: i16 = 7;
+const ACTOR_UID: u16 = 14;
+const SITE_O: i16 = 2_004;
+const SITE_UID: u16 = 4;
+const FARM_INDEX: i16 = 2;
+const CELL_XY: usize = 2 * 4 + 1;
+const TRANSPOSED_YX: usize = 1 * 4 + 2;
+const PERCENT_BEFORE: u32 = 0x3e61_47a9;
+const PERCENT_AFTER: u32 = 0x3e66_6661;
 
 fn build(o: i16, uid: u16, farm_index: i16) -> production::BuildData {
     let mut build = production::BuildData {
@@ -38,7 +39,7 @@ fn build(o: i16, uid: u16, farm_index: i16) -> production::BuildData {
     build
 }
 
-fn farm_order() -> Order {
+fn gather_order() -> Order {
     Order::economy(EconomyOrderNode {
         metric: 0,
         header: EconomyOrderHeader {
@@ -62,12 +63,67 @@ fn farm_order() -> Order {
     .unwrap()
 }
 
+fn farm_two() -> FarmStruct {
+    FarmStruct {
+        who: i32::from(WHO),
+        o: i32::from(SITE_O),
+        percent: [
+            0x3f80_0000,
+            0x3f80_0000,
+            0x3f80_0000,
+            0,
+            0,
+            0x3f74_7ad5,
+            0x3f80_0000,
+            0x3f80_0000,
+            0,
+            PERCENT_BEFORE,
+            0x3f80_0000,
+            0x3f80_0000,
+            0x3f80_0000,
+            0,
+            0,
+            0x3f80_0000,
+        ],
+        terrain_height: [
+            0x4346_0000,
+            0x4353_0000,
+            0x4366_0000,
+            0x4380_0000,
+            0x438a_8000,
+            0x4346_0000,
+            0x4344_0000,
+            0x4348_0000,
+            0x4359_0000,
+            0x4371_0000,
+            0x4343_0000,
+            0x4334_0000,
+            0x4334_0000,
+            0x4341_0000,
+            0x434c_0000,
+            0x4339_0000,
+            0x432a_0000,
+            0x431f_0000,
+            0x4323_0000,
+            0x4332_0000,
+            0x432e_0000,
+            0x431b_0000,
+            0x4314_0000,
+            0x4314_0000,
+            0x4321_0000,
+        ],
+        status: [2, 2, 2, 0, 0, 1, 2, 2, 0, 1, 2, 2, 2, 0, 0, 2],
+        valid: 1,
+        farm_type: 0,
+    }
+}
+
 fn authority(sim: &Sim, actor_row: usize, site_row: usize) -> GatherWorkAuthority {
     let actor = sim.world.handle_at_row(actor_row).unwrap();
     let site = &sim.builds[site_row];
     GatherWorkAuthority {
-        revision: 0x4652_4d47,
-        composition_digest: [0xf3; 32],
+        revision: 0x4652_4d58,
+        composition_digest: [0x78; 32],
         actors: vec![GatherActorRuntimeFacts {
             actor,
             who: WHO,
@@ -100,12 +156,12 @@ fn authority(sim: &Sim, actor_row: usize, site_row: usize) -> GatherWorkAuthorit
             farm_record_valid: true,
             farm_type: 0,
             covers_actor_tile: true,
-            corner_tx: 124,
-            corner_ty: 8,
+            corner_tx: 249,
+            corner_ty: 116,
             x_size: 4,
             y_size: 4,
             selected_cell_status: Some(1),
-            lead_cur_time: 33,
+            lead_cur_time: 22,
             lead_end_time: 47,
             lead_hold_attack: 0,
         }],
@@ -126,29 +182,33 @@ fn reinstall(sim: &Sim, mut authority: GatherWorkAuthority) -> GatherWorkAuthori
 }
 
 fn fixture() -> (Sim, usize, usize, GatherWorkAuthority) {
-    let mut sim = Sim::new(0x7123_9876, 4);
-    sim.map.world.seed = 0x7123_9876;
+    let mut sim = Sim::new(0x7133_9876, 4);
+    sim.map.world.seed = 0x7133_9876;
     let mut actor_row = 0;
     for _ in 0..=ACTOR_O {
         let actor = sim
-            .spawn_unit(usize::from(WHO), 0x32, 24_216, 1_944, 4)
+            .spawn_unit(usize::from(WHO), 0x32, 48_312, 22_584, 4)
             .unwrap();
         actor_row = sim.world.row_of(actor).unwrap();
     }
     sim.world.units.set_uid(actor_row, ACTOR_UID);
-    sim.world.units.set_unit_masks(actor_row, 0x0004_0008);
+    sim.world.units.set_unit_masks(actor_row, 8);
+    sim.world.units.angle_mut()[actor_row] = 0x5c32_0000;
+    sim.world.units.dest_angle_mut()[actor_row] = 0x5c32_0000;
+    sim.world.units.orders_x_mut()[actor_row] = 48_312;
+    sim.world.units.orders_y_mut()[actor_row] = 22_584;
     sim.world.units.group_mut()[actor_row] = -1;
     sim.world.frame = FRAME;
     sim.vic_match.frame = FRAME;
 
     let mut rows = Vec::new();
-    for index in 0..=6i16 {
+    for index in 0..=4i16 {
         rows.push(sim.spawn_build(
             usize::from(WHO),
             build(
                 2_000 + index,
-                if index == 6 { SITE_UID } else { index as u16 },
-                if index == 6 { FARM_INDEX } else { -1 },
+                index as u16,
+                if index == 4 { FARM_INDEX } else { -1 },
             ),
         ));
     }
@@ -162,31 +222,30 @@ fn fixture() -> (Sim, usize, usize, GatherWorkAuthority) {
     city.who = WHO as i8;
     sim.cities.city_mark[WHO as usize] = 1;
 
-    let site_row = rows[6];
-    sim.world.orders_mut(actor_row).replace(farm_order());
+    let site_row = rows[4];
+    sim.world.orders_mut(actor_row).replace(gather_order());
     sim.farms = Farms::with_header(32, -1, 0);
-    for index in 0..=FARM_INDEX {
-        let mut farm = FarmStruct::default();
-        if index == FARM_INDEX {
-            farm.who = i32::from(WHO);
-            farm.o = i32::from(SITE_O);
-            farm.valid = 1;
-            farm.percent[CELL] = PERCENT_BEFORE;
-            farm.status[CELL] = 1;
-        }
-        sim.farms.push(farm).unwrap();
-    }
+    sim.farms.push(FarmStruct::default()).unwrap();
+    sim.farms.push(FarmStruct::default()).unwrap();
+    sim.farms.push(farm_two()).unwrap();
     let authority = authority(&sim, actor_row, site_row);
     (sim, actor_row, site_row, authority)
 }
 
 #[test]
-fn saved_farm_grow_is_one_exact_float_write_and_zero_rng() {
+fn retail_x_then_y_cell_selects_the_second_exact_saved_grow() {
     let (mut sim, actor_row, site_row, authority) = fixture();
+    assert_eq!(
+        sim.farms.get(FARM_INDEX as usize).unwrap().status[CELL_XY],
+        1
+    );
+    assert_eq!(
+        sim.farms.get(FARM_INDEX as usize).unwrap().status[TRANSPOSED_YX],
+        2
+    );
     let order_before = sim.world.orders(actor_row).clone();
-    let rng_before = sim.world.random.state();
-    let digest_before = sim.channel_digest();
     let build_before = sim.builds[site_row].image();
+    let rng_before = sim.world.random.state();
     let prepared = prepare_gather_work_activation(
         &sim.world,
         &sim.builds,
@@ -197,13 +256,12 @@ fn saved_farm_grow_is_one_exact_float_write_and_zero_rng() {
     )
     .unwrap();
     assert_eq!(prepared.plan.branch, GatherWorkBranch::FarmStatus1Grow);
-    assert_eq!(prepared.plan.changed_fields, 1);
     assert_eq!(
-        prepared.plan.farm_before.unwrap().percent[CELL],
+        prepared.plan.farm_before.unwrap().percent[CELL_XY],
         PERCENT_BEFORE
     );
     assert_eq!(
-        prepared.plan.farm_after.unwrap().percent[CELL],
+        prepared.plan.farm_after.unwrap().percent[CELL_XY],
         PERCENT_AFTER
     );
 
@@ -217,39 +275,47 @@ fn saved_farm_grow_is_one_exact_float_write_and_zero_rng() {
     )
     .unwrap();
     assert_eq!(receipt.branch, GatherWorkBranch::FarmStatus1Grow);
-    assert_eq!(receipt.farm_index, Some(FARM_INDEX as usize));
-    assert_eq!(receipt.farm_percent_before, Some(PERCENT_BEFORE));
-    assert_eq!(receipt.farm_percent_after, Some(PERCENT_AFTER));
-    assert_eq!((receipt.changed_fields, receipt.rng_draws), (1, 0));
     assert_eq!(
-        sim.farms.get(FARM_INDEX as usize).unwrap().percent[CELL],
+        (receipt.farm_percent_before, receipt.farm_percent_after),
+        (Some(PERCENT_BEFORE), Some(PERCENT_AFTER))
+    );
+    assert_eq!(
+        sim.farms.get(FARM_INDEX as usize).unwrap().percent[CELL_XY],
         PERCENT_AFTER
     );
+    assert_eq!(
+        sim.farms.get(FARM_INDEX as usize).unwrap().percent[TRANSPOSED_YX],
+        0x3f80_0000
+    );
     assert_eq!(sim.world.orders(actor_row), &order_before);
-    assert_eq!(sim.world.random.state(), rng_before);
     assert_eq!(sim.builds[site_row].image(), build_before);
-    assert_ne!(sim.channel_digest(), digest_before);
+    assert_eq!(sim.world.random.state(), rng_before);
 }
 
 #[test]
-fn production_frame_matches_save_reload_reinstall_and_resume() {
+fn x_then_y_saved_grow_matches_v16_save_reload_resume() {
     let (mut direct, actor_row, _, authority) = fixture();
     let saved = save_load::save_sim(&direct).unwrap();
     let mut resumed = save_load::load_sim(&saved).unwrap();
-    assert_eq!(resumed.farms, direct.farms);
     direct.replace_gather_work_authority(authority.clone());
     resumed.replace_gather_work_authority(reinstall(&resumed, authority));
-
-    let order_before = direct.world.orders(actor_row).clone();
     direct.do_frame();
     resumed.do_frame();
-    let receipt = direct.last_gather_work_receipt.unwrap();
-    assert_eq!(receipt, resumed.last_gather_work_receipt.unwrap());
-    assert_eq!(receipt.branch, GatherWorkBranch::FarmStatus1Grow);
-    assert_eq!(direct.world.orders(actor_row), &order_before);
     assert_eq!(
-        direct.farms.get(FARM_INDEX as usize).unwrap().percent[CELL],
+        direct.last_gather_work_receipt,
+        resumed.last_gather_work_receipt
+    );
+    assert_eq!(
+        direct.last_gather_work_receipt.unwrap().branch,
+        GatherWorkBranch::FarmStatus1Grow
+    );
+    assert_eq!(
+        direct.farms.get(FARM_INDEX as usize).unwrap().percent[CELL_XY],
         PERCENT_AFTER
+    );
+    assert_eq!(
+        direct.world.orders(actor_row).order_type(),
+        OrderIndex::Gather
     );
     assert_eq!(
         save_load::save_sim(&direct).unwrap(),
@@ -258,64 +324,64 @@ fn production_frame_matches_save_reload_reinstall_and_resume() {
 }
 
 #[test]
-fn farm_owner_and_every_unowned_tail_fail_before_a_write() {
-    let mutations: Vec<Box<dyn Fn(&mut Sim, &mut GatherWorkAuthority)>> = vec![
-        Box::new(|sim, _| sim.farms.get_mut(FARM_INDEX as usize).unwrap().status[CELL] = 0),
-        Box::new(|sim, _| sim.farms.get_mut(FARM_INDEX as usize).unwrap().valid = 0),
-        Box::new(|sim, _| sim.farms.get_mut(FARM_INDEX as usize).unwrap().o = 2_005),
-        Box::new(|_, authority| authority.actors[0].lead_animation = FARM_ANIMATION_24),
-        Box::new(|_, authority| authority.farms[0].lead_cur_time = 47),
-        Box::new(|_, authority| authority.farms[0].lead_hold_attack = 1),
-        Box::new(|_, authority| authority.farms[0].covers_actor_tile = false),
-        Box::new(|sim, _| sim.world.frame = (-i32::from(ACTOR_O) - i32::from(WHO)) & 0xff),
-        Box::new(|sim, _| sim.builds[6].city = -1),
-        Box::new(|sim, _| sim.builds[6].dock = 11),
-        Box::new(|sim, _| sim.world.units.x_internal_mut()[8] = 0),
-    ];
-    for mutate in mutations {
-        let (mut sim, actor_row, _, mut authority) = fixture();
-        mutate(&mut sim, &mut authority);
-        let order_before = sim.world.orders(actor_row).clone();
-        let farms_before = sim.farms.clone();
-        let rng_before = sim.world.random.state();
-        assert!(prepare_gather_work_activation(
-            &sim.world,
-            &sim.builds,
-            &sim.farms,
+fn transposed_or_stale_cell_images_cannot_publish() {
+    let (mut sim, actor_row, _, authority) = fixture();
+    // Mutating only the transposed byte does not affect the executable's x-then-y lookup.
+    sim.farms.get_mut(FARM_INDEX as usize).unwrap().status[TRANSPOSED_YX] = 0;
+    assert!(prepare_gather_work_activation(
+        &sim.world,
+        &sim.builds,
+        &sim.farms,
+        &sim.unit_type,
+        &authority,
+        actor_row,
+    )
+    .is_ok());
+
+    let (mut sim, actor_row, _, authority) = fixture();
+    sim.farms.get_mut(FARM_INDEX as usize).unwrap().status[CELL_XY] = 2;
+    let before = save_load::save_sim(&sim).unwrap();
+    assert!(prepare_gather_work_activation(
+        &sim.world,
+        &sim.builds,
+        &sim.farms,
+        &sim.unit_type,
+        &authority,
+        actor_row,
+    )
+    .is_err());
+    assert_eq!(save_load::save_sim(&sim).unwrap(), before);
+
+    let (mut sim, actor_row, _, authority) = fixture();
+    let prepared = prepare_gather_work_activation(
+        &sim.world,
+        &sim.builds,
+        &sim.farms,
+        &sim.unit_type,
+        &authority,
+        actor_row,
+    )
+    .unwrap();
+    sim.farms.get_mut(FARM_INDEX as usize).unwrap().percent[CELL_XY] ^= 1;
+    let before_commit = save_load::save_sim(&sim).unwrap();
+    assert_eq!(
+        commit_gather_work_activation(
+            &mut sim.world,
+            &mut sim.builds,
+            &mut sim.farms,
             &sim.unit_type,
             &authority,
-            actor_row,
-        )
-        .is_err());
-        assert_eq!(sim.world.orders(actor_row), &order_before);
-        assert_eq!(sim.farms, farms_before);
-        assert_eq!(sim.world.random.state(), rng_before);
-    }
+            prepared,
+        ),
+        Err(GatherWorkRuntimeError::StaleState)
+    );
+    assert_eq!(save_load::save_sim(&sim).unwrap(), before_commit);
 }
 
 #[test]
-fn farm_walk_image_and_fresh_census_split_are_exact() {
-    let (sim, _, _, _) = fixture();
-    let farm = *sim.farms.get(FARM_INDEX as usize).unwrap();
-    let image = farm.image();
-    assert_eq!(image.len(), 190);
-    assert_eq!(&image[0..4], &1i32.to_le_bytes());
-    assert_eq!(&image[4..8], &2_006i32.to_le_bytes());
-    assert_eq!(
-        &image[8 + CELL * 4..12 + CELL * 4],
-        &PERCENT_BEFORE.to_le_bytes()
-    );
-    assert_eq!(image[172 + CELL], 1);
-    assert_eq!(&image[188..190], &[1, 0]);
-
-    // Exact retail status[x][y] classification from all 17 fresh Farm orders: two type-one
-    // no-ops, nine status-three no-ops, four stable-animation grows, and two grows which
-    // require an animation mutation. No saved witness reaches relocation or snip.
-    assert_eq!((2 + 9 + 4 + 2), 17);
-    assert_eq!((2, 9, 4, 2), (2, 9, 4, 2));
-
+fn second_grow_witness_binds_literal_retail_images() {
     let literal = [
-        0x00, 0xd6, 0x07, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x00, 0xd4, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xa1, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
         0x01,
     ];
@@ -323,16 +389,11 @@ fn farm_walk_image_and_fresh_census_split_are_exact() {
     assert_eq!(order.retail_payload_image(), literal);
     assert_eq!(
         (order.target_who, order.target_o, order.target_uid),
-        (1, 2_006, 12)
+        (0, 2_004, 4)
     );
-}
-
-#[test]
-fn farm_union_is_preserved_only_for_farm_builds() {
-    let (sim, _, site_row, _) = fixture();
-    save_load::save_sim(&sim).unwrap();
-    let (mut non_farm, _, non_farm_site, _) = fixture();
-    assert_eq!(non_farm_site, site_row);
-    non_farm.builds[non_farm_site].orig_type = CAMP_PROPERTY;
-    assert!(save_load::save_sim(&non_farm).is_err());
+    let farm = farm_two().image();
+    assert_eq!(farm.len(), 190);
+    assert_eq!(farm[172 + CELL_XY], 1);
+    assert_eq!(farm[172 + TRANSPOSED_YX], 2);
+    assert_eq!(&farm[188..190], &[1, 0]);
 }

@@ -1,11 +1,12 @@
 # Canonical saved Farm/Gather grow transaction
 
-Status: **production `Sim::unit_work`; exact fresh-SVX FarmStruct grow; DoNSave v16
+Status: **production `Sim::unit_work`; four exact fresh-SVX FarmStruct grows; DoNSave v16
 save/load/resume; zero RNG**.
 
 The fresh save has 17 active Farm `GATHER` orders.  A structural walk and exact retail
-branch audit found one bounded, checksum-changing continuation whose full mutable surface is
-now owned: owner 1 Unit `o=8,uid=16` gathers at Build `o=2006,uid=12`, Farm index 12.
+branch audit found four bounded, checksum-changing continuations whose full mutable surface is
+now owned. The original symmetric witness is owner 1 Unit `o=8,uid=16` gathering at Build
+`o=2006,uid=12`, Farm index 12.
 Retail requests the Guy's existing animation `0x23`, then `Farms::grow(12,2,2)` changes one
 single-precision FarmStruct percentage:
 
@@ -15,8 +16,8 @@ status[2][2]:  1          -> 1
 RNG/order/Unit/Build/Guy/effects: unchanged
 ```
 
-This is production credit for that substantive saved tick, not a scalar resource award and
-not a zero-net surrogate.  Every other Farm tail stays fail-closed unless its complete
+This is production credit for substantive saved ticks, not a scalar resource award and not a
+zero-net surrogate. Every other Farm tail stays fail-closed unless its complete
 FarmStruct, Guy, relocation and RNG surface is available.
 
 ## Shipped authority
@@ -60,15 +61,28 @@ The exact Gather payload SHA-256 is
 target `(who,o,uid)=(1,2006,12)`, `tx=ty=-1`, `build_type=0x1a1`, `wait=0`,
 `(goto,non_flat,dist,been)=(1,0,0,1)`. Actor coordinate `(24216,1944)` maps to Farm
 corner `(124,8)`, cell `(x,y)=(2,2)`. The Farm record has raw type zero, valid one and
-row-major `status[y][x]==1`. The lead Guy has animation `0x23`, hold-attack zero and
+retail `status[x][y]==1`. The lead Guy has animation `0x23`, hold-attack zero and
 clock `33<47`.
+
+The non-symmetric mutation-kill witness is owner 0 Unit `o=7,uid=14` at
+`(48312,22584)`, targeting Build `o=2004,uid=4`, Farm index 2. Its Gather payload/node
+SHA-256 values are respectively
+`8a9c12ee3cb8894ffc4b1b15c946bd904b3742abb0ba914bb3d0df17fd3c7f77` and
+`e6c544b192e13ee4af549aed6c969ea479c01a9a55cc32cc56ce1410d7a3bea8`;
+the Unit, lead Guy and Farm images are
+`c79cfafd1c32ab78fe19fb5f5ec9df14a873e20b0c47af5b5851d626ee9d7fa6`,
+`ed910897ba05ca35929f19715b210e848216bc159c9c5b9ee9d2858fe34a67e6`, and
+`3c74984a75b49f675b158665251a9a728003406ada808e3a1753b2b07354f24c`.
+Its local cell is `(x,y)=(2,1)`: byte `status[2*4+1]` is one while the transposed
+`status[1*4+2]` is two. The exact write is
+`percent[2*4+1] 0x3e6147a9 -> 0x3e666661`; animation `0x23` and clock `22<47` are stable.
 
 ## Exact transaction and ownership
 
 The host atomically revalidates actor Handle/identity/type, complete current Gather order,
 Guys-array shape, Build target/UID/valid/active/Farm property/city/Farm index, actor tile,
 4x4 footprint and covers result, Unit periodic-search phase, Farm array header and record
-identity, row-major cell bytes, Guy animation/clock/hold byte, frame, RNG, and installed
+identity, x-then-y cell bytes, Guy animation/clock/hold byte, frame, RNG, and installed
 authority revision/digest.
 
 The canonical `Farms` owner stores the exact array header and 190-byte records. Float values
@@ -85,19 +99,26 @@ default Farms owner. Load resets Guy/content authority; callers must reinstall i
 work. The production witness proves direct and save/reload/reinstall/resumed `do_frame`
 receipts and resaves are byte-identical.
 
-## Exact census boundary
+## Exact census boundary and indexing correction
 
-Using retail's row-major `status[y][x]`, the 17 images split into two type-one no-ops, six
-two-RNG relocations, five grow paths, three snip paths and one animation-only no-op. Of the
-five grow paths, this specimen alone already has the requested animation and unexpired
-clock; the other four require canonical mutable Guy ownership. Relocation, snip, status
-transition, animation change, expired animation, periodic special effect, invalid Farm
-binding, Mine, capacity and retirement all refuse before any write.
+The executable does not use conventional row-major indexing here. At
+`0x005eff2d..0x005eff4b`, `Unit::do_gather` forms local x and y separately, then addresses
+`farm + 0xac + local_x*4 + local_y`: `status[x][y]`. Transposing that expression invents six
+relocation and three snip witnesses which are not present in this save.
+
+With the instruction-exact x-then-y lookup, the 17 images split into two type-one no-ops,
+nine already-stable status-three animation no-ops, four already-stable status-one grows, and
+two grow paths which require a Guy animation mutation. The four stable grows are owner/unit
+`0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
+No fresh witness reaches relocation or snip. Animation mutation, expired animation, periodic
+special effect, invalid Farm binding, Mine, capacity and retirement still refuse before any
+write.
 
 Focused gates:
 
 ```sh
 cargo test -p don-sim --test canonical_gather_farm_runtime
+cargo test -p don-sim --test canonical_gather_farm_xy_index
 cargo test -p don-sim --test canonical_gather_runtime --test canonical_gather_saved_work
 cargo test -p don-sim save_load --lib
 cargo check -p don-sim

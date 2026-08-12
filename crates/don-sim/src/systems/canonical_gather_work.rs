@@ -393,7 +393,8 @@ pub struct GatherFarmRuntimeFacts {
     pub corner_ty: i32,
     pub x_size: i32,
     pub y_size: i32,
-    /// Selected `FarmStruct::status[x][y]`. Unread on the `farm_type & 1` branch.
+    /// Selected `FarmStruct::status[x][y]`. Retail flattens this as `x * y_size + y`, not
+    /// conventional row-major `y * x_size + x`. Unread on the `farm_type & 1` branch.
     pub selected_cell_status: Option<u8>,
     pub lead_cur_time: u32,
     pub lead_end_time: u32,
@@ -648,7 +649,10 @@ pub fn plan_fresh_farm_tick(
                 UnownedGatherArm::FarmOutsideFootprint,
             ));
         }
-        let cell = (dy * facts.x_size + dx) as usize;
+        // `0x005eff2d..0x005eff4b`: base + 0xac + local_x*4 + local_y. The first
+        // subscript is x; transposing these indices invents relocation/snip branches which
+        // none of the fresh witnesses actually executes.
+        let cell = (dx * facts.y_size + dy) as usize;
         let status = farm.status.get(cell).copied();
         if status != facts.selected_cell_status {
             return Err(GatherWorkPlanError::Unowned(
@@ -698,7 +702,7 @@ pub fn plan_fresh_farm_tick(
     if branch == GatherWorkBranch::FarmStatus1Grow {
         let dx = reads.actor_tx.wrapping_sub(facts.corner_tx) as usize;
         let dy = reads.actor_ty.wrapping_sub(facts.corner_ty) as usize;
-        let cell = dy * facts.x_size as usize + dx;
+        let cell = dx * facts.y_size as usize + dy;
         farm_after.status[cell] = 1;
         let grown = f32::from_bits(farm_after.percent[cell]) + f32::from_bits(0x3ba3_d70a);
         farm_after.percent[cell] = grown.min(1.0).to_bits();
@@ -1300,7 +1304,7 @@ pub fn commit_gather_work_activation(
         prepared.farm_reads.map(|reads| {
             let dx = reads.actor_tx.wrapping_sub(facts.corner_tx) as usize;
             let dy = reads.actor_ty.wrapping_sub(facts.corner_ty) as usize;
-            dy * facts.x_size as usize + dx
+            dx * facts.y_size as usize + dy
         })
     });
     Ok(GatherWorkActivationReceipt {
