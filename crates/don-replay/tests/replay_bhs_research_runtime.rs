@@ -35,10 +35,16 @@ use don_sim::systems::leader_produce_building_prefix::{
     LeaderProduceBuildingPrefixStatus, BUILD_FLAG_NO_ACTIVE_CITY_REQUIRED,
     LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA,
 };
-use don_sim::systems::production::runtime::{
-    LiveProductionRuntime, LiveProductionType, SingleLibraryResearchStatus,
+use don_sim::systems::leader_produce_building_search_setup::{
+    apply_sim_leader_produce_building_search_setup, LeaderProduceBuildingSearchSetupError,
+    LeaderProduceBuildingSearchSetupStatus, LEADER_PRODUCE_BUILDING_CANDIDATE_BYTES_REMAINING,
+    LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA, LEADER_PRODUCE_BUILDING_SEARCH_SETUP_BYTES,
 };
-use don_sim::systems::production::{flag, off, BuildData, BuildQueue, BuildQueueEntry};
+use don_sim::systems::production::runtime::{
+    LiveBuildVisibilityTypeFacts, LiveProductionRuntime, LiveProductionType,
+    SingleLibraryResearchStatus,
+};
+use don_sim::systems::production::{flag, off, BuildData, BuildQueue, BuildQueueEntry, Footprint};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::Sim;
 
@@ -209,6 +215,12 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     };
     build.other[off::OBJECT_ID..off::OBJECT_ID + 2]
         .copy_from_slice(&(BUILD_BAND_BASE as i16).to_le_bytes());
+    // The native search setup decodes the Build's Coord into the canonical WData plane.
+    let center: i32 = 3 * 768 + 384;
+    build.other[off::X_INTERNAL..off::X_INTERNAL + 4]
+        .copy_from_slice(&(center ^ 0x63637).to_le_bytes());
+    build.other[off::Y_INTERNAL..off::Y_INTERNAL + 4]
+        .copy_from_slice(&(center ^ 0x63637).to_le_bytes());
     build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
     let row = sim.spawn_build(owner, build);
     sim.cities.city_mark[owner] = 1;
@@ -234,6 +246,13 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     let mut farm = LiveProductionType::in_place_building(417, 150);
     // Installed FARM BuildTypeData::build_flags, schema/live/live-tables-building.tsv.
     farm.build_flags = 0x1000_0049;
+    farm.build_visibility = Some(LiveBuildVisibilityTypeFacts {
+        footprint: Some(Footprint {
+            x_size: 4,
+            y_size: 4,
+        }),
+        is_fort: None,
+    });
     production.install_type(farm);
     production.leaders[owner].resources = [100; 6];
     sim.leaders[owner].econ.stockpile = [100; 6];
@@ -380,6 +399,92 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     assert_eq!(
         admitted_produce.continuation.unwrap().va,
         LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA
+    );
+    let search_input = admitted_produce.continuation.unwrap();
+    let search_build_before = city_sim.builds[city_row].image();
+    let search_groups_before = city_sim.groups.clone();
+    let search_setup = apply_sim_leader_produce_building_search_setup(
+        &city_sim,
+        &city_production,
+        &types,
+        search_input,
+    )
+    .unwrap();
+    assert_eq!(LEADER_PRODUCE_BUILDING_SEARCH_SETUP_BYTES, 0x5d4);
+    assert_eq!(
+        search_setup.status,
+        LeaderProduceBuildingSearchSetupStatus::ReadyForCandidateLoop
+    );
+    assert_eq!(search_setup.origin_type, LIBRARY);
+    assert_eq!(search_setup.origin_world_cell, [3, 3]);
+    assert_eq!(search_setup.origin_region, 64);
+    assert_eq!(search_setup.leader_radius, 20);
+    assert_eq!(search_setup.circle_radius_index, 5);
+    assert_eq!(search_setup.initial_circle_offset, 1);
+    assert_eq!(
+        search_setup.target_footprint,
+        Footprint {
+            x_size: 4,
+            y_size: 4
+        }
+    );
+    assert_eq!(search_setup.footprint_search, [1, 1, 2]);
+    assert!(!search_setup.target_is_dock);
+    assert!(
+        !search_setup.resource_sensitive_search,
+        "Farm forces retail's build_flags & 0x40 search local to zero"
+    );
+    let candidate = search_setup.continuation.unwrap();
+    assert_eq!(candidate.va, LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA);
+    assert_eq!(
+        candidate.bytes_remaining,
+        LEADER_PRODUCE_BUILDING_CANDIDATE_BYTES_REMAINING
+    );
+    assert_eq!(city_sim.builds[city_row].image(), search_build_before);
+    assert_eq!(city_sim.groups.list, search_groups_before.list);
+    assert_eq!(city_production.leaders[OWNER].resources, resources_before);
+
+    city_sim.step8.leaders[OWNER].flags = 0;
+    city_sim.vic_leaders.slots[OWNER].leader_flags = 0;
+    let saved_search_sim = save_sim(&city_sim).unwrap();
+    city_sim.step8.leaders[OWNER].flags = 3;
+    city_sim.vic_leaders.slots[OWNER].leader_flags = 3;
+    let mut resumed_search_sim = load_sim(&saved_search_sim).unwrap();
+    resumed_search_sim.step8.leaders[OWNER].flags = 3;
+    resumed_search_sim.vic_leaders.slots[OWNER].leader_flags = 3;
+    let resumed_search = apply_sim_leader_produce_building_search_setup(
+        &resumed_search_sim,
+        &city_production,
+        &types,
+        search_input,
+    )
+    .unwrap();
+    assert_eq!(resumed_search, search_setup);
+
+    city_sim.world.frame = 1;
+    assert_eq!(
+        apply_sim_leader_produce_building_search_setup(
+            &city_sim,
+            &city_production,
+            &types,
+            search_input,
+        ),
+        Err(LeaderProduceBuildingSearchSetupError::UnsupportedNonzeroFrame { frame: 1 })
+    );
+    city_sim.world.frame = 0;
+    let mut missing_footprint = city_production.clone();
+    missing_footprint.types[417]
+        .as_mut()
+        .unwrap()
+        .build_visibility = None;
+    assert_eq!(
+        apply_sim_leader_produce_building_search_setup(
+            &city_sim,
+            &missing_footprint,
+            &types,
+            search_input,
+        ),
+        Err(LeaderProduceBuildingSearchSetupError::MissingTargetFootprint)
     );
 
     let mut inactive_city_sim = city_sim;
@@ -942,6 +1047,31 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(
         installed_produce.continuation.unwrap().va,
         LEADER_PRODUCE_BUILDING_CITY_GATE_CONTINUATION_VA
+    );
+    let installed_search = apply_sim_leader_produce_building_search_setup(
+        &sim,
+        &production,
+        &types,
+        installed_produce.continuation.unwrap(),
+    )
+    .expect("advance the installed Farm through exact frame-zero search setup");
+    assert_eq!(
+        installed_search.status,
+        LeaderProduceBuildingSearchSetupStatus::ReadyForCandidateLoop
+    );
+    assert_eq!(installed_search.origin_world_cell, [3, 3]);
+    assert_eq!(installed_search.leader_radius, 20);
+    assert_eq!(
+        installed_search.target_footprint,
+        Footprint {
+            x_size: 4,
+            y_size: 4
+        }
+    );
+    assert_eq!(installed_search.footprint_search, [1, 1, 2]);
+    assert_eq!(
+        installed_search.continuation.unwrap().va,
+        LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA
     );
 
     let error = run_production_research_call(

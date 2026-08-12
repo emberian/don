@@ -1,7 +1,7 @@
 # Scenario `place_building_with_cost` transaction boundary
 
-This note records the retail body behind BHS builtin 520 and the exact canonical prefix now
-mounted in the replay-selected `ScriptRuntime`. The prefix is deliberately not a scalar stub:
+This note records the retail body behind BHS builtin 520 and the exact canonical prefixes now
+mounted in the replay-selected `ScriptRuntime`. The prefixes are deliberately not scalar stubs:
 an affordable request stops at the first unowned native transaction instead of reporting a
 building that was never placed.
 
@@ -31,13 +31,28 @@ A zero result returns zero without mutation. A nonzero result enters
 bytes and performs the native placement search, City association, resource payment, Build
 allocation, builder selection, and BUILD_AT order installation. It eventually calls
 `Objects::init_build` (call site `0x006E2CA3`) and `Group::action_swarm_around` (call site
-`0x006E2EB2`), but approximately 6.2 KiB of policy and search precedes those leaves.
+`0x006E2EB2`). The exact mounted entry/City gate owns `0x006E1400..0x006E150D`; the next
+1,492-byte frame-zero setup owns `0x006E150D..0x006E1AE1`. The candidate loop and mutation tail
+remain 5,645 bytes.
 
 The existing package-driven Group Build runtime is therefore not interchangeable with this
 call: it begins after a site and builders have already been selected, while
 `Leader::produce_building` owns that selection.
 
-## Canonical prefix and receipt
+The recovery is pinned to retail `riseofnations.exe` SHA-256
+`30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079` and `rise.pdb`
+SHA-256 `334a3ea1f96e65c0bd7d045449e2cc68d81c51923020f9728e80d1e508d9bff5`. PDB layouts name
+`SubObjectData::x_internal/y_internal` (`+0x10/+0x14`) and
+`ObjectTypeData::x_size/y_size` (`+0x234/+0x238`). The PE body establishes:
+
+- `0x006E150D..0x006E15B7`: coordinate decode, `WData +0x04` region read, and
+  `LeaderData::get_radius`;
+- the nonzero-frame policy beginning at the `Game+0x550` test, excluded by this tranche;
+- the distinct Oil Well (`type 421`) existing-object scan, also excluded; and
+- `0x006E1ACE..0x006E1AE0`: compare first offset with `circle_radius[radius_index]` and jump
+  to the common failure epilogue when exhausted. The next instruction is `0x006E1AE1`.
+
+## Canonical prefixes and receipts
 
 `bhs_place_building_runtime` reads and reconciles:
 
@@ -54,25 +69,50 @@ receipt with zero. An affordable request returns
 `ReadyForLeaderProduceBuilding` plus the exact continuation boundary
 `{ va: 0x006E1400, bytes: 7406, owner, type, origin, mode: 0 }` and no scalar result.
 
-The replay host records terminal receipts. On the ready arm it raises the existing unimplemented
-host boundary, so `ScriptRuntime` rolls back Program/ref/timers, BHS cursor, research queues,
+The entry tranche resolves the origin Build and reproduces retail's active-City versus target
+`build_flags & 0x10` admission. Its rejection returns native one, which builtin 521 converts to
+scenario zero. An admitted request continues at `0x006E150D`.
+
+The frame-zero search-setup tranche consumes only canonical owners:
+
+- decoded coordinates from `BuildData::x_internal/y_internal` and `WData::region` from the map;
+- `LeaderData::get_radius` from retail `CityRules`, the origin production Type, and the live
+  Indian tribe-bonus bit;
+- the exact `BuildTypeData::is(DOCK, 0)` relation from the mutable Type table;
+- `ObjectTypeData::x_size/y_size` from the installed production Type projection; and
+- `circle_radius[]` from the instruction-derived canonical circle generator.
+
+It deliberately refuses nonzero `Game::frame` because that retail arm changes the radius and
+first offset through additional Type policy, and it refuses Oil Well because that Type takes a
+separate existing-well/map scan. For the ordinary admitted cohort it records the origin world
+cell/region, radius and circle-table endpoint, Dock/footprint search arguments, and the
+resource-sensitive search flag. A non-exhausted scan returns no scalar: its continuation is
+`{ va: 0x006E1AE1, bytes_remaining: 5645, ...exact live locals }`.
+
+The replay host records terminal receipts from the earlier gates and both native-prefix receipts
+on admitted execution. Reaching the candidate loop raises the existing unimplemented host
+boundary, so `ScriptRuntime` rolls back Program/ref/timers, BHS cursor, research queues,
 resources, Cities, Groups, and all Leader mirrors. This preserves builtin 520 as the externally
-visible stop until `Leader::produce_building` can be committed as one atomic transaction.
+visible stop until candidate selection and the placement mutation tail are one atomic
+transaction.
 
 ## Installed-content evidence
 
 The replay-selected installed `economic.bhs` success path reaches builtin 520 after the owned
 357, 258, 362, 455, 386, and 436 continuation. Its first request is Farm in Athens for the replay
 AI owner. The fixture admits the installed Farm cost (`4t`, decoded to 40 Timber) and reconciles
-100 units of every Leader resource. The prefix result is nonzero (`100 / 40 = 2`) and the test
-still stops at builtin 520, proving that no false placement result leaks past the native boundary.
+100 units of every Leader resource. The cost result is nonzero (`100 / 40 = 2`); the active
+Athens Build passes the City gate; and the 4x4 Farm advances through radius 20 / circle index 5
+to the exact candidate-loop boundary. The test still stops at builtin 520, proving that no false
+placement result leaks past the native boundary.
 
 The focused gate is:
 
 ```text
-CARGO_TARGET_DIR=/Users/ember/.cache/don-bhs520-target \
+CARGO_TARGET_DIR=/Users/ember/.cache/don-bhs520c9-target \
   cargo test -p don-replay --test replay_bhs_research_runtime -- --nocapture
 ```
 
-All four tests pass with installed `ron-data`: terminal refusal, later-VM rollback, direct
-read-only/save-resume receipt, and replay-selected shipped economic continuation.
+All five tests pass with installed `ron-data`: terminal refusal, later-VM rollback, direct
+read-only/save-resume receipts, insufficient-resource refusal, and replay-selected shipped
+economic continuation.

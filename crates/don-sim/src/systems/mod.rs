@@ -220,6 +220,8 @@ pub mod leader_tech_sync;
 pub mod leader_process_taunt;
 /// Exact read-only City/target-Type gate at the start of `Leader::produce_building`.
 pub mod leader_produce_building_prefix;
+/// Exact frame-zero coordinate/radius/footprint setup before the placement candidate loop.
+pub mod leader_produce_building_search_setup;
 /// Added by `economy-step8`. `Leaders::process_all` `0x006ED2A0` — step 8 of `do_frame`,
 /// the caller `economy.rs` never had, plus the second level `Leader::gather` reaches:
 /// the `BitMask<44>` union that arms the two stat-dirty bits, `calc_wall_stats`,
