@@ -1,12 +1,22 @@
 use don_replay::continent::{
     execute_continent_prefix_with_regions_from_rng, execute_east_meets_west_player_land,
-    ContinentStop, EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandNext,
-    CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_CALL_VA, EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
-    MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
+    execute_east_meets_west_post_player_land_cleanup, ContinentStop, EastMeetsWestPlayerLandCall,
+    EastMeetsWestPlayerLandNext, EastMeetsWestPostPlayerLandCleanupNext,
+    EastMeetsWestStringClosePath, CHECK_PLAYER_LAND_NATIVE_BODY,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, EAST_MEETS_WEST_LOG_STRING,
+    EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET, EAST_MEETS_WEST_LOG_STRING_HASH,
+    EAST_MEETS_WEST_LOG_STRING_ORDINAL, EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS,
+    EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA, EAST_MEETS_WEST_PLAYER_LAND_CALL_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA, EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
+    EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_END_VA,
+    EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_INSTRUCTION_COUNT,
+    EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SIZE,
+    FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
-    RISE_EXE_SHA256, STRING_CLOSE_VA,
+    RISE_EXE_SHA256, STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256,
+    STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
+    STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
 };
 use don_replay::fractal_boundary::resolve_tile_selection;
 use don_replay::map_style::{ron_data_root_for_replay, MapStyleStaticData};
@@ -69,6 +79,51 @@ fn native_extent_fastcall_and_typed_residual_are_frozen() {
             EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
         ),
         (0x0069_7484, 0x0069_7492, 0x0069_7497)
+    );
+    assert_eq!(STRING_CLOSE_NATIVE_BODY.size, STRING_CLOSE_SIZE);
+    assert_eq!(STRING_CLOSE_SIZE, 79);
+    assert_eq!(STRING_CLOSE_INSTRUCTION_COUNT, 36);
+    assert_eq!(STRING_CLOSE_NATIVE_BODY.sha256, STRING_CLOSE_SHA256);
+    assert_eq!(
+        STRING_CLOSE_NATIVE_BODY.direct_calls,
+        [(
+            STRING_GUTS_DESTRUCTOR_CALL_VA,
+            STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA
+        )]
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY.end_va_exclusive,
+        EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_END_VA
+    );
+    assert_eq!(EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SIZE, 43);
+    assert_eq!(
+        EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_INSTRUCTION_COUNT,
+        11
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY.sha256,
+        EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256
+    );
+}
+
+#[test]
+fn caller_log_string_is_the_exact_shipped_internal_table_ordinal() {
+    assert_eq!(EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET, 0x17660);
+    assert_eq!(EAST_MEETS_WEST_LOG_STRING_ORDINAL, 4_792);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ron-data/internal_strings.xml");
+    let xml = std::fs::read_to_string(path).unwrap();
+    let table = don_content::string_table::parse_string_table_xml(&xml).unwrap();
+    let record = &table.records()[EAST_MEETS_WEST_LOG_STRING_ORDINAL];
+    assert_eq!(record.text, EAST_MEETS_WEST_LOG_STRING);
+    assert_eq!(record.declared_hash, EAST_MEETS_WEST_LOG_STRING_HASH);
+    assert_eq!(
+        record.text.encode_utf16().count(),
+        EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS
     );
 }
 
@@ -151,6 +206,33 @@ fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
             string_close_va: STRING_CLOSE_VA,
         }
     );
+    assert_eq!(
+        execute_east_meets_west_post_player_land_cleanup(&receipt, &[]),
+        Err(don_replay::continent::EastMeetsWestPlayerLandError::EmptyCentroidXArray)
+    );
+    let cleanup = execute_east_meets_west_post_player_land_cleanup(&receipt, &[40]).unwrap();
+    assert_eq!(
+        cleanup.stack_argument_pop_va,
+        EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA
+    );
+    assert_eq!(cleanup.guard_before_string_close, 1);
+    assert_eq!(cleanup.guard_after_string_close, 0);
+    assert_eq!(
+        cleanup.string_close.path,
+        EastMeetsWestStringClosePath::SharedStringGutsReferenceDecrement
+    );
+    assert_eq!(cleanup.string_close.table_reference_delta_over_lease, 0);
+    assert!(!cleanup.string_close.string_guts_destructor_called);
+    assert!(cleanup.string_close.local_data_is_null);
+    assert_eq!(cleanup.centroid_x_length, 1);
+    assert!(cleanup.centroid_x_list_non_null);
+    assert_eq!(
+        cleanup.next,
+        EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidXList {
+            call_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+            import_iat_va: FREE_IMPORT_IAT_VA,
+        }
+    );
 }
 
 #[test]
@@ -214,6 +296,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         let ContinentStop::AddStartingLocation {
             remaining,
             player_land: receipt,
+            post_player_land_cleanup,
             next_va,
             next_mutator_va,
             ..
@@ -228,8 +311,19 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        assert_eq!(*next_va, EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, "{name}");
-        assert_eq!(*next_mutator_va, STRING_CLOSE_VA, "{name}");
+        assert_eq!(*next_va, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, "{name}");
+        assert_eq!(*next_mutator_va, FREE_IMPORT_IAT_VA, "{name}");
+        assert_eq!(
+            post_player_land_cleanup.centroid_x_length,
+            usize::from(prefix.team_partition.as_ref().unwrap().continent_count),
+            "{name}"
+        );
+        assert!(
+            !post_player_land_cleanup
+                .string_close
+                .string_guts_destructor_called,
+            "{name}"
+        );
         assert_eq!(
             prefix.player_land.as_ref(),
             Some(&receipt.body_receipt),

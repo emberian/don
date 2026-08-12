@@ -217,6 +217,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             mutation,
             remaining,
             player_land,
+            post_player_land_cleanup,
             next_mutator_va,
         } = &prefix.stop
         else {
@@ -329,14 +330,16 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
+            don_replay::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::STRING_CLOSE_VA,
+            don_replay::continent::FREE_IMPORT_IAT_VA,
             "{name}"
         );
+        assert_eq!(post_player_land_cleanup.centroid_x_length, 2, "{name}");
+        assert!(post_player_land_cleanup.centroid_x_list_non_null, "{name}");
         assert_eq!(
             player_land.random_state_before, player_land.random_state_after,
             "{name}"

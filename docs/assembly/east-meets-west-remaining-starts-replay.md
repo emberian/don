@@ -9,9 +9,10 @@ before the post-loop call at 0x00697492. The next native mutator is
 Map::check_player_land at 0x0068ef00; this tranche names that call but does not
 execute it.
 
-The canonical continuation now executes that separately proved leaf and
-advances the integrated continent stop to the caller cleanup at 0x00697497;
-see `map-check-player-land-east-meets-west.md`. The boundary below remains the
+The canonical continuation now executes that separately proved leaf and its
+exact local-string cleanup, advancing the integrated continent stop to the
+first centroid-array free at 0x006974c2; see
+`map-check-player-land-east-meets-west.md`. The boundary below remains the
 historical contract of this isolated remaining-start tranche.
 
 Evidence is ron-bin/riseofnations.exe (SHA-256
@@ -91,9 +92,10 @@ claim that the generated World equals a later replay-recorded checksum.
 EastMeetsWestRemainingStartsReceipt binds every caller anchor, the exact
 active-slot schedule, skipped inactive slots, every repeated call, selector
 and mutation receipt, RNG chronology, and before/after World sections. On
-complete success ContinentStop::AddStartingLocation::next_va advances to the
-first unexecuted native body 0x0068ef00, while the remaining receipt retains
-the call site 0x00697492. A later selector failure instead advances to
+complete success the isolated remaining receipt retains the unexecuted leaf
+call site 0x00697492. The integrated
+ContinentStop::AddStartingLocation::next_va advances through that leaf and the
+next cleanup to 0x006974c2. A later selector failure instead advances to
 0x00697003. The continent owner digest includes the new source, so the
 localizer cannot reuse an older implementation proof.
 
@@ -115,8 +117,8 @@ does not visit slot 2.
 - exact corpus census: 13,119,476 walked / 7,917,091 owned / 5,202,385 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
 - exact current integrated boundary set: 2
-  map_team_continent_post_player_land_cleanup and 19
-  place_all_mountain_range_lists; all 21 earliest lawful unknowns remain
+  map_team_continent_centroid_x_free and 19
+  place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:
   replay-remaining-starts-check-v3-20260811T212804Z-3895-5126-a7bf776e8e5b.

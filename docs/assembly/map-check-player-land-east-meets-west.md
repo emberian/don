@@ -5,8 +5,9 @@
 This lane recovers the complete shipped `Map::check_player_land` leaf and the
 East Meets West caller edge after all active-player starting locations have
 been appended.  It executes the native call at `0x00697492`, returns to
-`0x00697497`, and stops at a typed local-string-cleanup residual.  The leaf
-consumes no RNG.
+`0x00697497`, executes the exact caller-local `String::close` cleanup, and
+stops before the first centroid-array `free` at `0x006974c2`.  Neither the
+leaf nor this cleanup consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -131,27 +132,55 @@ rejection.  StartArrays remain byte-identical.  These values are regression
 outputs of the binary-derived schedule; the recordings' later retail World
 checksums were not used as targets.
 
-## Typed residual and gates
+## Exact `String::close` and caller cleanup
 
 After the void return, the native caller resumes at `0x00697497`, writes its
 local cleanup guard at `0x0069749a`, and calls `String::close`
-`0x00a1cf40` at `0x006974a1`.  The receipt exposes this as
-`PostCallCleanup`; it does not pretend the rest of the style virtual ran.
+`0x00a1cf40` at `0x006974a1`.  PDB gives `String` a 20-byte layout and names
+the called body at `0x00a1cf40` with size 79.  Its exact half-open extent is
+`0x00a1cf40..0x00a1cf8f`, 36 instructions, SHA-256
+`80b55b224beca72346bcb001fb415310611060b52a0c49c8db67c66c71fbae7f`.
+
+The local is not an invented empty string.  At `0x006967be..0x006967cc` the
+same caller reads `[[int_str_array]+0x10] + 0x17660` and passes that 20-byte
+entry to `String::operator=`.  `0x17660 / 0x14 = 4792`; shipped
+`internal_strings.xml[4792]` is exactly `MapGen:EastMeetsWest enter`, declared
+hash `39143929`, 26 UTF-16 units.  The XML-loaded table entry is heap-backed;
+assignment adds the local `StringGuts` reference.  `String::close` therefore
+takes its reference-decrement arm.  Its only child call, the conditional
+`StringGuts` scalar deleting destructor at `0x00a1cf71 -> 0x004d3e90`, is
+unreachable for this just-acquired table lease.  Assignment plus close leaves
+the table's reference count unchanged, while the local data pointer, offset,
+length, and both cached hashes are cleared.
+
+The exact caller slice `0x00697497..0x006974c2` is 43 bytes / 11
+instructions, SHA-256
+`7d4bc060ac077efe0ba99a2900ff83acf9ab8f8887cccdfe5078b94ee17dc987`.
+After the close it clears the EH guard at `0x006974a6`, loads the first
+`SimpleArray<int>` list at `0x006974aa`, loads `__imp__free` from
+`0x00ac5500`, restores the PDB-named `SimpleArray<int>` vftable
+`0x00b22a60`, tests the list, and pushes it.  The centroid receipt contains at
+least one X coordinate, so this pointer is non-null and the branch reaches the
+still-unexecuted imported call at `0x006974c2`.  No later array destruction or
+style-virtual epilogue is inferred.
+
+## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
 after the frozen remaining-start loop.  `ContinentStop::AddStartingLocation`
-retains the complete wrapper receipt, exposes `next_va = 0x00697497`, and
-names the still-unexecuted native mutator separately as
-`next_mutator_va = 0x00a1cf40`.  The generic continent receipt carries the
-same leaf receipt.  Owner transition accepts the result only when both exact
-addresses match, and its implementation digest includes this source body.
-The offline localizer consequently names the two style-19 endpoints
-`map_team_continent_post_player_land_cleanup`, rather than the already
-executed start append or leaf.
+retains the complete wrapper and cleanup receipts, exposes
+`next_va = 0x006974c2`, and names the still-unexecuted imported mutator as
+`next_mutator_va = 0x00ac5500`.  The generic continent receipt carries the
+same leaf receipt.  Owner transition accepts the result only when the call,
+import slot, and unchanged RNG chronology all match; its implementation digest
+includes this source body.  The offline localizer consequently names the two
+style-19 endpoints `map_team_continent_centroid_x_free`, rather than the
+already executed leaf or local-string close.
 
 Validation gates:
 
-- local real-corpus test: both headers green;
+- local real-corpus/string-cleanup test: 4/4, including both headers and the
+  shipped positional string-table binder;
 - local mutation-sensitive anomaly fixture: green;
 - Persvati clean-HEAD overlay body/ABI fixture: green, job
   `map-player-land-audit-v3-20260811T212336Z-98376-3674-a7bf776e8e5b`;
@@ -176,3 +205,13 @@ Validation gates:
   `map-player-land-owner-full-hbox-20260812T003150Z-51674-1002-70f09f227b1d`,
   and the 62-opened-recording localizer census in
   `map-player-land-localizer-v2-hbox-20260812T003205Z-52756-15460-ed73570f9d4e`.
+- current post-cleanup local owner audit: 2/2, including all 21 checksum-bearing
+  recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
+  ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
+  `map_team_continent_centroid_x_free` / nineteen
+  `place_all_mountains_add_mountain`.
+- current clean-HEAD Hbox overlay: final source compile plus full 4/4 suite,
+  including both real fixtures, green in
+  `map-player-land-string-close-20260812T010753Z-5869-9508-c8a3c250f8bf`
+  and
+  `map-player-land-string-close-real-20260812T010942Z-7944-10909-34e003e4734b`.

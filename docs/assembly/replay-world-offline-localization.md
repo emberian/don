@@ -88,8 +88,8 @@ bytes from `schema/replay-validation.json`:
 
 | current exact stop | recordings |
 |---|---:|
-| `place_all_mountain_range_lists` | 19 |
-| `map_team_continent_post_player_land_cleanup` | 2 |
+| `place_all_mountains_add_mountain` | 19 |
+| `map_team_continent_centroid_x_free` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
 style virtual completes also receipt the common post-continent and fertility stages. This
@@ -112,8 +112,9 @@ snapshot or owners.
 
 1. **Continue the measured generator stops.** The shipped mountain range-list inputs to
    `Mountains::randomize_mountains` `0x0089ca70` block 19 files; the two East Meets West
-   recordings have completed `Map::check_player_land` and now stop at the exact caller
-   cleanup residual whose next native mutator is `String::close` `0x00a1cf40`.
+   recordings have completed `Map::check_player_land` and the exact caller-local
+   `String::close`; they now stop at the first centroid-X `SimpleArray<int>` free call
+   `0x006974c2` through `__imp__free` at `0x00ac5500`.
 2. **Replace the wipe baseline with later TData and visibility producers.** The baseline is
    exact, but starting objects, terrain footprints, LOS and detector passes can overwrite it
    before the turn-2 checkpoint.

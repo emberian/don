@@ -143,12 +143,27 @@ pub fn advance_continent_world_ownership(
         &receipt.stop,
         ContinentStop::AddStartingLocation {
             next_va,
+            post_player_land_cleanup,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA
-            || *next_mutator_va != crate::continent::STRING_CLOSE_VA
+        } if *next_va != crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA
+            || *next_mutator_va != crate::continent::FREE_IMPORT_IAT_VA
+            || post_player_land_cleanup.body
+                != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
+            || post_player_land_cleanup.string_close.body
+                != crate::continent::STRING_CLOSE_NATIVE_BODY
+            || post_player_land_cleanup.string_close.string_guts_destructor_called
+            || !post_player_land_cleanup.centroid_x_list_non_null
+            || post_player_land_cleanup.centroid_x_length == 0
+            || post_player_land_cleanup.next
+                != (crate::continent::EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidXList {
+                    call_va: crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+                    import_iat_va: crate::continent::FREE_IMPORT_IAT_VA,
+                })
+            || post_player_land_cleanup.random_state_before
+                != post_player_land_cleanup.random_state_after
     ) {
-        return Err(mismatch(stage, "stop.player_land_residual"));
+        return Err(mismatch(stage, "stop.post_player_land_cleanup_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added
