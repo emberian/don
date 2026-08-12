@@ -15,18 +15,23 @@ true before `GameDaemon::busy` or a World plane changes:
 4. invalid retained Build rows take the PE's two false validity virtuals and skip; each valid
    incomplete row resolves its canonical current type through `LiveProductionRuntime`, and an
    ordinary non-Wonder or an unstarted Wonder takes the PE's exact no-visibility return;
-5. a valid started Wonder carries exact `ObjectTypeData +0x234/+0x238` footprint and, when
-   uncaptured, the reached `BuildTypeData::is_fort` fact; the captured branch returns before
-   that virtual. Its complete `Wall::update_local_seen` body writes the canonical World planes
-   in x-outer/y-inner tile order through `World::set_locally_seen`;
-6. each admitted active Build gets signed LOS from `ObjectData::mylos +0x3C`; negative LOS refuses,
-   zero returns without reading `visible`, and positive LOS requires `visible +0x40 == 0` and an
+5. every active Build resolves its current type before LOS, reproducing
+   `Object::update_seen`'s `is_wonder` / captured / `is_fort` / started preamble; a
+   missing reached fact refuses rather than treating the row as ordinary;
+6. a reached `Wall::update_local_seen` carries exact `ObjectTypeData +0x234/+0x238`
+   footprint. Its complete body composes the all-player or relation mask and writes the
+   canonical World planes in x-outer/y-inner tile order through `World::set_locally_seen`;
+7. each admitted active Build gets signed LOS from `ObjectData::mylos +0x3C`; negative LOS
+   refuses, zero returns before `visible`, and positive LOS executes the local-seen virtual
+   when `visible +0x40` is nonzero or the preamble selects a started Wonder, then requires an
    `infiltrated +0x3A` recipient in `0..=7`;
-7. the existing revision-bound Unit authority resolves every active owner-local Unit row,
-   detector byte, LOS/general result, small-radius projection, and extra explored recipient;
-8. every Unit that stamps has `ObjectData::visible +0x40 == 0`, avoiding the unrecovered
-   virtual `Unit::update_local_seen`; and
-9. every newly explored cell's `World::reveal_fog` call is proven mutation-free: its centre
+8. the existing revision-bound Unit authority resolves every active owner-local Unit row,
+   detector byte, LOS/general result, small-radius projection, extra explored recipient, and,
+   when `visible` is nonzero, exact `UnitTypeData +0x234` local-seen radius;
+9. `Unit::update_local_seen` walks the canonical circle table from the Unit's unprojected
+   position, stamps the supplied visibility mask through `World::set_locally_seen`, and then
+   yields to the ordinary object stamp; and
+10. every newly explored cell's `World::reveal_fog` call is proven mutation-free: its centre
    TData tile has no `RESOURCE 0x0200`, and its WData cell has neither `OIL 0x0800` nor item
    bit `0x8000`.
 
@@ -47,22 +52,24 @@ The executed stage map is:
 | `memset(World+0x164)` | clear canonical `seen3` |
 | Build vtable `0x00B42174`, `+0x0C/+0x10` | visit each canonical sparse Build identity; invalid retained rows skip |
 | `BuildData::is_wonder` `0x00472320`, active `0x00472350`, started `0x00472360` | resolve valid incomplete type identity; ordinary incomplete and unstarted Wonder rows skip, while complete Builds take `Object::update_seen` |
-| `Wall::update_local_seen` `0x0063ED50` | for a started Wonder, compose the exact all-player or captured/fort mask and walk its canonical footprint in retail order |
+| `Wall::update_local_seen` `0x0063ED50` | for any reached Build call, compose the exact all-player or relation mask and walk its canonical footprint in retail order |
 | `WallData::tile_corner` `0x00643440` | derive footprint corner from canonical Build position and exact type `x_size/y_size`; reject off-map or malformed type facts during preflight |
 | `World::set_locally_seen` `0x006B4BB0` | write `seen2` and `WData::was_seen`, plus `seen` and `wcoord_seen` unless the captured/fort explored-only flag is set; `seen3` is untouched |
 | `WallData::los` `0x0063FA50` | read signed canonical `ObjectData::mylos +0x3C`; zero LOS returns before `visible` |
 | dedicated Wall outer pass | exact retail structural band `[3000,3000)` proves zero rows; any nonempty Wall band refuses |
 | Unit outer pass | traverse the opaque prepared Unit rows in retail owner/object order |
-| `Object::update_seen(0)` `0x00651B80` | stamp Builds before Units, using each exact resolved LOS, centre, detector prefix, full circle-table order, and infiltrated `set_was_seen` suffix |
+| `Object::update_seen(0)` `0x00651B80` | run the Build type preamble, then stamp Builds before Units using each exact resolved LOS, centre, detector prefix, full circle-table order, and infiltrated `set_was_seen` suffix |
+| `Unit::update_local_seen` `0x0060E410` | when Unit `visible` is nonzero, walk `circle_radius[UnitTypeData::x_size]` from the original position and stamp that exact mask before the ordinary disc |
 | `World::reveal_fog` `0x006B3D30` | retain exact call chronology; all calls take the preflight-proven no-effect path |
 | scenario reveal points | skip because both exact Game gates are clear |
 | frame-zero sharing | skip because scheduled phase 33 is nonzero |
 
-Preflight clones persistent `seen2` to reproduce both started-Wonder footprint exploration and
-the exact later first-exploration chronology. It validates every footprint cell, reached
+Preflight clones persistent `seen2` to reproduce Build/Unit local-seen exploration and the
+exact later first-exploration chronology. It validates every local-seen cell, reached
 `reveal_fog` cell, and residual gate before publishing anything. The commit then performs the
-real canonical plane clear and replays the opaque Build action sequence—Wonder local footprints
-and active Build stamps interleaved in sparse object order—before each prepared Unit stamp.
+real canonical plane clear and replays the opaque Build action sequence—local footprints and
+active Build stamps interleaved in sparse object order—then each Unit local disc immediately
+before that Unit's ordinary stamp.
 A chronology assertion binds the preflight to the commit. No danger/visibility sidecar is
 introduced.
 
@@ -74,25 +81,28 @@ introduced.
 - a canonical active-complete Build stamps nonempty `seen` and persistent `seen2`, with Object
   flag `0x40` driving the freshly cleared detector `seen3` plane;
 - an incomplete ordinary Build executes without a vision write, while a 6x6 started Wonder
-  executes 36 exact tile calls folding onto 3x3 fog cells, changes the World checksum, and
+  executes 64 exact tile visits across its one-tile perimeter, folding onto 5x5 fog cells,
+  changes the World checksum, and
   survives save/reload plus a resumed frame byte-for-byte;
 - a live canonical Unit writes nonempty `seen`, persistent `seen2`, and `wcoord_seen`, while a
   nondetector leaves the freshly cleared `seen3` plane empty;
+- an ordinary Build with a relation mask, an implicit active Wonder with a zero `visible` byte,
+  and a Unit with a type-sized local disc each execute their retail local-seen path; the Build
+  and Unit witnesses preserve checksum and resumed-frame byte equality across save/load;
 - the canonical World checksum changes;
 - after removing only the reinstallable type/instance authority, save/load preserves that
   checksum and the next resumed frame converges in channel digest and byte-identical save;
-- a missing incomplete-Build current type, missing started-Wonder footprint facts, a reached
-  but absent fort predicate, a positive-LOS active Build with nonzero `visible`, a resource-cell
-  reveal, or a Unit with nonzero `visible` refuses before daemon or plane mutation;
+- a missing reached Build current type, missing local footprint, absent reached fort predicate,
+  malformed footprint, invalid Unit local radius, or resource-cell reveal refuses before daemon
+  or plane mutation;
 - a zero-LOS Build returns before its deliberately nonzero `visible` byte is read.
 
 ## Remaining red boundary
 
-The gap remains red. A nonempty dedicated Wall band, active-Build or Unit local-seen call,
-effectful reveal, scenario reveal-point pass, direct/incremental entry, or frame-zero explored
-sharing fails closed. Missing current Build type or reached Wonder footprint/fort facts also
-refuse atomically rather than inventing an ordinary row. Those bodies need their complete
-canonical owners and the same
+The gap remains red. A nonempty dedicated Wall band, effectful reveal, scenario reveal-point
+pass, direct/incremental entry, or frame-zero explored sharing fails closed. Missing current
+Build type, reached footprint/fort facts, or Unit local radius also refuses atomically rather
+than inventing an ordinary row. Those bodies need their complete canonical owners and the same
 preflight/commit discipline before the general `update_all_seen` row can close.
 
 ## Focused gate
@@ -105,7 +115,7 @@ cargo test -p don-sim systems::game_daemon_step12 --lib
 ```
 
 The stage map was audited against `re/decomp-all/00732840.c`,
-`re/decomp-all/00651b80.c`, `re/decomp-all/0063ed50.c`,
+`re/decomp-all/00651b80.c`, `re/decomp-all/0060e410.c`, `re/decomp-all/0063ed50.c`,
 `re/decomp-all/00643440.c`, `re/decomp-all/006b4bb0.c`, `re/decomp-all/0063fa50.c`,
 `re/decomp-all/006b3d30.c`, exact shipped Build/Wall vtable bytes, the existing PE/PDB
 procedure census, and the canonical sparse-object, Unit-column, World, Fog, and semaphore

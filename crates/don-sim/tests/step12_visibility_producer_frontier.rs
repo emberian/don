@@ -68,6 +68,7 @@ fn authority(live: LiveStep12UnitState) -> Step12UnitAuthorityReceipt {
         unit_domain: None,
         type_unit_flags2: None,
         small_los_projection: None,
+        local_seen_radius: None,
     }
 }
 
@@ -112,6 +113,9 @@ fn shipped_entries_bits_and_checksum_owner_are_frozen() {
     assert_eq!(GAME_DAEMON_UPDATE_ALL_SEEN_VA, 0x0073_2840);
     assert_eq!(OBJECT_INIT_VA, 0x0064_7750);
     assert_eq!(OBJECT_UPDATE_SEEN_VA, 0x0065_1b80);
+    assert_eq!(UNIT_UPDATE_LOCAL_SEEN_VA, 0x0060_e410);
+    assert_eq!(WALL_UPDATE_LOCAL_SEEN_VA, 0x0063_ed50);
+    assert_eq!(WORLD_SET_LOCALLY_SEEN_VA, 0x006b_4bb0);
     assert_eq!(OBJECT_HAS_GENERAL_VA, 0x0064_6b00);
     assert_eq!(UNIT_DATA_LOS_VA, 0x0061_00c0);
     assert_eq!(UNIT_DATA_IS_ON_MAP_VA, 0x0046_ce30);
@@ -645,6 +649,67 @@ fn detector_false_and_true_require_matching_explicit_provenance() {
             ..
         })
     ));
+}
+
+#[test]
+fn local_seen_radius_is_lazy_exact_and_bound_only_after_positive_los_and_visible() {
+    let mut rows = [live(0, 0, 0)];
+    rows[0].visible = 0b0000_0100;
+    let live_snapshot = snapshot(&rows, [1, 0, 0, 0, 0, 0, 0, 0]);
+    let mut row_authority = authority(rows[0]);
+    let receipt = authority_batch(live_snapshot, vec![Some(row_authority)]);
+    assert_eq!(
+        prepare_live_unit_pass(
+            0,
+            Step12VisibilityTrigger::ScheduledStep12,
+            live_snapshot,
+            Some(&receipt),
+        ),
+        Err(LiveStep12PrepareFault::MissingLocalSeenRadius { row: 0 })
+    );
+
+    row_authority.local_seen_radius = Some(MAX_FOG_RADIUS + 1);
+    let receipt = authority_batch(live_snapshot, vec![Some(row_authority)]);
+    assert_eq!(
+        prepare_live_unit_pass(
+            0,
+            Step12VisibilityTrigger::ScheduledStep12,
+            live_snapshot,
+            Some(&receipt),
+        ),
+        Err(LiveStep12PrepareFault::InvalidLocalSeenRadius {
+            row: 0,
+            radius: MAX_FOG_RADIUS + 1,
+        })
+    );
+
+    row_authority.local_seen_radius = Some(7);
+    let receipt = authority_batch(live_snapshot, vec![Some(row_authority)]);
+    let LiveStep12Preparation::UnitPass(pass) = prepare_live_unit_pass(
+        0,
+        Step12VisibilityTrigger::ScheduledStep12,
+        live_snapshot,
+        Some(&receipt),
+    )
+    .unwrap() else {
+        panic!("expected preflighted Unit subpass")
+    };
+    assert_eq!(pass.rows()[0].local_seen_radius(), Some(7));
+
+    rows[0].mylos = 0;
+    let snapshot = snapshot(&rows, [1, 0, 0, 0, 0, 0, 0, 0]);
+    row_authority = authority(rows[0]);
+    let receipt = authority_batch(snapshot, vec![Some(row_authority)]);
+    let LiveStep12Preparation::UnitPass(pass) = prepare_live_unit_pass(
+        0,
+        Step12VisibilityTrigger::ScheduledStep12,
+        snapshot,
+        Some(&receipt),
+    )
+    .unwrap() else {
+        panic!("zero LOS must return before local-seen type authority")
+    };
+    assert_eq!(pass.rows()[0].local_seen_radius(), None);
 }
 
 #[test]

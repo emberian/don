@@ -5,10 +5,9 @@
 //! This owner joins the exact type, leader-count, HeroesData, Constants, projection, and
 //! instance-detector facts required by [`super::step12_visibility_producer_frontier`].  It is
 //! extended with canonical Build rows in exact retail Build-before-Unit order, including the
-//! complete started-Wonder `Wall::update_local_seen` footprint body. The active cohort requires
-//! an empty dedicated Wall band, disabled scenario reveal points, zero `ObjectData::visible` on
-//! every reached `Object::update_seen`, and the PE-proven no-effect branch of every reached
-//! `World::reveal_fog`. Other active maps still stop before `World::clear_seen`.
+//! complete `Wall::update_local_seen` footprint body. The active cohort requires an empty
+//! dedicated Wall band, disabled scenario reveal points, and the PE-proven no-effect branch of
+//! every reached `World::reveal_fog`. Other active maps still stop before `World::clear_seen`.
 
 use crate::systems::sparse_object_bands_authority_frontier::{
     RetailBand, RetailObjectAddress, SparseSlotLifecycle, BUILD_BAND_BASE, WALL_BAND_BASE,
@@ -21,7 +20,7 @@ use super::map_terrain::{self, tflag, wflag};
 use super::production::{
     self,
     runtime::{LiveProductionRuntime, LiveTypeClass},
-    BuildData, Footprint,
+    BuildData,
 };
 use super::step12_visibility_producer_frontier::{
     object_init_flags, prepare_live_unit_pass, resolve_unit_los, DetectorInstanceProvenance,
@@ -52,6 +51,8 @@ pub struct VisibilityTypeProjection {
     pub unit_flags2: u32,
     pub role: u32,
     pub is_siege: bool,
+    /// `ObjectTypeData +0x234`, used by the exact `Unit::update_local_seen` disc.
+    pub local_seen_radius: i32,
 }
 
 /// Identity-bearing row of the owner-local `HeroesData` list. `radius_tiles` is the exact
@@ -320,31 +321,22 @@ pub enum ActiveUnitProducerFault {
         row: usize,
         type_index: i32,
     },
-    StartedWonderNeedsVisibilityTypeFacts {
+    BuildLocalSeenNeedsFootprintAuthority {
         row: usize,
         type_index: i32,
     },
-    StartedWonderNeedsFortAuthority {
+    BuildWonderNeedsFortAuthority {
         row: usize,
         type_index: i32,
     },
-    InvalidWonderFootprint {
+    InvalidBuildLocalSeenFootprint {
         row: usize,
         x_size: i32,
         y_size: i32,
     },
-    WonderFootprintOutOfBounds {
-        row: usize,
-        tile_x: i32,
-        tile_y: i32,
-    },
     NegativeBuildLos {
         row: usize,
         los: i8,
-    },
-    BuildVisibleLocalSeen {
-        row: usize,
-        visible: i8,
     },
     InvalidBuildGrantSeen2 {
         row: usize,
@@ -356,10 +348,6 @@ pub enum ActiveUnitProducerFault {
     },
     ScenarioRevealPointsEnabled,
     FrameZeroExploredSharing,
-    VisibleLocalSeen {
-        row: usize,
-        visible: i8,
-    },
     InvalidGrantSeen2 {
         row: usize,
         recipient: i8,
@@ -376,6 +364,7 @@ pub struct PreparedStep12ActiveUnitClear {
     build_rows_visited: usize,
     build_actions: Vec<PreparedStep12BuildAction>,
     unit_pass: PreparedStep12UnitPass,
+    unit_local_seen: Vec<Vec<PreparedStep12LocalSeen>>,
     expected_reveal_calls: usize,
 }
 
@@ -399,7 +388,7 @@ impl PreparedStep12ActiveUnitClear {
             .count()
     }
 
-    pub fn wonder_local_seen_cells(&self) -> usize {
+    pub fn build_local_seen_cells(&self) -> usize {
         self.build_actions
             .iter()
             .map(|action| match action {
@@ -408,16 +397,20 @@ impl PreparedStep12ActiveUnitClear {
             })
             .sum()
     }
+
+    pub fn unit_local_seen_cells(&self) -> usize {
+        self.unit_local_seen.iter().map(Vec::len).sum()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PreparedStep12BuildAction {
     UpdateSeen(PreparedStep12BuildStamp),
-    UpdateLocalSeen(Vec<PreparedStep12WonderLocalSeen>),
+    UpdateLocalSeen(Vec<PreparedStep12LocalSeen>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PreparedStep12WonderLocalSeen {
+struct PreparedStep12LocalSeen {
     fog_x: i32,
     fog_y: i32,
     player_mask: u8,
@@ -454,25 +447,92 @@ pub struct ActiveUnitClearTrace {
     pub rows_visited: usize,
     pub build_rows_visited: usize,
     pub build_stamps: usize,
-    pub wonder_local_seen_cells: usize,
+    pub build_local_seen_cells: usize,
+    pub unit_local_seen_cells: usize,
     pub unit_stamps: usize,
     pub reveal_no_effect_calls: usize,
 }
 
-fn prepare_started_wonder_local_seen(
+fn resolve_build_type<'a>(
+    row: usize,
+    build: &BuildData,
+    production: &'a LiveProductionRuntime,
+) -> Result<(i32, &'a super::production::runtime::LiveProductionType), ActiveUnitProducerFault> {
+    let type_index = production.build_types.get(row).copied().flatten().ok_or(
+        ActiveUnitProducerFault::MissingBuildType {
+            row,
+            who: build.who,
+            object_o: build.object_id(),
+        },
+    )?;
+    let type_facts = usize::try_from(type_index)
+        .ok()
+        .and_then(|index| production.types.get(index))
+        .and_then(Option::as_ref)
+        .filter(|facts| facts.type_index == type_index && facts.class == LiveTypeClass::Building)
+        .ok_or(ActiveUnitProducerFault::InvalidBuildType { row, type_index })?;
+    Ok((type_index, type_facts))
+}
+
+fn build_implicit_local_seen(
     row: usize,
     build: &BuildData,
     type_index: i32,
-    footprint: Footprint,
-    is_fort: Option<bool>,
+    type_facts: &super::production::runtime::LiveProductionType,
+) -> Result<bool, ActiveUnitProducerFault> {
+    let is_wonder = (victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
+        .contains(&type_index);
+    // Exact Object::update_seen 0x00651B8A..0x00651C3F. A non-Wonder or captured
+    // Build returns before type-vtable +0xFC. Only an uncaptured Wonder reads is_fort,
+    // and only a non-fort started Wonder sets the implicit local-seen flag.
+    if !is_wonder || build.flags & production::flag::CAPTURED != 0 {
+        return Ok(false);
+    }
+    let is_fort = type_facts
+        .build_visibility
+        .and_then(|facts| facts.is_fort)
+        .ok_or(ActiveUnitProducerFault::BuildWonderNeedsFortAuthority { row, type_index })?;
+    Ok(!is_fort && build.is_started())
+}
+
+fn prepare_wall_local_seen(
+    row: usize,
+    build: &BuildData,
+    type_index: i32,
+    type_facts: &super::production::runtime::LiveProductionType,
     terrain: &map_terrain::World,
-) -> Result<Vec<PreparedStep12WonderLocalSeen>, ActiveUnitProducerFault> {
+) -> Result<Vec<PreparedStep12LocalSeen>, ActiveUnitProducerFault> {
+    let visibility = type_facts.build_visibility;
+    let is_wonder = (victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
+        .contains(&type_index);
+    let mut player_mask =
+        build.other[production::off::VISIBLE] | build.ever_seen | (1u8 << build.who);
+    let mut explored_only = true;
+
+    // Exact Wall::update_local_seen 0x0063ED62..0x0063EDCA gate order. An ordinary
+    // Build returns before captured/is_fort. A captured Wonder returns before is_fort.
+    // An uncaptured non-fort started Wonder uses 0xFF visible+explored; an unstarted
+    // one retains the relation mask but still writes both planes.
+    if is_wonder && build.flags & production::flag::CAPTURED == 0 {
+        let is_fort = visibility
+            .and_then(|facts| facts.is_fort)
+            .ok_or(ActiveUnitProducerFault::BuildWonderNeedsFortAuthority { row, type_index })?;
+        if !is_fort {
+            explored_only = false;
+            if build.is_started() {
+                player_mask = u8::MAX;
+            }
+        }
+    }
+    let footprint = visibility.and_then(|facts| facts.footprint).ok_or(
+        ActiveUnitProducerFault::BuildLocalSeenNeedsFootprintAuthority { row, type_index },
+    )?;
     if footprint.x_size <= 0
         || footprint.y_size <= 0
         || footprint.x_size > terrain.tile_xs
         || footprint.y_size > terrain.tile_ys
     {
-        return Err(ActiveUnitProducerFault::InvalidWonderFootprint {
+        return Err(ActiveUnitProducerFault::InvalidBuildLocalSeenFootprint {
             row,
             x_size: footprint.x_size,
             y_size: footprint.y_size,
@@ -480,61 +540,69 @@ fn prepare_started_wonder_local_seen(
     }
     let (fine_x, fine_y) = build.position();
     let (corner_x, corner_y) = footprint.tile_corner(fine_x, fine_y);
-    let (Some(end_x), Some(end_y)) = (
+    let (Some(start_x), Some(start_y), Some(end_x), Some(end_y), Some(span_x), Some(span_y)) = (
+        corner_x.checked_sub(1),
+        corner_y.checked_sub(1),
         corner_x.checked_add(footprint.x_size),
         corner_y.checked_add(footprint.y_size),
+        footprint.x_size.checked_add(2),
+        footprint.y_size.checked_add(2),
     ) else {
-        return Err(ActiveUnitProducerFault::InvalidWonderFootprint {
+        return Err(ActiveUnitProducerFault::InvalidBuildLocalSeenFootprint {
             row,
             x_size: footprint.x_size,
             y_size: footprint.y_size,
         });
     };
-    let mut player_mask = u8::MAX;
-    let mut explored_only = false;
-
-    // Exact 0x0063ED62..0x0063EDCA gate order. Captured Wonders return before the
-    // `is_fort` type virtual. An uncaptured non-fort started Wonder uses 0xFF; a fort
-    // relation uses the same explored-only mask as the captured arm.
-    if build.flags & production::flag::CAPTURED != 0 {
-        explored_only = true;
-        player_mask = build.other[production::off::VISIBLE] | build.ever_seen | (1u8 << build.who);
-    } else {
-        let is_fort = is_fort
-            .ok_or(ActiveUnitProducerFault::StartedWonderNeedsFortAuthority { row, type_index })?;
-        if is_fort {
-            explored_only = true;
-            player_mask =
-                build.other[production::off::VISIBLE] | build.ever_seen | (1u8 << build.who);
-        }
-    }
-
     let mut prepared = Vec::with_capacity(
-        usize::try_from(footprint.x_size).expect("positive validated Wonder x footprint")
-            * usize::try_from(footprint.y_size).expect("positive validated Wonder y footprint"),
+        usize::try_from(span_x).expect("positive validated Build local-seen x span")
+            * usize::try_from(span_y).expect("positive validated Build local-seen y span"),
     );
-    for tile_x in corner_x..end_x {
-        for tile_y in corner_y..end_y {
-            if !terrain.valid_t(tile_x, tile_y) {
-                return Err(ActiveUnitProducerFault::WonderFootprintOutOfBounds {
-                    row,
-                    tile_x,
-                    tile_y,
+    // Exact 0x0063EDDE..0x0063EE92: both counters start at -1 and run while
+    // `<= x_size/y_size`, revealing a one-tile perimeter around the footprint.
+    // Edge cells are tested and skipped rather than making the call fail.
+    for tile_x in start_x..=end_x {
+        for tile_y in start_y..=end_y {
+            if terrain.valid_t(tile_x, tile_y) {
+                prepared.push(PreparedStep12LocalSeen {
+                    fog_x: tile_x >> 1,
+                    fog_y: tile_y >> 1,
+                    player_mask,
+                    explored_only,
                 });
             }
-            prepared.push(PreparedStep12WonderLocalSeen {
-                fog_x: tile_x >> 1,
-                fog_y: tile_y >> 1,
-                player_mask,
-                explored_only,
+        }
+    }
+    Ok(prepared)
+}
+
+fn prepare_unit_local_seen(
+    stamp: super::step12_visibility_producer_frontier::Step12UnitStamp,
+    visible: i8,
+    radius: i32,
+    terrain: &map_terrain::World,
+    circle: &CircleTable,
+) -> Vec<PreparedStep12LocalSeen> {
+    debug_assert!(
+        (0..=super::step12_visibility_producer_frontier::MAX_FOG_RADIUS).contains(&radius)
+    );
+    let center_x = super::step12_visibility_producer_frontier::fine_to_fog(stamp.object_fine_x);
+    let center_y = super::step12_visibility_producer_frontier::fine_to_fog(stamp.object_fine_y);
+    let end = circle.radius[radius as usize] as usize;
+    let mut prepared = Vec::with_capacity(end);
+    for index in 0..end {
+        let fog_x = center_x + i32::from(circle.x[index]);
+        let fog_y = center_y + i32::from(circle.y[index]);
+        if terrain.valid_f(fog_x, fog_y) {
+            prepared.push(PreparedStep12LocalSeen {
+                fog_x,
+                fog_y,
+                player_mask: visible as u8,
+                explored_only: false,
             });
         }
     }
-    debug_assert!(
-        (victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
-            .contains(&type_index)
-    );
-    Ok(prepared)
+    prepared
 }
 
 /// The complete `GameDaemon::update_all_seen` paths that the live Sim can currently
@@ -712,45 +780,15 @@ fn prepare_active_unit_clear(
                 // `BuildData::is_wonder`; ordinary incomplete buildings then skip with no
                 // visibility effect. Only a started Wonder reaches
                 // `Wall::update_local_seen`.
-                let type_index = context
-                    .production
-                    .build_types
-                    .get(row)
-                    .copied()
-                    .flatten()
-                    .ok_or(ActiveUnitProducerFault::MissingBuildType {
-                        row,
-                        who: build.who,
-                        object_o: build.object_id(),
-                    })?;
-                let type_facts = usize::try_from(type_index)
-                    .ok()
-                    .and_then(|index| context.production.types.get(index))
-                    .and_then(Option::as_ref)
-                    .filter(|facts| {
-                        facts.type_index == type_index && facts.class == LiveTypeClass::Building
-                    })
-                    .ok_or(ActiveUnitProducerFault::InvalidBuildType { row, type_index })?;
+                let (type_index, type_facts) = resolve_build_type(row, build, context.production)?;
                 if !(victory_score::WONDER_FIRST as i32..victory_score::WONDER_END as i32)
                     .contains(&type_index)
                     || !build.is_started()
                 {
                     continue;
                 }
-                let visibility = type_facts.build_visibility.ok_or(
-                    ActiveUnitProducerFault::StartedWonderNeedsVisibilityTypeFacts {
-                        row,
-                        type_index,
-                    },
-                )?;
-                let cells = prepare_started_wonder_local_seen(
-                    row,
-                    build,
-                    type_index,
-                    visibility.footprint,
-                    visibility.is_fort,
-                    context.terrain,
-                )?;
+                let cells =
+                    prepare_wall_local_seen(row, build, type_index, type_facts, context.terrain)?;
                 for cell in &cells {
                     explored[context.terrain.f_index(cell.fog_x, cell.fog_y)] |= cell.player_mask;
                 }
@@ -758,6 +796,12 @@ fn prepare_active_unit_clear(
                 continue;
             }
 
+            // Object::update_seen computes this type/Build preamble before its LOS
+            // virtual. Even a zero-LOS active Build therefore requires current type
+            // identity and the reached Wonder fort fact.
+            let (type_index, type_facts) = resolve_build_type(row, build, context.production)?;
+            let implicit_local_seen =
+                build_implicit_local_seen(row, build, type_index, type_facts)?;
             let los = build.other[production::off::MYLOS] as i8;
             if los < 0 {
                 return Err(ActiveUnitProducerFault::NegativeBuildLos { row, los });
@@ -766,8 +810,13 @@ fn prepare_active_unit_clear(
                 continue;
             }
             let visible = build.other[production::off::VISIBLE] as i8;
-            if visible != 0 {
-                return Err(ActiveUnitProducerFault::BuildVisibleLocalSeen { row, visible });
+            if visible != 0 || implicit_local_seen {
+                let cells =
+                    prepare_wall_local_seen(row, build, type_index, type_facts, context.terrain)?;
+                for cell in &cells {
+                    explored[context.terrain.f_index(cell.fog_x, cell.fog_y)] |= cell.player_mask;
+                }
+                build_actions.push(PreparedStep12BuildAction::UpdateLocalSeen(cells));
             }
             let recipient = build.other[production::off::INFILTRATED] as i8;
             if !(0..=7).contains(&recipient) {
@@ -790,16 +839,26 @@ fn prepare_active_unit_clear(
         }
     }
 
+    let mut unit_local_seen = Vec::with_capacity(pass.rows().len());
     for row in pass.rows() {
         let UnitStampDecision::Stamp(stamp) = row.decision() else {
+            unit_local_seen.push(Vec::new());
             continue;
         };
-        if row.visible() != 0 {
-            return Err(ActiveUnitProducerFault::VisibleLocalSeen {
-                row: row.identity().row,
-                visible: row.visible(),
-            });
+        let local_cells = match row.local_seen_radius() {
+            Some(radius) => prepare_unit_local_seen(
+                stamp,
+                row.visible(),
+                radius,
+                context.terrain,
+                context.circle,
+            ),
+            None => Vec::new(),
+        };
+        for cell in &local_cells {
+            explored[context.terrain.f_index(cell.fog_x, cell.fog_y)] |= cell.player_mask;
         }
+        unit_local_seen.push(local_cells);
 
         if !(0..=7).contains(&stamp.grant_seen2_to) {
             return Err(ActiveUnitProducerFault::InvalidGrantSeen2 {
@@ -824,6 +883,7 @@ fn prepare_active_unit_clear(
         build_rows_visited,
         build_actions,
         unit_pass: pass,
+        unit_local_seen,
         expected_reveal_calls,
     })
 }
@@ -862,10 +922,29 @@ pub fn commit_active_unit_clear(
         }
     }
     let rows_visited = prepared.build_rows_visited + prepared.unit_pass.rows().len();
-    for row in prepared.unit_pass.rows() {
+    assert_eq!(
+        prepared.unit_local_seen.len(),
+        prepared.unit_pass.rows().len(),
+        "prepared Unit local-seen rows drifted before visibility commit"
+    );
+    for (row, local_cells) in prepared
+        .unit_pass
+        .rows()
+        .iter()
+        .zip(&prepared.unit_local_seen)
+    {
         let UnitStampDecision::Stamp(stamp) = row.decision() else {
             continue;
         };
+        for cell in local_cells {
+            fog.set_locally_seen_mask(
+                terrain,
+                cell.fog_x,
+                cell.fog_y,
+                cell.player_mask,
+                cell.explored_only,
+            );
+        }
         borders_fog::update_seen(
             fog,
             terrain,
@@ -890,7 +969,8 @@ pub fn commit_active_unit_clear(
         rows_visited,
         build_rows_visited: prepared.build_rows_visited,
         build_stamps: prepared.build_stamps(),
-        wonder_local_seen_cells: prepared.wonder_local_seen_cells(),
+        build_local_seen_cells: prepared.build_local_seen_cells(),
+        unit_local_seen_cells: prepared.unit_local_seen_cells(),
         unit_stamps: prepared.unit_pass.stamps(),
         reveal_no_effect_calls: newly_explored.len(),
     }
@@ -1511,6 +1591,12 @@ impl Step12VisibilityAuthority {
             None
         };
 
+        let local_seen_radius = if positive_los && row.state.visible != 0 {
+            Some(require_type("local_seen_radius")?.local_seen_radius)
+        } else {
+            None
+        };
+
         Ok(Step12UnitAuthorityReceipt {
             identity,
             detector,
@@ -1518,6 +1604,7 @@ impl Step12VisibilityAuthority {
             unit_domain,
             type_unit_flags2,
             small_los_projection,
+            local_seen_radius,
         })
     }
 
@@ -1602,6 +1689,7 @@ impl Step12VisibilityAuthority {
             mix(&mut hash, u64::from(facts.unit_flags2));
             mix(&mut hash, u64::from(facts.role));
             mix(&mut hash, facts.is_siege as u64);
+            mix(&mut hash, facts.local_seen_radius as u32 as u64);
         }
         for leader in &self.leaders {
             for &count in &leader.unit_counts {
@@ -1711,6 +1799,7 @@ mod tests {
                     unit_flags2: 0,
                     role: 0,
                     is_siege: false,
+                    local_seen_radius: 2,
                 }],
             )
             .unwrap();
@@ -1827,6 +1916,7 @@ mod tests {
                         unit_flags2: SMALL_LOS_STANDARD_TYPE_FLAGS2,
                         role: PTOLEMY_ROLE_MASK,
                         is_siege: false,
+                        local_seen_radius: 2,
                     },
                     VisibilityTypeProjection {
                         type_index:
@@ -1836,6 +1926,7 @@ mod tests {
                         unit_flags2: SMALL_LOS_STANDARD_TYPE_FLAGS2,
                         role: 0,
                         is_siege: false,
+                        local_seen_radius: 2,
                     },
                 ],
             )

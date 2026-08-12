@@ -163,7 +163,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger 0x00732D10 - exact body/tick adapter execute; reached UnitData::attack and late Airbase/Dock/basic-type building strength remain fail-closed",
-    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive and active Build/started-Wonder/Unit bounded full clears execute; nonempty Wall band, active-object local-seen, scenario-point, and effectful reveal_fog paths remain fail closed",
+    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive and active Build/Unit bounded full clears, including reached local-seen bodies, execute; nonempty Wall band, scenario-point, and effectful reveal_fog paths remain fail closed",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
@@ -1475,7 +1475,8 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
                     .work
                     .saturating_add(trace.rows_visited as u32)
                     .saturating_add(trace.build_stamps as u32)
-                    .saturating_add(trace.wonder_local_seen_cells as u32)
+                    .saturating_add(trace.build_local_seen_cells as u32)
+                    .saturating_add(trace.unit_local_seen_cells as u32)
                     .saturating_add(trace.unit_stamps as u32)
                     .saturating_add(trace.reveal_no_effect_calls as u32)
                     .max(1);
@@ -6153,6 +6154,7 @@ mod tests {
                 unit_flags2: 0,
                 role: 0,
                 is_siege: false,
+                local_seen_radius: 2,
             }],
         )
         .unwrap();

@@ -110,7 +110,10 @@ pub enum LiveBuildingCompletion {
 /// `BuildTypeData::is(FORTX, 0)` result behind type-vtable slot `+0xFC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiveBuildVisibilityTypeFacts {
-    pub footprint: Footprint,
+    /// Lazy exact `ObjectTypeData +0x234/+0x238` pair. A reached Build
+    /// `Object::update_seen` preamble can consume `is_fort` and then return on zero LOS
+    /// without reading the footprint.
+    pub footprint: Option<Footprint>,
     /// Lazy exact result of type-vtable `+0xFC`. Captured Wonders return before this
     /// virtual, so their projection may leave it absent.
     pub is_fort: Option<bool>,
@@ -141,9 +144,8 @@ pub struct LiveProductionType {
     pub stance_type: i32,
     pub unit_placement: LiveUnitPlacement,
     pub building_completion: LiveBuildingCompletion,
-    /// Lazy visibility facts. Complete active Builds do not read them; an incomplete
-    /// non-Wonder stops after the exact TypeIndex range test. Only a started Wonder
-    /// reaches this projection.
+    /// Lazy visibility facts. An ordinary Build stops before `is_fort`, while a reached
+    /// local-seen call consumes the footprint. Wonder preambles may consume only `is_fort`.
     pub build_visibility: Option<LiveBuildVisibilityTypeFacts>,
     pub city_pop_value: i32,
     pub build_flags: u32,

@@ -13,6 +13,9 @@ pub const GAME_DAEMON_PROCESS_ALL_VA: u32 = 0x0073_2700;
 pub const GAME_DAEMON_UPDATE_ALL_SEEN_VA: u32 = 0x0073_2840;
 pub const OBJECT_INIT_VA: u32 = 0x0064_7750;
 pub const OBJECT_UPDATE_SEEN_VA: u32 = 0x0065_1b80;
+pub const UNIT_UPDATE_LOCAL_SEEN_VA: u32 = 0x0060_e410;
+pub const WALL_UPDATE_LOCAL_SEEN_VA: u32 = 0x0063_ed50;
+pub const WORLD_SET_LOCALLY_SEEN_VA: u32 = 0x006b_4bb0;
 pub const OBJECT_HAS_GENERAL_VA: u32 = 0x0064_6b00;
 pub const UNIT_DATA_LOS_VA: u32 = 0x0061_00c0;
 pub const UNIT_DATA_IS_ON_MAP_VA: u32 = 0x0046_ce30;
@@ -589,6 +592,9 @@ pub struct Step12UnitAuthorityReceipt {
     /// Required only after the small-radius arm observes domain zero.
     pub type_unit_flags2: Option<u32>,
     pub small_los_projection: Option<SmallLosProjectionReceipt>,
+    /// Required only when positive LOS reaches nonzero `ObjectData::visible`, immediately
+    /// before the ordinary seen-disc stamp. Exact `UnitTypeData +0x234` value.
+    pub local_seen_radius: Option<i32>,
 }
 
 /// Frame/revision/cardinality-bound authority facts aligned with the flattened Unit bands.
@@ -697,6 +703,13 @@ pub enum LiveStep12PrepareFault {
     MissingDetectorProvenance {
         row: usize,
     },
+    MissingLocalSeenRadius {
+        row: usize,
+    },
+    InvalidLocalSeenRadius {
+        row: usize,
+        radius: i32,
+    },
     Projection {
         row: usize,
         fault: SmallLosProjectionFault,
@@ -711,6 +724,7 @@ pub enum LiveStep12PrepareFault {
 pub struct PreparedStep12UnitRow {
     identity: LiveStep12UnitIdentity,
     visible: i8,
+    local_seen_radius: Option<i32>,
     decision: UnitStampDecision,
 }
 
@@ -721,6 +735,10 @@ impl PreparedStep12UnitRow {
 
     pub const fn visible(&self) -> i8 {
         self.visible
+    }
+
+    pub const fn local_seen_radius(&self) -> Option<i32> {
+        self.local_seen_radius
     }
 
     pub const fn decision(&self) -> UnitStampDecision {
@@ -951,6 +969,7 @@ pub fn prepare_live_unit_pass(
             rows.push(PreparedStep12UnitRow {
                 identity: live.identity,
                 visible: live.visible,
+                local_seen_radius: None,
                 decision: UnitStampDecision::Skip(skip),
             });
             continue;
@@ -1064,12 +1083,30 @@ pub fn prepare_live_unit_pass(
                     fault,
                 })?;
         }
+        let local_seen_radius =
+            if matches!(decision, UnitStampDecision::Stamp(_)) && live.visible != 0 {
+                let radius = authority.local_seen_radius.ok_or(
+                    LiveStep12PrepareFault::MissingLocalSeenRadius {
+                        row: live.identity.row,
+                    },
+                )?;
+                if !(0..=MAX_FOG_RADIUS).contains(&radius) {
+                    return Err(LiveStep12PrepareFault::InvalidLocalSeenRadius {
+                        row: live.identity.row,
+                        radius,
+                    });
+                }
+                Some(radius)
+            } else {
+                None
+            };
         if matches!(decision, UnitStampDecision::Stamp(_)) {
             stamps += 1;
         }
         rows.push(PreparedStep12UnitRow {
             identity: live.identity,
             visible: live.visible,
+            local_seen_radius,
             decision,
         });
     }

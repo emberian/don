@@ -239,8 +239,8 @@ HeroesData, or the synchronized type composition: saving a non-default Step-12 a
 therefore rejected as `Unsupported("step-12 visibility authority")` rather than silently
 serializing guessed state. No competing save version or chunk was allocated for this tranche.
 
-The exact residual transaction owners are active Build/Wall vision, the started-Wonder
-local-seen branch, `World::reveal_fog`, scenario reveal points, frame-zero alliance explored
-sharing, the five direct entry routes, and incremental `Object::update_seen(1)`. Plane clearing
-and installation remain blocked until all reached contributors and side effects can preflight
-and commit atomically.
+The exact residual transaction owners are nonempty dedicated Wall vision,
+`World::reveal_fog`, scenario reveal points, frame-zero alliance explored sharing, the five
+direct entry routes, and incremental `Object::update_seen(1)`. Scheduled active Build/Unit
+local-seen bodies now execute against canonical planes. The general row remains blocked until
+all reached contributors and side effects can preflight and commit atomically.
