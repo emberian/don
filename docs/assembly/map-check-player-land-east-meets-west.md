@@ -12,9 +12,9 @@ and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
 Execution then runs the common driver's full `Regions::clear_all` and
 `Regions::find_all` bodies and all six World territory-limit stores, follows
 the style-19 fallthrough, executes complete `Map::fix_diag_land` at
-`0x0068be75 -> 0x0069c250`, and freezes before the caller-local `String`
-constructor at `0x0068be82 -> 0x00a1d660`. None of these tranches consumes
-RNG.
+`0x0068be75 -> 0x0069c250`, constructs the caller-local `map.cpp` String at
+`0x0068be82 -> 0x00a1d660`, and freezes before `GameLog::say_checksum` at
+`0x0068be9e -> 0x00930b30`. None of these tranches consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -282,6 +282,26 @@ than WData. Execution resumes at `0x0068be7a`, performs the two caller-local
 argument-preparation instructions, and freezes before the next native
 mutation, `String::String(char const*)` at `0x0068be82 -> 0x00a1d660`.
 
+## Post-repair diagnostic string
+
+The next tranche executes the full 33-byte, 15-instruction constructor
+`0x00a1d660..0x00a1d681` (SHA-256
+`354be1ff3375e00afd53c7dd2ce92e7ebccba375f1ddc813fa9034dff6e629fe`)
+and its nonempty `String::init_const` path over the shipped `map.cpp` literal
+at `0x00adde58`. The typed receipt binds the complete `init_const`, `reinit`,
+`get_string_guts`, and `char_to_wchar` native extents/call graph, the two
+`MultiByteToWideChar` imports, and a logical owned `StringGuts` allocation—no
+host pointer is stored or compared. The resulting local is the seven UTF-16
+code units for `map.cpp`, offset zero, length/capacity seven, flags/module ID
+zero, and zero lazy hashes.
+
+Caller execution stores cleanup guard 4 and stages the exact log arguments
+through `0x0068be9e`. This 28-byte, seven-instruction slice has SHA-256
+`98eba84d611b7e7c9ed1a9244a4b1f9712ba709e36426e8e0439020d9382497c`.
+It freezes before `GameLog::say_checksum` at
+`0x0068be9e -> 0x00930b30`, with line number `0x1e9b`, mode 1, and GameLog
+owner `0x00eb1360`. World and RNG are unchanged.
+
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
@@ -292,8 +312,9 @@ receipt that names the logical Y-coordinate allocation and its exact values as
 does the same for X and additionally binds every local clear, callee-saved
 register pop, SEH restoration, frame restoration, and `ret 4`.  The common
 clear, find, and territory receipts then bind the complete Region/World
-transitions; the diagonal receipt binds the final WData mutation and exposes
-`next_va = 0x0068be82`, `next_mutator_va = 0x00a1d660`. Owner transition
+transitions; the diagonal receipt binds the final WData mutation and the
+constructor receipt binds the caller-local allocation and arguments. It
+exposes `next_va = 0x0068be9e`, `next_mutator_va = 0x00930b30`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
@@ -301,7 +322,7 @@ unchanged RNG chronology match; its implementation
 digest includes the replay executor plus the sim Region and map-terrain
 bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_post_fix_diag_log_string`.
+`map_team_continent_game_log_say_checksum`.
 
 Validation gates:
 
@@ -369,4 +390,12 @@ Validation gates:
   localizer: 62 opened, 21 checksum-bearing, 21/21 coherent ledgers,
   265,619/265,619 same-group comparisons, with exact endpoints of two
   `map_team_continent_post_fix_diag_log_string` / nineteen
+  `place_all_mountains_add_mountain`.
+- current Cycle 9 focused real-fixture gate: both shipped style-19 fixtures
+  execute the exact constructor/helper receipt and freeze before
+  `GameLog::say_checksum`; focused player-land/constructor 5/5, continent 4/4,
+  initial 4/4, cargo check, and owner transition 2/2 are green. Full
+  localizer: 62 opened, 21 checksum-bearing, 21/21 coherent ledgers,
+  265,619/265,619 same-group comparisons, with exact endpoints of two
+  `map_team_continent_game_log_say_checksum` / nineteen
   `place_all_mountains_add_mountain`.

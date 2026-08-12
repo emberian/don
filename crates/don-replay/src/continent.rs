@@ -124,25 +124,31 @@ use crate::pools::{
 };
 pub use crate::post_continent::{
     execute_map_fix_diag_land, execute_map_make_first_regions_clear_all,
-    execute_map_make_first_regions_find_all, execute_map_make_territory_limits,
-    MapFixDiagLandError, MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
-    MapFixDiagLandWorldMutation, MapMakeFirstRegionsClearAllNext,
-    MapMakeFirstRegionsClearAllReceipt, MapMakeFirstRegionsFindAllCallerBody,
-    MapMakeFirstRegionsFindAllError, MapMakeFirstRegionsFindAllNext,
-    MapMakeFirstRegionsFindAllReceipt, MapMakeFirstTerritoryPrepBody, MapMakeTerritoryLimitsError,
+    execute_map_make_first_regions_find_all, execute_map_make_post_fix_diag_string_constructor,
+    execute_map_make_territory_limits, MapFixDiagLandError, MapFixDiagLandNativeBody,
+    MapFixDiagLandNext, MapFixDiagLandReceipt, MapFixDiagLandWorldMutation,
+    MapMakeFirstRegionsClearAllNext, MapMakeFirstRegionsClearAllReceipt,
+    MapMakeFirstRegionsFindAllCallerBody, MapMakeFirstRegionsFindAllError,
+    MapMakeFirstRegionsFindAllNext, MapMakeFirstRegionsFindAllReceipt,
+    MapMakeFirstTerritoryPrepBody, MapMakePostFixDiagGameLogCall, MapMakePostFixDiagLocalString,
+    MapMakePostFixDiagStringAllocationOwner, MapMakePostFixDiagStringAllocationReceipt,
+    MapMakePostFixDiagStringConstructorError, MapMakePostFixDiagStringConstructorNext,
+    MapMakePostFixDiagStringConstructorReceipt, MapMakeTerritoryLimitsError,
     MapMakeTerritoryLimitsNativeBody, MapMakeTerritoryLimitsNext, MapMakeTerritoryLimitsReceipt,
     MapMakeTerritoryStyleBranchReceipt, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
     RegionsClearAllNativeBody, RegionsClearAllRegionReceipt, RegionsClearAllWorldMutation,
     RegionsFindAllNativeBody, RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall,
-    RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation,
-    FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
-    MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA, MAP_FIX_DIAG_LAND_CORNER_X,
-    MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y, MAP_FIX_DIAG_LAND_CORNER_Y_VA,
-    MAP_FIX_DIAG_LAND_END_VA, MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT, MAP_FIX_DIAG_LAND_NATIVE_BODY,
-    MAP_FIX_DIAG_LAND_RET_VA, MAP_FIX_DIAG_LAND_SHA256, MAP_FIX_DIAG_LAND_SIZE,
-    MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
-    MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA, MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
-    MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
+    RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation, StringConstructorCallerBody,
+    StringConstructorHelperNativeBody, StringConstructorNativeBody, StringInitConstNativeBody,
+    StringReinitNativeBody, FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
+    GAME_LOG_SAY_CHECKSUM_VA, MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA,
+    MAP_FIX_DIAG_LAND_CORNER_X, MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y,
+    MAP_FIX_DIAG_LAND_CORNER_Y_VA, MAP_FIX_DIAG_LAND_END_VA, MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT,
+    MAP_FIX_DIAG_LAND_NATIVE_BODY, MAP_FIX_DIAG_LAND_RET_VA, MAP_FIX_DIAG_LAND_SHA256,
+    MAP_FIX_DIAG_LAND_SIZE, MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+    MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
     MAP_MAKE_FIRST_REGIONS_FIND_CALLER_INSTRUCTION_COUNT,
     MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SHA256, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SIZE,
     MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
@@ -150,7 +156,8 @@ pub use crate::post_continent::{
     MAP_MAKE_FIRST_TERRITORY_PREP_END_VA, MAP_MAKE_FIRST_TERRITORY_PREP_INSTRUCTION_COUNT,
     MAP_MAKE_FIRST_TERRITORY_PREP_SHA256, MAP_MAKE_FIRST_TERRITORY_PREP_SIZE,
     MAP_MAKE_FIRST_TERRITORY_STORE_VA, MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
-    MAP_MAKE_FIX_DIAG_LAND_RESUME_VA, MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+    MAP_MAKE_FIX_DIAG_LAND_RESUME_VA, MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY,
+    MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA, MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
     MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA, MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA,
     MAP_MAKE_STYLE_BRANCH_TARGET_VA, MAP_MAKE_STYLE_BRANCH_VA, MAP_MAKE_STYLE_BRANCH_VALUE,
     MAP_MAKE_STYLE_COMPARE_VA, MAP_MAKE_TERRITORY_LIMITS_END_VA,
@@ -164,7 +171,10 @@ pub use crate::post_continent::{
     REGIONS_CLEAR_ALL_RET_NULL_WORLD_DATA_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
     REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_END_VA, REGIONS_FIND_ALL_INSTRUCTION_COUNT,
     REGIONS_FIND_ALL_NATIVE_BODY, REGIONS_FIND_ALL_RET_VA, REGIONS_FIND_ALL_SHA256,
-    REGIONS_FIND_ALL_SIZE, REGIONS_FIND_ALL_VA, STRING_CONSTRUCTOR_VA, TERRITORY_LIMIT_FIELDS,
+    REGIONS_FIND_ALL_SIZE, REGIONS_FIND_ALL_VA, STRING_CHAR_TO_WCHAR_NATIVE_BODY,
+    STRING_CONSTRUCTOR_NATIVE_BODY, STRING_CONSTRUCTOR_VA, STRING_GET_STRING_GUTS_NATIVE_BODY,
+    STRING_GUTS_MEM_GET_NATIVE_BODY, STRING_GUTS_OPERATOR_NEW_NATIVE_BODY,
+    STRING_INIT_CONST_NATIVE_BODY, STRING_REINIT_NATIVE_BODY, TERRITORY_LIMIT_FIELDS,
     WORLD_PLAYER_TERRITORY_LIMIT_OFFSET, WORLD_TERRITORY_LIMIT_OFFSETS,
 };
 pub use crate::post_continent::{TerritoryLimitField, TerritoryLimitStoreReceipt, TerritoryLimits};
@@ -281,8 +291,9 @@ pub enum ContinentStop {
     /// post-loop `Map::check_player_land`, local-string cleanup, both centroid
     /// array `_free` calls, the complete style-virtual epilogue, and the common
     /// driver's first `Regions::clear_all` / `Regions::find_all` pair, all six
-    /// World territory-limit stores, and complete `Map::fix_diag_land` body.
-    /// Execution is frozen before the caller-local log `String` constructor.
+    /// World territory-limit stores, complete `Map::fix_diag_land`, and the
+    /// caller-local log `String` constructor. Execution is frozen before
+    /// `GameLog::say_checksum`.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -301,6 +312,7 @@ pub enum ContinentStop {
         regions_find_all: MapMakeFirstRegionsFindAllReceipt,
         territory_limits: MapMakeTerritoryLimitsReceipt,
         fix_diag_land: MapFixDiagLandReceipt,
+        post_fix_diag_string_constructor: MapMakePostFixDiagStringConstructorReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -411,6 +423,7 @@ pub enum ContinentError {
     RegionsFindAll(MapMakeFirstRegionsFindAllError),
     TerritoryLimits(MapMakeTerritoryLimitsError),
     FixDiagLand(MapFixDiagLandError),
+    PostFixDiagStringConstructor(MapMakePostFixDiagStringConstructorError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1730,10 +1743,27 @@ fn east_meets_west(
                     )
                     .map_err(ContinentError::FixDiagLand)?;
                     let MapFixDiagLandNext::StringConstructor {
-                        call_va: next_va,
-                        primitive_va: next_mutator_va,
+                        call_va,
+                        primitive_va: string_constructor_va,
                         ..
                     } = fix_diag_land.next;
+                    debug_assert_eq!(call_va, MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA);
+                    debug_assert_eq!(string_constructor_va, STRING_CONSTRUCTOR_VA);
+                    let post_fix_diag_string_constructor =
+                        execute_map_make_post_fix_diag_string_constructor(
+                            world,
+                            regions,
+                            rng.state(),
+                            &regions_clear_all,
+                            &regions_find_all,
+                            &territory_limits,
+                            &fix_diag_land,
+                        )
+                        .map_err(ContinentError::PostFixDiagStringConstructor)?;
+                    let MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(next) =
+                        post_fix_diag_string_constructor.next;
+                    let next_va = next.call_va;
+                    let next_mutator_va = next.primitive_va;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1754,6 +1784,7 @@ fn east_meets_west(
                             regions_find_all,
                             territory_limits,
                             fix_diag_land,
+                            post_fix_diag_string_constructor,
                             next_mutator_va,
                         },
                         starts_added,

@@ -205,10 +205,20 @@ pub use pools::{
     PoolMergeReceipt,
 };
 pub use post_continent::{
-    execute_map_fix_diag_land, execute_post_continent, MapFixDiagLandError,
+    execute_map_fix_diag_land, execute_map_make_post_fix_diag_string_constructor,
+    execute_post_continent, MapFixDiagLandError,
     MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
-    MapFixDiagLandWorldMutation, PostContinentError, PostContinentReceipt, TerritoryLimits,
+    MapFixDiagLandWorldMutation, MapMakePostFixDiagGameLogCall, MapMakePostFixDiagLocalString,
+    MapMakePostFixDiagStringAllocationOwner, MapMakePostFixDiagStringAllocationReceipt,
+    MapMakePostFixDiagStringConstructorError, MapMakePostFixDiagStringConstructorNext,
+    MapMakePostFixDiagStringConstructorReceipt, PostContinentError, PostContinentReceipt,
+    StringConstructorCallerBody, StringConstructorHelperNativeBody, StringConstructorNativeBody,
+    StringInitConstNativeBody, StringReinitNativeBody, TerritoryLimits,
     MAP_FIX_DIAG_LAND_NATIVE_BODY, MAP_FIX_DIAG_LAND_VA, MAP_MAKE_COASTLINES_VA,
+    MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY, STRING_CHAR_TO_WCHAR_NATIVE_BODY,
+    STRING_CONSTRUCTOR_NATIVE_BODY, STRING_GET_STRING_GUTS_NATIVE_BODY,
+    STRING_GUTS_MEM_GET_NATIVE_BODY, STRING_GUTS_OPERATOR_NEW_NATIVE_BODY,
+    STRING_INIT_CONST_NATIVE_BODY, STRING_REINIT_NATIVE_BODY,
     TERRAIN_GROUPS_FILL_FERTILE_VA,
 };
 pub use post_nubify_transition_frontier::{

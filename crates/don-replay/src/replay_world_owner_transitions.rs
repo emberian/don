@@ -159,10 +159,11 @@ pub fn advance_continent_world_ownership(
             regions_find_all,
             territory_limits,
             fix_diag_land,
+            post_fix_diag_string_constructor,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA
-            || *next_mutator_va != crate::continent::STRING_CONSTRUCTOR_VA
+        } if *next_va != crate::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA
+            || *next_mutator_va != crate::continent::GAME_LOG_SAY_CHECKSUM_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -300,16 +301,23 @@ pub fn advance_continent_world_ownership(
                 != regions_find_all.random_state_after
             || fix_diag_land.world_before != territory_limits.world_after
             || fix_diag_land.random_state_before != territory_limits.random_state_after
-            || !crate::post_continent::validate_map_fix_diag_land_receipt(
+            || post_fix_diag_string_constructor.world_before != fix_diag_land.world_after
+            || post_fix_diag_string_constructor.random_state_before
+                != fix_diag_land.random_state_after
+            || !crate::post_continent::validate_map_make_post_fix_diag_string_constructor_receipt(
                 &map.world,
                 &map.generation_regions,
                 regions_clear_all,
                 regions_find_all,
                 territory_limits,
                 fix_diag_land,
+                post_fix_diag_string_constructor,
             )
     ) {
-        return Err(mismatch(stage, "stop.fix_diag_land_residual"));
+        return Err(mismatch(
+            stage,
+            "stop.post_fix_diag_string_constructor_residual",
+        ));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

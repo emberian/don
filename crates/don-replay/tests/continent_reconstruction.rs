@@ -522,6 +522,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             regions_find_all,
             territory_limits,
             fix_diag_land,
+            post_fix_diag_string_constructor,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -551,11 +552,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 *next_va,
-                don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA
+                don_replay::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA
             );
             assert_eq!(
                 *next_mutator_va,
-                don_replay::continent::STRING_CONSTRUCTOR_VA
+                don_replay::continent::GAME_LOG_SAY_CHECKSUM_VA
             );
             assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
             assert!(post_player_land_cleanup.centroid_y_list_non_null);
@@ -589,6 +590,15 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             );
             assert_eq!(
                 fix_diag_land.world_after,
+                eastwest_world.checksum_sections()
+            );
+            assert_eq!(
+                post_fix_diag_string_constructor.constructor,
+                don_replay::continent::STRING_CONSTRUCTOR_NATIVE_BODY
+            );
+            assert_eq!(post_fix_diag_string_constructor.local.source, "map.cpp");
+            assert_eq!(
+                post_fix_diag_string_constructor.world_after,
                 eastwest_world.checksum_sections()
             );
             assert_eq!(

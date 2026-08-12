@@ -110,6 +110,74 @@ pub const MAP_MAKE_POST_FIX_DIAG_STRING_LITERAL_PUSH_VA: u32 = 0x0068_be7a;
 pub const MAP_MAKE_POST_FIX_DIAG_STRING_LOCAL_LOAD_VA: u32 = 0x0068_be7f;
 pub const MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_be82;
 pub const STRING_CONSTRUCTOR_VA: u32 = 0x00a1_d660;
+pub const STRING_CONSTRUCTOR_END_VA: u32 = 0x00a1_d681;
+pub const STRING_CONSTRUCTOR_RET_VA: u32 = 0x00a1_d67e;
+pub const STRING_CONSTRUCTOR_SIZE: u32 = 33;
+pub const STRING_CONSTRUCTOR_INSTRUCTION_COUNT: u32 = 15;
+pub const STRING_CONSTRUCTOR_SHA256: &str =
+    "354be1ff3375e00afd53c7dd2ce92e7ebccba375f1ddc813fa9034dff6e629fe";
+pub const STRING_INIT_CONST_VA: u32 = 0x00a1_6ff0;
+pub const STRING_INIT_CONST_END_VA: u32 = 0x00a1_7067;
+pub const STRING_INIT_CONST_SIZE: u32 = 119;
+pub const STRING_INIT_CONST_INSTRUCTION_COUNT: u32 = 54;
+pub const STRING_INIT_CONST_SHA256: &str =
+    "9010bb01781bb0aa7455b513c941deb4f9e1e0be741a96e3ecc3cd7b56b4788d";
+pub const STRING_REINIT_VA: u32 = 0x00a1_6120;
+pub const STRING_REINIT_END_VA: u32 = 0x00a1_62af;
+pub const STRING_REINIT_SIZE: u32 = 399;
+pub const STRING_REINIT_INSTRUCTION_COUNT: u32 = 170;
+pub const STRING_REINIT_SHA256: &str =
+    "598c171ba48987ff15049dcd75b2cf76d942fd14e6cf0e601c32b5c499e1a00b";
+pub const STRING_GET_STRING_GUTS_VA: u32 = 0x00a1_7b90;
+pub const STRING_GET_STRING_GUTS_END_VA: u32 = 0x00a1_7c28;
+pub const STRING_GET_STRING_GUTS_SIZE: u32 = 152;
+pub const STRING_GET_STRING_GUTS_INSTRUCTION_COUNT: u32 = 52;
+pub const STRING_GET_STRING_GUTS_SHA256: &str =
+    "732194bd936cb0f2976f2e603851ad5cb2f0078ed6c4116319690215a07cd8ab";
+pub const STRING_CHAR_TO_WCHAR_VA: u32 = 0x00a1_7c30;
+pub const STRING_CHAR_TO_WCHAR_END_VA: u32 = 0x00a1_7c76;
+pub const STRING_CHAR_TO_WCHAR_SIZE: u32 = 70;
+pub const STRING_CHAR_TO_WCHAR_INSTRUCTION_COUNT: u32 = 32;
+pub const STRING_CHAR_TO_WCHAR_SHA256: &str =
+    "0a3dd4cd0a8a50ec36810f992681c933a85b8376b9d8c90bd96b3a2b13de167e";
+pub const STRING_GUTS_OPERATOR_NEW_VA: u32 = 0x00a1_78f0;
+pub const STRING_GUTS_OPERATOR_NEW_END_VA: u32 = 0x00a1_7997;
+pub const STRING_GUTS_OPERATOR_NEW_SIZE: u32 = 167;
+pub const STRING_GUTS_OPERATOR_NEW_INSTRUCTION_COUNT: u32 = 54;
+pub const STRING_GUTS_OPERATOR_NEW_SHA256: &str =
+    "3f434b4f68c546c6d3629fba4c35b2751ca4a2b03e27359a5df574e8b2d1ca56";
+pub const STRING_GUTS_MEM_GET_VA: u32 = 0x00a1_7a10;
+pub const STRING_GUTS_MEM_GET_END_VA: u32 = 0x00a1_7b84;
+pub const STRING_GUTS_MEM_GET_SIZE: u32 = 372;
+pub const STRING_GUTS_MEM_GET_INSTRUCTION_COUNT: u32 = 112;
+pub const STRING_GUTS_MEM_GET_SHA256: &str =
+    "1f2cc84918f8b89315969c39d49702222848595e1dcc3cec667e201244e0b024";
+pub const STRING_GUTS_RESIZE_VA: u32 = 0x00a1_7520;
+pub const STRING_CLOSE_VA: u32 = 0x00a1_cf40;
+pub const MEMCPY_VA: u32 = 0x0055_e0ac;
+pub const MULTI_BYTE_TO_WIDE_CHAR_IAT_VA: u32 = 0x00c8_dc44;
+pub const MALLOC_IAT_VA: u32 = 0x00ac_54f0;
+pub const MAP_MAKE_POST_FIX_DIAG_LITERAL_VA: u32 = 0x00ad_de58;
+pub const MAP_MAKE_POST_FIX_DIAG_LITERAL: &str = "map.cpp";
+pub const MAP_MAKE_POST_FIX_DIAG_LITERAL_BYTES_WITH_NUL: usize = 8;
+pub const MAP_MAKE_POST_FIX_DIAG_LITERAL_SHA256: &str =
+    "e53a11bee43ce20f44c4a24166157bbaa9c16f4389ce6ffac46db16832503b16";
+pub const MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_END_VA: u32 = 0x0068_be9e;
+pub const MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_SIZE: u32 = 28;
+pub const MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_INSTRUCTION_COUNT: u32 = 7;
+pub const MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_SHA256: &str =
+    "98eba84d611b7e7c9ed1a9244a4b1f9712ba709e36426e8e0439020d9382497c";
+pub const MAP_MAKE_POST_FIX_DIAG_GUARD_STORE_VA: u32 = 0x0068_be87;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_LOAD_VA: u32 = 0x0068_be8e;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_PUSH_VA: u32 = 0x0068_be91;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_NUMBER: u32 = 0x1e9b;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_PUSH_VA: u32 = 0x0068_be96;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE_PUSH_VA: u32 = 0x0068_be97;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE: i32 = 1;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA: u32 = 0x0068_be99;
+pub const GAME_LOG_GLOBAL_VA: u32 = 0x00eb_1360;
+pub const MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA: u32 = 0x0068_be9e;
+pub const GAME_LOG_SAY_CHECKSUM_VA: u32 = 0x0093_0b30;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 
@@ -1398,6 +1466,437 @@ pub(crate) fn validate_map_fix_diag_land_receipt(
                 call_va: MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
                 primitive_va: STRING_CONSTRUCTOR_VA,
             })
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringConstructorNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const STRING_CONSTRUCTOR_NATIVE_BODY: StringConstructorNativeBody =
+    StringConstructorNativeBody {
+        entry_va: STRING_CONSTRUCTOR_VA,
+        end_va_exclusive: STRING_CONSTRUCTOR_END_VA,
+        ret_va: STRING_CONSTRUCTOR_RET_VA,
+        callee_stack_argument_bytes_popped: 4,
+        size: STRING_CONSTRUCTOR_SIZE,
+        instruction_count: STRING_CONSTRUCTOR_INSTRUCTION_COUNT,
+        sha256: STRING_CONSTRUCTOR_SHA256,
+        direct_calls: &[(0x00a1_d673, STRING_INIT_CONST_VA)],
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringInitConstNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_vas: &'static [u32],
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+    pub indirect_import_calls: &'static [(u32, u32)],
+}
+
+pub const STRING_INIT_CONST_NATIVE_BODY: StringInitConstNativeBody = StringInitConstNativeBody {
+    entry_va: STRING_INIT_CONST_VA,
+    end_va_exclusive: STRING_INIT_CONST_END_VA,
+    ret_vas: &[0x00a1_7057, 0x00a1_7064],
+    size: STRING_INIT_CONST_SIZE,
+    instruction_count: STRING_INIT_CONST_INSTRUCTION_COUNT,
+    sha256: STRING_INIT_CONST_SHA256,
+    direct_calls: &[
+        (0x00a1_702f, STRING_REINIT_VA),
+        (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+    ],
+    indirect_import_calls: &[],
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringReinitNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const STRING_REINIT_NATIVE_BODY: StringReinitNativeBody = StringReinitNativeBody {
+    entry_va: STRING_REINIT_VA,
+    end_va_exclusive: STRING_REINIT_END_VA,
+    size: STRING_REINIT_SIZE,
+    instruction_count: STRING_REINIT_INSTRUCTION_COUNT,
+    sha256: STRING_REINIT_SHA256,
+    direct_calls: &[
+        (0x00a1_6151, STRING_CLOSE_VA),
+        (0x00a1_6163, STRING_GET_STRING_GUTS_VA),
+        (0x00a1_6182, MEMCPY_VA),
+        (0x00a1_61f0, STRING_GUTS_RESIZE_VA),
+        (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+        (0x00a1_627e, MEMCPY_VA),
+    ],
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringConstructorHelperNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_vas: &'static [u32],
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+    pub indirect_import_calls: &'static [(u32, u32)],
+}
+
+pub const STRING_GET_STRING_GUTS_NATIVE_BODY: StringConstructorHelperNativeBody =
+    StringConstructorHelperNativeBody {
+        entry_va: STRING_GET_STRING_GUTS_VA,
+        end_va_exclusive: STRING_GET_STRING_GUTS_END_VA,
+        ret_vas: &[0x00a1_7c09, 0x00a1_7c25],
+        size: STRING_GET_STRING_GUTS_SIZE,
+        instruction_count: STRING_GET_STRING_GUTS_INSTRUCTION_COUNT,
+        sha256: STRING_GET_STRING_GUTS_SHA256,
+        direct_calls: &[
+            (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+            (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+        ],
+        indirect_import_calls: &[],
+    };
+
+pub const STRING_CHAR_TO_WCHAR_NATIVE_BODY: StringConstructorHelperNativeBody =
+    StringConstructorHelperNativeBody {
+        entry_va: STRING_CHAR_TO_WCHAR_VA,
+        end_va_exclusive: STRING_CHAR_TO_WCHAR_END_VA,
+        ret_vas: &[0x00a1_7c75],
+        size: STRING_CHAR_TO_WCHAR_SIZE,
+        instruction_count: STRING_CHAR_TO_WCHAR_INSTRUCTION_COUNT,
+        sha256: STRING_CHAR_TO_WCHAR_SHA256,
+        direct_calls: &[],
+        indirect_import_calls: &[
+            (0x00a1_7c4e, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA),
+            (0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA),
+        ],
+    };
+
+pub const STRING_GUTS_OPERATOR_NEW_NATIVE_BODY: StringConstructorHelperNativeBody =
+    StringConstructorHelperNativeBody {
+        entry_va: STRING_GUTS_OPERATOR_NEW_VA,
+        end_va_exclusive: STRING_GUTS_OPERATOR_NEW_END_VA,
+        ret_vas: &[0x00a1_793c, 0x00a1_7996],
+        size: STRING_GUTS_OPERATOR_NEW_SIZE,
+        instruction_count: STRING_GUTS_OPERATOR_NEW_INSTRUCTION_COUNT,
+        sha256: STRING_GUTS_OPERATOR_NEW_SHA256,
+        direct_calls: &[(0x00a1_7975, 0x0055_d14a)],
+        indirect_import_calls: &[(0x00a1_7946, MALLOC_IAT_VA)],
+    };
+
+pub const STRING_GUTS_MEM_GET_NATIVE_BODY: StringConstructorHelperNativeBody =
+    StringConstructorHelperNativeBody {
+        entry_va: STRING_GUTS_MEM_GET_VA,
+        end_va_exclusive: STRING_GUTS_MEM_GET_END_VA,
+        ret_vas: &[0x00a1_7aff, 0x00a1_7b46, 0x00a1_7b83],
+        size: STRING_GUTS_MEM_GET_SIZE,
+        instruction_count: STRING_GUTS_MEM_GET_INSTRUCTION_COUNT,
+        sha256: STRING_GUTS_MEM_GET_SHA256,
+        direct_calls: &[
+            (0x00a1_7aaa, STRING_CONSTRUCTOR_VA),
+            (0x00a1_7ac7, 0x00a2_e550),
+            (0x00a1_7ad5, STRING_CLOSE_VA),
+            (0x00a1_7ae4, STRING_CLOSE_VA),
+        ],
+        indirect_import_calls: &[(0x00a1_7b6b, MALLOC_IAT_VA)],
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringConstructorCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY: StringConstructorCallerBody =
+    StringConstructorCallerBody {
+        entry_va: MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+        end_va_exclusive: MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_END_VA,
+        size: MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_SIZE,
+        instruction_count: MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_SHA256,
+        direct_calls: &[(
+            MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+            STRING_CONSTRUCTOR_VA,
+        )],
+    };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagLocalString {
+    pub source_va: u32,
+    pub source: &'static str,
+    pub source_bytes_with_nul: usize,
+    pub source_sha256: &'static str,
+    pub code_page: u32,
+    pub utf16: Vec<u16>,
+    pub length: u16,
+    pub capacity: u16,
+    pub offset: u16,
+    pub flags: u8,
+    pub module_id: u8,
+    pub hash: u32,
+    pub insensitive_hash: u32,
+    pub owns_typed_string_guts: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostFixDiagStringAllocationOwner {
+    CallerLocalMapCpp,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagStringAllocationReceipt {
+    pub owner: MapMakePostFixDiagStringAllocationOwner,
+    pub string_guts_length: u16,
+    pub string_guts_capacity: u16,
+    pub utf16_units_allocated_with_nul: usize,
+    pub host_pointer_recorded: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagGameLogCall {
+    pub source_load_va: u32,
+    pub line_push_va: u32,
+    pub line_number: u32,
+    pub source_push_va: u32,
+    pub mode_push_va: u32,
+    pub mode: i32,
+    pub this_load_va: u32,
+    pub game_log_va: u32,
+    pub call_va: u32,
+    pub primitive_va: u32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostFixDiagStringConstructorNext {
+    GameLogSayChecksum(MapMakePostFixDiagGameLogCall),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostFixDiagStringConstructorReceipt {
+    pub caller: StringConstructorCallerBody,
+    pub constructor: StringConstructorNativeBody,
+    pub init_const: StringInitConstNativeBody,
+    pub reinit: StringReinitNativeBody,
+    pub get_string_guts: StringConstructorHelperNativeBody,
+    pub string_guts_operator_new: StringConstructorHelperNativeBody,
+    pub string_guts_mem_get: StringConstructorHelperNativeBody,
+    pub char_to_wchar: StringConstructorHelperNativeBody,
+    pub multi_byte_to_wide_char_iat_va: u32,
+    pub executed_direct_calls: Vec<(u32, u32)>,
+    pub executed_indirect_import_calls: Vec<(u32, u32)>,
+    pub local: MapMakePostFixDiagLocalString,
+    pub allocation: MapMakePostFixDiagStringAllocationReceipt,
+    pub cleanup_guard_store_va: u32,
+    pub cleanup_guard_after: u8,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakePostFixDiagStringConstructorNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostFixDiagStringConstructorError {
+    PriorFixDiagLandReceiptMismatch,
+}
+
+fn map_make_post_fix_diag_local_string() -> MapMakePostFixDiagLocalString {
+    let utf16 = MAP_MAKE_POST_FIX_DIAG_LITERAL
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    MapMakePostFixDiagLocalString {
+        source_va: MAP_MAKE_POST_FIX_DIAG_LITERAL_VA,
+        source: MAP_MAKE_POST_FIX_DIAG_LITERAL,
+        source_bytes_with_nul: MAP_MAKE_POST_FIX_DIAG_LITERAL_BYTES_WITH_NUL,
+        source_sha256: MAP_MAKE_POST_FIX_DIAG_LITERAL_SHA256,
+        code_page: 0x0000_fde9,
+        length: u16::try_from(utf16.len()).expect("map.cpp length fits retail String"),
+        capacity: u16::try_from(utf16.len()).expect("map.cpp capacity fits retail String"),
+        offset: 0,
+        flags: 0,
+        module_id: 0,
+        hash: 0,
+        insensitive_hash: 0,
+        owns_typed_string_guts: true,
+        utf16,
+    }
+}
+
+/// Execute the exact post-diagonal `String::String(char const*)` constructor,
+/// its complete internal init path for the shipped nonempty `map.cpp` literal,
+/// and the caller-local guard/argument staging. Freeze before GameLog mutates.
+pub fn execute_map_make_post_fix_diag_string_constructor(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+) -> Result<MapMakePostFixDiagStringConstructorReceipt, MapMakePostFixDiagStringConstructorError> {
+    if !validate_map_fix_diag_land_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+    ) || prior_fix_diag.random_state_after != random_state
+    {
+        return Err(MapMakePostFixDiagStringConstructorError::PriorFixDiagLandReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let local = map_make_post_fix_diag_local_string();
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostFixDiagStringConstructorReceipt {
+        caller: MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY,
+        constructor: STRING_CONSTRUCTOR_NATIVE_BODY,
+        init_const: STRING_INIT_CONST_NATIVE_BODY,
+        reinit: STRING_REINIT_NATIVE_BODY,
+        get_string_guts: STRING_GET_STRING_GUTS_NATIVE_BODY,
+        string_guts_operator_new: STRING_GUTS_OPERATOR_NEW_NATIVE_BODY,
+        string_guts_mem_get: STRING_GUTS_MEM_GET_NATIVE_BODY,
+        char_to_wchar: STRING_CHAR_TO_WCHAR_NATIVE_BODY,
+        multi_byte_to_wide_char_iat_va: MULTI_BYTE_TO_WIDE_CHAR_IAT_VA,
+        executed_direct_calls: vec![
+            (
+                MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+                STRING_CONSTRUCTOR_VA,
+            ),
+            (0x00a1_d673, STRING_INIT_CONST_VA),
+            (0x00a1_702f, STRING_REINIT_VA),
+            (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+            (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+            (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+            (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+        ],
+        executed_indirect_import_calls: vec![(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)],
+        allocation: MapMakePostFixDiagStringAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            string_guts_length: local.length,
+            string_guts_capacity: local.capacity,
+            utf16_units_allocated_with_nul: local.utf16.len() + 1,
+            host_pointer_recorded: false,
+        },
+        local,
+        cleanup_guard_store_va: MAP_MAKE_POST_FIX_DIAG_GUARD_STORE_VA,
+        cleanup_guard_after: 4,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(
+            MapMakePostFixDiagGameLogCall {
+                source_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_LOAD_VA,
+                line_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_PUSH_VA,
+                line_number: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_NUMBER,
+                source_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_PUSH_VA,
+                mode_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE_PUSH_VA,
+                mode: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE,
+                this_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA,
+                game_log_va: GAME_LOG_GLOBAL_VA,
+                call_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+                primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
+            },
+        ),
+    })
+}
+
+pub(crate) fn validate_map_make_post_fix_diag_string_constructor_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    receipt: &MapMakePostFixDiagStringConstructorReceipt,
+) -> bool {
+    validate_map_fix_diag_land_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+    ) && receipt.caller == MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY
+        && receipt.constructor == STRING_CONSTRUCTOR_NATIVE_BODY
+        && receipt.init_const == STRING_INIT_CONST_NATIVE_BODY
+        && receipt.reinit == STRING_REINIT_NATIVE_BODY
+        && receipt.get_string_guts == STRING_GET_STRING_GUTS_NATIVE_BODY
+        && receipt.string_guts_operator_new == STRING_GUTS_OPERATOR_NEW_NATIVE_BODY
+        && receipt.string_guts_mem_get == STRING_GUTS_MEM_GET_NATIVE_BODY
+        && receipt.char_to_wchar == STRING_CHAR_TO_WCHAR_NATIVE_BODY
+        && receipt.multi_byte_to_wide_char_iat_va == MULTI_BYTE_TO_WIDE_CHAR_IAT_VA
+        && receipt.executed_direct_calls
+            == [
+                (
+                    MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+                    STRING_CONSTRUCTOR_VA,
+                ),
+                (0x00a1_d673, STRING_INIT_CONST_VA),
+                (0x00a1_702f, STRING_REINIT_VA),
+                (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+                (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+                (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+                (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+            ]
+        && receipt.executed_indirect_import_calls
+            == [(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)]
+        && receipt.local == map_make_post_fix_diag_local_string()
+        && receipt.allocation
+            == (MapMakePostFixDiagStringAllocationReceipt {
+                owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                string_guts_length: 7,
+                string_guts_capacity: 7,
+                utf16_units_allocated_with_nul: 8,
+                host_pointer_recorded: false,
+            })
+        && receipt.cleanup_guard_store_va == MAP_MAKE_POST_FIX_DIAG_GUARD_STORE_VA
+        && receipt.cleanup_guard_after == 4
+        && receipt.world_before == prior_fix_diag.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_fix_diag.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(
+                MapMakePostFixDiagGameLogCall {
+                    source_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_LOAD_VA,
+                    line_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_PUSH_VA,
+                    line_number: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_NUMBER,
+                    source_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_PUSH_VA,
+                    mode_push_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE_PUSH_VA,
+                    mode: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE,
+                    this_load_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA,
+                    game_log_va: GAME_LOG_GLOBAL_VA,
+                    call_va: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+                    primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
+                },
+            )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

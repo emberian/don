@@ -208,6 +208,51 @@ fn caller_log_string_is_the_exact_shipped_internal_table_ordinal() {
 }
 
 #[test]
+fn post_fix_diag_constructor_native_graph_is_frozen() {
+    use don_replay::post_continent as pc;
+
+    assert_eq!(pc::STRING_CONSTRUCTOR_NATIVE_BODY.entry_va, 0x00a1_d660);
+    assert_eq!(pc::STRING_CONSTRUCTOR_NATIVE_BODY.size, 33);
+    assert_eq!(pc::STRING_CONSTRUCTOR_NATIVE_BODY.instruction_count, 15);
+    assert_eq!(
+        pc::STRING_CONSTRUCTOR_NATIVE_BODY.sha256,
+        "354be1ff3375e00afd53c7dd2ce92e7ebccba375f1ddc813fa9034dff6e629fe"
+    );
+    assert_eq!(
+        pc::STRING_CONSTRUCTOR_NATIVE_BODY.direct_calls,
+        [(0x00a1_d673, pc::STRING_INIT_CONST_VA)]
+    );
+    assert_eq!(pc::STRING_INIT_CONST_NATIVE_BODY.size, 119);
+    assert_eq!(pc::STRING_INIT_CONST_NATIVE_BODY.instruction_count, 54);
+    assert_eq!(pc::STRING_REINIT_NATIVE_BODY.size, 399);
+    assert_eq!(pc::STRING_REINIT_NATIVE_BODY.instruction_count, 170);
+    assert_eq!(pc::STRING_GET_STRING_GUTS_NATIVE_BODY.size, 152);
+    assert_eq!(pc::STRING_GUTS_OPERATOR_NEW_NATIVE_BODY.size, 167);
+    assert_eq!(pc::STRING_GUTS_MEM_GET_NATIVE_BODY.size, 372);
+    assert_eq!(
+        pc::STRING_GUTS_MEM_GET_NATIVE_BODY.indirect_import_calls,
+        [(0x00a1_7b6b, pc::MALLOC_IAT_VA)]
+    );
+    assert_eq!(pc::STRING_CHAR_TO_WCHAR_NATIVE_BODY.size, 70);
+    assert_eq!(
+        pc::STRING_CHAR_TO_WCHAR_NATIVE_BODY.indirect_import_calls,
+        [
+            (0x00a1_7c4e, pc::MULTI_BYTE_TO_WIDE_CHAR_IAT_VA),
+            (0x00a1_7c60, pc::MULTI_BYTE_TO_WIDE_CHAR_IAT_VA),
+        ]
+    );
+    assert_eq!(pc::MAP_MAKE_POST_FIX_DIAG_LITERAL, "map.cpp");
+    assert_eq!(pc::MAP_MAKE_POST_FIX_DIAG_LITERAL_VA, 0x00ad_de58);
+    assert_eq!(pc::MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY.size, 28);
+    assert_eq!(
+        pc::MAP_MAKE_POST_FIX_DIAG_CONSTRUCTOR_CALLER_BODY.instruction_count,
+        7
+    );
+    assert_eq!(pc::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA, 0x0068_be9e);
+    assert_eq!(pc::GAME_LOG_SAY_CHECKSUM_VA, 0x0093_0b30);
+}
+
+#[test]
 fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
     assert_eq!(RING_COUNT[10], 441);
     assert_eq!((RING_X[288], RING_Y[288]), (-8, -16));
@@ -479,6 +524,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             regions_find_all,
             territory_limits,
             fix_diag_land,
+            post_fix_diag_string_constructor,
             next_va,
             next_mutator_va,
             ..
@@ -495,12 +541,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_MAKE_POST_FIX_DIAG_STRING_CONSTRUCTOR_CALL_VA,
+            don_replay::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::continent::STRING_CONSTRUCTOR_VA,
+            don_replay::continent::GAME_LOG_SAY_CHECKSUM_VA,
             "{name}"
         );
         assert_eq!(
@@ -672,6 +718,97 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                 expected.land_sub = 0;
                 mutation.before.land == 0 && mutation.after == expected
             }),
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.constructor,
+            don_replay::continent::STRING_CONSTRUCTOR_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.init_const,
+            don_replay::continent::STRING_INIT_CONST_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.reinit,
+            don_replay::continent::STRING_REINIT_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.local.source, "map.cpp",
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.local.utf16,
+            "map.cpp".encode_utf16().collect::<Vec<_>>(),
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.cleanup_guard_after, 4,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.allocation.owner,
+            don_replay::continent::MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor
+                .allocation
+                .utf16_units_allocated_with_nul,
+            8,
+            "{name}"
+        );
+        assert!(
+            !post_fix_diag_string_constructor.allocation.host_pointer_recorded,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.executed_indirect_import_calls,
+            [(
+                0x00a1_7c60,
+                don_replay::post_continent::MULTI_BYTE_TO_WIDE_CHAR_IAT_VA,
+            )],
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.world_before, fix_diag_land.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(
+            post_fix_diag_string_constructor
+                .world_sections_changed
+                .is_empty(),
+            "{name}"
+        );
+        assert_eq!(
+            post_fix_diag_string_constructor.next,
+            don_replay::continent::MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(
+                don_replay::continent::MapMakePostFixDiagGameLogCall {
+                    source_load_va:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_LOAD_VA,
+                    line_push_va:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_PUSH_VA,
+                    line_number:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_LINE_NUMBER,
+                    source_push_va:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_SOURCE_PUSH_VA,
+                    mode_push_va:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE_PUSH_VA,
+                    mode: 1,
+                    this_load_va:
+                        don_replay::post_continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_THIS_LOAD_VA,
+                    game_log_va: don_replay::post_continent::GAME_LOG_GLOBAL_VA,
+                    call_va: don_replay::continent::MAP_MAKE_POST_FIX_DIAG_GAME_LOG_CALL_VA,
+                    primitive_va: don_replay::continent::GAME_LOG_SAY_CHECKSUM_VA,
+                }
+            ),
             "{name}"
         );
         assert!(
