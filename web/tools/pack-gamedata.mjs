@@ -40,12 +40,13 @@ const OUT = process.argv.includes('--out')
 // the magic carries a version and the Rust side rejects a mismatch.
 // ---------------------------------------------------------------------------------------
 
-const MAGIC = 'DONPACK2';
+const MAGIC = 'DONPACK3';
 /** i32 fields per unit-type record, in this order. */
 const UNIT_FIELDS = [
   'type_id', 'attack', 'armor', 'hits', 'moves', 'max_range', 'min_range', 'recharge',
   'to_hit', 'domain', 'military_level', 'splash_area', 'splash_percent', 'obj_masks',
-  'target_size', 'age', 'unit_flags', 'los', 'role', 'roster',
+  'target_size', 'age', 'unit_flags', 'los', 'role', 'unit_flags2', 'guy_spacing',
+  'x_spacing', 'y_spacing', 'uber_size', 'roster',
 ];
 /** i32 rules values, in the field order of `don_sim::CombatRules` plus `rules_0x8b8`. */
 const RULES_OFFSETS = [
@@ -58,6 +59,8 @@ const RULES_OFFSETS = [
 ];
 const BALANCE_N = 493;
 const BALANCE_BASE_ID = 50; // unit ids start at 50; the table's row 0 is type id 50.
+const UNIT_COUNT = 364;
+const AUTHORITY_SCHEMA = 1;
 
 // ---------------------------------------------------------------------------------------
 
@@ -123,6 +126,24 @@ function main() {
   }
 
   const units = readTsv(unitTsv);
+  if (units.length !== UNIT_COUNT) {
+    throw new Error(`unit table has ${units.length} rows, expected ${UNIT_COUNT}`);
+  }
+  const ids = new Set();
+  for (const u of units) {
+    const typeId = Number(u.type_id);
+    if (!Number.isInteger(typeId) || typeId < BALANCE_BASE_ID || typeId >= BALANCE_BASE_ID + UNIT_COUNT) {
+      throw new Error(`invalid authority type_id ${u.type_id}`);
+    }
+    if (ids.has(typeId)) throw new Error(`duplicate authority type_id ${typeId}`);
+    ids.add(typeId);
+    for (const field of ['guy_spacing', 'x_spacing', 'y_spacing', 'uber_size']) {
+      const value = Number(u[field]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
+      }
+    }
+  }
   const roster = pickRoster(units);
   const rosterIndex = new Map(roster.map((u, i) => [u.type_id, i]));
   const rules = readRules(rulesTxt);
@@ -144,7 +165,7 @@ function main() {
   out.writeUInt32LE(BALANCE_N, o); o += 4;
   out.writeUInt32LE(BALANCE_BASE_ID, o); o += 4;
   out.writeUInt32LE(roster.length, o); o += 4;
-  out.writeUInt32LE(0, o); o += 4;
+  out.writeUInt32LE(AUTHORITY_SCHEMA, o); o += 4;
 
   for (const u of units) {
     for (const f of UNIT_FIELDS) {

@@ -25,8 +25,13 @@
 use don_sim::CombatRules;
 
 /// `i32` fields per unit record. Must match `UNIT_FIELDS` in the packer.
-pub const UNIT_FIELDS: usize = 20;
-const MAGIC: &[u8; 8] = b"DONPACK2";
+pub const UNIT_FIELDS: usize = 25;
+const MAGIC: &[u8; 8] = b"DONPACK3";
+const UNIT_COUNT: usize = 364;
+const BALANCE_N: usize = 493;
+const BALANCE_BASE: usize = 50;
+const RULES_COUNT: usize = 16;
+const AUTHORITY_SCHEMA: usize = 1;
 
 /// One `UnitType`, in the fields this simulation reads.
 ///
@@ -68,6 +73,16 @@ pub struct UnitTypeRec {
     pub unit_flags: i32,
     pub los: i32,
     pub role: i32,
+    /// Second live Unit-type flag word. Formation category reads bits 2, 3, 5, 6, and 13.
+    pub unit_flags2: i32,
+    /// `ObjectTypeData::guy_spacing` `+0x224`.
+    pub guy_spacing: i32,
+    /// `ObjectTypeData::x_spacing` `+0x228`.
+    pub x_spacing: i32,
+    /// `ObjectTypeData::y_spacing` `+0x22c`.
+    pub y_spacing: i32,
+    /// `UnitTypeData::uber_size` `+0x308`.
+    pub uber_size: i32,
     /// Index into the spawn roster, or -1 if this type is not spawned by the spectator.
     pub roster: i32,
 }
@@ -86,6 +101,8 @@ pub struct GameData {
     balance_base: i32,
     /// False when this is the synthetic stand-in rather than the packed game data.
     pub is_real: bool,
+    /// Deterministic digest of the authority-bearing pack bytes.
+    authority_revision: u64,
 }
 
 impl GameData {
@@ -102,23 +119,31 @@ impl GameData {
         let balance_n = u32_at(20);
         let balance_base = u32_at(24);
         let roster_count = u32_at(28);
-        if unit_fields != UNIT_FIELDS || rules_count < 16 {
+        let authority_schema = u32_at(32);
+        if unit_count != UNIT_COUNT
+            || unit_fields != UNIT_FIELDS
+            || rules_count != RULES_COUNT
+            || balance_n != BALANCE_N
+            || balance_base != BALANCE_BASE
+            || authority_schema != AUTHORITY_SCHEMA
+        {
             return None;
         }
         let unit_bytes = unit_count * unit_fields * 4;
         let rules_bytes = rules_count * 4;
         let bal_bytes = balance_n * balance_n * 2;
         let head = 36;
-        if b.len() < head + unit_bytes + rules_bytes + bal_bytes {
+        if b.len() != head + unit_bytes + rules_bytes + bal_bytes {
             return None;
         }
 
         let i32_at = |o: usize| i32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
         let mut units = Vec::with_capacity(unit_count);
+        let mut seen_type = vec![false; BALANCE_BASE + UNIT_COUNT];
         for k in 0..unit_count {
             let o = head + k * unit_fields * 4;
             let f = |j: usize| i32_at(o + j * 4);
-            units.push(UnitTypeRec {
+            let rec = UnitTypeRec {
                 type_id: f(0),
                 attack: f(1),
                 armor: f(2),
@@ -138,8 +163,28 @@ impl GameData {
                 unit_flags: f(16),
                 los: f(17),
                 role: f(18),
-                roster: f(19),
-            });
+                unit_flags2: f(19),
+                guy_spacing: f(20),
+                x_spacing: f(21),
+                y_spacing: f(22),
+                uber_size: f(23),
+                roster: f(24),
+            };
+            let type_index = usize::try_from(rec.type_id).ok()?;
+            if !(BALANCE_BASE..BALANCE_BASE + UNIT_COUNT).contains(&type_index)
+                || seen_type[type_index]
+                || rec.guy_spacing <= 0
+                || rec.x_spacing <= 0
+                || rec.y_spacing <= 0
+                || rec.uber_size <= 0
+            {
+                return None;
+            }
+            seen_type[type_index] = true;
+            units.push(rec);
+        }
+        if !seen_type[BALANCE_BASE..].iter().all(|value| *value) {
+            return None;
         }
 
         let ro = head + unit_bytes;
@@ -177,6 +222,11 @@ impl GameData {
             balance.push(i16::from_le_bytes([b[o], b[o + 1]]));
         }
 
+        // FNV-1a is a provenance/revision key here, not a lockstep checksum. The canonical
+        // authority also hashes every projected member before commit.
+        let authority_revision = b.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
         let mut gd = GameData {
             units,
             by_id: Vec::new(),
@@ -187,6 +237,7 @@ impl GameData {
             balance_n: balance_n as i32,
             balance_base: balance_base as i32,
             is_real: true,
+            authority_revision,
         };
         gd.reindex();
         if gd.roster.is_empty() {
@@ -221,6 +272,11 @@ impl GameData {
                 unit_flags: 0,
                 los: 5,
                 role: 0,
+                unit_flags2: 0,
+                guy_spacing: 48,
+                x_spacing: 48,
+                y_spacing: 48,
+                uber_size: 1,
                 roster,
             };
         let units = vec![
@@ -259,6 +315,7 @@ impl GameData {
             },
             rules_0x8b8: 0,
             is_real: false,
+            authority_revision: 0,
         };
         gd.reindex();
         gd
@@ -330,5 +387,37 @@ impl GameData {
             }
         }
         n
+    }
+}
+
+impl don_sim::systems::group_move_authority::GroupMoveContent for GameData {
+    fn revision(&self) -> u64 {
+        self.authority_revision
+    }
+
+    fn type_facts(
+        &self,
+        type_id: i32,
+    ) -> Option<don_sim::systems::group_move_authority::GroupMoveTypeFacts> {
+        // Synthetic fallback remains sufficient for the spectator, never for command authority.
+        if !self.is_real {
+            return None;
+        }
+        let rec = *self.units.get(self.index_of_type(type_id)?)?;
+        Some(don_sim::systems::group_move_authority::GroupMoveTypeFacts {
+            type_id: rec.type_id,
+            attack: rec.attack,
+            max_range: rec.max_range,
+            obj_masks: rec.obj_masks as u32,
+            unit_flags: rec.unit_flags as u32,
+            unit_flags2: rec.unit_flags2 as u32,
+            role: rec.role,
+            domain: rec.domain,
+            age: rec.age,
+            guy_spacing: rec.guy_spacing,
+            x_spacing: rec.x_spacing,
+            y_spacing: rec.y_spacing,
+            uber_size: rec.uber_size,
+        })
     }
 }

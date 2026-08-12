@@ -147,6 +147,8 @@ pub mod graphics_turret;
 /// Exact 1,022-byte `Group::action_trade` transaction and order-install chronology.
 pub mod group_action_trade_frontier;
 pub mod groups_guys;
+/// Fail-closed product authority join for canonical Group→Move packages.
+pub mod group_move_authority;
 /// `do_job` arm 12: the snapshot-bound atomic host boundary, concrete payload and same-tick
 /// movement integration that turns [`guard_order`]'s pure transcription into a dispatched
 /// `Unit::do_guard`.

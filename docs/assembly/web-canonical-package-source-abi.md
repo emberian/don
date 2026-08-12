@@ -104,3 +104,39 @@ identity, RNG, and extent mismatches without implying browser execution.
 Browser activation remains gated on complete product movement-authority installation, a newly
 built Wasm artifact with an audited export list, live client integration, two-tab receipt/state
 convergence, and unchanged Halt-cohort evidence.
+
+## Product authority prerequisite (`DONPACK3`)
+
+The checked-in source now has an isolated product join in
+`don_sim::systems::group_move_authority`. It constructs `GroupMoveAuthority` from the live
+generational `World`, Sim order/path owners, live `LeaderData` flags and tech bit 0x12, terrain,
+and one immutable content interface. The producer includes every live active Unit because the
+retail fixed Group allocator may normalize a previous small Group while choosing a slot. Its
+composition digest covers every instance identity and every projected dynamic/static field.
+
+`DONPACK3` is deliberately incompatible with `DONPACK2`. Each of its 364 dense TypeIndex rows now
+also carries the exact postload `unit_flags2`, `guy_spacing`, `x_spacing`, `y_spacing`, and
+`uber_size` inputs needed by `FormData::type_cat` `0x0072DFC0` and `Form::categorize`
+`0x0072E250`. The parser requires all type ids 50..413 exactly once, positive formation geometry,
+the exact 16-rule and 493x493 balance shapes, exact total length, and authority schema 1. A stale,
+short, duplicate, synthetic, or old-version pack cannot supply command authority. It is rejected;
+no formation defaults are installed.
+
+Dynamic predicates remain instance-owned. The producer reads `is_on_map`, captain/subordinate and
+containment links, `unit_masks & 0x1000` (`is_blown`), the concrete SpecialAnim enter/exit
+discriminator, current form width/angle, path-row availability, and Handle generation from Sim.
+A malformed SpecialAnim fails the whole projection. A missing path leaves the member unable to
+install an order. A recycled object id cannot consume a resolved fact for the old generation.
+
+One blocker is now explicit rather than papered over. `UnitData::speed` `0x0060AAE0` returns the
+live `myspeed` field immediately only when the effective type domain is non-land. Land Units then
+read terrain rule predicates A6..A9, nearby-object/type predicates 0x166/0x167, leader flag 0x8000,
+four leader counters, type predicates 0x105/0x167, and eleven Constants fields. The browser Sim
+does not yet own that complete evaluation, and its scenario spawn currently initializes
+`myspeed` from a deterministic random draw. Therefore `MOVES` and `myspeed` are not accepted as a
+retail land-speed substitute. `GroupMoveContent::resolved_land_speed` must return a value bound to
+the exact `Handle`; the real `GameData` adapter intentionally returns unavailable today.
+
+Consequently this prerequisite still does not activate the client, build/publish a Wasm artifact,
+or advertise a capability. A real browser land Group→Move remains fail-closed at
+`MissingResolvedLandSpeed` until the remaining retail speed owners are recovered and installed.
