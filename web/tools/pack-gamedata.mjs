@@ -40,13 +40,14 @@ const OUT = process.argv.includes('--out')
 // the magic carries a version and the Rust side rejects a mismatch.
 // ---------------------------------------------------------------------------------------
 
-const MAGIC = 'DONPACK4';
+const MAGIC = 'DONPACK5';
 /** i32 fields per unit-type record, in this order. */
 const UNIT_FIELDS = [
   'type_id', 'attack', 'armor', 'hits', 'moves', 'max_range', 'min_range', 'recharge',
   'to_hit', 'domain', 'military_level', 'splash_area', 'splash_percent', 'obj_masks',
   'target_size', 'age', 'unit_flags', 'los', 'role', 'unit_flags2', 'guy_spacing',
   'x_spacing', 'y_spacing', 'uber_size', 'from', 'where_type', 'graft', 'roster',
+  'new_block_radius', 'big_radius', 'push_size', 'push_circles', 'abil', 'squad_size',
 ];
 /** i32 rules values, in the field order of `don_sim::CombatRules` plus `rules_0x8b8`. */
 const RULES_OFFSETS = [
@@ -147,6 +148,21 @@ function main() {
     for (const field of ['guy_spacing', 'x_spacing', 'y_spacing', 'uber_size']) {
       const value = Number(u[field]);
       if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
+      }
+    }
+    for (const field of ['new_block_radius']) {
+      const value = Number(u[field]);
+      if (!Number.isInteger(value) || value < 0 || value > 10) {
+        throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
+      }
+    }
+    if (!Number.isInteger(Number(u.squad_size)) || Number(u.squad_size) !== 1) {
+      throw new Error(`unit ${typeId} has invalid squad_size: ${u.squad_size}`);
+    }
+    for (const field of ['big_radius', 'push_size', 'push_circles']) {
+      const value = Number(u[field]);
+      if (!Number.isInteger(value) || value < 0) {
         throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
       }
     }

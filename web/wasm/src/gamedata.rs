@@ -25,8 +25,8 @@
 use don_sim::CombatRules;
 
 /// `i32` fields per unit record. Must match `UNIT_FIELDS` in the packer.
-pub const UNIT_FIELDS: usize = 28;
-const MAGIC: &[u8; 8] = b"DONPACK4";
+pub const UNIT_FIELDS: usize = 34;
+const MAGIC: &[u8; 8] = b"DONPACK5";
 const UNIT_COUNT: usize = 364;
 const BALANCE_N: usize = 493;
 const BALANCE_BASE: usize = 50;
@@ -91,6 +91,18 @@ pub struct UnitTypeRec {
     pub graft: i32,
     /// Index into the spawn roster, or -1 if this type is not spawned by the spectator.
     pub roster: i32,
+    /// `ObjectTypeData::new_block_radius` `+0x248`, in collision-grid radius units.
+    pub new_block_radius: i32,
+    /// `ObjectTypeData::big_radius` `+0x244`, in Coord units.
+    pub big_radius: i32,
+    /// `UnitTypeData::push_size` `+0x2f8`.
+    pub push_size: i32,
+    /// `UnitTypeData::push_circles` `+0x2fc`.
+    pub push_circles: i32,
+    /// Live `ABIL`; the ordinary no-spell cohort is `-1`.
+    pub abil: i32,
+    /// Live `SQUAD_SIZE`. The browser lifecycle admits its explicit one-Guy body only for `1`.
+    pub squad_size: i32,
 }
 
 pub struct GameData {
@@ -182,6 +194,12 @@ impl GameData {
                 where_type: f(25),
                 graft: f(26),
                 roster: f(27),
+                new_block_radius: f(28),
+                big_radius: f(29),
+                push_size: f(30),
+                push_circles: f(31),
+                abil: f(32),
+                squad_size: f(33),
             };
             let type_index = usize::try_from(rec.type_id).ok()?;
             if !(BALANCE_BASE..BALANCE_BASE + UNIT_COUNT).contains(&type_index)
@@ -190,6 +208,11 @@ impl GameData {
                 || rec.x_spacing <= 0
                 || rec.y_spacing <= 0
                 || rec.uber_size <= 0
+                || !(0..=10).contains(&rec.new_block_radius)
+                || rec.big_radius < 0
+                || rec.push_size < 0
+                || rec.push_circles < 0
+                || !(1..=10).contains(&rec.squad_size)
             {
                 return None;
             }
@@ -319,6 +342,12 @@ impl GameData {
                 where_type: -1,
                 graft: -1,
                 roster,
+                new_block_radius: 1,
+                big_radius: 48,
+                push_size: 48,
+                push_circles: 1,
+                abil: -1,
+                squad_size: 1,
             };
         let units = vec![
             mk(50, 100, 0, 100, 24, 0, 30, 0, 0),
@@ -397,6 +426,51 @@ impl GameData {
         } else {
             Some(k as usize)
         }
+    }
+
+    /// Build the exact collision facts for the browser lifecycle's explicit one-Guy land body.
+    /// Types whose live record does not match that body fail closed; no multi-Guy approximation
+    /// is installed into the movement owner.
+    pub fn browser_collision_source(
+        &self,
+        type_id: i32,
+        x: i32,
+        y: i32,
+        angle: i32,
+    ) -> Option<don_sim::systems::movement_live::LiveCollisionSource> {
+        if !self.is_real {
+            return None;
+        }
+        let rec = *self.units.get(self.index_of_type(type_id)?)?;
+        if rec.domain != don_sim::systems::collision::DOMAIN_LAND
+            || rec.squad_size != 1
+            || !(0..=10).contains(&rec.new_block_radius)
+        {
+            return None;
+        }
+        Some(don_sim::systems::movement_live::LiveCollisionSource {
+            domain: rec.domain,
+            block_radius: rec.new_block_radius,
+            big_radius: rec.big_radius,
+            push_size: rec.push_size,
+            push_circles: rec.push_circles,
+            unit_flags: rec.unit_flags as u32,
+            unit_flags2: rec.unit_flags2 as u32,
+            attack_value: rec.attack,
+            spell_id: rec.abil,
+            unpacking: false,
+            captain: true,
+            moving: false,
+            searching: false,
+            action: don_sim::order::OrderIndex::None as i32,
+            invalid_tiles: Vec::new(),
+            guys: vec![don_sim::systems::movement_live::LiveCollisionGuy {
+                x,
+                y,
+                angle,
+                block_radius: rec.new_block_radius,
+            }],
+        })
     }
 
     /// `Balance::final_balance_table[attacker][defender]`, as a percent.

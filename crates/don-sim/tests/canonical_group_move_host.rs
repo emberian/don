@@ -253,7 +253,7 @@ fn explicit_package_publishes_canonical_group_backlink_order_path_and_cache() {
     assert_eq!(group.order_num, 1);
     assert_eq!(fixture.world.units.group()[row], slot as i16);
     assert_eq!(fixture.world.units.get_unit_masks(row), 0);
-    assert!(fixture.paths[row].is_empty());
+    assert_eq!(fixture.paths[row].len(), 1);
     assert_eq!(
         fixture.state.selection(0).unwrap(),
         &[CachedSelection {
@@ -262,6 +262,15 @@ fn explicit_package_publishes_canonical_group_backlink_order_path_and_cache() {
         }]
     );
     let order = fixture.world.orders(row).current().unwrap();
+    assert_eq!(
+        fixture.paths[row].peek(),
+        Some(PathData {
+            to_x: order.x,
+            to_y: order.y,
+            tolerance: 0,
+            flags: PathData::FLAG_MORE,
+        })
+    );
     assert_eq!(order.kind, OrderIndex::MoveTo);
     assert_eq!(order.flags, ORDER_GROUP | ORDER_FORM);
     let state = order.move_state.unwrap();
@@ -269,6 +278,36 @@ fn explicit_package_publishes_canonical_group_backlink_order_path_and_cache() {
     assert_eq!((state.dest_x, state.dest_y), (order.x, order.y));
     assert_eq!(fixture.world.units.orders_x()[row], order.x);
     assert_eq!(fixture.world.units.orders_y()[row], order.y);
+}
+
+#[test]
+fn command_coordinates_are_clamped_in_the_pathfinder_tile_scale() {
+    let mut fixture = Fixture::new(1);
+    let bytes = package(
+        &fixture.objects,
+        MoveToWire {
+            x: 100_000,
+            y: 200_000,
+            ..movement()
+        },
+    );
+    fixture.process(0, 1, &bytes).unwrap();
+    let row = fixture.world.row_of(fixture.handles[0]).unwrap();
+    let order = fixture.world.orders(row).current().unwrap();
+    // Formation destinations are snapped to the final 48-unit cell centre inside the
+    // 256 * 192 authoritative terrain span.
+    assert_eq!((order.x, order.y), (256 * 192 - 24, 256 * 192 - 24));
+    assert_eq!(
+        (
+            order.move_state.unwrap().orig_x,
+            order.move_state.unwrap().orig_y
+        ),
+        (256 * 192 - 1, 256 * 192 - 1)
+    );
+    assert_eq!(
+        fixture.paths[row].peek().map(|path| (path.to_x, path.to_y)),
+        Some((order.x, order.y))
+    );
 }
 
 #[test]

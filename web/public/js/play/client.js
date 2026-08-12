@@ -1370,7 +1370,7 @@ function groupMoveRelaySelected() {
 
 function canonicalRendererIdentity(who, ownerLocal = null) {
   if (!state.mod.canonicalPackageReady()) {
-    throw new Error('canonical Group→Move requires the evidenced Wasm source ABI and DONPACK4');
+    throw new Error('canonical Group→Move requires the evidenced Wasm source ABI and DONPACK5');
   }
   const views = state.mod.views();
   for (let row = 0; row < state.mod.live; row++) {
@@ -1390,11 +1390,15 @@ function canonicalRendererIdentity(who, ownerLocal = null) {
 function canonicalLocalGroupMove(play) {
   const selected = canonicalRendererIdentity(play);
   if (!selected.info) throw new Error(`P${play} command Unit disappeared before package construction`);
-  const direction = play % 2 === 0 ? 1 : -1;
-  const margin = state.mod.subtile * 2;
-  const x = clamp(selected.info.x + direction * state.mod.subtile * 8, margin, state.mod.span - margin);
-  const y = clamp(selected.info.y + state.mod.subtile * 4, margin, state.mod.span - margin);
-  return encodeCanonicalSingletonGroupMove(selected.identity, x, y);
+  const xDirection = selected.info.x < state.mod.span / 2 ? 1 : -1;
+  const yDirection = selected.info.y < state.mod.span / 2 ? 1 : -1;
+  const x = clamp(selected.info.x + xDirection * state.mod.subtile * 8, 0, state.mod.span - 1);
+  const y = clamp(selected.info.y + yDirection * state.mod.subtile * 4, 0, state.mod.span - 1);
+  return encodeCanonicalSingletonGroupMove({
+    who: selected.identity.who,
+    o: selected.identity.o,
+    uid: selected.identity.uid,
+  }, x, y);
 }
 
 function receiptEvidence(receipt) {

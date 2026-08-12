@@ -510,7 +510,7 @@ export class GameModule {
   processCanonicalCommandPackage(play, lockstepSerial, rendererId, input) {
     this._requireCanonicalPackageSourceAbi();
     if (!this.hasGameData) {
-      throw new Error('canonical command package authority requires installed DONPACK4 game data');
+      throw new Error('canonical command package authority requires installed DONPACK5 game data');
     }
     if (!this.g || !Number.isInteger(play) || play < 0 || play >= this.playerCount ||
         !Number.isInteger(lockstepSerial) || lockstepSerial < -0x8000_0000 ||

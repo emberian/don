@@ -102,6 +102,6 @@ test('unpublished artifact and invalid wrapper inputs fail before staging', () =
   assert.throws(
     () => missingData.game.processCanonicalCommandPackage(
       3, 41, 0x710000, missingData.expectedBytes),
-    /DONPACK4/);
+    /DONPACK5/);
   assert.deepEqual(missingData.counts(), { captures: 0, processes: 0 });
 });

@@ -83,9 +83,10 @@ the requested active local slot. A failed setup still installs nothing. This tab
 included in the canonical save image, and survives load exactly.
 
 Load deliberately clears adapter-only command identity scratch, the one-shot lease, selections,
-and receipt. The loaded play→who table remains authoritative, while externally derived
-`GroupMoveAuthority` remains unavailable until its product owner reinstalls it. Thus a freshly
-captured post-load package reaches `MissingAuthority`, not `MissingPlayerMap`.
+and receipt. The loaded play→who table remains authoritative. The collision runtime is not yet a
+canonical save section, however, so the product-authority join now preflights it and fails closed
+at `Movement(MissingSource)` after load. A freshly captured post-load package cannot publish a
+movement receipt until exact collision-source rehydration is implemented.
 
 ## Guarded JavaScript wrapper
 
@@ -105,38 +106,65 @@ Browser activation remains gated on complete product movement-authority installa
 built Wasm artifact with an audited export list, live client integration, two-tab receipt/state
 convergence, and unchanged Halt-cohort evidence.
 
-## Product authority prerequisite (`DONPACK3`)
+## Product authority lifecycle (`DONPACK5`)
 
-The checked-in source now has an isolated product join in
-`don_sim::systems::group_move_authority`. It constructs `GroupMoveAuthority` from the live
-generational `World`, Sim order/path owners, live `LeaderData` flags and tech bit 0x12, terrain,
-and one immutable content interface. The producer includes every live active Unit because the
-retail fixed Group allocator may normalize a previous small Group while choosing a slot. Its
-composition digest covers every instance identity and every projected dynamic/static field.
+The product join in `don_sim::systems::group_move_authority` now consumes the live generational
+`World`, order/path owners, terrain, diplomacy/leader/hero facts, exact recovered land-speed
+producer, and immutable type content. `DONPACK5` extends the fail-closed `DONPACK4` record from 28
+to 34 words with the six collision-body inputs `new_block_radius`, `big_radius`, `push_size`,
+`push_circles`, `ABIL`, and `SQUAD_SIZE`. The packer admits the measured one-Guy cohort only;
+synthetic, stale-magic, short, duplicate, or malformed content cannot install movement authority.
 
-`DONPACK3` is deliberately incompatible with `DONPACK2`. Each of its 364 dense TypeIndex rows now
-also carries the exact postload `unit_flags2`, `guy_spacing`, `x_spacing`, `y_spacing`, and
-`uber_size` inputs needed by `FormData::type_cat` `0x0072DFC0` and `Form::categorize`
-`0x0072E250`. The parser requires all type ids 50..413 exactly once, positive formation geometry,
-the exact 16-rule and 493x493 balance shapes, exact total length, and authority schema 1. A stale,
-short, duplicate, synthetic, or old-version pack cannot supply command authority. It is rejected;
-no formation defaults are installed.
+`GameData::browser_collision_source` constructs the explicit live one-Guy land body. It binds the
+type domain and radii, push facts, both unit-flag words, attack/spell inputs, and the current
+generational Unit position/angle. `Game::new` resolves every row before its first spatial write,
+then lets the Sim collision owner validate and atomically publish the WData anchor, Guy footprint,
+and identity-bound source. The Group-Move product join also preflights the complete collision
+runtime before producing authority, so a missing, foreign, unlinked, or malformed source refuses
+the package before the Sim transaction.
 
-Dynamic predicates remain instance-owned. The producer reads `is_on_map`, captain/subordinate and
-containment links, `unit_masks & 0x1000` (`is_blown`), the concrete SpecialAnim enter/exit
-discriminator, current form width/angle, path-row availability, and Handle generation from Sim.
-A malformed SpecialAnim fails the whole projection. A missing path leaves the member unable to
-install an order. A recycled object id cannot consume a resolved fact for the old generation.
+The browser lifecycle's default terrain has no adapter-supplied invalid-tile overlay and every
+spawned browser Unit is one on-map land Guy. Other formation bodies and post-load collision-source
+rehydration remain outside this bounded producer and therefore fail closed.
 
-One blocker is now explicit rather than papered over. `UnitData::speed` `0x0060AAE0` returns the
-live `myspeed` field immediately only when the effective type domain is non-land. Land Units then
-read terrain rule predicates A6..A9, nearby-object/type predicates 0x166/0x167, leader flag 0x8000,
-four leader counters, type predicates 0x105/0x167, and eleven Constants fields. The browser Sim
-does not yet own that complete evaluation, and its scenario spawn currently initializes
-`myspeed` from a deterministic random draw. Therefore `MOVES` and `myspeed` are not accepted as a
-retail land-speed substitute. `GroupMoveContent::resolved_land_speed` must return a value bound to
-the exact `Handle`; the real `GameData` adapter intentionally returns unavailable today.
+## One coordinate scale and atomic initial path
 
-Consequently this prerequisite still does not activate the client, build/publish a Wasm artifact,
-or advertise a capability. A real browser land Group→Move remains fail-closed at
-`MissingResolvedLandSpeed` until the remaining retail speed owners are recovered and installed.
+Canonical command coordinates, browser projections, terrain lookups, and movement paths now use
+the terrain/movement tile scale throughout:
+
+```text
+COORD_PER_TILE = 192
+MAP_TILES       = 128
+MAP_SPAN        = 24,576
+```
+
+The prior browser projection used `world::COORD_PER_TILE == 768` while the pathfinder and collision
+terrain used 192. That made an accepted Group-Move destination valid to the command adapter but
+off-map to movement. `game_abi` and `canonical_group_move_host` now share the 192-unit constant and
+clamp before formation placement. The remaining `0x300` arithmetic in the host is only the
+recovered retail order-remainder field, not a map-bound scale.
+
+When a MoveTo becomes the current order, the same package after-image now publishes a one-record
+`PathStack` to the exact formation-adjusted destination with tolerance zero and `FLAG_MORE`. Order,
+orders-x/y, and path therefore commit or roll back together. Appending a queued order does not
+replace the current path early. This direct initial path is the authoritative repath for the
+bounded flat browser lifecycle; collision remains responsible for rejecting or detouring an
+occupied step.
+
+Focused source evidence covers:
+
+- 12 pure host tests, including 192-scale edge clamping and order/path atomicity;
+- exact DONPACK5 parsing plus stale DONPACK4 rejection and collision-row projection;
+- two independently created native ABI `Game` instances processing both players' leased
+  Group→Move packages with identical receipts, frame digests, and RNG after every step; and
+- actual position change for both selected land Units within 32 frames in both instances.
+
+The dormant client helper now chooses an inward destination from the authoritative exported span
+and passes only strict `{who,o,uid}` input to the package encoder; renderer id and generation remain
+lease evidence and never become retail `o`.
+
+This remains source-only. No checked-in Wasm artifact, capability/version bit, or client default is
+changed. Activation still requires an exact-commit reproducible Wasm build and the same two-instance
+receipt/frame/digest/RNG **and position-change** proof against the compiled artifact. Browser proof
+is additionally unavailable while the required Chrome target is absent, and load/resume remains
+red until the collision runtime has a generation-safe canonical rehydration transaction.

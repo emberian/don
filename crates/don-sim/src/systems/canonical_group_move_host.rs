@@ -17,7 +17,7 @@ use crate::systems::groups_guys::{
     formation_order_coord, FormationMember, GroupData, Groups, GROUPS_PER_PLAYER,
     GROUP_MAX_MEMBERS, NUM_GROUPS, NUM_LEADERS,
 };
-use crate::systems::movement::PathStack;
+use crate::systems::movement::{PathData, PathStack, TILE as COORD_PER_TILE};
 use crate::systems::production::{BuildData, BUILDDATA_SIZE};
 use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
@@ -705,8 +705,8 @@ fn final_position(image: &UnitImage, map_tiles: (i32, i32)) -> Result<(i32, i32)
                 | OrderIndex::GroupMove
                 | OrderIndex::GroupAttackTo
         ) {
-            let max_x = map_tiles.0.wrapping_mul(0x300);
-            let max_y = map_tiles.1.wrapping_mul(0x300);
+            let max_x = map_tiles.0.wrapping_mul(COORD_PER_TILE);
+            let max_y = map_tiles.1.wrapping_mul(COORD_PER_TILE);
             return Ok(
                 if order.x >= 0 && order.y >= 0 && order.x < max_x && order.y < max_y {
                     (order.x, order.y)
@@ -726,6 +726,24 @@ fn final_position(image: &UnitImage, map_tiles: (i32, i32)) -> Result<(i32, i32)
 
 fn order_remainder(value: i32) -> i16 {
     value.wrapping_sub((value / 0x300).wrapping_mul(0x300)) as i16
+}
+
+/// Produce the complete direct-path after-image paired with a newly-current locomotion order.
+///
+/// `PathStack` is checksum-owned Unit state, so a canonical package cannot publish a MoveTo
+/// order and leave the old path behind (or clear it to an unusable empty stack). The browser
+/// lifecycle currently mounts a flat, obstacle-free terrain source; its authoritative repath is
+/// therefore the one direct destination record consumed by `Unit::do_move`. A queued order does
+/// not replace the current path until it becomes current.
+pub fn initial_direct_move_path(destination: (i32, i32), tolerance: i32) -> PathStack {
+    let mut path = PathStack::new();
+    path.push(PathData {
+        to_x: destination.0,
+        to_y: destination.1,
+        tolerance,
+        flags: PathData::FLAG_MORE,
+    });
+    path
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1321,8 +1339,8 @@ pub fn prepare_group_move_package(
     let mut groups_after = selection.groups_after.clone();
     let mut mutations = selection.units.clone();
 
-    let max_x = map_tiles.0.wrapping_mul(0x300).wrapping_sub(1);
-    let max_y = map_tiles.1.wrapping_mul(0x300).wrapping_sub(1);
+    let max_x = map_tiles.0.wrapping_mul(COORD_PER_TILE).wrapping_sub(1);
+    let max_y = map_tiles.1.wrapping_mul(COORD_PER_TILE).wrapping_sub(1);
     let x = wire.movement.x.clamp(0, max_x.max(0));
     let y = wire.movement.y.clamp(0, max_y.max(0));
     let group = &mut groups_after.list[group_slot];
@@ -1502,6 +1520,7 @@ pub fn prepare_group_move_package(
         );
         let mutation_index = ensure_mutation_for_row(&mut mutations, world, paths, row)?;
         let mutation = &mut mutations[mutation_index];
+        let becomes_current = queue == 2 || mutation.before.orders.is_empty();
         if queue == 2 {
             if wire.movement.orders == 2
                 && mutation
@@ -1515,13 +1534,15 @@ pub fn prepare_group_move_package(
                 });
             }
             mutation.after.orders.replace(order);
-            mutation.after.path.clear();
             mutation.after.unit_masks &= !0x0400_0000;
         } else {
             mutation.after.orders.push(order);
         }
+        if becomes_current {
+            mutation.after.path = initial_direct_move_path(destination, 0);
+        }
         mutation.after.unit_masks &= !0x400;
-        if queue == 2 || mutation.before.orders.is_empty() {
+        if becomes_current {
             mutation.after.orders_x = destination.0;
             mutation.after.orders_y = destination.1;
         }

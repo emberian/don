@@ -36,7 +36,7 @@ const CMD_SCRATCH: usize = 16 * 1024;
 const PICK_MAX: usize = 4096;
 const SAVE_LIMIT: usize = 256 * 1024 * 1024;
 const MAP_TILES: i32 = W_CELLS * don_sim::systems::map_terrain::TILES_PER_WCELL;
-const TILE_COORD: i32 = don_sim::world::COORD_PER_TILE;
+const TILE_COORD: i32 = don_sim::systems::map_terrain::COORD_PER_TILE;
 const CORE_SUBTILE: i32 = don_sim::world::SUBTILE;
 const MAP_SPAN: i32 = MAP_TILES * TILE_COORD;
 const STARTING_GOODS_RULE: usize = 564;
@@ -120,6 +120,8 @@ enum TrainingRefusal {
 enum BrowserGroupMoveAuthorityError {
     LandSpeed(LandSpeedAuthorityError),
     GroupMove(GroupMoveAuthorityError),
+    MissingCollisionType { handle: Handle, type_id: i32 },
+    Movement(don_sim::systems::movement_live::LiveCollisionFault),
 }
 
 impl TrainingRefusal {
@@ -263,16 +265,24 @@ impl Game {
             start_y,
         };
         game.install_production_facts();
-        if let Err(error) = game.rebuild_group_move_authority((start_x[0], start_y[0])) {
-            game.set_error(format!(
-                "group move authority unavailable at browser lifecycle creation: {error:?}"
-            ));
+        match game
+            .install_browser_movement_sources()
+            .and_then(|_| game.rebuild_group_move_authority((start_x[0], start_y[0])))
+        {
+            Ok(_) => {}
+            Err(error) => {
+                game.core
+                    .replace_group_move_authority(GroupMoveAuthority::default());
+                game.set_error(format!(
+                    "group move authority unavailable at browser lifecycle creation: {error:?}"
+                ));
+            }
         }
         game.refresh();
         game
     }
 
-    /// Join the immutable DONPACK4 content and every current dynamic Sim owner into the
+    /// Join the immutable DONPACK5 content and every current dynamic Sim owner into the
     /// detached authority consumed by the canonical Group→Move transaction. Synthetic data
     /// deliberately has no authority producer; tests may still install a hand-built projection
     /// to exercise the lower ABI seam.
@@ -283,6 +293,10 @@ impl Game {
         if !self.gd.is_real {
             return Ok(false);
         }
+        self.core
+            .movement_collision
+            .preflight(&self.core.world, &self.core.map.world, &self.core.paths)
+            .map_err(BrowserGroupMoveAuthorityError::Movement)?;
         let authority = {
             let speed = produce_resolved_land_speed_authority(&self.core, &self.gd)
                 .map_err(BrowserGroupMoveAuthorityError::LandSpeed)?;
@@ -293,6 +307,43 @@ impl Game {
                 .map_err(BrowserGroupMoveAuthorityError::GroupMove)?
         };
         self.core.replace_group_move_authority(authority);
+        Ok(true)
+    }
+
+    /// Mount the complete collision source for every browser-created one-Guy land Unit.
+    /// All immutable type rows and live identities are resolved before the first spatial write.
+    fn install_browser_movement_sources(&mut self) -> Result<bool, BrowserGroupMoveAuthorityError> {
+        if !self.gd.is_real {
+            return Ok(false);
+        }
+        let mut planned = Vec::with_capacity(self.core.world.live_count() as usize);
+        for row in 0..self.core.world.live_count() as usize {
+            let handle = self.core.world.handle_at_row(row).ok_or(
+                BrowserGroupMoveAuthorityError::MissingCollisionType {
+                    handle: Handle {
+                        id: row as u32,
+                        generation: 0,
+                    },
+                    type_id: -1,
+                },
+            )?;
+            let type_id = self.core.unit_type.get(row).copied().unwrap_or(-1);
+            let source = self
+                .gd
+                .browser_collision_source(
+                    type_id,
+                    self.core.world.units.x_internal()[row],
+                    self.core.world.units.y_internal()[row],
+                    self.core.world.units.angle()[row],
+                )
+                .ok_or(BrowserGroupMoveAuthorityError::MissingCollisionType { handle, type_id })?;
+            planned.push((handle, source));
+        }
+        for (handle, source) in planned {
+            self.core
+                .install_movement_collision_source(handle, source)
+                .map_err(BrowserGroupMoveAuthorityError::Movement)?;
+        }
         Ok(true)
     }
 
@@ -2344,12 +2395,12 @@ mod tests {
         stage(&GAMEDATA).clear();
     }
 
-    /// Build the exact DONPACK4 authority shape from the tracked retail Unit table. Balance is
+    /// Build the exact DONPACK5 authority shape from the tracked retail Unit table. Balance is
     /// neutral because these lifecycle tests never enter combat; every Group/land-speed field
     /// and all twelve retail speed Constants are canonical inputs.
-    fn stage_test_donpack4_authority() {
+    fn stage_test_donpack5_authority() {
         const UNIT_TABLE: &str = include_str!("../../../schema/live/live-tables-unit.tsv");
-        const UNIT_FIELDS: [&str; 27] = [
+        const UNIT_FIELDS: [&str; 33] = [
             "type_id",
             "attack",
             "armor",
@@ -2377,6 +2428,12 @@ mod tests {
             "from",
             "where",
             "graft",
+            "new_block_radius",
+            "big_radius",
+            "push_size",
+            "push_circles",
+            "abil",
+            "squad_size",
         ];
         let mut lines = UNIT_TABLE.lines();
         let header = lines.next().unwrap().split('\t').collect::<Vec<_>>();
@@ -2391,17 +2448,21 @@ mod tests {
         assert_eq!(rows.len(), 364);
 
         let mut bytes = Vec::with_capacity(527_014);
-        bytes.extend_from_slice(b"DONPACK4");
-        for word in [364u32, 28, 28, 493, 50, 1, 1] {
+        bytes.extend_from_slice(b"DONPACK5");
+        for word in [364u32, 34, 28, 493, 50, 1, 1] {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
         for row in &rows {
-            for &index in &indexes {
+            for &index in &indexes[..27] {
                 let value = row[index].parse::<i64>().unwrap() as u32;
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
             let type_id = row[indexes[0]].parse::<i32>().unwrap();
             bytes.extend_from_slice(&(if type_id == 50 { 0i32 } else { -1 }).to_le_bytes());
+            for &index in &indexes[27..] {
+                let value = row[index].parse::<i64>().unwrap() as u32;
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
         }
         let rules: [i32; 28] = [
             200, 10, 50, 40, 33, 170, 30, 85, 170, 512, 512, 33, 0, 25, 204, 1,
@@ -2419,6 +2480,42 @@ mod tests {
         staged.clear();
         staged.extend_from_slice(&bytes);
         assert!(GameData::parse(staged).is_some());
+    }
+
+    #[test]
+    fn donpack5_collision_rows_are_exact_and_older_packs_fail_closed() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage_test_donpack5_authority();
+        let bytes = stage(&GAMEDATA).clone();
+        let gd = GameData::parse(&bytes).expect("the exact DONPACK5 test image parses");
+        let citizen = gd
+            .units
+            .get(gd.index_of_type(50).unwrap())
+            .copied()
+            .unwrap();
+        let source = gd
+            .browser_collision_source(50, 4_032, 4_224, 17)
+            .expect("the live Citizen row is an authoritative one-Guy land body");
+        assert_eq!(source.domain, citizen.domain);
+        assert_eq!(source.block_radius, citizen.new_block_radius);
+        assert_eq!(source.big_radius, citizen.big_radius);
+        assert_eq!(source.push_size, citizen.push_size);
+        assert_eq!(source.push_circles, citizen.push_circles);
+        assert_eq!(source.unit_flags, citizen.unit_flags as u32);
+        assert_eq!(source.unit_flags2, citizen.unit_flags2 as u32);
+        assert_eq!(source.spell_id, citizen.abil);
+        assert_eq!(source.guys.len(), 1);
+        assert_eq!(
+            (source.guys[0].x, source.guys[0].y, source.guys[0].angle),
+            (4_032, 4_224, 17)
+        );
+
+        let mut old = bytes;
+        old[..8].copy_from_slice(b"DONPACK4");
+        assert!(GameData::parse(&old).is_none());
     }
 
     fn submit_packet(game: &mut Game, who: u32, packet: &[u8]) {
@@ -2482,12 +2579,12 @@ mod tests {
     }
 
     #[test]
-    fn donpack4_game_new_and_manual_teams_install_generation_bound_land_authority() {
+    fn donpack5_game_new_and_manual_teams_install_generation_bound_land_authority() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         stage(&PLAYDATA).clear();
-        stage_test_donpack4_authority();
+        stage_test_donpack5_authority();
         let mut game = Game::new(0xd04_2026);
         assert!(game.gd.is_real);
 
@@ -2532,12 +2629,12 @@ mod tests {
     }
 
     #[test]
-    fn donpack4_package_rebuilds_current_authority_and_returns_the_real_sim_receipt() {
+    fn donpack5_package_rebuilds_current_authority_and_returns_the_real_sim_receipt() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         stage(&PLAYDATA).clear();
-        stage_test_donpack4_authority();
+        stage_test_donpack5_authority();
         let mut game = Game::new(0xd04_2027);
         assert_eq!(
             unsafe {
@@ -2586,12 +2683,135 @@ mod tests {
     }
 
     #[test]
-    fn donpack4_dynamic_owner_mismatch_refuses_before_the_sim_transaction() {
+    fn donpack5_group_move_advances_two_independent_games_in_lockstep() {
         let _stage = STAGE_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         stage(&PLAYDATA).clear();
-        stage_test_donpack4_authority();
+        stage_test_donpack5_authority();
+
+        let mut left = Game::new(0xd05_2026);
+        let mut right = Game::new(0xd05_2026);
+        for game in [&mut left, &mut right] {
+            assert_eq!(
+                unsafe {
+                    game_start_manual_teams(game, 0x03, u32::from_le_bytes([0, 1, 8, 8]), 0, 0, 0)
+                },
+                1,
+                "{}",
+                String::from_utf8_lossy(&game.error)
+            );
+        }
+
+        let actors = (0..2u8)
+            .map(|who| {
+                let row = (0..left.core.world.live_count() as usize)
+                    .find(|&row| left.core.world.units.get_who(row) == who)
+                    .unwrap();
+                let handle = left.core.world.handle_at_row(row).unwrap();
+                let start = (
+                    left.core.world.units.x_internal()[row],
+                    left.core.world.units.y_internal()[row],
+                );
+                let x_direction = if start.0 < MAP_SPAN / 2 { 1 } else { -1 };
+                let y_direction = if start.1 < MAP_SPAN / 2 { 1 } else { -1 };
+                let destination = (
+                    start.0 + x_direction * TILE_COORD * 8,
+                    start.1 + y_direction * TILE_COORD * 4,
+                );
+                (who, row, handle, start, destination)
+            })
+            .collect::<Vec<_>>();
+
+        for (serial_index, &(who, row, handle, _, destination)) in actors.iter().enumerate() {
+            let o = left.core.world.units.o()[row];
+            let packet = group_move_packet(who, o, destination.0, destination.1);
+            let mut expected_receipt = None;
+            let mut expected_order_destination = None;
+            for game in [&mut left, &mut right] {
+                game.cmd[..packet.len()].copy_from_slice(&packet);
+                assert_eq!(
+                    unsafe { game_object_command_identity(game, handle.id as i32) },
+                    1
+                );
+                assert_eq!(
+                    unsafe {
+                        game_process_command_package(
+                            game,
+                            u32::from(who),
+                            serial_index as i32 + 1,
+                            packet.len() as u32,
+                        )
+                    },
+                    1,
+                    "{}",
+                    String::from_utf8_lossy(&game.error)
+                );
+                let order_destination = game
+                    .core
+                    .world
+                    .orders(row)
+                    .current()
+                    .map(|order| (order.x, order.y))
+                    .unwrap();
+                assert_eq!(
+                    game.core.paths[row]
+                        .peek()
+                        .map(|path| (path.to_x, path.to_y)),
+                    Some(order_destination)
+                );
+                if let Some(expected) = expected_order_destination {
+                    assert_eq!(order_destination, expected);
+                } else {
+                    expected_order_destination = Some(order_destination);
+                }
+                if let Some(expected) = &expected_receipt {
+                    assert_eq!(&game.package_receipt, expected);
+                } else {
+                    expected_receipt = Some(game.package_receipt.clone());
+                }
+            }
+            assert_eq!(
+                left.core.world.random.state(),
+                right.core.world.random.state()
+            );
+            assert_eq!(left.core.channel_digest(), right.core.channel_digest());
+        }
+
+        let mut moved = [false; 2];
+        for _ in 0..32 {
+            unsafe {
+                game_step(&mut left, 1);
+                game_step(&mut right, 1);
+            }
+            assert_eq!(
+                left.core.world.random.state(),
+                right.core.world.random.state()
+            );
+            assert_eq!(left.core.channel_digest(), right.core.channel_digest());
+            for (actor_index, &(_, row, _, start, _)) in actors.iter().enumerate() {
+                let left_position = (
+                    left.core.world.units.x_internal()[row],
+                    left.core.world.units.y_internal()[row],
+                );
+                let right_position = (
+                    right.core.world.units.x_internal()[row],
+                    right.core.world.units.y_internal()[row],
+                );
+                assert_eq!(left_position, right_position);
+                moved[actor_index] |= left_position != start;
+            }
+        }
+        assert_eq!(moved, [true, true]);
+    }
+
+    #[test]
+    fn donpack5_dynamic_owner_mismatch_refuses_before_the_sim_transaction() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage_test_donpack5_authority();
         let mut game = Game::new(0xd04_2028);
         assert_eq!(
             unsafe {
