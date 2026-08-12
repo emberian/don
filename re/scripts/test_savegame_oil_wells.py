@@ -20,6 +20,7 @@ from savegame_cities import parse_cities_section  # noqa: E402
 from savegame_constants_block import parse_constants_block  # noqa: E402
 from savegame_direct_scalars import parse_direct_scalars  # noqa: E402
 from savegame_forms import parse_forms_section  # noqa: E402
+from savegame_forts import parse_forts_section  # noqa: E402
 from savegame_goods import parse_goods_section  # noqa: E402
 from savegame_herds import parse_herds_section  # noqa: E402
 from savegame_heroes import parse_heroes_section  # noqa: E402
@@ -109,7 +110,7 @@ class OilWellsParserTests(unittest.TestCase):
         self.assertEqual(parsed.sha256, hashlib.sha256(data[offset : parsed.end]).hexdigest())
         self.assertEqual(
             parsed.layout_sha256,
-            "LAYOUT_SHA256",
+            "eded763dbf926c50691f545c4417abf41242c2d5e5f8029954adbb0304e6fe8e",
         )
 
         owner = parsed.owners[0]
