@@ -910,11 +910,14 @@ impl From<Order> for OrderRec {
         let move_state = o
             .move_state
             .unwrap_or_else(|| crate::order::MoveOrderState::fresh(o.x, o.y));
-        let patrol_payload = o
-            .air_patrol
-            .as_ref()
-            .and_then(|payload| patrol::AirPatrolOrder::try_from(payload).ok())
-            .map_or(PatrolPayload::None, PatrolPayload::Air);
+        let patrol_payload = if let Some(strafe) = o.strafe {
+            PatrolPayload::Strafe(strafe)
+        } else {
+            o.air_patrol
+                .as_ref()
+                .and_then(|payload| patrol::AirPatrolOrder::try_from(payload).ok())
+                .map_or(PatrolPayload::None, PatrolPayload::Air)
+        };
         OrderRec {
             kind: o.kind,
             node_metric: o.node_metric,
@@ -970,6 +973,10 @@ impl From<OrderRec> for Order {
             }
             PatrolPayload::None | PatrolPayload::Group(_) | PatrolPayload::Strafe(_) => None,
         };
+        let strafe = match &r.patrol_payload {
+            PatrolPayload::Strafe(order) => Some(order.clone()),
+            PatrolPayload::None | PatrolPayload::Group(_) | PatrolPayload::Air(_) => None,
+        };
         let move_state = matches!(
             r.kind,
             OrderIndex::MoveTo
@@ -1021,6 +1028,7 @@ impl From<OrderRec> for Order {
             special_anim: r.special_anim,
             form_order: r.form_order,
             air_patrol,
+            strafe,
             economy: r.economy,
         }
     }

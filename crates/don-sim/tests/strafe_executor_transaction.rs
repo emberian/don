@@ -302,12 +302,12 @@ fn malformed_duplicate_header_and_stale_commit_are_fail_closed() {
 }
 
 #[test]
-fn frontier_and_payload_authority_are_consumed_without_shared_registration() {
+fn frontier_and_payload_authority_are_registered_for_the_canonical_host() {
     assert_eq!(OrderIndex::Strafe as i32, STRAFE_ORDER_INDEX);
     authority::validate_strafe_order(&strafe()).unwrap();
-    assert!(!std::fs::read_to_string(
+    assert!(std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/systems/mod.rs")
     )
     .unwrap()
-    .contains("strafe_executor_transaction"));
+    .contains("pub mod strafe_executor_transaction"));
 }

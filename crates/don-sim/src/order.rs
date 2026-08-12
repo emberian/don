@@ -442,6 +442,21 @@ pub struct OrderTargetIdentity {
     pub uid: u16,
 }
 
+/// Failure to adopt a checksum-complete STRAFE payload into the flattened canonical queue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrafeOrderAdoptionError {
+    Authority(crate::systems::strafe_runtime_authority::StrafeAuthorityError),
+    TargetOutOfRange { o: i32, who: i32 },
+}
+
+impl From<crate::systems::strafe_runtime_authority::StrafeAuthorityError>
+    for StrafeOrderAdoptionError
+{
+    fn from(error: crate::systems::strafe_runtime_authority::StrafeAuthorityError) -> Self {
+        Self::Authority(error)
+    }
+}
+
 /// One `UnitOrder`, flattened.
 ///
 /// The retail hierarchy is 31 classes with a virtual `get_type()`, a virtually-inherited
@@ -486,6 +501,9 @@ pub struct Order {
     /// Complete walked payload of `AirPatrolOrder`, including both dynamic-array metadata
     /// records and the secondary `AirOrder` base. `Some` is valid only for AIR_PATROL.
     pub air_patrol: Option<crate::systems::air_runtime_authority::AirPatrolOrderPayload>,
+    /// Exact walked `StrafeOrder` payload. Target identity is duplicated in the generic
+    /// header and must agree; `Some` is valid only for STRAFE.
+    pub strafe: Option<crate::systems::patrol::StrafeOrder>,
     /// Exact economy-order suffix for BOARD_SHIP/AWAIT_BOARD/REPAIR/GATHER/CAST_SPELL/
     /// TRADE_ROUTE. Target-only variants are explicit so a foreign tag-0 order cannot be
     /// mistaken for a recovered economy node.
@@ -510,6 +528,7 @@ impl Default for Order {
             special_anim: None,
             form_order: None,
             air_patrol: None,
+            strafe: None,
             economy: None,
         }
     }
@@ -617,6 +636,35 @@ impl Order {
             kind: OrderIndex::AirPatrol,
             flags: if group { ORDER_GROUP } else { 0 },
             air_patrol: Some(payload),
+            ..Order::default()
+        })
+    }
+
+    /// Construct one canonical STRAFE queue node from its complete walked payload.
+    pub fn strafe(
+        payload: crate::systems::patrol::StrafeOrder,
+        group: bool,
+    ) -> Result<Order, StrafeOrderAdoptionError> {
+        crate::systems::strafe_runtime_authority::validate_strafe_order(&payload)?;
+        let target_who = i8::try_from(payload.target_who).map_err(|_| {
+            StrafeOrderAdoptionError::TargetOutOfRange {
+                o: payload.target_o,
+                who: payload.target_who,
+            }
+        })?;
+        let target_o = i16::try_from(payload.target_o).map_err(|_| {
+            StrafeOrderAdoptionError::TargetOutOfRange {
+                o: payload.target_o,
+                who: payload.target_who,
+            }
+        })?;
+        Ok(Order {
+            kind: OrderIndex::Strafe,
+            flags: if group { ORDER_GROUP } else { 0 },
+            target_who,
+            target_o,
+            target_uid: payload.target_uid,
+            strafe: Some(payload),
             ..Order::default()
         })
     }

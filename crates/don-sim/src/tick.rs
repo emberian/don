@@ -64,9 +64,9 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
-    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live,
-    order_dispatch, production,
+    ammo, borders_fog, canonical_strafe_runtime, casters_animals, collision_blocks_live, combat,
+    defeat_cleanup, economy, game_daemon_step12, groups_guys, leaders, movement, movement_driver,
+    movement_live, order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -866,6 +866,12 @@ pub struct Sim {
         Option<crate::systems::canonical_trade_route_runtime::TradeRouteActivationReceipt>,
     pub last_trade_route_error:
         Option<crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeError>,
+    /// Reinstalled content/search projection and transaction epochs for STRAFE row 16.
+    pub strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority,
+    /// Most recent canonical STRAFE commit or refusal. Diagnostic only; gameplay effects live
+    /// in World/order/path/RNG/Unit/ammo owners.
+    pub last_strafe_receipt: Option<canonical_strafe_runtime::CanonicalStrafeCommitReceipt>,
+    pub last_strafe_error: Option<canonical_strafe_runtime::CanonicalStrafeRuntimeError>,
 
     // ---- step 13: standing AI armies -------------------------------------------------
     pub armies: crate::systems::armies::Armies,
@@ -1485,6 +1491,9 @@ impl Sim {
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
             last_trade_route_error: None,
+            strafe_runtime_authority: canonical_strafe_runtime::StrafeRuntimeAuthority::default(),
+            last_strafe_receipt: None,
+            last_strafe_error: None,
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
@@ -1536,6 +1545,14 @@ impl Sim {
         authority: crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority,
     ) {
         self.trade_route_authority = authority;
+    }
+
+    /// Install the revision-bound type/search projection used by canonical STRAFE activations.
+    pub fn replace_strafe_runtime_authority(
+        &mut self,
+        authority: canonical_strafe_runtime::StrafeRuntimeAuthority,
+    ) {
+        self.strafe_runtime_authority = authority;
     }
 
     /// Process the bounded canonical command cohort: exactly opcode 0 Group followed by opcode 7
@@ -3062,6 +3079,8 @@ impl Sim {
             // Arm 15, `Unit::do_trade` `0x005ED270`. The adapter admits only fully owned
             // branches; every road/city/caravan/selection residual holds without mutation.
             OrderIndex::TradeRoute => self.do_trade_route(row),
+            // Arm 16, `Unit::do_strafe` `0x005EAB00`, through the atomic canonical adapter.
+            OrderIndex::Strafe => self.do_strafe(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
@@ -3104,6 +3123,98 @@ impl Sim {
                 self.cover.trade_route_refused += 1;
             }
         }
+    }
+
+    fn do_strafe(&mut self, row: usize) {
+        let prepared = match canonical_strafe_runtime::prepare_strafe_activation(
+            &self.world,
+            &self.paths,
+            &self.unit_type,
+            &self.strafe_runtime_authority,
+            row,
+            (self.map.world.xs * 4, self.map.world.ys * 4),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.last_strafe_receipt = None;
+                self.last_strafe_error = Some(error);
+                return;
+            }
+        };
+
+        let mut ammo_jobs = Vec::new();
+        for effect in prepared.effects() {
+            let canonical_strafe_runtime::StrafeRuntimeEffect::FireAmmo(target) = *effect else {
+                continue;
+            };
+            let Some(target_row) = self.world.unit_row_at(target.who, target.o) else {
+                self.last_strafe_receipt = None;
+                self.last_strafe_error =
+                    Some(canonical_strafe_runtime::CanonicalStrafeRuntimeError::StaleTarget);
+                return;
+            };
+            if self.world.units.get_uid(target_row) != target.uid
+                || self.world.units.get_flags(target_row) & OBJ_FLAG_ACTIVE == 0
+            {
+                self.last_strafe_receipt = None;
+                self.last_strafe_error =
+                    Some(canonical_strafe_runtime::CanonicalStrafeRuntimeError::StaleTarget);
+                return;
+            }
+            let actor_type = self.unit_type[row];
+            let Some(rules) = self.shooter_rules_for(actor_type) else {
+                self.last_strafe_receipt = None;
+                self.last_strafe_error = Some(
+                    canonical_strafe_runtime::CanonicalStrafeRuntimeError::UnsupportedCone(
+                        "STRAFE ammo type has no shooter rules",
+                    ),
+                );
+                return;
+            };
+            let damage = self
+                .type_stats(actor_type)
+                .map_or(0, |stats| stats.attack / 10);
+            ammo_jobs.push((target_row, rules, damage));
+        }
+
+        let receipt = match canonical_strafe_runtime::commit_strafe_activation(
+            &mut self.world,
+            &mut self.paths,
+            &self.unit_type,
+            &mut self.strafe_runtime_authority,
+            prepared,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.last_strafe_receipt = None;
+                self.last_strafe_error = Some(error);
+                return;
+            }
+        };
+        let mut ammo_job = ammo_jobs.into_iter();
+        for effect in &receipt.effects {
+            match *effect {
+                canonical_strafe_runtime::StrafeRuntimeEffect::SetAnimation(animation) => {
+                    self.world.units.set_idle(
+                        row,
+                        u8::from(animation == crate::systems::strafe_order_frontier::IDLE_ANIM),
+                    );
+                }
+                canonical_strafe_runtime::StrafeRuntimeEffect::FireAmmo(_) => {
+                    let (target_row, rules, damage) =
+                        ammo_job.next().expect("STRAFE ammo jobs were preflighted");
+                    self.fire_ammo(row, target_row, rules, damage);
+                }
+            }
+        }
+        if self.world.random.state() != receipt.expected_rng_state_after_effects {
+            self.last_strafe_receipt = None;
+            self.last_strafe_error =
+                Some(canonical_strafe_runtime::CanonicalStrafeRuntimeError::StaleCanonicalState);
+            return;
+        }
+        self.last_strafe_error = None;
+        self.last_strafe_receipt = Some(receipt);
     }
 
     /// Build the SPECIAL_ANIM dispatch view from canonical row-owned state.

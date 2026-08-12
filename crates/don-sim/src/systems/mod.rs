@@ -66,6 +66,8 @@ pub mod building_gather;
 pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
 pub mod canonical_group_move_host;
+/// Canonical live-World/path/RNG/animation/ammo adapter for STRAFE row 16.
+pub mod canonical_strafe_runtime;
 /// Exact fail-closed production adapter for a substantive `TRADE_ROUTE` Unit::work branch.
 pub mod canonical_trade_route_runtime;
 /// Tier-C spell-lifecycle and wildlife/RNG primitives recovered from the interrupted
@@ -274,6 +276,12 @@ pub mod step12_visibility_runtime;
 /// dependencies. It does **not** cover the `Group::action_eject_all` argument set — see
 /// `docs/mechanics/step8-eject-contents.md` §"What this does not cover".
 pub mod step8_eject_contents;
+/// Atomic detached-image STRAFE executor transaction.
+pub mod strafe_executor_transaction;
+/// Exact recovered `Unit::do_strafe` CFG/fact planner.
+pub mod strafe_order_frontier;
+/// Lossless retail walk and DoNSave v13 tag-8 authority for `StrafeOrder`.
+pub mod strafe_runtime_authority;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
