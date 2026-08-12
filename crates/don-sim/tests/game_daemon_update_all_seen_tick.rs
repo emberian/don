@@ -238,29 +238,16 @@ fn visible_local_seen_refuses_before_daemon_or_plane_mutation() {
 }
 
 #[test]
-fn source_auto_explore_refuses_before_daemon_or_plane_mutation() {
+fn clear_item_flag_returns_before_source_auto_explore_mask_is_read() {
     let mut sim = active_unit_phase33();
     sim.game_daemon.busy = 19;
     seed_fog_planes(&mut sim);
     sim.world.units.set_unit_masks(0, 0x100);
-    let daemon_before = sim.game_daemon;
-    let checksum_before = sim.map.world.checksum();
 
     let trace = sim.do_frame();
 
-    assert_eq!(
-        trace.steps[12],
-        StepRun::Unimplemented(Gap::GameDaemonUpdateAllSeen)
-    );
-    assert_eq!(sim.game_daemon, daemon_before);
-    assert_eq!(sim.map.world.checksum(), checksum_before);
-    assert!(matches!(
-        sim.step12_visibility_error,
-        Some(Step12VisibilityPreflightError::ActiveUnitCohort(
-            ActiveUnitProducerFault::RevealFogEffectful {
-                blocker: RevealFogNoEffectBlocker::SourceUnitAutoExplore,
-                ..
-            }
-        ))
-    ));
+    assert_eq!(trace.steps[12], StepRun::Executed);
+    assert_eq!(sim.game_daemon.busy, 4);
+    assert_eq!(sim.step12_visibility_error, None);
+    assert!(sim.map.world.seen.iter().any(|&byte| byte & 1 != 0));
 }

@@ -347,9 +347,6 @@ pub struct Step12UnitStamp {
     pub center: UnitStampCenter,
     /// Comes only from authoritative `object_flags & OBJECT_DETECTOR` at this pass.
     pub detector: bool,
-    /// Call-time `UnitData::unit_masks +0x218`. `World::reveal_fog` tests bit `0x100`
-    /// on the source Unit after its rare/oil/item clauses.
-    pub unit_masks: u32,
     pub grant_seen2_to: i8,
 }
 
@@ -435,7 +432,6 @@ pub fn plan_unit_stamp(facts: Step12UnitFacts) -> Result<UnitStampDecision, Unit
         radius_fog_cells,
         center,
         detector: facts.object_flags & OBJECT_DETECTOR != 0,
-        unit_masks: facts.unit_masks,
         grant_seen2_to: facts.grant_seen2_to,
     }))
 }

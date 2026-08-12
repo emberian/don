@@ -269,7 +269,6 @@ pub enum RevealFogNoEffectBlocker {
     ResourceTile,
     OilCell,
     ItemCell,
-    SourceUnitAutoExplore,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -347,7 +346,6 @@ fn reveal_fog_no_effect(
     terrain: &map_terrain::World,
     fog_x: i32,
     fog_y: i32,
-    source_unit_masks: u32,
 ) -> Result<(), ActiveUnitProducerFault> {
     let tile_x = fog_x * 2 + 1;
     let tile_y = fog_y * 2 + 1;
@@ -371,13 +369,6 @@ fn reveal_fog_no_effect(
             fog_x,
             fog_y,
             blocker: RevealFogNoEffectBlocker::ItemCell,
-        });
-    }
-    if source_unit_masks & 0x100 != 0 {
-        return Err(ActiveUnitProducerFault::RevealFogEffectful {
-            fog_x,
-            fog_y,
-            blocker: RevealFogNoEffectBlocker::SourceUnitAutoExplore,
         });
     }
     Ok(())
@@ -454,7 +445,7 @@ fn prepare_active_unit_clear(
             }
             let plane_index = context.terrain.f_index(fog_x, fog_y);
             if explored[plane_index] & owner_mask == 0 {
-                reveal_fog_no_effect(context.terrain, fog_x, fog_y, stamp.unit_masks)?;
+                reveal_fog_no_effect(context.terrain, fog_x, fog_y)?;
                 expected_reveal_calls += 1;
             }
             explored[plane_index] |= owner_mask | extra_mask;

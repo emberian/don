@@ -16,12 +16,13 @@ true before `GameDaemon::busy` or a World plane changes:
 5. every Unit that stamps has `ObjectData::visible +0x40 == 0`, avoiding the unrecovered
    virtual `Unit::update_local_seen`; and
 6. every newly explored cell's `World::reveal_fog` call is proven mutation-free: its centre
-   TData tile has no `RESOURCE 0x0200`, its WData cell has neither `OIL 0x0800` nor item bit
-   `0x8000`, and the source Unit lacks auto-explore mask `0x100`.
+   TData tile has no `RESOURCE 0x0200`, and its WData cell has neither `OIL 0x0800` nor item
+   bit `0x8000`.
 
 The last condition follows the exact branch order in `World::reveal_fog` `0x006B3D30`. With
-those four gates clear, the rare-Good, oil-patch, Item-ever-seen, and source-Unit
-`get_goody_box` mutations are all skipped. Territory ownership is not a gate in this body.
+those three gates clear, the rare-Good and oil-patch branches are skipped, then the signed-clear
+item flag returns before either Item-ever-seen or the source-Unit `get_goody_box` suffix.
+Territory ownership is not a gate in this body.
 
 ## PE stage map and transaction
 
@@ -56,8 +57,7 @@ preflight to the commit. No danger/visibility sidecar is introduced.
 - the canonical World checksum changes;
 - after removing only the reinstallable type/instance authority, save/load preserves that
   checksum and the next resumed frame converges in channel digest and byte-identical save;
-- a resource-cell reveal, nonzero `visible`, or source auto-explore bit refuses before daemon or
-  plane mutation.
+- a resource-cell reveal or nonzero `visible` refuses before daemon or plane mutation.
 
 ## Remaining red boundary
 
