@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
-    bind_first_farm_builder_at_frame79, discover_first_2018_farm, FirstFarmAuthorityBlocker,
-    FirstFarmAuthorityError, FirstFarmBuilderBindingError, FirstFarmFrame79Authority,
-    FirstFarmFrame79Source, FIRST_FRAME, FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL,
-    STRICT_REPLAY_SHA256,
+    bind_first_farm_builder_at_frame79, discover_first_2018_farm,
+    produce_first_farm_first_placement, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
+    FirstFarmBuilderBindingError, FirstFarmFirstPlacementError, FirstFarmFrame79Authority,
+    FirstFarmFrame79Source, FirstFarmSetupEntryAuthority, FirstFarmSetupEntrySource, FIRST_FRAME,
+    FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
 };
 use don_replay::groups_pre_pair_unit_authority::{
     replay_build_type_facts, PrePairUnitAuthorityError,
@@ -19,7 +20,13 @@ use don_replay::setup_units_producer::{
     DUTCH_MERCHANT_TYPE, OBJECTS_INIT_UNIT_BYTES, OBJECTS_INIT_UNIT_VA,
     PLACE_UNIT_DIRECT_RANDOM_CALL_VA,
 };
+use don_replay::{
+    build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest},
+    setup_cities_builds::CITY_CENTER_TYPE,
+    setup_place_unit_deep_re::{PlaceUnitExternalResidual, ProbeDisposition},
+};
 use don_sim::rng::Random;
+use don_sim::systems::{map_terrain::land, production};
 use don_sim::tick::Sim;
 use don_sim::world::Handle;
 
@@ -186,6 +193,49 @@ fn authority() -> FirstFarmFrame79Authority {
     }
 }
 
+fn synthetic_setup_entry(replay: &Replay) -> (Sim, FirstFarmSetupEntryAuthority) {
+    let edge = replay.initial.info.settings.map_edge_world_cells().unwrap() as u16;
+    let mut sim = Sim::new(u64::from(replay.initial.info.seed), edge);
+    sim.activate(FIRST_OWNER as usize);
+    for cell in &mut sim.map.world.wdata {
+        cell.land = land::FERTILE;
+        cell.region = 1;
+        cell.down = -1;
+        cell.flags = 0;
+    }
+    sim.map.world.tdata.fill(0);
+
+    let mut build = production::BuildData {
+        flags: production::flag::VALID,
+        city: -1,
+        city_down: -1,
+        ..production::BuildData::default()
+    };
+    build.queue.queued = 0;
+    let spawned = spawn_canonical_build(
+        &mut sim,
+        CanonicalBuildSpawnRequest {
+            owner: FIRST_OWNER,
+            type_index: CITY_CENTER_TYPE,
+            snapped_x: 21_600,
+            snapped_y: 64_608,
+            build,
+        },
+    )
+    .unwrap();
+    assert_eq!(spawned.object_id, 2_000);
+    let post_worldgen_rng = 0x12345;
+    sim.world.random.reseed(post_worldgen_rng);
+    let authority = FirstFarmSetupEntryAuthority {
+        revision: 1,
+        composition_digest: [0x5a; 32],
+        source: FirstFarmSetupEntrySource::CompletedCanonicalWorldgenAndStartingCitySetup,
+        world_checksum: sim.map.world.checksum_sections(),
+        post_worldgen_rng,
+    };
+    (sim, authority)
+}
+
 #[test]
 fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
     let path = replay_path();
@@ -313,6 +363,99 @@ fn in_memory_wire_or_rules_mutation_cannot_be_promoted_to_first_packet_authority
     assert_eq!(
         replay_build_type_facts(&payload, &rules, 0x1a1),
         Err(PrePairUnitAuthorityError::RulesSha256Mismatch)
+    );
+}
+
+#[test]
+fn canonical_setup_entry_produces_the_first_real_placement_probe_boundary() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (sim, authority) = synthetic_setup_entry(&replay);
+
+    let receipt = produce_first_farm_first_placement(&replay, &plan, &sim, &authority).unwrap();
+    assert_eq!(receipt.setup_ordinal, 0);
+    assert_eq!(receipt.center_row, 0);
+    assert_eq!(receipt.post_worldgen_rng, 0x12345);
+    assert_eq!(receipt.map_checksum, authority.world_checksum);
+    assert_ne!(receipt.placement_snapshot_sha256, [0; 32]);
+    assert_eq!(receipt.placement.inputs.upgraded_type, 69);
+    assert_eq!(receipt.placement.anchor_coord, (21_600, 64_608));
+    assert_eq!(receipt.placement.radius, 2);
+    assert_eq!(receipt.placement.probes.len(), 1);
+    assert_eq!(
+        receipt.placement.probes[0].disposition,
+        ProbeDisposition::Accepted
+    );
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        receipt.placement.first_external_residual
+    else {
+        panic!("all-land fixture must reach Objects::init_unit")
+    };
+    assert_eq!((request.owner, request.type_index), (0, 69));
+    assert_eq!(
+        (
+            request.exact_o,
+            request.external_previous,
+            request.external_next
+        ),
+        (-1, -1, -1)
+    );
+}
+
+#[test]
+fn first_placement_refuses_unbound_map_rng_center_and_allocation_chronology() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (mut sim, authority) = synthetic_setup_entry(&replay);
+
+    let mut missing_revision = authority.clone();
+    missing_revision.revision = 0;
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &missing_revision),
+        Err(FirstFarmFirstPlacementError::MissingAuthorityRevision)
+    );
+
+    let mut wrong_checksum = authority.clone();
+    wrong_checksum.world_checksum.full ^= 1;
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &wrong_checksum),
+        Err(FirstFarmFirstPlacementError::WorldChecksumMismatch)
+    );
+
+    let mut wrong_rng = authority.clone();
+    wrong_rng.post_worldgen_rng ^= 1;
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &wrong_rng),
+        Err(FirstFarmFirstPlacementError::PostWorldgenRngMismatch)
+    );
+
+    sim.world.frame = 1;
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &authority),
+        Err(FirstFarmFirstPlacementError::WrongFrame {
+            expected: 0,
+            actual: 1,
+        })
+    );
+    sim.world.frame = 0;
+
+    sim.production_runtime.build_types[0] = Some(CITY_CENTER_TYPE + 1);
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &authority),
+        Err(FirstFarmFirstPlacementError::CenterBuildMismatch)
+    );
+    sim.production_runtime.build_types[0] = Some(CITY_CENTER_TYPE);
+
+    sim.spawn_unit(FIRST_OWNER as usize, 69, 100, 100, 1)
+        .unwrap();
+    sim.world.random.reseed(authority.post_worldgen_rng);
+    assert_eq!(
+        produce_first_farm_first_placement(&replay, &plan, &sim, &authority),
+        Err(FirstFarmFirstPlacementError::ExistingOwnerUnits { mark: 1 })
     );
 }
 

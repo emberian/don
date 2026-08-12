@@ -12,9 +12,10 @@ use std::fmt;
 
 use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
 use don_sim::systems::map_terrain::{Coord, WCoord};
-use don_sim::systems::production::Footprint;
+use don_sim::systems::production::{self, Footprint};
+use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use don_sim::tick::Sim;
-use don_sim::world::OBJ_FLAG_ACTIVE;
+use don_sim::world::{WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 use crate::groups_build_history::{
     strict_group_build_history_before, GroupBuildHistoryError, ReplayGroupBuildPackage,
@@ -26,6 +27,10 @@ use crate::groups_pre_pair_unit_authority::{
 };
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
+use crate::setup_place_unit_deep_re::{
+    produce_place_unit_probe_prefix, CenterBuildFacts, PlaceUnitInputs, PlaceUnitProducerError,
+    PlaceUnitProducerReceipt, PlacementMapSnapshot, PlacementTileFacts,
+};
 use crate::setup_units_producer::{
     starting_citizen_counts, validate_build_units_prefix_receipt, BuildUnitsPlan,
     BuildUnitsPrefixReceipt, BuildUnitsReceiptError, PlacementOutcomeReceipt, PlacementRngEvent,
@@ -45,6 +50,7 @@ pub const FIRST_OWNER: u8 = 0;
 pub const FIRST_SELECTED_O: i16 = 4;
 pub const FARM_TYPE: i32 = 0x1a1;
 pub const FIRST_BUILDER_SETUP_ORDINAL: usize = 4;
+pub const FIRST_SETUP_PLACEMENT_ORDINAL: usize = 0;
 
 /// Exact setup schedule facts which precede object allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +181,85 @@ impl From<PrePairUnitAuthorityError> for FirstFarmAuthorityError {
     }
 }
 
+/// External provenance admitted at the first `Setup::place_unit` call.
+///
+/// The replay does not contain this state. The source means that an external canonical map
+/// transaction completed all world-generation calls, then executed the starting-City setup in
+/// native order. Merely reconstructing the replay-prefix World is not this source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFarmSetupEntrySource {
+    CompletedCanonicalWorldgenAndStartingCitySetup,
+}
+
+/// Revisioned external authority for the canonical setup-entry Sim.
+///
+/// `world_checksum` binds every synchronized map owner inspected by the placement probe. The RNG
+/// state is checked independently against the canonical object World because main RNG is not part
+/// of the map checksum. `composition_digest` attests the omitted transaction receipts and must be
+/// independently produced; this adapter never derives it from a caller-created snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmSetupEntryAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: FirstFarmSetupEntrySource,
+    pub world_checksum: don_sim::systems::map_terrain::WorldChecksum,
+    pub post_worldgen_rng: i32,
+}
+
+/// Exact source-produced first setup placement through its first unexecuted native mutation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmFirstPlacementReceipt {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub source: FirstFarmSetupEntrySource,
+    pub replay_file_sha256: [u8; 32],
+    pub setup_ordinal: usize,
+    pub map_checksum: don_sim::systems::map_terrain::WorldChecksum,
+    pub placement_snapshot_sha256: [u8; 32],
+    pub center_row: usize,
+    pub post_worldgen_rng: i32,
+    pub placement: PlaceUnitProducerReceipt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstPlacementError {
+    Discovery(FirstFarmAuthorityError),
+    MissingAuthorityRevision,
+    MissingCompositionDigest,
+    WrongFrame { expected: i32, actual: i32 },
+    WrongSetupPlan,
+    WorldChecksumMismatch,
+    PostWorldgenRngMismatch,
+    RegistryNotDenseEquivalent,
+    ExistingOwnerUnits { mark: i32 },
+    MissingCenterBuild,
+    CenterBuildRowOutOfRange,
+    CenterBuildMismatch,
+    MapDimensionMismatch,
+    MapShapeOverflow,
+    Placement(PlaceUnitProducerError),
+}
+
+impl fmt::Display for FirstFarmFirstPlacementError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "first 2018 Farm setup placement refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FirstFarmFirstPlacementError {}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstPlacementError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<PlaceUnitProducerError> for FirstFarmFirstPlacementError {
+    fn from(value: PlaceUnitProducerError) -> Self {
+        Self::Placement(value)
+    }
+}
+
 /// External state provenance admitted by the frame-79 join.
 ///
 /// This is intentionally narrower than "loaded Sim": the state must be the output of the
@@ -285,6 +370,178 @@ fn strict_first_builder_plan(
             && call.uber_size == 1
             && call.squad_size == 1
             && call.crew_size == 0
+    })
+}
+
+fn capture_placement_map(
+    sim: &Sim,
+) -> Result<(PlacementMapSnapshot, [u8; 32]), FirstFarmFirstPlacementError> {
+    let world = &sim.map.world;
+    if world.xs <= 0
+        || world.ys <= 0
+        || world.tile_xs != world.xs.checked_mul(4).unwrap_or(i32::MIN)
+        || world.tile_ys != world.ys.checked_mul(4).unwrap_or(i32::MIN)
+    {
+        return Err(FirstFarmFirstPlacementError::MapDimensionMismatch);
+    }
+    let cells = world
+        .xs
+        .checked_mul(world.ys)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or(FirstFarmFirstPlacementError::MapShapeOverflow)?;
+    if world.wdata.len() != cells {
+        return Err(FirstFarmFirstPlacementError::MapDimensionMismatch);
+    }
+
+    let mut tiles = Vec::with_capacity(cells);
+    let mut image = Vec::with_capacity(8 + cells.saturating_mul(9));
+    image.extend_from_slice(&world.xs.to_le_bytes());
+    image.extend_from_slice(&world.ys.to_le_bytes());
+    for y in 0..world.ys {
+        for x in 0..world.xs {
+            let cell = &world.wdata[(y * world.xs + x) as usize];
+            let collision = world.tmask(x * 4 + 2, y * 4 + 2);
+            let tile = PlacementTileFacts {
+                continent: cell.region as u16,
+                flags: cell.flags,
+                land: cell.land,
+                occupied_o: cell.down,
+                collision,
+            };
+            image.extend_from_slice(&tile.continent.to_le_bytes());
+            image.extend_from_slice(&tile.flags.to_le_bytes());
+            image.push(tile.land as u8);
+            image.extend_from_slice(&tile.occupied_o.to_le_bytes());
+            image.extend_from_slice(&tile.collision.to_le_bytes());
+            tiles.push(tile);
+        }
+    }
+    Ok((
+        PlacementMapSnapshot {
+            xs: world.xs,
+            ys: world.ys,
+            tiles,
+        },
+        sha256(&image),
+    ))
+}
+
+/// Produce the exact first setup placement from a canonical post-worldgen Sim.
+///
+/// This is the first real state-consuming step toward the five allocation receipts. It captures
+/// the placement WData/TData projection directly from canonical map owners, binds the starting
+/// Village through the sparse Build band, and executes every `Setup::place_unit` RNG/probe gate.
+/// The returned receipt still stops at `Objects::init_unit` (or the exact centered Build-train
+/// fallback); it never invents an allocation, Unit Handle, or 2018 worldgen transcript.
+pub fn produce_first_farm_first_placement(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    sim: &Sim,
+    authority: &FirstFarmSetupEntryAuthority,
+) -> Result<FirstFarmFirstPlacementReceipt, FirstFarmFirstPlacementError> {
+    if authority.revision == 0 {
+        return Err(FirstFarmFirstPlacementError::MissingAuthorityRevision);
+    }
+    if authority.composition_digest == [0; 32] {
+        return Err(FirstFarmFirstPlacementError::MissingCompositionDigest);
+    }
+    if sim.world.frame != 0 {
+        return Err(FirstFarmFirstPlacementError::WrongFrame {
+            expected: 0,
+            actual: sim.world.frame,
+        });
+    }
+    let discovery = discover_first_2018_farm(replay)?;
+    if !strict_first_builder_plan(plan, &discovery) {
+        return Err(FirstFarmFirstPlacementError::WrongSetupPlan);
+    }
+    let expected_edge = replay
+        .initial
+        .info
+        .settings
+        .map_edge_world_cells()
+        .ok_or(FirstFarmFirstPlacementError::MapDimensionMismatch)?;
+    if sim.map.world.xs != expected_edge || sim.map.world.ys != expected_edge {
+        return Err(FirstFarmFirstPlacementError::MapDimensionMismatch);
+    }
+    let map_checksum = sim.map.world.checksum_sections();
+    if map_checksum != authority.world_checksum {
+        return Err(FirstFarmFirstPlacementError::WorldChecksumMismatch);
+    }
+    if sim.world.random.state() != authority.post_worldgen_rng {
+        return Err(FirstFarmFirstPlacementError::PostWorldgenRngMismatch);
+    }
+    if !sim.world.object_bands_are_dense_equivalent() {
+        return Err(FirstFarmFirstPlacementError::RegistryNotDenseEquivalent);
+    }
+    let unit_mark = sim.world.unit_mark(FIRST_OWNER as usize).unwrap_or(-1);
+    if unit_mark != 0 {
+        return Err(FirstFarmFirstPlacementError::ExistingOwnerUnits { mark: unit_mark });
+    }
+
+    let center_identity = sim
+        .world
+        .object_bands()
+        .live_identity(RetailObjectAddress::new(
+            FIRST_OWNER,
+            RetailBand::Build,
+            discovery.center_build_o as i32,
+        ))
+        .ok_or(FirstFarmFirstPlacementError::MissingCenterBuild)?;
+    let WorldObjectIdentity::BuildRow(center_row) = center_identity else {
+        return Err(FirstFarmFirstPlacementError::MissingCenterBuild);
+    };
+    let center_row = center_row as usize;
+    let center = sim
+        .builds
+        .get(center_row)
+        .ok_or(FirstFarmFirstPlacementError::CenterBuildRowOutOfRange)?;
+    let center_type = sim
+        .production_runtime
+        .build_types
+        .get(center_row)
+        .and_then(|value| *value);
+    if center.flags & production::flag::VALID == 0
+        || center.who != FIRST_OWNER
+        || center.object_id() != discovery.center_build_o
+        || center.position() != discovery.center_position
+        || center_type != Some(crate::setup_cities_builds::CITY_CENTER_TYPE)
+    {
+        return Err(FirstFarmFirstPlacementError::CenterBuildMismatch);
+    }
+
+    let (map, placement_snapshot_sha256) = capture_placement_map(sim)?;
+    let call = plan.calls[FIRST_SETUP_PLACEMENT_ORDINAL];
+    let placement = produce_place_unit_probe_prefix(
+        PlaceUnitInputs {
+            owner: call.owner,
+            upgraded_type: call.place_unit_upgrade,
+            requested_x: call.requested_x,
+            requested_y: call.requested_y,
+            center: Some(CenterBuildFacts {
+                owner: i32::from(FIRST_OWNER),
+                o: discovery.center_build_o as i32,
+                x: discovery.center_position.0,
+                y: discovery.center_position.1,
+            }),
+            starting_town: replay.initial.info.settings.starting_town,
+            leader_active: 0,
+        },
+        &map,
+        authority.post_worldgen_rng,
+    )?;
+
+    Ok(FirstFarmFirstPlacementReceipt {
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        source: authority.source,
+        replay_file_sha256: discovery.replay_file_sha256,
+        setup_ordinal: FIRST_SETUP_PLACEMENT_ORDINAL,
+        map_checksum,
+        placement_snapshot_sha256,
+        center_row,
+        post_worldgen_rng: authority.post_worldgen_rng,
+        placement,
     })
 }
 

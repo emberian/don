@@ -58,6 +58,28 @@ lacks the post-worldgen RNG/map inputs needed to produce the five actual placeme
 the intervening 79-tick canonical state. A fresh save can exercise the same native address shape,
 but cannot authorize this different 2018 match.
 
+## First setup placement producer
+
+The next adapter now consumes a revisioned canonical setup-entry authority instead of a detached
+placement fixture. It requires frame zero, an empty owner-0 Unit band, dense-equivalent sparse
+object bands, and the live Village at `(owner=0,o=2000)` with its canonical Build row, registered
+type, and replay-camera position. It independently checks the complete synchronized map checksum
+and the main RNG state; the latter is separate because it is not part of the map walk.
+
+After those checks, the adapter projects every WData cell plus each center-TCoord collision word
+directly from `Sim::map.world`, hashes that exact placement snapshot, and runs the source-owned
+`Setup::place_unit` producer for Scout ordinal zero. Its result contains every consumed RNG draw,
+candidate offset, rejection in native order, and the exact first external residual:
+`Objects::init_unit` on success or centered `Build::get_build -> Build::train` after exhaustion.
+
+This closes the executable injection seam, not the historical input gap. A valid authority must
+come from completed canonical world generation followed by starting-City setup and must carry an
+independently composed transaction digest. The current repository cannot derive that authority
+for this recording because `TerrainGroups::place_all` and later worldgen/setup runtime inputs are
+not all present. The adapter therefore does not allocate a Unit or clear the existing ordered
+`PostWorldgenRandomState` / `SetupPlacementWorldSnapshot` blockers merely because a synthetic test
+can exercise the API.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking
@@ -84,5 +106,6 @@ atomic opcode-25 host without defaults.
 `groups_first_farm_authority.rs` runs the strict recording through the complete discovery
 path, asserts the stage map and both recorded checksums, and asserts the ordered red
 boundary. Its mutations change the in-memory opcode-25 body and replay-carried Farm footprint,
-then exercise wrong frame, missing direct placement draw, nonconsecutive setup allocation,
-stale Handle generation, and split Sim/World types. All are rejected before runtime promotion.
+then exercise a wrong setup map checksum/RNG/center type/allocation chronology, wrong frame,
+missing direct placement draw, nonconsecutive setup allocation, stale Handle generation, and
+split Sim/World types. All are rejected before runtime promotion.
