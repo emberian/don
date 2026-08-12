@@ -66,7 +66,8 @@ fn continent_implementation_digest() -> [u8; 32] {
             + include_bytes!("east_meets_west_add_start.rs").len()
             + include_bytes!("east_meets_west_remaining_starts.rs").len()
             + include_bytes!("east_meets_west_player_land.rs").len()
-            + include_bytes!("post_continent.rs").len(),
+            + include_bytes!("post_continent.rs").len()
+            + include_bytes!("../../don-sim/src/systems/regions.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
@@ -79,6 +80,7 @@ fn continent_implementation_digest() -> [u8; 32] {
     source.extend_from_slice(include_bytes!("east_meets_west_remaining_starts.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_player_land.rs"));
     source.extend_from_slice(include_bytes!("post_continent.rs"));
+    source.extend_from_slice(include_bytes!("../../don-sim/src/systems/regions.rs"));
     sha256(&source)
 }
 
@@ -151,10 +153,11 @@ pub fn advance_continent_world_ownership(
             centroid_y_free_cleanup,
             centroid_x_free_cleanup,
             regions_clear_all,
+            regions_find_all,
             next_mutator_va,
             ..
-        } if *next_va != crate::continent::MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA
-            || *next_mutator_va != crate::continent::REGIONS_FIND_ALL_VA
+        } if *next_va != crate::continent::MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA
+            || *next_mutator_va != crate::continent::MAP_MAKE_FIRST_TERRITORY_STORE_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -284,13 +287,17 @@ pub fn advance_continent_world_ownership(
             || regions_clear_all.world_before != player_land.world_after
             || regions_clear_all.random_state_before
                 != centroid_x_free_cleanup.random_state_after
-            || !crate::post_continent::validate_map_make_first_regions_clear_all_receipt(
+            || regions_find_all.world_before != regions_clear_all.world_after
+            || regions_find_all.random_state_before
+                != regions_clear_all.random_state_after
+            || !crate::post_continent::validate_map_make_first_regions_find_all_receipt(
                 &map.world,
                 &map.generation_regions,
                 regions_clear_all,
+                regions_find_all,
             )
     ) {
-        return Err(mismatch(stage, "stop.regions_clear_all_residual"));
+        return Err(mismatch(stage, "stop.regions_find_all_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

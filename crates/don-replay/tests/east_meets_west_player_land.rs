@@ -28,13 +28,14 @@ use don_replay::continent::{
     FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
     MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
-    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+    MAP_MAKE_FIRST_TERRITORY_STORE_VA, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
     REGIONS_CLEAR_ALL_END_VA, REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
     REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
     REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
-    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA, RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE,
-    STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256,
-    STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
+    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_NATIVE_BODY, REGIONS_FIND_ALL_VA, RISE_EXE_SHA256,
+    SIMPLE_ARRAY_INT_SIZE, STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY,
+    STRING_CLOSE_SHA256, STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
     STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
 };
 use don_replay::fractal_boundary::resolve_tile_selection;
@@ -476,6 +477,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             centroid_y_free_cleanup,
             centroid_x_free_cleanup,
             regions_clear_all,
+            regions_find_all,
             next_va,
             next_mutator_va,
             ..
@@ -490,8 +492,11 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        assert_eq!(*next_va, MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, "{name}");
-        assert_eq!(*next_mutator_va, REGIONS_FIND_ALL_VA, "{name}");
+        assert_eq!(*next_va, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA, "{name}");
+        assert_eq!(
+            *next_mutator_va, MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            "{name}"
+        );
         assert_eq!(
             post_player_land_cleanup.centroid_y_length,
             usize::from(prefix.team_partition.as_ref().unwrap().continent_count),
@@ -530,20 +535,43 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             map.world.wdata.len(),
             "{name}"
         );
+        assert_eq!(
+            regions_find_all.body, REGIONS_FIND_ALL_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            regions_find_all.world_before, regions_clear_all.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            regions_find_all.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert_eq!(regions_find_all.region_records_visited, 128, "{name}");
         assert!(
-            regions_clear_all
+            regions_find_all
                 .region_records
                 .iter()
                 .all(|record| record.after
                     == map.generation_regions.list[usize::from(record.region)]),
             "{name}"
         );
+        assert_eq!(
+            regions_find_all.world_mutations.len(),
+            map.world.wdata.len(),
+            "{name}"
+        );
         assert!(
-            map.world.wdata.iter().all(|cell| cell.region == 0),
+            map.world.wdata.iter().all(|cell| cell.region != 0),
             "{name}"
         );
         assert_eq!(map.generation_regions.land, 0, "{name}");
-        assert_eq!(map.generation_regions.sea, 64, "{name}");
+        assert_eq!(map.generation_regions.sea, 65, "{name}");
+        assert_eq!(regions_find_all.successful_find_calls, 3, "{name}");
+        assert_eq!(regions_find_all.build.non_input_pumps, 4, "{name}");
+        assert!(regions_find_all.scratch.allocation.is_some(), "{name}");
+        assert!(regions_find_all.scratch.final_free.is_some(), "{name}");
         assert!(
             !post_player_land_cleanup
                 .string_close
@@ -610,8 +638,11 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             receipt.world_cell_mutations.iter().all(|mutation| {
                 let mut after_clear = mutation.after.clone();
                 after_clear.region = 0;
-                mutation.before != mutation.after
-                    && map.world.wdata(mutation.x, mutation.y) == &after_clear
+                let cell = (mutation.y * map.world.xs + mutation.x) as usize;
+                let mut after_find_undone = map.world.wdata(mutation.x, mutation.y).clone();
+                after_find_undone.region = regions_find_all.world_mutations[cell].region_before;
+                after_find_undone.region2 = regions_find_all.world_mutations[cell].region2_before;
+                mutation.before != mutation.after && after_find_undone == after_clear
             }),
             "{name}"
         );
@@ -621,7 +652,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         );
         assert_eq!(
             map.world.checksum_sections(),
-            regions_clear_all.world_after,
+            regions_find_all.world_after,
             "{name}"
         );
     }

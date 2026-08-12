@@ -9,8 +9,9 @@ been appended.  It executes the native call at `0x00697492`, returns to
 executes the first centroid-array `_free` at `0x006974c2` plus its caller-local
 destructor bookkeeping, then executes the centroid-X `_free` at `0x00697502`
 and the complete style-virtual epilogue through `ret 4` at `0x0069753c`.
-Execution then runs the common driver's full `Regions::clear_all` body and
-stops before `Regions::find_all` at caller `0x0068be3c`.  None of these
+Execution then runs the common driver's full `Regions::clear_all` and
+`Regions::find_all` bodies, returns to `Map::make` at `0x0068be41`, and freezes
+before its first World territory-limit store at `0x0068be4a`. None of these
 tranches consumes RNG.
 
 Evidence is the shipped executable
@@ -202,7 +203,7 @@ at `0x0069753c`.  PDB's 3,839-byte
 
 The common `Map::make` caller invokes `Regions::clear_all` at
 `0x0068be36 -> 0x00680060`, resumes at `0x0068be3b`, pushes an unread ECX word,
-and reaches the still-unexecuted `Regions::find_all(int)` call at
+and invokes `Regions::find_all(int)` at
 `0x0068be3c -> 0x0067eff0`.  PDB gives `Regions::clear_all` size 275; its exact
 extent `0x00680060..0x00680173` contains 79 instructions, SHA-256
 `86333bac51dacb209b15048ecb33aa57b77c2d143a1ad797631e1992994b7317`.
@@ -221,6 +222,34 @@ The receipt retains every Region before/after record, every changed World
 region label, and a typed logical coordinate-allocation release for each
 executed `_free`; no host pointer is stored or compared.
 
+## First common `Regions::find_all`
+
+PDB gives `Regions::find_all(int)` size 2,009. Its exact half-open extent is
+`0x0067eff0..0x0067f7c9`, containing 558 decoded instructions; the raw body
+SHA-256 is
+`3e356054293f63e1be4b36681473d000c1ec5bd6e4eb3fa368d8fce98b2cc1cd`.
+The formal four-byte stack argument is never read, and the body returns with
+`ret 4` at `0x0067f7c6`.
+
+The admitted body allocates its shared eight-byte-coordinate flood queue,
+finds every land and sea component, retains retail's 62/63 and 125/126
+overflow consolidation rules, fills `region2` for half-water cells, and calls
+`set_coastals`, `sort_regions`, `rebuild_coords`, and `do_all_non_input`. It
+then releases the shared queue through `0x0067f788 -> __imp__free` and returns
+to the caller. Both real East Meets West fixtures find two land components and
+one sea component, make four total non-input pumps, and execute neither native
+size-mismatch diagnostic path.
+
+The receipt retains every Region record and every changed `region`/`region2`
+label before and after. Its typed scratch receipt records the logical
+`Unallocated -> Live -> Freed` lifecycle, requested element count and byte
+width, but no host pointer. The caller's exact `push`/`call` slice
+`0x0068be3b..0x0068be41` has SHA-256
+`ff5c2df80ce0958c86143fb098cb30488633cc03971c09d64b1bf9f918a9b1da`.
+The following read-only preparation loads at `0x0068be41` and `0x0068be47`
+lead to the next unexecuted native mutator, the World player-territory-limit
+store at `0x0068be4a`.
+
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
@@ -230,13 +259,14 @@ receipt that names the logical Y-coordinate allocation and its exact values as
 `Live -> Freed` without storing or comparing a host pointer.  The final receipt
 does the same for X and additionally binds every local clear, callee-saved
 register pop, SEH restoration, frame restoration, and `ret 4`.  The common
-clear receipt then binds the complete Region/World transition and exposes
-`next_va = 0x0068be3c`, `next_mutator_va = 0x0067eff0`.  Owner transition
+clear and find receipts then bind both complete Region/World transitions and
+expose `next_va = 0x0068be41`, `next_mutator_va = 0x0068be4a`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
-all 128 Region transitions, the WData region clears, and unchanged RNG
-chronology match; its implementation digest includes both source bodies.  The
+both sets of 128 Region transitions, every WData region label, the typed
+scratch lifecycle, and unchanged RNG chronology match; its implementation
+digest includes the replay executor and the sim Region body. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_regions_find_all`.
+`map_team_continent_territory_limit_store`.
 
 Validation gates:
 
@@ -269,7 +299,7 @@ Validation gates:
 - current centroid-X-free local owner audit: 2/2, including all 21
   checksum-bearing recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
   ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
-  `map_team_continent_regions_find_all` / nineteen
+  `map_team_continent_territory_limit_store` / nineteen
   `place_all_mountains_add_mountain`.
 - current clean-HEAD Hbox overlay: final source compile plus full 4/4 suite,
   including both real fixtures, green in
@@ -282,3 +312,11 @@ Validation gates:
 - current clean-HEAD Hbox centroid-X-free/complete-epilogue overlay: full 4/4
   suite, including both real fixtures, green in
   `map-player-land-x-free-real-v2-20260812T015625Z-75503-436-7cad6dcf92f8`.
+- current Cycle 6 local pack: continent reconstruction 4/4, both real
+  player-land/find-all receipts 4/4, remaining-start continuation 2/2, edge
+  canals 4/4, and initial-item reconstruction 4/4;
+- current Cycle 6 owner transition: 2/2, including all 21 checksum-bearing
+  recordings; full localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
+  ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
+  `map_team_continent_territory_limit_store` / nineteen
+  `place_all_mountains_add_mountain`.

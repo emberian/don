@@ -13,6 +13,28 @@ use don_sim::systems::regions::{
 
 pub const REGIONS_CLEAR_ALL_VA: u32 = 0x0068_0060;
 pub const REGIONS_FIND_ALL_VA: u32 = 0x0067_eff0;
+pub const REGIONS_FIND_ALL_END_VA: u32 = 0x0067_f7c9;
+pub const REGIONS_FIND_ALL_SIZE: u32 = 2_009;
+pub const REGIONS_FIND_ALL_INSTRUCTION_COUNT: u32 = 558;
+pub const REGIONS_FIND_ALL_SHA256: &str =
+    "3e356054293f63e1be4b36681473d000c1ec5bd6e4eb3fa368d8fce98b2cc1cd";
+pub const REGIONS_FIND_ALL_RET_VA: u32 = 0x0067_f7c6;
+pub const REGIONS_FIND_ALL_OLD_SCRATCH_FREE_CALL_VA: u32 = 0x0067_f042;
+pub const REGIONS_FIND_ALL_SCRATCH_MALLOC_CALL_VA: u32 = 0x0067_f06b;
+pub const REGIONS_FIND_ALL_STRING_CONSTRUCTOR_VA: u32 = 0x00a1_d660;
+pub const REGIONS_FIND_ALL_ERROR_REPORT_VA: u32 = 0x00a2_e550;
+pub const REGIONS_FIND_ALL_STRING_CLOSE_VA: u32 = 0x00a1_cf40;
+pub const REGIONS_FIND_VA: u32 = 0x0068_0180;
+pub const REGIONS_FIND_ALL_FIND_CALL_VA: u32 = 0x0067_f549;
+pub const REGIONS_SET_COASTALS_VA: u32 = 0x0067_fd70;
+pub const REGIONS_SORT_REGIONS_VA: u32 = 0x0067_fb90;
+pub const REGIONS_REBUILD_COORDS_VA: u32 = 0x0067_f800;
+pub const DO_ALL_NON_INPUT_VA: u32 = 0x0053_8810;
+pub const REGIONS_FIND_ALL_SET_COASTALS_CALL_VA: u32 = 0x0067_f774;
+pub const REGIONS_FIND_ALL_SORT_REGIONS_CALL_VA: u32 = 0x0067_f77b;
+pub const REGIONS_FIND_ALL_FINAL_SCRATCH_FREE_CALL_VA: u32 = 0x0067_f788;
+pub const REGIONS_FIND_ALL_REBUILD_COORDS_CALL_VA: u32 = 0x0067_f7ac;
+pub const REGIONS_FIND_ALL_NON_INPUT_CALL_VA: u32 = 0x0067_f7b1;
 pub const REGIONS_CLEAR_ALL_END_VA: u32 = 0x0068_0173;
 pub const REGIONS_CLEAR_ALL_SIZE: u32 = 275;
 pub const REGIONS_CLEAR_ALL_INSTRUCTION_COUNT: u32 = 79;
@@ -23,10 +45,27 @@ pub const REGIONS_CLEAR_ALL_RET_EMPTY_WORLD_VA: u32 = 0x0068_015e;
 pub const REGIONS_CLEAR_ALL_RET_NULL_WORLD_DATA_VA: u32 = 0x0068_0172;
 pub const REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA: u32 = 0x0068_00c5;
 pub const FREE_IMPORT_IAT_VA: u32 = 0x00ac_5500;
+pub const MALLOC_IMPORT_IAT_VA: u32 = 0x00ac_54f0;
 pub const MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA: u32 = 0x0068_be36;
 pub const MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA: u32 = 0x0068_be3b;
 pub const MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA: u32 = 0x0068_be3b;
 pub const MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA: u32 = 0x0068_be3c;
+pub const MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA: u32 = 0x0068_be41;
+pub const MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA: u32 = MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA;
+pub const MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SIZE: u32 = 6;
+pub const MAP_MAKE_FIRST_REGIONS_FIND_CALLER_INSTRUCTION_COUNT: u32 = 2;
+pub const MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SHA256: &str =
+    "ff5c2df80ce0958c86143fb098cb30488633cc03971c09d64b1bf9f918a9b1da";
+pub const MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA: u32 = 0x0068_be41;
+pub const MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA: u32 = 0x0068_be47;
+pub const MAP_MAKE_FIRST_TERRITORY_STORE_VA: u32 = 0x0068_be4a;
+pub const MAP_MAKE_FIRST_TERRITORY_PREP_END_VA: u32 = MAP_MAKE_FIRST_TERRITORY_STORE_VA;
+pub const MAP_MAKE_FIRST_TERRITORY_PREP_SIZE: u32 = 9;
+pub const MAP_MAKE_FIRST_TERRITORY_PREP_INSTRUCTION_COUNT: u32 = 2;
+pub const MAP_MAKE_FIRST_TERRITORY_PREP_SHA256: &str =
+    "cf0aa5dda08cbce5603defb8fddc99471fdbb7d6f4bd348812170223b59ea05f";
+pub const MAP_PLAYER_TERRITORY_LIMIT_OFFSET: u32 = 0x4c;
+pub const WORLD_PLAYER_TERRITORY_LIMIT_OFFSET: u32 = 0x38;
 pub const MAP_FIX_DIAG_LAND_VA: u32 = 0x0069_c250;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
@@ -59,7 +98,109 @@ pub const REGIONS_CLEAR_ALL_NATIVE_BODY: RegionsClearAllNativeBody = RegionsClea
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RegionsFindAllNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+    pub indirect_import_calls: &'static [(u32, u32)],
+    pub indirect_virtual_calls: &'static [u32],
+}
+
+pub const REGIONS_FIND_ALL_NATIVE_BODY: RegionsFindAllNativeBody = RegionsFindAllNativeBody {
+    entry_va: REGIONS_FIND_ALL_VA,
+    end_va_exclusive: REGIONS_FIND_ALL_END_VA,
+    ret_va: REGIONS_FIND_ALL_RET_VA,
+    callee_stack_argument_bytes_popped: 4,
+    size: REGIONS_FIND_ALL_SIZE,
+    instruction_count: REGIONS_FIND_ALL_INSTRUCTION_COUNT,
+    sha256: REGIONS_FIND_ALL_SHA256,
+    direct_calls: &[
+        (0x0067_f252, REGIONS_FIND_ALL_STRING_CONSTRUCTOR_VA),
+        (0x0067_f26f, REGIONS_FIND_ALL_ERROR_REPORT_VA),
+        (0x0067_f27d, REGIONS_FIND_ALL_STRING_CLOSE_VA),
+        (0x0067_f28c, REGIONS_FIND_ALL_STRING_CLOSE_VA),
+        (0x0067_f4e0, REGIONS_FIND_ALL_STRING_CONSTRUCTOR_VA),
+        (0x0067_f500, REGIONS_FIND_ALL_ERROR_REPORT_VA),
+        (0x0067_f511, REGIONS_FIND_ALL_STRING_CLOSE_VA),
+        (0x0067_f520, REGIONS_FIND_ALL_STRING_CLOSE_VA),
+        (REGIONS_FIND_ALL_FIND_CALL_VA, REGIONS_FIND_VA),
+        (
+            REGIONS_FIND_ALL_SET_COASTALS_CALL_VA,
+            REGIONS_SET_COASTALS_VA,
+        ),
+        (
+            REGIONS_FIND_ALL_SORT_REGIONS_CALL_VA,
+            REGIONS_SORT_REGIONS_VA,
+        ),
+        (
+            REGIONS_FIND_ALL_REBUILD_COORDS_CALL_VA,
+            REGIONS_REBUILD_COORDS_VA,
+        ),
+        (REGIONS_FIND_ALL_NON_INPUT_CALL_VA, DO_ALL_NON_INPUT_VA),
+    ],
+    indirect_import_calls: &[
+        (
+            REGIONS_FIND_ALL_OLD_SCRATCH_FREE_CALL_VA,
+            FREE_IMPORT_IAT_VA,
+        ),
+        (
+            REGIONS_FIND_ALL_SCRATCH_MALLOC_CALL_VA,
+            MALLOC_IMPORT_IAT_VA,
+        ),
+        (
+            REGIONS_FIND_ALL_FINAL_SCRATCH_FREE_CALL_VA,
+            FREE_IMPORT_IAT_VA,
+        ),
+    ],
+    indirect_virtual_calls: &[0x0067_f2f5],
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeFirstRegionsFindAllCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY: MapMakeFirstRegionsFindAllCallerBody =
+    MapMakeFirstRegionsFindAllCallerBody {
+        entry_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+        end_va_exclusive: MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
+        size: MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SIZE,
+        instruction_count: MAP_MAKE_FIRST_REGIONS_FIND_CALLER_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SHA256,
+        direct_calls: &[(MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, REGIONS_FIND_ALL_VA)],
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeFirstTerritoryPrepBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_FIRST_TERRITORY_PREP_BODY: MapMakeFirstTerritoryPrepBody =
+    MapMakeFirstTerritoryPrepBody {
+        entry_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+        end_va_exclusive: MAP_MAKE_FIRST_TERRITORY_PREP_END_VA,
+        size: MAP_MAKE_FIRST_TERRITORY_PREP_SIZE,
+        instruction_count: MAP_MAKE_FIRST_TERRITORY_PREP_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_FIRST_TERRITORY_PREP_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RegionsAllocationState {
+    Unallocated,
     Live,
     Freed,
 }
@@ -338,6 +479,392 @@ pub(crate) fn validate_map_make_first_regions_clear_all_receipt(
                 && mutation.region_before != 0
                 && mutation.region_after == 0
         })
+}
+
+/// One imported allocator call over the logical shared `Regions::coords`
+/// scratch queue. No native pointer value is retained or compared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionsFindAllScratchAllocatorCall {
+    pub call_va: u32,
+    pub import_iat_va: u32,
+    pub elements: i32,
+    pub bytes: u64,
+    pub state_before: RegionsAllocationState,
+    pub state_after: RegionsAllocationState,
+    pub native_return: (),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionsFindAllScratchReceipt {
+    pub before: WCoordList,
+    pub old_allocation_free: Option<RegionsFindAllScratchAllocatorCall>,
+    pub allocation: Option<RegionsFindAllScratchAllocatorCall>,
+    pub capacity_during_body: i32,
+    pub final_free: Option<RegionsFindAllScratchAllocatorCall>,
+    pub after: WCoordList,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionsFindAllRegionReceipt {
+    pub region: u8,
+    pub before: Region,
+    pub after: Region,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RegionsFindAllWorldMutation {
+    pub cell: usize,
+    pub region_before: i16,
+    pub region_after: i16,
+    pub region2_before: i16,
+    pub region2_after: i16,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeFirstRegionsFindAllNext {
+    TerritoryLimitStore {
+        prep: MapMakeFirstTerritoryPrepBody,
+        world_owner_load_va: u32,
+        map_value_load_va: u32,
+        store_va: u32,
+        map_field_offset: u32,
+        world_field_offset: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeFirstRegionsFindAllReceipt {
+    pub caller: MapMakeFirstRegionsFindAllCallerBody,
+    pub body: RegionsFindAllNativeBody,
+    pub executed_ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub caller_resume_va: u32,
+    pub stack_argument_is_unread: bool,
+    pub build: RegionBuildReceipt,
+    pub successful_find_calls: i32,
+    pub diagnostic_calls_executed: Vec<u32>,
+    pub scratch: RegionsFindAllScratchReceipt,
+    pub region_records_visited: usize,
+    pub region_records: Vec<RegionsFindAllRegionReceipt>,
+    pub regions_land_before: i32,
+    pub regions_land_after: i32,
+    pub regions_sea_before: i32,
+    pub regions_sea_after: i32,
+    pub world_cells_visited: usize,
+    pub world_mutations: Vec<RegionsFindAllWorldMutation>,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakeFirstRegionsFindAllNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeFirstRegionsFindAllError {
+    PriorClearReceiptMismatch,
+    FindAll(RegionsError),
+}
+
+/// Execute the exact first common-driver `Regions::find_all(int)` body and
+/// freeze before the first World territory-limit store at `0x0068be4a`.
+pub fn execute_map_make_first_regions_find_all(
+    world: &mut World,
+    regions: &mut Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+) -> Result<MapMakeFirstRegionsFindAllReceipt, MapMakeFirstRegionsFindAllError> {
+    if !validate_map_make_first_regions_clear_all_receipt(world, regions, prior_clear)
+        || prior_clear.random_state_after != random_state
+    {
+        return Err(MapMakeFirstRegionsFindAllError::PriorClearReceiptMismatch);
+    }
+
+    let world_before = world.checksum_sections();
+    let world_region_before = world
+        .wdata
+        .iter()
+        .map(|cell| (cell.region, cell.region2))
+        .collect::<Vec<_>>();
+    let regions_before = regions.clone();
+    let build = regions
+        .find_all_after_clear(world)
+        .map_err(MapMakeFirstRegionsFindAllError::FindAll)?;
+    let world_after = world.checksum_sections();
+
+    let scratch_grows = regions_before.coords.capacity < world.size;
+    let old_scratch_live = regions_before.coords.capacity > 0;
+    let allocated_elements = if scratch_grows {
+        world.size.max(0)
+    } else {
+        regions_before.coords.capacity.max(0)
+    };
+    let allocated_bytes = u64::try_from(allocated_elements).unwrap_or(0) * 8;
+    let old_allocation_free =
+        (scratch_grows && old_scratch_live).then(|| RegionsFindAllScratchAllocatorCall {
+            call_va: REGIONS_FIND_ALL_OLD_SCRATCH_FREE_CALL_VA,
+            import_iat_va: FREE_IMPORT_IAT_VA,
+            elements: regions_before.coords.capacity,
+            bytes: u64::try_from(regions_before.coords.capacity).unwrap_or(0) * 8,
+            state_before: RegionsAllocationState::Live,
+            state_after: RegionsAllocationState::Freed,
+            native_return: (),
+        });
+    let allocation =
+        (scratch_grows && world.size > 0).then(|| RegionsFindAllScratchAllocatorCall {
+            call_va: REGIONS_FIND_ALL_SCRATCH_MALLOC_CALL_VA,
+            import_iat_va: MALLOC_IMPORT_IAT_VA,
+            elements: world.size,
+            bytes: u64::try_from(world.size).unwrap_or(0) * 8,
+            state_before: RegionsAllocationState::Unallocated,
+            state_after: RegionsAllocationState::Live,
+            native_return: (),
+        });
+    let scratch_live_during_body = allocated_elements > 0;
+    let final_free = scratch_live_during_body.then(|| RegionsFindAllScratchAllocatorCall {
+        call_va: REGIONS_FIND_ALL_FINAL_SCRATCH_FREE_CALL_VA,
+        import_iat_va: FREE_IMPORT_IAT_VA,
+        elements: allocated_elements,
+        bytes: allocated_bytes,
+        state_before: RegionsAllocationState::Live,
+        state_after: RegionsAllocationState::Freed,
+        native_return: (),
+    });
+    let scratch = RegionsFindAllScratchReceipt {
+        before: regions_before.coords.clone(),
+        old_allocation_free,
+        allocation,
+        capacity_during_body: allocated_elements,
+        final_free,
+        after: regions.coords.clone(),
+    };
+    let region_records = regions_before
+        .list
+        .iter()
+        .zip(regions.list.iter())
+        .enumerate()
+        .map(|(region, (before, after))| RegionsFindAllRegionReceipt {
+            region: region as u8,
+            before: before.clone(),
+            after: after.clone(),
+        })
+        .collect();
+    let world_mutations = world_region_before
+        .into_iter()
+        .zip(world.wdata.iter().map(|cell| (cell.region, cell.region2)))
+        .enumerate()
+        .filter_map(
+            |(cell, ((region_before, region2_before), (region_after, region2_after)))| {
+                (region_before != region_after || region2_before != region2_after).then_some(
+                    RegionsFindAllWorldMutation {
+                        cell,
+                        region_before,
+                        region_after,
+                        region2_before,
+                        region2_after,
+                    },
+                )
+            },
+        )
+        .collect();
+    let world_sections_changed = WorldSection::all()
+        .into_iter()
+        .filter(|section| world_before.section(*section) != world_after.section(*section))
+        .collect();
+
+    Ok(MapMakeFirstRegionsFindAllReceipt {
+        caller: MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
+        body: REGIONS_FIND_ALL_NATIVE_BODY,
+        executed_ret_va: REGIONS_FIND_ALL_RET_VA,
+        callee_stack_argument_bytes_popped: 4,
+        caller_resume_va: MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+        stack_argument_is_unread: true,
+        successful_find_calls: build.land_components_found + build.sea_components_found,
+        diagnostic_calls_executed: Vec::new(),
+        build,
+        scratch,
+        region_records_visited: REGION_COUNT,
+        region_records,
+        regions_land_before: regions_before.land,
+        regions_land_after: regions.land,
+        regions_sea_before: regions_before.sea,
+        regions_sea_after: regions.sea,
+        world_cells_visited: world.wdata.len(),
+        world_mutations,
+        world_before,
+        world_after,
+        world_sections_changed,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
+            prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
+            world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+            map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
+            store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
+            world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
+        },
+    })
+}
+
+pub(crate) fn validate_map_make_first_regions_find_all_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    receipt: &MapMakeFirstRegionsFindAllReceipt,
+) -> bool {
+    if prior_clear.region_records.len() != REGION_COUNT
+        || receipt.world_mutations.len() != world.wdata.len()
+    {
+        return false;
+    }
+    let mut clear_world = world.clone();
+    for mutation in &receipt.world_mutations {
+        if mutation.cell >= clear_world.wdata.len() {
+            return false;
+        }
+        clear_world.wdata[mutation.cell].region = mutation.region_before;
+        clear_world.wdata[mutation.cell].region2 = mutation.region2_before;
+    }
+    let mut clear_regions = regions.clone();
+    for (region, record) in prior_clear.region_records.iter().enumerate() {
+        if usize::from(record.region) != region {
+            return false;
+        }
+        clear_regions.list[region] = record.after.clone();
+    }
+    clear_regions.coords = prior_clear.regions_coords_after.clone();
+    clear_regions.land = prior_clear.regions_land_after;
+    clear_regions.sea = prior_clear.regions_sea_after;
+    if !validate_map_make_first_regions_clear_all_receipt(&clear_world, &clear_regions, prior_clear)
+    {
+        return false;
+    }
+
+    let expected_next = MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
+        prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
+        world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+        map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
+        store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+        map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
+        world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
+    };
+    if receipt.caller != MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY
+        || receipt.body != REGIONS_FIND_ALL_NATIVE_BODY
+        || receipt.executed_ret_va != REGIONS_FIND_ALL_RET_VA
+        || receipt.callee_stack_argument_bytes_popped != 4
+        || receipt.caller_resume_va != MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA
+        || !receipt.stack_argument_is_unread
+        || receipt.successful_find_calls
+            != receipt.build.land_components_found + receipt.build.sea_components_found
+        || receipt.build.non_input_pumps != receipt.successful_find_calls + 1
+        || !receipt.diagnostic_calls_executed.is_empty()
+        || receipt.region_records_visited != REGION_COUNT
+        || receipt.region_records.len() != REGION_COUNT
+        || receipt.regions_land_before != prior_clear.regions_land_after
+        || receipt.regions_land_after != regions.land
+        || receipt.regions_sea_before != prior_clear.regions_sea_after
+        || receipt.regions_sea_after != regions.sea
+        || receipt.world_cells_visited != world.wdata.len()
+        || receipt.world_mutations.len() != world.wdata.len()
+        || receipt.world_before != prior_clear.world_after
+        || receipt.world_after != world.checksum_sections()
+        || receipt.world_sections_changed
+            != receipt
+                .world_before
+                .differing_sections(&receipt.world_after)
+        || receipt.world_sections_changed != [WorldSection::WData]
+        || receipt.random_state_before != prior_clear.random_state_after
+        || receipt.random_state_before != receipt.random_state_after
+        || !receipt.direct_rng_sites.is_empty()
+        || receipt.next != expected_next
+    {
+        return false;
+    }
+
+    if receipt
+        .region_records
+        .iter()
+        .enumerate()
+        .any(|(region, record)| {
+            usize::from(record.region) != region
+                || record.before != prior_clear.region_records[region].after
+                || record.after != regions.list[region]
+        })
+    {
+        return false;
+    }
+    if receipt
+        .world_mutations
+        .iter()
+        .enumerate()
+        .any(|(cell, mutation)| {
+            mutation.cell != cell
+                || mutation.region_before != 0
+                || mutation.region_after != world.wdata[cell].region
+                || mutation.region2_after != world.wdata[cell].region2
+                || (mutation.region_before == mutation.region_after
+                    && mutation.region2_before == mutation.region2_after)
+        })
+    {
+        return false;
+    }
+
+    let before_capacity = receipt.scratch.before.capacity;
+    let scratch_grows = before_capacity < world.size;
+    let expected_capacity = if scratch_grows {
+        world.size.max(0)
+    } else {
+        before_capacity.max(0)
+    };
+    if receipt.scratch.before != prior_clear.regions_coords_after
+        || receipt.scratch.after != regions.coords
+        || !receipt.scratch.after.items.is_empty()
+        || receipt.scratch.after.capacity != 0
+        || receipt.scratch.after.flags != 0
+        || receipt.scratch.capacity_during_body != expected_capacity
+        || receipt.scratch.old_allocation_free.is_some() != (scratch_grows && before_capacity > 0)
+        || receipt.scratch.allocation.is_some() != (scratch_grows && world.size > 0)
+        || receipt.scratch.final_free.is_some() != (expected_capacity > 0)
+    {
+        return false;
+    }
+    if let Some(call) = &receipt.scratch.old_allocation_free {
+        if call.call_va != REGIONS_FIND_ALL_OLD_SCRATCH_FREE_CALL_VA
+            || call.import_iat_va != FREE_IMPORT_IAT_VA
+            || call.elements != before_capacity
+            || call.bytes != u64::try_from(before_capacity).unwrap_or(0) * 8
+            || call.state_before != RegionsAllocationState::Live
+            || call.state_after != RegionsAllocationState::Freed
+        {
+            return false;
+        }
+    }
+    if let Some(call) = &receipt.scratch.allocation {
+        if call.call_va != REGIONS_FIND_ALL_SCRATCH_MALLOC_CALL_VA
+            || call.import_iat_va != MALLOC_IMPORT_IAT_VA
+            || call.elements != world.size
+            || call.bytes != u64::try_from(world.size).unwrap_or(0) * 8
+            || call.state_before != RegionsAllocationState::Unallocated
+            || call.state_after != RegionsAllocationState::Live
+        {
+            return false;
+        }
+    }
+    if let Some(call) = &receipt.scratch.final_free {
+        if call.call_va != REGIONS_FIND_ALL_FINAL_SCRATCH_FREE_CALL_VA
+            || call.import_iat_va != FREE_IMPORT_IAT_VA
+            || call.elements != expected_capacity
+            || call.bytes != u64::try_from(expected_capacity).unwrap_or(0) * 8
+            || call.state_before != RegionsAllocationState::Live
+            || call.state_after != RegionsAllocationState::Freed
+        {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

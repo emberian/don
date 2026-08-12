@@ -123,17 +123,33 @@ use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
 pub use crate::post_continent::{
-    execute_map_make_first_regions_clear_all, MapMakeFirstRegionsClearAllNext,
-    MapMakeFirstRegionsClearAllReceipt, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
+    execute_map_make_first_regions_clear_all, execute_map_make_first_regions_find_all,
+    MapMakeFirstRegionsClearAllNext, MapMakeFirstRegionsClearAllReceipt,
+    MapMakeFirstRegionsFindAllCallerBody, MapMakeFirstRegionsFindAllError,
+    MapMakeFirstRegionsFindAllNext, MapMakeFirstRegionsFindAllReceipt,
+    MapMakeFirstTerritoryPrepBody, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
     RegionsClearAllNativeBody, RegionsClearAllRegionReceipt, RegionsClearAllWorldMutation,
+    RegionsFindAllNativeBody, RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall,
+    RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation,
     FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
+    MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA,
     MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
-    MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA, MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
-    REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA, REGIONS_CLEAR_ALL_END_VA,
-    REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
+    MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALLER_INSTRUCTION_COUNT,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SHA256, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SIZE,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+    MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA, MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
+    MAP_MAKE_FIRST_TERRITORY_PREP_END_VA, MAP_MAKE_FIRST_TERRITORY_PREP_INSTRUCTION_COUNT,
+    MAP_MAKE_FIRST_TERRITORY_PREP_SHA256, MAP_MAKE_FIRST_TERRITORY_PREP_SIZE,
+    MAP_MAKE_FIRST_TERRITORY_STORE_VA, MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+    MAP_PLAYER_TERRITORY_LIMIT_OFFSET, REGIONS_CLEAR_ALL_COORD_FREE_CALL_VA,
+    REGIONS_CLEAR_ALL_END_VA, REGIONS_CLEAR_ALL_INSTRUCTION_COUNT, REGIONS_CLEAR_ALL_NATIVE_BODY,
     REGIONS_CLEAR_ALL_RET_EMPTY_WORLD_VA, REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA,
     REGIONS_CLEAR_ALL_RET_NULL_WORLD_DATA_VA, REGIONS_CLEAR_ALL_SHA256, REGIONS_CLEAR_ALL_SIZE,
-    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA,
+    REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_END_VA, REGIONS_FIND_ALL_INSTRUCTION_COUNT,
+    REGIONS_FIND_ALL_NATIVE_BODY, REGIONS_FIND_ALL_RET_VA, REGIONS_FIND_ALL_SHA256,
+    REGIONS_FIND_ALL_SIZE, REGIONS_FIND_ALL_VA, WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
 };
 use crate::region_centroid::{
     execute_east_meets_west_centroids, EastMeetsWestCentroidReceipt, RegionCentroidError,
@@ -248,7 +264,7 @@ pub enum ContinentStop {
     /// post-loop `Map::check_player_land`, local-string cleanup, both centroid
     /// array `_free` calls, the complete style-virtual epilogue, and the common
     /// driver's first `Regions::clear_all`. Execution is frozen before the
-    /// following `Regions::find_all` mutator.
+    /// following World territory-limit store.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -264,6 +280,7 @@ pub enum ContinentStop {
         centroid_y_free_cleanup: EastMeetsWestCentroidYFreeCleanupReceipt,
         centroid_x_free_cleanup: EastMeetsWestCentroidXFreeCleanupReceipt,
         regions_clear_all: MapMakeFirstRegionsClearAllReceipt,
+        regions_find_all: MapMakeFirstRegionsFindAllReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -371,6 +388,7 @@ pub enum ContinentError {
     AddStartingLocation(EastMeetsWestAddStartError),
     RemainingStarts(EastMeetsWestRemainingStartsError),
     EastMeetsWestPlayerLand(EastMeetsWestPlayerLandError),
+    RegionsFindAll(MapMakeFirstRegionsFindAllError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1647,11 +1665,21 @@ fn east_meets_west(
                     debug_assert_eq!(callee_stack_argument_bytes_popped, 4);
                     let regions_clear_all =
                         execute_map_make_first_regions_clear_all(world, regions, rng.state());
-                    let MapMakeFirstRegionsClearAllNext::FindAll {
-                        call_va: next_va,
-                        primitive_va: next_mutator_va,
+                    let MapMakeFirstRegionsClearAllNext::FindAll { call_va, .. } =
+                        regions_clear_all.next;
+                    debug_assert_eq!(call_va, MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA);
+                    let regions_find_all = execute_map_make_first_regions_find_all(
+                        world,
+                        regions,
+                        rng.state(),
+                        &regions_clear_all,
+                    )
+                    .map_err(ContinentError::RegionsFindAll)?;
+                    let MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
+                        store_va: next_mutator_va,
                         ..
-                    } = regions_clear_all.next;
+                    } = regions_find_all.next;
+                    let next_va = regions_find_all.caller_resume_va;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1669,6 +1697,7 @@ fn east_meets_west(
                             centroid_y_free_cleanup,
                             centroid_x_free_cleanup,
                             regions_clear_all,
+                            regions_find_all,
                             next_mutator_va,
                         },
                         starts_added,

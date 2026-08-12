@@ -281,6 +281,25 @@ impl Regions {
         Ok(receipt)
     }
 
+    /// Exact `Regions::find_all(int)` `0x0067eff0` after its caller has already
+    /// completed `Regions::clear_all`.
+    ///
+    /// The native formal stack argument is unread. The operation is
+    /// transactional for structural errors so a failed coordinate rebuild does
+    /// not expose the native body's partial Region or WData writes.
+    pub fn find_all_after_clear(
+        &mut self,
+        world: &mut World,
+    ) -> Result<RegionBuildReceipt, RegionsError> {
+        validate_world_shape(world)?;
+        let mut next_regions = self.clone();
+        let mut next_world = world.clone();
+        let receipt = next_regions.find_all_cleared(&mut next_world)?;
+        *self = next_regions;
+        *world = next_world;
+        Ok(receipt)
+    }
+
     pub fn get_num_land(&self) -> i32 {
         self.list[..LAND_REGION_COUNT]
             .iter()
