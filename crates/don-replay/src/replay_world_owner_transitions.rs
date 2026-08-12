@@ -64,7 +64,8 @@ fn continent_implementation_digest() -> [u8; 32] {
             + include_bytes!("east_meets_west_start_boundary.rs").len()
             + include_bytes!("east_meets_west_place_start.rs").len()
             + include_bytes!("east_meets_west_add_start.rs").len()
-            + include_bytes!("east_meets_west_remaining_starts.rs").len(),
+            + include_bytes!("east_meets_west_remaining_starts.rs").len()
+            + include_bytes!("east_meets_west_player_land.rs").len(),
     );
     source.extend_from_slice(include_bytes!("continent.rs"));
     source.extend_from_slice(include_bytes!("east_indies_tail.rs"));
@@ -75,6 +76,7 @@ fn continent_implementation_digest() -> [u8; 32] {
     source.extend_from_slice(include_bytes!("east_meets_west_place_start.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_add_start.rs"));
     source.extend_from_slice(include_bytes!("east_meets_west_remaining_starts.rs"));
+    source.extend_from_slice(include_bytes!("east_meets_west_player_land.rs"));
     sha256(&source)
 }
 
@@ -136,6 +138,17 @@ pub fn advance_continent_world_ownership(
     if matches!(&receipt.stop, ContinentStop::HookComplete { next_va } if *next_va != REGIONS_CLEAR_ALL_VA)
     {
         return Err(mismatch(stage, "stop.next_va"));
+    }
+    if matches!(
+        &receipt.stop,
+        ContinentStop::AddStartingLocation {
+            next_va,
+            next_mutator_va,
+            ..
+        } if *next_va != crate::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA
+            || *next_mutator_va != crate::continent::STRING_CLOSE_VA
+    ) {
+        return Err(mismatch(stage, "stop.player_land_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

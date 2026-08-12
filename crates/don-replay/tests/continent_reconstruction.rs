@@ -514,6 +514,8 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             selector,
             mutation,
             remaining,
+            player_land,
+            next_mutator_va,
         } => {
             assert_eq!(
                 *primitive_va,
@@ -540,7 +542,18 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(remaining.random_state_after, eastwest.rng_final);
             assert_eq!(selector.draws.len(), 1);
             assert_eq!(selector.accepted_pass, Some(1));
-            assert_eq!(*next_va, don_replay::continent::MAP_CHECK_PLAYER_LAND_VA);
+            assert_eq!(
+                *next_va,
+                don_replay::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA
+            );
+            assert_eq!(*next_mutator_va, don_replay::continent::STRING_CLOSE_VA);
+            assert_eq!(player_land.random_state_before, eastwest.rng_final);
+            assert_eq!(player_land.random_state_after, eastwest.rng_final);
+            assert!(player_land.direct_rng_sites.is_empty());
+            assert_eq!(
+                eastwest.player_land.as_ref(),
+                Some(&player_land.body_receipt)
+            );
             assert_eq!(remaining.entry_va, mutation.caller_return_va);
             assert_eq!(remaining.iterations.len(), 3);
             assert!(remaining
@@ -597,7 +610,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0xfca6_71f7, 0x4f28_bf8c, 0x823b_55f6)
+        (0xd293_cb35, 0x7420_6b9e, 0x4f28_bf8c, 0x0fac_4f9d)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

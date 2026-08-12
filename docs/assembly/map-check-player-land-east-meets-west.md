@@ -104,8 +104,9 @@ On success:
 - the incoming RNG word is returned exactly and the direct-RNG site list is
   empty.
 
-The receipt retains full before/after states for every changed Region rather
-than reducing the transaction to a count.
+The receipt retains full before/after states for every changed Region and an
+exact `(x,y,before,after)` record for every changed `WData` cell rather than
+reducing either owner transaction to a count.
 
 ## Two real style-19 receipts
 
@@ -137,6 +138,17 @@ local cleanup guard at `0x0069749a`, and calls `String::close`
 `0x00a1cf40` at `0x006974a1`.  The receipt exposes this as
 `PostCallCleanup`; it does not pretend the rest of the style virtual ran.
 
+The canonical continent continuation now executes this receipt immediately
+after the frozen remaining-start loop.  `ContinentStop::AddStartingLocation`
+retains the complete wrapper receipt, exposes `next_va = 0x00697497`, and
+names the still-unexecuted native mutator separately as
+`next_mutator_va = 0x00a1cf40`.  The generic continent receipt carries the
+same leaf receipt.  Owner transition accepts the result only when both exact
+addresses match, and its implementation digest includes this source body.
+The offline localizer consequently names the two style-19 endpoints
+`map_team_continent_post_player_land_cleanup`, rather than the already
+executed start append or leaf.
+
 Validation gates:
 
 - local real-corpus test: both headers green;
@@ -148,3 +160,19 @@ Validation gates:
 - frozen-file Persvati anomaly gate after the two-header receipts were pinned:
   green, job
   `map-player-land-final-20260811T213819Z-14845-19044-a7bf776e8e5b`.
+- integrated local focused pack: continent reconstruction 4/4, both real
+  style-19 player-land receipts 3/3, remaining-start continuation 2/2, edge
+  canals 4/4, and initial-item reconstruction 4/4;
+- integrated owner-transition suite: 2/2, including the 21-checksummed-replay
+  coherent-ledger audit;
+- integrated full localizer: 62 recordings opened, 21 checksum-bearing,
+  21/21 coherent owner ledgers, 265,619/265,619 same-group comparisons, and
+  exact endpoints of 2 post-player-land cleanup / 19 mountain-range-list
+  inputs for `Mountains::randomize_mountains`;
+- Persvati clean-HEAD overlay integration compile/body gate: green, jobs
+  `map-player-land-bind-20260811T215247Z-39654-24602-7ea9e9ab5b69` and
+  `map-player-land-bind-20260811T215429Z-42990-10682-7ea9e9ab5b69`.
+- post-restart Hbox recovery gates: full owner transition 2/2 in
+  `map-player-land-owner-full-hbox-20260812T003150Z-51674-1002-70f09f227b1d`,
+  and the 62-opened-recording localizer census in
+  `map-player-land-localizer-v2-hbox-20260812T003205Z-52756-15460-ed73570f9d4e`.

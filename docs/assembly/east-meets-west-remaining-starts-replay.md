@@ -9,6 +9,11 @@ before the post-loop call at 0x00697492. The next native mutator is
 Map::check_player_land at 0x0068ef00; this tranche names that call but does not
 execute it.
 
+The canonical continuation now executes that separately proved leaf and
+advances the integrated continent stop to the caller cleanup at 0x00697497;
+see `map-check-player-land-east-meets-west.md`. The boundary below remains the
+historical contract of this isolated remaining-start tranche.
+
 Evidence is ron-bin/riseofnations.exe (SHA-256
 30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079),
 ron-bin/sbl/rise.pdb (SHA-256
@@ -107,10 +112,11 @@ does not visit slot 2.
 - current-source full localizer: 62 recordings opened, 21 checksum-bearing,
   21/21 coherent owner ledgers, and 265,619/265,619 agreeing same-group peer
   comparisons;
-- exact corpus census: 13,119,476 walked / 7,917,024 owned / 5,202,452 unknown
+- exact corpus census: 13,119,476 walked / 7,917,091 owned / 5,202,385 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
-- exact current boundary set: 2 map_team_continent_add_start and 19
-  place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
+- exact current integrated boundary set: 2
+  map_team_continent_post_player_land_cleanup and 19
+  place_all_mountain_range_lists; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:
   replay-remaining-starts-check-v3-20260811T212804Z-3895-5126-a7bf776e8e5b.

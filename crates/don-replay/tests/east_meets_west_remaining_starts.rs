@@ -204,6 +204,8 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             next_va,
             mutation: first_mutation,
             remaining,
+            player_land,
+            next_mutator_va,
             ..
         } = &prefix.stop
         else {
@@ -252,7 +254,18 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         );
         assert_eq!(remaining.iterations.len(), 3, "{}", expected.name);
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
-        assert_eq!(*next_va, MAP_CHECK_PLAYER_LAND_VA, "{}", expected.name);
+        assert_eq!(
+            *next_va,
+            don_replay::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
+            *next_mutator_va,
+            don_replay::continent::STRING_CLOSE_VA,
+            "{}",
+            expected.name
+        );
         assert_eq!(
             remaining.next,
             EastMeetsWestRemainingStartsNext::CheckPlayerLand {
@@ -435,6 +448,21 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             expected.name
         );
         assert_eq!(
+            player_land.world_before.full, expected.full_after,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
+            player_land.start_arrays_checksum_before, expected.starts_after,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
+            player_land.start_arrays_checksum_after, expected.starts_after,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
             map.world
                 .start_x
                 .items
@@ -447,7 +475,7 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             expected.name
         );
         let checksum = map.world.checksum_sections();
-        assert_eq!(checksum.full, expected.full_after, "{}", expected.name);
+        assert_eq!(checksum, player_land.world_after, "{}", expected.name);
         assert_eq!(
             checksum.section(WorldSection::StartArrays).adler,
             expected.starts_after,
@@ -496,11 +524,23 @@ fn later_selector_failure_stops_before_visiting_another_active_slot() {
         selector,
         mutation,
         remaining,
+        player_land,
         ..
     } = prefix.stop
     else {
         panic!("unexpected stop {:?}", prefix.stop);
     };
+
+    for write in &player_land.world_cell_mutations {
+        assert_eq!(map.world.wdata(write.x, write.y), &write.after);
+        *map.world.wdata_mut(write.x, write.y) = write.before.clone();
+    }
+    for mutation in &player_land.region_mutations {
+        let region = &mut map.generation_regions.list[mutation.region as usize];
+        assert_eq!(region, &mutation.after);
+        *region = mutation.before.clone();
+    }
+    assert_eq!(map.world.checksum_sections(), player_land.world_before);
 
     for later in remaining.iterations.iter().rev() {
         for write in later

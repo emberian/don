@@ -216,6 +216,8 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             selector,
             mutation,
             remaining,
+            player_land,
+            next_mutator_va,
         } = &prefix.stop
         else {
             panic!("{name}: unexpected stop {:?}", prefix.stop);
@@ -327,9 +329,19 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::continent::MAP_CHECK_PLAYER_LAND_VA,
+            don_replay::continent::EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
             "{name}"
         );
+        assert_eq!(
+            *next_mutator_va,
+            don_replay::continent::STRING_CLOSE_VA,
+            "{name}"
+        );
+        assert_eq!(
+            player_land.random_state_before, player_land.random_state_after,
+            "{name}"
+        );
+        assert!(player_land.direct_rng_sites.is_empty(), "{name}");
         assert_eq!(remaining.entry_va, mutation.caller_return_va, "{name}");
         assert_eq!(mutation.returned_start_index, 0, "{name}");
         assert_eq!(mutation.input, selector.output.unwrap(), "{name}");

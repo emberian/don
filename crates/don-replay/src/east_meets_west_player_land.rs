@@ -10,7 +10,7 @@ use crate::player_land::{
     execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
     MAP_CHECK_PLAYER_LAND_VA,
 };
-use don_sim::systems::map_terrain::{World, WorldChecksum, WorldSection};
+use don_sim::systems::map_terrain::{WData, World, WorldChecksum, WorldSection};
 use don_sim::systems::regions::{Region, Regions, REGION_COUNT};
 
 pub const EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA: u32 = 0x0069_7484;
@@ -81,6 +81,14 @@ pub struct RegionMutation {
     pub after: Region,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldCellMutation {
+    pub x: i32,
+    pub y: i32,
+    pub before: WData,
+    pub after: WData,
+}
+
 /// The native leaf is `void`; execution resumes in the style virtual and its
 /// first still-unported work is local-string cleanup.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -109,6 +117,7 @@ pub struct EastMeetsWestPlayerLandReceipt {
     pub world_sections_changed: Vec<WorldSection>,
     pub start_arrays_checksum_before: u32,
     pub start_arrays_checksum_after: u32,
+    pub world_cell_mutations: Vec<WorldCellMutation>,
     pub region_mutations: Vec<RegionMutation>,
     pub next: EastMeetsWestPlayerLandNext,
 }
@@ -157,6 +166,7 @@ pub fn execute_east_meets_west_player_land(
     }
 
     let world_before = world.checksum_sections();
+    let wdata_before = world.wdata.clone();
     let regions_before = regions.clone();
     let native_call = CheckPlayerLandCall {
         enabled: 1,
@@ -191,6 +201,18 @@ pub fn execute_east_meets_west_player_land(
             after: regions.list[index].clone(),
         })
         .collect();
+    let world_cell_mutations = wdata_before
+        .into_iter()
+        .zip(world.wdata.iter().cloned())
+        .enumerate()
+        .filter(|(_, (before, after))| before != after)
+        .map(|(index, (before, after))| WorldCellMutation {
+            x: index as i32 % world.xs,
+            y: index as i32 / world.xs,
+            before,
+            after,
+        })
+        .collect();
 
     Ok(EastMeetsWestPlayerLandReceipt {
         caller_entry_va: EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA,
@@ -204,6 +226,7 @@ pub fn execute_east_meets_west_player_land(
         direct_rng_sites: Vec::new(),
         start_arrays_checksum_before: world_before.section(WorldSection::StartArrays).adler,
         start_arrays_checksum_after: world_after.section(WorldSection::StartArrays).adler,
+        world_cell_mutations,
         world_before,
         world_after,
         world_sections_changed,

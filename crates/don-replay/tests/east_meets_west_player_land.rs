@@ -1,20 +1,6 @@
-#[path = "../src/east_meets_west_player_land.rs"]
-mod east_meets_west_player_land;
-
-mod player_land {
-    pub use don_replay::player_land::*;
-}
-
-use don_replay::continent::{execute_continent_prefix_with_regions_from_rng, ContinentStop};
-use don_replay::fractal_boundary::resolve_tile_selection;
-use don_replay::map_style::{ron_data_root_for_replay, MapStyleStaticData};
-use don_replay::replay::Replay;
-use don_sim::systems::collision::{RING_COUNT, RING_X, RING_Y};
-use don_sim::systems::combat::circle_table;
-use don_sim::systems::map_terrain::{land, WCoord, World, WorldSection};
-use don_sim::systems::regions::Regions;
-use east_meets_west_player_land::{
-    execute_east_meets_west_player_land, EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandNext,
+use don_replay::continent::{
+    execute_continent_prefix_with_regions_from_rng, execute_east_meets_west_player_land,
+    ContinentStop, EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandNext,
     CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA,
     EAST_MEETS_WEST_PLAYER_LAND_CALL_VA, EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA,
     EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
@@ -22,6 +8,13 @@ use east_meets_west_player_land::{
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
     RISE_EXE_SHA256, STRING_CLOSE_VA,
 };
+use don_replay::fractal_boundary::resolve_tile_selection;
+use don_replay::map_style::{ron_data_root_for_replay, MapStyleStaticData};
+use don_replay::replay::Replay;
+use don_sim::systems::collision::{RING_COUNT, RING_X, RING_Y};
+use don_sim::systems::combat::circle_table;
+use don_sim::systems::map_terrain::{land, WCoord, World, WorldSection};
+use don_sim::systems::regions::Regions;
 use std::path::{Path, PathBuf};
 
 fn replay_path(name: &str) -> PathBuf {
@@ -218,8 +211,15 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             &mut map.generation_regions,
         )
         .unwrap();
-        let ContinentStop::AddStartingLocation { remaining, .. } = &prefix.stop else {
-            panic!("{name}: unexpected pre-call stop {:?}", prefix.stop);
+        let ContinentStop::AddStartingLocation {
+            remaining,
+            player_land: receipt,
+            next_va,
+            next_mutator_va,
+            ..
+        } = &prefix.stop
+        else {
+            panic!("{name}: unexpected post-call stop {:?}", prefix.stop);
         };
         assert_eq!(remaining.active_slots, plan.inputs.active_slots, "{name}");
         assert_eq!(
@@ -228,18 +228,13 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
 
-        let receipt = execute_east_meets_west_player_land(
-            &mut map.world,
-            &mut map.generation_regions,
-            EastMeetsWestPlayerLandCall {
-                expected_start_count: plan.inputs.active_slots.len(),
-                avoid_continent: 16,
-                unread_stack_word: 0,
-                random_state: prefix.rng_final,
-            },
-        )
-        .unwrap();
-
+        assert_eq!(*next_va, EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, "{name}");
+        assert_eq!(*next_mutator_va, STRING_CLOSE_VA, "{name}");
+        assert_eq!(
+            prefix.player_land.as_ref(),
+            Some(&receipt.body_receipt),
+            "{name}"
+        );
         assert_eq!(receipt.body_receipt.footprints_visited, 16, "{name}");
         assert_eq!(receipt.body_receipt.effective_radius, 5, "{name}");
         assert_eq!(
@@ -290,5 +285,15 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             expected.5,
             "{name}"
         );
+        assert!(!receipt.world_cell_mutations.is_empty(), "{name}");
+        assert!(
+            receipt
+                .world_cell_mutations
+                .iter()
+                .all(|mutation| mutation.before != mutation.after
+                    && map.world.wdata(mutation.x, mutation.y) == &mutation.after),
+            "{name}"
+        );
+        assert_eq!(map.world.checksum_sections(), receipt.world_after, "{name}");
     }
 }
