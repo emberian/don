@@ -1829,6 +1829,59 @@ impl Sim {
         ))
     }
 
+    /// Process one replay-decoded opcode-0 Group plus LaunchPatrol/Scramble pair while retaining
+    /// its exact indices in the containing command package. Commands outside the pair are not
+    /// executed here: the caller must present the canonical Sim state immediately before Group.
+    pub fn process_air_group_packet_pair(
+        &mut self,
+        position: crate::systems::air_group_action_transaction::CommandPackagePosition,
+        group_packet: &[u8],
+        action_packet: &[u8],
+    ) -> Result<
+        crate::systems::air_group_action_transaction::AirGroupActionReceipt,
+        crate::systems::canonical_air_group_host::CanonicalAirPackageError,
+    > {
+        use crate::systems::canonical_air_group_host::{
+            commit_canonical_air_package, prepare_canonical_air_packet_pair,
+        };
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_canonical_air_packet_pair(
+            &self.world,
+            &self.builds,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            &self.scenario_ignore_orders,
+            &player_who,
+            position,
+            group_packet,
+            action_packet,
+        )?;
+        Ok(commit_canonical_air_package(
+            &mut self.world,
+            &self.builds,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            &self.scenario_ignore_orders,
+            prepared,
+        ))
+    }
+
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
     /// UNITMASK (32), STOP_SPELL (29), HALT (12), SET_TRANSPORT (14), BUILDMASK (33),
     /// or FOLLOW (30).

@@ -50,6 +50,14 @@ containment head. Commit revalidates that image, and Build members never receive
 `00000024` reselection. DoNSave already retained both sides of the containment link; it now admits
 only reciprocal, active, acyclic Build-to-Unit chains.
 
+Replay decoding no longer has to collapse every admitted pair to command indices 0/1. The
+canonical pair entrypoint consumes the exact decoded Group and Scramble/LaunchPatrol slices plus
+their `CommandPackagePosition`, retains the retail frame, serial, play and command indices in the
+transaction receipt, and requires the packet frame to equal the canonical World frame before
+selection. This matters for the recorded Build Scrambles at indices 1/2: presentation or lockstep
+shell commands remain outside this bounded transaction, but their presence is no longer erased
+from its provenance. Negative plays and stale frames fail before Group/cache/order publication.
+
 `UnitData::is_busy` now follows the executable at `0x0060A370`: a typed current CastOrder reads
 its exact spell id, then ORs the synchronized spell-type virtual answers at `+0x50` and `+0x54`;
 when there is no CastOrder, typed SpecialAnim Enter/Exit supplies the recovered
@@ -87,6 +95,8 @@ integration decision after the patch lands with its save-version coordination.
 `canonical_air_build_selection_save_resume` additionally proves:
 
 - all three exact explicit Build-band replay packets select the recorded airbases;
+- their exact recorded frame/serial/play/index positions survive canonical execution, including
+  the 1/2 pairs, and stale position mutations publish nothing;
 - an empty recorded Build selection and its saved cached reselection advance only the canonical
   Group/cache revision, with zero aircraft/order/path/RNG effects;
 - contained Unit aircraft receive AIR_PATROL while retaining `group == -1`;

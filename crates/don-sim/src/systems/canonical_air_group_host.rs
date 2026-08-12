@@ -70,6 +70,8 @@ pub enum CanonicalAirPackageError {
     TrailingBytes { expected: usize, actual: usize },
     Pair(transaction::AirGroupPairError),
     Selection(PackageError),
+    PositionFrameMismatch { world: i32, packet: i32 },
+    PositionPlayOutOfRange { play: i32 },
     PlayOutOfRange { play: usize },
     MissingPlayerMap { play: usize },
     PlayerOwnerMismatch { play: usize, expected: u8, got: u8 },
@@ -680,9 +682,12 @@ fn target_before(
     })
 }
 
-/// Prepare selection plus the landed packet transaction without publishing either half.
+/// Prepare one replay-decoded Group/action pair at its exact position in the containing
+/// `CommandPackage`, without publishing either half. Presentation and lockstep commands around
+/// the pair remain the caller's responsibility; their presence must not be erased by relabelling
+/// every admitted pair as command indices 0/1.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub fn prepare_canonical_air_package(
+pub fn prepare_canonical_air_packet_pair(
     world: &World,
     builds: &[BuildData],
     groups: &Groups,
@@ -692,10 +697,9 @@ pub fn prepare_canonical_air_package(
     authority: &AirGroupRuntimeAuthority,
     scenario: &ScenarioIgnoreOrdersAuthority,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
-    frame: i32,
-    play: usize,
-    lockstep_serial: i32,
-    bytes: &[u8],
+    position: transaction::CommandPackagePosition,
+    group_packet: &[u8],
+    action_packet: &[u8],
 ) -> Result<PreparedCanonicalAirPackage, CanonicalAirPackageError> {
     if authority.composition_digest == [0; 32] {
         return Err(CanonicalAirPackageError::MissingCompositionDigest);
@@ -714,7 +718,19 @@ pub fn prepare_canonical_air_package(
     {
         return Err(CanonicalAirPackageError::DuplicateAuthorityUnit(duplicate));
     }
-    let pair = decode_canonical_air_package(frame, play, lockstep_serial, bytes)?;
+    if position.game_frame != world.frame {
+        return Err(CanonicalAirPackageError::PositionFrameMismatch {
+            world: world.frame,
+            packet: position.game_frame,
+        });
+    }
+    let play = usize::try_from(position.play).map_err(|_| {
+        CanonicalAirPackageError::PositionPlayOutOfRange {
+            play: position.play,
+        }
+    })?;
+    let pair = transaction::decode_air_group_packet_pair(position, group_packet, action_packet)
+        .map_err(CanonicalAirPackageError::Pair)?;
     if play >= NETWORK_PLAYERS {
         return Err(CanonicalAirPackageError::PlayOutOfRange { play });
     }
@@ -735,7 +751,7 @@ pub fn prepare_canonical_air_package(
         command_state,
         selection_authority,
         &authority.builds,
-        frame,
+        position.game_frame,
         play,
         pair.group.owner,
         &pair.group.requested,
@@ -749,7 +765,6 @@ pub fn prepare_canonical_air_package(
         &mut selection,
     )?;
     let group_before = group_before_image(world, &selection)?;
-    let (group_packet, action_packet) = decode_package_parts(bytes)?;
     let revisions = transaction::AuthorityRevisions {
         scenario: scenario.revision,
         types: authority.revision,
@@ -832,14 +847,56 @@ pub fn prepare_canonical_air_package(
     };
     Ok(PreparedCanonicalAirPackage {
         play,
-        lockstep_serial,
-        frame,
+        lockstep_serial: position.package_serial as i32,
+        frame: position.game_frame,
         selection,
         request,
         snapshot,
         authority_snapshot: authority.clone(),
         scenario_snapshot: scenario.clone(),
     })
+}
+
+/// Prepare an exact two-command package. This compatibility entrypoint intentionally labels the
+/// adjacent pair 0/1; replay consumers which decoded a larger package must call
+/// [`prepare_canonical_air_packet_pair`] so the receipt retains the real command indices.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_canonical_air_package(
+    world: &World,
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    selection_authority: &GroupMoveAuthority,
+    authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    frame: i32,
+    play: usize,
+    lockstep_serial: i32,
+    bytes: &[u8],
+) -> Result<PreparedCanonicalAirPackage, CanonicalAirPackageError> {
+    let (group_packet, action_packet) = decode_package_parts(bytes)?;
+    prepare_canonical_air_packet_pair(
+        world,
+        builds,
+        groups,
+        paths,
+        command_state,
+        selection_authority,
+        authority,
+        scenario,
+        player_who,
+        transaction::CommandPackagePosition {
+            game_frame: frame,
+            package_serial: lockstep_serial as u32,
+            play: i32::try_from(play).unwrap_or(i32::MAX),
+            group_command_index: 0,
+            action_command_index: 1,
+        },
+        group_packet,
+        action_packet,
+    )
 }
 
 fn actor_from_image(image: &UnitImage) -> UnitWork {

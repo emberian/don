@@ -2,10 +2,12 @@
 //! Exact recorded Build-band Scramble selections through the canonical cache/package owner.
 
 use don_sim::order::OrderIndex;
-use don_sim::systems::air_group_action_transaction::{AirTransactionStatus, SCRAMBLE_OPCODE};
+use don_sim::systems::air_group_action_transaction::{
+    AirTransactionStatus, CommandPackagePosition, SCRAMBLE_OPCODE,
+};
 use don_sim::systems::canonical_air_group_host::{
     commit_canonical_air_package, prepare_canonical_air_package, AirGroupRuntimeAuthority,
-    AirGroupUnitAuthority,
+    AirGroupUnitAuthority, CanonicalAirPackageError,
 };
 use don_sim::systems::canonical_group_move_host::{
     BuildSelectionAuthority, BuildSelectionIdentity, CachedSelection, GroupMoveAuthority,
@@ -162,22 +164,57 @@ fn selected_group(sim: &Sim) -> &don_sim::systems::groups_guys::GroupData {
     &sim.groups.list[sim.groups.last_group[0] as usize]
 }
 
+fn recorded_parts(packet: &[u8]) -> (&[u8], &[u8]) {
+    packet.split_at(packet.len() - 1)
+}
+
 #[test]
 fn all_three_recorded_explicit_build_packets_resolve_the_exact_airbase_members() {
     let (mut sim, planes) = fixture();
-    for (serial, (packet, expected)) in [
-        (RECORDED_ONE, &[2_015i16][..]),
-        (RECORDED_TWO, &[2_090i16, 2_091][..]),
-        (RECORDED_THREE, &[2_090i16, 2_091, 2_147][..]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (position, packet, expected) in [
+        (
+            CommandPackagePosition {
+                game_frame: 47_706,
+                package_serial: 48_065,
+                play: 0,
+                group_command_index: 1,
+                action_command_index: 2,
+            },
+            RECORDED_ONE,
+            &[2_015i16][..],
+        ),
+        (
+            CommandPackagePosition {
+                game_frame: 51_868,
+                package_serial: 52_254,
+                play: 0,
+                group_command_index: 1,
+                action_command_index: 2,
+            },
+            RECORDED_TWO,
+            &[2_090i16, 2_091][..],
+        ),
+        (
+            CommandPackagePosition {
+                game_frame: 57_968,
+                package_serial: 58_402,
+                play: 0,
+                group_command_index: 0,
+                action_command_index: 1,
+            },
+            RECORDED_THREE,
+            &[2_090i16, 2_091, 2_147][..],
+        ),
+    ] {
+        sim.world.frame = position.game_frame;
+        sim.vic_match.frame = position.game_frame;
+        let (group_packet, action_packet) = recorded_parts(packet);
         let before_rng = sim.world.random.state();
         let receipt = sim
-            .process_air_group_package(0, 0x700 + serial as i32, packet)
+            .process_air_group_packet_pair(position, group_packet, action_packet)
             .unwrap();
         assert!(receipt.validates());
+        assert_eq!(receipt.request.position, position);
         assert!(matches!(receipt.status, AirTransactionStatus::Applied(_)));
         let group = selected_group(&sim);
         assert_eq!(group.buildings, 1);
@@ -275,8 +312,18 @@ fn empty_recorded_build_scramble_commits_and_resumes_selection_without_rng() {
 #[test]
 fn recorded_build_cache_survives_save_reload_and_empty_scramble_reselection() {
     let (mut sim, planes) = fixture();
+    let explicit_position = CommandPackagePosition {
+        game_frame: 47_706,
+        package_serial: 48_065,
+        play: 0,
+        group_command_index: 1,
+        action_command_index: 2,
+    };
+    sim.world.frame = explicit_position.game_frame;
+    sim.vic_match.frame = explicit_position.game_frame;
+    let (group_packet, action_packet) = recorded_parts(RECORDED_ONE);
     let first = sim
-        .process_air_group_package(0, 0x800, RECORDED_ONE)
+        .process_air_group_packet_pair(explicit_position, group_packet, action_packet)
         .unwrap();
     assert!(matches!(first.status, AirTransactionStatus::Applied(_)));
     assert_eq!(
@@ -294,14 +341,60 @@ fn recorded_build_cache_survives_save_reload_and_empty_scramble_reselection() {
     assert_eq!(save_sim(&resumed).unwrap(), bytes);
     install_authorities(&mut resumed, &planes, &[2_015, 2_090, 2_091, 2_147]);
     let before_rng = resumed.world.random.state();
+    let cached_position = CommandPackagePosition {
+        game_frame: resumed.world.frame,
+        package_serial: 48_066,
+        play: 0,
+        group_command_index: 2,
+        action_command_index: 3,
+    };
+    let (group_packet, action_packet) = recorded_parts(CACHED_SCRAMBLE);
     let cached = resumed
-        .process_air_group_package(0, 0x801, CACHED_SCRAMBLE)
+        .process_air_group_packet_pair(cached_position, group_packet, action_packet)
         .unwrap();
     assert!(cached.validates());
     assert!(matches!(cached.status, AirTransactionStatus::Applied(_)));
     assert!(cached.request.selection.is_cached_reselection());
     assert_eq!(&selected_group(&resumed).list[..1], &[2_015]);
     assert_eq!(resumed.world.random.state(), before_rng);
+}
+
+#[test]
+fn replay_pair_position_is_revalidated_before_selection_or_order_publication() {
+    for invalid in 0..2 {
+        let (mut sim, planes) = fixture();
+        let plane_row = sim.world.row_of(planes[0]).unwrap();
+        let before_groups = sim.groups.clone();
+        let before_cache = sim.command_package_state.clone();
+        let before_order = sim.world.orders(plane_row).clone();
+        let before_rng = sim.world.random.state();
+        let mut position = CommandPackagePosition {
+            game_frame: sim.world.frame,
+            package_serial: 48_065,
+            play: 0,
+            group_command_index: 1,
+            action_command_index: 2,
+        };
+        let expected = if invalid == 0 {
+            position.game_frame += 1;
+            CanonicalAirPackageError::PositionFrameMismatch {
+                world: sim.world.frame,
+                packet: position.game_frame,
+            }
+        } else {
+            position.play = -1;
+            CanonicalAirPackageError::PositionPlayOutOfRange { play: -1 }
+        };
+        let (group_packet, action_packet) = recorded_parts(RECORDED_ONE);
+        assert_eq!(
+            sim.process_air_group_packet_pair(position, group_packet, action_packet),
+            Err(expected)
+        );
+        assert_eq!(sim.groups.list, before_groups.list);
+        assert_eq!(sim.command_package_state, before_cache);
+        assert_eq!(sim.world.orders(plane_row), &before_order);
+        assert_eq!(sim.world.random.state(), before_rng);
+    }
 }
 
 fn prepared_first(
