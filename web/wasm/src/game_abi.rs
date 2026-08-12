@@ -12,7 +12,13 @@ use don_sim::deviations::{Deviation, ModeConfig, Surface};
 use don_sim::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::order::{Order, OrderIndex};
 use don_sim::systems::canonical_group_move_host::{
-    decode_group_move_package, GroupMovePackageReceipt, UnitIdentity,
+    decode_group_move_package, GroupMoveAuthority, GroupMovePackageReceipt, UnitIdentity,
+};
+use don_sim::systems::group_move_authority::{
+    produce_group_move_authority, GroupMoveAuthorityError,
+};
+use don_sim::systems::land_speed_authority::{
+    produce_resolved_land_speed_authority, LandSpeedAuthorityError,
 };
 use don_sim::systems::player_lifecycle_tails::PLAYER_PRESENT;
 use don_sim::systems::player_setup::ManualPlayerSetup;
@@ -110,6 +116,12 @@ enum TrainingRefusal {
     PlacementBlocked,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BrowserGroupMoveAuthorityError {
+    LandSpeed(LandSpeedAuthorityError),
+    GroupMove(GroupMoveAuthorityError),
+}
+
 impl TrainingRefusal {
     fn gap(self) -> usize {
         match self {
@@ -125,6 +137,19 @@ impl TrainingRefusal {
 }
 
 impl Game {
+    fn initialize_browser_unit_command_state(core: &mut CoreSim, handle: Handle) {
+        let row = core
+            .world
+            .row_of(handle)
+            .expect("a just-spawned browser Unit retains its generational row");
+        core.world.units.group_mut()[row] = -1;
+        core.world.units.o_down_mut()[row] = -1;
+        core.world.units.inside_down_mut()[row] = -1;
+        core.world.units.inside_down_who_mut()[row] = -1;
+        core.world.units.form_mut()[row] = 0;
+        core.world.units.form_mod_mut()[row] = 50;
+    }
+
     fn new(seed: u64) -> Game {
         let gd = GameData::parse(stage(&GAMEDATA)).unwrap_or_else(GameData::synthetic);
         let play = PlayData::parse(stage(&PLAYDATA)).unwrap_or_else(PlayData::empty);
@@ -192,13 +217,15 @@ impl Game {
                 let x = start_x[p] + (k as i32 - 3) * CORE_SUBTILE;
                 let y = start_y[p] + 3 * CORE_SUBTILE;
                 if let Some(h) = core.spawn_unit(p, citizen, x, y, 4) {
-                    let _ = h;
+                    Self::initialize_browser_unit_command_state(&mut core, h);
                 }
             }
             for k in 0..2 {
                 let x = start_x[p] + (k * 2 - 1) * 2 * CORE_SUBTILE;
                 let y = start_y[p] - 3 * CORE_SUBTILE;
-                let _ = core.spawn_unit(p, escort, x, y, 5);
+                if let Some(h) = core.spawn_unit(p, escort, x, y, 5) {
+                    Self::initialize_browser_unit_command_state(&mut core, h);
+                }
             }
         }
         let capacity = core.world.capacity() as usize + BUILD_PROJECTION_CAPACITY;
@@ -236,8 +263,37 @@ impl Game {
             start_y,
         };
         game.install_production_facts();
+        if let Err(error) = game.rebuild_group_move_authority((start_x[0], start_y[0])) {
+            game.set_error(format!(
+                "group move authority unavailable at browser lifecycle creation: {error:?}"
+            ));
+        }
         game.refresh();
         game
+    }
+
+    /// Join the immutable DONPACK4 content and every current dynamic Sim owner into the
+    /// detached authority consumed by the canonical Group→Move transaction. Synthetic data
+    /// deliberately has no authority producer; tests may still install a hand-built projection
+    /// to exercise the lower ABI seam.
+    fn rebuild_group_move_authority(
+        &mut self,
+        destination: (i32, i32),
+    ) -> Result<bool, BrowserGroupMoveAuthorityError> {
+        if !self.gd.is_real {
+            return Ok(false);
+        }
+        let authority = {
+            let speed = produce_resolved_land_speed_authority(&self.core, &self.gd)
+                .map_err(BrowserGroupMoveAuthorityError::LandSpeed)?;
+            let content = speed
+                .bind(&self.core, &self.gd)
+                .map_err(BrowserGroupMoveAuthorityError::LandSpeed)?;
+            produce_group_move_authority(&self.core, &content, destination, false)
+                .map_err(BrowserGroupMoveAuthorityError::GroupMove)?
+        };
+        self.core.replace_group_move_authority(authority);
+        Ok(true)
     }
 
     fn row_for_id(&self, id: u32) -> Option<usize> {
@@ -1086,7 +1142,20 @@ impl Game {
     }
 
     fn advance_core_frame(&mut self) {
+        let mut generations_before = vec![None; self.core.world.capacity() as usize];
+        for row in 0..self.core.world.live_count() as usize {
+            if let Some(handle) = self.core.world.handle_at_row(row) {
+                generations_before[handle.id as usize] = Some(handle.generation);
+            }
+        }
         self.core.do_frame();
+        for row in 0..self.core.world.live_count() as usize {
+            if let Some(handle) = self.core.world.handle_at_row(row) {
+                if generations_before[handle.id as usize] != Some(handle.generation) {
+                    Self::initialize_browser_unit_command_state(&mut self.core, handle);
+                }
+            }
+        }
         for owner in 0..PLAYERS {
             let completed_age = self.core.production_runtime.leaders[owner]
                 .tech
@@ -1121,6 +1190,10 @@ impl Game {
             self.core.production_runtime.leaders[owner].resources =
                 self.core.leaders[owner].econ.stockpile;
         }
+        // Land speed, path gates, containment, animation and leader facts can all change on a
+        // frame. A package rebuilds them for its exact destination immediately before commit.
+        self.core
+            .replace_group_move_authority(GroupMoveAuthority::default());
     }
 
     fn apply_commands(&mut self) {
@@ -1317,7 +1390,15 @@ pub unsafe extern "C" fn game_activate_player(g: *mut Game, who: u32) -> u32 {
     if who as usize >= PLAYERS {
         return 0;
     }
-    game_ref!(g).core.activate(who as usize);
+    let game = game_ref!(g);
+    game.core.activate(who as usize);
+    if let Err(error) = game.rebuild_group_move_authority((game.start_x[0], game.start_y[0])) {
+        game.core
+            .replace_group_move_authority(GroupMoveAuthority::default());
+        game.set_error(format!(
+            "group move authority unavailable after roster activation: {error:?}"
+        ));
+    }
     1
 }
 
@@ -1382,7 +1463,19 @@ pub unsafe extern "C" fn game_start_manual_teams(
             players.console_play = local_player as i32;
             players.console_who = local_player as i32;
             game.core.players = Some(players);
-            game.error.clear();
+            match game.rebuild_group_move_authority((
+                game.start_x[local_player as usize],
+                game.start_y[local_player as usize],
+            )) {
+                Ok(_) => game.error.clear(),
+                Err(error) => {
+                    game.core
+                        .replace_group_move_authority(GroupMoveAuthority::default());
+                    game.set_error(format!(
+                        "manual player setup applied but group move authority is unavailable: {error:?}"
+                    ));
+                }
+            }
             game.refresh();
             1
         }
@@ -1598,17 +1691,34 @@ pub unsafe extern "C" fn game_process_command_package(
         );
         return 0;
     }
+    match game.rebuild_group_move_authority((wire.movement.x, wire.movement.y)) {
+        Ok(_) => {}
+        Err(error) => {
+            game.core
+                .replace_group_move_authority(GroupMoveAuthority::default());
+            game.set_error(format!(
+                "command package refused: authoritative lifecycle join failed: {error:?}"
+            ));
+            return 0;
+        }
+    }
     match game
         .core
         .process_command_package(play as usize, lockstep_serial, &bytes)
     {
         Ok(receipt) => {
             game.write_package_receipt(&receipt);
+            // Group allocation and member backlinks changed. The just-consumed projection is
+            // destination- and before-image-bound, so retain only the receipt, never stale facts.
+            game.core
+                .replace_group_move_authority(GroupMoveAuthority::default());
             game.error.clear();
             game.refresh();
             1
         }
         Err(error) => {
+            game.core
+                .replace_group_move_authority(GroupMoveAuthority::default());
             game.set_error(format!("command package refused: {error:?}"));
             0
         }
@@ -1996,20 +2106,19 @@ pub unsafe extern "C" fn game_debug_spawn(g: *mut Game, owner: u32, type_id: i32
     let game = game_ref!(g);
     let mut made = 0;
     for _ in 0..n {
-        if game
-            .core
-            .spawn_unit(
-                owner as usize,
-                type_id,
-                game.start_x[(owner as usize) % PLAYERS],
-                game.start_y[(owner as usize) % PLAYERS],
-                4,
-            )
-            .is_some()
-        {
+        if let Some(handle) = game.core.spawn_unit(
+            owner as usize,
+            type_id,
+            game.start_x[(owner as usize) % PLAYERS],
+            game.start_y[(owner as usize) % PLAYERS],
+            4,
+        ) {
+            Game::initialize_browser_unit_command_state(&mut game.core, handle);
             made += 1;
         }
     }
+    game.core
+        .replace_group_move_authority(GroupMoveAuthority::default());
     game.refresh();
     made
 }
@@ -2085,7 +2194,16 @@ pub unsafe extern "C" fn game_load_commit(g: *mut Game) -> u32 {
             game.commands_seen = 0;
             game.orders_applied = 0;
             game.terrain_version = game.terrain_version.wrapping_add(1).max(1);
-            game.error.clear();
+            match game.rebuild_group_move_authority((game.start_x[0], game.start_y[0])) {
+                Ok(_) => game.error.clear(),
+                Err(error) => {
+                    game.core
+                        .replace_group_move_authority(GroupMoveAuthority::default());
+                    game.set_error(format!(
+                        "load applied but group move authority is unavailable: {error:?}"
+                    ));
+                }
+            }
             game.refresh();
             1
         }
@@ -2226,6 +2344,83 @@ mod tests {
         stage(&GAMEDATA).clear();
     }
 
+    /// Build the exact DONPACK4 authority shape from the tracked retail Unit table. Balance is
+    /// neutral because these lifecycle tests never enter combat; every Group/land-speed field
+    /// and all twelve retail speed Constants are canonical inputs.
+    fn stage_test_donpack4_authority() {
+        const UNIT_TABLE: &str = include_str!("../../../schema/live/live-tables-unit.tsv");
+        const UNIT_FIELDS: [&str; 27] = [
+            "type_id",
+            "attack",
+            "armor",
+            "hits",
+            "moves",
+            "max_range",
+            "min_range",
+            "recharge",
+            "to_hit",
+            "domain",
+            "military_level",
+            "splash_area",
+            "splash_percent",
+            "obj_masks",
+            "target_size",
+            "age",
+            "unit_flags",
+            "los",
+            "role",
+            "unit_flags2",
+            "guy_spacing",
+            "x_spacing",
+            "y_spacing",
+            "uber_size",
+            "from",
+            "where",
+            "graft",
+        ];
+        let mut lines = UNIT_TABLE.lines();
+        let header = lines.next().unwrap().split('\t').collect::<Vec<_>>();
+        let indexes = UNIT_FIELDS
+            .iter()
+            .map(|name| header.iter().position(|column| column == name).unwrap())
+            .collect::<Vec<_>>();
+        let rows = lines
+            .filter(|line| !line.is_empty())
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 364);
+
+        let mut bytes = Vec::with_capacity(527_014);
+        bytes.extend_from_slice(b"DONPACK4");
+        for word in [364u32, 28, 28, 493, 50, 1, 1] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        for row in &rows {
+            for &index in &indexes {
+                let value = row[index].parse::<i64>().unwrap() as u32;
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            let type_id = row[indexes[0]].parse::<i32>().unwrap();
+            bytes.extend_from_slice(&(if type_id == 50 { 0i32 } else { -1 }).to_le_bytes());
+        }
+        let rules: [i32; 28] = [
+            200, 10, 50, 40, 33, 170, 30, 85, 170, 512, 512, 33, 0, 25, 204, 1,
+            // Constants +0x004, +0x838..+0x844, +0xB4C, +0xB78, +0xB7C,
+            // +0xBB0, +0xBC0, +0xBD4, +0xC50.
+            1, 1, 1, 1, 1, 384, 307, 307, 150, 120, 120, 42,
+        ];
+        for value in rules {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for _ in 0..493 * 493 {
+            bytes.extend_from_slice(&100i16.to_le_bytes());
+        }
+        let staged = stage(&GAMEDATA);
+        staged.clear();
+        staged.extend_from_slice(&bytes);
+        assert!(GameData::parse(staged).is_some());
+    }
+
     fn submit_packet(game: &mut Game, who: u32, packet: &[u8]) {
         game.pending.extend_from_slice(&who.to_le_bytes());
         game.pending
@@ -2284,6 +2479,154 @@ mod tests {
         packet.extend_from_slice(&0i32.to_le_bytes());
         packet.extend_from_slice(&[1, 2, 0, 50, 0]);
         packet
+    }
+
+    #[test]
+    fn donpack4_game_new_and_manual_teams_install_generation_bound_land_authority() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage_test_donpack4_authority();
+        let mut game = Game::new(0xd04_2026);
+        assert!(game.gd.is_real);
+
+        let row = (0..game.core.world.live_count() as usize)
+            .find(|&row| game.core.world.units.get_who(row) == 0)
+            .unwrap();
+        let handle = game.core.world.handle_at_row(row).unwrap();
+        let initial = game
+            .core
+            .group_move_authority
+            .members
+            .iter()
+            .find(|member| member.handle == handle)
+            .cloned()
+            .expect("Game::new installs one authority row per live land Unit");
+        assert_eq!(initial.domain, 0);
+        assert_eq!(
+            initial.speed,
+            i32::from(game.core.world.units.myspeed()[row])
+        );
+        assert!(initial.on_map && initial.is_captain && initial.can_move);
+        let initial_revision = game.core.group_move_authority.revision;
+
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x03, u32::from_le_bytes([0, 1, 8, 8]), 0, 0, 0)
+            },
+            1,
+            "{}",
+            String::from_utf8_lossy(&game.error)
+        );
+        let installed = game
+            .core
+            .group_move_authority
+            .members
+            .iter()
+            .find(|member| member.handle == handle)
+            .expect("manual setup rebuilds against the same generational Unit");
+        assert_eq!(installed.handle, handle);
+        assert!(installed.can_move);
+        assert_ne!(game.core.group_move_authority.revision, initial_revision);
+    }
+
+    #[test]
+    fn donpack4_package_rebuilds_current_authority_and_returns_the_real_sim_receipt() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage_test_donpack4_authority();
+        let mut game = Game::new(0xd04_2027);
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x03, u32::from_le_bytes([0, 1, 8, 8]), 0, 0, 0)
+            },
+            1
+        );
+        let row = (0..game.core.world.live_count() as usize)
+            .find(|&row| game.core.world.units.get_who(row) == 0)
+            .unwrap();
+        let handle = game.core.world.handle_at_row(row).unwrap();
+        let o = game.core.world.units.o()[row];
+        let uid = game.core.world.units.get_uid(row);
+        let packet = group_move_packet(
+            0,
+            o,
+            game.start_x[0] + TILE_COORD,
+            game.start_y[0] + TILE_COORD,
+        );
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            1,
+            "{}",
+            String::from_utf8_lossy(&game.error)
+        );
+        assert_eq!(game.package_receipt[0..6], [0, 1, 0, 0, 1, 1]);
+        assert_eq!(
+            game.package_receipt[11..16],
+            [
+                handle.id as i32,
+                handle.generation as i32,
+                0,
+                i32::from(o),
+                i32::from(uid),
+            ]
+        );
+        assert_eq!(game.core.world.random.state(), rng);
+        assert!(game.core.group_move_authority.members.is_empty());
+        assert!(game.command_identity_lease.is_none());
+    }
+
+    #[test]
+    fn donpack4_dynamic_owner_mismatch_refuses_before_the_sim_transaction() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage_test_donpack4_authority();
+        let mut game = Game::new(0xd04_2028);
+        assert_eq!(
+            unsafe {
+                game_start_manual_teams(&mut game, 0x03, u32::from_le_bytes([0, 1, 8, 8]), 0, 0, 0)
+            },
+            1
+        );
+        let row = (0..game.core.world.live_count() as usize)
+            .find(|&row| game.core.world.units.get_who(row) == 0)
+            .unwrap();
+        let handle = game.core.world.handle_at_row(row).unwrap();
+        let o = game.core.world.units.o()[row];
+        game.core.vic_leaders.slots[0].num_units[(0x16d - 50) as usize] = 1;
+        let packet = group_move_packet(
+            0,
+            o,
+            game.start_x[0] + TILE_COORD,
+            game.start_y[0] + TILE_COORD,
+        );
+        game.cmd[..packet.len()].copy_from_slice(&packet);
+        assert_eq!(
+            unsafe { game_object_command_identity(&mut game, handle.id as i32) },
+            1
+        );
+        let stable = game.core.channel_digest();
+        let rng = game.core.world.random.state();
+        assert_eq!(
+            unsafe { game_process_command_package(&mut game, 0, 1, packet.len() as u32) },
+            0
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("LeaderCounterMismatch"));
+        assert_eq!(game.core.channel_digest(), stable);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert!(game.core.group_move_authority.members.is_empty());
+        assert!(game.package_receipt.is_empty());
     }
 
     #[test]
