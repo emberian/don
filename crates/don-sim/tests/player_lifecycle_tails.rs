@@ -465,7 +465,10 @@ fn states_one_and_two_dissolve_teams_and_declare_every_remaining_pair() {
         let plan = plan_process_drop(&img, 0, state).unwrap();
         assert_eq!(plan.image.team_style, expected_style);
         for slot in [0usize, 1, 3] {
-            assert_eq!(plan.image.players[slot].team, PLAYER_TEAM_AUTO, "slot {slot}");
+            assert_eq!(
+                plan.image.players[slot].team, PLAYER_TEAM_AUTO,
+                "slot {slot}"
+            );
         }
         // An absent player row is untouched.
         assert_eq!(plan.image.players[4].team, 0);
@@ -656,7 +659,10 @@ fn every_recovered_constant_is_pinned_to_its_literal() {
     assert_eq!(PLAYER_DROP_RETAIN_MASK, 0xffeb);
     assert_eq!(PLAYER_TEAM_AUTO, 8);
     // `and word ptr [..], 0xFFEB` clears exactly these two bits and nothing else.
-    assert_eq!(!PLAYER_DROP_RETAIN_MASK, PLAYER_LEAVE_SCAN_REQUIRED | PLAYER_LEFT);
+    assert_eq!(
+        !PLAYER_DROP_RETAIN_MASK,
+        PLAYER_LEAVE_SCAN_REQUIRED | PLAYER_LEFT
+    );
     // `test al, 0xD0` covers exactly the three "gone" bits.
     assert_eq!(
         PLAYER_SCAN_EXCLUDE_MASK,
@@ -670,11 +676,20 @@ fn every_recovered_constant_is_pinned_to_its_literal() {
     assert_eq!(DROPPED_LEADER_MULTI_DIFF, 3);
 
     // `Game::semaphore` bit indices: `Game+0x820` is byte 0, `+0x821` byte 1, `+0x822` byte 2.
-    assert_eq!((SEM_NET_OR_RECORDING / 8, 1u8 << (SEM_NET_OR_RECORDING % 8)), (0, 0x04));
-    assert_eq!((SEM_DROP_CONTROL / 8, 1u8 << (SEM_DROP_CONTROL % 8)), (0, 0x10));
+    assert_eq!(
+        (SEM_NET_OR_RECORDING / 8, 1u8 << (SEM_NET_OR_RECORDING % 8)),
+        (0, 0x04)
+    );
+    assert_eq!(
+        (SEM_DROP_CONTROL / 8, 1u8 << (SEM_DROP_CONTROL % 8)),
+        (0, 0x10)
+    );
     assert_eq!((SEM_GAME_OVER / 8, 1u8 << (SEM_GAME_OVER % 8)), (0, 0x40));
     assert_eq!((SEM_LOCAL_LEFT / 8, 1u8 << (SEM_LOCAL_LEFT % 8)), (1, 0x80));
-    assert_eq!((SEM_QUIT_PREFIX / 8, 1u8 << (SEM_QUIT_PREFIX % 8)), (2, 0x04));
+    assert_eq!(
+        (SEM_QUIT_PREFIX / 8, 1u8 << (SEM_QUIT_PREFIX % 8)),
+        (2, 0x04)
+    );
 
     // `Leader::defeat` arguments.
     assert_eq!(DEFEAT_TYPE_CAPITAL, 1);

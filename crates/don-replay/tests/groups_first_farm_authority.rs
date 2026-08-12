@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
+<<<<<<< HEAD
     bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
     produce_first_farm_first_placement, produce_first_farm_first_scout_collision_tail,
     produce_first_farm_first_scout_complete_init, produce_first_farm_first_scout_guy_prefix,
@@ -16,11 +17,16 @@ use don_replay::groups_first_farm_authority::{
     FirstFarmFrame79Authority, FirstFarmFrame79Source, FirstFarmSetupEntryAuthority,
     FirstFarmSetupEntrySource, FIRST_FRAME, FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O,
     FIRST_SERIAL, STRICT_REPLAY_SHA256,
+=======
+    discover_first_2018_farm, FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FIRST_FRAME,
+    FIRST_OWNER, FIRST_PLAY, FIRST_SELECTED_O, FIRST_SERIAL, STRICT_REPLAY_SHA256,
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 };
 use don_replay::groups_pre_pair_unit_authority::{
     replay_build_type_facts, PrePairUnitAuthorityError,
 };
 use don_replay::replay::{load_payload, Replay};
+<<<<<<< HEAD
 use don_replay::setup_units_producer::{
     build_units_plan, BuildUnitsInputs, BuildUnitsPlan, BuildUnitsPrefixReceipt,
     DirectRandomDrawReceipt, EngineContainerShapeReceipt, GuyIdentityReceipt,
@@ -73,6 +79,8 @@ use don_sim::systems::{
 };
 use don_sim::tick::Sim;
 use don_sim::world::Handle;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,6 +94,7 @@ fn replay_path() -> PathBuf {
     repo_root().join("ron-data/replays/multi/Playback___2018.11.17_13_21_42__Sat_.rcx")
 }
 
+<<<<<<< HEAD
 fn type_facts(base: i32) -> TypeResolutionFacts {
     TypeResolutionFacts {
         base,
@@ -759,6 +768,15 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
     let path = replay_path();
     let replay = Replay::open(&path)
         .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+=======
+#[test]
+fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
+    let path = replay_path();
+    let Ok(replay) = Replay::open(&path) else {
+        eprintln!("SKIPPED -- NOT A PASS: missing {}", path.display());
+        return;
+    };
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     let discovered = discover_first_2018_farm(&replay).unwrap();
 
     assert_eq!(discovered.replay_file_sha256, STRICT_REPLAY_SHA256);
@@ -791,6 +809,7 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
         ),
         (1, 14, 14, 69, 50)
     );
+<<<<<<< HEAD
     assert_eq!(
         (
             discovered.scout.squad_size,
@@ -802,6 +821,8 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
         ),
         (1, 1, 1, 1, 0, 1)
     );
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
     assert_eq!(
         (
@@ -836,7 +857,10 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
 
     assert!(discovered.recorded_groups_matches_pre_issue_state());
     assert_eq!(discovered.recorded_groups_checksum, 0x1c78_f3f5);
+<<<<<<< HEAD
     assert_eq!(discovered.recorded_units_checksum, 0x2bc4_5014);
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     assert!(!discovered.runtime_authority_ready());
     assert_eq!(
         discovered.blockers,
@@ -863,8 +887,14 @@ fn first_real_farm_advances_to_the_exact_setup_and_runtime_boundary() {
 #[test]
 fn in_memory_wire_or_rules_mutation_cannot_be_promoted_to_first_packet_authority() {
     let path = replay_path();
+<<<<<<< HEAD
     let mut replay = Replay::open(&path)
         .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+=======
+    let Ok(mut replay) = Replay::open(&path) else {
+        return;
+    };
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     let action = replay
         .turns
         .iter_mut()
@@ -894,6 +924,7 @@ fn in_memory_wire_or_rules_mutation_cannot_be_promoted_to_first_packet_authority
         Err(PrePairUnitAuthorityError::RulesSha256Mismatch)
     );
 }
+<<<<<<< HEAD
 
 #[test]
 fn canonical_setup_entry_produces_the_first_real_placement_probe_boundary() {
@@ -1873,3 +1904,5 @@ fn frame79_builder_join_rejects_unversioned_stale_or_malformed_authority() {
         Err(FirstFarmBuilderBindingError::CanonicalTypeMismatch)
     );
 }
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))

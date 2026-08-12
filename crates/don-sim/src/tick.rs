@@ -64,10 +64,17 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
+<<<<<<< HEAD
     ammo, borders_fog, canonical_air_patrol_runtime, canonical_build_at_work, canonical_cast_work,
     canonical_gather_work, canonical_strafe_runtime, casters_animals, collision_blocks_live,
     combat, defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys,
     leaders, movement, movement_driver, movement_live, order_dispatch, production,
+=======
+    ammo, borders_fog, canonical_air_patrol_runtime, canonical_cast_work, canonical_gather_work,
+    canonical_strafe_runtime, casters_animals, collision_blocks_live, combat, defeat_cleanup,
+    economy, game_daemon_calc_danger, game_daemon_step12, groups_guys, leaders, movement,
+    movement_driver, movement_live, order_dispatch, production,
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,

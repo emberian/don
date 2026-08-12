@@ -80,7 +80,10 @@ fn the_unit_gate_skips_garrisoned_units_but_never_scholars() {
     let tick = sim.do_frame();
 
     assert_eq!(tick.steps[15], StepRun::Executed);
-    assert_eq!(tick.work[15], 4, "all four are still visited by the band loop");
+    assert_eq!(
+        tick.work[15], 4,
+        "all four are still visited by the band loop"
+    );
     assert_eq!(
         sim.cover.inc_time_units_gated, 1,
         "only the garrisoned non-Scholar is skipped"

@@ -4005,7 +4005,10 @@ mod tests {
         inc_time_band_traversal(&bands, &mut step15);
 
         assert_eq!(
-            step15.iter().filter(|e| e.address.band == RetailBand::Wall).count(),
+            step15
+                .iter()
+                .filter(|e| e.address.band == RetailBand::Wall)
+                .count(),
             0,
             "0x0065DB70 has no loop at wall base 3000"
         );
@@ -4020,13 +4023,18 @@ mod tests {
             "the leader pointer walk 0x00E3A390..0x00E7F8C8 is address order, not rotated"
         );
         assert_eq!(
-            step15.iter().filter(|e| e.address.band == RetailBand::Build).count(),
+            step15
+                .iter()
+                .filter(|e| e.address.band == RetailBand::Build)
+                .count(),
             OWNER_SLOTS,
             "the building band sits inside the same ten-iteration owner walk"
         );
         // Per owner, the unit band precedes the building band.
-        let ordered: Vec<(u8, RetailBand)> =
-            step15.iter().map(|e| (e.address.owner, e.address.band)).collect();
+        let ordered: Vec<(u8, RetailBand)> = step15
+            .iter()
+            .map(|e| (e.address.owner, e.address.band))
+            .collect();
         let expected: Vec<(u8, RetailBand)> = (0..OWNER_SLOTS as u8)
             .flat_map(|o| [(o, RetailBand::Unit), (o, RetailBand::Build)])
             .collect();
@@ -4066,7 +4074,10 @@ mod tests {
     fn unit_inc_time_gate_is_inside_up_plus_two_literal_scholar_ids() {
         assert!(unit_inc_time_animates(-1, 0), "not inside anything");
         assert!(unit_inc_time_animates(i16::MIN, 999));
-        assert!(!unit_inc_time_animates(0, 0), "inside_up 0 is inside slot 0");
+        assert!(
+            !unit_inc_time_animates(0, 0),
+            "inside_up 0 is inside slot 0"
+        );
         assert!(!unit_inc_time_animates(7, 51));
         assert!(unit_inc_time_animates(7, TYPE_SCHOLARS));
         assert!(unit_inc_time_animates(7, TYPE_SCHOLARS_KOREAN));

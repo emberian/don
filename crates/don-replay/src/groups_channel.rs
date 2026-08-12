@@ -151,27 +151,111 @@ pub struct WindowField {
 /// `GroupData`'s fields inside `[4, 0x4c)`, in offset order
 /// [`schema/types.json`, class `GroupData`].
 pub const WINDOW_FIELDS: [WindowField; 21] = [
-    WindowField { name: "id", offset: 4, size: 4 },
-    WindowField { name: "army", offset: 8, size: 4 },
-    WindowField { name: "num", offset: 12, size: 4 },
-    WindowField { name: "form", offset: 16, size: 4 },
-    WindowField { name: "stamp", offset: 20, size: 4 },
-    WindowField { name: "ox", offset: 24, size: 4 },
-    WindowField { name: "oy", offset: 28, size: 4 },
-    WindowField { name: "o_dist", offset: 32, size: 4 },
-    WindowField { name: "o_angle", offset: 36, size: 4 },
-    WindowField { name: "disband", offset: 40, size: 4 },
-    WindowField { name: "order_num", offset: 44, size: 4 },
-    WindowField { name: "priority", offset: 48, size: 4 },
-    WindowField { name: "role", offset: 52, size: 4 },
-    WindowField { name: "think_frame", offset: 56, size: 4 },
-    WindowField { name: "new_speed", offset: 60, size: 4 },
-    WindowField { name: "speed", offset: 64, size: 4 },
-    WindowField { name: "form_num", offset: 68, size: 4 },
-    WindowField { name: "facing", offset: 72, size: 1 },
-    WindowField { name: "buildings", offset: 73, size: 1 },
-    WindowField { name: "who", offset: 74, size: 1 },
-    WindowField { name: "march", offset: 75, size: 1 },
+    WindowField {
+        name: "id",
+        offset: 4,
+        size: 4,
+    },
+    WindowField {
+        name: "army",
+        offset: 8,
+        size: 4,
+    },
+    WindowField {
+        name: "num",
+        offset: 12,
+        size: 4,
+    },
+    WindowField {
+        name: "form",
+        offset: 16,
+        size: 4,
+    },
+    WindowField {
+        name: "stamp",
+        offset: 20,
+        size: 4,
+    },
+    WindowField {
+        name: "ox",
+        offset: 24,
+        size: 4,
+    },
+    WindowField {
+        name: "oy",
+        offset: 28,
+        size: 4,
+    },
+    WindowField {
+        name: "o_dist",
+        offset: 32,
+        size: 4,
+    },
+    WindowField {
+        name: "o_angle",
+        offset: 36,
+        size: 4,
+    },
+    WindowField {
+        name: "disband",
+        offset: 40,
+        size: 4,
+    },
+    WindowField {
+        name: "order_num",
+        offset: 44,
+        size: 4,
+    },
+    WindowField {
+        name: "priority",
+        offset: 48,
+        size: 4,
+    },
+    WindowField {
+        name: "role",
+        offset: 52,
+        size: 4,
+    },
+    WindowField {
+        name: "think_frame",
+        offset: 56,
+        size: 4,
+    },
+    WindowField {
+        name: "new_speed",
+        offset: 60,
+        size: 4,
+    },
+    WindowField {
+        name: "speed",
+        offset: 64,
+        size: 4,
+    },
+    WindowField {
+        name: "form_num",
+        offset: 68,
+        size: 4,
+    },
+    WindowField {
+        name: "facing",
+        offset: 72,
+        size: 1,
+    },
+    WindowField {
+        name: "buildings",
+        offset: 73,
+        size: 1,
+    },
+    WindowField {
+        name: "who",
+        offset: 74,
+        size: 1,
+    },
+    WindowField {
+        name: "march",
+        offset: 75,
+        size: 1,
+    },
 ];
 
 /// Offsets of the six `num`-length member arrays [`schema/types.json`, `GroupData`].
@@ -723,10 +807,7 @@ mod tests {
         };
         assert_eq!(
             walk_group(9, &oversize, &mut CheckSum::new()),
-            Err(GroupsChannelError::MemberCountOutOfRange {
-                slot: 9,
-                num: 129
-            })
+            Err(GroupsChannelError::MemberCountOutOfRange { slot: 9, num: 129 })
         );
     }
 

@@ -469,10 +469,7 @@ pub fn plan_repair(
         if !class_ok {
             continue;
         }
-        if !m
-            .regions_touch
-            .or_legacy(true, &mut plan.unresolved)
-        {
+        if !m.regions_touch.or_legacy(true, &mut plan.unresolved) {
             continue;
         }
         let castable = m
@@ -583,8 +580,7 @@ pub fn plan_trade(
         let accepted = match filter {
             TradeMemberFilter::Caravan => m.is_caravan.or_legacy(true, &mut plan.unresolved),
             TradeMemberFilter::SeaTrader => {
-                m.is_sea_trade_member
-                    .or_legacy(true, &mut plan.unresolved)
+                m.is_sea_trade_member.or_legacy(true, &mut plan.unresolved)
                     && m.regions_touch.or_legacy(true, &mut plan.unresolved)
             }
             TradeMemberFilter::None => true,

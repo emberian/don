@@ -293,7 +293,10 @@ impl std::fmt::Display for ProgramMergeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProgramMergeError::WalkMetaPresent => {
-                write!(f, "a checksum sidecar is attached; merge before attaching one")
+                write!(
+                    f,
+                    "a checksum sidecar is attached; merge before attaching one"
+                )
             }
             ProgramMergeError::GlobalTypeNames => {
                 write!(f, "tag-9 global type names cannot be merged")

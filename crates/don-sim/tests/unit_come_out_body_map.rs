@@ -140,15 +140,8 @@ fn the_release_tail_planner_is_reachable_from_the_library() {
         where_probes: None,
         army_probes: None,
     };
-    let plan = plan_unit_come_out_release_tail(
-        &facts,
-        &[],
-        RngStamp {
-            seed: 1,
-            draws: 0,
-        },
-    )
-    .expect("the empty-selection path plans");
+    let plan = plan_unit_come_out_release_tail(&facts, &[], RngStamp { seed: 1, draws: 0 })
+        .expect("the empty-selection path plans");
     assert_eq!(plan.steps, vec![ReleaseTailStep::SetOptionsRebuild]);
     assert_eq!(plan.rng.draws, 0);
 }

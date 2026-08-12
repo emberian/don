@@ -1,0 +1,53 @@
+{
+  "credential_material": "none",
+  "generation": 3,
+  "live_capture": {
+    "captured_json_sha256": "1da31f670dbec3c395f4de08cda9bf8c871b6d03516848ecbc5f22b88cbf9adc",
+    "captured_json_size": 3498,
+    "loaded_module": {
+      "base": "0x71b80000",
+      "file_size": 205824,
+      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+      "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+      "size_of_image": 221184
+    },
+    "mode": "load-only",
+    "trace": {
+      "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+      "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+      "size": 496
+    }
+  },
+  "proof": {
+    "exit": {
+      "exit_code": -1,
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+      "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+      "size": 14
+    },
+    "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+    "generation": 3,
+    "shim": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+      "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+      "size": 205824
+    },
+    "termination": {
+      "close_requested": false,
+      "forced": true,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 3028,
+        "session_id": 1,
+        "start_utc": "2026-08-09T17:17:28.8545457Z"
+      }
+    },
+    "trace": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+      "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+      "size": 496
+    }
+  },
+  "schema": "don.retail-netsys-load-proof.v1"
+}

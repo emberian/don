@@ -85,7 +85,10 @@ fn opcode_35_runs_the_return_helicopter_route_on_the_real_object_table() {
     assert_eq!(bridge.groups.get(package.group).unwrap().disband, 0);
 
     let slot = table.get(2, 0).unwrap();
-    assert_eq!(slot.unit_masks, 1, "unit_masks & 0x04000000 must be cleared");
+    assert_eq!(
+        slot.unit_masks, 1,
+        "unit_masks & 0x04000000 must be cleared"
+    );
     assert_eq!(strafe_target(&table, 0), Some((-1, -1, 1)));
     assert_eq!(table.air_object(2, 0).unwrap().path_length, 0);
     assert_eq!(

@@ -200,7 +200,11 @@ mod tests {
         // at candidate 2 instead of falling through to the include-path candidate, which
         // is a silent divergence rather than a visible failure.
         let root = tmp("declared-absent");
-        write(&root, "scenario/scriptlibrary/lib.bhs", "scenario s () { }\n");
+        write(
+            &root,
+            "scenario/scriptlibrary/lib.bhs",
+            "scenario s () { }\n",
+        );
         let mut m = ModPackage::new("broken", "broken");
         m.declare_path("scenario/scriptlibrary/lib.bhs");
         let mut stack = ContentStack::new();

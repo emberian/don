@@ -313,6 +313,7 @@ impl Game {
     /// Mount the complete collision source for every browser-created one-Guy land Unit.
     /// All immutable type rows and live identities are resolved before the first spatial write.
     fn install_browser_movement_sources(&mut self) -> Result<bool, BrowserGroupMoveAuthorityError> {
+<<<<<<< HEAD
         let Some(planned) = Self::browser_movement_sources_for(&self.gd, &self.core)? else {
             return Ok(false);
         };
@@ -340,6 +341,14 @@ impl Game {
         let mut planned = Vec::with_capacity(core.world.live_count() as usize);
         for row in 0..core.world.live_count() as usize {
             let handle = core.world.handle_at_row(row).ok_or(
+=======
+        if !self.gd.is_real {
+            return Ok(false);
+        }
+        let mut planned = Vec::with_capacity(self.core.world.live_count() as usize);
+        for row in 0..self.core.world.live_count() as usize {
+            let handle = self.core.world.handle_at_row(row).ok_or(
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
                 BrowserGroupMoveAuthorityError::MissingCollisionType {
                     handle: Handle {
                         id: row as u32,
@@ -348,6 +357,7 @@ impl Game {
                     type_id: -1,
                 },
             )?;
+<<<<<<< HEAD
             let type_id = core.unit_type.get(row).copied().unwrap_or(-1);
             let source = gd
                 .browser_collision_source(
@@ -355,11 +365,30 @@ impl Game {
                     core.world.units.x_internal()[row],
                     core.world.units.y_internal()[row],
                     core.world.units.angle()[row],
+=======
+            let type_id = self.core.unit_type.get(row).copied().unwrap_or(-1);
+            let source = self
+                .gd
+                .browser_collision_source(
+                    type_id,
+                    self.core.world.units.x_internal()[row],
+                    self.core.world.units.y_internal()[row],
+                    self.core.world.units.angle()[row],
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
                 )
                 .ok_or(BrowserGroupMoveAuthorityError::MissingCollisionType { handle, type_id })?;
             planned.push((handle, source));
         }
+<<<<<<< HEAD
         Ok(Some(planned))
+=======
+        for (handle, source) in planned {
+            self.core
+                .install_movement_collision_source(handle, source)
+                .map_err(BrowserGroupMoveAuthorityError::Movement)?;
+        }
+        Ok(true)
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     }
 
     fn row_for_id(&self, id: u32) -> Option<usize> {
@@ -2849,6 +2878,7 @@ mod tests {
             }
         }
         assert_eq!(moved, [true, true]);
+<<<<<<< HEAD
 
         for game in [&mut left, &mut right] {
             assert_eq!(
@@ -2945,6 +2975,8 @@ mod tests {
             }
         }
         assert_eq!(resumed_moved, [true, true]);
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     }
 
     #[test]

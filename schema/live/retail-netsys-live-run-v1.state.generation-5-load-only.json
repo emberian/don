@@ -1,0 +1,53 @@
+{
+  "credential_material": "none",
+  "generation": 5,
+  "live_capture": {
+    "captured_json_sha256": "094ef3fd6c774b369f0f3d9c9602e8ac976f3670bb89f625a05bd5a41bb33316",
+    "captured_json_size": 3660,
+    "loaded_module": {
+      "base": "0x71bc0000",
+      "file_size": 208384,
+      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+      "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+      "size_of_image": 225280
+    },
+    "mode": "load-only",
+    "trace": {
+      "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:52344",
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+      "sha256": "baa24bbe7f8428f18cb09a795f1d6d65f279ca0e8fb708e6560277bd01a128fb",
+      "size": 591
+    }
+  },
+  "proof": {
+    "exit": {
+      "exit_code": -1,
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+      "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+      "size": 14
+    },
+    "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:52344",
+    "generation": 5,
+    "shim": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+      "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+      "size": 208384
+    },
+    "termination": {
+      "close_requested": false,
+      "forced": true,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 11324,
+        "session_id": 1,
+        "start_utc": "2026-08-09T17:58:10.5495245Z"
+      }
+    },
+    "trace": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+      "sha256": "baa24bbe7f8428f18cb09a795f1d6d65f279ca0e8fb708e6560277bd01a128fb",
+      "size": 591
+    }
+  },
+  "schema": "don.retail-netsys-load-proof.v1"
+}

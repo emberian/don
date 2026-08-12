@@ -1,0 +1,922 @@
+{
+  "active_pid": 5056,
+  "bind": "0.0.0.0:31337",
+  "checkpoints": {
+    "debugger_diagnostic_crash_generation_5": {
+      "archived_exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0005-debugger-crash-0001\\exit-host-bridge.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "archived_trace": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0005-debugger-crash-0001\\trace-host-bridge.log",
+        "sha256": "a09951f20c201d6b4d3cb9cbf09eaa11fef4876c17a85779fdb89eb3daafd906",
+        "size": 1099
+      },
+      "capture_script": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0005-debugger-crash-0001\\capture-create-status.ps1",
+        "sha256": "2a14a86f338e60db982e4649e319146a2c9f3dd5e5de0eee73178fea9eaea50f",
+        "size": 4824
+      },
+      "credential_material": "none",
+      "diagnostic": {
+        "adapter_actual_va": "0x010dcb20",
+        "adapter_preferred_va": "0x004fcb20",
+        "debugger_pid": 7280,
+        "failure": "uncontinued-attach-event",
+        "original_opcode": "55",
+        "restored_before_detach": true
+      },
+      "dump": {
+        "path": "C:\\Users\\Public\\don-crashdumps\\riseofnations\\riseofnations.exe.12080.dmp",
+        "sha256": "5c23ac84fdaad9bdf3b726a5ac231ad2cb4f82793d99ddaacf0f119634b797ff",
+        "size": 740893851
+      },
+      "dump_stage_diagnosis": {
+        "credential_material": "none",
+        "failure_stage": "party-network-before-ns_host",
+        "finding": "retail backend/Party stage; not shim regression",
+        "lobby_structure": {
+          "attribute_nodes": 8,
+          "available_slots": 1,
+          "max_members": 2,
+          "member_count": 1,
+          "string_lengths": [
+            47,
+            15,
+            107
+          ]
+        },
+        "parser": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0005-debugger-crash-0001\\read-gen5-dump-stage.ps1",
+          "sha256": "467ebb8123c4686abe6f1d19b39fcb38c1e36d65f03b5fa97a00e5cd1ca53985",
+          "size": 3030
+        },
+        "party_network": {
+          "owner_present": false,
+          "shared_pointer_present": false
+        },
+        "playfab_create": "succeeded-structurally",
+        "schema": "don.retail-netsys-friend-game-stage.v1",
+        "special_connectivity_error_present": false
+      },
+      "finding": "diagnostic-induced; not shim-regression evidence",
+      "generation": 5,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 12080
+      },
+      "schema": "don.retail-netsys-debugger-crash.v1",
+      "shim": {
+        "path": "/Users/ember/dev/don/crates/netsys-shim/target/i686-pc-windows-msvc/release/CrossplayNetLib.dll",
+        "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+        "size": 208384
+      },
+      "trace_summary": {
+        "last_call": "call=export.OnHostUpdated",
+        "load_only": false,
+        "pid": 12080,
+        "record_count": 20
+      }
+    },
+    "generation_2_load_proof": {
+      "artifact": {
+        "path": "/Users/ember/dev/don/schema/live/retail-netsys-generation-2-load-only-v1.json",
+        "sha256": "a4171a2a5275da27fbf4eb7c9dde1bb334e9bc86fd6287d5564b1e59f0ade1f5",
+        "size": 915
+      },
+      "credential_material": "none",
+      "generation": 2,
+      "live_capture": null,
+      "proof": {
+        "exit": {
+          "exit_code": 8008,
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+          "sha256": "4942c90e99c8992f8f85e4cd9d0427b261efdf8e16998a2da5f9c449eed799b5",
+          "size": 16
+        },
+        "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:63577",
+        "generation": 2,
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "fd7808951003db54fc34e0dba3378c4666ce536038aca7da7dd429443ca2eba3",
+          "size": 198656
+        },
+        "trace": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "aabf97b5ee87ba1ce732fdb9f94681dfb7477dd0e910c2eb0edc71e1467fce5d",
+          "size": 552
+        }
+      },
+      "schema": "don.retail-netsys-load-proof.v1"
+    },
+    "generation_2_manifest": {
+      "backup_dll": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+        "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+        "size": 1198592
+      },
+      "created_unix_ms": 1786271255489,
+      "credential_material": "none",
+      "environment": {
+        "DON_NET_BIND": "127.0.0.1:31337",
+        "DON_NET_ID": "1",
+        "DON_NET_LOAD_ONLY": "1",
+        "DON_NET_NAME": "Ai",
+        "DON_NET_ROLE": "host",
+        "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log"
+      },
+      "generation": 2,
+      "launcher_sha256": "253721d3795a13348771337f2b763f525b9a001d2aad70aa4d02845e68d910ba",
+      "mode": "load-only",
+      "original_dll": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+        "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+        "size": 1198592
+      },
+      "retail_executable": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+        "size": 9925120
+      },
+      "rollover": null,
+      "schema": "don.retail-netsys-experiment.v1",
+      "shim": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+        "sha256": "fd7808951003db54fc34e0dba3378c4666ce536038aca7da7dd429443ca2eba3",
+        "size": 198656
+      },
+      "state": "installed",
+      "task_name": "don-netsys-experiment"
+    },
+    "generation_4_load_only_ui_crash": {
+      "credential_material": "none",
+      "dump": {
+        "path": "C:\\Users\\Public\\don-crashdumps\\riseofnations\\riseofnations.exe.5632.dmp",
+        "sha256": "8b825c2b4ad4231ee628a195ecf8884e8b902d77661482422cfedcc8340625ab",
+        "size": 745933059
+      },
+      "exception": {
+        "code": "0xc0000005",
+        "fault_module": "riseofnations.exe",
+        "fault_rva": "0x0004f04f"
+      },
+      "exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0004-load-only-ui-0001\\exit-load-only.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "generation": 4,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5632,
+        "session_id": 1,
+        "start_utc": "2026-08-09T17:47:05.8323942Z"
+      },
+      "root_cause": "repair constructed the embedded LobbyDTO only outside load-only mode; the actual retail load-only process reached the same direct UI callback while the standalone smoke exception was active",
+      "schema": "don.retail-netsys-host-crash.v1",
+      "shim": {
+        "sha256": "4a3a9939da46caa336b24eed72a0a8d565bc4b887623fd23153ad30ddd155f6f",
+        "size": 206336
+      },
+      "trace": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0004-load-only-ui-0001\\trace-load-only.log",
+        "sha256": "5205e80162bdf1614f0d355dbacc775c00f54aa5cbd068247bfdd3641dec1320",
+        "size": 995
+      }
+    },
+    "host_bridge_attempt_1_crash": {
+      "credential_material": "none",
+      "dump": {
+        "path": "C:\\Users\\Public\\don-crashdumps\\riseofnations\\riseofnations.exe.5412.dmp",
+        "sha256": "4cb2aa682549c62305a5538abdd5546210f0c57ab20eee79387aa984cad3c342",
+        "size": 749698915
+      },
+      "exception": {
+        "code": "0xc0000005",
+        "fault_module": "riseofnations.exe",
+        "fault_rva": "0x0004f04f"
+      },
+      "exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0003-host-bridge-0001\\exit-host-bridge.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "generation": 3,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5412,
+        "session_id": 1,
+        "start_utc": "2026-08-09T17:20:15.1408245Z"
+      },
+      "root_cause": "retail directly copy-assigned LobbyDTO into concrete CrossplayNetLibSys +0xd0; replacement left that shipped member as zero padding, so its unordered_map list sentinel was null",
+      "schema": "don.retail-netsys-host-crash.v1",
+      "shim": {
+        "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+        "size": 205824
+      },
+      "trace": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\attempts\\generation-0003-host-bridge-0001\\trace-host-bridge.log",
+        "sha256": "d38fe02d0d6af18488759ed7fef64f4aa609e6786e581c8501604793a0817641",
+        "size": 994
+      }
+    },
+    "host_bridge_configuration": {
+      "credential_material": "none",
+      "current": {
+        "backup_dll": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "created_unix_ms": 1786271255489,
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "0.0.0.0:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_SETUP_BRIDGE": "1",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log"
+        },
+        "generation": 3,
+        "launcher_sha256": "05bf2b4c2515be609e2446e07f24891163c774f108472ace89c25c24ea9aad50",
+        "mode": "host-bridge",
+        "original_dll": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "retail_executable": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+          "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+          "size": 9925120
+        },
+        "rollover": null,
+        "schema": "don.retail-netsys-experiment.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size": 205824
+        },
+        "state": "installed",
+        "task_name": "don-netsys-experiment"
+      },
+      "host_activation": "awaiting explicit user Friend Game UI; no UI was invoked",
+      "load_only_proof": {
+        "exit": {
+          "exit_code": -1,
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+          "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+          "size": 14
+        },
+        "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+        "generation": 3,
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size": 205824
+        },
+        "termination": {
+          "close_requested": false,
+          "forced": true,
+          "process": {
+            "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+            "pid": 3028,
+            "session_id": 1,
+            "start_utc": "2026-08-09T17:17:28.8545457Z"
+          }
+        },
+        "trace": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+          "size": 496
+        }
+      },
+      "operation": "configure-host-bridge-from-load-only",
+      "schema": "don.retail-netsys-experiment.v1"
+    },
+    "host_bridge_crash_generation_3": {
+      "credential_material": "none",
+      "exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-host-bridge.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "generation": 3,
+      "last_call": "call=export.OnHostUpdated",
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5412
+      },
+      "recovery_generation": 4,
+      "schema": "don.retail-netsys-host-crash.v1",
+      "shim": {
+        "path": "/Users/ember/dev/don/crates/netsys-shim/target/i686-pc-windows-msvc/release/CrossplayNetLib.dll",
+        "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+        "size": 205824
+      },
+      "trace": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log",
+        "sha256": "d38fe02d0d6af18488759ed7fef64f4aa609e6786e581c8501604793a0817641",
+        "size": 994
+      }
+    },
+    "host_bridge_crash_generation_4": {
+      "credential_material": "none",
+      "exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "generation": 4,
+      "last_call": "call=export.OnHostUpdated",
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5632
+      },
+      "recovery_generation": 5,
+      "schema": "don.retail-netsys-host-crash.v1",
+      "shim": {
+        "path": "/Users/ember/dev/don/crates/netsys-shim/target/i686-pc-windows-msvc/release/CrossplayNetLib.dll",
+        "sha256": "4a3a9939da46caa336b24eed72a0a8d565bc4b887623fd23153ad30ddd155f6f",
+        "size": 206336
+      },
+      "trace": {
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+        "sha256": "5205e80162bdf1614f0d355dbacc775c00f54aa5cbd068247bfdd3641dec1320",
+        "size": 995
+      }
+    },
+    "host_bridge_crash_generation_5_forensics": {
+      "classification": {
+        "generation_3_4_lobby_copy": "distinct",
+        "generation_5_pid12080_debugger": "distinct",
+        "prior_party_failure": "superseded-by-successful-party-host-path"
+      },
+      "credential_material": "none",
+      "dump": {
+        "path": "C:\\Users\\Public\\don-crashdumps\\riseofnations\\riseofnations.exe.5056.dmp",
+        "sha256": "af69cc13403c9ea3910c1c2bee3d62814e9ba3f07696276cda15994a34e59720",
+        "size": 778967389
+      },
+      "exception": {
+        "access": "read",
+        "actual_va": "0x0119d635",
+        "code": "0xc0000005",
+        "fault_address": "0x00000004",
+        "preferred_main_va": "0x005bd635",
+        "register": "edi=0"
+      },
+      "exit": {
+        "exit_code": -1073741819,
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-host-bridge.txt",
+        "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+        "size": 23
+      },
+      "generation": 5,
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5056
+      },
+      "root_cause": "shim NetSys::get_ip_addresses returned null; SetupWin::draw_ip_address dereferenced returned ObjectArray<String> at +4 after successful host bring-up",
+      "schema": "don.retail-netsys-host-crash-forensics.v1",
+      "shim": {
+        "path": "/Users/ember/dev/don/crates/netsys-shim/target/i686-pc-windows-msvc/release/CrossplayNetLib.dll",
+        "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+        "size": 208384
+      },
+      "trace": {
+        "last_call": "call=vtable.ns_get_ip_addresses",
+        "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log",
+        "record_count": 44,
+        "sha256": "35ab0526edb4dc4191d1f31f2c6a47fbd16a95fa9f4f97a5d0efa33b6f8ab51b",
+        "size": 2272
+      }
+    },
+    "host_bridge_launch": {
+      "mode": "host-bridge",
+      "operation": "launch-resumed",
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5412,
+        "session_id": 1,
+        "start_utc": "2026-08-09T17:20:15.1408245Z"
+      }
+    },
+    "host_bridge_launch_generation_5": {
+      "credential_material": "none",
+      "environment": {
+        "DON_NET_BIND": "0.0.0.0:31337",
+        "DON_NET_ID": "1",
+        "DON_NET_NAME": "Ai",
+        "DON_NET_ROLE": "host",
+        "DON_NET_SETUP_BRIDGE": "1",
+        "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log"
+      },
+      "host_activation": "staged-awaiting-retail-ui-or-explicit-invoke; launcher does not call ns_host",
+      "launch_transport": "schtasks",
+      "mode": "host-bridge",
+      "operation": "launch",
+      "process": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+        "pid": 5056,
+        "session_id": 1,
+        "start_utc": "2026-08-09T18:38:26.5628252Z"
+      },
+      "schema": "don.retail-netsys-experiment.v1"
+    },
+    "latest_load_proof": {
+      "artifact": {
+        "path": "/Users/ember/dev/don/schema/live/retail-netsys-current-load-only-v1.json",
+        "sha256": "6f0185d7d58aebf693e2b8522ae68f8e6f2ba92d1443c14ddd2528b0cf248a60",
+        "size": 1992
+      },
+      "credential_material": "none",
+      "generation": 3,
+      "live_capture": {
+        "captured_json_sha256": "1da31f670dbec3c395f4de08cda9bf8c871b6d03516848ecbc5f22b88cbf9adc",
+        "captured_json_size": 3498,
+        "loaded_module": {
+          "base": "0x71b80000",
+          "file_size": 205824,
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size_of_image": 221184
+        },
+        "mode": "load-only",
+        "trace": {
+          "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+          "size": 496
+        }
+      },
+      "proof": {
+        "exit": {
+          "exit_code": -1,
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+          "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+          "size": 14
+        },
+        "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+        "generation": 3,
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size": 205824
+        },
+        "termination": {
+          "close_requested": false,
+          "forced": true,
+          "process": {
+            "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+            "pid": 3028,
+            "session_id": 1,
+            "start_utc": "2026-08-09T17:17:28.8545457Z"
+          }
+        },
+        "trace": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+          "size": 496
+        }
+      },
+      "schema": "don.retail-netsys-load-proof.v1"
+    },
+    "recovery_configuration_generation_5": {
+      "credential_material": "none",
+      "current": {
+        "backup_dll": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "created_unix_ms": 1786271255489,
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "0.0.0.0:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_SETUP_BRIDGE": "1",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log"
+        },
+        "generation": 5,
+        "launcher_sha256": "05bf2b4c2515be609e2446e07f24891163c774f108472ace89c25c24ea9aad50",
+        "mode": "host-bridge",
+        "original_dll": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "retail_executable": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+          "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+          "size": 9925120
+        },
+        "rollover": null,
+        "schema": "don.retail-netsys-experiment.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+          "size": 208384
+        },
+        "state": "installed",
+        "task_name": "don-netsys-experiment"
+      },
+      "host_activation": "awaiting explicit user Friend Game UI; no UI was invoked",
+      "load_only_proof": {
+        "exit": {
+          "exit_code": -1,
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+          "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+          "size": 14
+        },
+        "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:52344",
+        "generation": 5,
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+          "size": 208384
+        },
+        "termination": {
+          "close_requested": false,
+          "forced": true,
+          "process": {
+            "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+            "pid": 11324,
+            "session_id": 1,
+            "start_utc": "2026-08-09T17:58:10.5495245Z"
+          }
+        },
+        "trace": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "baa24bbe7f8428f18cb09a795f1d6d65f279ca0e8fb708e6560277bd01a128fb",
+          "size": 591
+        }
+      },
+      "operation": "configure-host-bridge-from-load-only",
+      "schema": "don.retail-netsys-experiment.v1"
+    },
+    "recovery_load_proof_generation_5": {
+      "artifact": {
+        "path": "/Users/ember/dev/don/schema/live/retail-netsys-live-run-v1.state.generation-5-load-only.json",
+        "sha256": "b9b7fa77a9c4e49ca22f6a7506c18b7d0debd5a62e5d8cd5aa5bc643faac3fae",
+        "size": 1993
+      },
+      "credential_material": "none",
+      "generation": 5,
+      "live_capture": {
+        "captured_json_sha256": "094ef3fd6c774b369f0f3d9c9602e8ac976f3670bb89f625a05bd5a41bb33316",
+        "captured_json_size": 3660,
+        "loaded_module": {
+          "base": "0x71bc0000",
+          "file_size": 208384,
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+          "size_of_image": 225280
+        },
+        "mode": "load-only",
+        "trace": {
+          "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:52344",
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "baa24bbe7f8428f18cb09a795f1d6d65f279ca0e8fb708e6560277bd01a128fb",
+          "size": 591
+        }
+      },
+      "proof": {
+        "exit": {
+          "exit_code": -1,
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+          "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+          "size": 14
+        },
+        "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:52344",
+        "generation": 5,
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+          "size": 208384
+        },
+        "termination": {
+          "close_requested": false,
+          "forced": true,
+          "process": {
+            "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+            "pid": 11324,
+            "session_id": 1,
+            "start_utc": "2026-08-09T17:58:10.5495245Z"
+          }
+        },
+        "trace": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+          "sha256": "baa24bbe7f8428f18cb09a795f1d6d65f279ca0e8fb708e6560277bd01a128fb",
+          "size": 591
+        }
+      },
+      "schema": "don.retail-netsys-load-proof.v1"
+    },
+    "recovery_rollover_generation_4": {
+      "archived_generation": {
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "0.0.0.0:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_SETUP_BRIDGE": "1",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log"
+        },
+        "evidence": [
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0003\\trace-load-only.log",
+            "label": "trace-load-only",
+            "sha256": "af7aaa0a1d7ce7dd427d5a2e39e69b9f3894a4530ed2bdc312a1ac95960908f9",
+            "size": 496,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+            "summary": {
+              "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:65439",
+              "kind": "trace",
+              "load_only": true,
+              "pid": 3028,
+              "record_count": 9
+            }
+          },
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0003\\exit-load-only.txt",
+            "label": "exit-load-only",
+            "sha256": "eb1e160c885895fb51bc49c82d0f514b62585af8c7e01b8d81ce96d4f70efaac",
+            "size": 14,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+            "summary": {
+              "exit_code": -1,
+              "kind": "exit"
+            }
+          },
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0003\\trace-host-bridge.log",
+            "label": "trace-host-bridge",
+            "sha256": "d38fe02d0d6af18488759ed7fef64f4aa609e6786e581c8501604793a0817641",
+            "size": 994,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\trace-host-bridge.log",
+            "summary": {
+              "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=false local_addr=0.0.0.0:31337",
+              "kind": "trace",
+              "load_only": false,
+              "pid": 5412,
+              "record_count": 19
+            }
+          },
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0003\\exit-host-bridge.txt",
+            "label": "exit-host-bridge",
+            "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+            "size": 23,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\exit-host-bridge.txt",
+            "summary": {
+              "exit_code": -1073741819,
+              "kind": "exit"
+            }
+          }
+        ],
+        "generation": 3,
+        "mode": "host-bridge",
+        "schema": "don.retail-netsys-evidence-generation.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size": 205824
+        }
+      },
+      "backup_immutable": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+      "credential_material": "none",
+      "current": {
+        "backup_dll": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "created_unix_ms": 1786271255489,
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "127.0.0.1:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_LOAD_ONLY": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log"
+        },
+        "generation": 4,
+        "launcher_sha256": "253721d3795a13348771337f2b763f525b9a001d2aad70aa4d02845e68d910ba",
+        "mode": "load-only",
+        "original_dll": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "retail_executable": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+          "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+          "size": 9925120
+        },
+        "rollover": null,
+        "schema": "don.retail-netsys-experiment.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "4a3a9939da46caa336b24eed72a0a8d565bc4b887623fd23153ad30ddd155f6f",
+          "size": 206336
+        },
+        "state": "installed",
+        "task_name": "don-netsys-experiment"
+      },
+      "operation": "next-generation",
+      "schema": "don.retail-netsys-experiment.v1"
+    },
+    "recovery_rollover_generation_5": {
+      "archived_generation": {
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "127.0.0.1:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_LOAD_ONLY": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log"
+        },
+        "evidence": [
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0004\\trace-load-only.log",
+            "label": "trace-load-only",
+            "sha256": "5205e80162bdf1614f0d355dbacc775c00f54aa5cbd068247bfdd3641dec1320",
+            "size": 995,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+            "summary": {
+              "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:60842",
+              "kind": "trace",
+              "load_only": true,
+              "pid": 5632,
+              "record_count": 19
+            }
+          },
+          {
+            "archive_path": "C:\\Users\\Public\\don-netsys-experiment\\generations\\generation-0004\\exit-load-only.txt",
+            "label": "exit-load-only",
+            "sha256": "c049dcd8caba028400be826643c96cf7c696dbf037b91251d5de46be88f01f87",
+            "size": 23,
+            "source_path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+            "summary": {
+              "exit_code": -1073741819,
+              "kind": "exit"
+            }
+          }
+        ],
+        "generation": 4,
+        "mode": "load-only",
+        "schema": "don.retail-netsys-evidence-generation.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "4a3a9939da46caa336b24eed72a0a8d565bc4b887623fd23153ad30ddd155f6f",
+          "size": 206336
+        }
+      },
+      "backup_immutable": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+      "credential_material": "none",
+      "current": {
+        "backup_dll": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "created_unix_ms": 1786271255489,
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "127.0.0.1:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_LOAD_ONLY": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log"
+        },
+        "generation": 5,
+        "launcher_sha256": "253721d3795a13348771337f2b763f525b9a001d2aad70aa4d02845e68d910ba",
+        "mode": "load-only",
+        "original_dll": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "retail_executable": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+          "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+          "size": 9925120
+        },
+        "rollover": null,
+        "schema": "don.retail-netsys-experiment.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+          "size": 208384
+        },
+        "state": "installed",
+        "task_name": "don-netsys-experiment"
+      },
+      "operation": "next-generation",
+      "schema": "don.retail-netsys-experiment.v1"
+    },
+    "rollover": {
+      "current": {
+        "backup_dll": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.shipped.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "created_unix_ms": 1786271255489,
+        "credential_material": "none",
+        "environment": {
+          "DON_NET_BIND": "127.0.0.1:31337",
+          "DON_NET_ID": "1",
+          "DON_NET_LOAD_ONLY": "1",
+          "DON_NET_NAME": "Ai",
+          "DON_NET_ROLE": "host",
+          "DON_NET_TRACE": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log"
+        },
+        "generation": 3,
+        "launcher_sha256": "253721d3795a13348771337f2b763f525b9a001d2aad70aa4d02845e68d910ba",
+        "mode": "load-only",
+        "original_dll": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+          "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60",
+          "size": 1198592
+        },
+        "retail_executable": {
+          "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\riseofnations.exe",
+          "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+          "size": 9925120
+        },
+        "rollover": null,
+        "schema": "don.retail-netsys-experiment.v1",
+        "shim": {
+          "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+          "sha256": "bde53df94a6102b5ede4d320ed9da11b8e894ca73f430aa22a16c75e080c151f",
+          "size": 205824
+        },
+        "state": "installed",
+        "task_name": "don-netsys-experiment"
+      },
+      "operation": "next-generation-resumed"
+    },
+    "vm_hard_reset_clean_boundary_after_generation_5": {
+      "credential_material": "none",
+      "debugger_processes": [],
+      "guest_ip": "10.211.55.6",
+      "guest_tools": {
+        "state": "installed",
+        "version": "26.4.1-57516"
+      },
+      "installed_generation": 5,
+      "installed_shim": {
+        "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rise of Nations\\CrossplayNetLib.dll",
+        "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+        "size": 208384
+      },
+      "launch_performed": false,
+      "next_action": "offline-generation-7-hardening-only; no retail launch or UI without explicit authorization",
+      "operation": "hard-reset-then-force-stop-start-after-reset-boot-stall",
+      "retail_processes": [],
+      "schema": "don.retail-netsys-vm-clean-boundary.v1"
+    }
+  },
+  "created_unix_ms": 1786291117790,
+  "credential_material": "none",
+  "owned_peer": {
+    "path": "/Users/ember/dev/don/tools/owned-peer/target/release/don-owned-peer",
+    "sha256": "70c9e1f88ecb3047d76debe3b388c2ba427975f2f41a1eee9eaa2e5cfedc4099",
+    "size": 892704
+  },
+  "paths": {
+    "evidence": "/Users/ember/dev/don/schema/live/retail-netsys-live-lockstep-v1.donlstp",
+    "generation2_capture": "/Users/ember/dev/don/schema/live/retail-netsys-generation-2-load-only-v1.json",
+    "host_capture": "/Users/ember/dev/don/schema/live/retail-netsys-live-host-bridge-v1.json",
+    "latest_load_capture": "/Users/ember/dev/don/schema/live/retail-netsys-current-load-only-v1.json"
+  },
+  "peer_endpoint": "10.211.55.6:31337",
+  "phase": "awaiting-friend-game-ui",
+  "reconnect_after": 3,
+  "schema": "don.retail-netsys-live-run.v1",
+  "shim": {
+    "path": "/Users/ember/dev/don/crates/netsys-shim/target/i686-pc-windows-msvc/release/CrossplayNetLib.dll",
+    "sha256": "ee78f95e8c54e468bd4886c5c6b40152a551787d78829bdaf35e077433a42ab5",
+    "size": 208384
+  },
+  "source_generation": 2,
+  "target_generation": 5,
+  "timeout_secs": 300,
+  "turns": 4,
+  "updated_unix_ms": 1786308227444
+}

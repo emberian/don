@@ -119,7 +119,10 @@ fn the_zero_length_arm_reads_no_dormant_array_history() {
     assert_eq!(a_bytes, b_bytes);
     assert_eq!(a_value.checksum, b_value.checksum);
     assert_eq!(a_value.bytes_walked, 4);
-    assert_eq!(a_value.flags_after, 0xff, "empty arrays return before masking");
+    assert_eq!(
+        a_value.flags_after, 0xff,
+        "empty arrays return before masking"
+    );
 }
 
 #[test]

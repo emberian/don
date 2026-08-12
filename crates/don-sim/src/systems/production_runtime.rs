@@ -3243,10 +3243,8 @@ pub fn apply_sim_queue_up_fleet_transaction(
                 .wrapping_add(increment);
         }
         QueueUpTrainingFamily::Dock => {
-            leader.carrier_training_queued.dock = leader
-                .carrier_training_queued
-                .dock
-                .wrapping_add(increment);
+            leader.carrier_training_queued.dock =
+                leader.carrier_training_queued.dock.wrapping_add(increment);
         }
     }
     sim.leaders[owner].econ.stockpile = plan.resources_after;

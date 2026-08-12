@@ -103,8 +103,8 @@ fn the_derived_game_init_scenario_state_is_the_value_retail_carries() {
     // 8,321 bytes of derived fixed state plus the two strings' UTF-16 payloads. This is
     // the number that says the agreement is not empty-state coincidence: an uninstalled
     // channel walks zero bytes and reads 1.
-    let string_units =
-        channel.general_powers_script_file.encode_utf16().count() + channel.temp_save.encode_utf16().count();
+    let string_units = channel.general_powers_script_file.encode_utf16().count()
+        + channel.temp_save.encode_utf16().count();
     assert_eq!(channel.bytes_walked, 8_321 + 2 * string_units as u64);
     assert_eq!(channel.bytes_walked, 8_453);
 }
@@ -186,7 +186,11 @@ fn the_harness_installs_channel_fourteen_and_survives_a_real_recording() {
             "{}: every compare must walk real bytes",
             run.file
         );
-        assert_eq!(ch.trivial_matches, 0, "{}: no empty-state matches", run.file);
+        assert_eq!(
+            ch.trivial_matches, 0,
+            "{}: no empty-state matches",
+            run.file
+        );
         assert_eq!(
             ch.unmodelled_matches, 0,
             "{}: the channel has an installed producer",

@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+<<<<<<< HEAD
 use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
 use don_sim::systems::casters_animals::ManaCapacityInput;
 use don_sim::systems::groups_guys::UnitTypeStats;
@@ -22,6 +23,10 @@ use don_sim::systems::production::{self, Footprint};
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use don_sim::tick::Sim;
 use don_sim::world::{WorldObjectIdentity, OBJ_FLAG_ACTIVE};
+=======
+use don_sim::systems::map_terrain::{Coord, WCoord};
+use don_sim::systems::production::Footprint;
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
 use crate::groups_build_history::{
     strict_group_build_history_before, GroupBuildHistoryError, ReplayGroupBuildPackage,
@@ -31,6 +36,7 @@ use crate::groups_pre_pair_unit_authority::{
     replay_build_type_facts, replay_tribe_type_facts, replay_unit_type_facts,
     PrePairUnitAuthorityError, ReplayBuildTypeFacts, ReplayTribeTypeFacts, ReplayUnitTypeFacts,
 };
+<<<<<<< HEAD
 use crate::leaders_dynamic_children_frontier::DynamicLeadersAuthority;
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
@@ -64,6 +70,15 @@ use crate::wire::CommandView;
 use crate::world_owner_frontier::sha256;
 use don_sim::systems::items::Items;
 use don_sim::systems::world_oil_goods::OilGoodRuntime;
+=======
+use crate::replay::{load_payload, Replay};
+use crate::setup_cities_builds::{CAMERA_COMMAND_OPCODE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD};
+use crate::setup_units_producer::{
+    starting_citizen_counts, CITIZEN_SIMPLE_CALL_VA, SCOUT_BASE_CALL_VA,
+};
+use crate::wire::CommandView;
+use crate::world_owner_frontier::sha256;
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
 pub const STRICT_REPLAY_SHA256: [u8; 32] = [
     0xc0, 0x06, 0xec, 0xb8, 0x60, 0x27, 0x36, 0x05, 0xd2, 0xb4, 0x8b, 0xf6, 0x9f, 0x5d, 0xcb, 0x04,
@@ -75,8 +90,11 @@ pub const FIRST_PLAY: usize = 1;
 pub const FIRST_OWNER: u8 = 0;
 pub const FIRST_SELECTED_O: i16 = 4;
 pub const FARM_TYPE: i32 = 0x1a1;
+<<<<<<< HEAD
 pub const FIRST_BUILDER_SETUP_ORDINAL: usize = 4;
 pub const FIRST_SETUP_PLACEMENT_ORDINAL: usize = 0;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
 /// Exact setup schedule facts which precede object allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +225,7 @@ impl From<PrePairUnitAuthorityError> for FirstFarmAuthorityError {
     }
 }
 
+<<<<<<< HEAD
 /// External provenance admitted at the first `Setup::place_unit` call.
 ///
 /// The replay does not contain this state. The source means that an external canonical map
@@ -1919,6 +1938,8 @@ pub fn bind_first_farm_builder_at_frame79(
     })
 }
 
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 /// Discover every exact source-owned input for serial 14 without fitting recorded checksums.
 pub fn discover_first_2018_farm(
     replay: &Replay,

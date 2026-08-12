@@ -47,25 +47,25 @@
 pub mod armies_runtime;
 pub mod build_init_prefix;
 pub mod build_spawn_runtime;
+pub mod builds_runtime;
 pub mod check_all;
 pub mod check_player_forest;
-pub mod builds_runtime;
+pub mod checksum;
 pub mod cities_runtime;
 pub mod city_build_constructor_runtime;
-pub mod checksum;
 pub mod continent;
 pub mod east_meets_west_place_start;
 pub mod east_meets_west_start_boundary;
 pub mod edge_canals;
 pub mod fractal_boundary;
-pub mod groups_channel;
 pub mod groups_build_history;
 pub mod groups_build_runtime;
-pub mod growth;
+pub mod groups_channel;
 pub mod groups_dynamic;
 pub mod groups_first_farm_authority;
 pub mod groups_pre_pair_unit_authority;
 pub mod groups_sim_channel;
+pub mod growth;
 pub mod guys_runtime;
 pub mod harness;
 pub mod image;
@@ -87,11 +87,11 @@ pub mod place_all_advance;
 pub mod place_all_boundary;
 pub mod place_all_facts;
 pub mod place_player_resource_body_frontier;
+pub mod place_region_resource_world_body_frontier;
 pub mod place_resources_bonus_mutation_frontier;
 pub mod place_resources_bonus_rows_mutation_frontier;
 pub mod place_resources_canonical_transaction;
 pub mod place_resources_category_frontier;
-pub mod place_region_resource_world_body_frontier;
 pub mod place_resources_pool_frontier;
 pub mod place_resources_xml_frontier;
 pub mod player_land;
@@ -113,13 +113,17 @@ pub mod scenario_channel;
 pub mod script_channel;
 pub mod setup_cities_builds;
 pub mod setup_place_unit_deep_re;
+<<<<<<< HEAD
 pub mod setup_unit_visibility_deep_re;
 pub mod state;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 pub mod setup_units_producer;
 pub mod starting_village_suffix;
-pub mod units_runtime;
-pub mod unit_init_location_deep_re;
+pub mod state;
 pub mod unit_init_collision_tail_deep_re;
+pub mod unit_init_location_deep_re;
+pub mod units_runtime;
 pub mod walk;
 pub mod wire;
 pub mod world_owner_frontier;
@@ -180,11 +184,10 @@ pub use nubify_forest_frontier::{
 pub use place_all_advance::{
     advance_place_all_boundary, OilGoodPolicy, PlaceAllAdvanceError, PlaceAllAdvanceFacts,
     PlaceAllAdvanceReceipt, PlaceAllStop, SelectedGroupRow, CLIFFS_POSITION_CLIFF_VA,
-    CLIFFS_VERIFY_DEFENSIVE_POSITION_VA, MOUNTAINS_ADD_MOUNTAIN_VA,
-    MOUNTAINS_RANDOMIZE_CALL_VA, MOUNTAINS_RANDOMIZE_MOUNTAINS_VA,
-    TERRAIN_GROUPS_ADD_DOOBERS_VA, TERRAIN_GROUPS_TREEIFY_MOUNTAINS_VA,
-    TERRAIN_GROUP_PLACE_PLAYER_GROUP_VA, TERRAIN_GROUP_PLACE_REGION_GROUP_VA,
-    WORLD_SET_OIL_AT_VA,
+    CLIFFS_VERIFY_DEFENSIVE_POSITION_VA, MOUNTAINS_ADD_MOUNTAIN_VA, MOUNTAINS_RANDOMIZE_CALL_VA,
+    MOUNTAINS_RANDOMIZE_MOUNTAINS_VA, TERRAIN_GROUPS_ADD_DOOBERS_VA,
+    TERRAIN_GROUPS_TREEIFY_MOUNTAINS_VA, TERRAIN_GROUP_PLACE_PLAYER_GROUP_VA,
+    TERRAIN_GROUP_PLACE_REGION_GROUP_VA, WORLD_SET_OIL_AT_VA,
 };
 pub use place_all_boundary::{
     execute_replay_place_all, ReplayPlaceAllError, ReplayPlaceAllFacts, ReplayPlaceAllHostFacts,

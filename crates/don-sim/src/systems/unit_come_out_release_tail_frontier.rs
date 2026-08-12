@@ -429,11 +429,7 @@ pub enum InstalledOrder {
     },
     /// `Unit::add_gather_order(o, QueuePos, int)` `0x006194A8` (Scholar) / `0x006195F8`
     /// (worker). No owner argument — the PDB signature has three parameters.
-    Gather {
-        o: i32,
-        queue: QueuePos,
-        flag: i32,
-    },
+    Gather { o: i32, queue: QueuePos, flag: i32 },
     /// `Unit::add_trade_order(o, who, oxx, whose, QueuePos, int)` `0x006196B5`, pushed
     /// `edi, esi, -1, -1, 1, 0`.
     Trade {
@@ -470,11 +466,7 @@ pub enum InstalledOrder {
         queue: QueuePos,
     },
     /// `Unit::add_move_facing_order(...)` `0x00619FDD`, the ordinary movement fallback.
-    MoveFacing {
-        tile: Point,
-        angle: i32,
-        mode: i32,
-    },
+    MoveFacing { tile: Point, angle: i32, mode: i32 },
     /// `Group::action_move_to(x, y, QueuePos, int, int, OrderIndex, ...)` — the uber-size and
     /// scratch-group routes at `0x006199EA`, `0x00619A04` and `0x00619E98`. `group` is the
     /// `groups.list` index (stride `0x9D4` from `[0x00E85F20]`).
@@ -630,7 +622,10 @@ impl<'a> Cursor<'a> {
         Ok(receipt)
     }
 
-    fn index(&mut self, expected: HostCallKind) -> Result<(i32, Option<BuildingFacts>), ReleaseTailError> {
+    fn index(
+        &mut self,
+        expected: HostCallKind,
+    ) -> Result<(i32, Option<BuildingFacts>), ReleaseTailError> {
         let receipt = self.take(expected)?;
         let HostReturn::Index(index) = receipt.ret else {
             return Err(ReleaseTailError::ReceiptReturnMismatch { call: expected });
@@ -1250,7 +1245,12 @@ mod tests {
     }
 
     /// Receipts for "a building was found, repositioning succeeded".
-    fn building_receipts(index: i32, b: BuildingFacts, tile: Point, who: i8) -> Vec<HostCallReceipt> {
+    fn building_receipts(
+        index: i32,
+        b: BuildingFacts,
+        tile: Point,
+        who: i8,
+    ) -> Vec<HostCallReceipt> {
         let band = search_band(&actor(), &constants());
         let centre = container().position;
         vec![
@@ -1312,12 +1312,8 @@ mod tests {
         let mut b = building(1);
         b.slot_4c = 1; // not the build arm
         b.damage = 5;
-        let plan = plan_unit_come_out_release_tail(
-            &f,
-            &building_receipts(4, b, tile, 1),
-            stamp(0),
-        )
-        .expect("repair plan");
+        let plan = plan_unit_come_out_release_tail(&f, &building_receipts(4, b, tile, 1), stamp(0))
+            .expect("repair plan");
         assert!(plan.steps.iter().any(|s| matches!(
             s,
             ReleaseTailStep::InstallOrder {
@@ -1327,12 +1323,8 @@ mod tests {
         )));
 
         b.damage = 0;
-        let plan = plan_unit_come_out_release_tail(
-            &f,
-            &building_receipts(4, b, tile, 1),
-            stamp(0),
-        )
-        .expect("gather plan");
+        let plan = plan_unit_come_out_release_tail(&f, &building_receipts(4, b, tile, 1), stamp(0))
+            .expect("gather plan");
         assert!(!plan.steps.iter().any(|s| matches!(
             s,
             ReleaseTailStep::InstallOrder {
@@ -1382,8 +1374,7 @@ mod tests {
                     found: None,
                 });
             }
-            let plan =
-                plan_unit_come_out_release_tail(&f, &receipts, stamp(0)).expect("plan");
+            let plan = plan_unit_come_out_release_tail(&f, &receipts, stamp(0)).expect("plan");
             let gathered = plan.steps.iter().any(|s| {
                 matches!(
                     s,
@@ -1414,9 +1405,8 @@ mod tests {
         b.garrison_limit = 4;
         b.can_garrison = 1;
         let tile = tile_of(f.selection.point);
-        let plan =
-            plan_unit_come_out_release_tail(&f, &building_receipts(6, b, tile, 1), stamp(0))
-                .expect("garrison plan");
+        let plan = plan_unit_come_out_release_tail(&f, &building_receipts(6, b, tile, 1), stamp(0))
+            .expect("garrison plan");
         let garrisoned: Vec<_> = plan
             .steps
             .iter()
@@ -1653,7 +1643,9 @@ mod tests {
         )));
         assert_eq!(
             plan.boundaries,
-            vec![ReleaseTailBoundary::SpecAnimQueuePosUnestablished { push_va: 0x0061_a002 }]
+            vec![ReleaseTailBoundary::SpecAnimQueuePosUnestablished {
+                push_va: 0x0061_a002
+            }]
         );
     }
 

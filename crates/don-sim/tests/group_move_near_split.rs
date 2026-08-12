@@ -56,12 +56,8 @@ fn populated_slots(bridge: &Bridge) -> Vec<(i32, Vec<i16>)> {
     (0..64 * 8)
         .filter_map(|slot| {
             let group = bridge.groups.get(slot)?;
-            (group.num > 0 && group.who == WHO).then(|| {
-                (
-                    slot,
-                    group.list[..group.num as usize].to_vec(),
-                )
-            })
+            (group.num > 0 && group.who == WHO)
+                .then(|| (slot, group.list[..group.num as usize].to_vec()))
         })
         .collect()
 }
@@ -173,7 +169,10 @@ fn an_all_land_selection_is_untouched_by_the_split() {
         "no extra group slot is consumed"
     );
     for o in 0..3 {
-        assert_eq!(installed(&fleet, o), vec![(OrderIndex::MoveTo, DEST.0, DEST.1)]);
+        assert_eq!(
+            installed(&fleet, o),
+            vec![(OrderIndex::MoveTo, DEST.0, DEST.1)]
+        );
     }
 }
 
@@ -255,7 +254,10 @@ fn a_plane_led_selection_installs_nothing() {
     select(&mut bridge, &mut package, &mut fleet, &[0, 1]);
     move_near(&mut bridge, &mut package, &mut fleet);
     for o in 0..2 {
-        assert!(installed(&fleet, o).is_empty(), "plane {o} is not commanded");
+        assert!(
+            installed(&fleet, o).is_empty(),
+            "plane {o} is not commanded"
+        );
     }
 }
 
@@ -352,7 +354,11 @@ impl SplitWorld for OneObject {
         let mut object = self.0;
         object.captain = o;
         object.domain = if o == 9 { 1 } else { object.domain };
-        object.unit_flags = if o == 9 { 0 } else { UNIT_FLAG_BOARDS_TRANSPORT };
+        object.unit_flags = if o == 9 {
+            0
+        } else {
+            UNIT_FLAG_BOARDS_TRANSPORT
+        };
         Some(object)
     }
 }
@@ -380,7 +386,11 @@ fn pass_two_routes_the_transport_flag_into_the_first_half() {
         destination_is_water: false,
         frame: 0,
     };
-    let MoveNearSplit::Split { first, second, pass } = plan_move_near_split(&[3, 9], &facts, &world)
+    let MoveNearSplit::Split {
+        first,
+        second,
+        pass,
+    } = plan_move_near_split(&[3, 9], &facts, &world)
     else {
         panic!("pass 2 splits the transport-flagged member out");
     };

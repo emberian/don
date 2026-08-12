@@ -263,12 +263,13 @@ fn a_lifecycle_image_turns_row_70_into_a_named_leader_defeat_boundary() {
             from_quit: 0
         }
     );
-    assert!(lifecycle
-        .effects
-        .iter()
-        .any(|e| matches!(e, tail_command_transactions::lifecycle::LifecycleEffect::Call(
-            LifecycleCall::LeaderDefeat { defeat_type: 6, .. }
-        ))));
+    assert!(lifecycle.effects.iter().any(|e| matches!(
+        e,
+        tail_command_transactions::lifecycle::LifecycleEffect::Call(LifecycleCall::LeaderDefeat {
+            defeat_type: 6,
+            ..
+        })
+    )));
 }
 
 #[test]
@@ -358,19 +359,23 @@ fn row_80_reaches_the_recovered_drop_control_body_only_under_semaphore_bit_four(
 
     // State 1 declares war between every remaining leader pair: still a boundary, but now a
     // named `Leader::action_declare` one rather than "the drop-control body is unrecovered".
-    let Ok(TailDecision::Boundary(plan)) = plan_tail_command(&drop, &lifecycle_facts(image.clone()))
+    let Ok(TailDecision::Boundary(plan)) =
+        plan_tail_command(&drop, &lifecycle_facts(image.clone()))
     else {
         panic!("state 1 reaches Leader::action_declare");
     };
-    let TailOpenBoundary::PlayerLifecycle { plan: lifecycle, .. } = plan.boundary else {
+    let TailOpenBoundary::PlayerLifecycle {
+        plan: lifecycle, ..
+    } = plan.boundary
+    else {
         panic!("expected the recovered lifecycle boundary");
     };
-    assert!(lifecycle
-        .effects
-        .iter()
-        .any(|e| matches!(e, tail_command_transactions::lifecycle::LifecycleEffect::Call(
+    assert!(lifecycle.effects.iter().any(|e| matches!(
+        e,
+        tail_command_transactions::lifecycle::LifecycleEffect::Call(
             LifecycleCall::LeaderActionDeclare { .. }
-        ))));
+        )
+    )));
 
     // A state-3 drop for a player already marked dropped mutates nothing and applies.
     let mut gated = image;
@@ -425,7 +430,10 @@ fn the_capital_elimination_arm_is_still_an_unrecovered_callee() {
     else {
         panic!("expected a boundary");
     };
-    let TailOpenBoundary::PlayerLifecycle { plan: lifecycle, .. } = plan.boundary else {
+    let TailOpenBoundary::PlayerLifecycle {
+        plan: lifecycle, ..
+    } = plan.boundary
+    else {
         panic!("expected the recovered lifecycle boundary");
     };
     assert_eq!(

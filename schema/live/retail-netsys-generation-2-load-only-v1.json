@@ -1,0 +1,26 @@
+{
+  "credential_material": "none",
+  "generation": 2,
+  "live_capture": null,
+  "proof": {
+    "exit": {
+      "exit_code": 8008,
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\exit-load-only.txt",
+      "sha256": "4942c90e99c8992f8f85e4cd9d0427b261efdf8e16998a2da5f9c449eed799b5",
+      "size": 16
+    },
+    "factory_ready": "factory=ready abi=netsys-v65 role=Host load_only=true local_addr=127.0.0.1:63577",
+    "generation": 2,
+    "shim": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\CrossplayNetLib.experimental.dll",
+      "sha256": "fd7808951003db54fc34e0dba3378c4666ce536038aca7da7dd429443ca2eba3",
+      "size": 198656
+    },
+    "trace": {
+      "path": "C:\\Users\\Public\\don-netsys-experiment\\trace-load-only.log",
+      "sha256": "aabf97b5ee87ba1ce732fdb9f94681dfb7477dd0e910c2eb0edc71e1467fce5d",
+      "size": 552
+    }
+  },
+  "schema": "don.retail-netsys-load-proof.v1"
+}

@@ -416,10 +416,7 @@ fn validate(image: &LifecycleImage, play: i32) -> Result<u8, LifecycleError> {
     }
     for (slot, row) in image.leaders.iter().enumerate() {
         if row.who != slot as i32 {
-            return Err(LifecycleError::LeaderSlotMismatch {
-                slot,
-                who: row.who,
-            });
+            return Err(LifecycleError::LeaderSlotMismatch { slot, who: row.who });
         }
     }
     let play = play as u8;
@@ -485,8 +482,8 @@ fn append_leave_game(plan: &mut LifecyclePlan, play: u8, reason: i32) {
 
     let who = plan.image.players[play as usize].who;
     let leader = plan.image.leaders[who as usize];
-    let capital_arm =
-        leader.leader_flags & LEADER_VALID_ACTIVE == LEADER_VALID_ACTIVE && leader.lost_capital_timer != 0;
+    let capital_arm = leader.leader_flags & LEADER_VALID_ACTIVE == LEADER_VALID_ACTIVE
+        && leader.lost_capital_timer != 0;
 
     if !capital_arm {
         plan.call(LifecycleCall::LeaderDefeat {
@@ -583,11 +580,7 @@ pub fn plan_resign(
     Ok(plan)
 }
 
-fn append_resign(
-    plan: &mut LifecyclePlan,
-    play: u8,
-    from_quit: i32,
-) -> Result<(), LifecycleError> {
+fn append_resign(plan: &mut LifecyclePlan, play: u8, from_quit: i32) -> Result<(), LifecycleError> {
     let flags = plan.image.players[play as usize].flags | PLAYER_RESIGNED;
     plan.set_player_flags(play, flags);
 
@@ -660,11 +653,7 @@ pub fn plan_quit(
     Ok(plan)
 }
 
-fn append_quit(
-    plan: &mut LifecyclePlan,
-    play: u8,
-    force_stop: i32,
-) -> Result<(), LifecycleError> {
+fn append_quit(plan: &mut LifecyclePlan, play: u8, force_stop: i32) -> Result<(), LifecycleError> {
     let saved_local_left = plan.image.sem(SEM_LOCAL_LEFT);
 
     append_resign(plan, play, 1)?;

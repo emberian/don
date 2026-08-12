@@ -717,7 +717,10 @@ fn missing_subtype_freqs() -> UnavailablePlaceAllFact {
         // TILESET_DATA/<tileset>/LANDKEY[name]/frequency_<i> attributes.
         required_source:
             "not read by place_all; otherwise mapstyle TILESET_DATA/LANDKEY frequency_N",
-        addresses: vec![GAME_MAP_POINTER_VA, crate::fractal_boundary::TERRAIN_GROUPS_INIT_TILESET_DATA_VA],
+        addresses: vec![
+            GAME_MAP_POINTER_VA,
+            crate::fractal_boundary::TERRAIN_GROUPS_INIT_TILESET_DATA_VA,
+        ],
     }
 }
 

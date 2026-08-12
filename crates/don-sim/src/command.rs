@@ -152,10 +152,10 @@ pub mod group_move_near_split;
 pub mod late_command_plans;
 #[path = "systems/object_command_plans.rs"]
 pub mod object_command_plans;
-#[path = "systems/recall_action_frontier.rs"]
-pub mod recall_action_frontier;
 #[path = "systems/queue_up_action.rs"]
 pub mod queue_up_action;
+#[path = "systems/recall_action_frontier.rs"]
+pub mod recall_action_frontier;
 #[path = "systems/return_action_frontier.rs"]
 pub mod return_action_frontier;
 #[path = "systems/setup_diplomacy.rs"]
@@ -194,11 +194,9 @@ use self::late_command_plans::{
 use self::object_command_plans::{
     RenameCityCommand, RenameCityTransactionReceipt, RenameCityTransactionStatus,
 };
+use self::queue_up_action::{QueueUpActionReceipt, QueueUpActionRequest, QueueUpTransactionStatus};
 use self::recall_action_frontier::{
     plan_recall, RecallBoundary, RecallEffect, RecallFacts, RecallPlan, RecallRequest,
-};
-use self::queue_up_action::{
-    QueueUpActionReceipt, QueueUpActionRequest, QueueUpTransactionStatus,
 };
 use self::return_action_frontier::{
     plan_return, ReturnEffect, ReturnFacts, ReturnPlan, ReturnRequest,
@@ -4713,7 +4711,9 @@ impl Bridge {
         if receipt.status != QueueUpTransactionStatus::Applied || !receipt.validates(&request) {
             return false;
         }
-        let Some(plan) = receipt.plan else { return false };
+        let Some(plan) = receipt.plan else {
+            return false;
+        };
         let Some(group) = self.groups.get_mut(slot) else {
             return false;
         };

@@ -75,9 +75,11 @@ fn repair_installs_the_cast_companion_and_retires_the_targets_orders() {
         t.region = Some(3);
         t.unit_masks = 0x0400_0000 | 0x1;
     }
-    host.orders_mut(2, 5).unwrap().push_back(
-        don_sim::systems::order_dispatch::OrderRec::of_kind(OrderIndex::Think),
-    );
+    host.orders_mut(2, 5)
+        .unwrap()
+        .push_back(don_sim::systems::order_dispatch::OrderRec::of_kind(
+            OrderIndex::Think,
+        ));
 
     let cmd = wire(
         16,
@@ -85,7 +87,10 @@ fn repair_installs_the_cast_companion_and_retires_the_targets_orders() {
     );
     let mut bridge = run(&mut host, &[select(&[0]), cmd]);
 
-    assert_eq!(kinds(&host, 0), vec![OrderIndex::Repair, OrderIndex::CastSpell]);
+    assert_eq!(
+        kinds(&host, 0),
+        vec![OrderIndex::Repair, OrderIndex::CastSpell]
+    );
     // `action_repair` retires the repair target: mask bit 0x04000000 cleared, list emptied.
     assert_eq!(host.get(2, 5).unwrap().unit_masks, 0x1);
     assert!(host.orders(2, 5).unwrap().is_empty());
@@ -127,7 +132,10 @@ fn repair_skips_a_member_whose_region_does_not_touch_the_target() {
     host.set_regions_touch(3, 0x41);
     let cmd = wire(16, &[i32b(5), i32b(2), i32b(2)].concat());
     run(&mut host, &[select(&[0]), cmd]);
-    assert_eq!(kinds(&host, 0), vec![OrderIndex::Repair, OrderIndex::CastSpell]);
+    assert_eq!(
+        kinds(&host, 0),
+        vec![OrderIndex::Repair, OrderIndex::CastSpell]
+    );
 }
 
 #[test]
@@ -250,10 +258,7 @@ fn trade_installs_on_caravans_only_and_records_both_endpoints() {
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, TRADE_SEA_MEMBER_TYPE, 0);
 
     // TradeCommand: ox@1 whom@5 oxx@9 whose@13 queued@17.
-    let cmd = wire(
-        17,
-        &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat(),
-    );
+    let cmd = wire(17, &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat());
     let mut bridge = run(&mut host, &[select(&[0, 1]), cmd]);
 
     assert_eq!(kinds(&host, 0), vec![OrderIndex::TradeRoute]);
@@ -294,10 +299,7 @@ fn trade_refuses_an_inactive_destination_without_installing_or_resetting_form() 
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, 0x3b, 1);
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, TRADE_SEA_MEMBER_TYPE, 0);
 
-    let cmd = wire(
-        17,
-        &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat(),
-    );
+    let cmd = wire(17, &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat());
     // `CommandPackage::process_group` `0x0094A0C0` runs `Group::clear(-1)` `0x00713E80` at
     // `0x0094A0FF`, and `clear` writes `form = -1` (`+0x10`). A fresh selection therefore
     // already carries `-1`, so plant a distinct value between the two commands and let the
@@ -344,10 +346,7 @@ fn trade_takes_the_sea_branch_when_the_destination_is_a_sea_trade_dock() {
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, 0x3b, 0);
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, TRADE_SEA_MEMBER_TYPE, 1);
 
-    let cmd = wire(
-        17,
-        &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat(),
-    );
+    let cmd = wire(17, &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat());
     run(&mut host, &[select(&[0, 1]), cmd]);
     // `is_trade` answered true, so retail takes the caravan branch and neither member,
     // both of which answered `is_caravan = false`, is accepted.
@@ -377,10 +376,7 @@ fn trade_takes_the_sea_branch_when_the_destination_is_a_sea_trade_dock() {
     host.set_regions_touch(2, 0x41);
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, 0x3b, 0);
     host.set_group_count(TRADE_GROUP_COUNT_INDEX, TRADE_SEA_MEMBER_TYPE, 1);
-    let cmd = wire(
-        17,
-        &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat(),
-    );
+    let cmd = wire(17, &[i32b(5), i32b(2), i32b(4), i32b(3), i32b(2)].concat());
     run(&mut host, &[select(&[0, 1]), cmd]);
     // The entry gate reads the same column, so it refuses before the member loop: the
     // recovered split between the two `+0x24` receivers is not observable through a host

@@ -3296,10 +3296,7 @@ pub fn execute_attrition_recompute<H: ArenaAttritionSelectionHost>(
             }
             GatherOrderState::Gathering { non_flat: false } | GatherOrderState::NotGathering => {}
             GatherOrderState::Unavailable => {
-                return blocked(
-                    AttritionSelectionBlocker::GatherOrderState,
-                    territory_owner,
-                )
+                return blocked(AttritionSelectionBlocker::GatherOrderState, territory_owner)
             }
         }
     } else if !facts.is_merchant && !facts.is_hero() && !facts.is_supply() {
@@ -4715,8 +4712,10 @@ mod tests {
             if who == other {
                 return Ok(false);
             }
-            Ok(self.diplos[who as usize][other as usize] == Diplo::War as i32
-                || self.diplos[other as usize][who as usize] == Diplo::War as i32)
+            Ok(
+                self.diplos[who as usize][other as usize] == Diplo::War as i32
+                    || self.diplos[other as usize][who as usize] == Diplo::War as i32,
+            )
         }
 
         fn leader_target(&self, _who: i32) -> Result<i32, Self::Error> {

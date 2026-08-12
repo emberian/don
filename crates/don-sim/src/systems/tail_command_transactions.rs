@@ -228,12 +228,17 @@ pub enum TailDecision {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TailPlanError {
-    FactsMismatch { opcode: u8 },
+    FactsMismatch {
+        opcode: u8,
+    },
     LeaderOptions(adjacent::LeaderOptionsPrefixError),
     Lifecycle(LifecycleError),
     /// `TailCommandFacts::PlayerLifecycle` carried a `game_semaphore` byte that disagrees
     /// with `image.semaphore[0]`. The row-80 handler and `DropControl` read the same byte.
-    SemaphoreImageMismatch { supplied: u8, image: u8 },
+    SemaphoreImageMismatch {
+        supplied: u8,
+        image: u8,
+    },
 }
 
 /// Turn one recovered lifecycle plan into a tail decision.

@@ -7,10 +7,10 @@ use don_replay::place_resources_bonus_mutation_frontier::{
     GOOD_WDATA_DOWN_WRITE_VA, OBJECTS_INIT_GOOD_VA, REGION_INIT_GOOD_CALL_VA,
 };
 use don_replay::replay_goods_initial::ReplayInitialGoodsRuntime;
+use don_replay::replay_goods_resource_schedule::*;
 use don_sim::systems::map_terrain::World;
 use don_sim::systems::terrain_drop_tile::DropTileExternalRequest;
 use don_sim::systems::world_oil_goods::{OilGoodMutation, SUBOBJECT_COORD_XOR};
-use don_replay::replay_goods_resource_schedule::*;
 
 fn oil_request(wx: i32, wy: i32, enabled: bool) -> DropTileExternalRequest {
     let request = OilGoodMutation::at(wx, wy, enabled);

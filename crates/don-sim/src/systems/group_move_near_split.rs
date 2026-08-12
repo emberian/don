@@ -415,8 +415,11 @@ mod tests {
         ship.domain = DOMAIN_SEA;
         world.0.insert((1, 2), ship);
 
-        let MoveNearSplit::Split { first, second, pass } =
-            plan_move_near_split(&[0, 1, 2], &facts(), &world)
+        let MoveNearSplit::Split {
+            first,
+            second,
+            pass,
+        } = plan_move_near_split(&[0, 1, 2], &facts(), &world)
         else {
             panic!("a mixed land/sea selection splits");
         };
@@ -456,8 +459,11 @@ mod tests {
         transport.domain = DOMAIN_SEA;
         world.0.insert((1, 9), transport);
 
-        let MoveNearSplit::Split { first, second, pass } =
-            plan_move_near_split(&[0, 1], &facts(), &world)
+        let MoveNearSplit::Split {
+            first,
+            second,
+            pass,
+        } = plan_move_near_split(&[0, 1], &facts(), &world)
         else {
             panic!("one land unit plus one embarked unit splits");
         };
@@ -504,8 +510,11 @@ mod tests {
         other.domain = DOMAIN_SEA;
         world.0.insert((1, 1), other);
 
-        let MoveNearSplit::Split { first, second, pass } =
-            plan_move_near_split(&[0, 1], &facts(), &world)
+        let MoveNearSplit::Split {
+            first,
+            second,
+            pass,
+        } = plan_move_near_split(&[0, 1], &facts(), &world)
         else {
             panic!("pass 2 splits a transport-flagged member out");
         };
@@ -617,7 +626,10 @@ mod tests {
         assert_eq!(group.id, 12, "a negative argument leaves id alone");
         assert_eq!((group.army, group.num, group.form), (-1, 0, -1));
         assert_eq!(group.stamp, 99);
-        assert_eq!((group.facing, group.buildings, group.who, group.march), (0, 0, 0, 0));
+        assert_eq!(
+            (group.facing, group.buildings, group.who, group.march),
+            (0, 0, 0, 0)
+        );
         assert_eq!(
             group.list[0], 0x1234,
             "Group::clear writes scalars only; the arrays survive"

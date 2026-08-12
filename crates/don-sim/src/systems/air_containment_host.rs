@@ -75,7 +75,7 @@ use crate::command::recall_action_frontier::{
 use crate::command::return_action_frontier::{
     plan_return, ReturnAirLookup, ReturnAirOrderFacts, ReturnAirResolution, ReturnContainedFacts,
     ReturnEffect, ReturnFacts, ReturnInsideLookup, ReturnLaunchingFacts, ReturnMemberFacts,
-    ReturnOrdinaryAircraftFacts, ReturnPlanePredicate, ReturnPlan, ReturnRequest, ReturnRouteFacts,
+    ReturnOrdinaryAircraftFacts, ReturnPlan, ReturnPlanePredicate, ReturnRequest, ReturnRouteFacts,
 };
 use crate::command::{
     ObjectTable, QueuePos, RecallActionReceipt, RecallActionRequest, RecallActionTransactionStatus,
@@ -279,7 +279,10 @@ pub fn recall_facts(table: &ObjectTable, group: &GroupData, per_owner: usize) ->
         let (source, o) = if group.buildings != 0 {
             (RecallLeaderSource::FirstMember, i32::from(group.list[0]))
         } else {
-            (RecallLeaderSource::FindLeaderZero, find_leader(table, group))
+            (
+                RecallLeaderSource::FindLeaderZero,
+                find_leader(table, group),
+            )
         };
         RecallLeaderFacts {
             source,
@@ -631,7 +634,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             apply_build_clear_gather(table, who, o, per_owner)
         }
         RecallEffect::ClearAircraftOrders { who, o } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(slot) = table.get_mut(who, o) else {
                 return false;
             };
@@ -653,7 +658,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             true
         }
         RecallEffect::SetExistingAirReturning { who, o, value } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(air) = table.air.get_mut(who, o).and_then(|c| c.air.as_mut()) else {
                 return false;
             };
@@ -661,7 +668,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             true
         }
         RecallEffect::ClearUnitMasks { who, o, mask } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(slot) = table.get_mut(who, o) else {
                 return false;
             };
@@ -669,12 +678,16 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             true
         }
         RecallEffect::ResetPathLength { who, o, value } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             table.air.entry(who, o).path_length = value;
             true
         }
         RecallEffect::CloseOrders { who, o, .. } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(slot) = table.get_mut(who, o) else {
                 return false;
             };
@@ -704,7 +717,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             queue_pos,
             ..
         } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             if QueuePos::from_i64(i64::from(queue_pos)) != QueuePos::New {
                 return false;
             }
@@ -725,7 +740,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
         // installed above is already the head.
         RecallEffect::UpdateOrder { .. } => true,
         RecallEffect::RestoreNewAirCruisingAltitude { who, o, value } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(air) = table.air.get_mut(who, o).and_then(|c| c.air.as_mut()) else {
                 return false;
             };
@@ -733,7 +750,9 @@ fn apply_recall_effect(table: &mut ObjectTable, effect: &RecallEffect, per_owner
             true
         }
         RecallEffect::RestoreNewAirSharpTurn { who, o, value } => {
-            let Ok(o) = i16::try_from(o) else { return false };
+            let Ok(o) = i16::try_from(o) else {
+                return false;
+            };
             let Some(air) = table.air.get_mut(who, o).and_then(|c| c.air.as_mut()) else {
                 return false;
             };

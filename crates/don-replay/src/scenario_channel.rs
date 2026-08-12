@@ -690,7 +690,8 @@ pub fn scenario_checksum(
 
 /// `ScenarioData::msg_color` source constant at `0x00c8d260`, ten bytes.
 /// `0x00a03dfd movq [0xe8fe34], xmm0` plus `0x00a03e31 mov [0xe8fe3c], eax`.
-pub const RETAIL_INIT_MSG_COLOR: Color = [0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
+pub const RETAIL_INIT_MSG_COLOR: Color =
+    [0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
 
 /// `ScenarioData::game_msg_color` and `objective_color` share one source constant at
 /// `0x00c8d26c` (`0x00a03e29`/`0x00a03e36` store the same `xmm1`, `0x00a03e0c`/`0x00a03e12`
@@ -756,13 +757,13 @@ impl RetailInitialScenario {
         ScenarioState {
             direct: ScenarioDirect {
                 load_scenario_script: 0,
-                msg_time: 200,           // 0x00a03e48 mov [0xcc21ec], 0xc8
-                game_msg_time: 12_000,   // 0x00a03e3e mov [0xcc2290], 0x2ee0
-                hilite_option: -1,       // 0x00a03e52
-                hilite_object: -1,       // 0x00a03e5c
-                highlight_x: -1,         // [0xcc02fc]
-                highlight_y: -1,         // [0xcc2188]
-                involved_who: -1,        // 0x00a04243 mov [0xcc228c], 0xffffffff
+                msg_time: 200,         // 0x00a03e48 mov [0xcc21ec], 0xc8
+                game_msg_time: 12_000, // 0x00a03e3e mov [0xcc2290], 0x2ee0
+                hilite_option: -1,     // 0x00a03e52
+                hilite_object: -1,     // 0x00a03e5c
+                highlight_x: -1,       // [0xcc02fc]
+                highlight_y: -1,       // [0xcc2188]
+                involved_who: -1,      // 0x00a04243 mov [0xcc228c], 0xffffffff
                 camera_init_x: [-1; PLAYER_COUNT],
                 camera_init_y: [-1; PLAYER_COUNT],
                 camera_init_zoom: [5; PLAYER_COUNT], // 0x00a03f2c mov [0xcc21c0], 5
@@ -776,22 +777,22 @@ impl RetailInitialScenario {
                 builds_destroyed: &self.builds_destroyed,
                 reinforcements_arrived: [0; PLAYER_COUNT], // 0x00a041be
                 war_blocked: [0; PLAYER_COUNT * PLAYER_COUNT], // 0x00a0419e movq [eax], 0
-                ally_mask: [0; PLAYER_COUNT],                  // 0x00a04141
-                diplomacy_setting: [0; PLAYER_COUNT],          // 0x00a0413a
-                plunder: 1,                 // 0x00cb195a
-                building_unit_bonus: 1,     // 0x00cb195b
-                building_resource_bonus: 1, // 0x00cb4ba9
-                buildings_free: 0,          // 0x00cb4bab
-                buildings_gather: 1,        // 0x00cbe329
-                units_free: 0,              // 0x00cb7df9
-                techs_free: 0,              // 0x00cb4baa
-                speed_control_disabled: 0,  // 0x00cbe32b
-                pause_disabled: 0,          // 0x00cbe5af
-                mouse_selection_disabled: 0,   // 0x00cb7dfb
-                hotkey_selection_disabled: 0,  // 0x00cb7dfa
-                display_bubble_text: 1,     // 0x00a04008 mov [0xcbb0d9], 1
-                highlight_visible: 0,       // 0x00cbb0da
-                highlight_active: 0,        // 0x00cbb0db
+                ally_mask: [0; PLAYER_COUNT],              // 0x00a04141
+                diplomacy_setting: [0; PLAYER_COUNT],      // 0x00a0413a
+                plunder: 1,                                // 0x00cb195a
+                building_unit_bonus: 1,                    // 0x00cb195b
+                building_resource_bonus: 1,                // 0x00cb4ba9
+                buildings_free: 0,                         // 0x00cb4bab
+                buildings_gather: 1,                       // 0x00cbe329
+                units_free: 0,                             // 0x00cb7df9
+                techs_free: 0,                             // 0x00cb4baa
+                speed_control_disabled: 0,                 // 0x00cbe32b
+                pause_disabled: 0,                         // 0x00cbe5af
+                mouse_selection_disabled: 0,               // 0x00cb7dfb
+                hotkey_selection_disabled: 0,              // 0x00cb7dfa
+                display_bubble_text: 1,                    // 0x00a04008 mov [0xcbb0d9], 1
+                highlight_visible: 0,                      // 0x00cbb0da
+                highlight_active: 0,                       // 0x00cbb0db
             },
             strings: ScenarioStrings {
                 scenario_name: Utf16String(&[]),
@@ -913,13 +914,12 @@ impl InitialScenarioChannel {
         table: &don_content::RetailStringTable,
     ) -> Result<InitialScenarioChannel, InternalStringsError> {
         let pick = |ordinal: u32| -> Result<String, InternalStringsError> {
-            table
-                .get(ordinal as usize)
-                .map(str::to_owned)
-                .ok_or(InternalStringsError::OrdinalMissing {
+            table.get(ordinal as usize).map(str::to_owned).ok_or(
+                InternalStringsError::OrdinalMissing {
                     ordinal,
                     entries: table.len(),
-                })
+                },
+            )
         };
         let general_powers_script_file = pick(INTERNAL_STRING_ORDINAL_GENERAL_POWERS_SCRIPT_FILE)?;
         let temp_save = pick(INTERNAL_STRING_ORDINAL_TEMP_SAVE)?;

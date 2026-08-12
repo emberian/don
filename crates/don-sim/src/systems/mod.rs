@@ -79,6 +79,7 @@ pub mod canonical_air_group_host;
 pub mod canonical_air_package_shell;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
+<<<<<<< HEAD
 /// Canonical bounded opcode-9 receiver and resumed ground-order hold frame.
 pub mod canonical_attack_ground_runtime;
 /// Installed, revision-bound production adapter for the fresh saved Village BUILD_AT tick.
@@ -91,8 +92,19 @@ pub mod canonical_group_move_host;
 pub mod canonical_guard_runtime;
 /// Installed, revision-bound production adapter for exact saved Camp Gather work.
 pub mod canonical_gather_work;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 /// Installed, revision-bound production adapter for the fresh Fishermen DEPLOY wait frame.
 pub mod canonical_cast_work;
+/// Atomic opcode-38 declaration transaction over command, resource, relation, vision,
+/// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
+pub mod canonical_diplomacy_host;
+/// Atomic Board/Repair/Trade packet planner sharing the canonical Group→Move selector.
+pub mod canonical_economy_group_host;
+/// Installed, revision-bound production adapter for exact saved Camp Gather work.
+pub mod canonical_gather_work;
+/// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
+pub mod canonical_group_move_host;
 /// Canonical fixed-Group transaction for the strict Group plus UNITMASK packet cohort.
 pub mod canonical_simple_group_host;
 /// Canonical live-World/path/RNG/animation/ammo adapter for STRAFE row 16.
@@ -134,11 +146,14 @@ pub mod death_inctime;
 /// Exact defeated-player Unit-band dispatch: true planes die, other valid units close
 /// orders, and both branches clear `unit_masks & 0x40000`.
 pub mod defeat_cleanup;
+<<<<<<< HEAD
 /// Atomic opcode-38 declaration transaction over command, resource, relation, vision,
 /// victory, army, and object projections. Shared Bridge/Sim/save mounting remains gated.
 pub mod canonical_diplomacy_host;
 /// Real Bridge-to-Sim opcode-38 mount; reached external authority remains fail-closed.
 pub mod canonical_diplomacy_runtime;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 /// Full `Leader::action_respond(target, 1)` transaction reached by synchronized opcode 41.
 pub mod diplomacy_accept_host;
 /// Exact simulation/presentation split for the ordinary accepted-deal callbacks.
@@ -186,9 +201,9 @@ pub mod gathering;
 pub mod graphics_turret;
 /// Exact 1,022-byte `Group::action_trade` transaction and order-install chronology.
 pub mod group_action_trade_frontier;
-pub mod groups_guys;
 /// Fail-closed product authority join for canonical Group→Move packages.
 pub mod group_move_authority;
+pub mod groups_guys;
 /// `do_job` arm 12: the snapshot-bound atomic host boundary, concrete payload and same-tick
 /// movement integration that turns [`guard_order`]'s pure transcription into a dispatched
 /// `Unit::do_guard`.
@@ -203,10 +218,18 @@ pub mod hotkey_group_action;
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
 /// remain explicit boundaries; see `docs/mechanics/items.md`.
 pub mod items;
+/// Full `UnitData::speed` authority over exact type, terrain, leader, hero, and Constants owners.
+pub mod land_speed_authority;
 /// Option-independent `Leader::init` diplomacy prefix for active frame-zero teammates.
 pub mod leader_init_diplomacy;
 /// Complete source-only `Leader::init` diplomacy/shared-vision eight-target loop.
 pub mod leader_init_diplomacy_loop;
+/// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
+/// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
+/// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp
+/// the six `LeaderData` AI build-priority scalars. Presentation leaves through a typed
+/// outbox. `Leader::action_respond` `0x006D03C0` is the one named boundary.
+pub mod leader_process_taunt;
 /// Added by `tick11-production-ai`. `Leader::plan_strategy` `0x006B9620`'s entry and
 /// dispatch skeleton plus the whole 628-byte `Leader::production_ai` `0x006C1960` step
 /// machine — the only door into retail's compiled production pipeline, which nothing but
@@ -220,6 +243,7 @@ pub mod leader_set_diplo;
 /// Atomic publication of production-owned current tech and ages into the victory and
 /// step-8 duplicate views. Production completion preflights this before mutation.
 pub mod leader_tech_sync;
+<<<<<<< HEAD
 /// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
 /// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
 /// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp
@@ -234,6 +258,8 @@ pub mod leader_produce_building_candidate_prefix;
 pub mod leader_produce_building_prefix;
 /// Exact frame-zero coordinate/radius/footprint setup before the placement candidate loop.
 pub mod leader_produce_building_search_setup;
+=======
+>>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 /// Added by `economy-step8`. `Leaders::process_all` `0x006ED2A0` — step 8 of `do_frame`,
 /// the caller `economy.rs` never had, plus the second level `Leader::gather` reaches:
 /// the `BitMask<44>` union that arms the two stat-dirty bits, `calc_wall_stats`,
@@ -369,6 +395,10 @@ pub mod trade_order_frontier;
 /// 532-byte opcode-49 wrapper. Its `Unit::come_out(0)` call is the authority step the four
 /// `unit_come_out_*_frontier` modules below now tile completely.
 pub mod unit_action_come_out_frontier;
+/// Added by lane `come-out` on 2026-08-11. The address-space accounting that ties the four
+/// `unit_come_out_*_frontier` tranches to the retail body, and the typed boundary every
+/// caller of `Unit::come_out` stops at today.
+pub mod unit_come_out_body_map;
 /// Registered by lane `come-out` on 2026-08-11. Second tranche of `Unit::come_out`
 /// `0x00617C10`: the common release prologue `0x006186B4..0x00618B22` plus three outlined
 /// virtual-call islands. 1,169 logical bytes.
@@ -388,10 +418,6 @@ pub mod unit_come_out_gather_selection_frontier;
 /// the three tranches above this tiles all 9,925 bytes of the body with no gap and no
 /// overlap, which [`unit_come_out_body_map`] asserts byte by byte.
 pub mod unit_come_out_release_tail_frontier;
-/// Added by lane `come-out` on 2026-08-11. The address-space accounting that ties the four
-/// `unit_come_out_*_frontier` tranches to the retail body, and the typed boundary every
-/// caller of `Unit::come_out` stops at today.
-pub mod unit_come_out_body_map;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
 /// event-execution paths.
@@ -412,5 +438,3 @@ pub mod walls;
 pub mod wonders;
 /// Exact `World::set_oil_at` plus retail Goods-slot allocation/retirement owner.
 pub mod world_oil_goods;
-/// Full `UnitData::speed` authority over exact type, terrain, leader, hero, and Constants owners.
-pub mod land_speed_authority;

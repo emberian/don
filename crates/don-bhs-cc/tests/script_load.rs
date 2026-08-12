@@ -98,8 +98,7 @@ fn shipped_general_powers_loads_as_a_zero_argument_step_four_entry() {
 
     assert_eq!(loaded.entry, "general_powers");
     assert_eq!(
-        loaded.resolved_name,
-        "./scenario/scriptlibrary/general_powers.bhs",
+        loaded.resolved_name, "./scenario/scriptlibrary/general_powers.bhs",
         "check_ext must leave an already-.bhs path alone"
     );
     let idx = loaded
