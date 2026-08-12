@@ -368,3 +368,5 @@ pub mod walls;
 pub mod wonders;
 /// Exact `World::set_oil_at` plus retail Goods-slot allocation/retirement owner.
 pub mod world_oil_goods;
+/// Full `UnitData::speed` authority over exact type, terrain, leader, hero, and Constants owners.
+pub mod land_speed_authority;

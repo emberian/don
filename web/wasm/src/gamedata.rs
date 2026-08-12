@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | 364 unit-type records | `schema/live/live-tables-unit.tsv` | the live `UnitType` list at `0x00C0A264`, ids 50..413 |
 //! | 493x493 `i16` | `schema/live/balance-real.bin` | `Balance::final_balance_table` at `0x00C12BF4` |
-//! | 16 rules `i32` | `schema/live/rules-block-pid14644.txt` | the live `Constants` singleton at `+0x44..+0xB98` |
+//! | 28 rules `i32` | `schema/live/rules-block-pid14644.txt` | the live `Constants` singleton, including all twelve `UnitData::speed` cells |
 //!
 //! The rules land in [`don_sim::CombatRules`], whose field comments carry the retail offset
 //! each one is read at, so the mapping is checkable field by field.
@@ -25,12 +25,12 @@
 use don_sim::CombatRules;
 
 /// `i32` fields per unit record. Must match `UNIT_FIELDS` in the packer.
-pub const UNIT_FIELDS: usize = 25;
-const MAGIC: &[u8; 8] = b"DONPACK3";
+pub const UNIT_FIELDS: usize = 28;
+const MAGIC: &[u8; 8] = b"DONPACK4";
 const UNIT_COUNT: usize = 364;
 const BALANCE_N: usize = 493;
 const BALANCE_BASE: usize = 50;
-const RULES_COUNT: usize = 16;
+const RULES_COUNT: usize = 28;
 const AUTHORITY_SCHEMA: usize = 1;
 
 /// One `UnitType`, in the fields this simulation reads.
@@ -83,6 +83,12 @@ pub struct UnitTypeRec {
     pub y_spacing: i32,
     /// `UnitTypeData::uber_size` `+0x308`.
     pub uber_size: i32,
+    /// `TypeData::from` `+0x3c`, used by the non-strict ObjectType relation.
+    pub from: i32,
+    /// `TypeData::where` `+0x40`, tested directly by both Stable hero branches.
+    pub where_type: i32,
+    /// `ObjectTypeData::graft` `+0x25c`, used by both relation sets.
+    pub graft: i32,
     /// Index into the spawn roster, or -1 if this type is not spawned by the spectator.
     pub roster: i32,
 }
@@ -103,6 +109,10 @@ pub struct GameData {
     pub is_real: bool,
     /// Deterministic digest of the authority-bearing pack bytes.
     authority_revision: u64,
+    /// Four independently seeded FNV-1a lanes binding the complete pack bytes.
+    authority_digest: [u8; 32],
+    /// Absent on the synthetic fallback, which must never answer land-speed authority.
+    land_speed_constants: Option<don_sim::systems::land_speed_authority::LandSpeedConstants>,
 }
 
 impl GameData {
@@ -168,7 +178,10 @@ impl GameData {
                 x_spacing: f(21),
                 y_spacing: f(22),
                 uber_size: f(23),
-                roster: f(24),
+                from: f(24),
+                where_type: f(25),
+                graft: f(26),
+                roster: f(27),
             };
             let type_index = usize::try_from(rec.type_id).ok()?;
             if !(BALANCE_BASE..BALANCE_BASE + UNIT_COUNT).contains(&type_index)
@@ -209,6 +222,20 @@ impl GameData {
             rule_0xb98: r(14),
         };
         let rules_0x8b8 = r(15);
+        let land_speed_constants = don_sim::systems::land_speed_authority::LandSpeedConstants {
+            coord_scale: r(16),
+            irq_spear_bonus: r(17),
+            irq_mo_spear_bonus: r(18),
+            irq_hmo_spear_bonus: r(19),
+            irq_emo_spear_bonus: r(20),
+            alexander_napoleon_aura_256: r(21),
+            spitamenes_stable_256: r(22),
+            porus_elephant_256: r(23),
+            napoleon_siege_percent: r(24),
+            charles_percent: r(25),
+            blucher_stable_percent: r(26),
+            hero_aura_speed: r(27),
+        };
         // `height_increment` is a divisor the chain multiplies by 100 and divides by; a
         // zero there is a `#DE` in retail and a trap in wasm. Refuse the pack instead.
         if rules.height_increment == 0 {
@@ -227,6 +254,15 @@ impl GameData {
         let authority_revision = b.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
         });
+        let mut authority_digest = [0u8; 32];
+        for lane in 0..4u64 {
+            let hash = b.iter().fold(
+                0xcbf2_9ce4_8422_2325u64 ^ lane.wrapping_mul(0x9e37_79b9_7f4a_7c15),
+                |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3),
+            );
+            authority_digest[lane as usize * 8..lane as usize * 8 + 8]
+                .copy_from_slice(&hash.to_le_bytes());
+        }
         let mut gd = GameData {
             units,
             by_id: Vec::new(),
@@ -238,6 +274,8 @@ impl GameData {
             balance_base: balance_base as i32,
             is_real: true,
             authority_revision,
+            authority_digest,
+            land_speed_constants: Some(land_speed_constants),
         };
         gd.reindex();
         if gd.roster.is_empty() {
@@ -277,6 +315,9 @@ impl GameData {
                 x_spacing: 48,
                 y_spacing: 48,
                 uber_size: 1,
+                from: -1,
+                where_type: -1,
+                graft: -1,
                 roster,
             };
         let units = vec![
@@ -316,6 +357,8 @@ impl GameData {
             rules_0x8b8: 0,
             is_real: false,
             authority_revision: 0,
+            authority_digest: [0; 32],
+            land_speed_constants: None,
         };
         gd.reindex();
         gd
@@ -419,5 +462,40 @@ impl don_sim::systems::group_move_authority::GroupMoveContent for GameData {
             y_spacing: rec.y_spacing,
             uber_size: rec.uber_size,
         })
+    }
+}
+
+impl don_sim::systems::land_speed_authority::LandSpeedContent for GameData {
+    fn land_speed_revision(&self) -> u64 {
+        self.authority_revision
+    }
+
+    fn land_speed_composition_digest(&self) -> [u8; 32] {
+        self.authority_digest
+    }
+
+    fn land_speed_type(
+        &self,
+        type_id: i32,
+    ) -> Option<don_sim::systems::land_speed_authority::LandSpeedTypeFacts> {
+        if !self.is_real {
+            return None;
+        }
+        let rec = *self.units.get(self.index_of_type(type_id)?)?;
+        Some(don_sim::systems::land_speed_authority::LandSpeedTypeFacts {
+            type_id: rec.type_id,
+            from: rec.from,
+            where_type: rec.where_type,
+            graft: rec.graft,
+            domain: rec.domain,
+            unit_flags: rec.unit_flags as u32,
+            unit_flags2: rec.unit_flags2 as u32,
+        })
+    }
+
+    fn land_speed_constants(
+        &self,
+    ) -> Option<don_sim::systems::land_speed_authority::LandSpeedConstants> {
+        self.land_speed_constants
     }
 }

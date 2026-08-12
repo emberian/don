@@ -10,7 +10,7 @@
 //   schema/live/balance-real.bin          493x493 int16 `Balance::final_balance_table`
 //                                         captured at 0x00C12BF4
 //   schema/live/rules-block-pid14644.txt  4 KB of the live `Constants` singleton, base64;
-//                                         the combat constants live at +0x44..+0xB98
+//                                         includes combat plus UnitData::speed constants
 //
 // # Why a binary and not JSON
 //
@@ -40,13 +40,13 @@ const OUT = process.argv.includes('--out')
 // the magic carries a version and the Rust side rejects a mismatch.
 // ---------------------------------------------------------------------------------------
 
-const MAGIC = 'DONPACK3';
+const MAGIC = 'DONPACK4';
 /** i32 fields per unit-type record, in this order. */
 const UNIT_FIELDS = [
   'type_id', 'attack', 'armor', 'hits', 'moves', 'max_range', 'min_range', 'recharge',
   'to_hit', 'domain', 'military_level', 'splash_area', 'splash_percent', 'obj_masks',
   'target_size', 'age', 'unit_flags', 'los', 'role', 'unit_flags2', 'guy_spacing',
-  'x_spacing', 'y_spacing', 'uber_size', 'roster',
+  'x_spacing', 'y_spacing', 'uber_size', 'from', 'where_type', 'graft', 'roster',
 ];
 /** i32 rules values, in the field order of `don_sim::CombatRules` plus `rules_0x8b8`. */
 const RULES_OFFSETS = [
@@ -56,6 +56,13 @@ const RULES_OFFSETS = [
   ['river_modifier', 0x68], ['recapture_city_modifier', 0x6c],
   ['red_fort_air_defense', 0x4c4], ['rule_0x558', 0x558], ['rule_0x76c', 0x76c],
   ['rule_0xb98', 0xb98], ['rules_0x8b8', 0x8b8],
+  ['speed_coord_scale', 0x004],
+  ['speed_irq_spear_bonus', 0x838], ['speed_irq_mo_spear_bonus', 0x83c],
+  ['speed_irq_hmo_spear_bonus', 0x840], ['speed_irq_emo_spear_bonus', 0x844],
+  ['speed_alexander_napoleon_aura_256', 0xb4c],
+  ['speed_spitamenes_stable_256', 0xb78], ['speed_porus_elephant_256', 0xb7c],
+  ['speed_napoleon_siege_percent', 0xbb0], ['speed_charles_percent', 0xbc0],
+  ['speed_blucher_stable_percent', 0xbd4], ['speed_hero_aura', 0xc50],
 ];
 const BALANCE_N = 493;
 const BALANCE_BASE_ID = 50; // unit ids start at 50; the table's row 0 is type id 50.
@@ -143,6 +150,12 @@ function main() {
         throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
       }
     }
+    for (const field of ['from', 'where', 'graft']) {
+      const value = Number(u[field]);
+      if (!Number.isInteger(value) || value < -2 || value >= 806) {
+        throw new Error(`unit ${typeId} has invalid ${field}: ${u[field]}`);
+      }
+    }
   }
   const roster = pickRoster(units);
   const rosterIndex = new Map(roster.map((u, i) => [u.type_id, i]));
@@ -171,6 +184,7 @@ function main() {
     for (const f of UNIT_FIELDS) {
       let v;
       if (f === 'roster') v = rosterIndex.has(u.type_id) ? rosterIndex.get(u.type_id) : -1;
+      else if (f === 'where_type') v = Number(u.where);
       else v = Number(u[f]);
       if (!Number.isFinite(v)) throw new Error(`unit ${u.type_id} field ${f} is ${u[f]}`);
       // obj_masks and unit_flags are bit sets that overflow i32 as decimals in the TSV
