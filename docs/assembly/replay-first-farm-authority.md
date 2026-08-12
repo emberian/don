@@ -150,6 +150,54 @@ not evidence for the 2018 run. The recording carries neither input, and no compl
 authority is available. This therefore closes an executable nested segment without promoting the
 real initializer, executing the Farm package, or installing a checksum channel.
 
+### Nested first-Scout collision and common tail
+
+The next adapter composes the location receipt with the canonical
+`produce_unit_init_collision_tail` owner. Its mutable collision World must be a revisioned,
+checksum-bound image at the exact `Unit::init +0xBCD9` seam: completed world generation and the
+preceding setup/Unit work have run, but the journaled Guy collision and common tail have not. The
+adapter clones this World, runs the complete collision/tail transaction on the clone, validates the
+resulting identity and deferred visibility request, and commits only after every check passes.
+
+Strict replay Rules supplies Scout 69's domain, type identity, and `unit_flags2`. Type-inheritance
+queries, Leader flags/bonuses, the four address-bound stat returns, mana inputs, and earlier instance
+fields remain explicit inputs covered by the collision-seam composition digest. They are not guessed
+from the checksum or from the synthetic after-image. A forged World checksum or stat body leaves the
+canonical collision owner unchanged.
+
+On success the receipt contains the allocated/stamped collision-block delta, all common Unit-tail
+stores, updated Leader flags, unchanged RNG, and the exact `Object::update_seen(0)` request. It stops
+there: fog projection and `World::reveal_fog` side effects are still owned by the visibility runtime
+and are not skipped or treated as inert.
+
+The local collision World, scalar values, graphics, and terrain remain synthetic contract fixtures.
+The 2018 recording supplies none of those dynamic seam inputs, so this composition does not make the
+historical initializer executable, clear its ordered authority blocker, or install a checksum
+channel.
+
+### Nested first-Scout visibility transaction
+
+Visibility is now composed as well because every owner can be bound without defaults. The
+authority checksum-binds the immutable canonical World and carries exact preimages for Goods,
+Items, and dynamic Leader arrays, whose standalone checksum projections do not cover this seam. It
+also supplies the complete LOS, Leader, object-chain, rare-class, and type-availability authority
+consumed by the existing source-owned visibility producer.
+
+The adapter clones collision World, Goods, Items, and dynamic Leaders, executes the collision/tail
+stage on those clones, then runs `Object::update_seen`, fog stamping, and every reached
+`World::reveal_fog` effect. It commits all four mutable owners only after visibility chronology and
+RNG continuity pass. A malformed visibility authority therefore rolls back the prior collision
+allocation/stamp as part of the same outer transaction.
+
+The returned boundary is `None` when no newly revealed goody requests auto-explore. If such a goody
+is reached, the exact `Unit::get_goody_box -> Group` requests remain a named Groups residual; this
+adapter does not cross that owner boundary. Module registration exposes the source through the
+replay library but installs no checksum channel.
+
+Again, the repository has no historical 2018 preimages for these owners. Synthetic empty registries
+and fog planes prove atomic composition, not the recorded match. The real first-Scout setup and
+first Farm package therefore remain red despite the now-runnable nested transaction.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking

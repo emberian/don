@@ -1,6 +1,6 @@
 # Replay setup Unit visibility / reveal-fog deep RE
 
-Status: source-only atomic producer; replay/channel registration intentionally deferred.
+Status: source-only atomic producer; replay-library module registered, no channel installed.
 
 ## Provenance
 
@@ -135,8 +135,8 @@ error without publishing a fog bit or partial leader/item/good write. The receip
 - visible `0 -> 0` and skipped local-seen body; and
 - RNG before/after equality.
 
-The module remains source-only. It installs no replay channel and edits no World/tick/save
-registration.
+The module remains source-only. Replay-library registration exposes the authority API for the
+first-Scout composition; it installs no replay channel and edits no World/tick/save registration.
 
 ## Runnable validation
 
