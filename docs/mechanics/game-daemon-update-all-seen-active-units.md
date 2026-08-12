@@ -100,9 +100,11 @@ introduced.
 ## Remaining red boundary
 
 The gap remains red. A nonempty dedicated Wall band, effectful reveal, scenario reveal-point
-pass, direct/incremental entry, or frame-zero explored sharing fails closed. Missing current
-Build type, reached footprint/fort facts, or Unit local radius also refuses atomically rather
-than inventing an ordinary row. Those bodies need their complete canonical owners and the same
+pass, the non-`Game::run` direct routes, or incremental entry fails closed. `Game::run`'s
+frame-zero explored sharing is mounted separately on the same transaction in
+`game-daemon-update-all-seen-frame-zero.md`. Missing current Build type, reached footprint/fort
+facts, or Unit local radius also refuses atomically rather than inventing an ordinary row.
+Those remaining bodies need their complete canonical owners and the same
 preflight/commit discipline before the general `update_all_seen` row can close.
 
 ## Focused gate

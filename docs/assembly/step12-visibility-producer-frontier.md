@@ -100,14 +100,15 @@ After the option-3 early return, `GameDaemon::update_all_seen` performs:
    frame zero can reach it.
 
 The isolated module owns the cadence, instance detector transition, Unit admission/stamp
-plan, and exact post-frame `seen`/`seen3` cell sample. It does **not** claim the complete
-1,221-byte producer. Remaining bodies before shared integration are:
+plan, and exact post-frame `seen`/`seen3` cell sample. Later bounded tranches mount those
+facts, active Build/Unit local-seen bodies, and `Game::run`'s frame-zero explored-sharing
+tail, but still do **not** claim the complete 1,221-byte producer. Remaining bodies before
+general closure are:
 
-- active Wall stamping and the special started-Wonder local-seen path;
-- authoritative Sim population of the now-executable Ptolemy/CEO `UnitData::los` inputs;
-- `Object::update_seen`'s newly-explored `World::reveal_fog` effects;
+- a nonempty dedicated Wall band (structurally absent in the supported executable);
+- `Object::update_seen`'s effectful newly-explored `World::reveal_fog` branches;
 - scenario reveal-point storage and its two Game flag gates;
-- explored-plane alliance closure;
+- the other four direct-entry owning actions; and
 - incremental `Object::update_seen(1)` calls outside this periodic step-12 refresh.
 
 These are checksum/replay concerns even though only the Unit detector subpass is needed to
@@ -129,8 +130,8 @@ The shared integration should be one preflighted transaction:
    `Step12UnitStamp` into the full-disc `borders_fog::update_seen` body using its stamp
    coordinates. Commit the returned newly explored cells through the recovered `reveal_fog`
    path. Its `detector` field must come from `object_flags & 0x40`, never `false` on missing
-   data. Route the five immediate callers above through the same body as their owning mechanics
-   land.
+   data. `Game::run` is now mounted; route the remaining four immediate callers above through
+   the same body only as their owning mechanics land.
 4. After the whole `Sim::do_frame` (including later incremental object visibility work), use
    `sample_visibility_cell` to fill
    `RetailUnitVisibilityFacts::{cell_seen_mask,cell_detected_mask}` for the external owner.
@@ -240,7 +241,8 @@ therefore rejected as `Unsupported("step-12 visibility authority")` rather than 
 serializing guessed state. No competing save version or chunk was allocated for this tranche.
 
 The exact residual transaction owners are nonempty dedicated Wall vision,
-`World::reveal_fog`, scenario reveal points, frame-zero alliance explored sharing, the five
-direct entry routes, and incremental `Object::update_seen(1)`. Scheduled active Build/Unit
-local-seen bodies now execute against canonical planes. The general row remains blocked until
-all reached contributors and side effects can preflight and commit atomically.
+`World::reveal_fog`, scenario reveal points, the `Build::close` and three Scenario direct entry
+routes, and incremental `Object::update_seen(1)`. The `Game::run` direct route and its
+frame-zero alliance explored-sharing tail now execute against canonical saved owners, as do
+scheduled active Build/Unit local-seen bodies. The general row remains blocked until all
+reached contributors and side effects can preflight and commit atomically.

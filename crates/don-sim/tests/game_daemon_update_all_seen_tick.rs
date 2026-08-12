@@ -17,7 +17,7 @@ use don_sim::systems::{
         Footprint,
     },
 };
-use don_sim::tick::{Gap, Sim, StepRun};
+use don_sim::tick::{GameRunVisibilityError, Gap, Sim, StepRun};
 
 fn advance_to_phase_33(sim: &mut Sim) {
     while sim.world.frame < 33 {
@@ -90,6 +90,131 @@ fn active_empty_leader_executes_the_exact_empty_unit_cohort() {
     assert!(sim.map.world.seen3.iter().all(|&byte| byte == 0));
     assert!(sim.map.world.wcoord_seen.iter().all(|&byte| byte == 0));
     assert_eq!(sim.step12_visibility_error, None);
+}
+
+fn frame_zero_allied_pair(starting_resources: u8) -> Sim {
+    let mut sim = Sim::new(0x7328_4000, 8);
+    sim.vic_match.options.starting_resources = starting_resources;
+    let mut setup = ManualPlayerSetup {
+        active_mask: 0b0000_0011,
+        local_player_setup_slot: 0,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[0] = 0;
+    setup.teams[1] = 0;
+    sim.start_manual_player_setup(setup).unwrap();
+    assert_eq!(sim.world.frame, 0);
+    assert_eq!(sim.vic_match.frame, 0);
+    assert_eq!(sim.vic_leaders.slots[0].diplos[1], 2);
+    assert_eq!(sim.vic_leaders.slots[1].diplos[0], 2);
+    sim
+}
+
+#[test]
+fn game_run_direct_entry_shares_frame_zero_exploration_and_roundtrips() {
+    let mut original = frame_zero_allied_pair(1);
+    original.game_daemon.busy = 19;
+    original.map.world.seen.fill(0x51);
+    original.map.world.seen2.fill(0);
+    original.map.world.seen2[0] = 0b0000_0001;
+    original.map.world.seen2[1] = 0b0000_0010;
+    original.map.world.seen2[2] = 0b0000_0100;
+    original.map.world.seen2[3] = 0b0000_0011;
+    original.map.world.seen3.fill(0xc4);
+    original.map.world.wcoord_seen.fill(0x38);
+    original.map.world.wdata[0].was_seen = 0x42;
+    let checksum_before = original.map.world.checksum();
+
+    let work = original.game_run_update_all_seen().unwrap();
+
+    assert_eq!(work, 4, "one set plus three exact intersecting-cell writes");
+    assert_eq!(original.game_daemon.busy, 4);
+    assert_eq!(&original.map.world.seen2[..4], &[3, 3, 4, 3]);
+    assert!(original.map.world.seen.iter().all(|&byte| byte == 0));
+    assert!(original.map.world.seen3.iter().all(|&byte| byte == 0));
+    assert!(original.map.world.wcoord_seen.iter().all(|&byte| byte == 0));
+    assert_eq!(
+        original.map.world.wdata[0].was_seen, 0x42,
+        "the frame-zero tail writes only World::seen2"
+    );
+    assert_ne!(original.map.world.checksum(), checksum_before);
+    assert_eq!(original.step12_visibility_error, None);
+
+    let saved = save_sim(&original).unwrap();
+    let mut resumed = load_sim(&saved).unwrap();
+    assert_eq!(resumed.map.world.checksum(), original.map.world.checksum());
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+
+    original.game_run_update_all_seen().unwrap();
+    resumed.game_run_update_all_seen().unwrap();
+    assert_eq!(resumed.channel_digest(), original.channel_digest());
+    assert_eq!(save_sim(&resumed).unwrap(), save_sim(&original).unwrap());
+}
+
+#[test]
+fn frame_zero_sharing_option_gate_and_leader_activity_are_atomic() {
+    let mut disabled = frame_zero_allied_pair(0);
+    disabled.map.world.seen2.fill(0);
+    disabled.map.world.seen2[0] = 1;
+    disabled.map.world.seen2[1] = 2;
+    disabled.game_run_update_all_seen().unwrap();
+    assert_eq!(&disabled.map.world.seen2[..2], &[1, 2]);
+
+    let mut mismatched = frame_zero_allied_pair(1);
+    mismatched.game_daemon.busy = 19;
+    seed_fog_planes(&mut mismatched);
+    mismatched.vic_leaders.slots[1].leader_flags &= !1;
+    let daemon_before = mismatched.game_daemon;
+    let checksum_before = mismatched.map.world.checksum();
+
+    let error = mismatched.game_run_update_all_seen().unwrap_err();
+
+    assert_eq!(mismatched.game_daemon, daemon_before);
+    assert_eq!(mismatched.map.world.checksum(), checksum_before);
+    assert!(matches!(
+        error,
+        GameRunVisibilityError::Preflight(Step12VisibilityPreflightError::ActiveUnitCohort(
+            ActiveUnitProducerFault::FrameZeroLeaderActivityMismatch {
+                who: 1,
+                object_owner_active: true,
+                leader_active: false,
+            }
+        ))
+    ));
+}
+
+#[test]
+fn frame_zero_sharing_requires_mutual_diplomacy_but_accepts_ally_mask() {
+    let make_nonteam_pair = || {
+        let mut sim = Sim::new(0x7328_4001, 8);
+        sim.vic_match.options.starting_resources = 1;
+        let mut setup = ManualPlayerSetup {
+            active_mask: 0b0000_0011,
+            local_player_setup_slot: 0,
+            ..ManualPlayerSetup::default()
+        };
+        setup.teams[0] = 0;
+        setup.teams[1] = 1;
+        sim.start_manual_player_setup(setup).unwrap();
+        sim
+    };
+
+    let mut one_way = make_nonteam_pair();
+    one_way.vic_leaders.slots[0].diplos[1] = 2;
+    one_way.vic_leaders.slots[1].diplos[0] = 1;
+    one_way.map.world.seen2.fill(0);
+    one_way.map.world.seen2[0] = 1;
+    one_way.map.world.seen2[1] = 2;
+    one_way.game_run_update_all_seen().unwrap();
+    assert_eq!(&one_way.map.world.seen2[..2], &[1, 2]);
+
+    let mut shared_mask = make_nonteam_pair();
+    shared_mask.vic_leaders.slots[0].init_diplomacy.ally_mask |= 2;
+    shared_mask.map.world.seen2.fill(0);
+    shared_mask.map.world.seen2[0] = 1;
+    shared_mask.map.world.seen2[1] = 2;
+    shared_mask.game_run_update_all_seen().unwrap();
+    assert_eq!(&shared_mask.map.world.seen2[..2], &[3, 3]);
 }
 
 fn active_unit_phase33() -> Sim {

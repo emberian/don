@@ -123,6 +123,8 @@ fn shipped_entries_bits_and_checksum_owner_are_frozen() {
     assert_eq!(WORLD_CLEAR_SEEN_VA, 0x006b_2250);
     assert_eq!(WORLD_SET_SEEN_VA, 0x006b_3c60);
     assert_eq!(PROJECT_VA, 0x0092_cf40);
+    assert_eq!(FRAME_ZERO_EXPLORED_SHARING_BEGIN_VA, 0x0073_2bd8);
+    assert_eq!(FRAME_ZERO_EXPLORED_SHARING_END_VA, 0x0073_2cf3);
     assert_eq!(
         UPDATE_ALL_SEEN_DIRECT_CALL_SITES,
         [

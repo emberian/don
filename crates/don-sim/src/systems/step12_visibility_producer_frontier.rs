@@ -23,6 +23,8 @@ pub const UNIT_DATA_IS_VALID_UNIT_VA: u32 = 0x0046_cda0;
 pub const WORLD_CLEAR_SEEN_VA: u32 = 0x006b_2250;
 pub const WORLD_SET_SEEN_VA: u32 = 0x006b_3c60;
 pub const PROJECT_VA: u32 = 0x0092_cf40;
+pub const FRAME_ZERO_EXPLORED_SHARING_BEGIN_VA: u32 = 0x0073_2bd8;
+pub const FRAME_ZERO_EXPLORED_SHARING_END_VA: u32 = 0x0073_2cf3;
 
 /// Non-scheduler call sites which force the same complete producer immediately. They are
 /// `Game::run`, `Build::close`, Scenario `add_visibility`, `remove_visibility`, and

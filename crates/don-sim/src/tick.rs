@@ -163,7 +163,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger 0x00732D10 - exact body/tick adapter execute; reached UnitData::attack and late Airbase/Dock/basic-type building strength remain fail-closed",
-    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive and active Build/Unit bounded full clears, including reached local-seen bodies, execute; nonempty Wall band, scenario-point, and effectful reveal_fog paths remain fail closed",
+    "step 12 GameDaemon::update_all_seen 0x00732840 - scheduled bounded clears and Game::run frame-zero explored sharing execute; other direct routes, nonempty Wall band, scenario-point, and effectful reveal_fog paths remain fail closed",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
@@ -783,6 +783,13 @@ pub enum UnitTypeStatSourceInstallError {
     LeadersActivated,
 }
 
+/// Fail-closed boundary for retail's immediate `Game::run -> update_all_seen` call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GameRunVisibilityError {
+    GameFrameMismatch { world: i32, game: i32 },
+    Preflight(step12_visibility_runtime::Step12VisibilityPreflightError),
+}
+
 /// A world plus the state its tick needs, and the executable `Game::do_frame`.
 ///
 /// Deliberately not `Clone`: `movement::PathFinder` owns search containers that are scratch
@@ -1353,6 +1360,51 @@ enum SimGameDaemonBridgeFault {
     Visibility(step12_visibility_runtime::Step12VisibilityPreflightError),
 }
 
+fn commit_prepared_visibility(
+    sim: &mut Sim,
+    busy: &mut i32,
+    prepared: step12_visibility_runtime::PreparedStep12FullProducer,
+    accumulated_work: u32,
+) -> u32 {
+    match prepared {
+        step12_visibility_runtime::PreparedStep12FullProducer::NoMutation(cadence) => {
+            debug_assert_eq!(
+                cadence,
+                step12_visibility_producer_frontier::Step12VisibilityCadence::SuppressedByFogOptionThree
+            );
+            accumulated_work
+        }
+        step12_visibility_runtime::PreparedStep12FullProducer::InactiveLeadersClear => {
+            // Exact 0x0073285D order: the body stores four before either plane clear.
+            *busy = 4;
+            sim.map.fog.begin_frame(&mut sim.map.world);
+            accumulated_work.saturating_add(1)
+        }
+        step12_visibility_runtime::PreparedStep12FullProducer::ActiveUnitClear(prepared) => {
+            // Build, Unit, reveal-fog and any reached frame-zero sharing work were
+            // preflighted in retail order against the same canonical owners.
+            *busy = 4;
+            let map = &mut sim.map;
+            let trace = step12_visibility_runtime::commit_active_unit_clear(
+                prepared,
+                &map.fog,
+                &mut map.world,
+                &map.circle,
+            );
+            accumulated_work
+                .saturating_add(trace.rows_visited as u32)
+                .saturating_add(trace.build_stamps as u32)
+                .saturating_add(trace.build_local_seen_cells as u32)
+                .saturating_add(trace.unit_local_seen_cells as u32)
+                .saturating_add(trace.unit_stamps as u32)
+                .saturating_add(trace.reveal_no_effect_calls as u32)
+                .saturating_add(trace.frame_zero_share_groups as u32)
+                .saturating_add(trace.frame_zero_explored_cell_writes as u32)
+                .max(1)
+        }
+    }
+}
+
 impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     type Fault = SimGameDaemonBridgeFault;
 
@@ -1446,44 +1498,7 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
             .take()
             .expect("scheduled update_all_seen has a prepared image")
             .expect("step-12 preflight rejected every failed visibility image");
-        match prepared {
-            step12_visibility_runtime::PreparedStep12FullProducer::NoMutation(cadence) => {
-                debug_assert_eq!(
-                    cadence,
-                    step12_visibility_producer_frontier::Step12VisibilityCadence::SuppressedByFogOptionThree
-                );
-            }
-            step12_visibility_runtime::PreparedStep12FullProducer::InactiveLeadersClear => {
-                // Exact 0x0073285D order: the body stores four before either plane clear.
-                // Every later object/scenario/alliance loop is gated off by the prepared
-                // all-inactive LeaderData image.
-                *busy = 4;
-                self.sim.map.fog.begin_frame(&mut self.sim.map.world);
-                self.work = self.work.saturating_add(1);
-            }
-            step12_visibility_runtime::PreparedStep12FullProducer::ActiveUnitClear(prepared) => {
-                // Same first store as retail's active body. The prepared image owns the
-                // complete active Build-then-Unit traversal and has proved every reached
-                // `World::reveal_fog` call takes its no-effect return.
-                *busy = 4;
-                let map = &mut self.sim.map;
-                let trace = step12_visibility_runtime::commit_active_unit_clear(
-                    prepared,
-                    &map.fog,
-                    &mut map.world,
-                    &map.circle,
-                );
-                self.work = self
-                    .work
-                    .saturating_add(trace.rows_visited as u32)
-                    .saturating_add(trace.build_stamps as u32)
-                    .saturating_add(trace.build_local_seen_cells as u32)
-                    .saturating_add(trace.unit_local_seen_cells as u32)
-                    .saturating_add(trace.unit_stamps as u32)
-                    .saturating_add(trace.reveal_no_effect_calls as u32)
-                    .max(1);
-            }
-        }
+        self.work = commit_prepared_visibility(self.sim, busy, prepared, self.work);
     }
 
     fn calc_markets(&mut self) {
@@ -3338,6 +3353,55 @@ impl Sim {
 
     // -- step 12 ----------------------------------------------------------------------
 
+    /// Exact immediate visibility refresh called by `Game::run` at `0x0058525D`.
+    ///
+    /// Unlike the scheduled step-12 route, this entry bypasses the phase-33 cadence and can
+    /// therefore reach retail's frame-zero explored-sharing tail. Other direct callers retain
+    /// their own red routing boundaries; this method cannot be used to impersonate them.
+    pub fn game_run_update_all_seen(&mut self) -> Result<u32, GameRunVisibilityError> {
+        if self.world.frame != self.vic_match.frame {
+            return Err(GameRunVisibilityError::GameFrameMismatch {
+                world: self.world.frame,
+                game: self.vic_match.frame,
+            });
+        }
+        let leader_active = std::array::from_fn(|who| self.leaders[who].active);
+        let scenario_reveal_points_enabled = self.vic_match.sem(victory_score::game_sem::PLAYBACK)
+            || self.vic_match.sem(victory_score::game_sem::SCENARIO_RULES);
+        let prepared = self.step12_visibility.preflight_full_producer(
+            &self.world,
+            &self.unit_type,
+            leader_active,
+            self.map.fog.option.0,
+            step12_visibility_producer_frontier::Step12VisibilityTrigger::GameRun,
+            Some(step12_visibility_runtime::ScheduledActiveProducerContext {
+                terrain: &self.map.world,
+                circle: &self.map.circle,
+                builds: &self.builds,
+                production: &self.production_runtime,
+                scenario_reveal_points_enabled,
+                frame_zero_sharing: Some(
+                    step12_visibility_runtime::FrameZeroExploredSharingContext {
+                        leaders: &self.vic_leaders.slots,
+                        starting_resources: self.vic_match.options.starting_resources,
+                    },
+                ),
+            }),
+        );
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.step12_visibility_error = Some(error.clone());
+                return Err(GameRunVisibilityError::Preflight(error));
+            }
+        };
+        let mut busy = self.game_daemon.busy;
+        let work = commit_prepared_visibility(self, &mut busy, prepared, 0);
+        self.game_daemon.busy = busy;
+        self.step12_visibility_error = None;
+        Ok(work)
+    }
+
     /// `GameDaemon::process_all` `0x00732700` — `process_victory`, `calc_danger`,
     /// `update_all_seen`, `calc_markets`, `check_borders`, `process_coll_blocks`,
     /// `Groups::process`. `calc_danger` executes from an immutable projection of canonical
@@ -3366,6 +3430,7 @@ impl Sim {
                     builds: &self.builds,
                     production: &self.production_runtime,
                     scenario_reveal_points_enabled,
+                    frame_zero_sharing: None,
                 }),
             )
         });

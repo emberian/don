@@ -7,7 +7,8 @@
 //! extended with canonical Build rows in exact retail Build-before-Unit order, including the
 //! complete `Wall::update_local_seen` footprint body. The active cohort requires an empty
 //! dedicated Wall band, disabled scenario reveal points, and the PE-proven no-effect branch of
-//! every reached `World::reveal_fog`. Other active maps still stop before `World::clear_seen`.
+//! every reached `World::reveal_fog`. The `Game::run` direct entry additionally owns the exact
+//! frame-zero explored-sharing tail. Other active maps still stop before `World::clear_seen`.
 
 use crate::systems::sparse_object_bands_authority_frontier::{
     RetailBand, RetailObjectAddress, SparseSlotLifecycle, BUILD_BAND_BASE, WALL_BAND_BASE,
@@ -272,6 +273,18 @@ pub struct ScheduledActiveProducerContext<'a> {
     pub builds: &'a [BuildData],
     pub production: &'a LiveProductionRuntime,
     pub scenario_reveal_points_enabled: bool,
+    /// Required only by a direct producer entry at `Game::frame == 0`, after every
+    /// object and scenario-point stamp has been preflighted.
+    pub frame_zero_sharing: Option<FrameZeroExploredSharingContext<'a>>,
+}
+
+/// Canonical retail fields read by the explored-sharing tail at
+/// `0x00732BD8..0x00732CF3`.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameZeroExploredSharingContext<'a> {
+    pub leaders: &'a [victory_score::LeaderState],
+    /// `GameInfo +0x21` / `Game +0x2D`.
+    pub starting_resources: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -347,7 +360,19 @@ pub enum ActiveUnitProducerFault {
         mark: i32,
     },
     ScenarioRevealPointsEnabled,
-    FrameZeroExploredSharing,
+    MissingFrameZeroExploredSharingContext,
+    FrameZeroLeaderCardinality {
+        actual: usize,
+    },
+    FrameZeroLeaderActivityMismatch {
+        who: usize,
+        object_owner_active: bool,
+        leader_active: bool,
+    },
+    FrameZeroLeaderWhoOutOfRange {
+        slot: usize,
+        who: i32,
+    },
     InvalidGrantSeen2 {
         row: usize,
         recipient: i8,
@@ -366,6 +391,7 @@ pub struct PreparedStep12ActiveUnitClear {
     unit_pass: PreparedStep12UnitPass,
     unit_local_seen: Vec<Vec<PreparedStep12LocalSeen>>,
     expected_reveal_calls: usize,
+    frame_zero_sharing: Option<PreparedFrameZeroExploredSharing>,
 }
 
 impl PreparedStep12ActiveUnitClear {
@@ -401,6 +427,20 @@ impl PreparedStep12ActiveUnitClear {
     pub fn unit_local_seen_cells(&self) -> usize {
         self.unit_local_seen.iter().map(Vec::len).sum()
     }
+
+    pub fn frame_zero_explored_cells_changed(&self) -> usize {
+        self.frame_zero_sharing
+            .as_ref()
+            .map_or(0, |sharing| sharing.expected_cells_changed)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedFrameZeroExploredSharing {
+    group_masks: Vec<u8>,
+    sharing_enabled: bool,
+    expected_cell_writes: usize,
+    expected_cells_changed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -451,6 +491,9 @@ pub struct ActiveUnitClearTrace {
     pub unit_local_seen_cells: usize,
     pub unit_stamps: usize,
     pub reveal_no_effect_calls: usize,
+    pub frame_zero_share_groups: usize,
+    pub frame_zero_explored_cell_writes: usize,
+    pub frame_zero_explored_cells_changed: usize,
 }
 
 fn resolve_build_type<'a>(
@@ -691,15 +734,101 @@ fn preflight_seeing_cells(
     Ok(reveal_calls)
 }
 
+fn prepare_frame_zero_explored_sharing(
+    frame: i32,
+    fog_option: u8,
+    leader_active: [bool; LEADER_SLOTS],
+    context: Option<FrameZeroExploredSharingContext<'_>>,
+    explored: &mut [u8],
+) -> Result<Option<PreparedFrameZeroExploredSharing>, ActiveUnitProducerFault> {
+    if frame != 0 {
+        return Ok(None);
+    }
+    let context = context.ok_or(ActiveUnitProducerFault::MissingFrameZeroExploredSharingContext)?;
+    if context.leaders.len() != LEADER_SLOTS {
+        return Err(ActiveUnitProducerFault::FrameZeroLeaderCardinality {
+            actual: context.leaders.len(),
+        });
+    }
+    for (who, (&object_owner_active, leader)) in
+        leader_active.iter().zip(context.leaders).enumerate()
+    {
+        let active = leader.is_active();
+        if object_owner_active != active {
+            return Err(ActiveUnitProducerFault::FrameZeroLeaderActivityMismatch {
+                who,
+                object_owner_active,
+                leader_active: active,
+            });
+        }
+    }
+
+    let sharing_enabled = context.starting_resources != 0 || fog_option != 0;
+    let mut processed_mask = 0u8;
+    let mut group_masks = Vec::new();
+    let mut expected_cell_writes = 0usize;
+    let mut expected_cells_changed = 0usize;
+    for slot in 0..LEADER_SLOTS {
+        if !leader_active[slot] {
+            continue;
+        }
+        let leader = &context.leaders[slot];
+        let leader_who = usize::try_from(leader.who)
+            .ok()
+            .filter(|&who| who < LEADER_SLOTS)
+            .ok_or(ActiveUnitProducerFault::FrameZeroLeaderWhoOutOfRange {
+                slot,
+                who: leader.who,
+            })?;
+        let mut group_mask = 1u8 << slot;
+        for target in 0..LEADER_SLOTS {
+            if target == slot {
+                continue;
+            }
+            let target_mask = 1u8 << target;
+            let mutual_alliance = target == leader_who
+                || (leader.diplos[target] == 2 && context.leaders[target].diplos[leader_who] == 2);
+            if mutual_alliance || leader.init_diplomacy.ally_mask & target_mask != 0 {
+                group_mask |= target_mask;
+            }
+        }
+
+        // Exact `0x00732C82..0x00732CCE`: a set already covered by an earlier set is
+        // skipped. Otherwise the current set joins the processed union even when both
+        // Game option bytes disable the actual plane walk.
+        if group_mask & processed_mask == group_mask {
+            continue;
+        }
+        group_masks.push(group_mask);
+        if sharing_enabled {
+            for byte in explored.iter_mut() {
+                if *byte & group_mask == 0 {
+                    continue;
+                }
+                expected_cell_writes += 1;
+                let before = *byte;
+                *byte |= group_mask;
+                expected_cells_changed += usize::from(*byte != before);
+            }
+        }
+        processed_mask |= group_mask;
+    }
+
+    Ok(Some(PreparedFrameZeroExploredSharing {
+        group_masks,
+        sharing_enabled,
+        expected_cell_writes,
+        expected_cells_changed,
+    }))
+}
+
 fn prepare_active_unit_clear(
     pass: PreparedStep12UnitPass,
     world: &World,
     leader_active: [bool; LEADER_SLOTS],
+    fog_option: u8,
     context: ScheduledActiveProducerContext<'_>,
 ) -> Result<PreparedStep12ActiveUnitClear, ActiveUnitProducerFault> {
-    if pass.frame() == 0 {
-        return Err(ActiveUnitProducerFault::FrameZeroExploredSharing);
-    }
     if context.scenario_reveal_points_enabled {
         return Err(ActiveUnitProducerFault::ScenarioRevealPointsEnabled);
     }
@@ -879,12 +1008,20 @@ fn prepare_active_unit_clear(
             &mut explored,
         )?;
     }
+    let frame_zero_sharing = prepare_frame_zero_explored_sharing(
+        pass.frame(),
+        fog_option,
+        leader_active,
+        context.frame_zero_sharing,
+        &mut explored,
+    )?;
     Ok(PreparedStep12ActiveUnitClear {
         build_rows_visited,
         build_actions,
         unit_pass: pass,
         unit_local_seen,
         expected_reveal_calls,
+        frame_zero_sharing,
     })
 }
 
@@ -965,6 +1102,31 @@ pub fn commit_active_unit_clear(
         prepared.expected_reveal_calls,
         "prepared reveal_fog chronology drifted before visibility commit"
     );
+    let mut frame_zero_explored_cell_writes = 0usize;
+    let mut frame_zero_explored_cells_changed = 0usize;
+    if let Some(sharing) = &prepared.frame_zero_sharing {
+        if sharing.sharing_enabled {
+            for &group_mask in &sharing.group_masks {
+                for byte in &mut terrain.seen2 {
+                    if *byte & group_mask == 0 {
+                        continue;
+                    }
+                    frame_zero_explored_cell_writes += 1;
+                    let before = *byte;
+                    *byte |= group_mask;
+                    frame_zero_explored_cells_changed += usize::from(*byte != before);
+                }
+            }
+        }
+        assert_eq!(
+            frame_zero_explored_cell_writes, sharing.expected_cell_writes,
+            "prepared frame-zero explored write chronology drifted before visibility commit"
+        );
+        assert_eq!(
+            frame_zero_explored_cells_changed, sharing.expected_cells_changed,
+            "prepared frame-zero explored after-image drifted before visibility commit"
+        );
+    }
     ActiveUnitClearTrace {
         rows_visited,
         build_rows_visited: prepared.build_rows_visited,
@@ -973,6 +1135,12 @@ pub fn commit_active_unit_clear(
         unit_local_seen_cells: prepared.unit_local_seen_cells(),
         unit_stamps: prepared.unit_pass.stamps(),
         reveal_no_effect_calls: newly_explored.len(),
+        frame_zero_share_groups: prepared
+            .frame_zero_sharing
+            .as_ref()
+            .map_or(0, |sharing| sharing.group_masks.len()),
+        frame_zero_explored_cell_writes,
+        frame_zero_explored_cells_changed,
     }
 }
 
@@ -1401,13 +1569,15 @@ impl Step12VisibilityAuthority {
                 Ok(PreparedStep12FullProducer::InactiveLeadersClear)
             }
             LiveStep12Preparation::UnitPass(pass)
-                if matches!(trigger, Step12VisibilityTrigger::ScheduledStep12) =>
+                if matches!(trigger, Step12VisibilityTrigger::ScheduledStep12)
+                    || (matches!(trigger, Step12VisibilityTrigger::GameRun)
+                        && scheduled_active.is_some()) =>
             {
                 let context =
                     scheduled_active.ok_or(Step12VisibilityPreflightError::ActiveUnitCohort(
                         ActiveUnitProducerFault::MissingScheduledContext,
                     ))?;
-                prepare_active_unit_clear(pass, world, leader_active, context)
+                prepare_active_unit_clear(pass, world, leader_active, fog_option, context)
                     .map(PreparedStep12FullProducer::ActiveUnitClear)
                     .map_err(Step12VisibilityPreflightError::ActiveUnitCohort)
             }
@@ -1874,6 +2044,50 @@ mod tests {
                 residuals: Step12ProducerResiduals::MISSING,
             }
         );
+    }
+
+    #[test]
+    fn non_game_run_direct_entries_stay_red_even_when_given_the_game_run_context_shape() {
+        let mut world = World::new(9);
+        assert!(world.set_object_owner_active(0, true));
+        let terrain = map_terrain::World::init(8, 8, 44, 4, 4);
+        let circle = CircleTable::build();
+        let production = LiveProductionRuntime::default();
+        let builds = [];
+        let context = ScheduledActiveProducerContext {
+            terrain: &terrain,
+            circle: &circle,
+            builds: &builds,
+            production: &production,
+            scenario_reveal_points_enabled: false,
+            frame_zero_sharing: None,
+        };
+        let authority = Step12VisibilityAuthority::default();
+
+        for trigger in [
+            Step12VisibilityTrigger::BuildClose,
+            Step12VisibilityTrigger::ScenarioAddVisibility,
+            Step12VisibilityTrigger::ScenarioRemoveVisibility,
+            Step12VisibilityTrigger::ScenarioSetExploredShowBuildings,
+        ] {
+            let error = authority
+                .preflight_full_producer(
+                    &world,
+                    &[],
+                    [true, false, false, false, false, false, false, false],
+                    0,
+                    trigger,
+                    Some(context),
+                )
+                .unwrap_err();
+            assert_eq!(
+                error,
+                Step12VisibilityPreflightError::IncompleteProducer {
+                    prepared_unit_stamps: 0,
+                    residuals: Step12ProducerResiduals::MISSING,
+                }
+            );
+        }
     }
 
     #[test]
