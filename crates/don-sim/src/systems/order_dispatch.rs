@@ -958,6 +958,7 @@ impl From<Order> for OrderRec {
             targeted_payload,
             patrol_payload,
             economy: o.economy,
+            guard: o.guard,
             ..OrderRec::default()
         }
     }
@@ -1029,6 +1030,7 @@ impl From<OrderRec> for Order {
             form_order: r.form_order,
             air_patrol,
             strafe,
+            guard: r.guard,
             economy: r.economy,
         }
     }

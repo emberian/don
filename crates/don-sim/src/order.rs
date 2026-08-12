@@ -504,6 +504,9 @@ pub struct Order {
     /// Exact walked `StrafeOrder` payload. Target identity is duplicated in the generic
     /// header and must agree; `Some` is valid only for STRAFE.
     pub strafe: Option<crate::systems::patrol::StrafeOrder>,
+    /// Complete checksum-visible `GuardOrder` payload. The flattened target header is a
+    /// second view of the same identity and must agree with `guard.target`.
+    pub guard: Option<crate::systems::guard_order::GuardOrderState>,
     /// Exact economy-order suffix for BOARD_SHIP/AWAIT_BOARD/REPAIR/GATHER/CAST_SPELL/
     /// TRADE_ROUTE. Target-only variants are explicit so a foreign tag-0 order cannot be
     /// mistaken for a recovered economy node.
@@ -529,6 +532,7 @@ impl Default for Order {
             form_order: None,
             air_patrol: None,
             strafe: None,
+            guard: None,
             economy: None,
         }
     }
@@ -592,6 +596,21 @@ impl Order {
             follow: Some(payload),
             ..Order::default()
         }
+    }
+
+    /// Construct one exact `GuardOrder` node without borrowing the incompatible Move payload.
+    pub fn guard(payload: crate::systems::guard_order::GuardOrderState) -> Result<Order, ()> {
+        let target_who = i8::try_from(payload.target.who).map_err(|_| ())?;
+        let target_o = i16::try_from(payload.target.o).map_err(|_| ())?;
+        Ok(Order {
+            kind: OrderIndex::Guard,
+            flags: ORDER_GROUP,
+            target_who,
+            target_o,
+            target_uid: payload.target.uid,
+            guard: Some(payload),
+            ..Order::default()
+        })
     }
 
     /// `Unit::add_spec_anim_order(type, data1, data2, QueuePos)` `0x005E4160`.

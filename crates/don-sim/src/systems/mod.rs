@@ -83,6 +83,8 @@ pub mod canonical_build_at_work;
 pub mod canonical_economy_group_host;
 /// Sim-owned atomic opcode-0 Group plus opcode-7 MoveTo command transaction.
 pub mod canonical_group_move_host;
+/// Canonical bounded `[Group][GUARD]` installer and saved periodic-idle frame owner.
+pub mod canonical_guard_runtime;
 /// Installed, revision-bound production adapter for exact saved Camp Gather work.
 pub mod canonical_gather_work;
 /// Installed, revision-bound production adapter for the fresh Fishermen DEPLOY wait frame.

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Source-only reconstruction of the GUARD order installer and one `Unit::do_guard` frame.
 //!
-//! This file is deliberately not registered in `systems/mod.rs` yet.  GUARD needs a typed
-//! payload, save/load support, command construction, an atomic world adapter, and a real
-//! `Sim::do_frame` call path before the arm can be called complete.  The pure planners here
-//! freeze the retail decisions without pretending those host-owned tails already exist.
+//! These pure planners freeze the complete retail decisions. The canonical runtime currently
+//! consumes only the receipt-proven singleton Queue-New installer and nonmoving periodic-idle
+//! frame; spatial, movement, casting, RNG and general formation tails remain fail-closed, so the
+//! command/executor row is not globally complete.
 
 pub const GUARD_ORDER_INDEX: i32 = 12;
 pub const UNIT_ADD_GUARD_ORDER_VA: u32 = 0x005e_3e40;

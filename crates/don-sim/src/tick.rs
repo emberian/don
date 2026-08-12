@@ -876,6 +876,8 @@ pub struct Sim {
     /// Revision/digest-bound type, containment, and scenario facts for the admitted
     /// Unit-carrier LaunchPatrol/Scramble package cone.
     pub air_group_authority: crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority,
+    /// Revision-bound singleton-formation and target virtual facts for the bounded GUARD cone.
+    pub guard_authority: crate::systems::canonical_guard_runtime::CanonicalGuardAuthority,
     /// Revision/digest-bound registry/caravan/terrain facts for admitted `Unit::do_trade`
     /// branches. This is a load-time adapter, not a second persistent order owner.
     pub trade_route_authority:
@@ -1603,6 +1605,8 @@ impl Sim {
                 crate::systems::canonical_economy_group_host::EconomyRuntimeAuthority::default(),
             air_group_authority:
                 crate::systems::canonical_air_group_host::AirGroupRuntimeAuthority::default(),
+            guard_authority:
+                crate::systems::canonical_guard_runtime::CanonicalGuardAuthority::default(),
             trade_route_authority:
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
@@ -1657,6 +1661,14 @@ impl Sim {
         authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
     ) {
         self.group_move_authority = authority;
+    }
+
+    /// Install the target/formation facts consumed by the bounded canonical GUARD host.
+    pub fn replace_guard_authority(
+        &mut self,
+        authority: crate::systems::canonical_guard_runtime::CanonicalGuardAuthority,
+    ) {
+        self.guard_authority = authority;
     }
 
     /// Install action facts used by SET_TRANSPORT, BUILDMASK, and FOLLOW. Loaded simulations
@@ -1881,6 +1893,56 @@ impl Sim {
             &self.scenario_ignore_orders,
             prepared,
         ))
+    }
+
+    /// Process the dominant strict retail GUARD subdomain: one opcode-0 Unit selection followed
+    /// by opcode 31 QueuePos::New. General multi-member, queue-last and spatial tails stay red.
+    pub fn process_guard_group_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_guard_runtime::GuardPackageReceipt,
+        crate::systems::canonical_guard_runtime::CanonicalGuardError,
+    > {
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+        use crate::systems::canonical_guard_runtime::{commit_guard_package, prepare_guard_package};
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_guard_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.guard_authority,
+            &self.scenario_ignore_orders,
+            &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_guard_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.guard_authority,
+            &self.scenario_ignore_orders,
+            &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
+            prepared,
+        )
     }
 
     /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
@@ -3526,6 +3588,9 @@ impl Sim {
             // Arm 11, bounded to the receipt-proven nearby-target branch. The movement/search
             // and containment-promotion cones remain fail-closed in the canonical adapter.
             OrderIndex::Follow => self.do_follow_near(row),
+            // Arm 12, bounded to the exact nonmoving periodic idle pulse. All spatial,
+            // movement, CAST and RNG branches remain fail-closed in the canonical adapter.
+            OrderIndex::Guard => self.do_guard_idle(row),
             // Arm 5 falls to the default arm and does nothing. Faithfully empty.
             OrderIndex::Patrol => {}
             _ => {}
@@ -3546,6 +3611,17 @@ impl Sim {
             &self.simple_group_action_authority,
             prepared,
         );
+    }
+
+    fn do_guard_idle(&mut self, row: usize) {
+        use crate::systems::canonical_guard_runtime::{
+            commit_guard_idle_activation, prepare_guard_idle_activation,
+        };
+        let Ok(prepared) = prepare_guard_idle_activation(&self.world, &self.guard_authority, row)
+        else {
+            return;
+        };
+        let _ = commit_guard_idle_activation(&mut self.world, &self.guard_authority, prepared);
     }
 
     fn do_gather_work(&mut self, row: usize) {

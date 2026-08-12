@@ -523,6 +523,9 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
     if format_version < ORDER_NODE_METRIC_FORMAT_VERSION && o.strafe.is_some() {
         return Err(SaveError::Unsupported("STRAFE payload before DoNSave v13"));
     }
+    if format_version < ORDER_NODE_METRIC_FORMAT_VERSION && o.guard.is_some() {
+        return Err(SaveError::Unsupported("GUARD payload before DoNSave v13"));
+    }
     if format_version >= TYPED_ORDER_FORMAT_VERSION {
         if o.move_state.is_some() && !order_kind_carries_move_state(o.kind) {
             return Err(SaveError::Invalid("movement payload on foreign order kind"));
@@ -556,10 +559,20 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             }) {
                 return Err(SaveError::Invalid("invalid STRAFE payload"));
             }
+            if o.guard.is_some() && o.kind != OrderIndex::Guard {
+                return Err(SaveError::Invalid("GUARD payload on foreign order kind"));
+            }
+            if o.guard.is_some_and(|guard| {
+                (i32::from(o.target_o), i32::from(o.target_who), o.target_uid)
+                    != (guard.target.o, guard.target.who, guard.target.uid)
+            }) {
+                return Err(SaveError::Invalid("invalid GUARD payload"));
+            }
         }
         let typed_payloads = usize::from(o.move_state.is_some())
             + usize::from(o.air_patrol.is_some())
-            + usize::from(o.strafe.is_some());
+            + usize::from(o.strafe.is_some())
+            + usize::from(o.guard.is_some());
         if typed_payloads > 1 {
             return Err(SaveError::Invalid("multiple typed order payloads"));
         }
@@ -575,7 +588,10 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
         None
     };
     if economy_node.is_some()
-        && (o.move_state.is_some() || o.air_patrol.is_some() || o.strafe.is_some())
+        && (o.move_state.is_some()
+            || o.air_patrol.is_some()
+            || o.strafe.is_some()
+            || o.guard.is_some())
     {
         return Err(SaveError::Invalid("multiple typed order payloads"));
     }
@@ -660,6 +676,8 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             DoNSaveOrderPayloadTag::AirPatrol
         } else if strafe_leaf.is_some() {
             DoNSaveOrderPayloadTag::Strafe
+        } else if o.guard.is_some() {
+            DoNSaveOrderPayloadTag::Guard
         } else {
             DoNSaveOrderPayloadTag::None
         };
@@ -678,6 +696,18 @@ fn write_order(w: &mut Writer, o: &Order, format_version: u32) -> Result<(), Sav
             debug_assert_eq!(leaf[0], tag as u8);
             debug_assert_eq!(leaf[1], tag.wire_version());
             w.bytes(&leaf);
+        } else if let Some(guard) = o.guard {
+            w.u8(tag as u8);
+            w.u8(tag.wire_version());
+            w.i32(guard.target.o);
+            w.i32(guard.target.who);
+            w.u16(guard.target.uid);
+            w.i32(guard.dx);
+            w.i32(guard.dy);
+            w.i32(guard.guard_x);
+            w.i32(guard.guard_y);
+            w.i32(guard.idle);
+            w.i32(guard.retry);
         } else {
             w.u8(tag as u8);
             w.u8(tag.wire_version());
@@ -738,6 +768,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         form_order: None,
         air_patrol: None,
         strafe: None,
+        guard: None,
         economy: None,
     };
     let special_anim = if r.bool()? {
@@ -778,7 +809,8 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
     } else {
         None
     };
-    let (move_state, air_patrol, strafe, economy) = if format_version >= TYPED_ORDER_FORMAT_VERSION
+    let (move_state, air_patrol, strafe, guard, economy) = if format_version
+        >= TYPED_ORDER_FORMAT_VERSION
     {
         let tag = DoNSaveOrderPayloadTag::from_raw(r.u8()?).ok_or(SaveError::Invalid(
             "unknown order payload discriminator/version",
@@ -811,7 +843,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                 } else {
                     None
                 };
-                (None, None, None, economy)
+                (None, None, None, None, economy)
             }
             (DoNSaveOrderPayloadTag::Move, 1) => {
                 if !order_kind_carries_move_state(kind) {
@@ -846,6 +878,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                     None,
                     None,
                     None,
+                    None,
                 )
             }
             (
@@ -854,6 +887,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                 | DoNSaveOrderPayloadTag::TradeRoute),
                 1,
             ) if format_version >= economy_payload::DON_SAVE_V13 => (
+                None,
                 None,
                 None,
                 None,
@@ -883,7 +917,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                     },
                 };
                 payload.validate().map_err(map_air_patrol_save_error)?;
-                (None, Some(payload), None, None)
+                (None, Some(payload), None, None, None)
             }
             (DoNSaveOrderPayloadTag::AirPatrol, _)
                 if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
@@ -913,9 +947,46 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
                     &bytes,
                 )
                 .map_err(map_strafe_save_error)?;
-                (None, None, Some(payload), None)
+                (None, None, Some(payload), None, None)
             }
             (DoNSaveOrderPayloadTag::Strafe, _)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                return Err(SaveError::Invalid(
+                    "unknown order payload discriminator/version",
+                ));
+            }
+            (DoNSaveOrderPayloadTag::Guard, 1)
+                if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
+            {
+                if kind != OrderIndex::Guard {
+                    return Err(SaveError::Invalid("GUARD payload on foreign order kind"));
+                }
+                let payload = crate::systems::guard_order::GuardOrderState {
+                    target: crate::systems::guard_order::GuardIdentity {
+                        o: r.i32()?,
+                        who: r.i32()?,
+                        uid: r.u16()?,
+                    },
+                    dx: r.i32()?,
+                    dy: r.i32()?,
+                    guard_x: r.i32()?,
+                    guard_y: r.i32()?,
+                    idle: r.i32()?,
+                    retry: r.i32()?,
+                };
+                if (payload.target.o, payload.target.who, payload.target.uid)
+                    != (
+                        i32::from(order.target_o),
+                        i32::from(order.target_who),
+                        order.target_uid,
+                    )
+                {
+                    return Err(SaveError::Invalid("invalid GUARD payload"));
+                }
+                (None, None, None, Some(payload), None)
+            }
+            (DoNSaveOrderPayloadTag::Guard, _)
                 if format_version >= ORDER_NODE_METRIC_FORMAT_VERSION =>
             {
                 return Err(SaveError::Invalid(
@@ -941,7 +1012,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
             }
         }
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
     if let (Some(move_state), Some(form)) = (move_state, form_order) {
         if kind == OrderIndex::ChangeForm && move_state.angle != form.angle {
@@ -955,6 +1026,7 @@ fn read_order(r: &mut Reader<'_>, format_version: u32) -> Result<Order, SaveErro
         move_state,
         air_patrol,
         strafe,
+        guard,
         economy,
         ..order
     })
