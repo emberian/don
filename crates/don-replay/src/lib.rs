@@ -63,6 +63,7 @@ pub mod groups_build_history;
 pub mod groups_build_runtime;
 pub mod growth;
 pub mod groups_dynamic;
+pub mod groups_first_farm_authority;
 pub mod groups_pre_pair_unit_authority;
 pub mod groups_sim_channel;
 pub mod guys_runtime;
