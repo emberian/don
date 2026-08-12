@@ -370,9 +370,50 @@ fn retail_alliance_accept_stages_generic_victory_and_resumes_identically() {
 }
 
 #[test]
-fn alliance_victory_requiring_defeated_unit_cleanup_rolls_back_every_owner() {
+fn alliance_victory_executes_vacuous_defeated_owner_cleanup_and_resumes_identically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();
+        let checkpoint = save_sim(&uninterrupted).expect("pending coalition alliance is savable");
+        let mut resumed = load_sim(&checkpoint).expect("pending coalition alliance reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert!(uninterrupted_receipt.validates(&uninterrupted_receipt.request));
+        let cleanup = resumed_receipt.defeat_cleanup.as_ref().unwrap();
+        assert_ne!(cleanup.owners, 0);
+        assert_eq!(
+            cleanup.per_owner.len(),
+            cleanup.owners.count_ones() as usize
+        );
+        for cleanup in &cleanup.per_owner {
+            assert_eq!(cleanup.armies_stopped, 0);
+            assert_eq!(cleanup.slots_visited, 0);
+        }
+        let mut forged_cleanup = resumed_receipt.clone();
+        forged_cleanup.defeat_cleanup.as_mut().unwrap().per_owner[0].owner = 8;
+        assert!(!forged_cleanup.validates(&forged_cleanup.request));
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("coalition victory reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn alliance_victory_with_a_live_defeated_army_rolls_back_every_owner() {
     with_large_stack(|| {
         let mut sim = configured_alliance_with_defeated_opponents_sim();
+        sim.armies.lists[4][3].valid = 1;
         let before = save_sim(&sim).unwrap();
         let receipt = sim
             .process_diplomacy_package(2, 0x2902, &RETAIL_ACCEPT_2_3)
@@ -381,9 +422,9 @@ fn alliance_victory_requiring_defeated_unit_cleanup_rolls_back_every_owner() {
         assert!(receipt.validates(&receipt.request));
         assert!(matches!(
             receipt.error,
-            Some(CanonicalDiplomacyRuntimeError::VictoryNeedsDefeatedUnitCleanup {
+            Some(CanonicalDiplomacyRuntimeError::VictoryNeedsNonVacuousDefeatCleanup {
                 owners,
-            }) if owners != 0
+            }) if owners & (1 << 4) != 0
         ));
         assert_eq!(save_sim(&sim).unwrap(), before);
     });
