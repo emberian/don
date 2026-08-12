@@ -50,6 +50,7 @@ fn live(row: usize, who: u8, object_o: i16) -> LiveStep12UnitState {
         fine_y: (20 + row as i32) * FINE_PER_FOG_CELL,
         unit_angle: 0x2000_0000,
         mylos: 10,
+        visible: 0,
         unit_masks: 0,
         infiltrated: 0,
     }

@@ -2,10 +2,11 @@
 
 ## Scope
 
-The shipped `GameDaemon::update_all_seen` body is `0x00732840`, 1,221 bytes.  The active-player
-producer is still open: active Build/Wall vision, started-Wonder local vision,
-`World::reveal_fog`, scenario reveal points, and frame-zero explored sharing do not yet have one
-complete canonical transaction.
+The shipped `GameDaemon::update_all_seen` body is `0x00732840`, 1,221 bytes.  The general
+active-player producer is still open. A later tranche now executes the bounded empty-Build/Wall
+Unit-only cohort documented in `game-daemon-update-all-seen-active-units.md`; populated
+Build/Wall vision, started-Wonder local vision, effectful `World::reveal_fog`, scenario reveal
+points, and frame-zero explored sharing remain outside both cohorts.
 
 This tranche executes a different complete PE path through the same body.  When all eight
 `LeaderData::flags & 1` gates are clear, retail reaches the following replay-visible mutations:
@@ -19,9 +20,7 @@ This tranche executes a different complete PE path through the same body.  When 
 
 No unowned virtual, object registry, scenario record, diplomacy row, or reveal effect is read on
 that path.  `step12_visibility_runtime::preflight_full_producer` therefore returns an opaque
-`InactiveLeadersClear` plan only when all eight canonical activity gates are false.  One active
-leader, even with empty object bands, retains the existing `IncompleteProducer` error because
-the scenario and Build/Wall registries are not authoritative emptiness proofs.
+`InactiveLeadersClear` plan when all eight canonical activity gates are false.
 
 ## Atomic tick seam
 
@@ -37,7 +36,7 @@ cursor, or Groups child.
 - non-empty `seen`, `seen3`, and `wcoord_seen` clear while persistent `seen2` survives;
 - the World checksum changes and `busy` ends at four;
 - save/load preserves the post-clear checksum and a resumed frame converges byte-for-byte; and
-- an active empty leader refuses with every daemon and fog byte unchanged.
+- an active empty leader takes the later exact empty Unit cohort rather than this inactive plan.
 
 The gap remains red for active leaders.  This is an executable input cohort, not a closure flip
 for the full active visibility producer.

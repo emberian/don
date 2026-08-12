@@ -339,10 +339,17 @@ pub struct Step12UnitStamp {
     pub stamp_fine_y: i32,
     pub fog_x: i32,
     pub fog_y: i32,
+    /// Exact positive result of `UnitData::los()`.  Retaining it lets the commit call the
+    /// already exact full-disc `Object::update_seen(0)` loop without reverse-engineering an
+    /// odd LOS value from its truncated fog radius.
+    pub resolved_los_tiles: i32,
     pub radius_fog_cells: i32,
     pub center: UnitStampCenter,
     /// Comes only from authoritative `object_flags & OBJECT_DETECTOR` at this pass.
     pub detector: bool,
+    /// Call-time `UnitData::unit_masks +0x218`. `World::reveal_fog` tests bit `0x100`
+    /// on the source Unit after its rare/oil/item clauses.
+    pub unit_masks: u32,
     pub grant_seen2_to: i8,
 }
 
@@ -424,9 +431,11 @@ pub fn plan_unit_stamp(facts: Step12UnitFacts) -> Result<UnitStampDecision, Unit
         stamp_fine_y,
         fog_x: fine_to_fog(stamp_fine_x),
         fog_y: fine_to_fog(stamp_fine_y),
+        resolved_los_tiles: facts.resolved_los_tiles,
         radius_fog_cells,
         center,
         detector: facts.object_flags & OBJECT_DETECTOR != 0,
+        unit_masks: facts.unit_masks,
         grant_seen2_to: facts.grant_seen2_to,
     }))
 }
@@ -462,6 +471,9 @@ pub struct LiveStep12UnitState {
     pub fine_y: i32,
     pub unit_angle: i32,
     pub mylos: i8,
+    /// `ObjectData::visible +0x40`.  A nonzero byte makes full `Object::update_seen(0)`
+    /// call virtual `Unit::update_local_seen` after the LOS calculation.
+    pub visible: i8,
     pub unit_masks: u32,
     pub infiltrated: i8,
 }
@@ -702,12 +714,17 @@ pub enum LiveStep12PrepareFault {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreparedStep12UnitRow {
     identity: LiveStep12UnitIdentity,
+    visible: i8,
     decision: UnitStampDecision,
 }
 
 impl PreparedStep12UnitRow {
     pub const fn identity(&self) -> LiveStep12UnitIdentity {
         self.identity
+    }
+
+    pub const fn visible(&self) -> i8 {
+        self.visible
     }
 
     pub const fn decision(&self) -> UnitStampDecision {
@@ -937,6 +954,7 @@ pub fn prepare_live_unit_pass(
         if let Some(skip) = early {
             rows.push(PreparedStep12UnitRow {
                 identity: live.identity,
+                visible: live.visible,
                 decision: UnitStampDecision::Skip(skip),
             });
             continue;
@@ -1055,6 +1073,7 @@ pub fn prepare_live_unit_pass(
         }
         rows.push(PreparedStep12UnitRow {
             identity: live.identity,
+            visible: live.visible,
             decision,
         });
     }

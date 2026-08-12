@@ -163,7 +163,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger 0x00732D10 - exact body/tick adapter execute; reached UnitData::attack and late Airbase/Dock/basic-type building strength remain fail-closed",
-    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive full clear executes; active leaders still fail closed on Build/Wall/reveal_fog ownership",
+    "step 12 GameDaemon::update_all_seen 0x00732840 - all-inactive and empty-Build/Wall Unit-only full clears execute; populated Build/Wall, visible-local-seen, scenario-point, and effectful reveal_fog paths remain fail closed",
     "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
@@ -1401,11 +1401,10 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     }
 
     fn update_all_seen(&mut self, busy: &mut i32) {
-        let prepared = *self
+        let prepared = self
             .visibility
-            .as_ref()
+            .take()
             .expect("scheduled update_all_seen has a prepared image")
-            .as_ref()
             .expect("step-12 preflight rejected every failed visibility image");
         match prepared {
             step12_visibility_runtime::PreparedStep12FullProducer::NoMutation(cadence) => {
@@ -1421,6 +1420,25 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
                 *busy = 4;
                 self.sim.map.fog.begin_frame(&mut self.sim.map.world);
                 self.work = self.work.saturating_add(1);
+            }
+            step12_visibility_runtime::PreparedStep12FullProducer::ActiveUnitClear(prepared) => {
+                // Same first store as retail's active body. The prepared image owns the
+                // complete Unit traversal and has already proved that every reached
+                // `World::reveal_fog` call takes its no-effect return.
+                *busy = 4;
+                let map = &mut self.sim.map;
+                let trace = step12_visibility_runtime::commit_active_unit_clear(
+                    prepared,
+                    &map.fog,
+                    &mut map.world,
+                    &map.circle,
+                );
+                self.work = self
+                    .work
+                    .saturating_add(trace.rows_visited as u32)
+                    .saturating_add(trace.unit_stamps as u32)
+                    .saturating_add(trace.reveal_no_effect_calls as u32)
+                    .max(1);
             }
         }
     }
@@ -2993,12 +3011,34 @@ impl Sim {
         let danger = (frame % 200 == 0).then(|| game_daemon_calc_danger_host::prepare(self));
         let visibility = (frame % 100 == 33).then(|| {
             let leader_active = std::array::from_fn(|who| self.leaders[who].active);
+            let build_marks = std::array::from_fn(|who| {
+                self.world
+                    .object_bands()
+                    .mark(who, RetailBand::Build)
+                    .expect("step-12 owner is inside the canonical sparse registry")
+            });
+            let wall_marks = std::array::from_fn(|who| {
+                self.world
+                    .object_bands()
+                    .mark(who, RetailBand::Wall)
+                    .expect("step-12 owner is inside the canonical sparse registry")
+            });
+            let scenario_reveal_points_enabled =
+                self.vic_match.sem(victory_score::game_sem::PLAYBACK)
+                    || self.vic_match.sem(victory_score::game_sem::SCENARIO_RULES);
             self.step12_visibility.preflight_full_producer(
                 &self.world,
                 &self.unit_type,
                 leader_active,
                 self.map.fog.option.0,
                 step12_visibility_producer_frontier::Step12VisibilityTrigger::ScheduledStep12,
+                Some(step12_visibility_runtime::ScheduledActiveProducerContext {
+                    terrain: &self.map.world,
+                    circle: &self.map.circle,
+                    build_marks,
+                    wall_marks,
+                    scenario_reveal_points_enabled,
+                }),
             )
         });
         let mut daemon = std::mem::take(&mut self.game_daemon);
@@ -5633,15 +5673,15 @@ mod tests {
         );
     }
 
-    /// Even a receipt-complete detector Unit cannot authorize a Unit-only plane rebuild. The
-    /// real `do_frame` call must fail before the GameDaemon shell and preserve sections 6/7.
+    /// A receipt-complete detector Unit still cannot authorize an effectful reveal-fog call.
+    /// The real `do_frame` call must fail before the GameDaemon shell and preserve sections 6/7.
     #[test]
     fn phase33_preflights_exact_units_but_preserves_planes_until_full_owner_lands() {
         use crate::systems::map_terrain::WorldSection;
         use crate::systems::step12_visibility_producer_frontier::OBJMASK_DETECT;
         use crate::systems::step12_visibility_runtime::{
-            Step12ProducerResiduals, Step12VisibilityPreflightError, VisibilityConstants,
-            VisibilityTypeProjection, UNIT_TYPE_BASE,
+            ActiveUnitProducerFault, RevealFogNoEffectBlocker, Step12VisibilityPreflightError,
+            VisibilityConstants, VisibilityTypeProjection, UNIT_TYPE_BASE,
         };
 
         let mut sim = Sim::new(13, 16);
@@ -5671,6 +5711,10 @@ mod tests {
         sim.map.world.seen2[3] = 0x22;
         sim.map.world.seen3[3] = 0x84;
         sim.map.world.wcoord_seen[0] = 0x48;
+        sim.map
+            .world
+            .tdata
+            .fill(crate::systems::map_terrain::tflag::RESOURCE);
         let before = sim.map.world.checksum_sections();
 
         let trace = sim.do_frame();
@@ -5683,13 +5727,15 @@ mod tests {
             sim.game_daemon.busy, 7,
             "preflight must precede daemon mutation"
         );
-        assert_eq!(
+        assert!(matches!(
             sim.step12_visibility_error,
-            Some(Step12VisibilityPreflightError::IncompleteProducer {
-                prepared_unit_stamps: 1,
-                residuals: Step12ProducerResiduals::MISSING,
-            })
-        );
+            Some(Step12VisibilityPreflightError::ActiveUnitCohort(
+                ActiveUnitProducerFault::RevealFogEffectful {
+                    blocker: RevealFogNoEffectBlocker::ResourceTile,
+                    ..
+                }
+            ))
+        ));
         let after = sim.map.world.checksum_sections();
         assert_eq!(
             after.section(WorldSection::TDataAndFog),

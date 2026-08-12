@@ -3,23 +3,26 @@
 //!
 //! This owner joins the exact type, leader-count, HeroesData, Constants, projection, and
 //! instance-detector facts required by [`super::step12_visibility_producer_frontier`].  It is
-//! intentionally unable to commit a refresh: active Build/Wall vision and `World::reveal_fog`
-//! are not yet transaction participants.  A scheduled refresh can therefore be fully
-//! preflighted, but must stop before `World::clear_seen` until those owners land.
+//! The active cohort admitted here requires exact empty Build/Wall bands, disabled scenario
+//! reveal points, zero `ObjectData::visible`, and the PE-proven no-effect branch of every
+//! reached `World::reveal_fog`. Other active maps still stop before `World::clear_seen`.
 
 use crate::systems::sparse_object_bands_authority_frontier::{
-    RetailBand, RetailObjectAddress, SparseSlotLifecycle,
+    RetailBand, RetailObjectAddress, SparseSlotLifecycle, BUILD_BAND_BASE, WALL_BAND_BASE,
 };
 use crate::world::{Handle, World, WorldObjectIdentity};
 
+use super::borders_fog::{self, CircleTable, Fog, SeeingObject};
+use super::items::WFLAG_ITEM;
+use super::map_terrain::{self, tflag, wflag};
 use super::step12_visibility_producer_frontier::{
     object_init_flags, prepare_live_unit_pass, resolve_unit_los, DetectorInstanceProvenance,
     LiveStep12Preparation, LiveStep12PrepareFault, LiveStep12UnitBandSnapshot,
-    LiveStep12UnitIdentity, LiveStep12UnitState, SmallLosProjectionReceipt,
+    LiveStep12UnitIdentity, LiveStep12UnitState, PreparedStep12UnitPass, SmallLosProjectionReceipt,
     Step12UnitAuthorityReceipt, Step12VisibilityAuthorityReceipt, Step12VisibilityCadence,
-    Step12VisibilityTrigger, UnitLosFacts, LEADER_SLOTS, OBJECT_VALID, PTOLEMY_NUM_UNITS_INDEX,
-    PTOLEMY_ROLE_MASK, SMALL_LOS_PROJECT_DISTANCE, SMALL_LOS_STANDARD_TYPE_FLAGS2,
-    SMALL_LOS_STANDARD_UNIT_MASKS, THE_CEO_NUM_UNITS_INDEX,
+    Step12VisibilityTrigger, UnitLosFacts, UnitStampDecision, LEADER_SLOTS, OBJECT_VALID,
+    PTOLEMY_NUM_UNITS_INDEX, PTOLEMY_ROLE_MASK, SMALL_LOS_PROJECT_DISTANCE,
+    SMALL_LOS_STANDARD_TYPE_FLAGS2, SMALL_LOS_STANDARD_UNIT_MASKS, THE_CEO_NUM_UNITS_INDEX,
 };
 
 pub const UNIT_TYPE_BASE: i32 = 0x32;
@@ -245,29 +248,265 @@ impl Step12ProducerResiduals {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step12VisibilityPreflightError {
     Authority(VisibilityAuthorityFault),
+    ActiveUnitCohort(ActiveUnitProducerFault),
     IncompleteProducer {
         prepared_unit_stamps: usize,
         residuals: Step12ProducerResiduals,
     },
 }
 
-/// The two complete `GameDaemon::update_all_seen` paths that the live Sim can currently
+#[derive(Clone, Copy, Debug)]
+pub struct ScheduledActiveProducerContext<'a> {
+    pub terrain: &'a map_terrain::World,
+    pub circle: &'a CircleTable,
+    pub build_marks: [i32; LEADER_SLOTS],
+    pub wall_marks: [i32; LEADER_SLOTS],
+    pub scenario_reveal_points_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevealFogNoEffectBlocker {
+    ResourceTile,
+    OilCell,
+    ItemCell,
+    SourceUnitAutoExplore,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActiveUnitProducerFault {
+    MissingScheduledContext,
+    NonEmptyBuildBand {
+        who: usize,
+        mark: i32,
+    },
+    NonEmptyWallBand {
+        who: usize,
+        mark: i32,
+    },
+    ScenarioRevealPointsEnabled,
+    FrameZeroExploredSharing,
+    VisibleLocalSeen {
+        row: usize,
+        visible: i8,
+    },
+    InvalidGrantSeen2 {
+        row: usize,
+        recipient: i8,
+    },
+    RevealFogEffectful {
+        fog_x: i32,
+        fog_y: i32,
+        blocker: RevealFogNoEffectBlocker,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedStep12ActiveUnitClear {
+    unit_pass: PreparedStep12UnitPass,
+    expected_reveal_calls: usize,
+}
+
+impl PreparedStep12ActiveUnitClear {
+    pub const fn expected_reveal_calls(&self) -> usize {
+        self.expected_reveal_calls
+    }
+
+    pub const fn unit_stamps(&self) -> usize {
+        self.unit_pass.stamps()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveUnitClearTrace {
+    pub rows_visited: usize,
+    pub unit_stamps: usize,
+    pub reveal_no_effect_calls: usize,
+}
+
+/// The complete `GameDaemon::update_all_seen` paths that the live Sim can currently
 /// authorize before the step-12 shell mutates anything.
 ///
 /// `InactiveLeadersClear` is not a claim about the active-object producer.  In the retail PE,
 /// every Build/Wall, Unit, scenario-point, and frame-zero alliance loop begins with the same
 /// `LeaderData::flags & 1` gate.  With all eight gates clear, the whole reached body is exactly
 /// `busy = 4`, `World::clear_seen`, and the `seen3` clear.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparedStep12FullProducer {
     NoMutation(Step12VisibilityCadence),
     InactiveLeadersClear,
+    ActiveUnitClear(PreparedStep12ActiveUnitClear),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LiveJoinRow {
     state: LiveStep12UnitState,
     handle: Option<Handle>,
+}
+
+fn reveal_fog_no_effect(
+    terrain: &map_terrain::World,
+    fog_x: i32,
+    fog_y: i32,
+    source_unit_masks: u32,
+) -> Result<(), ActiveUnitProducerFault> {
+    let tile_x = fog_x * 2 + 1;
+    let tile_y = fog_y * 2 + 1;
+    if terrain.tdata[terrain.t_index(tile_x, tile_y)] & tflag::RESOURCE != 0 {
+        return Err(ActiveUnitProducerFault::RevealFogEffectful {
+            fog_x,
+            fog_y,
+            blocker: RevealFogNoEffectBlocker::ResourceTile,
+        });
+    }
+    let cell = &terrain.wdata[terrain.w_index(fog_x >> 1, fog_y >> 1)];
+    if cell.flags & wflag::OIL != 0 {
+        return Err(ActiveUnitProducerFault::RevealFogEffectful {
+            fog_x,
+            fog_y,
+            blocker: RevealFogNoEffectBlocker::OilCell,
+        });
+    }
+    if cell.flags & WFLAG_ITEM != 0 {
+        return Err(ActiveUnitProducerFault::RevealFogEffectful {
+            fog_x,
+            fog_y,
+            blocker: RevealFogNoEffectBlocker::ItemCell,
+        });
+    }
+    if source_unit_masks & 0x100 != 0 {
+        return Err(ActiveUnitProducerFault::RevealFogEffectful {
+            fog_x,
+            fog_y,
+            blocker: RevealFogNoEffectBlocker::SourceUnitAutoExplore,
+        });
+    }
+    Ok(())
+}
+
+fn prepare_active_unit_clear(
+    pass: PreparedStep12UnitPass,
+    leader_active: [bool; LEADER_SLOTS],
+    context: ScheduledActiveProducerContext<'_>,
+) -> Result<PreparedStep12ActiveUnitClear, ActiveUnitProducerFault> {
+    if pass.frame() == 0 {
+        return Err(ActiveUnitProducerFault::FrameZeroExploredSharing);
+    }
+    if context.scenario_reveal_points_enabled {
+        return Err(ActiveUnitProducerFault::ScenarioRevealPointsEnabled);
+    }
+    for who in 0..LEADER_SLOTS {
+        if !leader_active[who] {
+            continue;
+        }
+        if context.build_marks[who] != BUILD_BAND_BASE {
+            return Err(ActiveUnitProducerFault::NonEmptyBuildBand {
+                who,
+                mark: context.build_marks[who],
+            });
+        }
+        if context.wall_marks[who] != WALL_BAND_BASE {
+            return Err(ActiveUnitProducerFault::NonEmptyWallBand {
+                who,
+                mark: context.wall_marks[who],
+            });
+        }
+    }
+
+    let mut explored = context.terrain.seen2.clone();
+    let mut expected_reveal_calls = 0usize;
+    for row in pass.rows() {
+        let UnitStampDecision::Stamp(stamp) = row.decision() else {
+            continue;
+        };
+        if row.visible() != 0 {
+            return Err(ActiveUnitProducerFault::VisibleLocalSeen {
+                row: row.identity().row,
+                visible: row.visible(),
+            });
+        }
+
+        if !(0..=7).contains(&stamp.grant_seen2_to) {
+            return Err(ActiveUnitProducerFault::InvalidGrantSeen2 {
+                row: row.identity().row,
+                recipient: stamp.grant_seen2_to,
+            });
+        }
+        let radius = stamp.radius_fog_cells as usize;
+        let end = context.circle.radius[radius] as usize;
+        let fully_inside = context.terrain.valid_f(
+            stamp.fog_x + stamp.radius_fog_cells,
+            stamp.fog_y + stamp.radius_fog_cells,
+        ) && context.terrain.valid_f(
+            stamp.fog_x - stamp.radius_fog_cells,
+            stamp.fog_y - stamp.radius_fog_cells,
+        );
+        let owner_mask = 1u8 << stamp.who;
+        let extra_mask = if stamp.grant_seen2_to == 0 {
+            0
+        } else {
+            1u8 << stamp.grant_seen2_to
+        };
+        for index in 0..end {
+            let fog_x = stamp.fog_x + i32::from(context.circle.x[index]);
+            let fog_y = stamp.fog_y + i32::from(context.circle.y[index]);
+            if !fully_inside && !context.terrain.valid_f(fog_x, fog_y) {
+                continue;
+            }
+            let plane_index = context.terrain.f_index(fog_x, fog_y);
+            if explored[plane_index] & owner_mask == 0 {
+                reveal_fog_no_effect(context.terrain, fog_x, fog_y, stamp.unit_masks)?;
+                expected_reveal_calls += 1;
+            }
+            explored[plane_index] |= owner_mask | extra_mask;
+        }
+    }
+    Ok(PreparedStep12ActiveUnitClear {
+        unit_pass: pass,
+        expected_reveal_calls,
+    })
+}
+
+/// Commit the preflight-complete Unit-only active producer after the caller stores
+/// `GameDaemon::busy = 4`. Every reached `World::reveal_fog` was proven to take its no-effect
+/// branch, so the exact call is represented by the trace rather than a skipped mutation.
+pub fn commit_active_unit_clear(
+    prepared: PreparedStep12ActiveUnitClear,
+    fog: &Fog,
+    terrain: &mut map_terrain::World,
+    circle: &CircleTable,
+) -> ActiveUnitClearTrace {
+    fog.begin_frame(terrain);
+    let mut newly_explored = Vec::new();
+    let rows_visited = prepared.unit_pass.rows().len();
+    for row in prepared.unit_pass.rows() {
+        let UnitStampDecision::Stamp(stamp) = row.decision() else {
+            continue;
+        };
+        borders_fog::update_seen(
+            fog,
+            terrain,
+            circle,
+            &SeeingObject {
+                fine_x: stamp.stamp_fine_x,
+                fine_y: stamp.stamp_fine_y,
+                owner: stamp.who,
+                los_tiles: stamp.resolved_los_tiles,
+                detector: stamp.detector,
+                grant_seen2_to: stamp.grant_seen2_to,
+            },
+            &mut newly_explored,
+        );
+    }
+    assert_eq!(
+        newly_explored.len(),
+        prepared.expected_reveal_calls,
+        "prepared reveal_fog chronology drifted before visibility commit"
+    );
+    ActiveUnitClearTrace {
+        rows_visited,
+        unit_stamps: prepared.unit_pass.stamps(),
+        reveal_no_effect_calls: newly_explored.len(),
+    }
 }
 
 impl Step12VisibilityAuthority {
@@ -592,6 +831,7 @@ impl Step12VisibilityAuthority {
                                 fine_y: world.units.y_internal()[row],
                                 unit_angle: world.units.angle()[row],
                                 mylos: world.units.mylos()[row],
+                                visible: world.units.visible()[row],
                                 unit_masks: world.units.get_unit_masks(row),
                                 infiltrated: world.units.infiltrated()[row],
                             },
@@ -622,6 +862,7 @@ impl Step12VisibilityAuthority {
                                 fine_y: 0,
                                 unit_angle: 0,
                                 mylos: 0,
+                                visible: 0,
                                 unit_masks: 0,
                                 infiltrated: 0,
                             },
@@ -677,6 +918,7 @@ impl Step12VisibilityAuthority {
         leader_active: [bool; LEADER_SLOTS],
         fog_option: u8,
         trigger: Step12VisibilityTrigger,
+        scheduled_active: Option<ScheduledActiveProducerContext<'_>>,
     ) -> Result<PreparedStep12FullProducer, Step12VisibilityPreflightError> {
         match self
             .prepare_unit_pass(world, unit_types, leader_active, fog_option, trigger)
@@ -690,6 +932,17 @@ impl Step12VisibilityAuthority {
             {
                 debug_assert_eq!(pass.stamps(), 0);
                 Ok(PreparedStep12FullProducer::InactiveLeadersClear)
+            }
+            LiveStep12Preparation::UnitPass(pass)
+                if matches!(trigger, Step12VisibilityTrigger::ScheduledStep12) =>
+            {
+                let context =
+                    scheduled_active.ok_or(Step12VisibilityPreflightError::ActiveUnitCohort(
+                        ActiveUnitProducerFault::MissingScheduledContext,
+                    ))?;
+                prepare_active_unit_clear(pass, leader_active, context)
+                    .map(PreparedStep12FullProducer::ActiveUnitClear)
+                    .map_err(Step12VisibilityPreflightError::ActiveUnitCohort)
             }
             LiveStep12Preparation::UnitPass(pass) => {
                 Err(Step12VisibilityPreflightError::IncompleteProducer {
@@ -1117,6 +1370,7 @@ mod tests {
                 [false; LEADER_SLOTS],
                 0,
                 Step12VisibilityTrigger::GameRun,
+                None,
             )
             .unwrap();
         assert_eq!(prepared, PreparedStep12FullProducer::InactiveLeadersClear);
@@ -1134,6 +1388,7 @@ mod tests {
                 [true, false, false, false, false, false, false, false],
                 0,
                 Step12VisibilityTrigger::GameRun,
+                None,
             )
             .unwrap_err();
         assert_eq!(
