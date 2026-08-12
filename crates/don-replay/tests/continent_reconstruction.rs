@@ -516,6 +516,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             remaining,
             player_land,
             post_player_land_cleanup,
+            centroid_y_free_cleanup,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -548,8 +549,14 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 don_replay::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA
             );
             assert_eq!(*next_mutator_va, don_replay::continent::FREE_IMPORT_IAT_VA);
-            assert_eq!(post_player_land_cleanup.centroid_x_length, 2);
-            assert!(post_player_land_cleanup.centroid_x_list_non_null);
+            assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
+            assert!(post_player_land_cleanup.centroid_y_list_non_null);
+            assert_eq!(
+                centroid_y_free_cleanup.free.allocation.elements,
+                centroids.centroid_y
+            );
+            assert_eq!(centroid_y_free_cleanup.centroid_x_length, 2);
+            assert!(centroid_y_free_cleanup.centroid_x_list_non_null);
             assert_eq!(player_land.random_state_before, eastwest.rng_final);
             assert_eq!(player_land.random_state_after, eastwest.rng_final);
             assert!(player_land.direct_rng_sites.is_empty());

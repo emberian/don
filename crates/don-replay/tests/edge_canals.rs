@@ -218,6 +218,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             remaining,
             player_land,
             post_player_land_cleanup,
+            centroid_y_free_cleanup,
             next_mutator_va,
         } = &prefix.stop
         else {
@@ -338,8 +339,14 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             don_replay::continent::FREE_IMPORT_IAT_VA,
             "{name}"
         );
-        assert_eq!(post_player_land_cleanup.centroid_x_length, 2, "{name}");
-        assert!(post_player_land_cleanup.centroid_x_list_non_null, "{name}");
+        assert_eq!(post_player_land_cleanup.centroid_y_length, 2, "{name}");
+        assert!(post_player_land_cleanup.centroid_y_list_non_null, "{name}");
+        assert_eq!(
+            centroid_y_free_cleanup.free.allocation.elements, centroids.centroid_y,
+            "{name}"
+        );
+        assert_eq!(centroid_y_free_cleanup.centroid_x_length, 2, "{name}");
+        assert!(centroid_y_free_cleanup.centroid_x_list_non_null, "{name}");
         assert_eq!(
             player_land.random_state_before, player_land.random_state_after,
             "{name}"

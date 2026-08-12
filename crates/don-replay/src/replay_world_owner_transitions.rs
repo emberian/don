@@ -143,7 +143,9 @@ pub fn advance_continent_world_ownership(
         &receipt.stop,
         ContinentStop::AddStartingLocation {
             next_va,
+            centroids,
             post_player_land_cleanup,
+            centroid_y_free_cleanup,
             next_mutator_va,
             ..
         } if *next_va != crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA
@@ -153,17 +155,78 @@ pub fn advance_continent_world_ownership(
             || post_player_land_cleanup.string_close.body
                 != crate::continent::STRING_CLOSE_NATIVE_BODY
             || post_player_land_cleanup.string_close.string_guts_destructor_called
-            || !post_player_land_cleanup.centroid_x_list_non_null
-            || post_player_land_cleanup.centroid_x_length == 0
+            || !post_player_land_cleanup.centroid_y_list_non_null
+            || post_player_land_cleanup.centroid_y_length != centroids.centroid_y.len()
+            || post_player_land_cleanup.centroid_y_list_load_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_LIST_LOAD_VA
+            || post_player_land_cleanup.free_import_load_va
+                != crate::continent::EAST_MEETS_WEST_FREE_IMPORT_LOAD_VA
+            || post_player_land_cleanup.centroid_y_vftable_store_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_VFTABLE_STORE_VA
+            || post_player_land_cleanup.centroid_y_vftable_va
+                != crate::continent::SIMPLE_ARRAY_INT_VFTABLE_VA
+            || post_player_land_cleanup.centroid_y_list_test_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_LIST_TEST_VA
+            || post_player_land_cleanup.centroid_y_list_push_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_LIST_PUSH_VA
             || post_player_land_cleanup.next
-                != (crate::continent::EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidXList {
-                    call_va: crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+                != (crate::continent::EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidYList {
+                    call_va: crate::continent::EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA,
                     import_iat_va: crate::continent::FREE_IMPORT_IAT_VA,
                 })
             || post_player_land_cleanup.random_state_before
                 != post_player_land_cleanup.random_state_after
+            || centroid_y_free_cleanup.body
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY
+            || centroid_y_free_cleanup.free.call_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA
+            || centroid_y_free_cleanup.free.import_iat_va
+                != crate::continent::FREE_IMPORT_IAT_VA
+            || centroid_y_free_cleanup.free.allocation.owner
+                != crate::continent::EastMeetsWestCentroidListOwner::YCoordinates
+            || centroid_y_free_cleanup.free.allocation.elements != centroids.centroid_y
+            || centroid_y_free_cleanup.free.allocation.element_width != 4
+            || centroid_y_free_cleanup.free.state_before
+                != crate::continent::RetailAllocationState::Live
+            || centroid_y_free_cleanup.free.state_after
+                != crate::continent::RetailAllocationState::Freed
+            || centroid_y_free_cleanup.stack_argument_bytes_popped != 4
+            || centroid_y_free_cleanup.list_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_LIST_CLEAR_VA
+            || centroid_y_free_cleanup.size_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_SIZE_CLEAR_VA
+            || centroid_y_free_cleanup.length_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_LENGTH_CLEAR_VA
+            || centroid_y_free_cleanup.flags_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_FLAGS_CLEAR_VA
+            || !centroid_y_free_cleanup.local_list_is_null
+            || centroid_y_free_cleanup.local_size != 0
+            || centroid_y_free_cleanup.local_length != 0
+            || centroid_y_free_cleanup.local_flags != 0
+            || centroid_y_free_cleanup.guard_clear_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_Y_GUARD_CLEAR_VA
+            || centroid_y_free_cleanup.cleanup_guard_after != -1
+            || !centroid_y_free_cleanup.centroid_x_list_non_null
+            || centroid_y_free_cleanup.centroid_x_length != centroids.centroid_x.len()
+            || centroid_y_free_cleanup.centroid_x_list_load_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_LIST_LOAD_VA
+            || centroid_y_free_cleanup.centroid_x_vftable_store_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_VFTABLE_STORE_VA
+            || centroid_y_free_cleanup.centroid_x_vftable_va
+                != crate::continent::SIMPLE_ARRAY_INT_VFTABLE_VA
+            || centroid_y_free_cleanup.centroid_x_list_test_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_LIST_TEST_VA
+            || centroid_y_free_cleanup.centroid_x_list_push_va
+                != crate::continent::EAST_MEETS_WEST_CENTROID_X_LIST_PUSH_VA
+            || centroid_y_free_cleanup.next
+                != (crate::continent::EastMeetsWestCentroidYFreeCleanupNext::FreeCentroidXList {
+                    call_va: crate::continent::EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+                    import_iat_va: crate::continent::FREE_IMPORT_IAT_VA,
+                })
+            || centroid_y_free_cleanup.random_state_before
+                != centroid_y_free_cleanup.random_state_after
     ) {
-        return Err(mismatch(stage, "stop.post_player_land_cleanup_residual"));
+        return Err(mismatch(stage, "stop.centroid_y_free_residual"));
     }
     if map.world.start_x.items.len() != receipt.starts_added
         || map.world.start_y.items.len() != receipt.starts_added

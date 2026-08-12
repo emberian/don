@@ -34,15 +34,26 @@ pub use east_meets_west_add_start::{
 };
 
 pub use east_meets_west_player_land::{
-    execute_east_meets_west_player_land, execute_east_meets_west_post_player_land_cleanup,
-    CheckPlayerLandNativeBody, CleanupNativeBody, EastMeetsWestLogStringLease,
-    EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandError, EastMeetsWestPlayerLandNext,
-    EastMeetsWestPlayerLandReceipt, EastMeetsWestPostPlayerLandCleanupNext,
-    EastMeetsWestPostPlayerLandCleanupReceipt, EastMeetsWestStringClosePath,
-    EastMeetsWestStringCloseReceipt, RegionMutation, WorldCellMutation,
-    CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
-    EAST_MEETS_WEST_CENTROID_X_LIST_LOAD_VA, EAST_MEETS_WEST_CENTROID_X_LIST_PUSH_VA,
-    EAST_MEETS_WEST_CENTROID_X_LIST_TEST_VA, EAST_MEETS_WEST_CENTROID_X_VFTABLE_STORE_VA,
+    execute_east_meets_west_centroid_y_free_cleanup, execute_east_meets_west_player_land,
+    execute_east_meets_west_post_player_land_cleanup, CheckPlayerLandNativeBody, CleanupNativeBody,
+    EastMeetsWestCentroidListAllocation, EastMeetsWestCentroidListOwner,
+    EastMeetsWestCentroidYFreeCleanupNext, EastMeetsWestCentroidYFreeCleanupReceipt,
+    EastMeetsWestImportedFreeReceipt, EastMeetsWestLogStringLease, EastMeetsWestPlayerLandCall,
+    EastMeetsWestPlayerLandError, EastMeetsWestPlayerLandNext, EastMeetsWestPlayerLandReceipt,
+    EastMeetsWestPostPlayerLandCleanupNext, EastMeetsWestPostPlayerLandCleanupReceipt,
+    EastMeetsWestStringClosePath, EastMeetsWestStringCloseReceipt, RegionMutation,
+    RetailAllocationState, WorldCellMutation, CHECK_PLAYER_LAND_NATIVE_BODY,
+    EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_X_LIST_LOAD_VA,
+    EAST_MEETS_WEST_CENTROID_X_LIST_PUSH_VA, EAST_MEETS_WEST_CENTROID_X_LIST_TEST_VA,
+    EAST_MEETS_WEST_CENTROID_X_VFTABLE_STORE_VA, EAST_MEETS_WEST_CENTROID_Y_FLAGS_CLEAR_VA,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_END_VA,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_INSTRUCTION_COUNT,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SHA256, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SIZE,
+    EAST_MEETS_WEST_CENTROID_Y_GUARD_CLEAR_VA, EAST_MEETS_WEST_CENTROID_Y_LENGTH_CLEAR_VA,
+    EAST_MEETS_WEST_CENTROID_Y_LIST_CLEAR_VA, EAST_MEETS_WEST_CENTROID_Y_LIST_LOAD_VA,
+    EAST_MEETS_WEST_CENTROID_Y_LIST_PUSH_VA, EAST_MEETS_WEST_CENTROID_Y_LIST_TEST_VA,
+    EAST_MEETS_WEST_CENTROID_Y_SIZE_CLEAR_VA, EAST_MEETS_WEST_CENTROID_Y_VFTABLE_STORE_VA,
     EAST_MEETS_WEST_FREE_IMPORT_LOAD_VA, EAST_MEETS_WEST_LOG_STRING,
     EAST_MEETS_WEST_LOG_STRING_ASSIGN_CALL_VA, EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET,
     EAST_MEETS_WEST_LOG_STRING_HASH, EAST_MEETS_WEST_LOG_STRING_ORDINAL,
@@ -56,7 +67,7 @@ pub use east_meets_west_player_land::{
     FREE_IMPORT_IAT_VA, INT_STR_ARRAY_VA, MAP_CHECK_PLAYER_LAND_END_VA,
     MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT, MAP_CHECK_PLAYER_LAND_RET_VA,
     MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE, RISE_EXE_SHA256,
-    SIMPLE_ARRAY_INT_VFTABLE_VA, STRING_ASSIGN_VA, STRING_CLOSE_END_VA,
+    SIMPLE_ARRAY_INT_SIZE, SIMPLE_ARRAY_INT_VFTABLE_VA, STRING_ASSIGN_VA, STRING_CLOSE_END_VA,
     STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_RET_VA,
     STRING_CLOSE_SHA256, STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
     STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA, STRING_SIZE,
@@ -211,9 +222,9 @@ pub enum ContinentStop {
         call: EastMeetsWestPlaceStartBoundary,
     },
     /// Every active selector and World append completed, followed by the exact
-    /// post-loop `Map::check_player_land` body and the exact local-string
-    /// cleanup. Execution is frozen before the first centroid-array `free`;
-    /// `next_mutator_va` names retail's imported-function pointer.
+    /// post-loop `Map::check_player_land`, local-string cleanup, and the first
+    /// centroid-array `_free`. Execution is frozen before the centroid-X
+    /// `_free`; `next_mutator_va` names retail's imported-function pointer.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -226,6 +237,7 @@ pub enum ContinentStop {
         remaining: EastMeetsWestRemainingStartsReceipt,
         player_land: EastMeetsWestPlayerLandReceipt,
         post_player_land_cleanup: EastMeetsWestPostPlayerLandCleanupReceipt,
+        centroid_y_free_cleanup: EastMeetsWestCentroidYFreeCleanupReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -1575,13 +1587,25 @@ fn east_meets_west(
                     let post_player_land_cleanup =
                         execute_east_meets_west_post_player_land_cleanup(
                             &player_land,
-                            &centroids.centroid_x,
+                            &centroids.centroid_y,
                         )
                         .map_err(ContinentError::EastMeetsWestPlayerLand)?;
-                    let EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidXList {
+                    let EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidYList {
+                        call_va,
+                        import_iat_va,
+                    } = post_player_land_cleanup.next;
+                    debug_assert_eq!(call_va, EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA);
+                    debug_assert_eq!(import_iat_va, FREE_IMPORT_IAT_VA);
+                    let centroid_y_free_cleanup = execute_east_meets_west_centroid_y_free_cleanup(
+                        &post_player_land_cleanup,
+                        &centroids.centroid_y,
+                        &centroids.centroid_x,
+                    )
+                    .map_err(ContinentError::EastMeetsWestPlayerLand)?;
+                    let EastMeetsWestCentroidYFreeCleanupNext::FreeCentroidXList {
                         call_va: next_va,
                         import_iat_va: next_mutator_va,
-                    } = post_player_land_cleanup.next;
+                    } = centroid_y_free_cleanup.next;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1596,6 +1620,7 @@ fn east_meets_west(
                             remaining,
                             player_land,
                             post_player_land_cleanup,
+                            centroid_y_free_cleanup,
                             next_mutator_va,
                         },
                         starts_added,

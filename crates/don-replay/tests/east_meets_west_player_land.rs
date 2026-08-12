@@ -1,22 +1,28 @@
 use don_replay::continent::{
-    execute_continent_prefix_with_regions_from_rng, execute_east_meets_west_player_land,
-    execute_east_meets_west_post_player_land_cleanup, ContinentStop, EastMeetsWestPlayerLandCall,
-    EastMeetsWestPlayerLandNext, EastMeetsWestPostPlayerLandCleanupNext,
-    EastMeetsWestStringClosePath, CHECK_PLAYER_LAND_NATIVE_BODY,
-    EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, EAST_MEETS_WEST_LOG_STRING,
-    EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET, EAST_MEETS_WEST_LOG_STRING_HASH,
-    EAST_MEETS_WEST_LOG_STRING_ORDINAL, EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS,
-    EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA, EAST_MEETS_WEST_PLAYER_LAND_CALL_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA, EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA,
-    EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
+    execute_continent_prefix_with_regions_from_rng,
+    execute_east_meets_west_centroid_y_free_cleanup, execute_east_meets_west_player_land,
+    execute_east_meets_west_post_player_land_cleanup, ContinentStop,
+    EastMeetsWestCentroidListOwner, EastMeetsWestCentroidYFreeCleanupNext,
+    EastMeetsWestPlayerLandCall, EastMeetsWestPlayerLandNext,
+    EastMeetsWestPostPlayerLandCleanupNext, EastMeetsWestStringClosePath, RetailAllocationState,
+    CHECK_PLAYER_LAND_NATIVE_BODY, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_END_VA,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_INSTRUCTION_COUNT,
+    EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SHA256, EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SIZE,
+    EAST_MEETS_WEST_LOG_STRING, EAST_MEETS_WEST_LOG_STRING_BYTE_OFFSET,
+    EAST_MEETS_WEST_LOG_STRING_HASH, EAST_MEETS_WEST_LOG_STRING_ORDINAL,
+    EAST_MEETS_WEST_LOG_STRING_UTF16_UNITS, EAST_MEETS_WEST_PLAYER_LAND_CALLER_ENTRY_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_CALL_VA, EAST_MEETS_WEST_PLAYER_LAND_GUARD_STORE_VA,
+    EAST_MEETS_WEST_PLAYER_LAND_RESUME_VA, EAST_MEETS_WEST_PLAYER_LAND_STRING_CLOSE_CALL_VA,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_END_VA,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_INSTRUCTION_COUNT,
     EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256, EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SIZE,
     FREE_IMPORT_IAT_VA, MAP_CHECK_PLAYER_LAND_END_VA, MAP_CHECK_PLAYER_LAND_INSTRUCTION_COUNT,
     MAP_CHECK_PLAYER_LAND_RET_VA, MAP_CHECK_PLAYER_LAND_SHA256, MAP_CHECK_PLAYER_LAND_SIZE,
-    RISE_EXE_SHA256, STRING_CLOSE_INSTRUCTION_COUNT, STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256,
-    STRING_CLOSE_SIZE, STRING_CLOSE_VA, STRING_GUTS_DESTRUCTOR_CALL_VA,
-    STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+    RISE_EXE_SHA256, SIMPLE_ARRAY_INT_SIZE, STRING_CLOSE_INSTRUCTION_COUNT,
+    STRING_CLOSE_NATIVE_BODY, STRING_CLOSE_SHA256, STRING_CLOSE_SIZE, STRING_CLOSE_VA,
+    STRING_GUTS_DESTRUCTOR_CALL_VA, STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
 };
 use don_replay::fractal_boundary::resolve_tile_selection;
 use don_replay::map_style::{ron_data_root_for_replay, MapStyleStaticData};
@@ -104,6 +110,24 @@ fn native_extent_fastcall_and_typed_residual_are_frozen() {
         EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY.sha256,
         EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_SHA256
     );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY.end_va_exclusive,
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_END_VA
+    );
+    assert_eq!(EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SIZE, 64);
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_INSTRUCTION_COUNT,
+        12
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY.sha256,
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_SHA256
+    );
+    assert_eq!(
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY.indirect_import_calls,
+        [(EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA, FREE_IMPORT_IAT_VA)]
+    );
+    assert_eq!(SIMPLE_ARRAY_INT_SIZE, 28);
 }
 
 #[test]
@@ -208,7 +232,7 @@ fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
     );
     assert_eq!(
         execute_east_meets_west_post_player_land_cleanup(&receipt, &[]),
-        Err(don_replay::continent::EastMeetsWestPlayerLandError::EmptyCentroidXArray)
+        Err(don_replay::continent::EastMeetsWestPlayerLandError::EmptyCentroidYArray)
     );
     let cleanup = execute_east_meets_west_post_player_land_cleanup(&receipt, &[40]).unwrap();
     assert_eq!(
@@ -224,11 +248,49 @@ fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
     assert_eq!(cleanup.string_close.table_reference_delta_over_lease, 0);
     assert!(!cleanup.string_close.string_guts_destructor_called);
     assert!(cleanup.string_close.local_data_is_null);
-    assert_eq!(cleanup.centroid_x_length, 1);
-    assert!(cleanup.centroid_x_list_non_null);
+    assert_eq!(cleanup.centroid_y_length, 1);
+    assert!(cleanup.centroid_y_list_non_null);
     assert_eq!(
         cleanup.next,
-        EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidXList {
+        EastMeetsWestPostPlayerLandCleanupNext::FreeCentroidYList {
+            call_va: EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA,
+            import_iat_va: FREE_IMPORT_IAT_VA,
+        }
+    );
+    assert_eq!(
+        execute_east_meets_west_centroid_y_free_cleanup(&cleanup, &[40], &[]),
+        Err(don_replay::continent::EastMeetsWestPlayerLandError::EmptyCentroidXArray)
+    );
+    let free_cleanup =
+        execute_east_meets_west_centroid_y_free_cleanup(&cleanup, &[40], &[41]).unwrap();
+    assert_eq!(
+        free_cleanup.free.allocation.owner,
+        EastMeetsWestCentroidListOwner::YCoordinates
+    );
+    assert_eq!(free_cleanup.free.allocation.elements, [40]);
+    assert_eq!(free_cleanup.free.allocation.element_width, 4);
+    assert_eq!(free_cleanup.free.state_before, RetailAllocationState::Live);
+    assert_eq!(free_cleanup.free.state_after, RetailAllocationState::Freed);
+    assert_eq!(
+        free_cleanup.body,
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CLEANUP_BODY
+    );
+    assert_eq!(
+        free_cleanup.free.call_va,
+        EAST_MEETS_WEST_CENTROID_Y_FREE_CALL_VA
+    );
+    assert_eq!(free_cleanup.free.import_iat_va, FREE_IMPORT_IAT_VA);
+    assert_eq!(free_cleanup.stack_argument_bytes_popped, 4);
+    assert!(free_cleanup.local_list_is_null);
+    assert_eq!(free_cleanup.local_size, 0);
+    assert_eq!(free_cleanup.local_length, 0);
+    assert_eq!(free_cleanup.local_flags, 0);
+    assert_eq!(free_cleanup.cleanup_guard_after, -1);
+    assert_eq!(free_cleanup.centroid_x_length, 1);
+    assert!(free_cleanup.centroid_x_list_non_null);
+    assert_eq!(
+        free_cleanup.next,
+        EastMeetsWestCentroidYFreeCleanupNext::FreeCentroidXList {
             call_va: EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA,
             import_iat_va: FREE_IMPORT_IAT_VA,
         }
@@ -294,9 +356,11 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         )
         .unwrap();
         let ContinentStop::AddStartingLocation {
+            centroids,
             remaining,
             player_land: receipt,
             post_player_land_cleanup,
+            centroid_y_free_cleanup,
             next_va,
             next_mutator_va,
             ..
@@ -314,8 +378,22 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         assert_eq!(*next_va, EAST_MEETS_WEST_CENTROID_X_FREE_CALL_VA, "{name}");
         assert_eq!(*next_mutator_va, FREE_IMPORT_IAT_VA, "{name}");
         assert_eq!(
-            post_player_land_cleanup.centroid_x_length,
+            post_player_land_cleanup.centroid_y_length,
             usize::from(prefix.team_partition.as_ref().unwrap().continent_count),
+            "{name}"
+        );
+        assert_eq!(
+            centroid_y_free_cleanup.free.allocation.elements, centroids.centroid_y,
+            "{name}"
+        );
+        assert_eq!(
+            centroid_y_free_cleanup.centroid_x_length,
+            centroids.centroid_x.len(),
+            "{name}"
+        );
+        assert_eq!(
+            centroid_y_free_cleanup.free.state_after,
+            RetailAllocationState::Freed,
             "{name}"
         );
         assert!(

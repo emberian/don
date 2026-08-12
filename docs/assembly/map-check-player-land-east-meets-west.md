@@ -6,8 +6,9 @@ This lane recovers the complete shipped `Map::check_player_land` leaf and the
 East Meets West caller edge after all active-player starting locations have
 been appended.  It executes the native call at `0x00697492`, returns to
 `0x00697497`, executes the exact caller-local `String::close` cleanup, and
-stops before the first centroid-array `free` at `0x006974c2`.  Neither the
-leaf nor this cleanup consumes RNG.
+executes the first centroid-array `_free` at `0x006974c2` plus its caller-local
+destructor bookkeeping.  It stops before the second `_free` at `0x00697502`.
+Neither the leaf nor either cleanup consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -132,7 +133,7 @@ rejection.  StartArrays remain byte-identical.  These values are regression
 outputs of the binary-derived schedule; the recordings' later retail World
 checksums were not used as targets.
 
-## Exact `String::close` and caller cleanup
+## Exact `String::close` and array cleanup
 
 After the void return, the native caller resumes at `0x00697497`, writes its
 local cleanup guard at `0x0069749a`, and calls `String::close`
@@ -159,23 +160,45 @@ instructions, SHA-256
 After the close it clears the EH guard at `0x006974a6`, loads the first
 `SimpleArray<int>` list at `0x006974aa`, loads `__imp__free` from
 `0x00ac5500`, restores the PDB-named `SimpleArray<int>` vftable
-`0x00b22a60`, tests the list, and pushes it.  The centroid receipt contains at
-least one X coordinate, so this pointer is non-null and the branch reaches the
-still-unexecuted imported call at `0x006974c2`.  No later array destruction or
-style-virtual epilogue is inferred.
+`0x00b22a60`, tests the list, and pushes it.  Argument order at the earlier
+`Map::find_region_centroid` call identifies this first array as centroid Y:
+the caller passes `&[ebp-0xdc]` first and `&[ebp-0xd8]` second, so the callee's
+formal X result is `[ebp-0xd8]` and formal Y is `[ebp-0xdc]`.  The first
+array's backing list is `[ebp-0x7c]`, part of the Y object based at
+`[ebp-0x8c]`; the X list is `[ebp-0x98]`, based at `[ebp-0xa8]`.
+
+The next exact half-open caller slice, `0x006974c2..0x00697502`, is 64 bytes /
+12 instructions, SHA-256
+`158e1582fb9c93e1485c5929ac0a4a3888878bca2b8c3b6b7f5182a9854674b4`.
+PDB gives `SimpleArray<int>` size 28, with length at `+4`, size at `+8`, list
+at `+16`, and flags at `+20`; its named destructor at `0x0041ff80` exhibits
+the same clear schedule.  The caller calls `__imp__free` through IAT slot
+`0x00ac5500`, pops the four-byte argument, and performs that inlined
+`SimpleArray<int>::~SimpleArray<int>` bookkeeping for Y: list, size, length,
+and flags are cleared at
+`0x006974c7`, `0x006974ce`, `0x006974d8`, and `0x006974e2`, then the EH guard
+is dismissed to `-1` at `0x006974e6`.  The caller loads the centroid-X list at
+`0x006974ed`, restores its vftable at `0x006974f3`, tests it at
+`0x006974fd`, and pushes it at `0x00697501`.  Both real receipts have nonempty
+Y and X arrays, so execution reaches the still-unexecuted second `_free` at
+`0x00697502`.  No later array destruction or style-virtual epilogue is
+inferred.
 
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
 after the frozen remaining-start loop.  `ContinentStop::AddStartingLocation`
-retains the complete wrapper and cleanup receipts, exposes
-`next_va = 0x006974c2`, and names the still-unexecuted imported mutator as
+retains the complete wrapper and cleanup receipts, including a typed allocator
+receipt that names the logical Y-coordinate allocation and its exact values as
+`Live -> Freed` without storing or comparing a host pointer.  It exposes
+`next_va = 0x00697502`, and names the still-unexecuted imported mutator as
 `next_mutator_va = 0x00ac5500`.  The generic continent receipt carries the
 same leaf receipt.  Owner transition accepts the result only when the call,
-import slot, and unchanged RNG chronology all match; its implementation digest
-includes this source body.  The offline localizer consequently names the two
-style-19 endpoints `map_team_continent_centroid_x_free`, rather than the
-already executed leaf or local-string close.
+import slot, freed Y values, cleared array locals, prepared X length, and
+unchanged RNG chronology all match; its implementation digest includes this
+source body.  The offline localizer consequently retains the two style-19
+endpoints `map_team_continent_centroid_x_free`, now at the exact second call,
+rather than the already executed leaf, local-string close, or Y free.
 
 Validation gates:
 
@@ -205,8 +228,8 @@ Validation gates:
   `map-player-land-owner-full-hbox-20260812T003150Z-51674-1002-70f09f227b1d`,
   and the 62-opened-recording localizer census in
   `map-player-land-localizer-v2-hbox-20260812T003205Z-52756-15460-ed73570f9d4e`.
-- current post-cleanup local owner audit: 2/2, including all 21 checksum-bearing
-  recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
+- current centroid-Y-free local owner audit: 2/2, including all 21
+  checksum-bearing recordings; current localizer: 62 opened, 21 checksum-bearing, 21/21 coherent
   ledgers, 265,619/265,619 same-group comparisons, and exact endpoints of two
   `map_team_continent_centroid_x_free` / nineteen
   `place_all_mountains_add_mountain`.
@@ -215,3 +238,6 @@ Validation gates:
   `map-player-land-string-close-20260812T010753Z-5869-9508-c8a3c250f8bf`
   and
   `map-player-land-string-close-real-20260812T010942Z-7944-10909-34e003e4734b`.
+- current clean-HEAD Hbox centroid-Y-free overlay: full 4/4 suite, including
+  both real fixtures, green in
+  `map-player-land-y-free-real-20260812T012804Z-33056-25206-a937d193cd03`.

@@ -10,8 +10,8 @@ Map::check_player_land at 0x0068ef00; this tranche names that call but does not
 execute it.
 
 The canonical continuation now executes that separately proved leaf and its
-exact local-string cleanup, advancing the integrated continent stop to the
-first centroid-array free at 0x006974c2; see
+exact local-string cleanup, the centroid-Y free, and its caller bookkeeping,
+advancing the integrated continent stop to the centroid-X free at 0x00697502; see
 `map-check-player-land-east-meets-west.md`. The boundary below remains the
 historical contract of this isolated remaining-start tranche.
 
@@ -95,7 +95,7 @@ and mutation receipt, RNG chronology, and before/after World sections. On
 complete success the isolated remaining receipt retains the unexecuted leaf
 call site 0x00697492. The integrated
 ContinentStop::AddStartingLocation::next_va advances through that leaf and the
-next cleanup to 0x006974c2. A later selector failure instead advances to
+next cleanups to 0x00697502. A later selector failure instead advances to
 0x00697003. The continent owner digest includes the new source, so the
 localizer cannot reuse an older implementation proof.
 
