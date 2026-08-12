@@ -67,13 +67,19 @@ economy, or research rule. Construction time still advances only through persist
   gathering, completed-Market tax, University/Scholar knowledge, normal payment, and normal
   queue timers.
 
-The measured two-seed/two-seat cohort is deliberately reported by outcome, not flattened
-into an “all optional purchases happen” claim. Granary and Lumber Mill complete in **4/4**
-runs. Smelter completes in **2/4**, with those two completions spanning both seeds and both
-seats. Chemistry completes in **4/4**. One run also pays and completes both Carpentry and
-Agriculture through their completed producer buildings. The other runs preserve different
-food/metal spending choices at the 30-minute cutoff; they are not rewritten into research
-successes.
+All three base enhancers complete exactly once in **4/4** measured runs, and Chemistry
+completes in **4/4**. This convergence does not come from extra resources or a completion
+write. The first trace isolated a policy payment race: after Chemistry, Scholar progression
+bought each 32/34/36/38-wealth unit before the 50-wealth Smelter could become payable. The
+policy now reserves that ordinary wealth window until `num_type_with_queued` observes the
+paid Smelter. One dense seat then exposed a second cause: the generic capital-centred site
+search had exhausted its bounded radius. Enhancers now use the already-reserved founder and
+the same public placement predicate to choose local land, after which the ordinary stable
+`MOVE_TO -> BUILD_AT` transaction performs every frame of the 1,000-frame build.
+
+One run also pays and completes both Carpentry and Agriculture through their completed
+producer buildings. The other runs preserve different food/metal spending choices at the
+30-minute cutoff; they are not rewritten into research successes.
 
 The exact `0x0061DE70` fine-coordinate search, multi-founder formation assignment,
 temporary Group allocation/identity, reswarm animation receipt, dynamic crowd avoidance,

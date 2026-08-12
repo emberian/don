@@ -250,12 +250,12 @@ impl Ai {
         let placed_market = !barracks_incomplete
             && obs.has_tech(ids.barter)
             && obs.count_with_queued(ids.market) < 1
-            && self.place_adjacent_city_building(obs, ids.market, out);
+            && self.place_founder_local_building(obs, ids.market, out);
         let placed_university = !placed_market
             && !barracks_incomplete
             && obs.has_tech(ids.classical_age)
             && obs.count_with_queued(ids.university) < 1
-            && self.place_adjacent_city_building(obs, ids.university, out);
+            && self.place_founder_local_building(obs, ids.university, out);
 
         let mut wants = Vec::new();
         if obs.has_tech(ids.art_of_war) && obs.count_with_queued(ids.barracks) < barracks_goal {
@@ -317,7 +317,21 @@ impl Ai {
         }
         if !placed_market && !placed_university {
             for type_id in wants {
-                if place_except(obs, type_id, &skip, out) {
+                // The recovered construction host owns a stable one-founder approach for
+                // each 5x5 enhancer. Keep its site selection and founder allocation in
+                // the same transaction: a capital-centred search can exhaust its radius
+                // on a mature base even while the reserved founder has legal local land.
+                let placed = if matches!(
+                    type_id,
+                    gather_upgrades::GRANARY_TYPE
+                        | gather_upgrades::LUMBER_MILL_TYPE
+                        | gather_upgrades::SMELTER_TYPE
+                ) {
+                    self.place_founder_local_building(obs, type_id, out)
+                } else {
+                    place_except(obs, type_id, &skip, out)
+                };
+                if placed {
                     break;
                 }
             }
@@ -332,10 +346,17 @@ impl Ai {
         if let Some(scholar) = scholar {
             let count = obs.count_with_queued(scholar) as i32;
             // Preserve one early knowledge decision per completed University, then let
-            // Market tax fund Mathematics and Chemistry before additional Scholar ramp
-            // costs repeatedly consume the same wealth source. This is ordering only;
-            // every Scholar and research still pays its exact loaded queue cost.
-            let scholar_budget_open = count < 1 || obs.has_tech(gather_upgrades::CHEMISTRY_TYPE);
+            // Market tax fund Mathematics, Chemistry and the base Smelter before further
+            // Scholar progression repeatedly consumes the same wealth slot. In the
+            // shipped rows Scholar costs rise through 32/34/36/38 while Smelter needs 50;
+            // spending each newly available Scholar therefore prevents the building from
+            // ever becoming payable on slower seats. This is purchase sequencing only:
+            // the Smelter still has to be paid, placed, walked to and built through the
+            // ordinary MOVE_TO -> BUILD_AT lifecycle.
+            let smelter_payment_pending = obs.has_tech(gather_upgrades::CHEMISTRY_TYPE)
+                && obs.count_with_queued(gather_upgrades::SMELTER_TYPE) < 1;
+            let scholar_budget_open = count < 1
+                || (obs.has_tech(gather_upgrades::CHEMISTRY_TYPE) && !smelter_payment_pending);
             if scholar_budget_open && count < don_sim::systems::gathering::MAX_KNOWLEDGE_GATHERERS {
                 let t = obs
                     .ty(scholar)
@@ -384,11 +405,12 @@ impl Ai {
         }
     }
 
-    /// Put a critical city building's nearest footprint edge one tile from its founder.
+    /// Put a persistent founder-owned building near the reserved construction body.
     /// Generic capital-first placement is legal but, on some generated layouts, strands a
-    /// construction worker behind the site. This searches the same public placement
-    /// predicate from the worker outward and changes no movement or construction rule.
-    fn place_adjacent_city_building(
+    /// construction worker behind the site or exhausts its bounded radius before a later
+    /// 5x5 enhancer is affordable. This searches the same public placement predicate from
+    /// the worker outward and changes no movement or construction rule.
+    fn place_founder_local_building(
         &mut self,
         obs: &Obs,
         type_id: i32,

@@ -215,8 +215,7 @@ fn natural_ai_completes_enhancers_and_unlocks_producer_gated_research_across_see
     let mut completed_types = [false; 3];
     let mut completed_seats = [false; 2];
     let mut completed_seeds = [false; 2];
-    let mut smelter_seats = [false; 2];
-    let mut smelter_seeds = [false; 2];
+    let mut full_trio_runs = 0;
     let mut chemistry_runs = 0;
     let mut granary_lumber_runs = 0;
     for seed_index in 0_u32..2 {
@@ -276,9 +275,8 @@ fn natural_ai_completes_enhancers_and_unlocks_producer_gated_research_across_see
             if completed[0] > 0 && completed[1] > 0 {
                 granary_lumber_runs += 1;
             }
-            if completed[2] > 0 {
-                smelter_seats[seat] = true;
-                smelter_seeds[seed_index as usize] = true;
+            if completed.into_iter().all(|count| count == 1) {
+                full_trio_runs += 1;
             }
             chemistry_runs += usize::from(held[1]);
             producer_research_runs += usize::from(
@@ -302,12 +300,11 @@ fn natural_ai_completes_enhancers_and_unlocks_producer_gated_research_across_see
         granary_lumber_runs == 4,
         "Granary and Lumber Mill did not both complete in every run: {diagnostics:#?}"
     );
-    assert!(
-        completed_types.into_iter().all(|value| value)
-            && smelter_seats.into_iter().all(|value| value)
-            && smelter_seeds.into_iter().all(|value| value),
-        "the natural cohort did not complete all three enhancer types across both seeds and seats: {diagnostics:#?}"
+    assert_eq!(
+        full_trio_runs, 4,
+        "every natural run must complete exactly one of each base enhancer: {diagnostics:#?}"
     );
+    assert!(completed_types.into_iter().all(|value| value));
     assert_eq!(
         chemistry_runs, 4,
         "natural renewable economy did not complete Chemistry in every run: {diagnostics:#?}"

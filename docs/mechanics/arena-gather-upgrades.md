@@ -131,11 +131,13 @@ evaluation feedback loop, but the composed payout remains red because ordinary C
 terrain geometry, generated Farm terrain facts, seating, construction activation and
 national exceptions are not all authoritative.
 
-The natural 30-minute Roman trace reaches Chemistry without injected resources but issues
-no Carpentry. Accepted 5x5 enhancer sites remain untouched at `build_left=1000` when their
-founders are stranded by the declared construction/movement MODEL. This tranche does not
-complete them by fiat, admit research at an incomplete producer, or widen the movement
-model. That RED cause belongs to the shared movement platform.
+The natural 30-minute Roman cohort reaches Chemistry and completes exactly one Granary,
+Lumber Mill and Smelter in all four fixed seed/seat runs without injected resources. Each
+5x5 site is paid from the live stock, placed through the public predicate, approached by its
+reserved founder, and completed by ordinary `BuildData` frames. Producer-gated research is
+therefore admitted only after the corresponding completed building; no incomplete producer
+or direct completion path is used. Full retail multi-founder swarm formation and dynamic
+crowd assignment remain outside this Arena subdomain.
 
 `arena_gather_upgrades.rs` pins source mutation, exact integer ordering, Market completion
 and city census, enhancer completion and city locality, sibling-city admission, policy
