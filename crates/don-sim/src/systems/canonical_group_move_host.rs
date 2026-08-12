@@ -323,10 +323,12 @@ pub struct UnitMutation {
 
 /// Which recovered consumer is asking the canonical opcode-0 selector to form a Group.
 ///
-/// Economy actions need a stable, order-installable unit set but do not enter the
-/// move-near split. Group→Move additionally requires the exact split admission bit.
+/// Simple Unit-state actions need only a live generational Unit with a bound authority member.
+/// Economy actions additionally need an order-installable Unit, while Group→Move also requires
+/// the exact split admission bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupSelectionUse {
+    SimpleUnitState,
     EconomyOrderInstall,
     MoveNear,
 }
@@ -801,8 +803,9 @@ pub fn prepare_group_selection(
         if world.units.o_down()[row] >= 0 {
             return Err(PackageError::SubordinateChainUnavailable { who, o: entry.o });
         }
-        if !facts.can_install_order {
+        if selection_use != GroupSelectionUse::SimpleUnitState && !facts.can_install_order {
             return Err(match selection_use {
+                GroupSelectionUse::SimpleUnitState => unreachable!("guard excludes this case"),
                 GroupSelectionUse::EconomyOrderInstall => {
                     PackageError::IncompleteSelectionAuthority { handle }
                 }

@@ -1603,6 +1603,55 @@ impl Sim {
         )
     }
 
+    /// Process exactly one opcode-0 Group followed by the currently admitted simple action,
+    /// UNITMASK (32). Selection/cache/allocation and every reached Unit/order/path mutation are
+    /// prepared and revalidated against the canonical owners before one assignment-only commit.
+    pub fn process_simple_group_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_simple_group_host::SimpleGroupPackageReceipt,
+        crate::systems::canonical_simple_group_host::SimpleGroupPackageError,
+    > {
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+        use crate::systems::canonical_simple_group_host::{
+            commit_simple_group_package, prepare_simple_group_package,
+        };
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_simple_group_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_simple_group_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &player_who,
+            prepared,
+        )
+    }
+
     /// Process exactly one opcode-0 Group followed by BoardShip (15), Repair (16), or Trade
     /// (17). Selection/cache/allocation and every reached order/path/Group mutation publish at
     /// one revalidated boundary; malformed or stale input consumes no RNG and writes nothing.
