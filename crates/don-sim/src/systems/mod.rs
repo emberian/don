@@ -224,6 +224,8 @@ pub mod leader_tech_sync;
 /// the six `LeaderData` AI build-priority scalars. Presentation leaves through a typed
 /// outbox. `Leader::action_respond` `0x006D03C0` is the one named boundary.
 pub mod leader_process_taunt;
+/// Exact negative-City-constraint `BuildTypeData::blocked_site` entry prefix.
+pub mod leader_produce_building_blocked_site_prefix;
 /// Exact candidate rejection loop through the first `BuildTypeData::blocked_site` call.
 pub mod leader_produce_building_candidate_prefix;
 /// Exact read-only City/target-Type gate at the start of `Leader::produce_building`.

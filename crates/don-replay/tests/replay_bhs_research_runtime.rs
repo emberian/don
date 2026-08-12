@@ -30,6 +30,16 @@ use don_sim::systems::bhs_type_factory::{
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
+use don_sim::systems::leader_produce_building_blocked_site_prefix::{
+    apply_sim_build_type_blocked_tcoord_land_prefix,
+    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixStatus,
+    LeaderProduceBuildingBlockedSitePrefixError, BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA,
+    BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING, BUILD_TYPE_BLOCKED_SITE_PREFIX_BYTES,
+    BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING, BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA,
+    BUILD_TYPE_BLOCKED_TCOORD_GET_GOOD_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_GET_LAND_CALL_VA,
+    BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES, BUILD_TYPE_BLOCKED_TCOORD_VA,
+    BUILD_TYPE_GET_GOOD_VA, LAND_DATA_GET_AMOUNT_VA, WORLD_DATA_GET_LAND_TCOORD_VA,
+};
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     apply_sim_leader_produce_building_candidate_prefix, CandidatePrefixRejection,
     LeaderProduceBuildingCandidatePrefixError, LeaderProduceBuildingCandidatePrefixStatus,
@@ -496,6 +506,106 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     assert_eq!(city_sim.groups.list, search_groups_before.list);
     assert_eq!(city_production.leaders[OWNER].resources, resources_before);
 
+    let blocked_site_prefix = apply_sim_leader_produce_building_blocked_site_prefix(
+        &city_production,
+        &types,
+        blocked_site,
+    )
+    .unwrap();
+    assert_eq!(BUILD_TYPE_BLOCKED_SITE_PREFIX_BYTES, 0x17c);
+    assert!(!blocked_site_prefix.target_is_city);
+    assert_eq!(blocked_site_prefix.placement_tcoord, [10, 10]);
+    assert_eq!(blocked_site_prefix.footprint_corner, [8, 8]);
+    assert_eq!(blocked_site_prefix.native_returned, None);
+    let blocked_tcoord = blocked_site_prefix.continuation;
+    assert_eq!(
+        blocked_tcoord.va,
+        BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA
+    );
+    assert_eq!(blocked_tcoord.callee_va, BUILD_TYPE_BLOCKED_TCOORD_VA);
+    assert_eq!(
+        blocked_tcoord.blocked_site_bytes_remaining,
+        BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING
+    );
+    assert_eq!(blocked_tcoord.tile, [8, 8]);
+    assert_eq!(blocked_tcoord.owner, OWNER as u8);
+    assert_eq!(blocked_tcoord.city_constraint, -1);
+    assert_eq!(blocked_tcoord.blocked_detail_initial, 0);
+    assert_eq!(city_sim.builds[city_row].image(), search_build_before);
+    assert_eq!(city_sim.groups.list, search_groups_before.list);
+    assert_eq!(city_production.leaders[OWNER].resources, resources_before);
+
+    let blocked_tcoord_prefix = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &city_sim,
+        &city_production,
+        &types,
+        blocked_tcoord,
+    )
+    .unwrap();
+    assert_eq!(BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES, 0x795);
+    assert_eq!(
+        blocked_tcoord_prefix.status,
+        BuildTypeBlockedTcoordPrefixStatus::ReadyForLandDataGetAmount
+    );
+    assert_eq!(blocked_tcoord_prefix.was_seen, Some(false));
+    assert_eq!(blocked_tcoord_prefix.world_region, Some(64));
+    assert_eq!(blocked_tcoord_prefix.terrain_mask, Some(tflag::CITY));
+    assert_eq!(blocked_tcoord_prefix.raw_returned_to_blocked_site, None);
+    assert_eq!(BUILD_TYPE_BLOCKED_TCOORD_GET_GOOD_CALL_VA, 0x0063_751c);
+    assert_eq!(BUILD_TYPE_GET_GOOD_VA, 0x0063_bd50);
+    assert_eq!(BUILD_TYPE_BLOCKED_TCOORD_GET_LAND_CALL_VA, 0x0063_7532);
+    assert_eq!(WORLD_DATA_GET_LAND_TCOORD_VA, 0x006b_4c70);
+    let get_amount = blocked_tcoord_prefix.continuation.unwrap();
+    assert_eq!(get_amount.va, BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA);
+    assert_eq!(get_amount.callee_va, LAND_DATA_GET_AMOUNT_VA);
+    assert_eq!(
+        get_amount.blocked_tcoord_bytes_remaining,
+        BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING
+    );
+    assert_eq!(BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING, 0x67);
+    assert_eq!(get_amount.tile, [8, 8]);
+    assert_eq!(get_amount.build_flags, 0x1000_0049);
+    assert_eq!(get_amount.good, 0);
+    assert_eq!(get_amount.land_index, 0);
+    assert_eq!(
+        get_amount.tile_linear_index,
+        8 * city_sim.map.world.tile_xs + 8
+    );
+    assert_eq!(city_sim.builds[city_row].image(), search_build_before);
+    assert_eq!(city_sim.groups.list, search_groups_before.list);
+    assert_eq!(city_production.leaders[OWNER].resources, resources_before);
+
+    let mut occupied_sim = production_owners(OWNER).0;
+    *occupied_sim.map.world.tmask_mut(8, 8) |= tflag::BLOCKER_BUILDING;
+    let occupied = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &occupied_sim,
+        &city_production,
+        &types,
+        blocked_tcoord,
+    )
+    .unwrap();
+    assert_eq!(
+        occupied.status,
+        BuildTypeBlockedTcoordPrefixStatus::ReturnedToBlockedSite
+    );
+    assert_eq!(occupied.raw_returned_to_blocked_site, Some(0x24));
+    assert!(occupied.continuation.is_none());
+
+    let mut unsupported_city = blocked_site;
+    unsupported_city.city_constraint = 0;
+    assert_eq!(
+        apply_sim_leader_produce_building_blocked_site_prefix(
+            &city_production,
+            &types,
+            unsupported_city,
+        ),
+        Err(
+            LeaderProduceBuildingBlockedSitePrefixError::UnsupportedCityConstraint {
+                city_constraint: 0
+            }
+        )
+    );
+
     let mut missing_domain = city_production.clone();
     missing_domain.types[417]
         .as_mut()
@@ -557,6 +667,21 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     )
     .unwrap();
     assert_eq!(resumed_candidate, candidate_prefix);
+    let resumed_blocked_site = apply_sim_leader_produce_building_blocked_site_prefix(
+        &city_production,
+        &types,
+        resumed_candidate.continuation.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resumed_blocked_site, blocked_site_prefix);
+    let resumed_blocked_tcoord = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &resumed_search_sim,
+        &city_production,
+        &types,
+        resumed_blocked_site.continuation,
+    )
+    .unwrap();
+    assert_eq!(resumed_blocked_tcoord, blocked_tcoord_prefix);
 
     city_sim.world.frame = 1;
     assert_eq!(
@@ -1275,6 +1400,42 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(
         installed_blocked_site.va,
         LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA
+    );
+    let installed_blocked_prefix = apply_sim_leader_produce_building_blocked_site_prefix(
+        &production,
+        &types,
+        installed_blocked_site,
+    )
+    .expect("advance the installed Farm through the exact blocked_site entry prefix");
+    assert_eq!(installed_blocked_prefix.placement_tcoord, [10, 10]);
+    assert_eq!(installed_blocked_prefix.footprint_corner, [8, 8]);
+    assert_eq!(
+        installed_blocked_prefix.continuation.va,
+        BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA
+    );
+    assert_eq!(
+        installed_blocked_prefix.continuation.callee_va,
+        BUILD_TYPE_BLOCKED_TCOORD_VA
+    );
+    let installed_blocked_tcoord = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &sim,
+        &production,
+        &types,
+        installed_blocked_prefix.continuation,
+    )
+    .expect("advance installed Farm through the ordinary land blocked_tcoord prefix");
+    assert_eq!(
+        installed_blocked_tcoord.status,
+        BuildTypeBlockedTcoordPrefixStatus::ReadyForLandDataGetAmount
+    );
+    assert_eq!(installed_blocked_tcoord.was_seen, Some(false));
+    assert_eq!(
+        installed_blocked_tcoord.continuation.unwrap().va,
+        BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA
+    );
+    assert_eq!(
+        installed_blocked_tcoord.continuation.unwrap().callee_va,
+        LAND_DATA_GET_AMOUNT_VA
     );
 
     let error = run_production_research_call(

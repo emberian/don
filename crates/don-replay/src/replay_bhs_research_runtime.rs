@@ -34,6 +34,11 @@ use don_sim::systems::bhs_type_queue_runtime::{
     NUM_TYPE_QUEUED_BUILTIN,
 };
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::leader_produce_building_blocked_site_prefix::{
+    apply_sim_build_type_blocked_tcoord_land_prefix,
+    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixReceipt,
+    LeaderProduceBuildingBlockedSitePrefixReceipt,
+};
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     apply_sim_leader_produce_building_candidate_prefix, LeaderProduceBuildingCandidatePrefixReceipt,
 };
@@ -66,6 +71,8 @@ pub struct ProductionResearchRunReceipt {
     pub produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
     pub produce_building_search_setups: Vec<LeaderProduceBuildingSearchSetupReceipt>,
     pub produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
+    pub produce_building_blocked_site_prefixes: Vec<LeaderProduceBuildingBlockedSitePrefixReceipt>,
+    pub produce_building_blocked_tcoord_prefixes: Vec<BuildTypeBlockedTcoordPrefixReceipt>,
 }
 
 struct ResearchHost<'a> {
@@ -85,6 +92,8 @@ struct ResearchHost<'a> {
     produce_buildings: Vec<LeaderProduceBuildingPrefixReceipt>,
     produce_building_search_setups: Vec<LeaderProduceBuildingSearchSetupReceipt>,
     produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
+    produce_building_blocked_site_prefixes: Vec<LeaderProduceBuildingBlockedSitePrefixReceipt>,
+    produce_building_blocked_tcoord_prefixes: Vec<BuildTypeBlockedTcoordPrefixReceipt>,
 }
 
 impl<'a> ResearchHost<'a> {
@@ -113,6 +122,8 @@ impl<'a> ResearchHost<'a> {
             produce_buildings: Vec::new(),
             produce_building_search_setups: Vec::new(),
             produce_building_candidate_prefixes: Vec::new(),
+            produce_building_blocked_site_prefixes: Vec::new(),
+            produce_building_blocked_tcoord_prefixes: Vec::new(),
         }
     }
 
@@ -456,10 +467,37 @@ impl<'a> ResearchHost<'a> {
         )
         .map_err(|_| HostError::Unimplemented)?;
         let returned = candidate.scenario_returned;
+        let blocked_site_boundary = candidate.continuation;
         self.produce_building_candidate_prefixes.push(candidate);
-        // Reaching `BuildTypeData::blocked_site` is not scalar placement success. Builtin
-        // 520 remains red until that call and the native mutation tail are atomic.
-        returned.map(Value::Int).ok_or(HostError::Unimplemented)
+        if let Some(returned) = returned {
+            return Ok(Value::Int(returned));
+        }
+        let blocked_site_boundary = blocked_site_boundary.ok_or(HostError::Unimplemented)?;
+        let blocked_site = apply_sim_leader_produce_building_blocked_site_prefix(
+            self.production,
+            self.types,
+            blocked_site_boundary,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        let returned = blocked_site.native_returned;
+        let blocked_tcoord_boundary = blocked_site.continuation;
+        self.produce_building_blocked_site_prefixes
+            .push(blocked_site);
+        if let Some(returned) = returned {
+            return Ok(Value::Int(returned));
+        }
+        let blocked_tcoord = apply_sim_build_type_blocked_tcoord_land_prefix(
+            self.sim,
+            self.production,
+            self.types,
+            blocked_tcoord_boundary,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        self.produce_building_blocked_tcoord_prefixes
+            .push(blocked_tcoord);
+        // A child verdict still belongs to `blocked_site`'s footprint aggregation; the shipped
+        // Farm reaches `LandData::get_amount`. Neither is scalar placement success.
+        Err(HostError::Unimplemented)
     }
 
     fn record(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
@@ -570,6 +608,8 @@ pub fn run_production_research_call(
         produce_buildings,
         produce_building_search_setups,
         produce_building_candidate_prefixes,
+        produce_building_blocked_site_prefixes,
+        produce_building_blocked_tcoord_prefixes,
     ) = {
         let mut host = ResearchHost::new(
             image,
@@ -609,6 +649,8 @@ pub fn run_production_research_call(
             host.produce_buildings,
             host.produce_building_search_setups,
             host.produce_building_candidate_prefixes,
+            host.produce_building_blocked_site_prefixes,
+            host.produce_building_blocked_tcoord_prefixes,
         )
     };
 
@@ -655,5 +697,7 @@ pub fn run_production_research_call(
         produce_buildings,
         produce_building_search_setups,
         produce_building_candidate_prefixes,
+        produce_building_blocked_site_prefixes,
+        produce_building_blocked_tcoord_prefixes,
     })
 }
