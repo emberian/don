@@ -292,7 +292,7 @@ impl CheckSum {
 /// are inside the checksum window and are therefore sim-critical bytes even though they
 /// are floats: `turret_inc`, `bank`, `last_bank`, `pitch`, `last_pitch`. None of the paths
 /// ported here write them, but a full port must, and must do it bit-exactly.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct GuyData {
     /// `+0x08` `type : TypeIndex`
     pub ty: i32,
@@ -380,6 +380,16 @@ pub struct GuyData {
     pub guy_num: i8,
 }
 
+// Retail compares/checksums the walked bytes, not host float semantics. In particular, two
+// equal NaN payloads must remain equal for whole-owner compare/exchange and save/resume.
+impl PartialEq for GuyData {
+    fn eq(&self, other: &Self) -> bool {
+        self.walk_bytes() == other.walk_bytes()
+    }
+}
+
+impl Eq for GuyData {}
+
 impl Default for GuyData {
     fn default() -> Self {
         GuyData {
@@ -430,6 +440,103 @@ impl Default for GuyData {
 }
 
 impl GuyData {
+    /// Rebuild the exact walked `GuyData` prefix without normalizing any scalar or float.
+    ///
+    /// DoNSave's canonical per-Unit Guys owner stores precisely the same 155-byte image as
+    /// retail's flat walker.  Keeping the inverse beside [`Self::walk_bytes`] makes the
+    /// byte-for-byte contract reviewable and, in particular, preserves every NaN payload.
+    pub fn from_walk_bytes(bytes: [u8; GUY_WALK_LEN]) -> Self {
+        let mut p = 0usize;
+        macro_rules! r32 {
+            () => {{
+                let value = i32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
+                p += 4;
+                value
+            }};
+        }
+        macro_rules! ru32 {
+            () => {{
+                let value = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
+                p += 4;
+                value
+            }};
+        }
+        macro_rules! rf32 {
+            () => {{
+                let value = f32::from_bits(ru32!());
+                value
+            }};
+        }
+        macro_rules! r16 {
+            () => {{
+                let value = i16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
+                p += 2;
+                value
+            }};
+        }
+        macro_rules! ru16 {
+            () => {{
+                let value = u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
+                p += 2;
+                value
+            }};
+        }
+        macro_rules! r8 {
+            () => {{
+                let value = bytes[p] as i8;
+                p += 1;
+                value
+            }};
+        }
+
+        let value = GuyData {
+            ty: r32!(),
+            x: r32!(),
+            y: r32!(),
+            z: r32!(),
+            angle: r32!(),
+            last_angle: r32!(),
+            turret_angles: std::array::from_fn(|_| r32!()),
+            des_turret_angles: std::array::from_fn(|_| r32!()),
+            turret_inc: rf32!(),
+            bank: rf32!(),
+            last_bank: rf32!(),
+            pitch: rf32!(),
+            last_pitch: rf32!(),
+            track_dx: r32!(),
+            track_dy: r32!(),
+            des_x: r32!(),
+            des_y: r32!(),
+            des_angle: r32!(),
+            last_x: r32!(),
+            last_y: r32!(),
+            last_z: r32!(),
+            cur_time: ru32!(),
+            end_time: ru32!(),
+            last_time: r32!(),
+            last_speed: r32!(),
+            avg_speed: r32!(),
+            gpiece: r32!(),
+            o: r16!(),
+            ox: r16!(),
+            variation: r16!(),
+            off_x: r16!(),
+            off_y: r16!(),
+            node_flags: r16!(),
+            des_node_flags: r16!(),
+            guy_flags: ru16!(),
+            cur_anim: r8!(),
+            stopped: r8!(),
+            hold_attack: r8!(),
+            whom: r8!(),
+            queued_attack: r8!(),
+            who: r8!(),
+            guy_num: r8!(),
+        };
+        debug_assert_eq!(p, GUY_WALK_LEN);
+        value
+    }
+
     /// The exact 155 bytes `GuyData::walk_data` hands the visitor, little-endian.
     ///
     /// `GuyData::walk_data` `0x005E0210` is four instructions of substance:
@@ -937,7 +1044,7 @@ pub enum MoveOutcome {
 /// `guy_mark` (`UnitData +0xB5`, a `char`) is the count of *initialised squad* guys, and
 /// is clamped to `squad_size` by `Unit::set_type`. Crew guys always occupy
 /// `[squad_size, squad_size + crew_size)` and are allocated whole.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnitGuys {
     /// `PtrArray<Guy>::list`. `None` is a null slot, which the checksum records.
     pub guys: Vec<Option<GuyData>>,

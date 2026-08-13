@@ -1,9 +1,13 @@
 # Canonical saved Farm/Gather grow transaction
 
-Status: **production `Sim::unit_work`; four exact fresh-SVX FarmStruct grows; DoNSave v16
-save/load/resume; zero RNG**.
+Status: **production `Sim::unit_work`; four stable-animation grows plus exact owner-2/o-5
+animation 8→35 + Farm grow; complete UnitGuys owner; DoNSave v19 save/load/resume; zero RNG**.
 
-The fresh save has 17 active Farm `GATHER` orders.  A structural walk and exact retail
+Closure status remains **RED**. The second animation-changing Farm node, owner 2 Unit `o=9`,
+is queued behind a live `MOVE_TO`; reaching it charges the still-open movement-completion child.
+Relocation, snip, periodic search, and retirement children also remain charged.
+
+The fresh save contains 17 Farm `GATHER` nodes. A structural walk and exact retail
 branch audit found four bounded, checksum-changing continuations whose full mutable surface is
 now owned. The original symmetric witness is owner 1 Unit `o=8,uid=16` gathering at Build
 `o=2006,uid=12`, Farm index 12.
@@ -77,10 +81,38 @@ Its local cell is `(x,y)=(2,1)`: byte `status[2*4+1]` is one while the transpose
 `status[1*4+2]` is two. The exact write is
 `percent[2*4+1] 0x3e6147a9 -> 0x3e666661`; animation `0x23` and clock `22<47` are stable.
 
+The formerly refused immediate animation-changing witness is owner 2 Unit `o=5,uid=11`,
+at `(1464,33336)`, targeting Build `(who,o,uid)=(2,2004,4)` and Farm index 8. Its Gather
+payload, node, Unit, Guys array, Guy, and Farm-record SHA-256 values are respectively
+`10bfded57e642b88a27958d7e44fb131283d021d73aaf92761f9c64fbafea4f8`,
+`0684e3b8534a7d7a32b31543e9b4805b3c4d6e5bdf4de3a72e2b0d9c2713ee2b`,
+`b781d896a9f0a67ee2d1696f4867c975271cd161455fe6a1251a68c77fa506a5`,
+`5a7e616a9bd534d24163a8d08e9ecf759cbbd41d64455926b6d7e09d9a09ec72`,
+`bc8ee7257e525dae083b65db177e65d016061c8b0f910d0032d8d1778192b1f7`, and
+`f488d2b03738a627dc17309fec79771a6092566c6a24a6d39b873c473a64128f`.
+Farm record 8 spans `0xe3bc5..0xe3c83` and selects `status[2][1]==1`:
+
+```text
+Guy.cur_time:        1 -> 0
+Guy.end_time:       15 -> 47
+Guy.last_time:       0 -> -1
+Guy.cur_anim:        8 -> 35
+Farm percent[2][1]:  0x3da3d70a -> 0x3dae147b
+order/Build/RNG/other 148 Guy bytes: unchanged
+```
+
+The literal call sequence at `Unit::do_gather` `0x005eff7b..0x005eff96` pushes
+`(1,0,0x23)`, calls `Unit::set_anim`, then calls `Farms::grow`. `Unit::set_anim`
+`0x00616f40` visits the initialized Guy prefix and forwards the same arguments. The shipped
+type-50/gpiece-6336 animation packet makes the class-8 to class-35 arm reset exactly those
+four Guy fields; no `Random::get` call is reached.
+
 ## Exact transaction and ownership
 
 The host atomically revalidates actor Handle/identity/type, complete current Gather order,
-Guys-array shape, Build target/UID/valid/active/Farm property/city/Farm index, actor tile,
+and, for the animation-changing branch, the complete canonical UnitGuys array and all 155
+walked lead-Guy bytes, Build
+target/UID/valid/active/Farm property/city/Farm index, actor tile,
 4x4 footprint and covers result, Unit periodic-search phase, Farm array header and record
 identity, x-then-y cell bytes, Guy animation/clock/hold byte, frame, RNG, and installed
 authority revision/digest.
@@ -92,12 +124,17 @@ input does not cross, so the only changed field is percentage bits above. Commit
 preparation before the first write and publishes the complete FarmStruct after-image. Its
 receipt includes Farm index and before/after percentage bits.
 
-DoNSave v16 adds the Farms section, including allocation metadata and every walked record.
+DoNSave v19 adds the per-live-row optional UnitGuys section. A present row preserves capacity,
+increment, flags, `guy_mark`, null topology, and every 155-byte Guy image without float/NaN
+normalization. Formats v7–v18 restore rows as explicitly unmaterialized; they do not fabricate
+empty Guy arrays. Whole-owner stale comparison is byte-based, so equal NaN payloads remain equal.
+DoNSave v16 added the Farms section, including allocation metadata and every walked record.
 The Build's existing `dock/farm/fort/oil_well` i16 union is accepted only for Farm type and
 must bind exactly one valid Farm record `(who,o,index)`. Older saves load with an empty
-default Farms owner. Load resets Guy/content authority; callers must reinstall it before
-work. The production witness proves direct and save/reload/reinstall/resumed `do_frame`
-receipts and resaves are byte-identical.
+default Farms owner. Load resets the installed content authority; callers must reinstall it before
+work. The production witnesses prove direct and save/reload/reinstall/resumed `do_frame`
+receipts and resaves are byte-identical. The partial simulation digest includes each owned
+UnitGuys image and explicit row absence without claiming absent rows are retail-empty arrays.
 
 ## Exact census boundary and indexing correction
 
@@ -110,14 +147,15 @@ With the instruction-exact x-then-y lookup, the 17 images split into two type-on
 nine already-stable status-three animation no-ops, four already-stable status-one grows, and
 two grow paths which require a Guy animation mutation. The four stable grows are owner/unit
 `0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
-No fresh witness reaches relocation or snip. Animation mutation, expired animation, periodic
-special effect, invalid Farm binding, Mine, capacity and retirement still refuse before any
-write.
+The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9 remains charged behind its
+current MOVE_TO. No fresh witness reaches relocation or snip. Expired animation, periodic
+special effect, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
 
 Focused gates:
 
 ```sh
 cargo test -p don-sim --test canonical_gather_farm_runtime
+cargo test -p don-sim --test canonical_gather_farm_animation_runtime
 cargo test -p don-sim --test canonical_gather_farm_xy_index
 cargo test -p don-sim --test canonical_gather_runtime --test canonical_gather_saved_work
 cargo test -p don-sim save_load --lib

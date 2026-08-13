@@ -67,7 +67,9 @@ const FARMS_FORMAT_VERSION: u32 = 16;
 const ARMIES_FORMAT_VERSION: u32 = 17;
 /// First version persisting checksum-owned ScenarioData ally masks and reveal arrays.
 const SCENARIO_DATA_FORMAT_VERSION: u32 = 18;
-const FORMAT_VERSION: u32 = SCENARIO_DATA_FORMAT_VERSION;
+/// First version persisting each live Unit's optional, complete walked Guys-array owner.
+const UNIT_GUYS_FORMAT_VERSION: u32 = 19;
+const FORMAT_VERSION: u32 = UNIT_GUYS_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -88,6 +90,7 @@ const MAX_BUILDS: usize = crate::objects::BANDED_SLOTS * production::BUILD_POOL_
 const MAX_BUILD_QUEUE_ENTRIES: usize = 4096;
 const MAX_BUILD_MINING_TILES: usize = 1 << 20;
 const MAX_BUILD_GATHER_POINTS: usize = 1 << 16;
+const MAX_GUYS_PER_UNIT: usize = 4096;
 
 /// DoNSave v12's extensible per-order payload tag table.
 ///
@@ -168,8 +171,9 @@ const SCENARIO_IGNORES: u16 = 0x000d;
 const FARMS: u16 = 0x000e;
 const ARMIES: u16 = 0x000f;
 const SCENARIO_DATA: u16 = 0x0010;
+const UNIT_GUYS: u16 = 0x0011;
 const LEGACY_REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
-const REQUIRED: [u16; 16] = [
+const REQUIRED: [u16; 17] = [
     CORE,
     MAP,
     OBJECTS,
@@ -186,11 +190,13 @@ const REQUIRED: [u16; 16] = [
     FARMS,
     ARMIES,
     SCENARIO_DATA,
+    UNIT_GUYS,
 ];
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
-        SCENARIO_DATA_FORMAT_VERSION => &REQUIRED,
+        UNIT_GUYS_FORMAT_VERSION => &REQUIRED,
+        SCENARIO_DATA_FORMAT_VERSION => &REQUIRED[..16],
         ARMIES_FORMAT_VERSION => &REQUIRED[..15],
         FARMS_FORMAT_VERSION => &REQUIRED[..14],
         SCENARIO_IGNORES_FORMAT_VERSION => &REQUIRED[..13],
@@ -1652,6 +1658,129 @@ fn read_paths(
     }
     r.finish()?;
     Ok((types, paths, path_units))
+}
+
+fn validate_unit_guys_row(
+    who: u8,
+    o: i16,
+    type_index: i32,
+    world_guy_mark: i8,
+    guys: &groups_guys::UnitGuys,
+) -> Result<(), SaveError> {
+    let len = guys.guys.len();
+    let mark = usize::try_from(guys.guy_mark)
+        .ok()
+        .filter(|&mark| mark <= len)
+        .ok_or(SaveError::Invalid("UnitGuys guy_mark"))?;
+    if guys.size < 0 || len > guys.size as usize || len > MAX_GUYS_PER_UNIT {
+        return Err(SaveError::Invalid("UnitGuys array shape"));
+    }
+    if guys.guy_mark != world_guy_mark || guys.guys[..mark].iter().any(Option::is_none) {
+        return Err(SaveError::Invalid("UnitGuys initialized prefix"));
+    }
+    for (index, guy) in guys.guys.iter().enumerate() {
+        let Some(guy) = guy else { continue };
+        if guy.who != who as i8
+            || guy.o != o
+            || guy.ty != type_index
+            || usize::try_from(guy.guy_num).ok() != Some(index)
+        {
+            return Err(SaveError::Invalid("UnitGuys Guy identity"));
+        }
+    }
+    Ok(())
+}
+
+fn write_unit_guys(sim: &Sim) -> Result<Vec<u8>, SaveError> {
+    let live = sim.world.live_count() as usize;
+    if sim.unit_guys.len() != live || sim.unit_type.len() != live {
+        return Err(SaveError::Invalid("UnitGuys side-store length"));
+    }
+    let mut w = Writer::default();
+    w.len(live, "UnitGuys row count")?;
+    for row in 0..live {
+        let Some(guys) = &sim.unit_guys[row] else {
+            w.bool(false);
+            continue;
+        };
+        validate_unit_guys_row(
+            sim.world.units.get_who(row),
+            sim.world.units.o()[row],
+            sim.unit_type[row],
+            sim.world.units.guy_mark()[row],
+            guys,
+        )?;
+        w.bool(true);
+        w.len(guys.guys.len(), "UnitGuys slots")?;
+        w.i32(guys.size);
+        w.i16(guys.increment);
+        w.u8(guys.flags);
+        w.i8(guys.guy_mark);
+        for guy in &guys.guys {
+            w.bool(guy.is_some());
+        }
+        for guy in guys.guys.iter().flatten() {
+            w.bytes(&guy.walk_bytes());
+        }
+    }
+    Ok(w.0)
+}
+
+fn read_unit_guys(
+    data: &[u8],
+    world: &WorldSaveState,
+) -> Result<Vec<Option<groups_guys::UnitGuys>>, SaveError> {
+    let mut r = Reader::new(data);
+    let live = world.live as usize;
+    let rows = r.len(MAX_UNITS, "UnitGuys row count")?;
+    if rows != live {
+        return Err(SaveError::Invalid("UnitGuys row count"));
+    }
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        if !r.bool()? {
+            out.push(None);
+            continue;
+        }
+        let len = r.len(MAX_GUYS_PER_UNIT, "UnitGuys slots")?;
+        let size = r.i32()?;
+        let increment = r.i16()?;
+        let flags = r.u8()?;
+        let guy_mark = r.i8()?;
+        let mut present = Vec::with_capacity(len);
+        for _ in 0..len {
+            present.push(r.bool()?);
+        }
+        let mut slots = Vec::with_capacity(len);
+        for is_present in present {
+            if is_present {
+                let image: [u8; groups_guys::GUY_WALK_LEN] = r
+                    .take(groups_guys::GUY_WALK_LEN)?
+                    .try_into()
+                    .expect("fixed-length Guy image");
+                slots.push(Some(groups_guys::GuyData::from_walk_bytes(image)));
+            } else {
+                slots.push(None);
+            }
+        }
+        let guys = groups_guys::UnitGuys {
+            guys: slots,
+            size,
+            increment,
+            flags,
+            guy_mark,
+        };
+        validate_unit_guys_row(
+            world.units.get_who(row),
+            world.units.o()[row],
+            world.unit_type_id[row],
+            world.units.guy_mark()[row],
+            &guys,
+        )?;
+        out.push(Some(guys));
+    }
+    r.finish()?;
+    Ok(out)
 }
 
 fn validate_build_state(
@@ -3497,6 +3626,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(FARMS, write_farms(&sim.farms)?),
             Chunk::leaf(ARMIES, armies::write(&sim.armies, &sim.groups)?),
             Chunk::leaf(SCENARIO_DATA, write_scenario_data(&sim.scenario_data)?),
+            Chunk::leaf(UNIT_GUYS, write_unit_guys(sim)?),
         ],
     )
     .encode()?;
@@ -3643,6 +3773,15 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         None if core.format_version < SCENARIO_DATA_FORMAT_VERSION => ScenarioDataState::default(),
         _ => return Err(SaveError::Invalid("ScenarioData section version")),
     };
+    let unit_guys = match sections[16] {
+        Some(data) if core.format_version >= UNIT_GUYS_FORMAT_VERSION => {
+            read_unit_guys(data, &world_state)?
+        }
+        None if core.format_version < UNIT_GUYS_FORMAT_VERSION => {
+            vec![None; world_state.live as usize]
+        }
+        _ => return Err(SaveError::Invalid("UnitGuys section version")),
+    };
     validate_farm_bindings(&builds, &farms)?;
     if let Some(setup) = player_setup {
         if leader_match.is_none() && core.frame != 0 {
@@ -3706,6 +3845,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.unit_type = unit_type;
     sim.paths = paths;
     sim.path_unit = path_unit;
+    sim.unit_guys = unit_guys;
     sim.crash_units = vec![None; sim.world.live_count() as usize];
     sim.game_daemon = core.game_daemon;
     sim.collision_blocks =
@@ -3879,6 +4019,117 @@ mod tests {
 
         assert_eq!(loaded.scenario_data, ScenarioDataState::default());
         assert_eq!(prior_format_stream(&loaded, ARMIES_FORMAT_VERSION), legacy);
+    }
+
+    #[test]
+    fn unit_guys_v19_roundtrips_complete_sparse_walk_images_and_v18_defaults_absent() {
+        let mut original = supported_sim();
+        let row = 0;
+        let mut lead = groups_guys::GuyData {
+            ty: original.unit_type[row],
+            who: original.world.units.get_who(row) as i8,
+            o: original.world.units.o()[row],
+            guy_num: 0,
+            turret_inc: f32::from_bits(0x7fc1_2345),
+            cur_anim: 8,
+            cur_time: 1,
+            end_time: 15,
+            ..Default::default()
+        };
+        lead.gpiece = 6_336;
+        let tail = groups_guys::GuyData {
+            ty: lead.ty,
+            who: lead.who,
+            o: lead.o,
+            guy_num: 2,
+            bank: f32::from_bits(0xffc0_0055),
+            ..Default::default()
+        };
+        original.unit_guys[row] = Some(groups_guys::UnitGuys {
+            guys: vec![Some(lead), None, Some(tail)],
+            size: 5,
+            increment: -1,
+            flags: 0x20,
+            guy_mark: 1,
+        });
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.unit_guys, original.unit_guys);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+        assert_eq!(loaded.channel_digest(), original.channel_digest());
+        let loaded_lead = loaded.unit_guys[row].as_ref().unwrap().guys[0]
+            .as_ref()
+            .unwrap();
+        assert_eq!(loaded_lead.turret_inc.to_bits(), 0x7fc1_2345);
+        assert_eq!(
+            loaded.unit_guys[row].as_ref().unwrap().guys[2]
+                .as_ref()
+                .unwrap()
+                .bank
+                .to_bits(),
+            0xffc0_0055
+        );
+
+        let v18 = prior_format_stream(&original, SCENARIO_DATA_FORMAT_VERSION);
+        let upgraded = load_sim(&v18).unwrap();
+        assert_eq!(upgraded.unit_guys, vec![None; original.unit_guys.len()]);
+        assert_eq!(
+            prior_format_stream(&upgraded, SCENARIO_DATA_FORMAT_VERSION),
+            v18
+        );
+    }
+
+    #[test]
+    fn unit_guys_v19_shape_topology_and_identity_corruption_fail_closed() {
+        let mut original = supported_sim();
+        let row = 0;
+        let lead = groups_guys::GuyData {
+            ty: original.unit_type[row],
+            who: original.world.units.get_who(row) as i8,
+            o: original.world.units.o()[row],
+            guy_num: 0,
+            ..Default::default()
+        };
+        original.unit_guys[row] = Some(groups_guys::UnitGuys {
+            guys: vec![Some(lead), None],
+            size: 2,
+            increment: 1,
+            flags: 0,
+            guy_mark: 1,
+        });
+        let bytes = save_sim(&original).unwrap();
+        let section = section_offset(&bytes, UNIT_GUYS);
+        let data = section + 8;
+
+        let mut bad_bool = bytes.clone();
+        bad_bool[data + 17] = 2;
+        assert_eq!(
+            load_error(&bad_bool),
+            SaveError::Invalid("non-canonical bool")
+        );
+
+        let mut bad_capacity = bytes.clone();
+        bad_capacity[data + 9..data + 13].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            load_error(&bad_capacity),
+            SaveError::Invalid("UnitGuys array shape")
+        );
+
+        let mut bad_identity = bytes.clone();
+        // row count + row-present + len/header + two-slot presence plane = 19 bytes.
+        bad_identity[data + 19 + 153] ^= 1;
+        assert_eq!(
+            load_error(&bad_identity),
+            SaveError::Invalid("UnitGuys Guy identity")
+        );
+
+        let mut bad_mark = original;
+        bad_mark.unit_guys[row].as_mut().unwrap().guy_mark = 2;
+        assert_eq!(
+            save_sim(&bad_mark),
+            Err(SaveError::Invalid("UnitGuys initialized prefix"))
+        );
     }
 
     fn section_offset(bytes: &[u8], id: u16) -> usize {
@@ -4717,6 +4968,7 @@ mod tests {
                         | FARMS
                         | ARMIES
                         | SCENARIO_DATA
+                        | UNIT_GUYS
                 )
             })
             .map(|child| {
@@ -4770,6 +5022,7 @@ mod tests {
                         | FARMS
                         | ARMIES
                         | SCENARIO_DATA
+                        | UNIT_GUYS
                 )
             })
             .map(|child| {

@@ -1,7 +1,8 @@
 # Canonical saved Gather work transaction
 
-Status: **production `Sim::unit_work` hook; revision-bound fresh-SVX Camp authority;
-wait loop plus exact wait-zero/all-gathering/RNG tail**.
+Status: **production `Sim::unit_work` hook; revision-bound fresh-SVX Camp/Farm authority;
+Camp wait-zero/all-gathering/RNG tail plus four stable Farm grows and the exact owner-2/o-5
+Guy animation 8→35/Farm-grow transaction**. Overall Gather closure remains **RED**.
 
 The full fresh Unit census found 29 `GATHER` nodes, making Gather the dominant concrete
 saved executor.  `crates/don-sim/src/systems/canonical_gather_work.rs` binds all 29 exact
@@ -63,7 +64,7 @@ coordinate, timer, or UID:
 
 | count | `build_type` | exact mutable suffix shape | transaction status |
 |---:|---:|---|---|
-| 17 | `0x1a1` Farm | `tx=ty=-1`, `wait=0`, `(goto,non_flat,dist,been)=(1,0,0,1)` | one exact grow image admitted by the [Farm continuation](canonical-gather-farm-work.md); residuals fail closed |
+| 17 | `0x1a1` Farm | `tx=ty=-1`, `wait=0`, `(goto,non_flat,dist,been)=(1,0,0,1)` | four stable grows plus the immediate owner-2/o-5 animation-8→35 grow admitted by the [Farm continuation](canonical-gather-farm-work.md); residuals fail closed |
 | 12 | `0x1a2` Camp | `tx,ty>=0`, `wait>0`, `(goto,non_flat,dist,been)=(0,1,4,1)` | admitted to the recovered timer branch when the live snapshot gates match |
 
 Every node also has metric zero, flags zero, a same-owner Build-band target, and a positive
@@ -135,7 +136,7 @@ or mismatched receipt is not success.
 
 | branch | missing exact owner | result |
 |---|---|---|
-| Farm tick | one exact FarmStruct grow now owned; residual animation/relocation/snip tails | one saved grow commits; residuals no commit |
+| Farm tick | canonical FarmStruct plus optional complete UnitGuys row; movement/relocation/snip tails remain | four stable grows and owner-2/o-5 animation-8→35 grow commit; residuals no commit |
 | Mine tick | MiningList/object identity, terrain and collision | no commit |
 | 128-frame Camp/Mine phase | exact gather chain and capacity/count result | no commit |
 | `goto_build != 0` | destination selection, access, collision and movement insertion | no commit |
@@ -154,9 +155,11 @@ terrain tile, count workers from a number, or silently consume an RNG draw.
 Build `(who,o,uid)`. A nonzero composition digest and revision bind exact type, Guys-array
 `(length,capacity,increment,flags)=(1,1,1,0)`, slot-zero presence/animation, and the target's
 Build/Wall virtual projection. Mutable Unit, GatherOrder, Build latch/recharge/chain, frame,
-and RNG bytes remain canonical `Sim` owners. Load restores those canonical owners but resets
-the adapter to default, so Gather work fails closed until content reinstalls the matching
-authority.
+RNG, FarmStruct, and materialized UnitGuys bytes remain canonical `Sim` owners. DoNSave v19
+restores every present UnitGuys row byte-for-byte (including null topology and float payloads)
+but resets the content adapter to default, so Gather work fails closed until content reinstalls
+the matching authority. Pre-v19 streams mark every row unmaterialized rather than inventing an
+empty Guys array.
 
 The integration test installs the exact first Camp image from the fresh SVX on owner 0 Unit
 `o=3`, targeting Build `o=2001, uid=1`.  Its `wait=295`, `tx=270`, `ty=116`, and payload
@@ -182,14 +185,18 @@ Focused direct tests cover a nonempty false chain (one exact LCG draw and animat
 reschedule), stale compare/exchange, exact `check_gatherers` unlink publication, malformed
 Guys authority, and zero writes on every refusal.
 
-This is production credit for the exact Camp branches above, not general Gather closure:
-Residual Farm, Mine, capacity phase, destination/collision, resource payout,
-retirement/replacement, and containment-special arms remain explicit boundaries.
+This is production credit for the exact Camp branches and Farm continuations above, not general
+Gather closure. The other animation-changing Farm node, owner 2 Unit `o=9`, is queued behind a
+live `MOVE_TO` and therefore charges movement completion. Residual Farm relocation/snip, Mine,
+capacity phase, destination/collision, resource payout, retirement/replacement, and
+containment-special arms remain explicit boundaries.
 
 Run the focused gate with:
 
 ```sh
 CARGO_TARGET_DIR=/tmp/don-gather-runtime-target \
   cargo test -p don-sim --test canonical_gather_saved_work \
-  --test canonical_gather_runtime
+  --test canonical_gather_runtime \
+  --test canonical_gather_farm_runtime \
+  --test canonical_gather_farm_animation_runtime
 ```

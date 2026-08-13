@@ -799,6 +799,16 @@ pub enum ScenarioVisibilityError {
     Preflight(step12_visibility_runtime::Step12VisibilityPreflightError),
 }
 
+/// Fail-closed installation error for a Unit's checksum/save-owned `PtrArray<Guy>` image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitGuysInstallError {
+    StaleHandle,
+    SideStoreLength,
+    InvalidArrayShape,
+    GuyMarkMismatch,
+    GuyIdentityMismatch,
+}
+
 /// A world plus the state its tick needs, and the executable `Game::do_frame`.
 ///
 /// Deliberately not `Clone`: `movement::PathFinder` owns search containers that are scratch
@@ -964,6 +974,10 @@ pub struct Sim {
     /// `Stack<PathData>` at `UnitData+0xB8`, per unit row.
     pub paths: Vec<movement::PathStack>,
     pub path_unit: Vec<movement::PathUnit>,
+    /// Canonical optional owner for each live Unit's complete walked `PtrArray<Guy>` image.
+    /// `None` means the row has not yet been materialized from an exact source; it is not an
+    /// empty array.  DoNSave preserves `Some` rows byte-for-byte.
+    pub unit_guys: Vec<Option<groups_guys::UnitGuys>>,
     pub pathfinder: movement::PathFinder,
     /// Authoritative generated-column/ObjectRegistry/Guy-stamp collision store.
     pub movement_collision: movement_live::LiveCollisionRuntime,
@@ -1673,6 +1687,7 @@ impl Sim {
             shooter_rules: Vec::new(),
             paths: Vec::new(),
             path_unit: Vec::new(),
+            unit_guys: Vec::new(),
             pathfinder: movement::PathFinder::new(),
             movement_collision: movement_live::LiveCollisionRuntime::new(),
             ammo: ammo::AmmoPool::new(),
@@ -2514,12 +2529,61 @@ impl Sim {
             self.unit_type.push(0);
             self.paths.push(movement::PathStack::new());
             self.path_unit.push(movement::PathUnit::default());
+            self.unit_guys.push(None);
             self.crash_units.push(None);
         }
         self.unit_type[row] = type_id;
+        // A recycled World row must never inherit a materialized Guy owner from the dead
+        // handle that previously occupied it. Exact callers may reinstall the new image.
+        self.unit_guys[row] = None;
         self.movement_collision
             .ensure_rows(self.world.live_count() as usize);
         Some(h)
+    }
+
+    /// Install one complete retail Guys-array image after validating its live Unit binding.
+    /// No canonical state changes on error.
+    pub fn install_unit_guys(
+        &mut self,
+        actor: Handle,
+        guys: groups_guys::UnitGuys,
+    ) -> Result<usize, UnitGuysInstallError> {
+        let row = self
+            .world
+            .row_of(actor)
+            .ok_or(UnitGuysInstallError::StaleHandle)?;
+        let live = self.world.live_count() as usize;
+        if self.unit_guys.len() != live || self.unit_type.len() != live {
+            return Err(UnitGuysInstallError::SideStoreLength);
+        }
+        let len = guys.guys.len();
+        let mark = usize::try_from(guys.guy_mark)
+            .ok()
+            .filter(|&mark| mark <= len)
+            .ok_or(UnitGuysInstallError::InvalidArrayShape)?;
+        if guys.size < 0 || len > guys.size as usize || guys.guy_mark < 0 {
+            return Err(UnitGuysInstallError::InvalidArrayShape);
+        }
+        if i32::from(self.world.units.guy_mark()[row]) != guys.guy_mark as i32
+            || guys.guys[..mark].iter().any(Option::is_none)
+        {
+            return Err(UnitGuysInstallError::GuyMarkMismatch);
+        }
+        let who = self.world.units.get_who(row) as i8;
+        let o = self.world.units.o()[row];
+        let ty = self.unit_type[row];
+        if guys.guys.iter().enumerate().any(|(index, guy)| {
+            guy.is_some_and(|guy| {
+                guy.who != who
+                    || guy.o != o
+                    || guy.ty != ty
+                    || usize::try_from(guy.guy_num).ok() != Some(index)
+            })
+        }) {
+            return Err(UnitGuysInstallError::GuyIdentityMismatch);
+        }
+        self.unit_guys[row] = Some(guys);
+        Ok(row)
     }
 
     /// Attach the exact non-column movement/collision facts for one live unit. Installation is
@@ -4081,6 +4145,7 @@ impl Sim {
             &self.world,
             &self.builds,
             &self.farms,
+            &self.unit_guys,
             &self.unit_type,
             &self.gather_work_authority,
             row,
@@ -4096,6 +4161,7 @@ impl Sim {
             &mut self.world,
             &mut self.builds,
             &mut self.farms,
+            &mut self.unit_guys,
             &self.unit_type,
             &self.gather_work_authority,
             prepared,
@@ -5431,6 +5497,20 @@ impl Sim {
         mix({
             let mut cs = crate::systems::groups_guys::CheckSum::default();
             self.groups.check_groups(&mut cs);
+            cs.value
+        });
+        // Canonical per-Unit Guy images currently form a partial channel: exact installed rows
+        // participate, while unmaterialized rows retain an explicit absence byte. This keeps
+        // determinism/save-resume gates sensitive to every owned Guy byte without pretending
+        // an absent row is retail's empty `PtrArray<Guy>`.
+        mix({
+            let mut cs = crate::systems::groups_guys::CheckSum::default();
+            for guys in &self.unit_guys {
+                cs.walk(&[u8::from(guys.is_some())]);
+                if let Some(guys) = guys {
+                    guys.walk(&mut cs);
+                }
+            }
             cs.value
         });
         mix(self.world.frame as u32);

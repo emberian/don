@@ -1101,6 +1101,7 @@ impl SimFinishedHost<'_> {
         self.sim.unit_type.pop();
         self.sim.paths.pop();
         self.sim.path_unit.pop();
+        self.sim.unit_guys.pop();
         self.sim.crash_units.pop();
 
         let control = self
@@ -1191,9 +1192,11 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
                     self.sim
                         .path_unit
                         .push(crate::systems::movement::PathUnit::default());
+                    self.sim.unit_guys.push(None);
                     self.sim.crash_units.push(None);
                 }
                 self.sim.unit_type[row] = request.type_index;
+                self.sim.unit_guys[row] = None;
                 self.sim.world.units.o()[row] as i32
             });
         if object_id >= 0 {

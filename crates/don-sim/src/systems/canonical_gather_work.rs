@@ -7,7 +7,8 @@
 //! by all 12 Camp images: a non-capacity phase, `goto_build == 0`, lead animation `0x19`,
 //! and the animation-`0x19` wait loop, including its exact wait-zero
 //! `Build::all_gathering`/single-RNG-draw tail.  It also executes the exact saved Farm
-//! status-one grow whose requested animation is already stable.
+//! status-one grow for stable animations and for the exact saved type-50 animation-8→35
+//! transition whose complete `UnitGuys` after-image is now canonically owned.
 //!
 //! Planning is read-only.  Publishing is one compare/exchange host call over the actor,
 //! order, target building, RNG state, and authority revision.  Farm cell mutation and
@@ -19,6 +20,7 @@ use crate::objects::{Band, BUILD_BAND_BASE, OWNER_SLOTS};
 use crate::order::{Order, OrderIndex};
 use crate::systems::economy_order_payload_authority::EconomyOrderPayload;
 use crate::systems::gathering::{self, GatherAssignment, GatherSite, GatherWorker};
+use crate::systems::groups_guys::UnitGuys;
 use crate::systems::map_terrain::{Coord, TCoord};
 use crate::systems::production::BuildData;
 use crate::world::{Handle, World};
@@ -370,11 +372,11 @@ pub enum GatherWorkBranch {
     CampAnimation19Rescheduled,
 }
 
-/// Dynamic Farm/Guy facts read by the two admitted saved-Farm branches.
+/// Installed geometry/content expectations read by the admitted saved-Farm branches.
 ///
-/// `FarmStruct` and `GuyData` are checksum-visible retail owners which this compact Sim does
-/// not yet store.  The authority therefore pins their exact revision-bound image.  Only
-/// branches which leave both owners byte-identical are admitted.
+/// `FarmStruct` and a materialized `UnitGuys` row are canonical gameplay owners. These facts
+/// bind their interpretation to exact Build virtuals, footprint geometry, and animation packet
+/// clocks; prepare validates them against the owners before staging a whole-owner after-image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GatherFarmRuntimeFacts {
     pub actor: Handle,
@@ -565,6 +567,16 @@ pub fn plan_fresh_farm_tick(
     reads: GatherFarmReadImage,
     farm: FarmStruct,
 ) -> Result<GatherWorkPlan, GatherWorkPlanError> {
+    plan_fresh_farm_tick_inner(before, facts, reads, farm, false)
+}
+
+fn plan_fresh_farm_tick_inner(
+    before: GatherWorkSnapshot,
+    facts: GatherFarmRuntimeFacts,
+    reads: GatherFarmReadImage,
+    farm: FarmStruct,
+    owns_animation_8_to_35: bool,
+) -> Result<GatherWorkPlan, GatherWorkPlanError> {
     if bind_fresh_gather_payload(before.actor.who, before.order)?
         != FreshGatherPayloadClass::FarmActive
     {
@@ -686,7 +698,9 @@ pub fn plan_fresh_farm_tick(
         .ok_or(GatherWorkPlanError::Unowned(
             UnownedGatherArm::MissingLeadGuy,
         ))?;
-    if current != requested_animation
+    let exact_owned_animation_mutation =
+        owns_animation_8_to_35 && current == 8 && requested_animation == FARM_ANIMATION_23;
+    if (current != requested_animation && !exact_owned_animation_mutation)
         || facts.lead_hold_attack != 0
         || facts.lead_cur_time >= facts.lead_end_time
     {
@@ -723,9 +737,9 @@ pub fn plan_fresh_farm_tick(
     })
 }
 
-/// Revision-bound facts for the slot-zero `GuyData` body which is not represented in the
-/// generated Unit columns.  The fresh SVX witnesses all have the exact `(1,1,1,0)` array
-/// header pinned here; a normalized "has animation" bit is not accepted.
+/// Revision-bound expected identity/header for the slot-zero `GuyData` body. A materialized
+/// canonical UnitGuys row is revalidated against these exact `(1,1,1,0)` fresh-SVX facts; a
+/// normalized "has animation" bit is not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GatherActorRuntimeFacts {
     pub actor: Handle,
@@ -847,6 +861,9 @@ pub struct PreparedGatherWorkActivation {
     pub farm_facts: Option<GatherFarmRuntimeFacts>,
     pub farm_reads: Option<GatherFarmReadImage>,
     pub farm_index: Option<usize>,
+    /// Complete Guys-array compare/exchange images for the exact animation-8→35 arm.
+    pub unit_guys_before: Option<UnitGuys>,
+    pub unit_guys_after: Option<UnitGuys>,
     pub plan: GatherWorkPlan,
     pub chain: Option<GatherChainProjection>,
 }
@@ -865,11 +882,20 @@ pub struct GatherWorkActivationReceipt {
     pub random_state_before: i32,
     pub random_state_after: i32,
     pub changed_fields: u8,
+    pub guy_changed_fields: u8,
     pub chain_unlinks: usize,
     pub rng_draws: u8,
     pub farm_index: Option<usize>,
     pub farm_percent_before: Option<u32>,
     pub farm_percent_after: Option<u32>,
+    pub guy_animation_before: Option<i8>,
+    pub guy_animation_after: Option<i8>,
+    pub guy_cur_time_before: Option<u32>,
+    pub guy_cur_time_after: Option<u32>,
+    pub guy_end_time_before: Option<u32>,
+    pub guy_end_time_after: Option<u32>,
+    pub guy_last_time_before: Option<i32>,
+    pub guy_last_time_after: Option<i32>,
 }
 
 fn work_order(order: &Order) -> Result<GatherWorkOrder, GatherWorkRuntimeError> {
@@ -1094,6 +1120,7 @@ pub fn prepare_gather_work_activation(
     world: &World,
     builds: &[BuildData],
     farms: &Farms,
+    unit_guys: &[Option<UnitGuys>],
     unit_types: &[i32],
     authority: &GatherWorkAuthority,
     row: usize,
@@ -1125,6 +1152,50 @@ pub fn prepare_gather_work_activation(
     {
         return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
     }
+    if unit_guys.len() != world.live_count() as usize {
+        return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
+    }
+    let owned_guys = unit_guys
+        .get(row)
+        .ok_or(GatherWorkRuntimeError::InvalidGuyArrayFacts)?
+        .as_ref();
+    let owned_lead = if let Some(guys) = owned_guys {
+        if (
+            guys.guys.len(),
+            guys.size,
+            i32::from(guys.increment),
+            guys.flags,
+        ) != (
+            actor_facts.guys_length as usize,
+            actor_facts.guys_capacity,
+            actor_facts.guys_increment,
+            actor_facts.guys_flags,
+        ) || guys.guy_mark != world.units.guy_mark()[row]
+            || guys.guy_mark != 1
+        {
+            return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
+        }
+        let lead = guys
+            .guys
+            .first()
+            .and_then(Option::as_ref)
+            .copied()
+            .ok_or(GatherWorkRuntimeError::InvalidGuyArrayFacts)?;
+        if (lead.who, lead.o, lead.guy_num, lead.ty, lead.cur_anim as u8)
+            != (
+                actor_facts.who as i8,
+                actor_facts.o,
+                0,
+                actor_facts.type_index,
+                actor_facts.lead_animation,
+            )
+        {
+            return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
+        }
+        Some(lead)
+    } else {
+        None
+    };
     let type_index = unit_types
         .get(row)
         .copied()
@@ -1179,46 +1250,105 @@ pub fn prepare_gather_work_activation(
             recharging: build.recharging,
         },
     };
-    let (farm_facts, farm_reads, chain, plan) = match payload_class {
-        FreshGatherPayloadClass::FarmActive => {
-            let farm_facts = authority
-                .farm(actor, build.who, build.object_id(), build.uid)
-                .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
-            if (farm_facts.site_who, farm_facts.site_o, farm_facts.site_uid)
-                != (build.who, build.object_id(), build.uid)
-                || farm_facts.farm_record_who != build.who
-                || farm_facts.farm_record_o != build.object_id()
-            {
-                return Err(GatherWorkRuntimeError::FarmAuthorityMismatch);
+    let (farm_facts, farm_reads, chain, unit_guys_before, unit_guys_after, plan) =
+        match payload_class {
+            FreshGatherPayloadClass::FarmActive => {
+                let farm_facts = authority
+                    .farm(actor, build.who, build.object_id(), build.uid)
+                    .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
+                if (farm_facts.site_who, farm_facts.site_o, farm_facts.site_uid)
+                    != (build.who, build.object_id(), build.uid)
+                    || farm_facts.farm_record_who != build.who
+                    || farm_facts.farm_record_o != build.object_id()
+                {
+                    return Err(GatherWorkRuntimeError::FarmAuthorityMismatch);
+                }
+                let actor_x = world.units.x_internal()[row];
+                let actor_y = world.units.y_internal()[row];
+                let reads = GatherFarmReadImage {
+                    actor_x,
+                    actor_y,
+                    actor_tx: TCoord::from_coord(Coord(actor_x)).0,
+                    actor_ty: TCoord::from_coord(Coord(actor_y)).0,
+                    site_city: build.city,
+                    site_farm_index: build.dock,
+                };
+                let farm_index = usize::try_from(build.dock)
+                    .map_err(|_| GatherWorkRuntimeError::FarmAuthorityMismatch)?;
+                let farm = farms
+                    .get(farm_index)
+                    .copied()
+                    .ok_or(GatherWorkRuntimeError::FarmAuthorityMismatch)?;
+                if owned_lead.is_some_and(|lead| {
+                    (lead.cur_time, lead.end_time, lead.hold_attack as u8)
+                        != (
+                            farm_facts.lead_cur_time,
+                            farm_facts.lead_end_time,
+                            farm_facts.lead_hold_attack,
+                        )
+                }) {
+                    return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
+                }
+                let owns_animation_8_to_35 = actor_facts.lead_animation == 8
+                    && owned_lead.is_some_and(|lead| {
+                        // Exact content/witness binding: type 50's gpiece 6336 packet maps
+                        // UnitAnim 35 to 47 frames in the shipped retail content.
+                        lead.ty == 50
+                            && lead.gpiece == 6_336
+                            && lead.cur_time < 15
+                            && lead.end_time == 15
+                            && lead.last_time == lead.cur_time as i32 - 1
+                            && lead.hold_attack == 0
+                    });
+                let plan = plan_fresh_farm_tick_inner(
+                    before,
+                    farm_facts,
+                    reads,
+                    farm,
+                    owns_animation_8_to_35,
+                )?;
+                let (guys_before, guys_after) = if owns_animation_8_to_35 {
+                    let before = owned_guys
+                        .expect("owned animation preflight retained UnitGuys")
+                        .clone();
+                    let mut after = before.clone();
+                    let lead = after.guys[0]
+                        .as_mut()
+                        .expect("owned animation preflight retained lead Guy");
+                    // Unit::set_anim(35,0,1) -> Guy::set_anim on the sole initialized Guy.
+                    // Old class 8 clears hold_attack (already zero); the nonzero class-35 arm
+                    // then resets this exact four-field walked surface without drawing RNG.
+                    lead.cur_time = 0;
+                    lead.end_time = 47;
+                    lead.last_time = -1;
+                    lead.cur_anim = FARM_ANIMATION_23 as i8;
+                    (Some(before), Some(after))
+                } else {
+                    (None, None)
+                };
+                (
+                    Some(farm_facts),
+                    Some(reads),
+                    None,
+                    guys_before,
+                    guys_after,
+                    plan,
+                )
             }
-            let actor_x = world.units.x_internal()[row];
-            let actor_y = world.units.y_internal()[row];
-            let reads = GatherFarmReadImage {
-                actor_x,
-                actor_y,
-                actor_tx: TCoord::from_coord(Coord(actor_x)).0,
-                actor_ty: TCoord::from_coord(Coord(actor_y)).0,
-                site_city: build.city,
-                site_farm_index: build.dock,
-            };
-            let farm_index = usize::try_from(build.dock)
-                .map_err(|_| GatherWorkRuntimeError::FarmAuthorityMismatch)?;
-            let farm = farms
-                .get(farm_index)
-                .copied()
-                .ok_or(GatherWorkRuntimeError::FarmAuthorityMismatch)?;
-            let plan = plan_fresh_farm_tick(before, farm_facts, reads, farm)?;
-            (Some(farm_facts), Some(reads), None, plan)
-        }
-        FreshGatherPayloadClass::CampActiveTimer if order.wait == 1 => {
-            let chain = structural_all_gathering(world, unit_types, build)?;
-            let plan = plan_fresh_gather_tick_at_wait_zero(before, chain.all_gathering)?;
-            (None, None, Some(chain), plan)
-        }
-        FreshGatherPayloadClass::CampActiveTimer => {
-            (None, None, None, plan_fresh_gather_tick(before)?)
-        }
-    };
+            FreshGatherPayloadClass::CampActiveTimer if order.wait == 1 => {
+                let chain = structural_all_gathering(world, unit_types, build)?;
+                let plan = plan_fresh_gather_tick_at_wait_zero(before, chain.all_gathering)?;
+                (None, None, Some(chain), None, None, plan)
+            }
+            FreshGatherPayloadClass::CampActiveTimer => (
+                None,
+                None,
+                None,
+                None,
+                None,
+                plan_fresh_gather_tick(before)?,
+            ),
+        };
     Ok(PreparedGatherWorkActivation {
         row,
         build_row,
@@ -1229,6 +1359,8 @@ pub fn prepare_gather_work_activation(
         farm_facts,
         farm_reads,
         farm_index: farm_reads.map(|reads| reads.site_farm_index as usize),
+        unit_guys_before,
+        unit_guys_after,
         plan,
         chain,
     })
@@ -1240,12 +1372,20 @@ pub fn commit_gather_work_activation(
     world: &mut World,
     builds: &mut [BuildData],
     farms: &mut Farms,
+    unit_guys: &mut [Option<UnitGuys>],
     unit_types: &[i32],
     authority: &GatherWorkAuthority,
     prepared: PreparedGatherWorkActivation,
 ) -> Result<GatherWorkActivationReceipt, GatherWorkRuntimeError> {
-    let current =
-        prepare_gather_work_activation(world, builds, farms, unit_types, authority, prepared.row)?;
+    let current = prepare_gather_work_activation(
+        world,
+        builds,
+        farms,
+        unit_guys,
+        unit_types,
+        authority,
+        prepared.row,
+    )?;
     if current != prepared {
         return Err(GatherWorkRuntimeError::StaleState);
     }
@@ -1300,6 +1440,12 @@ pub fn commit_gather_work_activation(
         debug_assert_eq!(*farm, farm_before);
         *farm = farm_after;
     }
+    if let (Some(guys_before), Some(guys_after)) =
+        (&prepared.unit_guys_before, &prepared.unit_guys_after)
+    {
+        debug_assert_eq!(unit_guys[prepared.row].as_ref(), Some(guys_before));
+        unit_guys[prepared.row] = Some(guys_after.clone());
+    }
     let farm_cell = prepared.farm_facts.and_then(|facts| {
         prepared.farm_reads.map(|reads| {
             let dx = reads.actor_tx.wrapping_sub(facts.corner_tx) as usize;
@@ -1307,6 +1453,17 @@ pub fn commit_gather_work_activation(
             dx * facts.y_size as usize + dy
         })
     });
+    let guy_before = prepared
+        .unit_guys_before
+        .as_ref()
+        .and_then(|guys| guys.guys.first())
+        .and_then(Option::as_ref);
+    let guy_after = prepared
+        .unit_guys_after
+        .as_ref()
+        .and_then(|guys| guys.guys.first())
+        .and_then(Option::as_ref);
+    let guy_changed_fields = u8::from(guy_before.zip(guy_after).is_some()) * 4;
     Ok(GatherWorkActivationReceipt {
         actor: prepared.actor_facts.actor,
         site_who: prepared.site_facts.who,
@@ -1319,7 +1476,8 @@ pub fn commit_gather_work_activation(
         wait_after: after.order.wait,
         random_state_before: before.rng_state,
         random_state_after: after.rng_state,
-        changed_fields: prepared.plan.changed_fields,
+        changed_fields: prepared.plan.changed_fields + guy_changed_fields,
+        guy_changed_fields,
         chain_unlinks: prepared.chain.as_ref().map_or(0, |chain| chain.removed),
         rng_draws: prepared.plan.rng_draws,
         farm_index: prepared.farm_index,
@@ -1327,6 +1485,14 @@ pub fn commit_gather_work_activation(
             .and_then(|cell| prepared.plan.farm_before.map(|farm| farm.percent[cell])),
         farm_percent_after: farm_cell
             .and_then(|cell| prepared.plan.farm_after.map(|farm| farm.percent[cell])),
+        guy_animation_before: guy_before.map(|guy| guy.cur_anim),
+        guy_animation_after: guy_after.map(|guy| guy.cur_anim),
+        guy_cur_time_before: guy_before.map(|guy| guy.cur_time),
+        guy_cur_time_after: guy_after.map(|guy| guy.cur_time),
+        guy_end_time_before: guy_before.map(|guy| guy.end_time),
+        guy_end_time_after: guy_after.map(|guy| guy.end_time),
+        guy_last_time_before: guy_before.map(|guy| guy.last_time),
+        guy_last_time_after: guy_after.map(|guy| guy.last_time),
     })
 }
 
