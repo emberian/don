@@ -117,6 +117,7 @@ pub mod setup_place_unit_deep_re;
 pub mod setup_unit_member_authority;
 pub mod setup_unit_visibility_deep_re;
 pub mod setup_units_producer;
+pub mod starting_city_unit_census;
 pub mod starting_village_suffix;
 pub mod state;
 pub mod unit_init_collision_tail_deep_re;

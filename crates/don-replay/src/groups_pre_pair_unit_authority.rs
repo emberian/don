@@ -77,6 +77,9 @@ pub struct ReplayUnitTypeFacts {
     pub moves: i32,
     pub turn_speed: i32,
     pub role: i32,
+    /// `UnitTypeData +0x2f0`, read by `Leader::plan_strategy` before the
+    /// frame-zero Citizen/City census. A zero value excludes the Unit from that pass.
+    pub control_cost: i32,
     pub military_level: i32,
     pub squad_size: i32,
     pub uber_size: i32,
@@ -389,6 +392,7 @@ pub fn replay_unit_type_facts(
                     moves: read_i32(section, unit_at(0x2c0))?,
                     turn_speed: read_i32(section, unit_at(0x2c4))?,
                     role: read_i32(section, unit_at(0x2c8))?,
+                    control_cost: read_i32(section, unit_at(0x2f0))?,
                     military_level: read_i32(section, unit_at(0x2dc))?,
                     squad_size: read_i32(section, unit_at(0x304))?,
                     uber_size: read_i32(section, unit_at(0x308))?,

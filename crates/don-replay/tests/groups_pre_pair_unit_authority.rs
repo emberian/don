@@ -141,6 +141,7 @@ fn census_first_clear_pool_group_move_witness() {
         ),
         (50, 4_227_108, 40, 0, 0, 144, 144, 144, 6_273, 2, 25, 262_912,)
     );
+    assert_eq!(citizen.control_cost, 1);
     assert_eq!(
         (
             citizen.squad_size,

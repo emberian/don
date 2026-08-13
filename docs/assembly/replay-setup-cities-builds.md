@@ -56,10 +56,11 @@ Build row, registry append, or channel.
 The fresh City body is not the first replay-checksum body. `Game::do_frame`
 (`0x00591EF0`) calls `Leaders::strategy_all` (`0x006ED430`), which calls
 `Leader::plan_strategy` (`0x006B9620`). On frame zero that function clears and recomputes
-walked City bytes `+0x62..+0x71`—ocean, land, filled, dock/space, and six gathered-resource
-bytes—from the surrounding WData. The first recorded Cities values occur on turn 2 and
-remain stable until later gameplay changes them. Comparing the fresh constructor walk to
-those values therefore correctly falsifies promotion; it does not falsify `City::init`.
+walked City bytes `+0x50`, `+0x5a..+0x5c`, and `+0x62..+0x71`: the first four come from its
+starting-Unit census, while ocean, land, filled, dock/space, and six gathered-resource bytes
+come from surrounding WData. The first recorded Cities values occur on turn 2 and remain
+stable until later gameplay changes them. Comparing the fresh constructor walk to those
+values therefore correctly falsifies promotion; it does not falsify `City::init`.
 
 The Build is also incomplete: inherited `SubObject/Object/Wall/Build` initialization,
 WData intrusive links, queue allocation, subtype virtuals, and the full activation body
@@ -73,6 +74,9 @@ separately publishes the canonical `Sim::cities` traversal as a conditional exac
 That producer makes the frozen constructor image observable to the replay scoreboard; it does
 not set `first_checksum_city_image_ready`, install Builds, or assert a retail match. See
 [`replay-cities-sim-channel.md`](replay-cities-sim-channel.md).
+The bounded exact Unit-census transaction is documented in
+[`replay-starting-city-unit-census.md`](replay-starting-city-unit-census.md); it remains
+unmounted until this setup host materializes its receipt-backed canonical Units.
 
 ## Verification
 

@@ -228,11 +228,15 @@ Three ordinary all-land, two-human recordings admit the existing starting-City c
 
 That is **36,955 non-trivial and substantive comparisons**, up from zero; all have zero
 unsourced bytes, a complete walk, and an exact producer. Matches and survival remain **0**.
-This is the intended result: the state is the fresh constructor, while retail runs the
-frame-zero `Leader::plan_strategy` Unit and terrain census before its first checkpoint. The
-next work is therefore localized to concrete City fields rather than hidden behind an absent
-producer. Full derivation and the fail-closed mutation proof are in
+This remains the intended measured result: the state is the fresh constructor, while retail
+runs the frame-zero `Leader::plan_strategy` Unit and terrain census before its first checkpoint.
+An exact bounded starting-Unit census transaction now owns `peasant_dist`, `free`, `busy`, and
+`gatherers`, but it is not mounted because the setup host does not yet materialize its
+receipt-backed canonical Units; the terrain census also lacks the activated WData `CITY`
+footprint. Full channel derivation and the fail-closed bridge mutation proof are in
 [`docs/assembly/replay-cities-sim-channel.md`](../assembly/replay-cities-sim-channel.md).
+The new transaction and its atomic refusal boundary are in
+[`docs/assembly/replay-starting-city-unit-census.md`](../assembly/replay-starting-city-unit-census.md).
 
 ### The corpus has a **second** checksum stream, and 39 recordings were carrying it
 

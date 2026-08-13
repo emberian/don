@@ -72,10 +72,13 @@ values are recorded in `schema/replay-validation.json` and summarized in
 
 ## Residual
 
-The immediate checksum residual is the pre-checkpoint `Leader::plan_strategy` Unit census. The
-instruction stream initializes each live City's `free` (`+0x5a`), `busy` (`+0x5b`), `gatherers`
-(`+0x5c`), and `peasant_dist` (`+0x50`) before scanning the owner's starting Units. The existing
-terrain-census owner separately reconstructs offsets `+0x62..+0x71`. These must be joined to the
-canonical starting Scout/Citizen Unit producer and the remaining setup schedule before the frozen
-constructor may become a first-checkpoint-correct City image. No recorded Cities checksum may be
-used as an input to that work.
+The exact starting-Unit owner for the pre-checkpoint `Leader::plan_strategy` census now exists.
+It clears each live City's `free` (`+0x5a`), `busy` (`+0x5b`), `gatherers` (`+0x5c`), and
+`peasant_dist` (`+0x50`), then joins the validated setup allocation receipts to canonical
+Scout/Citizen rows and applies the empty-action Citizen arm. It is not yet mountable in
+`StartingSetupState`: that host does not materialize the receipt-backed Units in `Sim::world`.
+The existing terrain-census owner for `+0x62..+0x71` also still needs the source-exact WData
+activation/`CITY` footprint. Both owners and the remaining setup schedule must join before the
+frozen constructor can become a first-checkpoint-correct image. No recorded Cities checksum is
+an input. See
+[`replay-starting-city-unit-census.md`](replay-starting-city-unit-census.md).
