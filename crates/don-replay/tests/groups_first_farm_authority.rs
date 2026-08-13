@@ -1,15 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use don_replay::groups_first_farm_authority::{
-    bind_first_farm_builder_at_frame79, bind_first_farm_first_init_unit, discover_first_2018_farm,
-    produce_first_farm_first_placement, produce_first_farm_first_scout_collision_tail,
-    produce_first_farm_first_scout_complete_init, produce_first_farm_first_scout_guy_prefix,
-    produce_first_farm_first_scout_location, produce_first_farm_first_scout_visibility,
-    FirstFarmAuthorityBlocker, FirstFarmAuthorityError, FirstFarmBuilderBindingError,
-    FirstFarmFirstInitUnitAuthority, FirstFarmFirstInitUnitError, FirstFarmFirstInitUnitSource,
-    FirstFarmFirstPlacementError, FirstFarmFirstScoutCollisionAuthority,
-    FirstFarmFirstScoutCollisionError, FirstFarmFirstScoutCollisionInputs,
-    FirstFarmFirstScoutCollisionSource, FirstFarmFirstScoutCompleteInitError,
+    bind_first_farm_builder_at_frame79, bind_first_farm_first_citizen_init,
+    bind_first_farm_first_init_unit, discover_first_2018_farm,
+    produce_first_farm_first_citizen_guy_prefix, produce_first_farm_first_citizen_location,
+    produce_first_farm_first_citizen_placement, produce_first_farm_first_placement,
+    produce_first_farm_first_scout_collision_tail, produce_first_farm_first_scout_complete_init,
+    produce_first_farm_first_scout_guy_prefix, produce_first_farm_first_scout_location,
+    produce_first_farm_first_scout_visibility, FirstFarmAuthorityBlocker, FirstFarmAuthorityError,
+    FirstFarmBuilderBindingError, FirstFarmFirstCitizenInitAuthority,
+    FirstFarmFirstCitizenInitError, FirstFarmFirstCitizenInitSource,
+    FirstFarmFirstCitizenLocationError, FirstFarmFirstCitizenLocationInputs,
+    FirstFarmFirstCitizenPlacementError, FirstFarmFirstInitUnitAuthority,
+    FirstFarmFirstInitUnitError, FirstFarmFirstInitUnitSource, FirstFarmFirstPlacementError,
+    FirstFarmFirstScoutCollisionAuthority, FirstFarmFirstScoutCollisionError,
+    FirstFarmFirstScoutCollisionInputs, FirstFarmFirstScoutCollisionSource,
+    FirstFarmFirstScoutCompleteInitError, FirstFarmFirstScoutCompleteInitReceipt,
     FirstFarmFirstScoutGuyError, FirstFarmFirstScoutLocationError,
     FirstFarmFirstScoutLocationInputs, FirstFarmFirstScoutVisibilityAuthority,
     FirstFarmFirstScoutVisibilityError, FirstFarmFirstScoutVisibilitySource,
@@ -377,6 +383,99 @@ fn first_scout_detailed_receipt(
     }
 }
 
+fn first_citizen_detailed_receipt(
+    request: don_replay::setup_place_unit_deep_re::ObjectsInitUnitRequest,
+    after: &Sim,
+    new_block_radius: i32,
+) -> DetailedInitUnitReceipt {
+    let row = after.world.unit_row_at(i32::from(FIRST_OWNER), 1).unwrap();
+    let after_image = UnitAfterInit {
+        owner: request.owner,
+        o: 1,
+        type_index: request.type_index,
+        x: after.world.units.x_internal()[row],
+        y: after.world.units.y_internal()[row],
+        angle: after.world.units.angle()[row],
+        unit_masks: after.world.units.get_unit_masks(row),
+    };
+    DetailedInitUnitReceipt {
+        request: BhsInitUnitRequest {
+            owner: request.owner,
+            type_index: request.type_index,
+            x: request.x,
+            y: request.y,
+            exact_o: request.exact_o,
+            external_previous: request.external_previous,
+            external_next: request.external_next,
+        },
+        type_facts: UnitTypeAuthorityFacts {
+            uber_size: 1,
+            control_cost: 0,
+            is_fighter_bomber: false,
+            is_government_hero: false,
+            track: TrackUnitTypeFacts {
+                has_attack: false,
+                training_where: TrainingWhere::Other,
+                domain: 0,
+                is_peasant: true,
+                is_scholar: false,
+                role_has_scout_bit: false,
+                is_type_0x42: false,
+                is_type_0x4b: false,
+                member_former_type_is_0x34: false,
+            },
+        },
+        steps: vec![
+            InitUnitStep::FindFree(FindFreeUnitReceipt {
+                ordinal: 0,
+                owner: request.owner,
+                start: 0,
+                limit: 2_000,
+                exact_o: -1,
+                cursor_before: 1,
+                cursor_after: 2,
+                returned: 1,
+                disposition: FindFreeDisposition::ConstructedAndRegistered {
+                    class: UnitBandStorageClass::Unit,
+                    object_list_registered: true,
+                    unit_projection_registered: true,
+                },
+            }),
+            InitUnitStep::UnitInit(UnitInitReceipt {
+                ordinal: 0,
+                owner: request.owner,
+                type_index: request.type_index,
+                o: 1,
+                x: request.x,
+                y: request.y,
+                returned: 1,
+                extent: CompleteBody::UnitInit3732Bytes,
+                after: after_image,
+            }),
+            InitUnitStep::SetPrevious {
+                ordinal: 0,
+                member_o: 1,
+                previous_o: -1,
+            },
+            InitUnitStep::ResolveCaptain(ResolveCaptainReceipt {
+                ordinal: 1,
+                from_owner: request.owner,
+                from_o: 1,
+                returned: 1,
+                captain: CaptainFacts {
+                    owner: request.owner,
+                    o: 1,
+                    x: after_image.x,
+                    y: after_image.y,
+                    angle: after_image.angle,
+                    new_block_radius,
+                },
+            }),
+        ],
+        returned: 1,
+    }
+}
+
 fn synthetic_first_scout_init(
     replay: &Replay,
     plan: &BuildUnitsPlan,
@@ -737,6 +836,163 @@ fn prepare_complete_first_scout_after_image(
     unit.after.unit_masks = completed.collision.tail.unit.unit_masks;
     init_authority.map_checksum_after = after.map.world.checksum_sections();
     (seam_world, canonical_world, collision_authority)
+}
+
+fn synthetic_complete_first_scout(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+) -> (FirstFarmFirstScoutCompleteInitReceipt, Sim) {
+    let (before, placement_authority, mut detailed, mut after, mut init_authority) =
+        synthetic_first_scout_init(replay, plan);
+    let (mut world, canonical_world, collision_authority) =
+        prepare_complete_first_scout_after_image(
+            replay,
+            plan,
+            &before,
+            &placement_authority,
+            &mut detailed,
+            &mut after,
+            &mut init_authority,
+        );
+    let mut goods = OilGoodRuntime::default();
+    let mut items = Items::new();
+    let mut dynamic = DynamicLeadersAuthority::default();
+    let visibility_authority =
+        first_scout_visibility_authority(&canonical_world, &goods, &items, &dynamic);
+    let receipt = produce_first_farm_first_scout_complete_init(
+        replay,
+        plan,
+        &before,
+        &placement_authority,
+        &detailed,
+        &after,
+        &init_authority,
+        &mut world,
+        &canonical_world,
+        &mut goods,
+        &mut items,
+        &mut dynamic,
+        &collision_authority,
+        first_scout_collision_inputs(replay, plan, &before, &placement_authority),
+        &visibility_authority,
+    )
+    .unwrap();
+    assert_eq!(
+        world.checksum_sections(),
+        after.map.world.checksum_sections()
+    );
+    (receipt, after)
+}
+
+fn synthetic_first_citizen_init(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+) -> (
+    FirstFarmFirstScoutCompleteInitReceipt,
+    Sim,
+    DetailedInitUnitReceipt,
+    Sim,
+    FirstFarmFirstCitizenInitAuthority,
+) {
+    let (scout, after_scout) = synthetic_complete_first_scout(replay, plan);
+    let placement =
+        produce_first_farm_first_citizen_placement(replay, plan, &scout, &after_scout).unwrap();
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        unreachable!()
+    };
+    let (same_scout, mut after_citizen) = synthetic_complete_first_scout(replay, plan);
+    assert_eq!(same_scout, scout);
+    after_citizen
+        .spawn_unit(
+            request.owner as usize,
+            request.type_index,
+            request.x,
+            request.y,
+            1,
+        )
+        .unwrap();
+    let row = after_citizen.world.unit_row_at(request.owner, 1).unwrap();
+    after_citizen.world.set_pos(
+        row,
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.x,
+        ),
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.y,
+        ),
+    );
+    after_citizen.world.units.angle_mut()[row] = UNIT_INIT_SET_ANGLE;
+    let discovery = discover_first_2018_farm(replay).unwrap();
+    after_citizen.world.units.form_mut()[row] = discovery.citizen.base_form as i8;
+    after_citizen
+        .world
+        .units
+        .set_unit_masks(row, discovery.citizen.obj_masks);
+    let mut rng = Random::new(placement.placement.rng_after_probes);
+    rng.get(0, 0xffff);
+    let rng_after = rng.state();
+    after_citizen.world.random.reseed(rng_after);
+    let detailed =
+        first_citizen_detailed_receipt(request, &after_citizen, discovery.citizen.new_block_radius);
+    let authority = FirstFarmFirstCitizenInitAuthority {
+        revision: 1,
+        composition_digest: [0x71; 32],
+        source: FirstFarmFirstCitizenInitSource::CompleteRetailBodyAndCanonicalAfterImage,
+        map_checksum_after: after_citizen.map.world.checksum_sections(),
+        rng_after,
+    };
+    (scout, after_scout, detailed, after_citizen, authority)
+}
+
+fn first_citizen_location_inputs(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    scout: &FirstFarmFirstScoutCompleteInitReceipt,
+    after_scout: &Sim,
+) -> FirstFarmFirstCitizenLocationInputs {
+    let placement =
+        produce_first_farm_first_citizen_placement(replay, plan, scout, after_scout).unwrap();
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        unreachable!()
+    };
+    let anchor = (
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.x,
+        ),
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.y,
+        ),
+    );
+    FirstFarmFirstCitizenLocationInputs {
+        graphics: vec![synthetic_first_scout_graphics(0)],
+        predicates: vec![synthetic_first_scout_predicates()],
+        terrain: vec![
+            TerrainHeightReceipt {
+                ordinal: 0,
+                call_va: UNIT_TERRAIN_Z_CALL_VA,
+                body_va: TERRAIN_FIND_TCOORD_Z_VA,
+                kind: TerrainQueryKind::UnitTcoord,
+                x: anchor.0 / 192,
+                y: anchor.1 / 192,
+                final_arg: 1,
+                returned_z: 20,
+            },
+            TerrainHeightReceipt {
+                ordinal: 1,
+                call_va: GUY_TERRAIN_Z_CALL_VA,
+                body_va: TERRAIN_FIND_DATA_Z_VA,
+                kind: TerrainQueryKind::GuyCoord,
+                x: anchor.0,
+                y: anchor.1,
+                final_arg: 0,
+                returned_z: 21,
+            },
+        ],
+    }
 }
 
 fn synthetic_first_scout_predicates() -> GuyInitPredicateFacts {
@@ -1777,6 +2033,261 @@ fn complete_init_after_image_failure_rolls_back_collision_and_visibility() {
     assert_eq!(goods, visibility_authority.goods_before);
     assert_eq!(items, visibility_authority.items_before);
     assert_eq!(dynamic, visibility_authority.dynamic_before);
+}
+
+#[test]
+fn first_citizen_placement_chains_from_the_complete_scout_world_and_rng() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (scout, mut after_scout) = synthetic_complete_first_scout(&replay, &plan);
+    let receipt =
+        produce_first_farm_first_citizen_placement(&replay, &plan, &scout, &after_scout).unwrap();
+
+    assert_eq!(receipt.setup_ordinal, 1);
+    assert_eq!((receipt.prior_scout.owner, receipt.prior_scout.o), (0, 0));
+    assert_eq!(receipt.rng_before, scout.rng_after);
+    assert_eq!(receipt.map_checksum, scout.world_checksum_after);
+    assert_eq!(receipt.placement.inputs.upgraded_type, 50);
+    assert!(!receipt.placement.probes.is_empty());
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        receipt.placement.first_external_residual
+    else {
+        panic!("first Citizen synthetic map must reach Objects::init_unit");
+    };
+    assert_eq!((request.owner, request.type_index), (0, 50));
+
+    after_scout.world.random.reseed(scout.rng_after ^ 1);
+    assert_eq!(
+        produce_first_farm_first_citizen_placement(&replay, &plan, &scout, &after_scout),
+        Err(FirstFarmFirstCitizenPlacementError::ScoutRngMismatch)
+    );
+}
+
+#[test]
+fn first_citizen_initializer_binds_o1_and_rejects_changed_scout_or_rng() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (scout, after_scout) = synthetic_complete_first_scout(&replay, &plan);
+    let placement =
+        produce_first_farm_first_citizen_placement(&replay, &plan, &scout, &after_scout).unwrap();
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) =
+        placement.placement.first_external_residual
+    else {
+        unreachable!()
+    };
+    let (same_scout, mut after_citizen) = synthetic_complete_first_scout(&replay, &plan);
+    assert_eq!(same_scout, scout);
+    let handle = after_citizen
+        .spawn_unit(
+            request.owner as usize,
+            request.type_index,
+            request.x,
+            request.y,
+            1,
+        )
+        .unwrap();
+    let row = after_citizen.world.unit_row_at(request.owner, 1).unwrap();
+    after_citizen.world.set_pos(
+        row,
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.x,
+        ),
+        don_sim::systems::objects_init_unit_authority_frontier::normalize_unit_init_coordinate(
+            request.y,
+        ),
+    );
+    after_citizen.world.units.angle_mut()[row] = UNIT_INIT_SET_ANGLE;
+    after_citizen.world.units.form_mut()[row] =
+        discover_first_2018_farm(&replay).unwrap().citizen.base_form as i8;
+    let mut rng = Random::new(placement.placement.rng_after_probes);
+    rng.get(0, 0xffff);
+    let rng_after = rng.state();
+    after_citizen.world.random.reseed(rng_after);
+    let discovery = discover_first_2018_farm(&replay).unwrap();
+    let detailed =
+        first_citizen_detailed_receipt(request, &after_citizen, discovery.citizen.new_block_radius);
+    let authority = FirstFarmFirstCitizenInitAuthority {
+        revision: 1,
+        composition_digest: [0x71; 32],
+        source: FirstFarmFirstCitizenInitSource::CompleteRetailBodyAndCanonicalAfterImage,
+        map_checksum_after: after_citizen.map.world.checksum_sections(),
+        rng_after,
+    };
+    let receipt = bind_first_farm_first_citizen_init(
+        &replay,
+        &plan,
+        &scout,
+        &after_scout,
+        &detailed,
+        &after_citizen,
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(receipt.effects.initialized_members, [1]);
+    assert_eq!(
+        (
+            receipt.effects.unit_mark_before,
+            receipt.effects.unit_mark_after
+        ),
+        (1, 2)
+    );
+    assert_eq!(receipt.allocation.o, 1);
+    assert_eq!(receipt.allocation.id, handle.id);
+    assert_eq!(receipt.unit.identity.handle, handle);
+    assert_eq!(receipt.rng_before, placement.placement.rng_after_probes);
+    assert_eq!(receipt.rng_after, rng_after);
+
+    after_citizen.world.random.reseed(rng_after ^ 1);
+    assert_eq!(
+        bind_first_farm_first_citizen_init(
+            &replay,
+            &plan,
+            &scout,
+            &after_scout,
+            &detailed,
+            &after_citizen,
+            &authority,
+        ),
+        Err(FirstFarmFirstCitizenInitError::AfterRngMismatch)
+    );
+    after_citizen.world.random.reseed(rng_after);
+
+    let scout_row = after_citizen
+        .world
+        .unit_row_at(i32::from(FIRST_OWNER), 0)
+        .unwrap();
+    after_citizen.world.units.mylos_mut()[scout_row] ^= 1;
+    assert_eq!(
+        bind_first_farm_first_citizen_init(
+            &replay,
+            &plan,
+            &scout,
+            &after_scout,
+            &detailed,
+            &after_citizen,
+            &authority,
+        ),
+        Err(FirstFarmFirstCitizenInitError::PriorScoutChanged)
+    );
+}
+
+#[test]
+fn first_citizen_guy_and_location_bind_one_draw_and_two_terrain_queries() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (scout, after_scout, detailed, after_citizen, authority) =
+        synthetic_first_citizen_init(&replay, &plan);
+    let inputs = first_citizen_location_inputs(&replay, &plan, &scout, &after_scout);
+    let receipt = produce_first_farm_first_citizen_location(
+        &replay,
+        &plan,
+        &scout,
+        &after_scout,
+        &detailed,
+        &after_citizen,
+        &authority,
+        inputs,
+    )
+    .unwrap();
+
+    assert_eq!((receipt.guy.squad_size, receipt.guy.crew_size), (1, 0));
+    assert_eq!(receipt.guy.prefix.stable_guys.len(), 1);
+    assert_eq!(receipt.guy.prefix.random.len(), 1);
+    assert_eq!(receipt.guy.prefix.rng_initial, receipt.guy.init.rng_before);
+    assert_eq!(
+        receipt.guy.prefix.rng_after_guys,
+        receipt.guy.init.rng_after
+    );
+    assert_eq!(receipt.location.terrain.len(), 2);
+    assert_eq!(receipt.location.graphics_calls.len(), 1);
+    assert_eq!(receipt.location.collision_requests.len(), 1);
+    assert_eq!(
+        (receipt.location.unit.x, receipt.location.unit.y),
+        receipt.normalized_anchor
+    );
+    assert_eq!(
+        receipt.location.unit.formation,
+        receipt.unit_type.base_form as i8
+    );
+    assert_eq!(
+        receipt.location.unit.unit_masks,
+        receipt.guy.init.unit.unit_masks
+    );
+}
+
+#[test]
+fn first_citizen_graphics_terrain_and_initializer_rng_are_fail_closed() {
+    let path = replay_path();
+    let replay = Replay::open(&path)
+        .unwrap_or_else(|error| panic!("required strict replay {}: {error}", path.display()));
+    let plan = first_farm_plan();
+    let (scout, after_scout, detailed, after_citizen, authority) =
+        synthetic_first_citizen_init(&replay, &plan);
+
+    let mut bad_graphics = first_citizen_location_inputs(&replay, &plan, &scout, &after_scout);
+    bad_graphics.graphics[0].provenance.coherent_capture = false;
+    assert_eq!(
+        produce_first_farm_first_citizen_location(
+            &replay,
+            &plan,
+            &scout,
+            &after_scout,
+            &detailed,
+            &after_citizen,
+            &authority,
+            bad_graphics,
+        ),
+        Err(FirstFarmFirstCitizenLocationError::Guy(
+            don_replay::groups_first_farm_authority::FirstFarmFirstCitizenGuyError::Guy(
+                UnitGuyInitError::IncoherentGraphicsCapture { slot: 0 }
+            )
+        ))
+    );
+
+    let mut bad_terrain = first_citizen_location_inputs(&replay, &plan, &scout, &after_scout);
+    bad_terrain.terrain[1].x ^= 1;
+    assert_eq!(
+        produce_first_farm_first_citizen_location(
+            &replay,
+            &plan,
+            &scout,
+            &after_scout,
+            &detailed,
+            &after_citizen,
+            &authority,
+            bad_terrain,
+        ),
+        Err(FirstFarmFirstCitizenLocationError::Location(
+            UnitInitLocationError::TerrainReceiptMismatch { ordinal: 1 }
+        ))
+    );
+
+    let mut bad_authority = authority.clone();
+    bad_authority.rng_after ^= 1;
+    assert!(matches!(
+        produce_first_farm_first_citizen_guy_prefix(
+            &replay,
+            &plan,
+            &scout,
+            &after_scout,
+            &detailed,
+            &after_citizen,
+            &bad_authority,
+            vec![synthetic_first_scout_graphics(0)],
+            vec![synthetic_first_scout_predicates()],
+        ),
+        Err(
+            don_replay::groups_first_farm_authority::FirstFarmFirstCitizenGuyError::Init(
+                FirstFarmFirstCitizenInitError::AfterRngMismatch
+            )
+        )
+    ));
 }
 
 #[test]

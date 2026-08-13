@@ -230,6 +230,44 @@ completed-worldgen/setup attestation currently binds them to the 2018 run. Conse
 `ObjectsInitUnitReceipts` blocker is narrowed to the remaining setup calls but not cleared, and no
 frame-79 state, opcode-25 execution, or checksum-channel match is claimed.
 
+### First Citizen allocation join
+
+Setup ordinal one now chains from the completed Scout rather than restarting from the earlier
+post-worldgen placeholder. The adapter requires the typed Scout receipt to contain the exact
+1,603-byte receiver extent, mark `0 -> 1`, stable owner-0/object-0 identity, Scout type 69, and
+the complete tail receipt. Its canonical after-Sim must independently retain the same
+generational Handle, full synchronized Unit tail, World checksum, frame-zero state, and RNG.
+
+Only then does the source capture the new placement WData/collision projection and execute the
+second `Setup::place_unit` probe schedule for Citizen 50 from the Scout's post-initializer RNG.
+The result preserves every consumed draw and stops at the exact owner-0 Citizen
+`Objects::init_unit` request. A changed Scout LOS/mask/link scalar, recycled object 0, altered
+World, or changed RNG refuses the second call before allocation authority is considered.
+
+The adjacent join admits a complete detailed receiver only when it allocates native object 1,
+advances the Unit mark `1 -> 2`, returns captain 1, resolves the exact Citizen type and collision
+radius from the replay Rules, and matches the canonical Unit/Handle, empty orders/path, map
+checksum, and RNG after-image. It also rechecks that Citizen creation did not rewrite the prior
+Scout tail. This produces a stable first-Citizen allocation receipt suitable for the next nested
+Guy/location tranche.
+
+That next tranche is now source-owned as well. Strict Rules fixes Citizen 50 to one squad Guy,
+zero crew Guys, and one uber member. The initializer starts from the placement receipt's RNG,
+requires one hash-gated installed-graphics row and one predicate row, and consumes exactly one
+`Guy::init_real` draw. It then executes the existing complete graphics/location continuation with
+the Rules-derived formation, spacing, domain, masks, and collision radius. The ground single-Guy
+path consumes exactly two ordered terrain receipts (Unit tile height, then Guy coordinate height)
+and ends with the exact collision request journal; malformed graphics, reordered terrain, a stale
+prior Scout, or divergent initializer RNG refuses the whole projection.
+
+The Citizen's shared collision/common-tail/visibility body is still external at this point. The
+graphics and terrain receipts are hash-gated but are not serialized by the 2018 recording, and the
+tests exercise the fail-closed API with synthetic values. Thus ordinal one's placement,
+allocation, Guy, RNG, and location chronology are joined without claiming the real 2018
+initializer ran. Its collision/visibility continuation, three later Citizens,
+completed-worldgen/setup provenance, frame-79 execution, and the Farm/checksum channel remain
+red.
+
 ## Checksum chronology
 
 The package records Groups `0x1c78f3f5` and Units `0x2bc45014`. Independently walking
