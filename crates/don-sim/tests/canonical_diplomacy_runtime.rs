@@ -261,7 +261,7 @@ fn retail_packet_runs_bridge_sim_current_load_and_resumed_packet_identically() {
         let checkpoint = save_sim(&uninterrupted).expect("applied declaration is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            17
+            18
         );
         let mut resumed = load_sim(&checkpoint).expect("declaration state reloads");
 
@@ -317,6 +317,68 @@ fn reached_army_authority_is_unavailable_and_rolls_back_every_owner() {
             receipt.error
         );
         assert_eq!(save_sim(&sim).unwrap(), before);
+    });
+}
+
+#[test]
+fn armies_off_force_process_executes_exact_entry_arm_and_resumes_with_v17_armies_owner() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_sim();
+        uninterrupted.vic_leaders.slots[2].leader_flags |= 0x40;
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.human_frame = 9;
+        let checkpoint = save_sim(&uninterrupted).expect("armies-off force target is savable");
+        assert_eq!(
+            u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
+            18
+        );
+        let mut resumed = load_sim(&checkpoint).expect("armies-off force target reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2635, &RETAIL_DECLARE_2_5_WAR)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2635, &RETAIL_DECLARE_2_5_WAR)
+            .unwrap();
+        for receipt in [&resumed_receipt, &uninterrupted_receipt] {
+            assert_eq!(receipt.status, CanonicalDiplomacyStatus::Applied);
+            assert!(receipt.validates(&receipt.request));
+            assert_eq!(receipt.completed_authority.len(), 1);
+            assert!(matches!(
+                receipt.completed_authority[0],
+                ExternalDiplomacyAuthority::Declare(SetDiploAuthority::ForceArmyProcess {
+                    owner: 2,
+                    army_slot: 3,
+                    forced: 1,
+                })
+            ));
+            assert_eq!(receipt.army_process_receipts.len(), 1);
+            let army = &receipt.army_process_receipts[0];
+            assert!(army.validates());
+            assert_eq!(army.before.human_frame, 9);
+            assert_eq!(army.after.human_frame, 8);
+            assert!(receipt.victory_receipts.is_empty());
+            assert!(receipt.defeat_cleanup.is_none());
+        }
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed.armies.lists[2][3].human_frame, 8);
+        assert_eq!(uninterrupted.armies.lists[2][3].human_frame, 8);
+        assert_eq!(resumed.vic_leaders.slots[2].diplos[5], Relation::War as i32);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("forced Army result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+
+        let mut forged = resumed_receipt.clone();
+        forged.army_process_receipts[0].after.human_frame = 7;
+        assert!(!forged.validates(&forged.request));
     });
 }
 
@@ -627,10 +689,11 @@ fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
         let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();
         let (row, group_id) = install_defeated_ground_army(&mut uninterrupted);
         let army_before = uninterrupted.armies.lists[4][5].clone();
-        let checkpoint = save_sim(&uninterrupted).expect("standing Army is savable in v17");
+        let checkpoint =
+            save_sim(&uninterrupted).expect("standing Army is savable through the v17 owner");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            17
+            18
         );
         let mut resumed = load_sim(&checkpoint).expect("standing Army reloads");
         resumed.replace_diplomacy_authority(complete_facts());
@@ -681,7 +744,7 @@ fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
 }
 
 #[test]
-fn alliance_revocation_projects_the_full_contained_ejection_cone_after_v17_resume() {
+fn alliance_revocation_projects_the_full_contained_ejection_cone_after_current_save_resume() {
     with_large_stack(|| {
         let mut uninterrupted = configured_sim();
         for (from, to) in [(2usize, 5usize), (5, 2)] {
@@ -691,7 +754,7 @@ fn alliance_revocation_projects_the_full_contained_ejection_cone_after_v17_resum
         let checkpoint = save_sim(&uninterrupted).expect("contained Unit roster is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            17
+            18
         );
         let mut resumed = load_sim(&checkpoint).expect("contained Unit roster reloads");
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());

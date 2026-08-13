@@ -5,8 +5,9 @@
 //! adapter projects its detached image from the existing Sim owners and publishes the remaining
 //! declaration or acceptance in one assignment-only fold. Generic alliance victory is staged
 //! through the canonical Leader/Match transaction; its defeated-player cleanup admits exact
-//! empty Army rosters and on-map ground Unit bands. Every broader external authority remains
-//! unavailable before publication.
+//! empty Army rosters and on-map ground Unit bands. It also owns the exact forced-Army arm where
+//! the entry countdown decrements and the leader's armies-off bit returns before normalization.
+//! Every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
     commit_diplomacy_transaction, prepare_diplomacy_transaction, CanonicalLeaderDiplomacyFields,
@@ -24,6 +25,10 @@ use crate::command::{
 use crate::objects::Band;
 use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
+use crate::systems::diplomacy_force_army_authority::{
+    commit_force_army_process, prepare_force_army_process, ForceArmyProcessReceipt,
+    ForceArmyProcessRequest, PreparedForceArmyProcess,
+};
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::leader_match_host::{
     apply_leader_match, LeaderMatchError, LeaderMatchReceipt, LeaderMatchRequest,
@@ -90,6 +95,7 @@ pub enum CanonicalDiplomacyRuntimeError {
         object_id: usize,
     },
     VictoryDefeatCleanup(super::defeat_cleanup::DefeatCleanupError),
+    ForceArmy(super::diplomacy_force_army_authority::ForceArmyProcessError),
     Commit(CommitDiplomacyError),
     StaleProjection,
     BridgeDidNotReturnReceipt,
@@ -109,6 +115,8 @@ pub struct CanonicalDiplomacyReceipt {
     pub victory_receipts: Vec<LeaderMatchReceipt>,
     /// Typed evidence for every staged defeated-player Army/Unit sweep.
     pub defeat_cleanup: Option<DiplomacyDefeatCleanupReceipt>,
+    /// Exact v17-owned Army entry mutations completed before the diplomacy publish.
+    pub army_process_receipts: Vec<ForceArmyProcessReceipt>,
     pub error: Option<CanonicalDiplomacyRuntimeError>,
 }
 
@@ -125,6 +133,7 @@ impl CanonicalDiplomacyReceipt {
             completed_authority: Vec::new(),
             victory_receipts: Vec::new(),
             defeat_cleanup: None,
+            army_process_receipts: Vec::new(),
             error: Some(error),
         }
     }
@@ -143,6 +152,7 @@ impl CanonicalDiplomacyReceipt {
             completed_authority: Vec::new(),
             victory_receipts: Vec::new(),
             defeat_cleanup: None,
+            army_process_receipts: Vec::new(),
             error: Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)),
         }
     }
@@ -155,7 +165,8 @@ impl CanonicalDiplomacyReceipt {
             CanonicalDiplomacyStatus::Unavailable => {
                 let common = self.completed_authority.is_empty()
                     && self.victory_receipts.is_empty()
-                    && self.defeat_cleanup.is_none();
+                    && self.defeat_cleanup.is_none()
+                    && self.army_process_receipts.is_empty();
                 match (&self.installed_facts, &self.prepared, &self.error) {
                     (None, None, Some(_)) => common,
                     (
@@ -186,6 +197,7 @@ impl CanonicalDiplomacyReceipt {
                     && victory_receipts_match_authority(
                         &self.completed_authority,
                         &self.victory_receipts,
+                        &self.army_process_receipts,
                     )
                     && defeat_cleanup_matches_victory(
                         &self.victory_receipts,
@@ -283,13 +295,33 @@ fn victory_request(
 fn victory_receipts_match_authority(
     authority: &[ExternalDiplomacyAuthority],
     receipts: &[LeaderMatchReceipt],
+    army_receipts: &[ForceArmyProcessReceipt],
 ) -> bool {
-    if authority.len() != receipts.len() {
+    if authority.len() != receipts.len() + army_receipts.len() {
         return false;
     }
-    authority.iter().zip(receipts).all(|(call, receipt)| {
-        victory_request(call).is_ok_and(|request| receipt.request == request)
-    })
+    let mut victory = receipts.iter();
+    let mut army = army_receipts.iter();
+    authority.iter().all(|call| match set_diplo_call(call) {
+        SetDiploAuthority::Victory { .. } => victory.next().is_some_and(|receipt| {
+            victory_request(call).is_ok_and(|request| receipt.request == request)
+        }),
+        SetDiploAuthority::ForceArmyProcess {
+            owner,
+            army_slot,
+            forced,
+        } => army.next().is_some_and(|receipt| {
+            receipt.request
+                == (ForceArmyProcessRequest {
+                    owner,
+                    army_slot,
+                    forced,
+                })
+                && receipt.validates()
+        }),
+        _ => false,
+    }) && victory.next().is_none()
+        && army.next().is_none()
 }
 
 fn set_plan_changes_relation(plan: &super::leader_set_diplo::SetDiploPlan) -> bool {
@@ -788,6 +820,41 @@ fn stage_ground_defeat_cleanup(
     Ok((world, groups, paths, receipt))
 }
 
+fn stage_force_army_authority(
+    sim: &Sim,
+    authority: &[ExternalDiplomacyAuthority],
+) -> Result<Option<PreparedForceArmyProcess>, CanonicalDiplomacyRuntimeError> {
+    if authority.is_empty() {
+        return Ok(None);
+    }
+    let mut requests = Vec::with_capacity(authority.len());
+    for call in authority {
+        let SetDiploAuthority::ForceArmyProcess {
+            owner,
+            army_slot,
+            forced,
+        } = set_diplo_call(call)
+        else {
+            return Ok(None);
+        };
+        // Every broader forced body is deliberately left for the generic external-authority
+        // refusal below. Bit 0x40 is the exact early return after `human_frame` decrements.
+        if sim.vic_leaders.slots[owner].leader_flags as u32 & super::armies::LF_ARMIES_OFF == 0 {
+            return Ok(None);
+        }
+        requests.push(ForceArmyProcessRequest {
+            owner,
+            army_slot,
+            forced,
+        });
+    }
+    let leader_flags = std::array::from_fn(|who| sim.vic_leaders.slots[who].leader_flags as u32);
+    let leader_flags2 = std::array::from_fn(|who| sim.vic_leaders.slots[who].leader_flags2 as u32);
+    prepare_force_army_process(&sim.armies, &leader_flags, &leader_flags2, &requests)
+        .map(Some)
+        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)
+}
+
 fn stage_victory_authority(
     sim: &Sim,
     before: &DiplomacyOwnerImage,
@@ -936,13 +1003,18 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let mut committed = before.clone();
             commit_diplomacy_transaction(&mut committed, &prepared, &completed_authority)
                 .map_err(CanonicalDiplomacyRuntimeError::Commit)?;
-            let staged_victory = match stage_victory_authority(
-                self.sim,
-                &before,
-                &committed,
-                &prepared,
-                &completed_authority,
-            ) {
+            let staged_army = stage_force_army_authority(self.sim, &completed_authority)?;
+            let staged_victory = match if staged_army.is_some() {
+                Ok(None)
+            } else {
+                stage_victory_authority(
+                    self.sim,
+                    &before,
+                    &committed,
+                    &prepared,
+                    &completed_authority,
+                )
+            } {
                 Ok(staged) => staged,
                 Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)) => {
                     return Ok(CanonicalDiplomacyReceipt::unavailable_prepared(
@@ -957,6 +1029,21 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             if project_owner(self.sim)? != before {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
+            let army_process_receipts = if let Some(staged) = staged_army {
+                let leader_flags =
+                    std::array::from_fn(|who| self.sim.vic_leaders.slots[who].leader_flags as u32);
+                let leader_flags2 =
+                    std::array::from_fn(|who| self.sim.vic_leaders.slots[who].leader_flags2 as u32);
+                commit_force_army_process(
+                    &mut self.sim.armies,
+                    &leader_flags,
+                    &leader_flags2,
+                    staged,
+                )
+                .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?
+            } else {
+                Vec::new()
+            };
             fold_owner(self.sim, committed);
             let victory_receipts = if let Some(staged) = staged_victory {
                 self.sim.vic_leaders = staged.leaders;
@@ -986,6 +1073,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 completed_authority,
                 victory_receipts: victory_receipts.0,
                 defeat_cleanup: victory_receipts.1,
+                army_process_receipts,
                 error: None,
             })
         })();
@@ -1002,7 +1090,8 @@ impl Sim {
     }
 
     /// Execute one real opcode-38 or opcode-41 command through `Bridge::process_all` and the
-    /// canonical Sim owner. Reached object/army/victory authority remains fail-closed.
+    /// canonical Sim owner. Reached object authority, broader Army processing, and unsupported
+    /// Victory cleanup remain fail-closed.
     pub fn process_diplomacy_package(
         &mut self,
         play: i32,
