@@ -2,12 +2,12 @@
 
 //! Real step-14 reachability for the recovered SPECIAL_ANIM dispatcher.
 
-use don_sim::objects::{BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::order::{Order, OrderIndex, SpecialAnimType};
+use don_sim::objects::{BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::systems::movement::PathData;
 use don_sim::systems::production::{self, BuildData};
-use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::special_anim_executor::AIRBASE_TYPE;
+use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::systems::walls::WallState;
 use don_sim::tick::{Sim, StepRun};
 
@@ -223,16 +223,11 @@ fn target_type_missing_after_save_load_refuses_instead_of_defaulting_non_airbase
     original.market.cycle = 1;
     let build_row = original.spawn_build(0, savable_build(0x5225));
     original.production_runtime.register_build(build_row, 0x120);
-<<<<<<< HEAD
     let (_, actor_row) = actor_with_order(
         &mut original,
         exit_from_target(BUILD_BAND_BASE as i32),
     );
     let order_before = original.world.orders(actor_row).current().unwrap().clone();
-=======
-    let (_, actor_row) = actor_with_order(&mut original, exit_from_target(BUILD_BAND_BASE as i32));
-    let order_before = *original.world.orders(actor_row).current().unwrap();
->>>>>>> 37d63cf ((sweep-up commit due to codex wall))
     let bytes = save_sim(&original).unwrap();
 
     let mut loaded = load_sim(&bytes).unwrap();
@@ -241,10 +236,7 @@ fn target_type_missing_after_save_load_refuses_instead_of_defaulting_non_airbase
 
     loaded.do_frame();
 
-    assert_eq!(
-        loaded.world.orders(actor_row).current(),
-        Some(&order_before)
-    );
+    assert_eq!(loaded.world.orders(actor_row).current(), Some(&order_before));
     assert_eq!(loaded.world.random.state(), rng_before);
     assert_eq!(loaded.cover.special_anim_completed, 0);
     assert_eq!(loaded.cover.special_anim_host_refused, 1);

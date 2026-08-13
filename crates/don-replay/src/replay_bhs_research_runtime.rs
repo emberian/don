@@ -587,7 +587,7 @@ pub fn run_production_research_call(
         Value::Int(call.num_loops),
     ];
 
-    let scenario_before = sim.scenario_data;
+    let scenario_before = sim.scenario_data.clone();
     let groups_before = sim.groups.clone();
     let builds_before = sim.builds.clone();
     let production_before = production.clone();

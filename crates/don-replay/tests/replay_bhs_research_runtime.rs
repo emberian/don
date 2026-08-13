@@ -1062,7 +1062,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     let idle_captain_before = sim.world.units.o_up()[idle_row];
     let idle_orders_before = sim.world.orders(idle_row).clone();
     let cities_before = sim.cities.clone();
-    let scenario_before = sim.scenario_data;
+    let scenario_before = sim.scenario_data.clone();
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
     let resources_before = production.leaders[OWNER].resources;
@@ -1232,7 +1232,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     failure_sim.leaders[content_owner].econ.stockpile = [0; 6];
     failure_sim.step8.leaders[content_owner].econ.stockpile = [0; 6];
     failure_sim.vic_leaders.slots[content_owner].economy.bucket = [0; 6];
-    let failure_scenario_before = failure_sim.scenario_data;
+    let failure_scenario_before = failure_sim.scenario_data.clone();
     let failure_groups_before = failure_sim.groups.clone();
     let failure_queue_before = failure_sim.builds[failure_row].queue.clone();
     let mut failure_call = call;

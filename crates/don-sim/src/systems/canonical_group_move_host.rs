@@ -18,13 +18,9 @@ use crate::systems::groups_guys::{
     GROUP_MAX_MEMBERS, NUM_GROUPS, NUM_LEADERS,
 };
 use crate::systems::movement::{PathData, PathStack, TILE as COORD_PER_TILE};
-<<<<<<< HEAD
 use crate::systems::production::{BuildData, BUILDDATA_SIZE};
 use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
-=======
-use crate::world::{Handle, World, OBJ_FLAG_ACTIVE};
->>>>>>> 37d63cf ((sweep-up commit due to codex wall))
 
 pub const GROUP_OPCODE: u8 = 0;
 pub const MOVE_TO_OPCODE: u8 = 7;
