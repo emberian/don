@@ -226,6 +226,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             fix_diag_land,
             post_fix_diag_string_constructor,
             game_log_say_checksum,
+            post_checksum_string_close,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -347,14 +348,15 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_CLOSE_VA,
+            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
             "{name}"
         );
+        assert!(!post_checksum_string_close.allocation.host_pointer_recorded);
         assert_eq!(post_player_land_cleanup.centroid_y_length, 2, "{name}");
         assert!(post_player_land_cleanup.centroid_y_list_non_null, "{name}");
         assert_eq!(

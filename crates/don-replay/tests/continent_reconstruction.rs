@@ -524,6 +524,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             fix_diag_land,
             post_fix_diag_string_constructor,
             game_log_say_checksum,
+            post_checksum_string_close,
             next_mutator_va,
         } => {
             assert_eq!(
@@ -553,11 +554,15 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 *next_va,
-                don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA
+                don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA
             );
             assert_eq!(
                 *next_mutator_va,
-                don_replay::post_continent::STRING_CLOSE_VA
+                don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA
+            );
+            assert_eq!(
+                post_checksum_string_close.allocation.buffer_after,
+                don_replay::continent::MapMakeStringAllocationState::ReturnedToRetailPool
             );
             assert_eq!(post_player_land_cleanup.centroid_y_length, 2);
             assert!(post_player_land_cleanup.centroid_y_list_non_null);

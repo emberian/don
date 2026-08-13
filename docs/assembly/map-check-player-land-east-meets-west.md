@@ -15,8 +15,10 @@ the style-19 fallthrough, executes complete `Map::fix_diag_land` at
 `0x0068be75 -> 0x0069c250`, constructs the caller-local `map.cpp` String at
 `0x0068be82 -> 0x00a1d660`, executes the typed `GameLog::say_checksum` host
 observation at `0x0068be9e -> 0x00930b30`, clears the caller cleanup guard,
-and freezes before the sole-owner `String::close` at
-`0x0068bead -> 0x00a1cf40`. None of these tranches consumes RNG.
+executes the sole-owner `String::close` at
+`0x0068bead -> 0x00a1cf40`, and freezes before the progress-message
+wide-string constructor at `0x0068bec4 -> 0x00a1d590`. None of these tranches
+consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -329,10 +331,23 @@ After return, the caller stores cleanup guard `-1` at `0x0068bea3` and loads
 the local address at `0x0068beaa`. The exact call/cleanup slice
 `0x0068be9e..0x0068bead` is 15 bytes / three instructions, SHA-256
 `3f130942dec6f49dc4774ad3eacbcee60a43d3181698848f155a44d835a1ace0`.
-Execution freezes before `String::close` because this local is the sole owner:
-unlike the earlier internal-table lease, its close may enter the
-`StringGuts` deleting-destructor and allocator-release path. No later caller
-tail is inferred.
+The sole-owned local has `StringGuts::ref_count == 0`, so `String::close`
+reaches the scalar-deleting destructor at `0x00a1cf71 -> 0x004d3e90`.
+That exact 90-byte body calls `StringGuts::mem_free` at
+`0x004d3ec4 -> 0x00a179a0`, then `StringGuts::operator delete` at
+`0x004d3ed1 -> 0x00a177b0`. Under the retail gameplay allocator flags, the
+eight-unit UTF-16 allocation returns to buffer pool class one and the
+16-byte `StringGuts` returns to its object pool. The receipt names both
+logical allocations and their `Live -> ReturnedToRetailPool` transitions;
+it never records a native pointer or guesses whether either pool grows.
+`String::close` then clears the local data, offset, length and cached hashes.
+
+The native replay call chain fixes `Map::make`'s third argument to one. The
+exact five-instruction read-only slice `0x0068beb2..0x0068bec4` therefore
+takes the progress arm, loads the wide-string-table source at
+`[0x00c8cd00] + 0xccec`, and stages it for `String::String(wchar_t const*)`.
+That constructor is the next stateful boundary; its runtime string contents
+and splash-screen owner are not inferred.
 
 ## Typed residual and gates
 
@@ -346,8 +361,10 @@ register pop, SEH restoration, frame restoration, and `ret 4`.  The common
 clear, find, and territory receipts then bind the complete Region/World
 transitions; the diagonal receipt binds the final WData mutation and the
 constructor receipt binds the caller-local allocation and arguments; the log
-receipt binds the exact source/mode/line owner and GameLog-relative effects.
-It exposes `next_va = 0x0068bead`, `next_mutator_va = 0x00a1cf40`. Owner transition
+receipt binds the exact source/mode/line owner and GameLog-relative effects;
+the close receipt binds all four executed direct calls, both logical allocator
+returns and the zeroed local image. It exposes `next_va = 0x0068bec4`,
+`next_mutator_va = 0x00a1d590`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
@@ -355,7 +372,7 @@ unchanged RNG chronology match; its implementation
 digest includes the replay executor plus the sim Region and map-terrain
 bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_post_checksum_string_close`.
+`map_team_continent_progress_string_constructor`.
 
 Validation gates:
 
@@ -440,5 +457,5 @@ Validation gates:
   installed full localizer opens 62 recordings, finds 21 checksum-bearing,
   retains 21/21 coherent owner ledgers and 265,619/265,619 same-group
   comparisons, and names exactly two
-  `map_team_continent_post_checksum_string_close` / nineteen
+  `map_team_continent_progress_string_constructor` / nineteen
   `place_all_mountains_add_mountain` endpoints.

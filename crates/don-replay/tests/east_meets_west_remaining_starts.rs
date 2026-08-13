@@ -211,6 +211,7 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             fix_diag_land,
             post_fix_diag_string_constructor,
             game_log_say_checksum,
+            post_checksum_string_close,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -262,13 +263,19 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_CLOSE_VA,
+            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
+            post_checksum_string_close.allocation.string_guts_after,
+            don_replay::continent::MapMakeStringAllocationState::ReturnedToRetailPool,
             "{}",
             expected.name
         );

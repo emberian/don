@@ -211,6 +211,58 @@ pub const MAP_MAKE_POST_CHECKSUM_CALLER_SIZE: u32 = 15;
 pub const MAP_MAKE_POST_CHECKSUM_CALLER_INSTRUCTION_COUNT: u32 = 3;
 pub const MAP_MAKE_POST_CHECKSUM_CALLER_SHA256: &str =
     "3f130942dec6f49dc4774ad3eacbcee60a43d3181698848f155a44d835a1ace0";
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_RESUME_VA: u32 = 0x0068_beb2;
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_SIZE: u32 = 5;
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_INSTRUCTION_COUNT: u32 = 1;
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_SHA256: &str =
+    "72e40e78c017521f98c87e6492bd9702157a03bd0114c8f55ee6b60c73122c48";
+pub const STRING_CLOSE_END_VA: u32 = 0x00a1_cf8f;
+pub const STRING_CLOSE_RET_VA: u32 = 0x00a1_cf8e;
+pub const STRING_CLOSE_SIZE: u32 = 79;
+pub const STRING_CLOSE_INSTRUCTION_COUNT: u32 = 36;
+pub const STRING_CLOSE_SHA256: &str =
+    "80b55b224beca72346bcb001fb415310611060b52a0c49c8db67c66c71fbae7f";
+pub const STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA: u32 = 0x00a1_cf71;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA: u32 = 0x004d_3e90;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_END_VA: u32 = 0x004d_3eea;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_RET_VA: u32 = 0x004d_3ee7;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_SIZE: u32 = 90;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_INSTRUCTION_COUNT: u32 = 31;
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_SHA256: &str =
+    "ddcc915eb021bbab83cb63a23fca873d18a8a73e3f5d892c2c19b9b8d7340e47";
+pub const STRING_GUTS_MEM_FREE_CALL_VA: u32 = 0x004d_3ec4;
+pub const STRING_GUTS_MEM_FREE_VA: u32 = 0x00a1_79a0;
+pub const STRING_GUTS_MEM_FREE_END_VA: u32 = 0x00a1_7a07;
+pub const STRING_GUTS_MEM_FREE_RET_VA: u32 = 0x00a1_7a06;
+pub const STRING_GUTS_MEM_FREE_SIZE: u32 = 103;
+pub const STRING_GUTS_MEM_FREE_INSTRUCTION_COUNT: u32 = 40;
+pub const STRING_GUTS_MEM_FREE_SHA256: &str =
+    "10daec99334e08a0e9fc11d884a1a63407cd88f89102467fe45c864b62271361";
+pub const STRING_GUTS_OPERATOR_DELETE_CALL_VA: u32 = 0x004d_3ed1;
+pub const STRING_GUTS_OPERATOR_DELETE_VA: u32 = 0x00a1_77b0;
+pub const STRING_GUTS_OPERATOR_DELETE_END_VA: u32 = 0x00a1_78e3;
+pub const STRING_GUTS_OPERATOR_DELETE_RET_VAS: [u32; 2] = [0x00a1_78a8, 0x00a1_78e2];
+pub const STRING_GUTS_OPERATOR_DELETE_SIZE: u32 = 307;
+pub const STRING_GUTS_OPERATOR_DELETE_INSTRUCTION_COUNT: u32 = 93;
+pub const STRING_GUTS_OPERATOR_DELETE_SHA256: &str =
+    "f23feb8190572011d058ba1174def4969c3905ef7e21bd76c346c9abeb79f1d9";
+pub const STRING_GUTS_BUFFER_POOL_CLASS: u8 = 1;
+pub const STRING_GUTS_LOGICAL_SIZE: u8 = 16;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_TEST_VA: u32 = 0x0068_beb2;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_BRANCH_VA: u32 = 0x0068_beb4;
+pub const MAP_MAKE_POST_CLOSE_NO_PROGRESS_TARGET_VA: u32 = 0x0068_bef2;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_PREP_END_VA: u32 = 0x0068_bec4;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_PREP_SIZE: u32 = 18;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_PREP_INSTRUCTION_COUNT: u32 = 5;
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_PREP_SHA256: &str =
+    "5287e0907afb9002eb66e3c49abcb1bcdfb8120294e860e019461ae6dc42133f";
+pub const MAP_MAKE_PROGRESS_STRING_TABLE_LOAD_VA: u32 = 0x0068_beb6;
+pub const MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA: u32 = 0x00c8_cd00;
+pub const MAP_MAKE_PROGRESS_STRING_BYTE_OFFSET: u32 = 0x0000_ccec;
+pub const MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA: u32 = 0x0068_bebb;
+pub const MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA: u32 = 0x0068_bec3;
+pub const MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_bec4;
+pub const STRING_WIDE_CONSTRUCTOR_VA: u32 = 0x00a1_d590;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 
@@ -1895,8 +1947,7 @@ pub(crate) fn validate_map_make_post_fix_diag_string_constructor_receipt(
                 (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
                 (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
             ]
-        && receipt.executed_indirect_import_calls
-            == [(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)]
+        && receipt.executed_indirect_import_calls == [(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)]
         && receipt.local == map_make_post_fix_diag_local_string()
         && receipt.allocation
             == (MapMakePostFixDiagStringAllocationReceipt {
@@ -2206,6 +2257,388 @@ pub(crate) fn validate_map_make_post_fix_diag_game_log_receipt(
                 allocation_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
                 may_release_owned_string_guts: true,
             })
+}
+
+/// Frozen instruction-level body for one reached `String::close` child.
+/// Calls listed here are possible in the whole body; the receipt below also
+/// pins the narrower direct-call sequence reached by the ordinary pool path.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringCloseChildNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_vas: &'static [u32],
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY: StringCloseChildNativeBody =
+    StringCloseChildNativeBody {
+        entry_va: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+        end_va_exclusive: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_END_VA,
+        ret_vas: &[STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_RET_VA],
+        size: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_SIZE,
+        instruction_count: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_INSTRUCTION_COUNT,
+        sha256: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_SHA256,
+    };
+
+pub const STRING_GUTS_MEM_FREE_BODY: StringCloseChildNativeBody = StringCloseChildNativeBody {
+    entry_va: STRING_GUTS_MEM_FREE_VA,
+    end_va_exclusive: STRING_GUTS_MEM_FREE_END_VA,
+    ret_vas: &[STRING_GUTS_MEM_FREE_RET_VA],
+    size: STRING_GUTS_MEM_FREE_SIZE,
+    instruction_count: STRING_GUTS_MEM_FREE_INSTRUCTION_COUNT,
+    sha256: STRING_GUTS_MEM_FREE_SHA256,
+};
+
+pub const STRING_GUTS_OPERATOR_DELETE_BODY: StringCloseChildNativeBody =
+    StringCloseChildNativeBody {
+        entry_va: STRING_GUTS_OPERATOR_DELETE_VA,
+        end_va_exclusive: STRING_GUTS_OPERATOR_DELETE_END_VA,
+        ret_vas: &STRING_GUTS_OPERATOR_DELETE_RET_VAS,
+        size: STRING_GUTS_OPERATOR_DELETE_SIZE,
+        instruction_count: STRING_GUTS_OPERATOR_DELETE_INSTRUCTION_COUNT,
+        sha256: STRING_GUTS_OPERATOR_DELETE_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostChecksumStringCloseCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALLER_BODY:
+    MapMakePostChecksumStringCloseCallerBody = MapMakePostChecksumStringCloseCallerBody {
+    entry_va: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+    end_va_exclusive: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_RESUME_VA,
+    size: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_SIZE,
+    instruction_count: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_INSTRUCTION_COUNT,
+    sha256: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_SHA256,
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringCloseNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub scalar_deleting_destructor_call_va: u32,
+    pub scalar_deleting_destructor_va: u32,
+}
+
+pub const MAP_MAKE_STRING_CLOSE_NATIVE_BODY: StringCloseNativeBody = StringCloseNativeBody {
+    entry_va: STRING_CLOSE_VA,
+    end_va_exclusive: STRING_CLOSE_END_VA,
+    ret_va: STRING_CLOSE_RET_VA,
+    size: STRING_CLOSE_SIZE,
+    instruction_count: STRING_CLOSE_INSTRUCTION_COUNT,
+    sha256: STRING_CLOSE_SHA256,
+    scalar_deleting_destructor_call_va: STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA,
+    scalar_deleting_destructor_va: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+};
+
+/// These are the initialized retail allocator flags on the ordinary game
+/// path. They select the two return-to-pool arms. Pool growth remains an
+/// allocator-local observation and does not expose a native pointer.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeStringAllocatorFacts {
+    pub shutdown_in_progress: bool,
+    pub debug_heap_enabled: bool,
+    pub duplicate_guts_guard_raised: bool,
+}
+
+impl MapMakeStringAllocatorFacts {
+    pub const RETAIL_GAMEPLAY: Self = Self {
+        shutdown_in_progress: false,
+        debug_heap_enabled: false,
+        duplicate_guts_guard_raised: false,
+    };
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeStringAllocationState {
+    Live,
+    ReturnedToRetailPool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostChecksumStringCloseAllocationReceipt {
+    pub owner: MapMakePostFixDiagStringAllocationOwner,
+    pub source_utf16: Vec<u16>,
+    pub buffer_units_with_nul: usize,
+    pub buffer_pool_class: u8,
+    pub string_guts_logical_size: u8,
+    pub buffer_before: MapMakeStringAllocationState,
+    pub buffer_after: MapMakeStringAllocationState,
+    pub string_guts_before: MapMakeStringAllocationState,
+    pub string_guts_after: MapMakeStringAllocationState,
+    pub buffer_pool_growth_is_allocator_state_dependent: bool,
+    pub string_guts_pool_growth_is_allocator_state_dependent: bool,
+    pub host_pointer_recorded: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostChecksumClosedString {
+    pub data_is_null: bool,
+    pub offset: u16,
+    pub length: u16,
+    pub flags: u8,
+    pub module_id: u8,
+    pub hash: u32,
+    pub insensitive_hash: u32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostCloseProgressPrepBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY: MapMakePostCloseProgressPrepBody =
+    MapMakePostCloseProgressPrepBody {
+        entry_va: MAP_MAKE_POST_CLOSE_PROGRESS_TEST_VA,
+        end_va_exclusive: MAP_MAKE_POST_CLOSE_PROGRESS_PREP_END_VA,
+        size: MAP_MAKE_POST_CLOSE_PROGRESS_PREP_SIZE,
+        instruction_count: MAP_MAKE_POST_CLOSE_PROGRESS_PREP_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_CLOSE_PROGRESS_PREP_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostChecksumStringCloseNext {
+    ProgressStringConstructor {
+        prep: MapMakePostCloseProgressPrepBody,
+        progress_test_va: u32,
+        progress_branch_va: u32,
+        no_progress_target_va: u32,
+        progress_requested: bool,
+        string_table_load_va: u32,
+        string_table_ptr_va: u32,
+        string_byte_offset: u32,
+        local_load_va: u32,
+        source_push_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakePostChecksumStringCloseReceipt {
+    pub caller: MapMakePostChecksumStringCloseCallerBody,
+    pub body: StringCloseNativeBody,
+    pub scalar_deleting_destructor: StringCloseChildNativeBody,
+    pub mem_free: StringCloseChildNativeBody,
+    pub operator_delete: StringCloseChildNativeBody,
+    pub allocator_facts: MapMakeStringAllocatorFacts,
+    pub executed_direct_calls: Vec<(u32, u32)>,
+    pub executed_indirect_import_calls: Vec<(u32, u32)>,
+    pub source_before: MapMakePostFixDiagLocalString,
+    pub local_after: MapMakePostChecksumClosedString,
+    pub allocation: MapMakePostChecksumStringCloseAllocationReceipt,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakePostChecksumStringCloseNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostChecksumStringCloseError {
+    PriorGameLogReceiptMismatch,
+    AllocatorFactsUnavailable,
+}
+
+fn map_make_post_checksum_closed_string() -> MapMakePostChecksumClosedString {
+    MapMakePostChecksumClosedString {
+        data_is_null: true,
+        offset: 0,
+        length: 0,
+        flags: 0,
+        module_id: 0,
+        hash: 0,
+        insensitive_hash: 0,
+    }
+}
+
+fn map_make_post_checksum_string_close_next() -> MapMakePostChecksumStringCloseNext {
+    MapMakePostChecksumStringCloseNext::ProgressStringConstructor {
+        prep: MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY,
+        progress_test_va: MAP_MAKE_POST_CLOSE_PROGRESS_TEST_VA,
+        progress_branch_va: MAP_MAKE_POST_CLOSE_PROGRESS_BRANCH_VA,
+        no_progress_target_va: MAP_MAKE_POST_CLOSE_NO_PROGRESS_TARGET_VA,
+        progress_requested: true,
+        string_table_load_va: MAP_MAKE_PROGRESS_STRING_TABLE_LOAD_VA,
+        string_table_ptr_va: MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA,
+        string_byte_offset: MAP_MAKE_PROGRESS_STRING_BYTE_OFFSET,
+        local_load_va: MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA,
+        source_push_va: MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA,
+        call_va: MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+        primitive_va: STRING_WIDE_CONSTRUCTOR_VA,
+    }
+}
+
+/// Execute the sole-owner `String::close` reached at `0x0068bead`.
+///
+/// The preceding constructor created an ordinary, seven-unit heap string with
+/// refcount zero. Retail therefore reaches the scalar-deleting destructor,
+/// returns the sixteen-byte UTF-16 allocation to buffer pool class one, then
+/// returns the sixteen-byte `StringGuts` object to its own pool. Native pointer
+/// identity and allocator freelist contents deliberately remain outside the
+/// receipt. The replay call chain fixes `Map::make`'s progress parameter to
+/// one, so the read-only branch preparation is also executed and the next
+/// mutator is the progress-message wide-string constructor at `0x0068bec4`.
+pub fn execute_map_make_post_checksum_string_close(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    allocator_facts: MapMakeStringAllocatorFacts,
+) -> Result<MapMakePostChecksumStringCloseReceipt, MapMakePostChecksumStringCloseError> {
+    if !validate_map_make_post_fix_diag_game_log_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+    ) || prior_log.random_state_after != random_state
+    {
+        return Err(MapMakePostChecksumStringCloseError::PriorGameLogReceiptMismatch);
+    }
+    if allocator_facts != MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY {
+        return Err(MapMakePostChecksumStringCloseError::AllocatorFactsUnavailable);
+    }
+    let world_before = world.checksum_sections();
+    let source_before = prior_log.source_after.clone();
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostChecksumStringCloseReceipt {
+        caller: MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALLER_BODY,
+        body: MAP_MAKE_STRING_CLOSE_NATIVE_BODY,
+        scalar_deleting_destructor: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY,
+        mem_free: STRING_GUTS_MEM_FREE_BODY,
+        operator_delete: STRING_GUTS_OPERATOR_DELETE_BODY,
+        allocator_facts,
+        executed_direct_calls: vec![
+            (MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA, STRING_CLOSE_VA),
+            (
+                STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA,
+                STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+            ),
+            (STRING_GUTS_MEM_FREE_CALL_VA, STRING_GUTS_MEM_FREE_VA),
+            (
+                STRING_GUTS_OPERATOR_DELETE_CALL_VA,
+                STRING_GUTS_OPERATOR_DELETE_VA,
+            ),
+        ],
+        executed_indirect_import_calls: Vec::new(),
+        allocation: MapMakePostChecksumStringCloseAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            source_utf16: source_before.utf16.clone(),
+            buffer_units_with_nul: source_before.utf16.len() + 1,
+            buffer_pool_class: STRING_GUTS_BUFFER_POOL_CLASS,
+            string_guts_logical_size: STRING_GUTS_LOGICAL_SIZE,
+            buffer_before: MapMakeStringAllocationState::Live,
+            buffer_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            string_guts_before: MapMakeStringAllocationState::Live,
+            string_guts_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            buffer_pool_growth_is_allocator_state_dependent: true,
+            string_guts_pool_growth_is_allocator_state_dependent: true,
+            host_pointer_recorded: false,
+        },
+        source_before,
+        local_after: map_make_post_checksum_closed_string(),
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: map_make_post_checksum_string_close_next(),
+    })
+}
+
+pub(crate) fn validate_map_make_post_checksum_string_close_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    receipt: &MapMakePostChecksumStringCloseReceipt,
+) -> bool {
+    validate_map_make_post_fix_diag_game_log_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+    ) && receipt.caller == MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALLER_BODY
+        && receipt.body == MAP_MAKE_STRING_CLOSE_NATIVE_BODY
+        && receipt.scalar_deleting_destructor == STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY
+        && receipt.mem_free == STRING_GUTS_MEM_FREE_BODY
+        && receipt.operator_delete == STRING_GUTS_OPERATOR_DELETE_BODY
+        && receipt.allocator_facts == MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY
+        && receipt.executed_direct_calls
+            == [
+                (MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA, STRING_CLOSE_VA),
+                (
+                    STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA,
+                    STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+                ),
+                (STRING_GUTS_MEM_FREE_CALL_VA, STRING_GUTS_MEM_FREE_VA),
+                (
+                    STRING_GUTS_OPERATOR_DELETE_CALL_VA,
+                    STRING_GUTS_OPERATOR_DELETE_VA,
+                ),
+            ]
+        && receipt.executed_indirect_import_calls.is_empty()
+        && receipt.source_before == prior_log.source_after
+        && receipt.source_before.owns_typed_string_guts
+        && receipt.local_after == map_make_post_checksum_closed_string()
+        && receipt.allocation
+            == (MapMakePostChecksumStringCloseAllocationReceipt {
+                owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                source_utf16: prior_log.source_after.utf16.clone(),
+                buffer_units_with_nul: prior_log.source_after.utf16.len() + 1,
+                buffer_pool_class: STRING_GUTS_BUFFER_POOL_CLASS,
+                string_guts_logical_size: STRING_GUTS_LOGICAL_SIZE,
+                buffer_before: MapMakeStringAllocationState::Live,
+                buffer_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+                string_guts_before: MapMakeStringAllocationState::Live,
+                string_guts_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+                buffer_pool_growth_is_allocator_state_dependent: true,
+                string_guts_pool_growth_is_allocator_state_dependent: true,
+                host_pointer_recorded: false,
+            })
+        && receipt.world_before == prior_log.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_log.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next == map_make_post_checksum_string_close_next()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

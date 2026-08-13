@@ -161,10 +161,11 @@ pub fn advance_continent_world_ownership(
             fix_diag_land,
             post_fix_diag_string_constructor,
             game_log_say_checksum,
+            post_checksum_string_close,
             next_mutator_va,
             ..
-        } if *next_va != crate::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA
-            || *next_mutator_va != crate::post_continent::STRING_CLOSE_VA
+        } if *next_va != crate::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA
+            || *next_mutator_va != crate::post_continent::STRING_WIDE_CONSTRUCTOR_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -309,6 +310,9 @@ pub fn advance_continent_world_ownership(
                 != post_fix_diag_string_constructor.world_after
             || game_log_say_checksum.random_state_before
                 != post_fix_diag_string_constructor.random_state_after
+            || post_checksum_string_close.world_before != game_log_say_checksum.world_after
+            || post_checksum_string_close.random_state_before
+                != game_log_say_checksum.random_state_after
             || !crate::post_continent::validate_map_make_post_fix_diag_string_constructor_receipt(
                 &map.world,
                 &map.generation_regions,
@@ -327,6 +331,17 @@ pub fn advance_continent_world_ownership(
                 fix_diag_land,
                 post_fix_diag_string_constructor,
                 game_log_say_checksum,
+            )
+            || !crate::post_continent::validate_map_make_post_checksum_string_close_receipt(
+                &map.world,
+                &map.generation_regions,
+                regions_clear_all,
+                regions_find_all,
+                territory_limits,
+                fix_diag_land,
+                post_fix_diag_string_constructor,
+                game_log_say_checksum,
+                post_checksum_string_close,
             )
     ) {
         return Err(mismatch(stage, "stop.post_fix_diag_game_log_residual"));

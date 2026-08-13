@@ -290,6 +290,49 @@ fn post_fix_diag_checksum_log_native_graph_is_frozen() {
 }
 
 #[test]
+fn post_checksum_string_close_native_graph_is_frozen() {
+    use don_replay::post_continent as pc;
+
+    assert_eq!(pc::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALLER_BODY.size, 5);
+    assert_eq!(
+        pc::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALLER_BODY.sha256,
+        "72e40e78c017521f98c87e6492bd9702157a03bd0114c8f55ee6b60c73122c48"
+    );
+    assert_eq!(pc::MAP_MAKE_STRING_CLOSE_NATIVE_BODY.entry_va, 0x00a1_cf40);
+    assert_eq!(pc::MAP_MAKE_STRING_CLOSE_NATIVE_BODY.size, 79);
+    assert_eq!(pc::MAP_MAKE_STRING_CLOSE_NATIVE_BODY.instruction_count, 36);
+    assert_eq!(
+        pc::MAP_MAKE_STRING_CLOSE_NATIVE_BODY.sha256,
+        "80b55b224beca72346bcb001fb415310611060b52a0c49c8db67c66c71fbae7f"
+    );
+    assert_eq!(
+        pc::STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY.entry_va,
+        0x004d_3e90
+    );
+    assert_eq!(pc::STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY.size, 90);
+    assert_eq!(
+        pc::STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY.instruction_count,
+        31
+    );
+    assert_eq!(pc::STRING_GUTS_MEM_FREE_BODY.entry_va, 0x00a1_79a0);
+    assert_eq!(pc::STRING_GUTS_MEM_FREE_BODY.size, 103);
+    assert_eq!(pc::STRING_GUTS_MEM_FREE_BODY.instruction_count, 40);
+    assert_eq!(pc::STRING_GUTS_OPERATOR_DELETE_BODY.entry_va, 0x00a1_77b0);
+    assert_eq!(pc::STRING_GUTS_OPERATOR_DELETE_BODY.size, 307);
+    assert_eq!(pc::STRING_GUTS_OPERATOR_DELETE_BODY.instruction_count, 93);
+    assert_eq!(pc::MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY.size, 18);
+    assert_eq!(
+        pc::MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY.sha256,
+        "5287e0907afb9002eb66e3c49abcb1bcdfb8120294e860e019461ae6dc42133f"
+    );
+    assert_eq!(
+        pc::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+        0x0068_bec4
+    );
+    assert_eq!(pc::STRING_WIDE_CONSTRUCTOR_VA, 0x00a1_d590);
+}
+
+#[test]
 fn shipped_ring_ten_anomaly_is_live_in_the_exclusion_scan() {
     assert_eq!(RING_COUNT[10], 441);
     assert_eq!((RING_X[288], RING_Y[288]), (-8, -16));
@@ -563,6 +606,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             fix_diag_land,
             post_fix_diag_string_constructor,
             game_log_say_checksum,
+            post_checksum_string_close,
             next_va,
             next_mutator_va,
             ..
@@ -579,12 +623,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_POST_CHECKSUM_STRING_CLOSE_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_CLOSE_VA,
+            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
             "{name}"
         );
         assert_eq!(
@@ -799,7 +843,9 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert!(
-            !post_fix_diag_string_constructor.allocation.host_pointer_recorded,
+            !post_fix_diag_string_constructor
+                .allocation
+                .host_pointer_recorded,
             "{name}"
         );
         assert_eq!(
@@ -893,6 +939,117 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                     don_replay::continent::MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
                 may_release_owned_string_guts: true,
             },
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.body,
+            don_replay::post_continent::MAP_MAKE_STRING_CLOSE_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.scalar_deleting_destructor,
+            don_replay::post_continent::STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.mem_free,
+            don_replay::post_continent::STRING_GUTS_MEM_FREE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.operator_delete,
+            don_replay::post_continent::STRING_GUTS_OPERATOR_DELETE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.allocator_facts,
+            don_replay::continent::MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.allocation.buffer_before,
+            don_replay::continent::MapMakeStringAllocationState::Live,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.allocation.buffer_after,
+            don_replay::continent::MapMakeStringAllocationState::ReturnedToRetailPool,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.allocation.string_guts_before,
+            don_replay::continent::MapMakeStringAllocationState::Live,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.allocation.string_guts_after,
+            don_replay::continent::MapMakeStringAllocationState::ReturnedToRetailPool,
+            "{name}"
+        );
+        assert_eq!(post_checksum_string_close.allocation.buffer_pool_class, 1);
+        assert_eq!(
+            post_checksum_string_close.allocation.source_utf16,
+            "map.cpp".encode_utf16().collect::<Vec<_>>()
+        );
+        assert!(!post_checksum_string_close.allocation.host_pointer_recorded);
+        assert!(post_checksum_string_close.local_after.data_is_null);
+        assert_eq!(post_checksum_string_close.local_after.length, 0);
+        assert_eq!(post_checksum_string_close.local_after.hash, 0);
+        assert_eq!(
+            post_checksum_string_close.world_before, game_log_say_checksum.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(post_checksum_string_close.world_sections_changed.is_empty());
+        assert_eq!(
+            post_checksum_string_close.random_state_before,
+            post_checksum_string_close.random_state_after,
+            "{name}"
+        );
+        assert_eq!(
+            post_checksum_string_close.next,
+            don_replay::continent::MapMakePostChecksumStringCloseNext::ProgressStringConstructor {
+                prep: don_replay::post_continent::MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY,
+                progress_test_va: don_replay::post_continent::MAP_MAKE_POST_CLOSE_PROGRESS_TEST_VA,
+                progress_branch_va:
+                    don_replay::post_continent::MAP_MAKE_POST_CLOSE_PROGRESS_BRANCH_VA,
+                no_progress_target_va:
+                    don_replay::post_continent::MAP_MAKE_POST_CLOSE_NO_PROGRESS_TARGET_VA,
+                progress_requested: true,
+                string_table_load_va:
+                    don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_TABLE_LOAD_VA,
+                string_table_ptr_va:
+                    don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA,
+                string_byte_offset:
+                    don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_BYTE_OFFSET,
+                local_load_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA,
+                source_push_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA,
+                call_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+                primitive_va: don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+            },
+            "{name}"
+        );
+        let mut bad_allocator = don_replay::continent::MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY;
+        bad_allocator.debug_heap_enabled = true;
+        assert_eq!(
+            don_replay::execute_map_make_post_checksum_string_close(
+                &map.world,
+                &map.generation_regions,
+                receipt.random_state_after,
+                regions_clear_all,
+                regions_find_all,
+                territory_limits,
+                fix_diag_land,
+                post_fix_diag_string_constructor,
+                game_log_say_checksum,
+                bad_allocator,
+            )
+            .unwrap_err(),
+            don_replay::continent::MapMakePostChecksumStringCloseError::AllocatorFactsUnavailable,
             "{name}"
         );
         assert!(
