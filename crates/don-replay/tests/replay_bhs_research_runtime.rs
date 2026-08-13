@@ -36,6 +36,7 @@ use don_sim::systems::gather_terrain::{
 };
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_build_type_blocked_tcoord_land_prefix,
+    apply_sim_leader_produce_building_blocked_site_farm_owned_tail,
     apply_sim_leader_produce_building_blocked_site_farm_unowned_tail,
     apply_sim_leader_produce_building_blocked_site_land_footprint,
     apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixError,
@@ -265,6 +266,9 @@ fn production_owners(owner: usize) -> (Sim, LiveProductionRuntime, usize) {
     city.city_flags = 1;
     city.city = 0;
     city.o = BUILD_BAND_BASE as i16;
+    city.reg = 64;
+    city.x = center;
+    city.y = center;
     city.who = owner as i8;
     city.name = "Athens".into();
     city.id = "capital_0".into();
@@ -637,6 +641,16 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
 
     let mut owned_territory = production_owners(OWNER).0;
     owned_territory.map.world.wdata_mut(2, 2).who = OWNER as i8;
+    let owned_prefix = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &owned_territory,
+        &city_production,
+        &types,
+        blocked_tcoord,
+    )
+    .expect("self-owned active-City region is an exact was_seen shortcut");
+    assert_eq!(owned_prefix.was_seen, Some(true));
+    assert!(owned_prefix.continuation.unwrap().seen_or_immediate);
+    owned_territory.map.world.wdata_mut(2, 2).who = 1;
     assert_eq!(
         apply_sim_build_type_blocked_tcoord_land_prefix(
             &owned_territory,
@@ -646,7 +660,7 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
         ),
         Err(
             BuildTypeBlockedTcoordPrefixError::UnsupportedOwnedTerritorySeenShortcut {
-                territory_owner: OWNER as i8,
+                territory_owner: 1,
                 region: 64,
             }
         )
@@ -1608,6 +1622,50 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
             }
         )
     );
+
+    // The same first candidate is viable when its WData cell belongs to the caller. The
+    // self-owned City-region witness makes every was_seen call exact; get_town selects Athens,
+    // its canonical Build chain contains zero Farms, and retail's minimum limit is five.
+    sim.map.world.wdata_mut(2, 2).who = content_owner as i8;
+    let owned_footprint = apply_sim_leader_produce_building_blocked_site_land_footprint(
+        &sim,
+        &production,
+        &types,
+        &terrain,
+        installed_site_tail.input.entry.clone(),
+    )
+    .expect("execute the self-owned Farm footprint with the exact active-City seen shortcut");
+    assert!(owned_footprint.tiles.iter().all(|tile| {
+        tile.prefix.was_seen == Some(true)
+            && tile.amount.input.was_seen
+            && tile.raw_returned_to_blocked_site == 0
+    }));
+    let owned_site = apply_sim_leader_produce_building_blocked_site_farm_owned_tail(
+        &sim,
+        &production,
+        &types,
+        owned_footprint,
+    )
+    .expect("accept the exact dry/self-owned Town/Farm-capacity branch");
+    assert!(owned_site.validates());
+    assert_eq!(owned_site.non_friendly_territory, 0);
+    assert!(!owned_site.lakota_bonus);
+    assert_eq!(owned_site.town.city_slot, 0);
+    assert_eq!(owned_site.town.city_object, BUILD_BAND_BASE as i16);
+    assert_eq!(owned_site.town.center_type, LIBRARY);
+    assert_eq!(owned_site.town.distance, 6);
+    assert_eq!(owned_site.town.radius, 20);
+    assert_eq!(owned_site.town.counted_farms, 0);
+    assert_eq!(owned_site.town.farm_limit_lower_bound, 5);
+    assert_eq!(owned_site.water_tiles, 0);
+    assert_eq!(owned_site.blocked_location_returned, 0);
+    assert_eq!(owned_site.native_returned, 0);
+    assert_eq!(owned_site.continuation.va, 0x006e_1e82);
+    assert_eq!(owned_site.continuation.bytes_remaining, 0x126c);
+    assert_eq!(owned_site.continuation.circle_offset, 1);
+    assert_eq!(owned_site.continuation.candidate_world_cell, [2, 2]);
+    assert_eq!(owned_site.continuation.placement_coord, [1920, 1920]);
+    sim.map.world.wdata_mut(2, 2).who = prior_territory_owner;
 
     // Resume retail's bounded circle immediately after the first rejected site. Every later
     // surviving candidate must independently execute the exact sixteen-tile read cone and

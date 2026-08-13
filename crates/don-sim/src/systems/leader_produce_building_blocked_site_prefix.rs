@@ -9,10 +9,12 @@
 //! `BuildTypeData::blocked_tcoord` path through the exact `get_good` switch and TCoord land
 //! classification. The source-backed continuation executes the complete read-only
 //! `LandData::get_amount` and repeats the admitted ordinary-land path over the full footprint.
-//! The installed Farm continuation then owns the reached dry/unowned-territory exit from
-//! `BuildTypeData::blocked_location` and the final non-immediate `blocked_site` return filter.
+//! The installed Farm continuations then own both the reached dry/unowned-territory exit and
+//! the dry/self-owned Town/Farm-capacity success from `BuildTypeData::blocked_location`, plus
+//! the final non-immediate `blocked_site` return filter.
 //! Nothing in this module mutates Sim.
 
+use crate::objects::{Band, BUILD_BAND_BASE};
 use crate::tick::{Sim, NUM_LEADERS};
 
 use super::bhs_type_table::{TypeBuiltinState, TypeDomain};
@@ -25,9 +27,11 @@ use super::leader_produce_building_candidate_prefix::{
 };
 use super::map_terrain::{tflag, wflag, Coord, TCoord};
 use super::production::{
+    flag,
     runtime::{LiveProductionRuntime, LiveTypeClass},
     Footprint,
 };
+use super::tech_cities::{city_radius, vector_dist, CityRules};
 
 pub const BUILD_TYPE_BLOCKED_SITE_END_VA: u32 = 0x0063_6d77;
 pub const BUILD_TYPE_BLOCKED_TCOORD_VA: u32 = 0x0063_6db0;
@@ -62,6 +66,8 @@ pub const FORT_TYPE: usize = 443;
 pub const FARM_TYPE: usize = 417;
 pub const GAME_SEMAPHORE_IMMEDIATE_BIT: u32 = 11;
 pub const LAKOTA_TRIBE: i32 = 19;
+pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA: u32 = 0x006e_1e82;
+pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING: u32 = 0x126c;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildTypeBlockedTcoordBoundary {
@@ -249,6 +255,84 @@ impl LeaderProduceBuildingBlockedSiteFarmUnownedReceipt {
     }
 }
 
+/// Exact Town/City-capacity reads on the reached friendly Farm path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeFarmTownRead {
+    pub city_slot: usize,
+    pub city_object: i16,
+    pub center_type: i32,
+    pub distance: i32,
+    pub radius: i32,
+    pub counted_farms: i32,
+    /// The least possible installed-retail result of `CityData::get_farm_limit`.
+    /// Egyptian and Olive Oil bonuses can only increase this value.
+    pub farm_limit_lower_bound: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingSuccessfulSiteBoundary {
+    pub va: u32,
+    pub bytes_remaining: u32,
+    pub owner: u8,
+    pub type_index: i32,
+    pub origin_build_object: i16,
+    pub circle_offset: i32,
+    pub candidate_world_cell: [i32; 2],
+    pub placement_coord: [i32; 2],
+}
+
+/// Complete reached Farm verdict in self-owned, dry City territory.
+///
+/// This cone intentionally does not guess diplomacy. Every WData cell is owned by the calling
+/// Leader, `get_town` selects one canonical active City, and that City's Build chain contains no
+/// Farm. Since retail's Farm limit is at least five, the exact capacity comparison succeeds
+/// without needing the still-unprojected Olive Oil bonus. Domain zero contributes no water, and
+/// build flag `0x10000000` returns zero before `calc_gather`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingBlockedSiteFarmOwnedReceipt {
+    pub input: LeaderProduceBuildingBlockedSiteFootprintReceipt,
+    pub territory_reads: Vec<BuildTypeNonFriendlyTerritoryRead>,
+    pub non_friendly_territory: i32,
+    pub lakota_bonus: bool,
+    pub town: BuildTypeFarmTownRead,
+    pub water_tiles: i32,
+    pub blocked_location_returned: i32,
+    pub immediate: bool,
+    pub native_returned: i32,
+    /// First instruction after the successful `blocked_site` call. Candidate scoring, RNG,
+    /// best-site selection, builder selection, and construction mutation begin here.
+    pub continuation: LeaderProduceBuildingSuccessfulSiteBoundary,
+}
+
+impl LeaderProduceBuildingBlockedSiteFarmOwnedReceipt {
+    pub fn validates(&self) -> bool {
+        self.input.continuation.va == BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+            && self.input.continuation.callee_va == BUILD_TYPE_BLOCKED_LOCATION_VA
+            && self.input.continuation.type_index == FARM_TYPE as i32
+            && self.territory_reads.len() == self.input.tiles.len()
+            && self.territory_reads.iter().all(|read| {
+                read.terrain_mask & tflag::SURFACE_MASK != tflag::SURFACE_WATER
+                    && read.territory_owner == self.input.continuation.owner as i8
+            })
+            && self.non_friendly_territory == 0
+            && self.town.counted_farms < self.town.farm_limit_lower_bound
+            && self.town.farm_limit_lower_bound == CityRules::RETAIL.farms_per_city_base
+            && self.water_tiles == 0
+            && !self.immediate
+            && self.blocked_location_returned == 0
+            && self.native_returned == 0
+            && self.continuation.va == LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA
+            && self.continuation.bytes_remaining
+                == LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING
+            && self.continuation.owner == self.input.continuation.owner
+            && self.continuation.type_index == self.input.continuation.type_index
+            && self.continuation.origin_build_object == self.input.entry.input.origin_build_object
+            && self.continuation.circle_offset == self.input.entry.input.circle_offset
+            && self.continuation.candidate_world_cell == self.input.entry.input.candidate_world_cell
+            && self.continuation.placement_coord == self.input.continuation.placement_coord
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildTypeBlockedTcoordPrefixStatus {
     ReturnedToBlockedSite,
@@ -365,6 +449,53 @@ pub enum LeaderProduceBuildingBlockedSiteFarmUnownedError {
         territory_owner: i8,
     },
     UnsupportedLakotaTerritoryBypass,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingBlockedSiteFarmOwnedError {
+    InvalidFootprintReceipt,
+    InvalidOwner {
+        owner: usize,
+    },
+    InvalidFarmProfile,
+    ImmediateSemaphore,
+    InvalidTile {
+        tile: [i32; 2],
+    },
+    TerrainReceiptMismatch {
+        tile: [i32; 2],
+        receipt_mask: u16,
+        actual_mask: u16,
+    },
+    UnsupportedWaterTile {
+        tile: [i32; 2],
+        terrain_mask: u16,
+    },
+    UnsupportedTerritoryOwner {
+        tile: [i32; 2],
+        territory_owner: i8,
+    },
+    MissingCityMask {
+        tile: [i32; 2],
+        terrain_mask: u16,
+    },
+    InvalidCityMark {
+        owner: usize,
+        mark: i32,
+        slots: usize,
+    },
+    MissingTown,
+    InvalidCityCenter {
+        city_slot: usize,
+        object_index: i16,
+    },
+    InvalidCityChain {
+        object_index: i16,
+    },
+    UnsupportedFarmCapacity {
+        counted: i32,
+        lower_bound: i32,
+    },
 }
 
 #[inline]
@@ -656,16 +787,32 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     {
         true
     } else if world_cell.who >= 0 {
-        // `WorldData::was_seen` does not equate owned territory with explored territory. It
-        // calls `LeaderData::is_ally`, then consults two region-indexed Leader arrays before
-        // falling through to `seen2 & player_mask`. Those arrays are not yet projected by Sim,
-        // so this reached shortcut remains fail-closed instead of being reconstructed as fog.
-        return Err(
-            BuildTypeBlockedTcoordPrefixError::UnsupportedOwnedTerritorySeenShortcut {
-                territory_owner: world_cell.who,
-                region: world_cell.region,
-            },
-        );
+        // `WorldData::was_seen` first asks whether the WData owner is allied, then treats either
+        // a City or Fort in this region as explored. Sim does not yet own general diplomacy or
+        // the Fort region counts. The reached self-owned arm is nevertheless exact: a Leader is
+        // allied with itself, and the canonical CityPool supplies the corresponding region-City
+        // witness. Foreign owners and self-owned regions without that witness remain fail-closed.
+        let mark = sim.cities.city_mark[owner];
+        let self_owned_city_region = types.leaders[owner].leader_flags & 1 != 0
+            && world_cell.who == owner as i8
+            && usize::try_from(mark)
+                .ok()
+                .filter(|&mark| mark <= sim.cities.slots[owner].len())
+                .is_some_and(|mark| {
+                    sim.cities.slots[owner][..mark].iter().any(|city| {
+                        city.active() && city.who == owner as i8 && city.reg == world_cell.region
+                    })
+                });
+        if self_owned_city_region {
+            true
+        } else {
+            return Err(
+                BuildTypeBlockedTcoordPrefixError::UnsupportedOwnedTerritorySeenShortcut {
+                    territory_owner: world_cell.who,
+                    region: world_cell.region,
+                },
+            );
+        }
     } else {
         world.was_seen(tx >> 1, ty >> 1, fog_leader.player_mask)
     };
@@ -1049,6 +1196,317 @@ pub fn apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
         immediate,
         // With the immediate semaphore clear, 0x00636D5F returns the child code unchanged.
         native_returned: 0x1a,
+    };
+    debug_assert!(receipt.validates());
+    Ok(receipt)
+}
+
+fn farm_owned_build_row(
+    sim: &Sim,
+    owner: usize,
+    object_index: i16,
+) -> Result<usize, LeaderProduceBuildingBlockedSiteFarmOwnedError> {
+    let slot = i32::from(object_index)
+        .checked_sub(BUILD_BAND_BASE as i32)
+        .and_then(|slot| usize::try_from(slot).ok())
+        .ok_or(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain { object_index })?;
+    let row = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Build)
+        .get(slot)
+        .copied()
+        .ok_or(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain { object_index })?
+        as usize;
+    let build = sim
+        .builds
+        .get(row)
+        .ok_or(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain { object_index })?;
+    if build.who as usize != owner || build.object_id() != object_index {
+        return Err(
+            LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain { object_index },
+        );
+    }
+    Ok(row)
+}
+
+/// Execute the exact installed-Farm friendly-territory continuation through the terminal zero
+/// `blocked_location` / `blocked_site` verdict.
+pub fn apply_sim_leader_produce_building_blocked_site_farm_owned_tail(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    input: LeaderProduceBuildingBlockedSiteFootprintReceipt,
+) -> Result<
+    LeaderProduceBuildingBlockedSiteFarmOwnedReceipt,
+    LeaderProduceBuildingBlockedSiteFarmOwnedError,
+> {
+    if !input.entry.validates()
+        || input.entry.native_returned.is_some()
+        || input.blocked_detail != 0
+        || input.locally_seen_tiles != 0
+        || input.continuation.va != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+        || input.continuation.callee_va != BUILD_TYPE_BLOCKED_LOCATION_VA
+        || input.continuation.blocked_site_bytes_remaining
+            != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING
+        || input.continuation.owner != input.entry.input.owner
+        || input.continuation.type_index != input.entry.input.type_index
+        || input.continuation.placement_coord != input.entry.input.placement_coord
+        || input.continuation.footprint_corner != input.entry.footprint_corner
+        || input.continuation.city_constraint != -1
+        || input.continuation.blocked_detail != input.blocked_detail
+    {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidFootprintReceipt);
+    }
+    let owner = input.continuation.owner as usize;
+    if owner >= NUM_LEADERS {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidOwner { owner });
+    }
+    let Some(target) = production.types.get(FARM_TYPE).and_then(Option::as_ref) else {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidFarmProfile);
+    };
+    let Some(target_row) = types.types.rows().get(FARM_TYPE) else {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidFarmProfile);
+    };
+    let visibility = target.build_visibility;
+    let is_related = |query: usize| {
+        target_row
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == query)
+    };
+    if input.continuation.type_index != FARM_TYPE as i32
+        || target.type_index != FARM_TYPE as i32
+        || target.class != LiveTypeClass::Building
+        || target_row.index != FARM_TYPE as i32
+        || target_row.domain() != TypeDomain::Build
+        || types.leaders[owner].leader_flags & 1 == 0
+        || target.build_flags != 0x1000_0049
+        || visibility.and_then(|facts| facts.domain) != Some(0)
+        || visibility.and_then(|facts| facts.footprint) != Some(input.entry.target_footprint)
+        || input.entry.target_footprint
+            != (Footprint {
+                x_size: 4,
+                y_size: 4,
+            })
+        || input.tiles.len() != 16
+        || is_related(CITY_TYPE)
+        || is_related(FORT_TYPE)
+        || is_related(DOCK_TYPE)
+        || input.tiles.iter().any(|tile| {
+            !tile.prefix.validates()
+                || tile.prefix.continuation != Some(tile.amount.input)
+                || tile.prefix.was_seen != Some(true)
+                || !tile.amount.input.was_seen
+                || tile.raw_returned_to_blocked_site != 0
+                || tile.amount.returned == 0
+                || tile.prefix.input.tile != tile.amount.input.tile
+        })
+    {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidFarmProfile);
+    }
+    let immediate = sim.vic_match.semaphore & (1 << GAME_SEMAPHORE_IMMEDIATE_BIT) != 0;
+    if immediate {
+        return Err(LeaderProduceBuildingBlockedSiteFarmOwnedError::ImmediateSemaphore);
+    }
+
+    let [corner_x, corner_y] = input.entry.footprint_corner;
+    let expected_tiles =
+        (corner_x..corner_x + 4).flat_map(|tx| (corner_y..corner_y + 4).map(move |ty| [tx, ty]));
+    let mut territory_reads = Vec::with_capacity(input.tiles.len());
+    for (tile, expected) in input.tiles.iter().zip(expected_tiles) {
+        let reached = tile.prefix.input.tile;
+        if reached != expected || !sim.map.world.valid_t(reached[0], reached[1]) {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidTile { tile: reached },
+            );
+        }
+        let terrain_mask = sim.map.world.tmask(reached[0], reached[1]);
+        if tile.amount.input.terrain_mask != terrain_mask {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::TerrainReceiptMismatch {
+                    tile: reached,
+                    receipt_mask: tile.amount.input.terrain_mask,
+                    actual_mask: terrain_mask,
+                },
+            );
+        }
+        if terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::UnsupportedWaterTile {
+                    tile: reached,
+                    terrain_mask,
+                },
+            );
+        }
+        if terrain_mask & tflag::CITY == 0 {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::MissingCityMask {
+                    tile: reached,
+                    terrain_mask,
+                },
+            );
+        }
+        let territory_owner = sim.map.world.wdata(reached[0] >> 2, reached[1] >> 2).who;
+        if territory_owner != owner as i8 {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::UnsupportedTerritoryOwner {
+                    tile: reached,
+                    territory_owner,
+                },
+            );
+        }
+        territory_reads.push(BuildTypeNonFriendlyTerritoryRead {
+            tile: reached,
+            terrain_mask,
+            territory_owner,
+        });
+    }
+
+    let mark = sim.cities.city_mark[owner];
+    let mark = usize::try_from(mark).map_err(|_| {
+        LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityMark {
+            owner,
+            mark,
+            slots: sim.cities.slots[owner].len(),
+        }
+    })?;
+    if mark > sim.cities.slots[owner].len() {
+        return Err(
+            LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityMark {
+                owner,
+                mark: mark as i32,
+                slots: sim.cities.slots[owner].len(),
+            },
+        );
+    }
+    let site_tx = TCoord::from_coord(Coord(input.continuation.placement_coord[0])).0;
+    let site_ty = TCoord::from_coord(Coord(input.continuation.placement_coord[1])).0;
+    let indian_radius_bonus = types.leaders[owner].tribe == 0x15;
+    let mut selected: Option<BuildTypeFarmTownRead> = None;
+    for (city_slot, city) in sim.cities.slots[owner][..mark].iter().enumerate() {
+        if !city.active() || city.who != owner as i8 {
+            continue;
+        }
+        let center_row = farm_owned_build_row(sim, owner, city.o).map_err(|_| {
+            LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityCenter {
+                city_slot,
+                object_index: city.o,
+            }
+        })?;
+        let center = &sim.builds[center_row];
+        if center.flags & flag::VALID == 0 || center.city != city_slot as i16 {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityCenter {
+                    city_slot,
+                    object_index: city.o,
+                },
+            );
+        }
+        let center_type = production
+            .build_types
+            .get(center_row)
+            .copied()
+            .flatten()
+            .ok_or(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityCenter {
+                    city_slot,
+                    object_index: city.o,
+                },
+            )?;
+        let distance = vector_dist(
+            TCoord::from_coord(Coord(city.x)).0.wrapping_sub(site_tx),
+            TCoord::from_coord(Coord(city.y)).0.wrapping_sub(site_ty),
+        ) as i32;
+        let radius = city_radius(&CityRules::RETAIL, center_type, indian_radius_bonus);
+        if distance > radius
+            || selected
+                .as_ref()
+                .is_some_and(|prior| distance > prior.distance)
+        {
+            continue;
+        }
+        selected = Some(BuildTypeFarmTownRead {
+            city_slot,
+            city_object: city.o,
+            center_type,
+            distance,
+            radius,
+            counted_farms: 0,
+            farm_limit_lower_bound: CityRules::RETAIL.farms_per_city_base,
+        });
+    }
+    let mut town = selected.ok_or(LeaderProduceBuildingBlockedSiteFarmOwnedError::MissingTown)?;
+
+    let mut object_index = town.city_object;
+    let mut visited = Vec::new();
+    let mut counted_farms = 0;
+    while object_index >= 0 {
+        if visited.contains(&object_index) {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain { object_index },
+            );
+        }
+        visited.push(object_index);
+        let row = farm_owned_build_row(sim, owner, object_index)?;
+        let build = &sim.builds[row];
+        if build.flags & flag::VALID != 0 {
+            let build_type = production
+                .build_types
+                .get(row)
+                .copied()
+                .flatten()
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|&index| index < types.types.rows().len())
+                .ok_or(
+                    LeaderProduceBuildingBlockedSiteFarmOwnedError::InvalidCityChain {
+                        object_index,
+                    },
+                )?;
+            let farm_relation = types
+                .types
+                .row(build_type)
+                .is_list
+                .iter()
+                .any(|&related| usize::from(related) == FARM_TYPE);
+            if build.flags & flag::ACTIVE != 0 && farm_relation {
+                counted_farms += 1;
+            }
+        }
+        object_index = build.city_down;
+    }
+    town.counted_farms = counted_farms;
+    if counted_farms >= town.farm_limit_lower_bound {
+        return Err(
+            LeaderProduceBuildingBlockedSiteFarmOwnedError::UnsupportedFarmCapacity {
+                counted: counted_farms,
+                lower_bound: town.farm_limit_lower_bound,
+            },
+        );
+    }
+
+    let continuation = LeaderProduceBuildingSuccessfulSiteBoundary {
+        va: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA,
+        bytes_remaining: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING,
+        owner: input.continuation.owner,
+        type_index: input.continuation.type_index,
+        origin_build_object: input.entry.input.origin_build_object,
+        circle_offset: input.entry.input.circle_offset,
+        candidate_world_cell: input.entry.input.candidate_world_cell,
+        placement_coord: input.continuation.placement_coord,
+    };
+    let receipt = LeaderProduceBuildingBlockedSiteFarmOwnedReceipt {
+        input,
+        territory_reads,
+        non_friendly_territory: 0,
+        lakota_bonus: types.leaders[owner].tribe == LAKOTA_TRIBE,
+        town,
+        water_tiles: 0,
+        blocked_location_returned: 0,
+        immediate,
+        native_returned: 0,
+        continuation,
     };
     debug_assert!(receipt.validates());
     Ok(receipt)
