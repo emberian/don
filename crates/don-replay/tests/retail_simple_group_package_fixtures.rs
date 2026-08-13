@@ -623,6 +623,35 @@ fn retail_replays_bind_follow_queue_new_explicit_and_cached_wires() {
 }
 
 #[test]
+fn retail_replay_binds_stance_explicit_origin_and_immediate_cache_reuse() {
+    let path = root().join(FOLLOW_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        FOLLOW_REPLAY_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    for (index, turn_number, frame, group_hex) in [
+        (2_818usize, 2_819, 11_281, "0005011b00200027002a002d00"),
+        (2_820usize, 2_821, 11_289, "000001"),
+    ] {
+        let turn = &replay.turns[index];
+        let player = turn.players.iter().find(|player| player.play == 0).unwrap();
+        let pair = player
+            .commands
+            .windows(2)
+            .find(|pair| pair[0].opcode == 0 && pair[1].opcode == 2)
+            .unwrap();
+        assert_eq!((turn.turn, player.stamp), (turn_number, frame));
+        assert_eq!(hex(&pair[0].bytes), group_hex);
+        assert_eq!(hex(&pair[1].bytes), "02ffffffff");
+    }
+}
+
+#[test]
 #[ignore = "full retail replay corpus"]
 fn census_strict_group_unitmask_packets() {
     let mut found = Vec::new();

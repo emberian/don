@@ -897,6 +897,8 @@ pub struct Sim {
     /// Reinstalled ordinary-ground type/animation facts for the bounded opcode-9 cone.
     pub attack_ground_authority:
         crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority,
+    /// Reinstalled Object/Unit stance-type results for the bounded opcode-2 cone.
+    pub stance_authority: crate::systems::canonical_stance_runtime::CanonicalStanceAuthority,
     /// Revision/digest-bound registry/caravan/terrain facts for admitted `Unit::do_trade`
     /// branches. This is a load-time adapter, not a second persistent order owner.
     pub trade_route_authority:
@@ -1636,6 +1638,8 @@ impl Sim {
                 crate::systems::canonical_guard_runtime::CanonicalGuardAuthority::default(),
             attack_ground_authority:
                 crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority::default(),
+            stance_authority:
+                crate::systems::canonical_stance_runtime::CanonicalStanceAuthority::default(),
             trade_route_authority:
                 crate::systems::canonical_trade_route_runtime::TradeRouteRuntimeAuthority::default(),
             last_trade_route_receipt: None,
@@ -1706,6 +1710,14 @@ impl Sim {
         authority: crate::systems::canonical_attack_ground_runtime::CanonicalAttackGroundAuthority,
     ) {
         self.attack_ground_authority = authority;
+    }
+
+    /// Install the exact Object/Unit stance-type projection consumed by opcode 2.
+    pub fn replace_stance_authority(
+        &mut self,
+        authority: crate::systems::canonical_stance_runtime::CanonicalStanceAuthority,
+    ) {
+        self.stance_authority = authority;
     }
 
     /// Install action facts used by SET_TRANSPORT, BUILDMASK, and FOLLOW. Loaded simulations
@@ -2140,6 +2152,55 @@ impl Sim {
             &self.attack_ground_authority,
             &self.scenario_ignore_orders,
             &std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags),
+            prepared,
+        )
+    }
+
+    /// Process the bounded retail opcode-2 cone for ordinary, on-map, non-aircraft Units with
+    /// one effective stance type in 1..=3. Type-zero order tails and Build groups fail closed.
+    pub fn process_stance_group_package(
+        &mut self,
+        play: usize,
+        lockstep_serial: i32,
+        bytes: &[u8],
+    ) -> Result<
+        crate::systems::canonical_stance_runtime::StancePackageReceipt,
+        crate::systems::canonical_stance_runtime::CanonicalStanceError,
+    > {
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+        use crate::systems::canonical_stance_runtime::{
+            commit_stance_package, prepare_stance_package,
+        };
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_stance_package(
+            &self.world,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.stance_authority,
+            &player_who,
+            self.world.frame,
+            play,
+            lockstep_serial,
+            bytes,
+        )?;
+        commit_stance_package(
+            &mut self.world,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.stance_authority,
+            &player_who,
             prepared,
         )
     }

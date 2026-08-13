@@ -95,6 +95,8 @@ pub mod canonical_gather_work;
 pub mod canonical_cast_work;
 /// Canonical fixed-Group transaction for the strict Group plus UNITMASK packet cohort.
 pub mod canonical_simple_group_host;
+/// Bounded exact opcode-2 Group stance transaction for ordinary Unit stance types 1..=3.
+pub mod canonical_stance_runtime;
 /// Canonical live-World/path/RNG/animation/ammo adapter for STRAFE row 16.
 pub mod canonical_strafe_runtime;
 /// Exact fail-closed production adapter for a substantive `TRADE_ROUTE` Unit::work branch.

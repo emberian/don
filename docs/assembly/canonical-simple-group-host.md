@@ -271,10 +271,11 @@ The remaining production-routing tranche is bounded:
 2. compare the first executable packet's Groups/Unit channels to the retail recording; and
 3. only after that evidence update closure reporting for opcode 32.
 
-The other three audited simple actions remain red at this host. DISBAND reaches the nested Build
-production queue. BEGIN has no corpus occurrence and is not used to claim execution. STANCE is
-blocked by arbitrary-order mandatory/repath/kill tails. FOLLOW itself also remains red for the
-unobserved action and executor cones listed above.
+The other rows remain red. DISBAND reaches the nested Build production queue. BEGIN has no corpus
+occurrence and is not used to claim execution. STANCE now has a separate canonical saved/resumed
+host for ordinary Unit stance types `1..=3`; type zero's arbitrary-order
+mandatory/repath/kill/clear tails remain refused, so its row is not promoted. FOLLOW itself also
+remains red for the unobserved action and executor cones listed above.
 
 ## Gates
 
