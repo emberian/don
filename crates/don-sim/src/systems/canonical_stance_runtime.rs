@@ -1,10 +1,12 @@
 //! Canonical bounded opcode-2 `STANCE` receiver.
 //!
 //! This host admits ordinary, on-map, non-aircraft Units whose effective Object and Unit
-//! stance types agree in the retail 1..=3 cycles.  In that cone `Group::action_stance` is a
-//! complete direct mutation: it resolves the modal option, writes `UnitData::stance`, sets
-//! Object flag `0x10`, and clears Group disband.  Type zero's order/path tail, Build groups,
-//! aircraft, and mixed stance-type groups remain explicit refusals.
+//! stance types agree in the retail 0..=3 cycles.  In the nonzero cycles
+//! `Group::action_stance` is a complete direct mutation. Type zero is admitted only when the
+//! resolved option is 1, 2, or 5 and the owning Leader's flags do not contain bit 4: those
+//! exact branches also terminate after the stance/flag writes. Type-zero mandatory-order
+//! options, its leader-bit-4 update/repath tail, Build groups, aircraft, and mixed stance-type
+//! groups remain explicit refusals.
 
 use crate::systems::canonical_group_move_host::{
     groups_equal, prepare_group_selection, unit_still_current, CommandPackageState,
@@ -69,6 +71,7 @@ pub enum CanonicalStanceError {
     StaleGroups,
     StaleSelectionAuthority,
     StaleStanceAuthority,
+    StaleLeaderFlags,
     StaleUnit(Handle),
     StaleUnitFlags(Handle),
     StaleUnitStance(Handle),
@@ -156,6 +159,8 @@ pub struct PreparedStancePackage {
     selection_digest: [u8; 32],
     selection_members: Vec<crate::systems::canonical_group_move_host::MoveMemberAuthority>,
     authority_before: CanonicalStanceAuthority,
+    leader_flags_owner: usize,
+    leader_flags_before: u32,
     random_state: i32,
     units: Vec<UnitMutation>,
     stances: Vec<StanceMutation>,
@@ -184,6 +189,7 @@ pub fn prepare_stance_package(
     command: &CommandPackageState,
     selection_authority: &GroupMoveAuthority,
     authority: &CanonicalStanceAuthority,
+    leader_flags: &[u32; crate::systems::groups_guys::NUM_LEADERS],
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     frame: i32,
     play: usize,
@@ -245,9 +251,9 @@ pub fn prepare_stance_package(
             actor: representative.identity.handle,
         })?
         .object_stance_type;
-    if !(1..=3).contains(&preferred) {
+    if !(0..=3).contains(&preferred) {
         return Err(CanonicalStanceError::UnsupportedCone(
-            "stance type zero and unsupported virtual types retain residual tails",
+            "unsupported virtual stance type retains residual tails",
         ));
     }
 
@@ -301,8 +307,16 @@ pub fn prepare_stance_package(
     }
 
     let group = selection.groups_after.list[selection.group_slot].clone();
-    let plan = plan_action_stance(&group, wire.requested_stance, preferred, 0, &facts)
-        .map_err(|_| CanonicalStanceError::BrokenPlan)?;
+    let leader_flags_owner = usize::from(wire.who);
+    let owner_flags = leader_flags[leader_flags_owner];
+    let plan = plan_action_stance(
+        &group,
+        wire.requested_stance,
+        preferred,
+        owner_flags,
+        &facts,
+    )
+    .map_err(|_| CanonicalStanceError::BrokenPlan)?;
     if !plan.group_on_map || plan.stance_type != preferred {
         return Err(CanonicalStanceError::BrokenPlan);
     }
@@ -369,6 +383,8 @@ pub fn prepare_stance_package(
         selection_digest: selection.authority_digest,
         selection_members: selection.authority_members,
         authority_before: authority.clone(),
+        leader_flags_owner,
+        leader_flags_before: owner_flags,
         random_state: world.random.state(),
         units: selection.units,
         stances,
@@ -383,6 +399,7 @@ pub fn commit_stance_package(
     command: &mut CommandPackageState,
     selection_authority: &GroupMoveAuthority,
     authority: &CanonicalStanceAuthority,
+    leader_flags: &[u32; crate::systems::groups_guys::NUM_LEADERS],
     player_who: &[Option<u8>; NETWORK_PLAYERS],
     prepared: PreparedStancePackage,
 ) -> Result<StancePackageReceipt, CanonicalStanceError> {
@@ -409,6 +426,9 @@ pub fn commit_stance_package(
     }
     if authority != &prepared.authority_before {
         return Err(CanonicalStanceError::StaleStanceAuthority);
+    }
+    if leader_flags[prepared.leader_flags_owner] != prepared.leader_flags_before {
+        return Err(CanonicalStanceError::StaleLeaderFlags);
     }
     for mutation in &prepared.units {
         if !unit_still_current(world, paths, &mutation.before) {

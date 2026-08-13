@@ -6,7 +6,7 @@ use don_sim::systems::canonical_group_move_host::{
 use don_sim::systems::canonical_stance_runtime::{
     prepare_stance_package, CanonicalStanceAuthority, CanonicalStanceBinding, CanonicalStanceError,
 };
-use don_sim::systems::groups_guys::FormationMember;
+use don_sim::systems::groups_guys::{FormationMember, NUM_LEADERS};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::lifecycle_host::PlayerTable;
 use don_sim::tick::Sim;
@@ -174,15 +174,7 @@ fn reverse_cycle_covers_every_admitted_nonzero_stance_type() {
 }
 
 #[test]
-fn type_zero_aircraft_and_non_corpus_requests_remain_explicit_boundaries() {
-    let (mut type_zero, actors) = fixture();
-    type_zero.replace_stance_authority(stance_authority(&actors, 0));
-    assert!(matches!(
-        type_zero.process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE),
-        Err(CanonicalStanceError::UnsupportedCone(_))
-    ));
-    assert_stance_unset(&type_zero, &actors);
-
+fn aircraft_and_non_corpus_requests_remain_explicit_boundaries() {
     let (mut air, air_actors) = fixture();
     air.replace_group_move_authority(selection_authority(&air_actors, true));
     assert!(matches!(
@@ -201,6 +193,87 @@ fn type_zero_aircraft_and_non_corpus_requests_remain_explicit_boundaries() {
     assert_stance_unset(&positive, &positive_actors);
 }
 
+#[test]
+fn type_zero_scalar_only_explicit_and_cached_packets_survive_save_resume() {
+    let (mut direct, actors) = fixture();
+    direct.replace_stance_authority(stance_authority(&actors, 0));
+    let explicit = direct
+        .process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE)
+        .unwrap();
+    assert_eq!(
+        (
+            explicit.stance_type,
+            explicit.current_option,
+            explicit.resolved_stance
+        ),
+        (0, 0, 1)
+    );
+    assert_stance(&direct, &actors, 1);
+
+    let bytes = save_sim(&direct).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    install(&mut resumed, &actors, 0);
+    for sim in [&mut direct, &mut resumed] {
+        sim.world.frame = 11_289;
+        sim.vic_match.frame = 11_289;
+    }
+    let direct_receipt = direct
+        .process_stance_group_package(0, 2_821, RETAIL_CACHED_STANCE)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_stance_group_package(0, 2_821, RETAIL_CACHED_STANCE)
+        .unwrap();
+    assert_eq!(direct_receipt, resumed_receipt);
+    assert_eq!(
+        (
+            resumed_receipt.stance_type,
+            resumed_receipt.current_option,
+            resumed_receipt.resolved_stance,
+        ),
+        (0, 1, 2)
+    );
+    assert_stance(&direct, &actors, 2);
+    assert_stance(&resumed, &actors, 2);
+    assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+#[test]
+fn type_zero_mandatory_and_leader_bit_four_tails_refuse_before_mutation() {
+    let (mut mandatory, actors) = fixture();
+    mandatory.replace_stance_authority(stance_authority(&actors, 0));
+    for &actor in &actors {
+        let row = mandatory.world.row_of(actor).unwrap();
+        mandatory.world.units.stance_mut()[row] = 2;
+    }
+    let groups_before = mandatory.groups.clone();
+    let command_before = mandatory.command_package_state.clone();
+    assert!(matches!(
+        mandatory.process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE),
+        Err(CanonicalStanceError::UnsupportedCone(_))
+    ));
+    assert!(groups_equal(&mandatory.groups, &groups_before));
+    assert_eq!(mandatory.command_package_state, command_before);
+    for &actor in &actors {
+        let row = mandatory.world.row_of(actor).unwrap();
+        assert_eq!(mandatory.world.units.stance()[row], 2);
+        assert_eq!(mandatory.world.units.get_flags(row) & 0x10, 0);
+        assert_eq!(mandatory.world.units.group()[row], -1);
+    }
+
+    let (mut flagged, flagged_actors) = fixture();
+    flagged.replace_stance_authority(stance_authority(&flagged_actors, 0));
+    flagged.vic_leaders.slots[1].leader_flags |= 4;
+    let groups_before = flagged.groups.clone();
+    let command_before = flagged.command_package_state.clone();
+    assert!(matches!(
+        flagged.process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE),
+        Err(CanonicalStanceError::UnsupportedCone(_))
+    ));
+    assert!(groups_equal(&flagged.groups, &groups_before));
+    assert_eq!(flagged.command_package_state, command_before);
+    assert_stance_unset(&flagged, &flagged_actors);
+}
+
 fn assert_stance_unset(sim: &Sim, actors: &[Handle]) {
     for &actor in actors {
         let row = sim.world.row_of(actor).unwrap();
@@ -214,6 +287,7 @@ fn assert_stance_unset(sim: &Sim, actors: &[Handle]) {
 fn detached_prepare_rejects_stale_stance_without_partial_publication() {
     let (mut sim, actors) = fixture();
     let player_who = [Some(1), None, None, None, None, None, None, None];
+    let leader_flags = [0; NUM_LEADERS];
     let prepared = prepare_stance_package(
         &sim.world,
         &sim.groups,
@@ -221,6 +295,7 @@ fn detached_prepare_rejects_stale_stance_without_partial_publication() {
         &sim.command_package_state,
         &sim.group_move_authority,
         &sim.stance_authority,
+        &leader_flags,
         &player_who,
         sim.world.frame,
         0,
@@ -239,6 +314,7 @@ fn detached_prepare_rejects_stale_stance_without_partial_publication() {
         &mut sim.command_package_state,
         &sim.group_move_authority,
         &sim.stance_authority,
+        &leader_flags,
         &player_who,
         prepared,
     )
@@ -251,4 +327,47 @@ fn detached_prepare_rejects_stale_stance_without_partial_publication() {
         assert_eq!(sim.world.units.stance()[other_row], 0);
         assert_eq!(sim.world.units.group()[other_row], -1);
     }
+}
+
+#[test]
+fn detached_type_zero_prepare_rejects_one_bit_leader_flag_mutation_atomically() {
+    let (mut sim, actors) = fixture();
+    sim.replace_stance_authority(stance_authority(&actors, 0));
+    let player_who = [Some(1), None, None, None, None, None, None, None];
+    let leader_flags = [0; NUM_LEADERS];
+    let prepared = prepare_stance_package(
+        &sim.world,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.stance_authority,
+        &leader_flags,
+        &player_who,
+        sim.world.frame,
+        0,
+        2_819,
+        RETAIL_EXPLICIT_STANCE,
+    )
+    .unwrap();
+    let mut changed_flags = leader_flags;
+    changed_flags[1] ^= 4;
+    let groups_before = sim.groups.clone();
+    let command_before = sim.command_package_state.clone();
+    let error = don_sim::systems::canonical_stance_runtime::commit_stance_package(
+        &mut sim.world,
+        &mut sim.groups,
+        &mut sim.paths,
+        &mut sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.stance_authority,
+        &changed_flags,
+        &player_who,
+        prepared,
+    )
+    .unwrap_err();
+    assert_eq!(error, CanonicalStanceError::StaleLeaderFlags);
+    assert!(groups_equal(&sim.groups, &groups_before));
+    assert_eq!(sim.command_package_state, command_before);
+    assert_stance_unset(&sim, &actors);
 }

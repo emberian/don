@@ -10,14 +10,18 @@ The admitted cone is deliberately exact and small:
 
 - the requested dword is `-1` or `-2`, the only two values in the corpus;
 - every effective selection member is an active, on-map, non-aircraft Unit;
-- the retail Object virtual and Unit type query agree on one stance type in `1..=3`;
+- the retail Object virtual and Unit type query agree on one stance type in `0..=3`;
 - an on-map captain supplies the representative selected by formation category; and
 - the recovered planner emits only `WriteUnitStance` plus Object flag `0x10` steps.
 
 Within that cone this is the whole reached action, not a no-op approximation. Retail computes the
 modal current option, cycles forward or backward with the type-specific cycle length, clears Group
-`disband`, writes the resolved stance to every eligible Unit, and sets flag `0x10`. Those fields and
-the selection cache already belong to the core save image. The external stance/type projection is
+`disband`, writes the resolved stance to every eligible Unit, and sets flag `0x10`. For type zero,
+resolved options 1, 2, and 5 end there when `LeaderData::flags & 4 == 0`; the host reads and
+stale-checks that canonical flag row. Options 0, 3, and 4 reach `clear_mandatory`, while flag bit 4
+can send options 1, 2, and 5 through repeated update/repath/order retirement, so those packets
+still refuse before publishing the already-prepared selection. The written fields and selection
+cache already belong to the core save image. The external stance/type projection is
 revision/digest and Handle bound, deliberately not saved, and must be reinstalled after load.
 
 ## Why STANCE was selected
@@ -53,10 +57,15 @@ packet changes option 0 to 1, core save/load byte-round-trips the resulting stat
 the exact empty-Group packet changes option 1 to 2 identically in direct and resumed simulations.
 This does not claim the recording's unavailable type table was reconstructed from RCX bytes.
 
-Type zero stays outside this host because stances 0/3/4 clear mandatory orders and other options
-can reach repeated update, repath, kill-current-order, or clear-orders tails. Build groups,
+The same two real packets also exercise the newly admitted type-zero scalar cone against a
+synthetic, Handle-bound type projection: option 0 advances to 1 before save and the cached packet
+advances 1 to 2 after load. This does not claim the recording's unavailable type table was
+reconstructed from RCX bytes. A mutation gate proves that flipping owner flag bit 4 between
+prepare and commit rejects the detached after-image atomically.
+
+Type-zero options 0/3/4 and the leader-bit-4 order tail remain outside, as do Build groups,
 aircraft, mixed stance types, positive requests not observed in this corpus, absent authority, and
-every stale before-image fail before mutation. The opcode row therefore remains red.
+every stale before-image. The opcode row therefore remains red.
 
 ## Gates
 

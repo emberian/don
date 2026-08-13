@@ -2157,7 +2157,8 @@ impl Sim {
     }
 
     /// Process the bounded retail opcode-2 cone for ordinary, on-map, non-aircraft Units with
-    /// one effective stance type in 1..=3. Type-zero order tails and Build groups fail closed.
+    /// one effective stance type in 0..=3. Type zero is admitted only for its scalar-only
+    /// options; mandatory/order/path tails and Build groups fail closed.
     pub fn process_stance_group_package(
         &mut self,
         play: usize,
@@ -2180,6 +2181,8 @@ impl Sim {
                     .then_some(row.who)
             })
         });
+        let leader_flags =
+            std::array::from_fn(|who| self.vic_leaders.slots[who].leader_flags as u32);
         let prepared = prepare_stance_package(
             &self.world,
             &self.groups,
@@ -2187,6 +2190,7 @@ impl Sim {
             &self.command_package_state,
             &self.group_move_authority,
             &self.stance_authority,
+            &leader_flags,
             &player_who,
             self.world.frame,
             play,
@@ -2200,6 +2204,7 @@ impl Sim {
             &mut self.command_package_state,
             &self.group_move_authority,
             &self.stance_authority,
+            &leader_flags,
             &player_who,
             prepared,
         )
