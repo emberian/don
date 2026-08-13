@@ -98,9 +98,9 @@ fn dutch_setup() -> Option<(
         center_city_o: 2_000,
         start_tile_x: 97,
         start_tile_y: 13,
-        starting_town: 1,
-        starting_resources: 2,
-        reveal_map: 1,
+        starting_town: i32::from(replay.initial.info.settings.starting_town),
+        starting_resources: replay.initial.info.settings.starting_resources,
+        reveal_map: replay.initial.info.settings.reveal_map,
         bonuses: StartingUnitBonuses {
             dutch_merchants: true,
             ..StartingUnitBonuses::default()
