@@ -10,7 +10,10 @@ use don_sim::systems::groups_guys::{FormationMember, NUM_LEADERS};
 use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::lifecycle_host::PlayerTable;
 use don_sim::tick::Sim;
-use don_sim::Handle;
+use don_sim::{
+    order::{AttackOrderState, Order, OrderIndex, OrderTargetIdentity},
+    Handle,
+};
 
 // Playback___2024.03.18_18_18_49__Mon_.rcx, package 2818 / turn 2819 / play 0 /
 // frame 11281: owner 1 explicitly selects five Units and requests the next stance option.
@@ -105,6 +108,111 @@ fn assert_stance(sim: &Sim, actors: &[Handle], expected: i8) {
         let row = sim.world.row_of(actor).unwrap();
         assert_eq!(sim.world.units.stance()[row], expected);
         assert_ne!(sim.world.units.get_flags(row) & 0x10, 0);
+    }
+}
+
+fn install_attack_orders(sim: &mut Sim, actors: &[Handle]) -> usize {
+    let mut total = 0;
+    for (index, &actor) in actors.iter().enumerate() {
+        let row = sim.world.row_of(actor).unwrap();
+        let target = OrderTargetIdentity {
+            handle: actor,
+            who: sim.world.units.get_who(row) as i8,
+            o: sim.world.units.o()[row],
+            uid: sim.world.units.get_uid(row),
+        };
+        sim.world.orders_mut(row).push(Order::attack_with_state(
+            target,
+            AttackOrderState {
+                def_x: 0x1100 + index as i32,
+                def_y: -0x2200 - index as i32,
+                mandatory: 1,
+                defensive: 2,
+                in_range: 3,
+                ever_in_range: 4,
+                new_ord: 5,
+            },
+        ));
+        total += 1;
+        if index == 0 {
+            // Retail walks through foreign order types and continues to a second ATTACK.
+            sim.world
+                .orders_mut(row)
+                .push(Order::move_to(12_345, 23_456, 17));
+            sim.world.orders_mut(row).push(Order::attack_with_state(
+                target,
+                AttackOrderState {
+                    def_x: 0x3300,
+                    def_y: -0x4400,
+                    mandatory: 0xff,
+                    defensive: 6,
+                    in_range: 7,
+                    ever_in_range: 8,
+                    new_ord: 9,
+                },
+            ));
+            total += 1;
+        }
+    }
+    total
+}
+
+fn set_attack_mandatory(sim: &mut Sim, actors: &[Handle], value: u8) {
+    for &actor in actors {
+        let row = sim.world.row_of(actor).unwrap();
+        for order in sim.world.orders_mut(row).iter_mut() {
+            if order.kind == OrderIndex::Attack {
+                order.attack.as_mut().unwrap().mandatory = value;
+            }
+        }
+    }
+}
+
+fn assert_attack_suffixes_cleared(sim: &Sim, actors: &[Handle]) {
+    for (actor_index, &actor) in actors.iter().enumerate() {
+        let row = sim.world.row_of(actor).unwrap();
+        let mut attack_index = 0;
+        for order in sim.world.orders(row).iter() {
+            if order.kind == OrderIndex::Attack {
+                let attack = order.attack.unwrap();
+                let expected = if attack_index == 0 {
+                    AttackOrderState {
+                        def_x: 0x1100 + actor_index as i32,
+                        def_y: -0x2200 - actor_index as i32,
+                        mandatory: 0,
+                        defensive: 2,
+                        in_range: 3,
+                        ever_in_range: 4,
+                        new_ord: 5,
+                    }
+                } else {
+                    AttackOrderState {
+                        def_x: 0x3300,
+                        def_y: -0x4400,
+                        mandatory: 0,
+                        defensive: 6,
+                        in_range: 7,
+                        ever_in_range: 8,
+                        new_ord: 9,
+                    }
+                };
+                assert_eq!(attack, expected);
+                attack_index += 1;
+            }
+        }
+        assert_eq!(attack_index, if actor_index == 0 { 2 } else { 1 });
+        if actor_index == 0 {
+            let move_order = sim
+                .world
+                .orders(row)
+                .iter()
+                .find(|order| order.kind == OrderIndex::MoveTo)
+                .unwrap();
+            assert_eq!(
+                (move_order.x, move_order.y, move_order.tolerance),
+                (12_345, 23_456, 17)
+            );
+        }
     }
 }
 
@@ -238,28 +346,7 @@ fn type_zero_scalar_only_explicit_and_cached_packets_survive_save_resume() {
 }
 
 #[test]
-fn type_zero_mandatory_and_leader_bit_four_tails_refuse_before_mutation() {
-    let (mut mandatory, actors) = fixture();
-    mandatory.replace_stance_authority(stance_authority(&actors, 0));
-    for &actor in &actors {
-        let row = mandatory.world.row_of(actor).unwrap();
-        mandatory.world.units.stance_mut()[row] = 2;
-    }
-    let groups_before = mandatory.groups.clone();
-    let command_before = mandatory.command_package_state.clone();
-    assert!(matches!(
-        mandatory.process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE),
-        Err(CanonicalStanceError::UnsupportedCone(_))
-    ));
-    assert!(groups_equal(&mandatory.groups, &groups_before));
-    assert_eq!(mandatory.command_package_state, command_before);
-    for &actor in &actors {
-        let row = mandatory.world.row_of(actor).unwrap();
-        assert_eq!(mandatory.world.units.stance()[row], 2);
-        assert_eq!(mandatory.world.units.get_flags(row) & 0x10, 0);
-        assert_eq!(mandatory.world.units.group()[row], -1);
-    }
-
+fn leader_bit_four_tail_refuses_before_mutation() {
     let (mut flagged, flagged_actors) = fixture();
     flagged.replace_stance_authority(stance_authority(&flagged_actors, 0));
     flagged.vic_leaders.slots[1].leader_flags |= 4;
@@ -272,6 +359,116 @@ fn type_zero_mandatory_and_leader_bit_four_tails_refuse_before_mutation() {
     assert!(groups_equal(&flagged.groups, &groups_before));
     assert_eq!(flagged.command_package_state, command_before);
     assert_stance_unset(&flagged, &flagged_actors);
+}
+
+#[test]
+fn type_zero_mandatory_tail_uses_real_explicit_and_cached_packets_across_save_resume() {
+    let (mut direct, actors) = fixture();
+    direct.replace_stance_authority(stance_authority(&actors, 0));
+    for &actor in &actors {
+        let row = direct.world.row_of(actor).unwrap();
+        direct.world.units.stance_mut()[row] = 2;
+    }
+    let attack_count = install_attack_orders(&mut direct, &actors);
+    let explicit = direct
+        .process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE)
+        .unwrap();
+    assert_eq!(
+        (
+            explicit.stance_type,
+            explicit.current_option,
+            explicit.resolved_stance,
+            explicit.attack_orders_cleared,
+        ),
+        (0, 2, 3, attack_count)
+    );
+    assert_stance(&direct, &actors, 3);
+    assert_attack_suffixes_cleared(&direct, &actors);
+
+    let bytes = save_sim(&direct).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install(&mut resumed, &actors, 0);
+    set_attack_mandatory(&mut direct, &actors, 0xa5);
+    set_attack_mandatory(&mut resumed, &actors, 0xa5);
+    for sim in [&mut direct, &mut resumed] {
+        sim.world.frame = 11_289;
+        sim.vic_match.frame = 11_289;
+    }
+    let direct_receipt = direct
+        .process_stance_group_package(0, 2_821, RETAIL_CACHED_STANCE)
+        .unwrap();
+    let resumed_receipt = resumed
+        .process_stance_group_package(0, 2_821, RETAIL_CACHED_STANCE)
+        .unwrap();
+    assert_eq!(direct_receipt, resumed_receipt);
+    assert_eq!(
+        (
+            resumed_receipt.current_option,
+            resumed_receipt.resolved_stance,
+            resumed_receipt.attack_orders_cleared,
+        ),
+        (3, 4, attack_count)
+    );
+    assert_stance(&direct, &actors, 4);
+    assert_stance(&resumed, &actors, 4);
+    assert_attack_suffixes_cleared(&direct, &actors);
+    assert_attack_suffixes_cleared(&resumed, &actors);
+    assert_eq!(save_sim(&direct).unwrap(), save_sim(&resumed).unwrap());
+}
+
+#[test]
+fn type_zero_reverse_cycle_reaches_zero_and_legacy_attack_payload_refuses_atomically() {
+    let mut reverse_wire = RETAIL_EXPLICIT_STANCE.to_vec();
+    reverse_wire[14..18].copy_from_slice(&(-2i32).to_le_bytes());
+    let (mut exact, actors) = fixture();
+    exact.replace_stance_authority(stance_authority(&actors, 0));
+    for &actor in &actors {
+        let row = exact.world.row_of(actor).unwrap();
+        exact.world.units.stance_mut()[row] = 1;
+    }
+    let attack_count = install_attack_orders(&mut exact, &actors);
+    let receipt = exact
+        .process_stance_group_package(0, 2_819, &reverse_wire)
+        .unwrap();
+    assert_eq!(
+        (
+            receipt.current_option,
+            receipt.resolved_stance,
+            receipt.attack_orders_cleared,
+        ),
+        (1, 0, attack_count)
+    );
+    assert_stance(&exact, &actors, 0);
+    assert_attack_suffixes_cleared(&exact, &actors);
+
+    let (mut legacy, legacy_actors) = fixture();
+    legacy.replace_stance_authority(stance_authority(&legacy_actors, 0));
+    for &actor in &legacy_actors {
+        let row = legacy.world.row_of(actor).unwrap();
+        legacy.world.units.stance_mut()[row] = 2;
+    }
+    let bad_row = legacy.world.row_of(legacy_actors[0]).unwrap();
+    legacy
+        .world
+        .orders_mut(bad_row)
+        .push(Order::attack(1, MEMBERS[0]));
+    let groups_before = legacy.groups.clone();
+    let command_before = legacy.command_package_state.clone();
+    let orders_before = legacy.world.orders(bad_row).clone();
+    assert!(matches!(
+        legacy.process_stance_group_package(0, 2_819, RETAIL_EXPLICIT_STANCE),
+        Err(CanonicalStanceError::UnsupportedCone(_))
+    ));
+    assert!(groups_equal(&legacy.groups, &groups_before));
+    assert_eq!(legacy.command_package_state, command_before);
+    assert_eq!(legacy.world.orders(bad_row), &orders_before);
+    for &actor in &legacy_actors {
+        let row = legacy.world.row_of(actor).unwrap();
+        assert_eq!(legacy.world.units.stance()[row], 2);
+        assert_eq!(legacy.world.units.get_flags(row) & 0x10, 0);
+        assert_eq!(legacy.world.units.group()[row], -1);
+    }
 }
 
 fn assert_stance_unset(sim: &Sim, actors: &[Handle]) {
@@ -370,4 +567,66 @@ fn detached_type_zero_prepare_rejects_one_bit_leader_flag_mutation_atomically() 
     assert!(groups_equal(&sim.groups, &groups_before));
     assert_eq!(sim.command_package_state, command_before);
     assert_stance_unset(&sim, &actors);
+}
+
+#[test]
+fn detached_mandatory_prepare_rejects_one_byte_order_mutation_atomically() {
+    let (mut sim, actors) = fixture();
+    sim.replace_stance_authority(stance_authority(&actors, 0));
+    for &actor in &actors {
+        let row = sim.world.row_of(actor).unwrap();
+        sim.world.units.stance_mut()[row] = 2;
+    }
+    install_attack_orders(&mut sim, &actors);
+    let player_who = [Some(1), None, None, None, None, None, None, None];
+    let leader_flags = [0; NUM_LEADERS];
+    let prepared = prepare_stance_package(
+        &sim.world,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.stance_authority,
+        &leader_flags,
+        &player_who,
+        sim.world.frame,
+        0,
+        2_819,
+        RETAIL_EXPLICIT_STANCE,
+    )
+    .unwrap();
+    let row = sim.world.row_of(actors[0]).unwrap();
+    sim.world
+        .orders_mut(row)
+        .current_mut()
+        .unwrap()
+        .attack
+        .as_mut()
+        .unwrap()
+        .defensive ^= 1;
+    let changed_orders = sim.world.orders(row).clone();
+    let groups_before = sim.groups.clone();
+    let command_before = sim.command_package_state.clone();
+    let error = don_sim::systems::canonical_stance_runtime::commit_stance_package(
+        &mut sim.world,
+        &mut sim.groups,
+        &mut sim.paths,
+        &mut sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.stance_authority,
+        &leader_flags,
+        &player_who,
+        prepared,
+    )
+    .unwrap_err();
+    assert_eq!(error, CanonicalStanceError::StaleUnitOrders(actors[0]));
+    assert!(groups_equal(&sim.groups, &groups_before));
+    assert_eq!(sim.command_package_state, command_before);
+    assert_eq!(sim.world.orders(row), &changed_orders);
+    for &actor in &actors {
+        let other_row = sim.world.row_of(actor).unwrap();
+        assert_eq!(sim.world.units.stance()[other_row], 2);
+        assert_eq!(sim.world.units.get_flags(other_row) & 0x10, 0);
+        assert_eq!(sim.world.units.group()[other_row], -1);
+    }
 }

@@ -3,10 +3,10 @@
 //! This host admits ordinary, on-map, non-aircraft Units whose effective Object and Unit
 //! stance types agree in the retail 0..=3 cycles.  In the nonzero cycles
 //! `Group::action_stance` is a complete direct mutation. Type zero is admitted only when the
-//! resolved option is 1, 2, or 5 and the owning Leader's flags do not contain bit 4: those
-//! exact branches also terminate after the stance/flag writes. Type-zero mandatory-order
-//! options, its leader-bit-4 update/repath tail, Build groups, aircraft, and mixed stance-type
-//! groups remain explicit refusals.
+//! owning Leader's flags do not contain bit 4. Resolved options 0, 3, and 4 additionally walk
+//! each Unit's whole order queue and clear the concrete `AttackOrder::mandatory` byte exactly as
+//! retail does. The leader-bit-4 update/repath tail, Build groups, aircraft, and mixed
+//! stance-type groups remain explicit refusals.
 
 use crate::systems::canonical_group_move_host::{
     groups_equal, prepare_group_selection, unit_still_current, CommandPackageState,
@@ -75,6 +75,7 @@ pub enum CanonicalStanceError {
     StaleUnit(Handle),
     StaleUnitFlags(Handle),
     StaleUnitStance(Handle),
+    StaleUnitOrders(Handle),
 }
 
 impl From<PackageError> for CanonicalStanceError {
@@ -137,6 +138,9 @@ struct StanceMutation {
     flags_after: u8,
     stance_before: i8,
     stance_after: i8,
+    clear_mandatory: bool,
+    orders_before: crate::order::OrderList,
+    orders_after: crate::order::OrderList,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +180,7 @@ pub struct StancePackageReceipt {
     pub stance_type: i32,
     pub current_option: i32,
     pub resolved_stance: i32,
+    pub attack_orders_cleared: usize,
     pub groups_checksum: u32,
     pub random_state_before: i32,
     pub random_state_after: i32,
@@ -303,6 +308,9 @@ pub fn prepare_stance_package(
             flags_after: flags,
             stance_before: current_stance,
             stance_after: current_stance,
+            clear_mandatory: false,
+            orders_before: world.orders(row).clone(),
+            orders_after: world.orders(row).clone(),
         });
     }
 
@@ -337,9 +345,23 @@ pub fn prepare_stance_package(
                     .ok_or(CanonicalStanceError::BrokenPlan)?;
                 mutation.flags_after |= mask;
             }
+            StanceStep::ClearMandatory { who, o } => {
+                let mutation = stances
+                    .iter_mut()
+                    .find(|entry| entry.identity.who == who && entry.identity.o == o)
+                    .ok_or(CanonicalStanceError::BrokenPlan)?;
+                mutation.clear_mandatory = true;
+                mutation
+                    .orders_after
+                    .clear_attack_mandatory()
+                    .map_err(|()| {
+                        CanonicalStanceError::UnsupportedCone(
+                            "type-zero mandatory tail requires concrete ATTACK payloads",
+                        )
+                    })?;
+            }
             StanceStep::SetObjectFlag { .. }
             | StanceStep::WriteBuildStance { .. }
-            | StanceStep::ClearMandatory { .. }
             | StanceStep::UpdateOrder { .. }
             | StanceStep::UpdateAction { .. }
             | StanceStep::Repath { .. }
@@ -430,13 +452,6 @@ pub fn commit_stance_package(
     if leader_flags[prepared.leader_flags_owner] != prepared.leader_flags_before {
         return Err(CanonicalStanceError::StaleLeaderFlags);
     }
-    for mutation in &prepared.units {
-        if !unit_still_current(world, paths, &mutation.before) {
-            return Err(CanonicalStanceError::StaleUnit(
-                mutation.before.identity.handle,
-            ));
-        }
-    }
     for mutation in &prepared.stances {
         let row = world
             .row_of(mutation.identity.handle)
@@ -449,6 +464,18 @@ pub fn commit_stance_package(
         if world.units.stance()[row] != mutation.stance_before {
             return Err(CanonicalStanceError::StaleUnitStance(
                 mutation.identity.handle,
+            ));
+        }
+        if world.orders(row) != &mutation.orders_before {
+            return Err(CanonicalStanceError::StaleUnitOrders(
+                mutation.identity.handle,
+            ));
+        }
+    }
+    for mutation in &prepared.units {
+        if !unit_still_current(world, paths, &mutation.before) {
+            return Err(CanonicalStanceError::StaleUnit(
+                mutation.before.identity.handle,
             ));
         }
     }
@@ -464,6 +491,21 @@ pub fn commit_stance_package(
         stance_type: prepared.stance_type,
         current_option: prepared.current_option,
         resolved_stance: prepared.resolved_stance,
+        attack_orders_cleared: prepared
+            .stances
+            .iter()
+            .map(|mutation| {
+                if mutation.clear_mandatory {
+                    mutation
+                        .orders_before
+                        .iter()
+                        .filter(|order| order.kind == crate::order::OrderIndex::Attack)
+                        .count()
+                } else {
+                    0
+                }
+            })
+            .sum(),
         groups_checksum: checksum.value,
         random_state_before: prepared.random_state,
         random_state_after: prepared.random_state,
@@ -482,6 +524,7 @@ pub fn commit_stance_package(
             .expect("STANCE mutation identities were revalidated");
         world.units.set_flags(row, mutation.flags_after);
         world.units.stance_mut()[row] = mutation.stance_after;
+        *world.orders_mut(row) = mutation.orders_after;
     }
     Ok(receipt)
 }

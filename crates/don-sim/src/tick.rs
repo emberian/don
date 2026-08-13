@@ -2157,8 +2157,9 @@ impl Sim {
     }
 
     /// Process the bounded retail opcode-2 cone for ordinary, on-map, non-aircraft Units with
-    /// one effective stance type in 0..=3. Type zero is admitted only for its scalar-only
-    /// options; mandatory/order/path tails and Build groups fail closed.
+    /// one effective stance type in 0..=3. Type zero includes the exact ordinary-ATTACK
+    /// `clear_mandatory` queue walk; its leader-bit-4 update/repath tail and Build groups fail
+    /// closed.
     pub fn process_stance_group_package(
         &mut self,
         play: usize,

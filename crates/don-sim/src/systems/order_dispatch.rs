@@ -469,6 +469,10 @@ pub struct OrderRec {
     pub attack_in_range: u8,
     pub attack_ever_in_range: u8,
     pub attack_new_ord: u8,
+    /// Whether the narrow canonical queue supplied all concrete `AttackOrder` suffix bytes.
+    /// The executable representation always has scalar slots; this bit prevents a legacy
+    /// descriptive ATTACK from silently acquiring a fabricated after-image on publication.
+    pub attack_payload_present: bool,
     /// `GroupAttackOrder::{temporary,oxxx,whosoever}` at concrete offsets `+60/+64/+68`.
     pub group_attack_temporary: i32,
     pub group_attack_oxxx: i32,
@@ -609,6 +613,7 @@ impl Default for OrderRec {
             attack_in_range: 0,
             attack_ever_in_range: 0,
             attack_new_ord: 0,
+            attack_payload_present: false,
             group_attack_temporary: 0,
             group_attack_oxxx: -1,
             group_attack_whosoever: -1,
@@ -647,6 +652,7 @@ impl OrderRec {
             target_who: who,
             target_o: o,
             target_uid: uid,
+            attack_payload_present: true,
             ..OrderRec::default()
         }
     }
@@ -888,6 +894,7 @@ impl From<Order> for OrderRec {
     /// Widen a descriptive [`crate::order::Order`]. The retry state machine starts clean.
     fn from(o: Order) -> OrderRec {
         let follow = o.follow;
+        let attack = o.attack;
         let targeted_payload = match o.kind {
             OrderIndex::AttackGround => o.attack_ground.map_or(
                 TargetedOrderPayload::None,
@@ -953,6 +960,14 @@ impl From<Order> for OrderRec {
             target_who: follow.map_or(i32::from(o.target_who), |payload| payload.whom),
             target_uid: follow.map_or(o.target_uid, |payload| payload.uid),
             target_handle: o.target_handle,
+            attack_def_x: attack.map_or(0, |state| state.def_x),
+            attack_def_y: attack.map_or(0, |state| state.def_y),
+            attack_mandatory: attack.map_or(0, |state| state.mandatory),
+            attack_defensive: attack.map_or(0, |state| state.defensive),
+            attack_in_range: attack.map_or(0, |state| state.in_range),
+            attack_ever_in_range: attack.map_or(0, |state| state.ever_in_range),
+            attack_new_ord: attack.map_or(0, |state| state.new_ord),
+            attack_payload_present: attack.is_some(),
             follow,
             special_anim: o.special_anim,
             angle: o.form_order.map_or(move_state.angle, |form| form.angle),
@@ -1019,6 +1034,17 @@ impl From<OrderRec> for Order {
             TargetedOrderPayload::AttackGround(state) => Some(state),
             TargetedOrderPayload::None | TargetedOrderPayload::AirAttackGround(_) => None,
         };
+        let attack = r
+            .attack_payload_present
+            .then_some(crate::order::AttackOrderState {
+                def_x: r.attack_def_x,
+                def_y: r.attack_def_y,
+                mandatory: r.attack_mandatory,
+                defensive: r.attack_defensive,
+                in_range: r.attack_in_range,
+                ever_in_range: r.attack_ever_in_range,
+                new_ord: r.attack_new_ord,
+            });
         Order {
             node_metric: r.node_metric,
             kind: r.kind,
@@ -1029,6 +1055,7 @@ impl From<OrderRec> for Order {
             target_o: r.target_o.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             target_uid: r.target_uid,
             target_handle: r.target_handle,
+            attack,
             tolerance: r.tolerance,
             move_state,
             follow: r.follow,
@@ -5339,7 +5366,8 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 /// The `MoveOrder`/`GroupMoveOrder` scalar image is lossless through
 /// [`crate::order::MoveOrderState`]. AIR_PATROL's dynamic arrays and walked secondary base
 /// are likewise lossless through `air_runtime_authority::AirPatrolOrderPayload`. Concrete
-/// attack, group-patrol, guard, and other payloads are still outside this narrow bridge;
+/// Ordinary ATTACK suffixes are lossless as well. Group-patrol and other payloads are still
+/// outside this narrow bridge;
 /// callers must not publish those classes until their typed [`crate::order::Order`] variants land.
 /// Exact target identity is retained by `target_uid` plus `target_handle`; a legacy target
 /// order which lacks a Handle still cannot grow one during widening. Widening a newly issued

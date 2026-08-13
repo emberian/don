@@ -442,6 +442,23 @@ pub struct OrderTargetIdentity {
     pub uid: u16,
 }
 
+/// Complete scalar payload owned by an ordinary `AttackOrder` (`sizeof=48`).
+///
+/// The target identity remains in [`Order`]'s generic target header. These seven fields are
+/// the concrete suffix returned by `UnitOrder::get_attack_order`; in particular,
+/// `Unit::clear_mandatory` `0x005E3890` walks the whole queue and clears `mandatory` on every
+/// order whose virtual type is exactly [`OrderIndex::Attack`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttackOrderState {
+    pub def_x: i32,
+    pub def_y: i32,
+    pub mandatory: u8,
+    pub defensive: u8,
+    pub in_range: u8,
+    pub ever_in_range: u8,
+    pub new_ord: u8,
+}
+
 /// Failure to adopt a checksum-complete STRAFE payload into the flattened canonical queue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StrafeOrderAdoptionError {
@@ -483,6 +500,9 @@ pub struct Order {
     /// descriptive order whose caller did not prove the authoritative Handle; ATTACK
     /// admission must not manufacture one from the retail scalar fields.
     pub target_handle: Option<Handle>,
+    /// Concrete `AttackOrder` suffix. `None` is retained for legacy/descriptive ATTACK nodes;
+    /// any transaction which reads or writes the suffix must fail closed on those nodes.
+    pub attack: Option<AttackOrderState>,
     /// Arrival tolerance in Coord units; `UnitData::tolerance` is the per-unit default.
     pub tolerance: i32,
     /// Complete executable `MoveOrder`/`GroupOrder` scalar image.  `None` is accepted only
@@ -528,6 +548,7 @@ impl Default for Order {
             target_o: -1,
             target_uid: 0,
             target_handle: None,
+            attack: None,
             tolerance: 0,
             move_state: None,
             follow: None,
@@ -575,6 +596,19 @@ impl Order {
             target_o: target.o,
             target_uid: target.uid,
             target_handle: Some(target.handle),
+            ..Order::default()
+        }
+    }
+
+    /// Construct one checksum-complete ordinary ATTACK queue node.
+    pub fn attack_with_state(target: OrderTargetIdentity, attack: AttackOrderState) -> Order {
+        Order {
+            kind: OrderIndex::Attack,
+            target_who: target.who,
+            target_o: target.o,
+            target_uid: target.uid,
+            target_handle: Some(target.handle),
+            attack: Some(attack),
             ..Order::default()
         }
     }
@@ -842,6 +876,39 @@ impl OrderList {
 
     pub fn iter(&self) -> impl Iterator<Item = &Order> {
         self.orders.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Order> {
+        self.orders.iter_mut()
+    }
+
+    /// Exact semantic write of `Unit::clear_mandatory` `0x005E3890`.
+    ///
+    /// Retail compares the virtual order type to 10, asks that node for its `AttackOrder`
+    /// subobject, and clears byte `+0x1C`. It does not touch derived attack classes whose
+    /// virtual types differ. A descriptive ATTACK without the concrete suffix is therefore
+    /// an explicit authority gap, not permission to invent the other six walked fields.
+    pub fn clear_attack_mandatory(&mut self) -> Result<usize, ()> {
+        if self
+            .orders
+            .iter()
+            .any(|order| order.kind == OrderIndex::Attack && order.attack.is_none())
+        {
+            return Err(());
+        }
+        let mut cleared = 0;
+        for order in &mut self.orders {
+            if order.kind != OrderIndex::Attack {
+                continue;
+            }
+            let attack = order
+                .attack
+                .as_mut()
+                .expect("ordinary ATTACK suffixes were preflighted");
+            attack.mandatory = 0;
+            cleared += 1;
+        }
+        Ok(cleared)
     }
 }
 

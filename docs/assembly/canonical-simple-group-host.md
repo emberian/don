@@ -273,9 +273,10 @@ The remaining production-routing tranche is bounded:
 
 The other rows remain red. DISBAND reaches the nested Build production queue. BEGIN has no corpus
 occurrence and is not used to claim execution. STANCE now has a separate canonical saved/resumed
-host for ordinary Unit stance types `1..=3`; type zero's arbitrary-order
-mandatory/repath/kill/clear tails remain refused, so its row is not promoted. FOLLOW itself also
-remains red for the unobserved action and executor cones listed above.
+host for ordinary Unit stance types `0..=3`, including type zero's exact ordinary-ATTACK
+`clear_mandatory` walk. Its leader-bit-4 update/repath/retirement tail remains refused, so the row
+is not promoted. FOLLOW itself also remains red for the unobserved action and executor cones
+listed above.
 
 ## Gates
 
