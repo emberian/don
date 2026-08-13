@@ -292,6 +292,9 @@ pub struct LiveProductionLeader {
     pub ages_queued: u8,
     pub epochs_queued: u8,
     pub last_unit_built: i32,
+    /// PDB `LeaderData::last_unit_finished[352]` at `+0x6274`, indexed by
+    /// `TypeIndex - REGULAR_UNIT_BEGIN`. Retail's completion store at `0x0062FA35`
+    /// subtracts the first regular-unit TypeIndex before addressing this array.
     pub last_unit_finished: Vec<i32>,
     pub age_stamp: [i32; 7],
     pub gain_context: GainTechCohortContext,
@@ -320,7 +323,11 @@ impl Default for LiveProductionLeader {
             ages_queued: 0,
             epochs_queued: 0,
             last_unit_built: -1,
-            last_unit_finished: vec![-1; crate::systems::tech_cities::ty::NUM_TYPES],
+            last_unit_finished: vec![
+                -1;
+                crate::systems::bhs_type_table::REGULAR_UNIT_END
+                    - crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN
+            ],
             age_stamp: [-1; 7],
             gain_context: GainTechCohortContext::default(),
             queue_dirty: false,
@@ -587,6 +594,9 @@ pub enum LiveProductionError {
     MissingBuildType(usize),
     MissingType(i32),
     InvalidOwner(u8),
+    /// A row classified as a Unit outside PDB `num_units[352]` / `last_unit_finished[352]`.
+    /// Real retail Unit types occupy exactly `REGULAR_UNIT_BEGIN..REGULAR_UNIT_END`.
+    InvalidUnitTypeIndex(i32),
     UnsupportedUnitPlacement(i32),
     UnsupportedBuildingCompletion(i32),
     UnsupportedTechEffects(i32),
@@ -845,6 +855,14 @@ fn preflight(
             .ok_or(LiveProductionError::MissingType(type_index))?;
         match facts.class {
             LiveTypeClass::Unit if facts.can_make => {
+                let unit_index = usize::try_from(type_index)
+                    .map_err(|_| LiveProductionError::InvalidUnitTypeIndex(type_index))?;
+                if !(crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN
+                    ..crate::systems::bhs_type_table::REGULAR_UNIT_END)
+                    .contains(&unit_index)
+                {
+                    return Err(LiveProductionError::InvalidUnitTypeIndex(type_index));
+                }
                 let trained_carrier = facts.is_aircraft_carrier
                     || facts.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
                 let producer_carrier = producer.is_aircraft_carrier
@@ -1197,11 +1215,20 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
     }
 
     fn publish_last_unit_finished(&mut self, owner: u8, type_index: i32, object_id: i32) {
+        let Some(unit_slot) = type_index
+            .checked_sub(crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN as i32)
+            .and_then(|slot| usize::try_from(slot).ok())
+        else {
+            self.unsupported("last-unit-finished type outside regular Unit range");
+            return;
+        };
         if let Some(last) = self.runtime.leaders[owner as usize]
             .last_unit_finished
-            .get_mut(type_index as usize)
+            .get_mut(unit_slot)
         {
             *last = object_id;
+        } else {
+            self.unsupported("last-unit-finished slot outside LeaderData array");
         }
     }
 
@@ -3920,8 +3947,49 @@ mod tests {
         assert_eq!(runtime.leaders[0].control, 2);
         assert_eq!(runtime.leaders[0].unit_counts[unit_type as usize], 1);
         assert_eq!(runtime.leaders[0].last_unit_built, 0);
-        assert_eq!(runtime.leaders[0].last_unit_finished[unit_type as usize], 0);
+        assert_eq!(runtime.leaders[0].last_unit_finished.len(), 352);
+        assert_eq!(
+            runtime.leaders[0].last_unit_finished
+                [unit_type as usize - crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN],
+            0
+        );
         assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn impossible_unit_type_refuses_before_allocation_or_queue_mutation() {
+        let unit_type = crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN as i32 - 1;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 2));
+        let live_before = sim.world.live_count();
+        let queue_before = sim.builds[row].queue.clone();
+        let control_before = runtime.leaders[0].control;
+        let finished_before = runtime.leaders[0].last_unit_finished.clone();
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::InvalidUnitTypeIndex(unit_type))
+        );
+        assert_eq!(sim.world.live_count(), live_before);
+        assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+        assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
+        assert_eq!(runtime.leaders[0].control, control_before);
+        assert_eq!(runtime.leaders[0].last_unit_finished, finished_before);
+    }
+
+    #[test]
+    fn final_regular_unit_type_publishes_to_the_final_history_slot() {
+        let unit_type = crate::systems::bhs_type_table::REGULAR_UNIT_END as i32 - 1;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 1));
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(runtime.leaders[0].last_unit_finished.len(), 352);
+        assert_eq!(runtime.leaders[0].last_unit_finished[351], 0);
+        assert!(runtime.leaders[0].last_unit_finished[..351]
+            .iter()
+            .all(|&object_id| object_id == -1));
     }
 
     #[test]
@@ -4077,7 +4145,8 @@ mod tests {
         assert_eq!(runtime.leaders[0].unit_counts[payload_type as usize], 2);
         assert_eq!(runtime.leaders[0].last_unit_built, 0);
         assert_eq!(
-            runtime.leaders[0].last_unit_finished[carrier_type as usize],
+            runtime.leaders[0].last_unit_finished
+                [carrier_type as usize - crate::systems::bhs_type_table::REGULAR_UNIT_BEGIN],
             0
         );
         assert_eq!(

@@ -1,0 +1,104 @@
+# Replay Leaders same-frame producer frontier
+
+This tranche joins the largest current fixed-body `LeaderData` cohort to real state in one
+`don_sim::tick::Sim` frame. It adds a fail-closed ownership receipt; it does **not** install
+checksum channel 7 (`leaders`) or claim retail equality.
+
+## Contract correction
+
+The generated `WalkSpec::walked_bytes = 27,182` is a static lower bound, not the total byte
+count of an executed active-Leader traversal. `LeaderData::walk_data` contains unresolved
+variable payload visits and calls child walkers. The complete conditional frontier executes
+28,428 bytes for an active row whose five arrays and UTF-16 string are empty:
+
+```text
+fixed prefix [0,+0x692a)                              26,922
+eight Diplomacy::walk_data calls                 8 * 92 = 736
+default dynamic-child suffix                                 770
+executed default active-row transcript                     28,428
+```
+
+Positive array lengths or a non-empty production script extend that transcript. An inactive
+row visits only its eight-byte header. Therefore 27,182 must not be used as a fixed runtime
+denominator or presented as a complete per-row checksum length.
+
+## Newly joined owner cohort
+
+For each active checksum Leader slot, `bind_sim_owner_frontier` observes these current owners:
+
+| `LeaderData` bytes | Same-frame owner | Source bytes | Already owned | Newly canonical |
+|---|---|---:|---:|---:|
+| `city_mark +0x408` | `Sim::cities.city_mark` | 4 | 0 | 4 |
+| `cities_captured/lost +0x824/+0x828` | `Sim::vic_leaders` | 8 | 0 | 8 |
+| `blacken`, tribute sent/received | `Sim::diplomacy` | 12 | 0 | 12 |
+| population and `reg_pop[64]` | production runtime | 132 | 0 | 132 |
+| `age_stamp[7]` | production runtime | 28 | 0 | 28 |
+| six training-queue counters | production runtime | 24 | 0 | 24 |
+| ages/epochs queued | production runtime | 2 | 0 | 2 |
+| `last_unit_finished[352]` | production runtime | 1,408 | 0 | 1,408 |
+| `num_units[352]` | production runtime, checked against victory | 704 | 704 | 0 |
+| `num_queued[806]` | production runtime, checked against victory | 1,612 | 1,612 | 0 |
+| six resource buckets | production runtime, checked against decoded economy | 24 | 24 | 0 |
+| `control` | production runtime, checked against step 8 | 4 | 4 | 0 |
+| **total** | | **3,962** | **2,344** | **1,618** |
+
+Composed with the established victory/step-8 frontier (4,852 bytes per active row) and the
+same-frame production-tech join (24 additional bytes), the conservative current-owner lower
+bound is 6,494 visited bytes per default active row. It deliberately does not count a byte
+twice merely because retail revisits the same object field in a child call. Against the
+28,428-byte empty-child transcript, at least 21,934 visited bytes per active row remain
+unsourced. Dynamic container contents can make the residual larger.
+
+## `last_unit_finished` port correction
+
+The PDB declares `LeaderData::last_unit_finished[352]` at `+0x6274`. Retail completion code at
+`0x0062fa35` subtracts the first regular-unit TypeIndex (50) before storing into the array.
+The port previously allocated 806 entries and indexed it by raw TypeIndex. The runtime now
+allocates exactly 352 entries, applies the subtraction, and refuses an out-of-range type. Unit
+and carrier completion tests pin both the length and translated index. Preflight also rejects an
+impossible Unit classification outside `50..402` before allocation, queue, or Leader mutation.
+
+## Agreement gates and red boundary
+
+The join first rebuilds the victory/step-8 base from the exact supplied `Sim`. It then requires:
+
+- every new fixed-body value to equal the independently assembled conditional transcript;
+- all 352 unit counts and 806 queue counts to fit retail `u16` representation and equal the
+  established runtime bytes;
+- resource buckets and control to equal their existing owners;
+- all source arrays to have their retail shape.
+
+A canonical population mutation changes Adler-32 only after the independent generated column
+is updated; a stale column refuses. The same mutation proof reaches the final dword of
+`last_unit_finished`, and a generated-layout test pins every joined field's PDB offset, size,
+element count, and walked status. Separate tests prove duplicate disagreement, negative-count,
+shortened-history refusal, and pre-mutation rejection of an impossible Unit index. `checksum()`
+always returns the complete frontier as an error and `installed_in_scoreboard()` is always false.
+
+## Corpus result
+
+The real replay evidence is intentionally unchanged because no producer was installed:
+
+```text
+leaders compares                 222,938 -> 222,938
+leaders matches                       0 -> 0
+leaders substantive compares          0 -> 0
+leaders best survived turns            0 -> 0
+installed                           false -> false
+```
+
+Those values come from `schema/replay-validation.json`; this patch cannot alter them because
+`CheckAll` still has no Leaders source. Reporting conditional transcript checksums as retail
+matches would fabricate evidence.
+
+The largest residuals are the historical region/building planes, remaining score and AI
+fields, most `Personality`, bitmask headers/payloads, `tech_at_start` history, live container
+contents and representation metadata, the production script, and the decoded economy fields
+which still lack a same-frame owner.
+
+## Verification
+
+The focused replay target covers the exact accounting, complete-but-red receipt, canonical
+mutation sensitivity, stale conditional refusal, duplicate-owner refusal, malformed shape,
+and representation-range refusal. Production tests cover both ordinary and carrier completion
+stores into the translated 352-entry `last_unit_finished` array.

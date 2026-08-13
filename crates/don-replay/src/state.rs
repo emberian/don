@@ -408,7 +408,7 @@ impl SimBridge {
         "DeathObjData ring, stride 0xa4 (deaths)",
         "Group mutation (groups) — the 512 slots Groups::clear 0x00713f20 leaves at Game::init are produced, together with the 32-byte last_group tail check_groups hashes through 0x00e85f4c, but nothing drives Groups::push_group / Group::action_*, so the channel is frozen at Game::init and expires at the recording's first group command; see docs/assembly/groups-initial-state.md",
         "GuyData columns (guys)",
-        "LeaderData records, 27,182 walked bytes each (leaders)",
+        "LeaderData records (leaders) — 27,182 statically resolved bytes, but the executed transcript is variable (28,428 with empty dynamic children); only a bounded same-frame owner frontier exists",
         "Good flat list (goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
         "ScenarioData mutation (scenario_data) — the ScenarioFuncSet::init 0x00a03c30 initial state is produced, but nothing writes units_killed/builds_destroyed/city_lost_to, so the channel is frozen at Game::init and expires at the recording's first kill; see docs/assembly/scenario-initial-state.md",

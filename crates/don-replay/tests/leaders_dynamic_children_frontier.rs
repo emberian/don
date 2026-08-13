@@ -20,6 +20,10 @@ use don_replay::leaders_runtime_frontier::{
     LEADER_DIPLOMACY_BYTES, LEADER_FIXED_BODY_BEGIN, LEADER_FIXED_BODY_END,
 };
 use don_replay::leaders_runtime_tribe_frontier::{bind_live_tribes, LEADER_TRIBE_OFFSET};
+use don_replay::leaders_sim_owner_frontier::{
+    bind_sim_owner_frontier, SimOwnerFrontierError, POP_OFFSET, SIM_OWNER_DUPLICATE_BYTES,
+    SIM_OWNER_NEWLY_CANONICAL_BYTES, SIM_OWNER_SOURCE_BYTES,
+};
 use don_replay::leaders_sim_tech_frontier::{
     bind_sim_tech_frontier, SimTechFrontierError, ECON_DISCOVERED_INDEX,
     SIM_TECH_EXISTING_DUPLICATE_BYTES, SIM_TECH_NEWLY_CANONICAL_BYTES, SIM_TECH_SOURCE_BYTES,
@@ -617,6 +621,53 @@ fn same_frame_sim(fixture: &Fixture) -> Sim {
     sim
 }
 
+fn same_frame_sim_with_fixed_owner_cohort(fixture: &Fixture) -> Sim {
+    let mut sim = same_frame_sim(fixture);
+    for production in &mut sim.production_runtime.leaders {
+        // The synthetic conditional columns are zeroed. These two runtime arrays use -1 as
+        // their real default, so align this fixture explicitly before testing the join.
+        production.last_unit_finished.fill(0);
+        production.age_stamp.fill(0);
+    }
+    sim
+}
+
+#[test]
+fn same_frame_owner_offsets_match_the_generated_pdb_layout() {
+    for (name, offset, size, count) in [
+        ("blacken", 0x020c, 4, 1),
+        ("city_mark", 0x0408, 4, 1),
+        ("cities_captured", 0x0824, 4, 1),
+        ("cities_lost", 0x0828, 4, 1),
+        ("tribute_sent", 0x0860, 4, 1),
+        ("tribute_received", 0x0864, 4, 1),
+        ("age_stamp", 0x08f8, 28, 7),
+        ("control", 0x0940, 4, 1),
+        ("pop", 0x095c, 4, 1),
+        ("barracks_queued", 0x0a10, 4, 1),
+        ("stable_queued", 0x0a14, 4, 1),
+        ("factory_queued", 0x0a18, 4, 1),
+        ("combat_queued", 0x0a1c, 4, 1),
+        ("dock_queued", 0x0a20, 4, 1),
+        ("air_queued", 0x0a24, 4, 1),
+        ("reg_pop", 0x0e62, 128, 64),
+        ("num_units", 0x5762, 704, 352),
+        ("num_queued", 0x5a22, 1_612, 806),
+        ("last_unit_finished", 0x6274, 1_408, 352),
+        ("ages_queued", 0x67f4, 1, 1),
+        ("epochs_queued", 0x67f5, 1, 1),
+    ] {
+        let field = leader::FIELDS
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap_or_else(|| panic!("generated LeaderData has no {name}"));
+        assert_eq!(field.offset, offset, "{name} offset");
+        assert_eq!(field.size, size, "{name} size");
+        assert_eq!(field.count, count, "{name} element count");
+        assert_eq!(field.walked, Some(true), "{name} checksum visitation");
+    }
+}
+
 #[test]
 fn same_frame_sim_tech_cohort_promotes_only_six_counter_dwords() {
     let Some(fixture) = fixture() else {
@@ -720,6 +771,210 @@ fn canonical_gain_tech_mutation_changes_the_complete_walk_and_stale_views_refuse
             slot: fixture.active,
             production: 1,
             step8: 0,
+        })
+    );
+}
+
+#[test]
+fn same_frame_owner_cohort_is_large_bounded_and_stays_red() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+    let sim = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    let tech = bind_sim_tech_frontier(fixture.previous, &fixture.authority, &sim).unwrap();
+    let joined = bind_sim_owner_frontier(&fixture.prefix, tech, &sim).unwrap();
+    let walk = joined.walk_frontier();
+
+    assert_eq!(walk.boundary, LeadersWalkBoundary::Complete);
+    assert_eq!(joined.claims().len(), fixture.active_count * 17);
+    assert_eq!(
+        joined.cohort_source_produced_walked_bytes(),
+        fixture.active_count * SIM_OWNER_SOURCE_BYTES
+    );
+    assert_eq!(
+        joined.cohort_duplicate_checked_walked_bytes(),
+        fixture.active_count * SIM_OWNER_DUPLICATE_BYTES
+    );
+    assert_eq!(
+        joined.cohort_newly_canonicalized_walked_bytes(),
+        fixture.active_count * SIM_OWNER_NEWLY_CANONICAL_BYTES
+    );
+    assert_eq!(
+        joined.unique_canonical_walked_bytes(),
+        fixture.active_count * 6_494 + (NUM_LEADERS - fixture.active_count) * 8
+    );
+    assert_eq!(
+        joined.remaining_unsourced_walked_bytes(),
+        walk.bytes_walked - joined.unique_canonical_walked_bytes() as u64
+    );
+    assert_eq!(joined.checksum(), Err(walk));
+    assert!(!joined.installed_in_scoreboard());
+
+    let checked = don_replay::check_all::CheckAll::of_state(&don_replay::state::SimState::new());
+    let leaders = &checked.per[Channel::Leaders as usize];
+    assert!(!leaders.installed);
+    assert!(!leaders.exact_producer);
+    assert!(!leaders.substantive());
+}
+
+#[test]
+fn same_frame_owner_mutation_bites_walk_only_after_conditional_owner_agrees() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+    let baseline_sim = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    let baseline_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &baseline_sim)
+            .unwrap();
+    let baseline = bind_sim_owner_frontier(&fixture.prefix, baseline_tech, &baseline_sim)
+        .unwrap()
+        .walk_frontier();
+
+    let mut changed_sim = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    changed_sim.production_runtime.leaders[fixture.active].population = 7;
+
+    let stale_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &changed_sim).unwrap();
+    assert!(matches!(
+        bind_sim_owner_frontier(&fixture.prefix, stale_tech, &changed_sim),
+        Err(SimOwnerFrontierError::ConditionalDisagreement {
+            slot,
+            field: "pop",
+            ..
+        }) if slot == fixture.active
+    ));
+
+    let mut changed_columns = fixture.columns.clone();
+    let pop = leader::FIELDS
+        .iter()
+        .find(|field| field.offset as usize == POP_OFFSET && field.name == "pop")
+        .unwrap();
+    write_field(
+        &mut changed_columns,
+        fixture.active,
+        pop,
+        &7i32.to_le_bytes(),
+    );
+    let changed_previous = deferred_frontier(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &changed_columns,
+    );
+    let changed_tech =
+        bind_sim_tech_frontier(changed_previous, &fixture.authority, &changed_sim).unwrap();
+    let changed = bind_sim_owner_frontier(&fixture.prefix, changed_tech, &changed_sim)
+        .unwrap()
+        .walk_frontier();
+    assert_eq!(changed.bytes_walked, baseline.bytes_walked);
+    assert_ne!(changed.checksum, baseline.checksum);
+}
+
+#[test]
+fn last_finished_tail_mutation_bites_only_after_the_independent_column_agrees() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+    let baseline_sim = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    let baseline_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &baseline_sim)
+            .unwrap();
+    let baseline = bind_sim_owner_frontier(&fixture.prefix, baseline_tech, &baseline_sim)
+        .unwrap()
+        .walk_frontier();
+
+    let tail = REGULAR_UNIT_END - REGULAR_UNIT_BEGIN - 1;
+    let value = 0x1234_5678i32;
+    let mut changed_sim = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    changed_sim.production_runtime.leaders[fixture.active].last_unit_finished[tail] = value;
+
+    let stale_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &changed_sim).unwrap();
+    assert!(matches!(
+        bind_sim_owner_frontier(&fixture.prefix, stale_tech, &changed_sim),
+        Err(SimOwnerFrontierError::ConditionalDisagreement {
+            slot,
+            field: "last_unit_finished",
+            ..
+        }) if slot == fixture.active
+    ));
+
+    let mut changed_columns = fixture.columns.clone();
+    let field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "last_unit_finished")
+        .unwrap();
+    let mut field_bytes = vec![0; field.size as usize];
+    field_bytes[tail * 4..tail * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    write_field(&mut changed_columns, fixture.active, field, &field_bytes);
+    let changed_previous = deferred_frontier(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &changed_columns,
+    );
+    let changed_tech =
+        bind_sim_tech_frontier(changed_previous, &fixture.authority, &changed_sim).unwrap();
+    let changed = bind_sim_owner_frontier(&fixture.prefix, changed_tech, &changed_sim)
+        .unwrap()
+        .walk_frontier();
+    assert_eq!(changed.bytes_walked, baseline.bytes_walked);
+    assert_ne!(changed.checksum, baseline.checksum);
+}
+
+#[test]
+fn same_frame_owner_duplicate_and_shape_disagreements_refuse() {
+    let Some(fixture) = fixture() else {
+        skip("ron-data/replays contains no derivable replay with an active Leader");
+        return;
+    };
+
+    let mut stale_counts = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    stale_counts.production_runtime.leaders[fixture.active].unit_counts[REGULAR_UNIT_BEGIN] = 1;
+    let stale_counts_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &stale_counts)
+            .unwrap();
+    assert!(matches!(
+        bind_sim_owner_frontier(&fixture.prefix, stale_counts_tech, &stale_counts),
+        Err(SimOwnerFrontierError::RuntimeDuplicateDisagreement {
+            slot,
+            field: "num_units",
+            ..
+        }) if slot == fixture.active
+    ));
+
+    let mut short_history = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    short_history.production_runtime.leaders[fixture.active]
+        .last_unit_finished
+        .pop();
+    let short_history_tech =
+        bind_sim_tech_frontier(fixture.previous.clone(), &fixture.authority, &short_history)
+            .unwrap();
+    assert!(matches!(
+        bind_sim_owner_frontier(&fixture.prefix, short_history_tech, &short_history),
+        Err(SimOwnerFrontierError::SourceLength {
+            slot,
+            source: "production_runtime.last_unit_finished",
+            ..
+        }) if slot == fixture.active
+    ));
+
+    let mut negative_count = same_frame_sim_with_fixed_owner_cohort(&fixture);
+    negative_count.production_runtime.leaders[fixture.active].unit_counts[REGULAR_UNIT_BEGIN] = -1;
+    let negative_count_tech =
+        bind_sim_tech_frontier(fixture.previous, &fixture.authority, &negative_count).unwrap();
+    assert_eq!(
+        bind_sim_owner_frontier(&fixture.prefix, negative_count_tech, &negative_count),
+        Err(SimOwnerFrontierError::SourceValueOutOfRange {
+            slot: fixture.active,
+            field: "num_units",
+            index: 0,
+            value: -1,
         })
     );
 }

@@ -117,9 +117,11 @@ Production-runtime tests additionally prove the installed hook itself: research 
 publishes its tech bit, age completion publishes decoded ages to both consumers, and shortening
 the victory tech vector refuses before either the queued Build or production `TechState` mutates.
 
-This is the smallest real ownership step toward installation. The next useful cohort should be
-chosen from a state already mutated by `Sim`; adding zero-initialized storage for an absent
-container or generated plane would not be a producer.
+This was the smallest real ownership step toward installation. The fixed-body continuation is
+now documented in `replay-leaders-sim-producer-frontier.md`: it joins another 1,618 canonical
+bytes per active row from City, diplomacy, victory, and production owners while leaving the
+channel deliberately red. Adding zero-initialized storage for an absent container or generated
+plane would still not be a producer.
 
 ## Verification
 
