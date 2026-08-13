@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Exact retail package shell -> cached Build LaunchPatrol -> v17 AIR/STRAFE resume.
+//! Exact retail package shell -> cached Build LaunchPatrol -> current AIR/STRAFE resume.
 
 use don_sim::order::OrderIndex;
 use don_sim::systems::air_group_action_transaction::{
@@ -7,8 +7,9 @@ use don_sim::systems::air_group_action_transaction::{
 };
 use don_sim::systems::canonical_air_group_host::{AirGroupRuntimeAuthority, AirGroupUnitAuthority};
 use don_sim::systems::canonical_air_package_shell::{
-    commit_canonical_air_replay_package, prepare_canonical_air_replay_package,
-    AirReplayShellCommand, CanonicalAirPackageShellError,
+    commit_canonical_air_replay_batch, commit_canonical_air_replay_package,
+    prepare_canonical_air_replay_batch, prepare_canonical_air_replay_package,
+    AirReplayPackageIdentity, AirReplayShellCommand, CanonicalAirPackageShellError,
 };
 use don_sim::systems::canonical_group_move_host::{
     BuildSelectionAuthority, BuildSelectionIdentity, CachedSelection, CommandPackageState,
@@ -33,6 +34,11 @@ const RETAIL_POSITION: CommandPackagePosition = CommandPackagePosition {
     group_command_index: 0,
     action_command_index: 1,
 };
+const RETAIL_TRIPLE_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 53_053,
+    package_serial: 8_853,
+    play: 1,
+};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -53,6 +59,23 @@ fn retail_commands() -> Vec<Vec<u8>> {
         "390a68becf7d2f714a01000000ca9d89bd7479fcd0d348ea71dd7f2b0b2c1d3cbd092a209101000000e5e3811761ae81b40431ba12e01deeb601000400d79fd709",
         "4a48001000000000000000",
         "4804460e01000d130000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_triple_commands() -> Vec<Vec<u8>> {
+    [
+        "4f0008030000030000",
+        "000002",
+        "0b3d9700003293000002000000000000000000000000000000",
+        "000002",
+        "0b3d9700003293000002000000000000000000000000000000",
+        "000002",
+        "0b3d9700003293000002000000000000000000000000000000",
+        "3973a3bbc3e077860b01000000d57d28869bce92f336b1e1442dcfc45b842dde4b68127735010000009ce18c5f3887b6a70431ba12db1c2db801000400c8de273d",
+        "4a48001000000000000000",
+        "48049a940000398a0000",
     ]
     .map(hex)
     .to_vec()
@@ -251,6 +274,122 @@ fn fixture() -> (Sim, Vec<Handle>, Vec<i16>, Handle) {
     (sim, planes, builds, target)
 }
 
+fn batch_member(handle: Handle, plane: bool) -> MoveMemberAuthority {
+    let mut member = move_member(handle);
+    member.is_plane = plane;
+    member.domain = if plane { 2 } else { 1 };
+    member
+}
+
+fn install_batch_package_authority(sim: &mut Sim, carriers: &[Handle], planes: &[Handle]) {
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x8853,
+        composition_digest: [0x53; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: carriers
+            .iter()
+            .copied()
+            .map(|handle| batch_member(handle, false))
+            .chain(
+                planes
+                    .iter()
+                    .copied()
+                    .map(|handle| batch_member(handle, true)),
+            )
+            .collect(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x53053,
+        composition_digest: [0x85; 32],
+        units: planes
+            .iter()
+            .copied()
+            .map(|handle| AirGroupUnitAuthority {
+                handle,
+                object_masks: 0,
+                is_biplane: true,
+                is_bomber: false,
+                is_helicopter: false,
+            })
+            .collect(),
+        builds: Vec::new(),
+        busy_spells: Vec::new(),
+    });
+}
+
+fn triple_batch_fixture() -> (Sim, Vec<Handle>, Vec<Handle>, Handle) {
+    let mut sim = Sim::new(0x18_8853, 256);
+    let mut players = PlayerTable::new();
+    players.seat(1, 1, 2, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_TRIPLE_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_TRIPLE_IDENTITY.game_frame;
+
+    let target_coord = (38_717, 37_682);
+    let mut owner_units = Vec::new();
+    for o in 0..150i16 {
+        let position = match o {
+            134 => (target_coord.0 - 100, target_coord.1),
+            117 => (target_coord.0 - 1_000, target_coord.1),
+            125 => (target_coord.0 - 2_000, target_coord.1),
+            147 => (target_coord.0 - 100, target_coord.1),
+            148 => (target_coord.0 - 1_000, target_coord.1),
+            149 => (target_coord.0 - 2_000, target_coord.1),
+            _ => (5_000 + i32::from(o) * 10, 5_000),
+        };
+        let type_id = if o >= 147 { PLANE_TYPE } else { 90 };
+        let handle = sim
+            .spawn_unit(2, type_id, position.0, position.1, 4)
+            .unwrap();
+        let row = sim.world.row_of(handle).unwrap();
+        assert_eq!(sim.world.units.o()[row], o);
+        owner_units.push(handle);
+    }
+    let target = sim
+        .spawn_unit(3, 91, target_coord.0, target_coord.1, 4)
+        .unwrap();
+    let carrier_os = [134i16, 117, 125];
+    let plane_os = [147i16, 148, 149];
+    let carriers: Vec<_> = carrier_os
+        .iter()
+        .map(|&o| owner_units[o as usize])
+        .collect();
+    let planes: Vec<_> = plane_os.iter().map(|&o| owner_units[o as usize]).collect();
+    for (&carrier_o, &plane_o) in carrier_os.iter().zip(&plane_os) {
+        let carrier_row = sim.world.row_of(owner_units[carrier_o as usize]).unwrap();
+        let plane_row = sim.world.row_of(owner_units[plane_o as usize]).unwrap();
+        sim.world.units.inside_down_mut()[carrier_row] = plane_o;
+        sim.world.units.inside_down_who_mut()[carrier_row] = 2;
+        sim.world.units.inside_up_mut()[plane_row] = carrier_o;
+        sim.world.units.inside_up_who_mut()[plane_row] = 2;
+        sim.world.units.inside_down_mut()[plane_row] = -1;
+        sim.world.units.inside_down_who_mut()[plane_row] = -1;
+    }
+    for handle in carriers.iter().chain(&planes) {
+        let row = sim.world.row_of(*handle).unwrap();
+        sim.world.units.group_mut()[row] = -1;
+        sim.world.units.o_down_mut()[row] = -1;
+        sim.world.units.form_mut()[row] = 0;
+        sim.world.units.form_mod_mut()[row] = 50;
+    }
+
+    let mut cache: [Vec<CachedSelection>; 8] = std::array::from_fn(|_| Vec::new());
+    cache[1] = carrier_os
+        .iter()
+        .map(|&o| {
+            let row = sim.world.row_of(owner_units[o as usize]).unwrap();
+            CachedSelection {
+                o,
+                uid: sim.world.units.get_uid(row),
+            }
+        })
+        .collect();
+    sim.command_package_state = CommandPackageState::from_saved_selections(cache).unwrap();
+    install_batch_package_authority(&mut sim, &carriers, &planes);
+    (sim, carriers, planes, target)
+}
+
 fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
     assert_eq!(left.world.frame, right.world.frame);
     assert_eq!(left.world.random.state(), right.world.random.state());
@@ -279,12 +418,122 @@ fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
 }
 
 #[test]
-fn exact_cached_force_all_shell_v17_reload_resumes_four_build_home_aircraft() {
+fn exact_retail_triple_cached_package_is_atomic_and_current_save_resumable() {
+    let (mut control, carriers, planes, target) = triple_batch_fixture();
+    let commands = retail_triple_commands();
+    let before_rng = control.world.random.state();
+    let receipt = control
+        .process_air_replay_batch(RETAIL_TRIPLE_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.identity, RETAIL_TRIPLE_IDENTITY);
+    assert_eq!(receipt.command_image, commands);
+    assert_eq!(receipt.shell.len(), 4);
+    assert_eq!(receipt.air.len(), 3);
+    assert_eq!(
+        receipt
+            .air
+            .iter()
+            .map(|air| air.request.position.group_command_index)
+            .collect::<Vec<_>>(),
+        [1, 3, 5],
+    );
+    assert!(receipt
+        .air
+        .iter()
+        .all(|air| matches!(air.status, AirTransactionStatus::Applied(_))));
+    assert_eq!(control.world.random.state(), before_rng);
+    for plane in &planes {
+        let row = control.world.row_of(*plane).unwrap();
+        assert_eq!(
+            control.world.orders(row).order_type(),
+            OrderIndex::AirPatrol
+        );
+    }
+
+    let bytes = save_sim(&control).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 18);
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install_batch_package_authority(&mut resumed, &carriers, &planes);
+    install_runtime_authority(&mut control, &planes, target);
+    install_runtime_authority(&mut resumed, &planes, target);
+
+    control.do_frame();
+    resumed.do_frame();
+    assert_air_state(&control, &resumed, &planes);
+    assert!(planes.iter().any(|plane| {
+        let row = control.world.row_of(*plane).unwrap();
+        control.world.orders(row).order_type() == OrderIndex::Strafe
+    }));
+}
+
+#[test]
+fn third_pair_staleness_rolls_back_the_first_two_pairs() {
+    let (mut sim, carriers, planes, _target) = triple_batch_fixture();
+    let commands = retail_triple_commands();
+    let players = std::array::from_fn(|play| (play == 1).then_some(2));
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        RETAIL_TRIPLE_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_world = sim.world.digest();
+    let before_groups = sim.groups.clone();
+    let before_paths = sim.paths.clone();
+    let before_cache = sim.command_package_state.clone();
+    let before_rng = sim.world.random.state();
+
+    // The third selected container changes after package prepare. The package-level CAS must
+    // reject before any of the first two installs or cache revisions become observable.
+    let third_row = sim.world.row_of(carriers[2]).unwrap();
+    sim.world.units.inside_down_mut()[third_row] = -1;
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    // The caller's intervening mutation remains; package publication itself is absent.
+    assert_eq!(sim.world.digest(), before_world);
+    assert_eq!(sim.groups.list.len(), before_groups.list.len());
+    assert_eq!(sim.groups.last_group, before_groups.last_group);
+    assert_eq!(sim.groups.proc_group, before_groups.proc_group);
+    assert_eq!(sim.paths, before_paths);
+    assert_eq!(sim.command_package_state, before_cache);
+    assert_eq!(sim.world.random.state(), before_rng);
+    for plane in planes {
+        let row = sim.world.row_of(plane).unwrap();
+        assert_eq!(sim.world.orders(row).order_type(), OrderIndex::None);
+    }
+}
+
+#[test]
+fn exact_cached_force_all_shell_current_reload_resumes_four_build_home_aircraft() {
     let (control, planes, builds, target) = fixture();
     let pre_package = save_sim(&control).unwrap();
     assert_eq!(
         u32::from_le_bytes(pre_package[24..28].try_into().unwrap()),
-        17
+        18
     );
     let mut control = load_sim(&pre_package).unwrap();
     assert_eq!(save_sim(&control).unwrap(), pre_package);
@@ -351,7 +600,7 @@ fn exact_cached_force_all_shell_v17_reload_resumes_four_build_home_aircraft() {
     }
 
     let applied = save_sim(&control).unwrap();
-    assert_eq!(u32::from_le_bytes(applied[24..28].try_into().unwrap()), 17);
+    assert_eq!(u32::from_le_bytes(applied[24..28].try_into().unwrap()), 18);
     let mut resumed = load_sim(&applied).unwrap();
     assert_eq!(save_sim(&resumed).unwrap(), applied);
     install_runtime_authority(&mut control, &planes, target);

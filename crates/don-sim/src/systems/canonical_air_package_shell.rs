@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Exact decoded-package shell around one canonical LaunchPatrol/Scramble pair.
+//! Exact decoded-package shells around canonical LaunchPatrol/Scramble pairs.
 //!
 //! Replay delivery has already removed command padding and exposes one byte-exact slice per
 //! command. This adapter retains the complete chronology, decodes the bounded retail shell
@@ -8,7 +8,8 @@
 //! legacy `command::Bridge` shadow owners.
 
 use crate::systems::air_group_action_transaction::{
-    AirGroupActionReceipt, CommandPackagePosition, LAUNCH_PATROL_OPCODE, SCRAMBLE_OPCODE,
+    AirGroupActionReceipt, AirTransactionStatus, CommandPackagePosition, LAUNCH_PATROL_OPCODE,
+    SCRAMBLE_OPCODE,
 };
 use crate::systems::air_runtime_authority::ScenarioIgnoreOrdersAuthority;
 use crate::systems::canonical_air_group_host::{
@@ -87,6 +88,11 @@ pub enum CanonicalAirPackageShellError {
     },
     Air(CanonicalAirPackageError),
     StaleCommandImage,
+    NoAirPairs,
+    AirTransactionNotApplied {
+        group_command_index: u16,
+    },
+    StaleCanonicalState,
 }
 
 impl From<CanonicalAirPackageError> for CanonicalAirPackageShellError {
@@ -109,6 +115,47 @@ pub struct CanonicalAirReplayPackageReceipt {
     pub command_image: Vec<Vec<u8>>,
     pub shell: Vec<AirReplayShellCommand>,
     pub air: AirGroupActionReceipt,
+}
+
+/// Package-wide identity shared by every command in one decoded retail contribution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AirReplayPackageIdentity {
+    pub game_frame: i32,
+    pub package_serial: u32,
+    pub play: i32,
+}
+
+impl AirReplayPackageIdentity {
+    fn position(self, group_command_index: u16) -> CommandPackagePosition {
+        CommandPackagePosition {
+            game_frame: self.game_frame,
+            package_serial: self.package_serial,
+            play: self.play,
+            group_command_index,
+            action_command_index: group_command_index + 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedCanonicalAirReplayBatch {
+    identity: AirReplayPackageIdentity,
+    commands_before: Vec<Vec<u8>>,
+    shell: Vec<AirReplayShellCommand>,
+    positions: Vec<CommandPackagePosition>,
+    expected_air: Vec<AirGroupActionReceipt>,
+    world_digest_before: u64,
+    selection_authority_before: GroupMoveAuthority,
+    authority_before: AirGroupRuntimeAuthority,
+    scenario_before: ScenarioIgnoreOrdersAuthority,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalAirReplayBatchReceipt {
+    pub identity: AirReplayPackageIdentity,
+    pub command_image: Vec<Vec<u8>>,
+    pub shell: Vec<AirReplayShellCommand>,
+    pub air: Vec<AirGroupActionReceipt>,
 }
 
 fn require_size(
@@ -219,6 +266,68 @@ fn decode_shell(
         .collect()
 }
 
+fn decode_batch_shell(
+    identity: AirReplayPackageIdentity,
+    commands: &[Vec<u8>],
+) -> Result<(Vec<CommandPackagePosition>, Vec<AirReplayShellCommand>), CanonicalAirPackageShellError>
+{
+    if commands.len() > usize::from(u16::MAX) + 1 {
+        return Err(CanonicalAirPackageShellError::TooManyCommands(
+            commands.len(),
+        ));
+    }
+    let mut positions = Vec::new();
+    let mut shell = Vec::new();
+    let mut index = 0usize;
+    while index < commands.len() {
+        let command = &commands[index];
+        let Some(&opcode) = command.first() else {
+            return Err(CanonicalAirPackageShellError::EmptyCommand {
+                index: u16::try_from(index).expect("command count checked"),
+            });
+        };
+        if opcode == 0 {
+            let Some(action) = commands.get(index + 1) else {
+                return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
+                    index: u16::try_from(index).expect("command count checked"),
+                    opcode,
+                });
+            };
+            let Some(&action_opcode) = action.first() else {
+                return Err(CanonicalAirPackageShellError::EmptyCommand {
+                    index: u16::try_from(index + 1).expect("command count checked"),
+                });
+            };
+            if !matches!(action_opcode, LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE) {
+                return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
+                    index: u16::try_from(index).expect("command count checked"),
+                    opcode,
+                });
+            }
+            positions.push(identity.position(
+                u16::try_from(index).expect("paired group cannot occupy the final u16 index"),
+            ));
+            index += 2;
+            continue;
+        }
+        if matches!(opcode, LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE) {
+            return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
+                index: u16::try_from(index).expect("command count checked"),
+                opcode,
+            });
+        }
+        shell.push(parse_shell(
+            u16::try_from(index).expect("command count checked"),
+            command,
+        )?);
+        index += 1;
+    }
+    if positions.is_empty() {
+        return Err(CanonicalAirPackageShellError::NoAirPairs);
+    }
+    Ok((positions, shell))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_canonical_air_replay_package(
     world: &World,
@@ -305,5 +414,187 @@ impl CanonicalAirReplayPackageReceipt {
             && self.air.request.position == self.position
             && self.air.request.group_packet == self.command_image[group]
             && self.air.request.packet == self.command_image[action]
+    }
+}
+
+/// Preflight every adjacent AIR pair in one decoded retail package on detached canonical
+/// owners. The shadow execution is important: a later cached Group observes the selection
+/// revision and order image published by every earlier pair, exactly as the retail command
+/// loop does, while the live Sim remains untouched until the package-wide commit.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_canonical_air_replay_batch(
+    world: &World,
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    selection_authority: &GroupMoveAuthority,
+    authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    identity: AirReplayPackageIdentity,
+    commands: &[Vec<u8>],
+) -> Result<PreparedCanonicalAirReplayBatch, CanonicalAirPackageShellError> {
+    let (positions, shell) = decode_batch_shell(identity, commands)?;
+    let mut shadow_world = world.clone();
+    let mut shadow_groups = groups.clone();
+    let mut shadow_paths = paths.to_vec();
+    let mut shadow_command_state = command_state.clone();
+    let mut expected_air = Vec::with_capacity(positions.len());
+
+    for position in &positions {
+        let group = &commands[usize::from(position.group_command_index)];
+        let action = &commands[usize::from(position.action_command_index)];
+        let prepared = prepare_canonical_air_packet_pair(
+            &shadow_world,
+            builds,
+            &shadow_groups,
+            &shadow_paths,
+            &shadow_command_state,
+            selection_authority,
+            authority,
+            scenario,
+            player_who,
+            *position,
+            group,
+            action,
+        )?;
+        let receipt = commit_canonical_air_package(
+            &mut shadow_world,
+            builds,
+            &mut shadow_groups,
+            &mut shadow_paths,
+            &mut shadow_command_state,
+            selection_authority,
+            authority,
+            scenario,
+            prepared,
+        );
+        if !matches!(receipt.status, AirTransactionStatus::Applied(_)) {
+            return Err(CanonicalAirPackageShellError::AirTransactionNotApplied {
+                group_command_index: position.group_command_index,
+            });
+        }
+        expected_air.push(receipt);
+    }
+
+    Ok(PreparedCanonicalAirReplayBatch {
+        identity,
+        commands_before: commands.to_vec(),
+        shell,
+        positions,
+        expected_air,
+        world_digest_before: world.digest(),
+        selection_authority_before: selection_authority.clone(),
+        authority_before: authority.clone(),
+        scenario_before: scenario.clone(),
+    })
+}
+
+/// Re-run the detached package plan against live owners and publish all AIR pairs or none.
+/// Any stale command, authority, selected Group/cache, target order/path, Build image, or World
+/// input makes a recomputed receipt differ and restores the complete checkpoint.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_canonical_air_replay_batch(
+    world: &mut World,
+    builds: &[BuildData],
+    groups: &mut Groups,
+    paths: &mut [PathStack],
+    command_state: &mut CommandPackageState,
+    selection_authority: &GroupMoveAuthority,
+    authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    commands: &[Vec<u8>],
+    prepared: PreparedCanonicalAirReplayBatch,
+) -> Result<CanonicalAirReplayBatchReceipt, CanonicalAirPackageShellError> {
+    if commands != prepared.commands_before {
+        return Err(CanonicalAirPackageShellError::StaleCommandImage);
+    }
+    if world.digest() != prepared.world_digest_before
+        || selection_authority != &prepared.selection_authority_before
+        || authority != &prepared.authority_before
+        || scenario != &prepared.scenario_before
+    {
+        return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+    }
+
+    let checkpoint = (
+        world.clone(),
+        groups.clone(),
+        paths.to_vec(),
+        command_state.clone(),
+    );
+    let mut air = Vec::with_capacity(prepared.positions.len());
+    for (position, expected) in prepared.positions.iter().zip(&prepared.expected_air) {
+        let group = &commands[usize::from(position.group_command_index)];
+        let action = &commands[usize::from(position.action_command_index)];
+        let pair = match prepare_canonical_air_packet_pair(
+            world,
+            builds,
+            groups,
+            paths,
+            command_state,
+            selection_authority,
+            authority,
+            scenario,
+            player_who,
+            *position,
+            group,
+            action,
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
+                *world = checkpoint.0;
+                *groups = checkpoint.1;
+                paths.clone_from_slice(&checkpoint.2);
+                *command_state = checkpoint.3;
+                return Err(CanonicalAirPackageShellError::Air(error));
+            }
+        };
+        let receipt = commit_canonical_air_package(
+            world,
+            builds,
+            groups,
+            paths,
+            command_state,
+            selection_authority,
+            authority,
+            scenario,
+            pair,
+        );
+        if &receipt != expected {
+            *world = checkpoint.0;
+            *groups = checkpoint.1;
+            paths.clone_from_slice(&checkpoint.2);
+            *command_state = checkpoint.3;
+            return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+        }
+        air.push(receipt);
+    }
+
+    Ok(CanonicalAirReplayBatchReceipt {
+        identity: prepared.identity,
+        command_image: prepared.commands_before,
+        shell: prepared.shell,
+        air,
+    })
+}
+
+impl CanonicalAirReplayBatchReceipt {
+    pub fn validates(&self) -> bool {
+        let Ok((positions, shell)) = decode_batch_shell(self.identity, &self.command_image) else {
+            return false;
+        };
+        shell == self.shell
+            && positions.len() == self.air.len()
+            && positions.iter().zip(&self.air).all(|(position, air)| {
+                let group = usize::from(position.group_command_index);
+                let action = usize::from(position.action_command_index);
+                air.validates()
+                    && air.request.position == *position
+                    && air.request.group_packet == self.command_image[group]
+                    && air.request.packet == self.command_image[action]
+            })
     }
 }

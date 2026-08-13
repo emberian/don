@@ -33,6 +33,10 @@ const AIR_FORCE_ALL_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2019.03.24_11_56_19__Sun_.rcx";
 const AIR_FORCE_ALL_REPLAY_SHA256: &str =
     "dab1c282556642300a5bc153f1f432f417fa039b265b4d72cb5876dd643ec055";
+const AIR_TRIPLE_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2018.12.01_18_33_16__Sat_.rcx";
+const AIR_TRIPLE_REPLAY_SHA256: &str =
+    "bc2c1f1a8bfb4b7e0d83a3f2ff69fb18ead1f2041507f6b3e864a1a069ee6089";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -155,6 +159,50 @@ fn retail_replay_binds_the_unique_cached_force_all_launch_and_its_explicit_cache
             "390a68becf7d2f714a01000000ca9d89bd7479fcd0d348ea71dd7f2b0b2c1d3cbd092a209101000000e5e3811761ae81b40431ba12e01deeb601000400d79fd709",
             "4a48001000000000000000",
             "4804460e01000d130000",
+        ],
+    );
+}
+
+#[test]
+fn retail_replay_binds_three_cached_launch_patrol_pairs_in_one_package() {
+    let path = root().join(AIR_TRIPLE_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        AIR_TRIPLE_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[8_852];
+    let player = turn.players.iter().find(|player| player.play == 1).unwrap();
+    assert_eq!((turn.turn, player.stamp), (8_853, 53_053));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [79, 0, 11, 0, 11, 0, 11, 57, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "4f0008030000030000",
+            "000002",
+            "0b3d9700003293000002000000000000000000000000000000",
+            "000002",
+            "0b3d9700003293000002000000000000000000000000000000",
+            "000002",
+            "0b3d9700003293000002000000000000000000000000000000",
+            "3973a3bbc3e077860b01000000d57d28869bce92f336b1e1442dcfc45b842dde4b68127735010000009ce18c5f3887b6a70431ba12db1c2db801000400c8de273d",
+            "4a48001000000000000000",
+            "48049a940000398a0000",
         ],
     );
 }

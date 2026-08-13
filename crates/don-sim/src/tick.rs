@@ -1985,6 +1985,59 @@ impl Sim {
         )
     }
 
+    /// Process every adjacent Group/AIR pair in one bounded decoded retail package as one
+    /// atomic Sim transaction. Fixed checksum, telemetry, speed and camera commands remain
+    /// typed shell receipts; no legacy Bridge/presentation state is synthesized.
+    pub fn process_air_replay_batch(
+        &mut self,
+        identity: crate::systems::canonical_air_package_shell::AirReplayPackageIdentity,
+        commands: &[Vec<u8>],
+    ) -> Result<
+        crate::systems::canonical_air_package_shell::CanonicalAirReplayBatchReceipt,
+        crate::systems::canonical_air_package_shell::CanonicalAirPackageShellError,
+    > {
+        use crate::systems::canonical_air_package_shell::{
+            commit_canonical_air_replay_batch, prepare_canonical_air_replay_batch,
+        };
+        use crate::systems::canonical_group_move_host::NETWORK_PLAYERS;
+
+        let player_who: [Option<u8>; NETWORK_PLAYERS] = std::array::from_fn(|slot| {
+            self.players.as_ref().and_then(|players| {
+                let row = players.players[slot];
+                (usize::from(row.play) == slot
+                    && row.flags & crate::systems::player_lifecycle_tails::PLAYER_PRESENT != 0
+                    && usize::from(row.who) < NUM_LEADERS)
+                    .then_some(row.who)
+            })
+        });
+        let prepared = prepare_canonical_air_replay_batch(
+            &self.world,
+            &self.builds,
+            &self.groups,
+            &self.paths,
+            &self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            &self.scenario_ignore_orders,
+            &player_who,
+            identity,
+            commands,
+        )?;
+        commit_canonical_air_replay_batch(
+            &mut self.world,
+            &self.builds,
+            &mut self.groups,
+            &mut self.paths,
+            &mut self.command_package_state,
+            &self.group_move_authority,
+            &self.air_group_authority,
+            &self.scenario_ignore_orders,
+            &player_who,
+            commands,
+            prepared,
+        )
+    }
+
     /// Process the dominant strict retail GUARD subdomain: one opcode-0 Unit selection followed
     /// by opcode 31 QueuePos::New. General multi-member, queue-last and spatial tails stay red.
     pub fn process_guard_group_package(

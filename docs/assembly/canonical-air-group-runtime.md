@@ -18,7 +18,7 @@ exact decoded retail package shell
   -> exact Cast/SpecialAnim busy + Handle-bound aircraft type snapshot
   -> persisted ordered scenario-ignore prune image
   -> checkpointed World/order/path/Group publish
-  -> current v17 root with typed AIR_PATROL tag 6
+  -> current v18 root with typed AIR_PATROL tag 6
   -> canonical Unit::work row 17
   -> shared air physics + revision-bound Unit search
   -> typed queue-first STRAFE tag 8
@@ -45,6 +45,16 @@ checksum, camera and player-speed facts plus exact TurnData payload bytes. It de
 not copy TurnControl or presentation state into `command::Bridge`; only the canonical Group/AIR
 transaction mutates Sim. Commit rechecks the complete command image, so a shell mutation between
 prepare and commit publishes nothing.
+
+The shell also owns the exact multi-pair package chronology instead of requiring one transaction
+per pair. A retail package at turn 8,853/frame 53,053 in replay SHA-256
+`bc2c1f1a8bfb4b7e0d83a3f2ff69fb18ead1f2041507f6b3e864a1a069ee6089` contains
+`[79,0,11,0,11,0,11,57,74,72]`: three cached Group+LaunchPatrol pairs at command indices
+1/2, 3/4 and 5/6. The batch host replays them in order on detached World/Groups/paths/cache
+images, then reruns the same three transactions on live owners under whole-command, authority and
+canonical-state CAS. A late-pair refusal restores the package checkpoint, so an earlier install or
+selection revision can never leak from a partly applied retail package. The shell receipts remain
+read-only facts; this does not fabricate TurnControl or presentation state.
 
 An answered containment chain with zero eligible aircraft is also a successful package, not an
 adapter error. Opcode 0 has already advanced the canonical selection revision and may have
@@ -123,14 +133,17 @@ integration decision after the patch lands with its save-version coordination.
   uninterrupted World/order/path/RNG state;
 - opcode 11 retains all six dwords and installs the expected relative patrol waypoint;
 - the exact Build-carried retail opcode-11 witness selects one cheapest/closest aircraft,
-  preserves its Build home across v17 load/resave, inserts STRAFE on the first resumed row-17
+  preserves its Build home across current load/resave, inserts STRAFE on the first resumed row-17
   tick and executes the same STRAFE/RNG state on the next row-16 tick;
 - a changed Build uid/image between AIR_PATROL prepare and commit rejects with no publication;
 - the unique exact cached force-all package consumes its full six-command shell, launches all
-  four Build-contained aircraft with zero package RNG, survives v17 load/resave, resumes four
+  four Build-contained aircraft with zero package RNG, survives current load/resave, resumes four
   row-17 activations and executes the due aircraft's row-16 STRAFE identically; and
 - a changed PlayerSpeed shell byte between prepare and commit rejects before Group, cache, order,
   path or RNG publication;
+- the exact triple cached package applies all three AIR pairs atomically, survives current v18
+  save/load, and resumes matching row-17 execution; a stale third carrier publishes none of the
+  first two installs or cache revisions;
 - exact Cast predicate and SpecialAnim busy vetoes, including malformed-state gates;
 - v15 duplicate/tombstone scenario persistence, captain/down recursion and stale-list rollback;
 - an armed partial prune followed by AIR_PATROL save/load and identical resumed row-17 STRAFE
