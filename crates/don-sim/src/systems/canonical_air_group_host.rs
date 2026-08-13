@@ -43,6 +43,9 @@ pub struct AirGroupUnitAuthority {
     pub is_biplane: bool,
     pub is_bomber: bool,
     pub is_helicopter: bool,
+    /// Exact non-strict `Unit::is(NUCLEARMISSILE = 0x13B, 0)` answer read at
+    /// `Group::action_launch_flight` `0x006FC2D2`.
+    pub is_nuclear_missile: bool,
 }
 
 /// Reinstalled facts not carried by generated Unit columns or `GroupMoveAuthority`.
@@ -56,7 +59,7 @@ pub struct AirGroupRuntimeAuthority {
 }
 
 impl AirGroupRuntimeAuthority {
-    fn unit(&self, handle: Handle) -> Option<AirGroupUnitAuthority> {
+    pub(crate) fn unit(&self, handle: Handle) -> Option<AirGroupUnitAuthority> {
         self.units
             .iter()
             .copied()

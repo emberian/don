@@ -62,6 +62,27 @@ published a new fixed Group/cache even when Scramble installs no order. The tran
 therefore binds the exact selection revision pair; empty explicit and cached Build Scrambles
 commit that selection alone, retain every target order/path byte, and consume zero RNG.
 
+The batch shell also admits one deliberately narrower opcode-28 predecessor, without claiming
+`Group::action_flight` generally complete. In `Group::action_launch_flight` (`0x006FBFB0`), the
+ATTACK arm first evaluates the selected Group's non-strict AIRBASE count at
+`0x006FC095` (`COUNT_TYPE = 0x11`, `AIRBASE = 0x1BF`). Its contained-object loop then applies
+the non-strict `NUCLEARMISSILE = 0x13B` test at `0x006FC2D2`. For a wholly AIRBASE selection
+whose complete containment chains contain no Nuclear Missile, every child exits at that test:
+the Flight body installs no order and consumes no RNG, but the immediately preceding opcode-0
+selection remains a real mutation. The canonical shell composes that selection-only Flight
+result with the following Group+LaunchPatrol pair under the existing package-wide checkpoint.
+
+The sole audited AIR-bearing package with this shape is package index 21,990 / serial 21,991 /
+turn 21,991 / frame 131,771 / play 3 from retail replay SHA-256
+`063bff8b293029c44cc14a4056eef130cf0efaf2e91632432653dbb1de477edc`. Its exact chronology is
+`[0, 28, 79, 0, 11, 58, 74, 72]`. Flight
+`1c36070000000000000000000000000000000000000a000000` targets owner 0 / object 1,846 with
+ATTACK (`OrderIndex = 10`) and all three modifier fields clear. Both Group packets are the cached
+owner-3 selection `000003`; its latest explicit origin is package index 21,985, Group
+`000403e808e908ea08eb08`, selecting Build addresses 2,280–2,283. This replay evidence fixes the
+wire chronology and cache origin. The all-AIRBASE and no-Nuclear-Missile facts remain mandatory
+host authority, not facts inferred from the recording.
+
 ## Retail comparison and the closure boundary
 
 The executable bodies are still the authority for the contained-object walk and the two
@@ -164,5 +185,16 @@ integration decision after the patch lands with its save-version coordination.
 - Build uid or containment mutation between prepare and commit publishes no Group, cache, order
   or RNG after-image; and
 - malformed nonreciprocal or cyclic Build garrisons remain unsavable.
+
+`canonical_air_package_shell_save_resume` additionally proves the exact mixed package above:
+
+- the Flight receipt retains target owner/object, ATTACK, both exact packet slices, all four
+  selected Airbases, and the full four-child non-missile containment walk;
+- Flight changes only the canonical Group/cache selection, then the following single-best
+  LaunchPatrol installs exactly one AIR_PATROL order with zero package RNG;
+- current save/load/resave retains that combined after-image and resumes the next AIR_PATROL
+  tick identically; and
+- a changed contained aircraft after whole-package prepare rejects before either the Flight
+  selection or the following LaunchPatrol can publish.
 
 No closure flag is changed by this tranche.

@@ -98,6 +98,7 @@ fn install_authorities(sim: &mut Sim, planes: &[Handle], selected: &[i16]) {
                     uid: build.uid,
                 },
                 role: 0x200,
+                is_airbase: true,
             }
         })
         .collect();
@@ -113,6 +114,7 @@ fn install_authorities(sim: &mut Sim, planes: &[Handle], selected: &[i16]) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                is_nuclear_missile: false,
             })
             .collect(),
         builds,

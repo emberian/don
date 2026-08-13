@@ -392,6 +392,9 @@ pub struct BuildSelectionIdentity {
 pub struct BuildSelectionAuthority {
     pub identity: BuildSelectionIdentity,
     pub role: i32,
+    /// Exact non-strict `ObjectData::is(AIRBASE = 0x1BF, 0)` answer used by
+    /// `GroupData::count(COUNT_TYPE = 0x11, AIRBASE, 0)` at `0x006FC095`.
+    pub is_airbase: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

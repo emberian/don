@@ -39,6 +39,11 @@ const RETAIL_TRIPLE_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentit
     package_serial: 8_853,
     play: 1,
 };
+const RETAIL_FLIGHT_AIR_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 131_771,
+    package_serial: 21_991,
+    play: 3,
+};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -81,6 +86,21 @@ fn retail_triple_commands() -> Vec<Vec<u8>> {
     .to_vec()
 }
 
+fn retail_flight_air_commands() -> Vec<Vec<u8>> {
+    [
+        "000003",
+        "1c36070000000000000000000000000000000000000a000000",
+        "4f0008020000020000",
+        "000003",
+        "0b5fcb00009d90000002000000000000000000000000000000",
+        "3a0e9465e403",
+        "4a35001500000000000000",
+        "4804afce00005ea30000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
 fn move_member(handle: Handle) -> MoveMemberAuthority {
     MoveMemberAuthority {
         handle,
@@ -99,7 +119,7 @@ fn move_member(handle: Handle) -> MoveMemberAuthority {
     }
 }
 
-fn build_record(o: i16, uid: u16, position: (i32, i32), child: Option<i16>) -> BuildData {
+fn build_record(who: u8, o: i16, uid: u16, position: (i32, i32), child: Option<i16>) -> BuildData {
     let mut build = BuildData {
         flags: production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE,
         uid,
@@ -112,7 +132,7 @@ fn build_record(o: i16, uid: u16, position: (i32, i32), child: Option<i16>) -> B
         attack_whom: -1,
         ..BuildData::default()
     };
-    build.who = 5;
+    build.who = who;
     build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
         .copy_from_slice(&o.to_le_bytes());
     build.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
@@ -122,7 +142,7 @@ fn build_record(o: i16, uid: u16, position: (i32, i32), child: Option<i16>) -> B
     build.other[0x2a..0x2c].copy_from_slice(&(-1i16).to_le_bytes());
     if let Some(child) = child {
         build.other[0x28..0x2a].copy_from_slice(&child.to_le_bytes());
-        build.other[0x3e] = 5;
+        build.other[0x3e] = who;
     } else {
         build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
         build.other[0x3e] = 0xff;
@@ -159,6 +179,7 @@ fn install_package_authority(sim: &mut Sim, planes: &[Handle], builds: &[i16]) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                is_nuclear_missile: false,
             })
             .collect(),
         builds: builds
@@ -173,6 +194,7 @@ fn install_package_authority(sim: &mut Sim, planes: &[Handle], builds: &[i16]) {
                         uid: sim.builds[row as usize].uid,
                     },
                     role: 0x200,
+                    is_airbase: true,
                 }
             })
             .collect(),
@@ -254,7 +276,7 @@ fn fixture() -> (Sim, Vec<Handle>, Vec<i16>, Handle) {
         });
         let position = selected.map_or((20_000 + row as i32, 20_000), |index| positions[index]);
         assert_eq!(
-            sim.spawn_build(5, build_record(o, 0x6100 + row as u16, position, child)),
+            sim.spawn_build(5, build_record(5, o, 0x6100 + row as u16, position, child)),
             row,
         );
     }
@@ -311,6 +333,7 @@ fn install_batch_package_authority(sim: &mut Sim, carriers: &[Handle], planes: &
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                is_nuclear_missile: false,
             })
             .collect(),
         builds: Vec::new(),
@@ -390,6 +413,110 @@ fn triple_batch_fixture() -> (Sim, Vec<Handle>, Vec<Handle>, Handle) {
     (sim, carriers, planes, target)
 }
 
+fn flight_then_launch_fixture() -> (Sim, Vec<Handle>, Vec<i16>, Handle) {
+    let mut sim = Sim::new(0x1c_21991, 256);
+    let mut players = PlayerTable::new();
+    players.seat(3, 1, 3, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_FLIGHT_AIR_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_FLIGHT_AIR_IDENTITY.game_frame;
+
+    // The exact Flight target is owner 0, object 1846. Object addresses are per owner,
+    // so retain the complete dense prefix instead of manufacturing that identity.
+    let mut target = None;
+    for o in 0..=1_846i16 {
+        let handle = sim
+            .spawn_unit(0, 91, 28_000 + i32::from(o % 100), 28_000, 4)
+            .unwrap();
+        assert_eq!(sim.world.units.o()[sim.world.row_of(handle).unwrap()], o);
+        target = Some(handle);
+    }
+    let target = target.unwrap();
+
+    let planes: Vec<_> = (0..4)
+        .map(|index| {
+            sim.spawn_unit(3, PLANE_TYPE, 52_000 + index * 100, 37_000, 4)
+                .unwrap()
+        })
+        .collect();
+    let builds = vec![2_280i16, 2_281, 2_282, 2_283];
+    for (plane, &build_o) in planes.iter().zip(&builds) {
+        let row = sim.world.row_of(*plane).unwrap();
+        sim.world.units.group_mut()[row] = -1;
+        sim.world.units.o_down_mut()[row] = -1;
+        sim.world.units.inside_up_mut()[row] = build_o;
+        sim.world.units.inside_up_who_mut()[row] = 3;
+        sim.world.units.inside_down_mut()[row] = -1;
+        sim.world.units.inside_down_who_mut()[row] = -1;
+    }
+    for row in 0..=283usize {
+        let o = 2_000 + row as i16;
+        let selected = builds.iter().position(|&candidate| candidate == o);
+        let child = selected.map(|index| {
+            let row = sim.world.row_of(planes[index]).unwrap();
+            sim.world.units.o()[row]
+        });
+        let position = selected.map_or((20_000 + row as i32, 20_000), |index| {
+            (51_900 + index as i32 * 150, 36_900)
+        });
+        assert_eq!(
+            sim.spawn_build(3, build_record(3, o, 0x7100 + row as u16, position, child)),
+            row,
+        );
+    }
+
+    let mut cache: [Vec<CachedSelection>; 8] = std::array::from_fn(|_| Vec::new());
+    cache[3] = builds
+        .iter()
+        .map(|&o| CachedSelection {
+            o,
+            uid: sim.builds[(o - 2_000) as usize].uid,
+        })
+        .collect();
+    sim.command_package_state = CommandPackageState::from_saved_selections(cache).unwrap();
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x21991,
+        composition_digest: [0x91; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: planes.iter().copied().map(move_member).collect(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x131771,
+        composition_digest: [0x77; 32],
+        units: planes
+            .iter()
+            .copied()
+            .map(|handle| AirGroupUnitAuthority {
+                handle,
+                object_masks: 0,
+                is_biplane: true,
+                is_bomber: false,
+                is_helicopter: false,
+                is_nuclear_missile: false,
+            })
+            .collect(),
+        builds: builds
+            .iter()
+            .map(|&o| {
+                let row = u32::try_from(o - 2_000).unwrap();
+                BuildSelectionAuthority {
+                    identity: BuildSelectionIdentity {
+                        row,
+                        who: 3,
+                        o,
+                        uid: sim.builds[row as usize].uid,
+                    },
+                    role: 0x200,
+                    is_airbase: true,
+                }
+            })
+            .collect(),
+        busy_spells: Vec::new(),
+    });
+    (sim, planes, builds, target)
+}
+
 fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
     assert_eq!(left.world.frame, right.world.frame);
     assert_eq!(left.world.random.state(), right.world.random.state());
@@ -415,6 +542,169 @@ fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
             right.world.units.angle()[right_row]
         );
     }
+}
+
+#[test]
+fn exact_retail_flight_no_action_then_launch_is_atomic_and_save_resumable() {
+    let (mut control, planes, builds, target) = flight_then_launch_fixture();
+    let commands = retail_flight_air_commands();
+    let before_rng = control.world.random.state();
+    let before_orders = planes
+        .iter()
+        .map(|&plane| {
+            let row = control.world.row_of(plane).unwrap();
+            control.world.orders(row).clone()
+        })
+        .collect::<Vec<_>>();
+
+    let receipt = control
+        .process_air_replay_batch(RETAIL_FLIGHT_AIR_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.command_image, commands);
+    assert_eq!(receipt.flight_no_action.len(), 1);
+    assert_eq!(receipt.air.len(), 1);
+    let flight = &receipt.flight_no_action[0];
+    assert_eq!(flight.position.group_command_index, 0);
+    assert_eq!(
+        (flight.request.target_who, flight.request.target_o),
+        (0, 1_846)
+    );
+    assert_eq!(flight.request.orders, 10);
+    assert_eq!(flight.selected_airbases.len(), 4);
+    assert_eq!(flight.contained_non_missiles.len(), 4);
+    assert_eq!(
+        flight
+            .selected_airbases
+            .iter()
+            .map(|identity| identity.o)
+            .collect::<Vec<_>>(),
+        builds,
+    );
+    assert_eq!(receipt.air[0].request.position.group_command_index, 3);
+    let AirGroupActionPlan::LaunchPatrol(plan) = receipt.air[0].plan.as_ref().unwrap() else {
+        panic!("following opcode 11 must retain its LaunchPatrol plan");
+    };
+    assert_eq!(plan.installs.len(), 1);
+    assert_eq!(control.world.random.state(), before_rng);
+    assert_eq!(
+        planes
+            .iter()
+            .filter(|&&plane| {
+                let row = control.world.row_of(plane).unwrap();
+                control.world.orders(row).order_type() == OrderIndex::AirPatrol
+            })
+            .count(),
+        1,
+    );
+    // The Flight arm itself installed nothing: only the following single-best LaunchPatrol
+    // may differ from the complete pre-package order image.
+    assert_eq!(
+        planes
+            .iter()
+            .zip(&before_orders)
+            .filter(|(plane, before)| {
+                let row = control.world.row_of(**plane).unwrap();
+                control.world.orders(row) != *before
+            })
+            .count(),
+        1,
+    );
+
+    let bytes = save_sim(&control).unwrap();
+    let mut resumed = load_sim(&bytes).unwrap();
+    assert_eq!(save_sim(&resumed).unwrap(), bytes);
+    install_runtime_authority(&mut control, &planes, target);
+    install_runtime_authority(&mut resumed, &planes, target);
+    // External group/type facts are intentionally reinstalled after load; the checksum-visible
+    // order/cache image must nevertheless resume identically.
+    control.do_frame();
+    resumed.do_frame();
+    assert_air_state(&control, &resumed, &planes);
+}
+
+#[test]
+fn stale_following_launch_rolls_back_the_preceding_flight_selection() {
+    let (mut sim, planes, _builds, _target) = flight_then_launch_fixture();
+    let commands = retail_flight_air_commands();
+    let players = std::array::from_fn(|play| (play == 3).then_some(3));
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        RETAIL_FLIGHT_AIR_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_groups = sim.groups.clone();
+    let before_paths = sim.paths.clone();
+    let before_cache = sim.command_package_state.clone();
+    let before_rng = sim.world.random.state();
+
+    // Change a contained plane after the complete package was prepared. The package-level
+    // world CAS rejects before publishing even the opcode-0 selection from Flight.
+    let stale_row = sim.world.row_of(planes[3]).unwrap();
+    sim.world.units.mana_burn_mut()[stale_row] = 1;
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.command_package_state, before_cache);
+    assert_eq!(sim.paths, before_paths);
+    assert_eq!(sim.world.random.state(), before_rng);
+    assert!(planes.iter().all(|&plane| {
+        let row = sim.world.row_of(plane).unwrap();
+        sim.world.orders(row).order_type() == OrderIndex::None
+    }));
+}
+
+#[test]
+fn nuclear_missile_child_refuses_the_narrow_flight_arm_without_selection_mutation() {
+    let (mut sim, planes, _builds, _target) = flight_then_launch_fixture();
+    sim.air_group_authority.units[0].is_nuclear_missile = true;
+    let before_world = sim.world.digest();
+    let before_groups = sim.groups.clone();
+    let before_paths = sim.paths.clone();
+    let before_cache = sim.command_package_state.clone();
+    let before_rng = sim.world.random.state();
+
+    assert!(matches!(
+        sim.process_air_replay_batch(RETAIL_FLIGHT_AIR_IDENTITY, &retail_flight_air_commands()),
+        Err(CanonicalAirPackageShellError::Flight(
+            don_sim::systems::canonical_air_package_shell::CanonicalFlightNoActionError::NuclearMissileTail {
+                who: 3,
+                o: 0,
+            }
+        )),
+    ));
+    assert_eq!(sim.world.digest(), before_world);
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.paths, before_paths);
+    assert_eq!(sim.command_package_state, before_cache);
+    assert_eq!(sim.world.random.state(), before_rng);
+    assert!(planes.iter().all(|&plane| {
+        let row = sim.world.row_of(plane).unwrap();
+        sim.world.orders(row).order_type() == OrderIndex::None
+    }));
 }
 
 #[test]

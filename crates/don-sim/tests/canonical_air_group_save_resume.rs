@@ -112,6 +112,7 @@ fn install_package_authorities(sim: &mut Sim, plane: Handle, carrier: Handle) {
             is_biplane: true,
             is_bomber: false,
             is_helicopter: false,
+            is_nuclear_missile: false,
         }],
         builds: Vec::new(),
         busy_spells: Vec::new(),
@@ -285,6 +286,7 @@ fn retail_build_launch_fixture() -> (Sim, Vec<Handle>, Handle) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                is_nuclear_missile: false,
             })
             .collect(),
         builds: builds
@@ -299,6 +301,7 @@ fn retail_build_launch_fixture() -> (Sim, Vec<Handle>, Handle) {
                         uid: sim.builds[row as usize].uid,
                     },
                     role: 0x200,
+                    is_airbase: true,
                 }
             })
             .collect(),
