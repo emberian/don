@@ -7,6 +7,13 @@ ptype, and the landed fresh-City constructor receipt. All work is staged; the Bu
 World subset, and `BuildsWalkAuthority` publish together only after the exact Build walk
 succeeds.
 
+The source-backed entrypoint now takes `BuildInitPrefixTerrainRequest`, which has no raw Z,
+plus a coherent `TerrainHeightAuthority`.  It executes the complete shipped
+`TerrainOut::find_tcoord_z` leaf and joins that receipt to this activation transaction before
+publication.  The older raw-Z entrypoint remains available for explicit measured receipts and
+unit isolation; it is not the replay-exact worldgen path.  Details and the fresh-SVX
+falsification of flat Z are in `docs/assembly/replay-terrain-height-runtime.md`.
+
 ## Temporal boundary
 
 The source order retained by the receipt is:

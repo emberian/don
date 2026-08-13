@@ -297,6 +297,42 @@ class UnitOrderListCensusTest(unittest.TestCase):
             "1bf44c19f2efa2554809023176e50621ad5b1d3643cd18f8d5cbe52832c6a17f",
         )
         self.assertEqual(
+            census.build_manifest_sha256,
+            "d56668f37bc3c79338e0593070d97f4f2146bda63b6a32242c29eb07c4fe4e99",
+        )
+        self.assertEqual(census.builds_checksum_walk_bytes, 11_578)
+        self.assertEqual(census.builds_checksum, 0x673E8820)
+        self.assertEqual(census.builds_flat_z_checksum, 0x73B77F08)
+        self.assertNotEqual(census.builds_checksum, census.builds_flat_z_checksum)
+        active_builds = [build for build in census.builds if build.active]
+        self.assertEqual(sum(build.z != 0 for build in active_builds), 36)
+        self.assertEqual(len({build.z for build in active_builds}), 36)
+        villages = [build for build in active_builds if build.ptype_index == 414]
+        self.assertEqual(
+            [(build.owner, build.slot, build.z, build.x, build.y) for build in villages],
+            [
+                (0, 2000, 104, 50016, 23136),
+                (1, 2000, 468, 23136, 2400),
+                (1, 2007, 551, 15456, 6240),
+                (2, 2000, 592, 2400, 31584),
+                (2, 2007, 510, 4704, 23904),
+                (3, 2000, 150, 31584, 50016),
+                (3, 2008, 276, 37728, 46944),
+            ],
+        )
+        self.assertTrue(all(build.checksum_walk_bytes == 491 for build in villages))
+
+        mutated_plain = bytearray(plain)
+        mutated_plain[villages[0].offset + 8] ^= 1  # encoded SubObject Z, not a tag
+        mutated = parse_unit_orderlist_census(mutated_plain, 0x4F21F)
+        self.assertEqual(mutated.builds_checksum_walk_bytes, 11_578)
+        self.assertNotEqual(mutated.build_manifest_sha256, census.build_manifest_sha256)
+        self.assertNotEqual(mutated.builds_checksum, census.builds_checksum)
+        self.assertEqual(
+            [build.z for build in mutated.builds if build.active and build.ptype_index == 414][0],
+            villages[0].z ^ 1,
+        )
+        self.assertEqual(
             [(owner.offset, owner.body_offset, owner.body_end) for owner in census.owners],
             [
                 (0x4F2AE, 0x504B7, 0x53DFC),
@@ -335,6 +371,7 @@ class UnitOrderListCensusTest(unittest.TestCase):
             (0x0047F220, 56, "7ef6d784096fb82a05c82718592939e8784f761e008694f36c6ecce8315d23f8"),
             (0x00486E60, 70, "7b15539744870b94a18fd5da451821461c0268e9b382022250a2409928e5afb4"),
             (0x004860A0, 70, "50b0f95ec4926d8ac96a2bd80c96ed9dda2e5b79d8036fd2a8677726b89bfd50"),
+            (0x008544A0, 196, "f9f2e5c9f818c640dd38e8ba9a055ead1eb03d029ac42a62139366c4c9dd94ef"),
         )
         for va, size, digest in expected:
             with self.subTest(va=f"{va:#x}"):

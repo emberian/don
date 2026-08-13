@@ -15,7 +15,12 @@
 use std::fmt;
 
 use don_sim::objects::BANDED_SLOTS;
+use don_sim::systems::map_terrain::{Coord, TCoord, World};
 use don_sim::systems::production::{self, BuildData, BuildQueue, MiningList};
+
+use crate::terrain_height_runtime::{
+    TerrainHeightAuthority, TerrainHeightError, TerrainTcoordZReceipt,
+};
 
 pub const BUILD_DATA_CTOR_VA: u32 = 0x0062_f370;
 pub const MINING_LIST_CTOR_VA: u32 = 0x0047_2260;
@@ -83,6 +88,39 @@ pub struct BuildInitPrefixRequest {
     /// Raw leader byte at the `Build::init` max-age source offset (`leader + 0xdc`).
     pub max_age_source_byte: u8,
     pub type_facts: BuildTypeInitFacts,
+}
+
+/// Build initializer inputs before the terrain query.  Unlike
+/// [`BuildInitPrefixRequest`], this shape has no caller-supplied Z; the exact query below
+/// must produce it from a completed height-plane authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildInitPrefixTerrainRequest {
+    pub owner: u8,
+    pub object_id: i16,
+    pub type_index: i32,
+    pub type_rows: usize,
+    pub snapped_x: i32,
+    pub snapped_y: i32,
+    pub owner_uid_before: u16,
+    pub max_age_source_byte: u8,
+    pub type_facts: BuildTypeInitFacts,
+}
+
+impl BuildInitPrefixTerrainRequest {
+    pub(crate) fn resolve(self, terrain_z: i32) -> BuildInitPrefixRequest {
+        BuildInitPrefixRequest {
+            owner: self.owner,
+            object_id: self.object_id,
+            type_index: self.type_index,
+            type_rows: self.type_rows,
+            snapped_x: self.snapped_x,
+            snapped_y: self.snapped_y,
+            terrain_z,
+            owner_uid_before: self.owner_uid_before,
+            max_age_source_byte: self.max_age_source_byte,
+            type_facts: self.type_facts,
+        }
+    }
 }
 
 /// Precise chronological boundary reached by this module.
@@ -164,6 +202,67 @@ impl fmt::Display for BuildInitPrefixError {
 }
 
 impl std::error::Error for BuildInitPrefixError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceBackedBuildInitPrefixReceipt {
+    pub terrain: TerrainTcoordZReceipt,
+    pub prefix: BuildInitPrefixReceipt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceBackedBuildInitPrefixError {
+    Terrain(TerrainHeightError),
+    /// Starting-city setup runs after `Terrain::init`; the pre-init fallback is therefore
+    /// an exact function result at the wrong chronological boundary.
+    UninitializedTerrainAtBuildInit,
+    Prefix(BuildInitPrefixError),
+}
+
+impl fmt::Display for SourceBackedBuildInitPrefixError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "source-backed Build::init prefix refused: {self:?}")
+    }
+}
+
+impl std::error::Error for SourceBackedBuildInitPrefixError {}
+
+/// Resolve the `SubObject::init` Z from a completed Terrain height plane and then apply
+/// the scalar Build prefix atomically.
+///
+/// `SubObject::init` converts its Coord X/Y through the signed `div_3_table` ladder and
+/// calls `TerrainOut::find_tcoord_z(..., 1)`.  The caller cannot fit or default the result:
+/// only the two exact height words and canonical TData water bit determine it.
+pub fn apply_build_init_prefix_from_terrain(
+    build: &mut BuildData,
+    request: BuildInitPrefixTerrainRequest,
+    world: &World,
+    terrain: &TerrainHeightAuthority,
+) -> Result<SourceBackedBuildInitPrefixReceipt, SourceBackedBuildInitPrefixError> {
+    let (resolved, terrain_receipt) = resolve_build_init_prefix_terrain(request, world, terrain)?;
+    let prefix = apply_build_init_prefix(build, resolved)
+        .map_err(SourceBackedBuildInitPrefixError::Prefix)?;
+    Ok(SourceBackedBuildInitPrefixReceipt {
+        terrain: terrain_receipt,
+        prefix,
+    })
+}
+
+#[doc(hidden)]
+pub fn resolve_build_init_prefix_terrain(
+    request: BuildInitPrefixTerrainRequest,
+    world: &World,
+    terrain: &TerrainHeightAuthority,
+) -> Result<(BuildInitPrefixRequest, TerrainTcoordZReceipt), SourceBackedBuildInitPrefixError> {
+    let tx = TCoord::from_coord(Coord(request.snapped_x)).0;
+    let ty = TCoord::from_coord(Coord(request.snapped_y)).0;
+    let terrain_receipt = terrain
+        .find_tcoord_z(world, tx, ty, 1)
+        .map_err(SourceBackedBuildInitPrefixError::Terrain)?;
+    if terrain_receipt.uninitialized_fallback {
+        return Err(SourceBackedBuildInitPrefixError::UninitializedTerrainAtBuildInit);
+    }
+    Ok((request.resolve(terrain_receipt.returned_z), terrain_receipt))
+}
 
 /// Apply the constructor and initializer scalar writes through the instruction immediately
 /// before `Object::add_to_world` (`0x0064d8c0`).

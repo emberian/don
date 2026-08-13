@@ -7,11 +7,16 @@ pub mod builds_runtime {
 pub mod city_build_constructor_runtime {
     pub use don_replay::city_build_constructor_runtime::*;
 }
+pub mod terrain_height_runtime {
+    pub use don_replay::terrain_height_runtime::*;
+}
 
 #[path = "../src/starting_build_activation_runtime.rs"]
 mod subject;
 
-use build_init_prefix::{BuildInitPrefixRequest, BuildTypeInitFacts};
+use build_init_prefix::{
+    BuildInitPrefixRequest, BuildInitPrefixTerrainRequest, BuildTypeInitFacts,
+};
 use builds_runtime::{check_sim_builds, BuildsWalkAuthority};
 use city_build_constructor_runtime::{
     apply_fresh_starting_village_projection, FreshStartingVillageReceipt,
@@ -23,16 +28,18 @@ use don_sim::systems::map_terrain::{tflag, COORD_PER_WCELL};
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
 use don_sim::tick::Sim;
 use subject::{
-    complete_starting_village_build, StartingBuildStage, StartingVillageBuildActivationError,
-    StartingVillageBuildSourceFacts, BUILD_ACTIVATE_VA, BUILD_DATA_WALK_VA, BUILD_INIT_VA,
-    BUILD_PROCESS_VA, BUILD_QUEUE_INIT_VA, BUILD_TYPE_MASK_ME_VA, LEADER_PROCESS_ALL_VA,
-    OBJECT_ADD_TO_WORLD_VA, OBJECT_UPDATE_SEEN_ALLY_VA, OBJECT_UPDATE_SEEN_VA,
-    STARTING_BUILD_STAGE_ORDER, STARTING_VILLAGE_BUILD_MASK, STARTING_VILLAGE_FINAL_FLAGS,
-    STARTING_VILLAGE_FOOTPRINT, STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS,
-    STARTING_VILLAGE_QUEUE_ROWS, STARTING_VILLAGE_TYPE, STARTING_VILLAGE_WALK_BYTES,
-    WALL_ACTIVATE_VA, WALL_INIT_VA, WALL_MASK_CITY_VA, WALL_MASK_ME_VA, WALL_START_VA,
-    WALL_UPDATE_HITS_VA, WALL_UPDATE_LOS_VA, WDATA_BUILD_MASK, WORLD_RESIDUALS,
+    complete_starting_village_build, complete_starting_village_build_from_terrain,
+    StartingBuildStage, StartingVillageBuildActivationError, StartingVillageBuildSourceFacts,
+    BUILD_ACTIVATE_VA, BUILD_DATA_WALK_VA, BUILD_INIT_VA, BUILD_PROCESS_VA, BUILD_QUEUE_INIT_VA,
+    BUILD_TYPE_MASK_ME_VA, LEADER_PROCESS_ALL_VA, OBJECT_ADD_TO_WORLD_VA,
+    OBJECT_UPDATE_SEEN_ALLY_VA, OBJECT_UPDATE_SEEN_VA, STARTING_BUILD_STAGE_ORDER,
+    STARTING_VILLAGE_BUILD_MASK, STARTING_VILLAGE_FINAL_FLAGS, STARTING_VILLAGE_FOOTPRINT,
+    STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS, STARTING_VILLAGE_QUEUE_ROWS, STARTING_VILLAGE_TYPE,
+    STARTING_VILLAGE_WALK_BYTES, WALL_ACTIVATE_VA, WALL_INIT_VA, WALL_MASK_CITY_VA,
+    WALL_MASK_ME_VA, WALL_START_VA, WALL_UPDATE_HITS_VA, WALL_UPDATE_LOS_VA, WDATA_BUILD_MASK,
+    WORLD_RESIDUALS,
 };
+use terrain_height_runtime::{TerrainHeightAuthority, TerrainHeightSource};
 
 const OWNER: u8 = 2;
 const CITY_SLOT: i16 = 0;
@@ -100,6 +107,37 @@ fn prefix_request(sim: &Sim) -> BuildInitPrefixRequest {
             sets_flat_flag: true,
             sets_detector_flag: false,
         },
+    }
+}
+
+fn terrain_prefix_request(sim: &Sim) -> BuildInitPrefixTerrainRequest {
+    let raw = prefix_request(sim);
+    BuildInitPrefixTerrainRequest {
+        owner: raw.owner,
+        object_id: raw.object_id,
+        type_index: raw.type_index,
+        type_rows: raw.type_rows,
+        snapped_x: raw.snapped_x,
+        snapped_y: raw.snapped_y,
+        owner_uid_before: raw.owner_uid_before,
+        max_age_source_byte: raw.max_age_source_byte,
+        type_facts: raw.type_facts,
+    }
+}
+
+fn terrain_authority(sim: &Sim) -> TerrainHeightAuthority {
+    let world = &sim.map.world;
+    let mut heights = vec![0; ((world.tile_xs + 1) * (world.tile_ys + 1)) as usize];
+    let tx = POSITION.0 / 192;
+    let ty = POSITION.1 / 192;
+    let stride = world.tile_xs as usize + 1;
+    heights[(ty as usize + 1) * stride + tx as usize] = 294.0f32.to_bits();
+    heights[ty as usize * stride + tx as usize + 1] = 294.0f32.to_bits();
+    TerrainHeightAuthority {
+        master_land_height_bits: heights,
+        land_height_bits: 0,
+        source: TerrainHeightSource::CompletedWorldgen,
+        source_digest: [0x5a; 32],
     }
 }
 
@@ -209,6 +247,35 @@ fn complete_row_owns_first_checkpoint_build_walk_and_installs_authority() {
     assert_eq!(channel.builds_walked, 1);
     assert_eq!(channel.bytes_walked, STARTING_VILLAGE_WALK_BYTES);
     assert_eq!(channel.checksum, receipt.walk.checksum);
+}
+
+#[test]
+fn source_backed_entrypoint_joins_height_query_to_the_complete_build_walk() {
+    let (mut sim, constructor) = setup_constructor();
+    let prefix = terrain_prefix_request(&sim);
+    let terrain = terrain_authority(&sim);
+    let mut authority = BuildsWalkAuthority::default();
+    let receipt = complete_starting_village_build_from_terrain(
+        &mut sim,
+        &mut authority,
+        0,
+        &constructor,
+        prefix,
+        &terrain,
+        source_facts(),
+    )
+    .unwrap();
+
+    assert_eq!(receipt.terrain.returned_z, 294);
+    assert_eq!(receipt.activation.prefix.terrain_z, 294);
+    assert_eq!(
+        receipt.activation.walk.bytes_walked,
+        STARTING_VILLAGE_WALK_BYTES
+    );
+    assert_eq!(
+        check_sim_builds(&sim, &authority).unwrap().checksum,
+        receipt.activation.walk.checksum
+    );
 }
 
 #[test]

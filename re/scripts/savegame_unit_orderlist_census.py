@@ -22,6 +22,7 @@ import hashlib
 import json
 import pathlib
 import struct
+import zlib
 from collections import Counter
 from typing import Sequence
 
@@ -201,6 +202,15 @@ class BuildImage:
     offset: int
     end: int
     active: bool
+    who: int | None
+    o: int | None
+    ptype_index: int | None
+    z: int | None
+    x: int | None
+    y: int | None
+    checksum_walk_bytes: int
+    checksum_walk_sha256: str
+    checksum_walk_hex: str = dataclasses.field(repr=False)
     sha256: str
 
 
@@ -230,6 +240,10 @@ class UnitOrderListCensus:
     order_manifest_sha256: str
     unit_manifest_sha256: str
     guy_manifest_sha256: str
+    build_manifest_sha256: str
+    builds_checksum_walk_bytes: int
+    builds_checksum: int
+    builds_flat_z_checksum: int
 
     @property
     def active_units(self) -> int:
@@ -337,7 +351,16 @@ def _simple_array_i32(reader: _Reader, owner: str) -> None:
 def _subobject(
     reader: _Reader,
     owner: str,
-) -> tuple[int, int, int | None, int | None, int | None]:
+) -> tuple[
+    int,
+    int,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+]:
     reader.expect_u8(SUBOBJECT_TAG, f"{owner} SubObject")
     flags = reader.u8()
     must_walk = reader.u8()
@@ -346,19 +369,39 @@ def _subobject(
             f"{owner} SubObject::must_walk is not boolean: {must_walk}"
         )
     if not must_walk:
-        return flags, must_walk, None, None, None
+        return flags, must_walk, None, None, None, None, None, None
     who = reader.u8()
     o = reader.i16()
-    reader.raw(12)  # z_internal, x_internal, y_internal
+    z_internal = reader.i32()
+    x_internal = reader.i32()
+    y_internal = reader.i32()
     ptype_index = reader.i32()
-    return flags, must_walk, who, o, ptype_index
+    return (
+        flags,
+        must_walk,
+        who,
+        o,
+        ptype_index,
+        z_internal ^ 0x00063637,
+        x_internal ^ 0x00063637,
+        y_internal ^ 0x00063637,
+    )
 
 
 def _object_base(
     reader: _Reader,
     owner: str,
-) -> tuple[int, int, int | None, int | None, int | None]:
-    flags, sub_gate, who, o, ptype_index = _subobject(reader, owner)
+) -> tuple[
+    int,
+    int,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+]:
+    flags, sub_gate, who, o, ptype_index, z, x, y = _subobject(reader, owner)
     reader.expect_u8(OBJECT_TAG, f"{owner} Object")
     object_gate = reader.u8()
     if object_gate not in (0, 1):
@@ -378,7 +421,7 @@ def _object_base(
         raise UnitOrderListCensusError(
             f"{owner} inherited gates disagree: {sub_gate}/{object_gate}"
         )
-    return flags, object_gate, who, o, ptype_index
+    return flags, object_gate, who, o, ptype_index, z, x, y
 
 
 def _path(reader: _Reader, owner: str) -> PathImage:
@@ -642,7 +685,7 @@ def _unit(
 ) -> UnitImage:
     offset = reader.p
     label = f"owner {owner} Unit slot {slot}"
-    flags, gate, who, o, ptype_index = _object_base(reader, label)
+    flags, gate, who, o, ptype_index, _, _, _ = _object_base(reader, label)
     reader.expect_u8(UNIT_TAG, f"{label} Unit")
     unit_gate = reader.u8()
     if unit_gate not in (0, 1):
@@ -705,7 +748,7 @@ def _build(reader: _Reader, owner: int, slot: int) -> BuildImage:
     offset = reader.p
     label = f"owner {owner} Build slot {slot}"
     reader.raw(2)  # founder and max_age are emitted before the Wall base
-    _, gate, _, _, _ = _object_base(reader, label)
+    _, gate, who, o, ptype_index, z, x, y = _object_base(reader, label)
     reader.expect_u8(WALL_TAG, f"{label} Wall")
     wall_gate = reader.u8()
     if wall_gate not in (0, 1):
@@ -734,14 +777,103 @@ def _build(reader: _Reader, owner: int, slot: int) -> BuildImage:
             reader.u8()  # LLNode metric
             reader.raw(GATHER_POINT_WALK_BYTES)
         reader.i32()  # BuildData::orig_type
+    checksum_walk = _build_checksum_walk(reader.data, offset, reader.p)
     return BuildImage(
         owner=owner,
         slot=slot,
         offset=offset,
         end=reader.p,
         active=bool(build_gate),
+        who=who,
+        o=o,
+        ptype_index=ptype_index,
+        z=z,
+        x=x,
+        y=y,
+        checksum_walk_bytes=len(checksum_walk),
+        checksum_walk_sha256=hashlib.sha256(checksum_walk).hexdigest(),
+        checksum_walk_hex=checksum_walk.hex(),
         sha256=_sha(reader, offset, reader.p),
     )
+
+
+def _capture_array(reader: _Reader, owner: str, element_bytes: int) -> bytes:
+    offset = reader.p
+    length, _, _, _ = _array_header(reader, owner)
+    reader.raw(length * element_bytes)
+    return bytes(reader.data[offset : reader.p])
+
+
+def _build_checksum_walk(
+    data: bytes | bytearray | memoryview,
+    offset: int,
+    expected_end: int,
+) -> bytes:
+    """Strip save-only walk-test tags from one already-validated Build body."""
+
+    reader = _Reader(data, offset)
+    out = bytearray(reader.raw(2))
+    reader.expect_u8(SUBOBJECT_TAG, "Build checksum SubObject")
+    flags = reader.u8()
+    gate = reader.u8()
+    if gate not in (0, 1):
+        raise UnitOrderListCensusError("Build checksum SubObject gate is not boolean")
+    out.extend((flags, gate))
+    if gate:
+        out.extend(reader.raw(19))
+
+    reader.expect_u8(OBJECT_TAG, "Build checksum Object")
+    object_gate = reader.u8()
+    if object_gate not in (0, 1) or object_gate != gate:
+        raise UnitOrderListCensusError("Build checksum Object gate disagrees")
+    out.append(object_gate)
+    if object_gate:
+        out.extend(reader.raw(34))
+    launching = reader.u8()
+    if launching not in (0, 1):
+        raise UnitOrderListCensusError("Build checksum launching presence is not boolean")
+    out.append(launching)
+    if launching:
+        out.extend(_capture_array(reader, "Build checksum launching", 4))
+
+    reader.expect_u8(WALL_TAG, "Build checksum Wall")
+    wall_gate = reader.u8()
+    if wall_gate not in (0, 1) or wall_gate != gate:
+        raise UnitOrderListCensusError("Build checksum Wall gate disagrees")
+    out.append(wall_gate)
+    if wall_gate:
+        out.extend(reader.raw(WALL_FIXED_BYTES))
+
+    reader.expect_u8(BUILD_TAG, "Build checksum Build")
+    build_gate = reader.u8()
+    if build_gate not in (0, 1) or build_gate != gate:
+        raise UnitOrderListCensusError("Build checksum Build gate disagrees")
+    out.append(build_gate)
+    if build_gate:
+        out.extend(reader.raw(BUILD_FIXED_BYTES))
+        reader.expect_u8(BUILD_QUEUE_TAG, "Build checksum BuildQueue")
+        queue_offset = reader.p
+        queue_size = _bounded_count(reader.i32(), "Build checksum BuildQueue", 65_536)
+        reader.raw(queue_size * QUEUE_ITEM_WALK_BYTES)
+        out.extend(reader.data[queue_offset : reader.p])
+        out.extend(reader.raw(2))
+        out.extend(_capture_array(reader, "Build checksum MiningList", TCOORD_DATA_BYTES))
+        gather_offset = reader.p
+        gather_count = _bounded_count(
+            reader.i32(), "Build checksum GatherPointList", 65_536
+        )
+        for _ in range(gather_count):
+            reader.i32()
+            reader.u8()
+            reader.raw(GATHER_POINT_WALK_BYTES)
+        out.extend(reader.data[gather_offset : reader.p])
+        out.extend(reader.raw(4))
+
+    if reader.p != expected_end:
+        raise UnitOrderListCensusError(
+            f"Build checksum walk ended at {reader.p:#x}, expected {expected_end:#x}"
+        )
+    return bytes(out)
 
 
 def _manifest(rows: object) -> str:
@@ -888,6 +1020,37 @@ def parse_unit_orderlist_census(
         if unit.guys is not None
         for guy in unit.guys.guys
     ]
+    build_manifest = [
+        (
+            build.owner,
+            build.slot,
+            build.offset,
+            build.end,
+            build.active,
+            build.who,
+            build.o,
+            build.ptype_index,
+            build.z,
+            build.x,
+            build.y,
+            build.checksum_walk_bytes,
+            build.checksum_walk_sha256,
+            build.sha256,
+        )
+        for build in builds
+    ]
+    live_build_walks = [
+        bytes.fromhex(build.checksum_walk_hex) for build in builds if build.active
+    ]
+    builds_walk = b"".join(live_build_walks)
+    flat_z_walk = bytearray()
+    encoded_zero_z = (0x0006_3637).to_bytes(4, "little")
+    for walk in live_build_walks:
+        if len(walk) < 11:
+            raise AssertionError("live Build walk is shorter than its SubObject Z field")
+        flattened = bytearray(walk)
+        flattened[7:11] = encoded_zero_z
+        flat_z_walk.extend(flattened)
     return UnitOrderListCensus(
         objects_offset=objects_offset,
         owners=tuple(owners),
@@ -899,6 +1062,10 @@ def parse_unit_orderlist_census(
         order_manifest_sha256=_manifest(order_manifest),
         unit_manifest_sha256=_manifest(unit_manifest),
         guy_manifest_sha256=_manifest(guy_manifest),
+        build_manifest_sha256=_manifest(build_manifest),
+        builds_checksum_walk_bytes=len(builds_walk),
+        builds_checksum=zlib.adler32(builds_walk, 1) & 0xFFFF_FFFF,
+        builds_flat_z_checksum=zlib.adler32(flat_z_walk, 1) & 0xFFFF_FFFF,
     )
 
 

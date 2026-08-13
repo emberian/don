@@ -1,7 +1,7 @@
 # Fresh SVX Unit/OrderList census
 
-Status: **complete bounded Unit census; exclusive parser/evidence tranche; no runtime or
-closure edit**.
+Status: **complete bounded Unit census plus exact live-Build checksum projection; exclusive
+parser/evidence tranche; no save importer or closure edit**.
 
 The fresh retail v16 save has 800 present Unit bodies.  A structure-derived walk reaches
 all 800, consumes the 800 interleaved Build bodies needed to reach later owners, and
@@ -43,10 +43,16 @@ therefore completes the Unit census without claiming to parse Good bodies.
 For every Unit the route is `SubObject -> Object -> Unit -> Stack<PathData> -> OrderList ->
 PtrArray<Guy> -> GuyData`.  Active Build bodies are consumed through `Wall`, `Build`,
 `BuildQueue`, `MiningList`, `Array<TCoordData>`, and `GatherPointList`; inactive inherited
-gates take their exact short branches.  The census is:
+gates take their exact short branches.  Build `z`, `x`, and `y` are decoded by the retail
+XOR transform.  Removing only the already-validated save walk-test tags then reconstructs
+each exact `Build::walk_data` checksum image.  The census is:
 
 - Units: 800 present; 47 active and 753 inactive.
 - Builds: 800 present; 37 active and 763 inactive.
+- Live Build checksum walk: 11,578 bytes; Adler `0x673e8820`.  Replacing only every live
+  Build's logical Z with zero leaves all boundaries intact but changes it to `0x73b77f08`.
+- Live Build Z: 36 of 37 are nonzero, with 36 distinct values.  All seven Village rows
+  (`TypeIndex=414`) have nonzero Z and exact 491-byte checksum walks.
 - Guys: 55 exact 155-byte images.  Active Guys arrays are 41 `(len=1,cap=1)`, four
   `(len=2,cap=2)`, and two `(len=3,cap=3)`; every increment is 1 and flags byte is zero.
 - Path stacks `(capacity,length,increment)`: 32 `(10,0,10)`, four `(20,0,10)`, three
@@ -60,9 +66,23 @@ Exact compact manifests pin every traversed row, boundary, and image hash:
 | 43 order rows | `3bc050ab7e0d49c9529ed879f0828217e664cbb3f778b1eb0c5ac5f4e1ad6dc9` |
 | 800 Unit rows | `b6f265645c006ff3432ca71f7ac852df020ec2804054666f24dc4f8df899d580` |
 | 55 Guy rows | `1bf44c19f2efa2554809023176e50621ad5b1d3643cd18f8d5cbe52832c6a17f` |
+| 800 Build rows, decoded coordinates, and checksum images | `d56668f37bc3c79338e0593070d97f4f2146bda63b6a32242c29eb07c4fe4e99` |
 
 The command's `--json` form emits every Unit, Build, Path, Guy, and order boundary, exact
-image SHA-256, decoded payload field, and exact payload hex.
+image SHA-256, decoded payload field, and exact payload hex.  Build rows additionally emit
+decoded XYZ plus the exact tag-free checksum-walk length, SHA-256, and hex.
+
+The seven observed Villages are:
+
+| owner/slot | decoded Z | decoded X | decoded Y |
+|---:|---:|---:|---:|
+| 0/2000 | 104 | 50016 | 23136 |
+| 1/2000 | 468 | 23136 | 2400 |
+| 1/2007 | 551 | 15456 | 6240 |
+| 2/2000 | 592 | 2400 | 31584 |
+| 2/2007 | 510 | 4704 | 23904 |
+| 3/2000 | 150 | 31584 | 50016 |
+| 3/2008 | 276 | 37728 | 46944 |
 
 ## Retail order grammar
 
@@ -164,16 +184,19 @@ the retail flags byte as the v13 discriminator.
 
 The matched executable SHA-256 is
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
-The test maps and pins full body spans for `PtrArray<Guy>`, `GuyData`, `BuildData`,
-`WallData`, `BuildQueue`, `Array<TCoordData>`, `GatherPointList`, `GatherPoint`, shared
-`TargetOrder`, `GatherOrder`, and `CastOrder`.  These extend the already pinned Objects,
-Unit, Path, OrderList, and Move bodies from the first-witness tranche.
+The test maps and pins full body spans for `TerrainOut::find_tcoord_z`, `PtrArray<Guy>`,
+`GuyData`, `BuildData`, `WallData`, `BuildQueue`, `Array<TCoordData>`, `GatherPointList`,
+`GatherPoint`, shared `TargetOrder`, `GatherOrder`, and `CastOrder`.  These extend the already
+pinned Objects, Unit, Path, OrderList, and Move bodies from the first-witness tranche.
 
 Synthetic coverage includes all four observed payload families with nonzero metrics and
 flags.  Mutations kill Objects/SubObject/Object/Unit/Build tags, both container history
 planes, inherited gates, a path length, order type, Guy presence, truncation, and a decoy
 tag prefix.  The fresh artifact gate pins both file hashes, all counts and owner boundaries,
-the three manifests, and byte-for-byte reconstruction of all 43 payloads.
+all four manifests, both Build checksum projections, and byte-for-byte reconstruction of
+all 43 payloads.  Flipping one bit in the first Village's encoded Z preserves the 11,578
+byte walk and every parse boundary while changing its decoded Z, Build manifest, and
+checksum.
 
 Run the exact gates with:
 
@@ -185,5 +208,6 @@ python3 re/scripts/savegame_unit_orderlist_census.py \
 ```
 
 The next structure boundary, if a broader Objects census is desired, is the first owner-8
-Good body at `0x6039a`.  It is not required to settle the Unit/OrderList census and this
-tranche claims no opcode, replay-host, or save-closure credit.
+Good body at `0x6039a`.  It is not required to settle the Unit/OrderList or bounded Build-Z
+projection.  This tranche does not recover the source height plane and claims no save
+importer, opcode, replay-host, or save-closure credit.

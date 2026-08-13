@@ -26,12 +26,15 @@ use don_sim::systems::tech_cities::{self, CityRules};
 use don_sim::tick::Sim;
 
 use crate::build_init_prefix::{
-    apply_build_init_prefix, BuildInitPrefixError, BuildInitPrefixReceipt, BuildInitPrefixRequest,
+    apply_build_init_prefix, resolve_build_init_prefix_terrain, BuildInitPrefixError,
+    BuildInitPrefixReceipt, BuildInitPrefixRequest, BuildInitPrefixTerrainRequest,
+    SourceBackedBuildInitPrefixError,
 };
 use crate::builds_runtime::{
     build_walk_value, BuildWalkError, BuildWalkFacts, BuildWalkValue, BuildsWalkAuthority,
 };
 use crate::city_build_constructor_runtime::FreshStartingVillageReceipt;
+use crate::terrain_height_runtime::{TerrainHeightAuthority, TerrainTcoordZReceipt};
 
 pub const BUILD_INIT_VA: u32 = 0x0062_9740;
 pub const OBJECT_ADD_TO_WORLD_VA: u32 = 0x0064_d8c0;
@@ -326,6 +329,52 @@ impl fmt::Display for StartingVillageBuildActivationError {
 }
 
 impl std::error::Error for StartingVillageBuildActivationError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceBackedStartingVillageBuildReceipt {
+    pub terrain: TerrainTcoordZReceipt,
+    pub activation: StartingVillageBuildActivationReceipt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceBackedStartingVillageBuildError {
+    TerrainPrefix(SourceBackedBuildInitPrefixError),
+    Activation(StartingVillageBuildActivationError),
+}
+
+impl fmt::Display for SourceBackedStartingVillageBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "source-backed starting Village Build refused: {self:?}")
+    }
+}
+
+impl std::error::Error for SourceBackedStartingVillageBuildError {}
+
+/// Complete the starting-Village Build from a coherent height plane rather than a raw Z.
+///
+/// The Terrain query is read-only. The existing activation transaction stages every Build
+/// and World write, so either failure path preserves the canonical owners and prior walk
+/// authority.
+pub fn complete_starting_village_build_from_terrain(
+    sim: &mut Sim,
+    authority: &mut BuildsWalkAuthority,
+    row: usize,
+    constructor: &FreshStartingVillageReceipt,
+    prefix_request: BuildInitPrefixTerrainRequest,
+    terrain: &TerrainHeightAuthority,
+    facts: StartingVillageBuildSourceFacts,
+) -> Result<SourceBackedStartingVillageBuildReceipt, SourceBackedStartingVillageBuildError> {
+    let (resolved, terrain_receipt) =
+        resolve_build_init_prefix_terrain(prefix_request, &sim.map.world, terrain)
+            .map_err(SourceBackedStartingVillageBuildError::TerrainPrefix)?;
+    let activation =
+        complete_starting_village_build(sim, authority, row, constructor, resolved, facts)
+            .map_err(SourceBackedStartingVillageBuildError::Activation)?;
+    Ok(SourceBackedStartingVillageBuildReceipt {
+        terrain: terrain_receipt,
+        activation,
+    })
+}
 
 /// Complete and authorize one already-reserved, already-City-linked starting Village.
 ///

@@ -1,3 +1,7 @@
+pub mod terrain_height_runtime {
+    pub use don_replay::terrain_height_runtime::*;
+}
+
 #[path = "../src/build_init_prefix.rs"]
 mod subject;
 

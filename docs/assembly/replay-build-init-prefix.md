@@ -40,9 +40,15 @@ BuildData constructor state.
 
 ## Exact API and honest stop
 
-`apply_build_init_prefix(BuildData&, BuildInitPrefixRequest)` preflights the playable owner
-and installed type-table range, then applies only writes that have occurred at the chosen
-boundary. It returns `BuildInitPrefixReceipt` with:
+`apply_build_init_prefix(BuildData&, BuildInitPrefixRequest)` remains the explicit-receipt
+leaf used by isolated tests and externally measured call chains.  The replay-exact entrypoint
+is now `apply_build_init_prefix_from_terrain`: its request has no Z field, it resolves the
+signed Coord-to-TCoord conversion and exact two-vertex height query from a coherent
+`TerrainHeightAuthority`, and only then applies the same scalar writes.  See
+`docs/assembly/replay-terrain-height-runtime.md`.
+
+Both paths preflight the playable owner and installed type-table range, then apply only writes
+that have occurred at the chosen boundary. They return `BuildInitPrefixReceipt` with:
 
 - lifecycle stage `BeforeObjectAddToWorld`;
 - object owner/id, current TypeIndex, snapped and encoded X/Y, terrain and encoded Z;
@@ -55,8 +61,9 @@ including `construct_hits`, `ever_seen`, `ever_seen_completed`, `stance`, and bo
 infiltration bytes. This matters because a zero-filled Rust default is not evidence for a
 C++ field that the constructor has not initialized yet.
 
-Both `init_complete()` and `activation_complete()` are false. To advance the receipt, a
-future owner must recover `Object::add_to_world`, the remainder of `Wall::init`, the
-remainder of `Build::init`, and then `Build::activate(0,0,0)`. Until those barriers are
-owned, the starting Build is not a complete 131-byte Builds-walk producer and this module
-makes no replay checksum claim.
+Both `init_complete()` and `activation_complete()` are false. The later
+`complete_starting_village_build_from_terrain` owner now consumes the source-backed prefix,
+performs `Object::add_to_world`, the remaining Wall/Build initializer and activation, and
+installs the exact 491-byte Village walk authority atomically.  The target replay still lacks
+the completed-worldgen height plane and remaining setup/frame-zero authorities, so this
+module makes no first-checkpoint agreement claim.
