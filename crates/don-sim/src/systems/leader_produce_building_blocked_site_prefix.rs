@@ -7,11 +7,15 @@
 //! capital scan because the constraint is negative, and begins the footprint walk in x-outer /
 //! y-inner order. This tranche also follows the reached ordinary-land
 //! `BuildTypeData::blocked_tcoord` path through the exact `get_good` switch and TCoord land
-//! classification. It stops before `LandData::get_amount` and mutates nothing.
+//! classification. The source-backed continuation executes the complete read-only
+//! `LandData::get_amount`, repeats the admitted ordinary-land path over the full footprint,
+//! and stops before `BuildTypeData::blocked_location`. Nothing in this module mutates Sim.
 
 use crate::tick::{Sim, NUM_LEADERS};
 
 use super::bhs_type_table::{TypeBuiltinState, TypeDomain};
+use super::gather_terrain::{GatherTerrainMaterialization, GatherTerrainMaterializationError};
+use super::gathering::LandGatherData;
 use super::leader_produce_building_candidate_prefix::{
     LeaderProduceBuildingBlockedSiteBoundary, BUILD_TYPE_BLOCKED_SITE_VA,
     LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING,
@@ -41,6 +45,10 @@ pub const BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES: u32 =
     BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA - BUILD_TYPE_BLOCKED_TCOORD_VA;
 pub const BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING: u32 =
     BUILD_TYPE_BLOCKED_TCOORD_END_VA - BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA;
+pub const BUILD_TYPE_BLOCKED_LOCATION_VA: u32 = 0x0063_75b0;
+pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA: u32 = 0x0063_6d18;
+pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING: u32 =
+    BUILD_TYPE_BLOCKED_SITE_END_VA - BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA;
 pub const CITY_TYPE: usize = 414;
 pub const OIL_WELL_TYPE: usize = 421;
 pub const OIL_PLATFORM_TYPE: usize = 422;
@@ -135,6 +143,9 @@ pub struct LandDataGetAmountBoundary {
     pub tile: [i32; 2],
     pub city_constraint: i32,
     pub was_seen: bool,
+    /// Exact `EBX` truth value retained by `blocked_tcoord`: the result of
+    /// `WorldData::was_seen`, OR the immediate-game semaphore override.
+    pub seen_or_immediate: bool,
     pub world_region: i16,
     pub terrain_mask: u16,
     pub build_flags: u32,
@@ -145,6 +156,45 @@ pub struct LandDataGetAmountBoundary {
     /// The second `LandData::get_amount` argument. Retail passes the TData linear index even
     /// though the recovered retail callee does not read it.
     pub tile_linear_index: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LandDataGetAmountReceipt {
+    pub input: LandDataGetAmountBoundary,
+    pub land_name: String,
+    pub land_gather: LandGatherData,
+    pub returned: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildTypeBlockedTcoordLandReceipt {
+    pub prefix: BuildTypeBlockedTcoordPrefixReceipt,
+    pub amount: LandDataGetAmountReceipt,
+    /// Exact raw child return consumed by `blocked_site` after the complete resource arm.
+    pub raw_returned_to_blocked_site: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeBlockedLocationBoundary {
+    pub va: u32,
+    pub callee_va: u32,
+    pub blocked_site_bytes_remaining: u32,
+    pub owner: u8,
+    pub type_index: i32,
+    pub placement_coord: [i32; 2],
+    pub footprint_corner: [i32; 2],
+    pub city_constraint: i32,
+    pub blocked_detail: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingBlockedSiteFootprintReceipt {
+    pub entry: LeaderProduceBuildingBlockedSitePrefixReceipt,
+    /// Retail order is x outer / y inner.
+    pub tiles: Vec<BuildTypeBlockedTcoordLandReceipt>,
+    pub blocked_detail: i32,
+    pub locally_seen_tiles: i32,
+    pub continuation: BuildTypeBlockedLocationBoundary,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +232,7 @@ impl BuildTypeBlockedTcoordPrefixReceipt {
                             && next.tile == self.input.tile
                             && next.owner == self.input.owner
                             && next.city_constraint == self.input.city_constraint
+                            && (!next.was_seen || next.seen_or_immediate)
                             && next.good == build_type_good(next.type_index)
                     })
             }
@@ -209,10 +260,6 @@ pub enum BuildTypeBlockedTcoordPrefixError {
     UnsupportedCityConstraint {
         city_constraint: i32,
     },
-    UnownedSeenTerritory {
-        territory_owner: i8,
-        region: i16,
-    },
     UnsupportedDockProfile,
     UnsupportedNonLandDomain {
         domain: i32,
@@ -226,6 +273,19 @@ pub enum BuildTypeBlockedTcoordPrefixError {
         terrain_mask: u16,
         build_flags: u32,
     },
+    UnsupportedOwnedTerritorySeenShortcut {
+        territory_owner: i8,
+        region: i16,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingBlockedSiteFootprintError {
+    InvalidEntryReceipt,
+    Prefix(BuildTypeBlockedTcoordPrefixError),
+    Land(GatherTerrainMaterializationError),
+    UnsupportedChildWithoutLandContinuation { tile: [i32; 2], raw: i32 },
+    UnsupportedNonZeroChild { tile: [i32; 2], raw: i32 },
 }
 
 #[inline]
@@ -375,8 +435,8 @@ pub fn apply_sim_leader_produce_building_blocked_site_prefix(
 }
 
 #[inline]
-fn raw_for_seen(was_seen: bool, seen_code: i32) -> i32 {
-    if was_seen {
+fn raw_for_seen_or_immediate(seen_or_immediate: bool, seen_code: i32) -> i32 {
+    if seen_or_immediate {
         seen_code
     } else {
         0x24
@@ -517,10 +577,16 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     {
         true
     } else if world_cell.who >= 0 {
-        return Err(BuildTypeBlockedTcoordPrefixError::UnownedSeenTerritory {
-            territory_owner: world_cell.who,
-            region: world_cell.region,
-        });
+        // `WorldData::was_seen` does not equate owned territory with explored territory. It
+        // calls `LeaderData::is_ally`, then consults two region-indexed Leader arrays before
+        // falling through to `seen2 & player_mask`. Those arrays are not yet projected by Sim,
+        // so this reached shortcut remains fail-closed instead of being reconstructed as fog.
+        return Err(
+            BuildTypeBlockedTcoordPrefixError::UnsupportedOwnedTerritorySeenShortcut {
+                territory_owner: world_cell.who,
+                region: world_cell.region,
+            },
+        );
     } else {
         world.was_seen(tx >> 1, ty >> 1, fog_leader.player_mask)
     };
@@ -528,7 +594,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     let seen_for_verdict = was_seen || immediate;
     if world_cell.region < 0 {
         return Ok(returned(
-            raw_for_seen(seen_for_verdict, 4),
+            raw_for_seen_or_immediate(seen_for_verdict, 4),
             Some(was_seen),
             Some(world_cell.region),
             None,
@@ -537,7 +603,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     let terrain_mask = world.tmask(tx, ty);
     if terrain_mask & tflag::BLOCKER_MASK == tflag::BLOCKER_BUILDING {
         return Ok(returned(
-            raw_for_seen(seen_for_verdict, 1),
+            raw_for_seen_or_immediate(seen_for_verdict, 1),
             Some(was_seen),
             Some(world_cell.region),
             Some(terrain_mask),
@@ -551,7 +617,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     }
     if terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER {
         return Ok(returned(
-            raw_for_seen(seen_for_verdict, 0x0e),
+            raw_for_seen_or_immediate(seen_for_verdict, 0x0e),
             Some(was_seen),
             Some(world_cell.region),
             Some(terrain_mask),
@@ -573,7 +639,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     }
     if target.build_flags & 0x10 == 0 && terrain_mask & tflag::CITY == 0 {
         return Ok(returned(
-            raw_for_seen(seen_for_verdict, 0x1f),
+            raw_for_seen_or_immediate(seen_for_verdict, 0x1f),
             Some(was_seen),
             Some(world_cell.region),
             Some(terrain_mask),
@@ -584,7 +650,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     }
     if target.build_flags & 0x400 != 0 {
         return Ok(returned(
-            raw_for_seen(seen_for_verdict, 0x2b),
+            raw_for_seen_or_immediate(seen_for_verdict, 0x2b),
             Some(was_seen),
             Some(world_cell.region),
             Some(terrain_mask),
@@ -619,6 +685,7 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
         tile: input.tile,
         city_constraint: input.city_constraint,
         was_seen,
+        seen_or_immediate: seen_for_verdict,
         world_region: world_cell.region,
         terrain_mask,
         build_flags: target.build_flags,
@@ -637,6 +704,120 @@ pub fn apply_sim_build_type_blocked_tcoord_land_prefix(
     };
     debug_assert!(receipt.validates());
     Ok(receipt)
+}
+
+/// Complete the 45-byte `LandData::get_amount` call reached by the ordinary-land path.
+pub fn apply_sim_land_data_get_amount(
+    sim: &Sim,
+    terrain: &GatherTerrainMaterialization,
+    input: LandDataGetAmountBoundary,
+) -> Result<LandDataGetAmountReceipt, GatherTerrainMaterializationError> {
+    let index = usize::try_from(input.land_index).map_err(|_| {
+        GatherTerrainMaterializationError::InvalidLandIndex {
+            index: input.land_index,
+        }
+    })?;
+    let land =
+        terrain
+            .lands()
+            .get(index)
+            .ok_or(GatherTerrainMaterializationError::InvalidLandIndex {
+                index: input.land_index,
+            })?;
+    let returned = terrain.land_amount(
+        &sim.map.world,
+        input.land_index,
+        input.good,
+        input.tile_linear_index,
+    )?;
+    Ok(LandDataGetAmountReceipt {
+        input,
+        land_name: land.name.clone(),
+        land_gather: land.gather,
+        returned,
+    })
+}
+
+/// Execute the installed ordinary-land cohort across every footprint tile and stop at the
+/// first still-unowned parent call, `BuildTypeData::blocked_location`. Nonzero child results
+/// deliberately remain fail-closed because retail's precedence filter is a separate cone.
+pub fn apply_sim_leader_produce_building_blocked_site_land_footprint(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    terrain: &GatherTerrainMaterialization,
+    entry: LeaderProduceBuildingBlockedSitePrefixReceipt,
+) -> Result<
+    LeaderProduceBuildingBlockedSiteFootprintReceipt,
+    LeaderProduceBuildingBlockedSiteFootprintError,
+> {
+    if !entry.validates() || entry.native_returned.is_some() {
+        return Err(LeaderProduceBuildingBlockedSiteFootprintError::InvalidEntryReceipt);
+    }
+    let [corner_x, corner_y] = entry.footprint_corner;
+    let end_x = corner_x
+        .checked_add(entry.target_footprint.x_size)
+        .ok_or(LeaderProduceBuildingBlockedSiteFootprintError::InvalidEntryReceipt)?;
+    let end_y = corner_y
+        .checked_add(entry.target_footprint.y_size)
+        .ok_or(LeaderProduceBuildingBlockedSiteFootprintError::InvalidEntryReceipt)?;
+    let mut tiles = Vec::new();
+    for tx in corner_x..end_x {
+        for ty in corner_y..end_y {
+            let mut boundary = entry.continuation;
+            boundary.tile = [tx, ty];
+            let prefix =
+                apply_sim_build_type_blocked_tcoord_land_prefix(sim, production, types, boundary)
+                    .map_err(LeaderProduceBuildingBlockedSiteFootprintError::Prefix)?;
+            let Some(amount_boundary) = prefix.continuation else {
+                return Err(
+                    LeaderProduceBuildingBlockedSiteFootprintError::UnsupportedChildWithoutLandContinuation {
+                        tile: [tx, ty],
+                        raw: prefix.raw_returned_to_blocked_site.unwrap_or_default(),
+                    },
+                );
+            };
+            let amount = apply_sim_land_data_get_amount(sim, terrain, amount_boundary)
+                .map_err(LeaderProduceBuildingBlockedSiteFootprintError::Land)?;
+            let raw = if amount.returned != 0 {
+                0
+            } else {
+                raw_for_seen_or_immediate(amount.input.seen_or_immediate, 9)
+            };
+            if raw != 0 {
+                return Err(
+                    LeaderProduceBuildingBlockedSiteFootprintError::UnsupportedNonZeroChild {
+                        tile: [tx, ty],
+                        raw,
+                    },
+                );
+            }
+            tiles.push(BuildTypeBlockedTcoordLandReceipt {
+                prefix,
+                amount,
+                raw_returned_to_blocked_site: raw,
+            });
+        }
+    }
+    let continuation = BuildTypeBlockedLocationBoundary {
+        va: BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA,
+        callee_va: BUILD_TYPE_BLOCKED_LOCATION_VA,
+        blocked_site_bytes_remaining: BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+        owner: entry.input.owner,
+        type_index: entry.input.type_index,
+        placement_coord: entry.input.placement_coord,
+        footprint_corner: entry.footprint_corner,
+        city_constraint: entry.input.city_constraint,
+        blocked_detail: 0,
+    };
+    Ok(LeaderProduceBuildingBlockedSiteFootprintReceipt {
+        entry,
+        tiles,
+        blocked_detail: 0,
+        // The reached caller's city constraint is -1, so retail skips its locally-seen count.
+        locally_seen_tiles: 0,
+        continuation,
+    })
 }
 
 #[cfg(test)]

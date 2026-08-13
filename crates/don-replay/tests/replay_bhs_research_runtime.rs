@@ -30,15 +30,23 @@ use don_sim::systems::bhs_type_factory::{
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
+use don_sim::systems::gather_terrain::{
+    GatherTerrainMaterialization, GatherTerrainSourceStamp, GatherTerrainWorldIdentity,
+    SUPPORTED_RULES_XML_SHA256,
+};
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_build_type_blocked_tcoord_land_prefix,
-    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixStatus,
-    LeaderProduceBuildingBlockedSitePrefixError, BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA,
-    BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING, BUILD_TYPE_BLOCKED_SITE_PREFIX_BYTES,
-    BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING, BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA,
-    BUILD_TYPE_BLOCKED_TCOORD_GET_GOOD_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_GET_LAND_CALL_VA,
-    BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES, BUILD_TYPE_BLOCKED_TCOORD_VA,
-    BUILD_TYPE_GET_GOOD_VA, LAND_DATA_GET_AMOUNT_VA, WORLD_DATA_GET_LAND_TCOORD_VA,
+    apply_sim_leader_produce_building_blocked_site_land_footprint,
+    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixError,
+    BuildTypeBlockedTcoordPrefixStatus, LeaderProduceBuildingBlockedSitePrefixError,
+    BUILD_TYPE_BLOCKED_LOCATION_VA, BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+    BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA,
+    BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA, BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING,
+    BUILD_TYPE_BLOCKED_SITE_PREFIX_BYTES, BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING,
+    BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_GET_GOOD_CALL_VA,
+    BUILD_TYPE_BLOCKED_TCOORD_GET_LAND_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES,
+    BUILD_TYPE_BLOCKED_TCOORD_VA, BUILD_TYPE_GET_GOOD_VA, GAME_SEMAPHORE_IMMEDIATE_BIT,
+    LAND_DATA_GET_AMOUNT_VA, WORLD_DATA_GET_LAND_TCOORD_VA,
 };
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     apply_sim_leader_produce_building_candidate_prefix, CandidatePrefixRejection,
@@ -321,6 +329,24 @@ fn game_seconds(seconds: i32) -> ExternalGameSeconds {
     ExternalGameSeconds::admit(Some(seconds), Some(seconds)).unwrap()
 }
 
+fn installed_gather_terrain(sim: &Sim) -> GatherTerrainMaterialization {
+    let rules_path = repo_root().join("ron-data/rules.xml");
+    let rules_xml = std::fs::read(&rules_path)
+        .unwrap_or_else(|error| panic!("read installed {}: {error}", rules_path.display()));
+    GatherTerrainMaterialization::from_supported_sources(
+        &rules_xml,
+        GatherTerrainSourceStamp {
+            installed_rules_sha256: SUPPORTED_RULES_XML_SHA256,
+            world_seed: sim.map.world.seed,
+            coherent_generation: true,
+        },
+        GatherTerrainWorldIdentity::from_world(&sim.map.world),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("materialize exact installed LandData rows for the replay world")
+}
+
 #[test]
 fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     let (types, _) = canonical_type_owners(OWNER);
@@ -564,6 +590,8 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     );
     assert_eq!(BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING, 0x67);
     assert_eq!(get_amount.tile, [8, 8]);
+    assert!(!get_amount.was_seen);
+    assert!(!get_amount.seen_or_immediate);
     assert_eq!(get_amount.build_flags, 0x1000_0049);
     assert_eq!(get_amount.good, 0);
     assert_eq!(get_amount.land_index, 0);
@@ -590,6 +618,36 @@ fn place_building_prefix_is_receipt_bearing_read_only_and_save_stable() {
     );
     assert_eq!(occupied.raw_returned_to_blocked_site, Some(0x24));
     assert!(occupied.continuation.is_none());
+
+    let mut immediate = production_owners(OWNER).0;
+    immediate.vic_match.semaphore |= 1 << GAME_SEMAPHORE_IMMEDIATE_BIT;
+    let immediate_prefix = apply_sim_build_type_blocked_tcoord_land_prefix(
+        &immediate,
+        &city_production,
+        &types,
+        blocked_tcoord,
+    )
+    .unwrap();
+    let immediate_amount = immediate_prefix.continuation.unwrap();
+    assert!(!immediate_amount.was_seen);
+    assert!(immediate_amount.seen_or_immediate);
+
+    let mut owned_territory = production_owners(OWNER).0;
+    owned_territory.map.world.wdata_mut(2, 2).who = OWNER as i8;
+    assert_eq!(
+        apply_sim_build_type_blocked_tcoord_land_prefix(
+            &owned_territory,
+            &city_production,
+            &types,
+            blocked_tcoord,
+        ),
+        Err(
+            BuildTypeBlockedTcoordPrefixError::UnsupportedOwnedTerritorySeenShortcut {
+                territory_owner: OWNER as i8,
+                region: 64,
+            }
+        )
+    );
 
     let mut unsupported_city = blocked_site;
     unsupported_city.city_constraint = 0;
@@ -1437,6 +1495,68 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
         installed_blocked_tcoord.continuation.unwrap().callee_va,
         LAND_DATA_GET_AMOUNT_VA
     );
+
+    let terrain = installed_gather_terrain(&sim);
+    let installed_footprint = apply_sim_leader_produce_building_blocked_site_land_footprint(
+        &sim,
+        &production,
+        &types,
+        &terrain,
+        installed_blocked_prefix,
+    )
+    .expect("execute all sixteen installed Farm LandData::get_amount calls");
+    assert_eq!(installed_footprint.tiles.len(), 16);
+    assert_eq!(
+        installed_footprint
+            .tiles
+            .iter()
+            .map(|tile| tile.prefix.input.tile)
+            .collect::<Vec<_>>(),
+        (8..12)
+            .flat_map(|tx| (8..12).map(move |ty| [tx, ty]))
+            .collect::<Vec<_>>(),
+        "retail walks the 4x4 footprint in x-outer/y-inner order"
+    );
+    assert!(installed_footprint.tiles.iter().all(|tile| {
+        tile.amount.input.good == 0
+            && tile.amount.input.land_index == 0
+            && tile.amount.land_name == "Land"
+            && tile.amount.returned == 1
+            && tile.raw_returned_to_blocked_site == 0
+    }));
+    assert_eq!(installed_footprint.blocked_detail, 0);
+    assert_eq!(installed_footprint.locally_seen_tiles, 0);
+    assert_eq!(
+        installed_footprint.continuation.va,
+        BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+    );
+    assert_eq!(
+        installed_footprint.continuation.callee_va,
+        BUILD_TYPE_BLOCKED_LOCATION_VA
+    );
+    assert_eq!(
+        installed_footprint
+            .continuation
+            .blocked_site_bytes_remaining,
+        BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING
+    );
+    assert_eq!(
+        BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+        0x5f
+    );
+    assert_eq!(installed_footprint.continuation.owner, content_owner as u8);
+    assert_eq!(installed_footprint.continuation.type_index, 417);
+    assert_eq!(
+        installed_footprint.continuation.placement_coord,
+        [1920, 1920]
+    );
+    assert_eq!(installed_footprint.continuation.footprint_corner, [8, 8]);
+    assert_eq!(installed_footprint.continuation.city_constraint, -1);
+    assert_eq!(installed_footprint.continuation.blocked_detail, 0);
+    assert_eq!(sim.groups.list, groups_before.list);
+    assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
+    assert_eq!(sim.builds[row].image(), city_build_before);
+    assert_eq!(production.leaders[content_owner].resources, [100; 6]);
 
     let error = run_production_research_call(
         &mut script_runtime,

@@ -190,6 +190,9 @@ pub enum GatherTerrainMaterializationError {
         expected: i32,
         actual: i32,
     },
+    InvalidLandIndex {
+        index: i32,
+    },
 }
 
 /// Installed LandData plus generated terrain-object arrays in their retail index order.
@@ -304,6 +307,30 @@ impl GatherTerrainMaterialization {
 
     pub fn cliffs(&self) -> &[Option<MaterializedCliffObject>] {
         &self.cliffs
+    }
+
+    /// Execute the complete read-only `LandData::get_amount(int good, int tindex)` body at
+    /// `0x0067E6D0`. Retail linearly scans `make[4]`, returns the paired `num_make` value for
+    /// the first match, and otherwise returns zero. The second argument is deliberately
+    /// retained by callers for receipt provenance but is not read by the 45-byte callee.
+    pub fn land_amount(
+        &self,
+        world: &World,
+        land_index: i32,
+        good: i32,
+        _tile_linear_index: i32,
+    ) -> Result<i32, GatherTerrainMaterializationError> {
+        self.validate_world(world)?;
+        let index = usize::try_from(land_index)
+            .ok()
+            .filter(|&index| index < self.lands.len())
+            .ok_or(GatherTerrainMaterializationError::InvalidLandIndex { index: land_index })?;
+        Ok(self.lands[index]
+            .gather
+            .slots
+            .iter()
+            .find(|slot| slot.make == good)
+            .map_or(0, |slot| slot.num_make))
     }
 
     fn validate_world(&self, world: &World) -> Result<(), GatherTerrainMaterializationError> {
@@ -925,6 +952,30 @@ mod tests {
         assert_eq!(
             materialization.lands()[8].gather.slots[0].make,
             economy::RES_METAL as i32
+        );
+    }
+
+    #[test]
+    fn land_get_amount_scans_make_slots_in_order_and_ignores_tile_index() {
+        let world = test_world();
+        let materialization = materialization(&world, Vec::new(), Vec::new());
+
+        assert_eq!(
+            materialization
+                .land_amount(&world, 0, economy::RES_KNOWLEDGE as i32, 0)
+                .unwrap(),
+            11
+        );
+        assert_eq!(
+            materialization
+                .land_amount(&world, 0, economy::RES_FOOD as i32, i32::MAX)
+                .unwrap(),
+            12
+        );
+        assert_eq!(materialization.land_amount(&world, 0, 99, -1).unwrap(), 0);
+        assert_eq!(
+            materialization.land_amount(&world, 9, 0, 0),
+            Err(GatherTerrainMaterializationError::InvalidLandIndex { index: 9 })
         );
     }
 

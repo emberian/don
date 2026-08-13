@@ -84,17 +84,28 @@ walk. The first tile reaches `BuildTypeData::blocked_tcoord` at `0x00636DB0` fro
 `0x00636BCC`.
 
 The ordinary-land child path is also recovered through `0x00637545` (1,941 bytes of the
-2,044-byte `blocked_tcoord`). It reads canonical tile bounds, `WData::region`, the exact explored
-fog plane and player mask, `Game::semaphore` bit 11, `TData` blocker/surface/City bits, the
-canonical Dock/Oil/City/Fort Type relations, `ObjectTypeData::domain`, and live `build_flags`.
+2,044-byte `blocked_tcoord`). The call boundary preserves argument three as the owner and
+argument four as the City/build constraint; neither is a fog surrogate. The child reads
+canonical tile bounds, `WData::region`, `Game::semaphore` bit 11, `TData` blocker/surface/City
+bits, the canonical Dock/Oil/City/Fort Type relations, `ObjectTypeData::domain`, and live
+`build_flags`.
+It calls `WorldData::was_seen` for that owner, and the retail `EBX` local then carries only
+`was_seen || immediate-semaphore`. A nonnegative `WData::who` enters an allied-territory shortcut
+which also reads two region-indexed Leader arrays that Sim does not project; that path therefore
+fails closed instead of manufacturing a seen/fog result from territory ownership.
 Deterministic off-map, blocker, water, missing-City, fort-only, and reserved-terrain arms retain
 their raw retail child verdict. Branches needing the unmounted placed-Build lookup, City/Fort
 territory graph, Oil special case, or water transport policy fail closed. The shipped Farm's
 land/City tile passes those gates, executes the exact six-case `BuildTypeData::get_good` switch at
 `0x0063BD50`, and calls canonical `WorldData::get_land(TCoord, TCoord, 1)` at `0x006B4C70`.
-It first reaches the still-unowned `LandData::get_amount` resource query at `0x0067E6D0` from
-`0x00637545`. That resource check,
-the remaining 427 bytes of `blocked_site` aggregation, and `blocked_location` remain unclaimed.
+The 45-byte `LandData::get_amount` resource query at `0x0067E6D0` linearly scans `make[4]`,
+returns the paired `num_make[4]` value for the first matching good, and otherwise returns zero;
+its tile-index argument is not read. The source-backed continuation executes that exact body for
+all sixteen installed Farm tiles in x-outer/y-inner order. Each canonical Land row returns one
+Food, so every child returns raw zero, the parent detail word stays zero, and the negative City
+constraint keeps the locally-unseen count at zero. The next honest boundary is the
+`BuildTypeData::blocked_location` call at `0x00636D18` (callee `0x006375B0`) with 95 bytes of
+`blocked_site` remaining. `blocked_location` and the final parent return filter remain unclaimed.
 
 ## Canonical prefixes and receipts
 
@@ -150,21 +161,28 @@ city_constraint, detail }`. It returns no scalar and performs no map, fog, colli
 or object mutation. Nonnegative City constraints are explicitly refused until their retail
 Leader/City expiry scan has a canonical owner.
 
-The first-tile ordinary-land receipt either carries the exact raw `blocked_tcoord` verdict back
+An ordinary-land receipt either carries the exact raw `blocked_tcoord` verdict back
 to its still-unmounted parent aggregator or continues with
-`{ va: 0x00637545, callee: 0x0067E6D0, blocked_tcoord_bytes_remaining: 103, tile, seen,
-region, terrain_mask, build_flags, good, land_index, tile_linear_index }`. A raw child verdict is deliberately not exposed as builtin
-520's result: `blocked_site` still owns footprint-wide precedence and the later
-`blocked_location` merge.
+`{ va: 0x00637545, callee: 0x0067E6D0, blocked_tcoord_bytes_remaining: 103, tile, owner,
+city_constraint, was_seen, seen_or_immediate, region, terrain_mask, build_flags, good, land_index,
+tile_linear_index }`. A raw child verdict is deliberately not exposed as builtin 520's result:
+`blocked_site` still owns footprint-wide precedence and the later `blocked_location` merge.
+
+The source-backed footprint receipt retains every `LandData::get_amount` input/output and raw
+child return, requires the admitted all-zero child cohort, and then exposes only the typed
+`blocked_location` call boundary. Any nonzero child remains fail-closed until the parent's exact
+precedence filter is owned. The routine is read-only and cannot manufacture placement success.
 
 The replay host records terminal receipts from the earlier gates and all five native-prefix
 receipts on admitted execution. A fully rejected ring returns scenario zero from the mounted
-builtin without mutation. Reaching `LandData::get_amount` (or returning a child verdict to the unmounted
-`blocked_site` aggregator) raises the existing unimplemented host boundary, so `ScriptRuntime`
-rolls back Program/ref/timers, BHS cursor, research queues,
-resources, Cities, Groups, Builds, and all Leader mirrors. This preserves builtin 520 as the
-externally visible stop until the virtual site check and placement mutation tail are one atomic
-transaction.
+builtin without mutation. Reaching `LandData::get_amount` (or returning a child verdict to the
+unmounted `blocked_site` aggregator) raises the existing unimplemented host boundary, so
+`ScriptRuntime` rolls back Program/ref/timers, BHS cursor, research queues, resources, Cities,
+Groups, Builds, and all Leader mirrors. This preserves builtin 520 as the externally visible stop
+until the virtual site check and placement mutation tail are one atomic transaction. The
+installed replay gate separately executes the source-backed sixteen-tile continuation through
+`LandData::get_amount` and proves the next stop is `blocked_location`; it does not turn that
+read-only evidence into builtin 520's scalar result.
 
 ## Installed-content evidence
 
@@ -177,11 +195,12 @@ to the first retail circle candidate. Existing canonical map predicates accept W
 with space grade four; the exact center is `(1920, 1920)` Coord units. The mounted `blocked_site`
 entry converts that to TCoord `(10, 10)`, derives Farm's top-left footprint corner `(8, 8)`, and
 the ordinary-land child observes region 64 and unexplored terrain mask `CITY`, resolves Farm to
-Food good zero and canonical land index zero, then stops before `LandData::get_amount`. The test
-still stops at builtin 520 and rolls back,
-proving that no false placement result leaks past the native boundary. A separate mounted test
-marks the bounded candidate ring with the exact `WData 0x4000` bit and proves the retail terminal
-zero return without Build, Group, or resource mutation.
+Food good zero and canonical land index zero. Installed `rules.xml` supplies the exact LandData
+row; all sixteen 4x4 tiles return amount one and raw child zero before the typed
+`blocked_location` stop. The test still stops at builtin 520 and rolls back, proving that no
+false placement result leaks past the native boundary. A separate mounted test marks the bounded
+candidate ring with the exact `WData 0x4000` bit and proves the retail terminal zero return
+without Build, Group, or resource mutation.
 
 The focused gate is:
 
