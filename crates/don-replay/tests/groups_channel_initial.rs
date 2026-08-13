@@ -20,7 +20,8 @@ use don_replay::checksum::Channel;
 use don_replay::groups_channel::{
     InitialGroupsChannel, CORPUS_INITIAL_GROUPS_CHANNEL, GROUP_SLOTS, INITIAL_WALKED_BYTES,
 };
-use don_replay::harness::{self, Phase, WorldSim};
+use don_replay::groups_sim_channel::sim_groups_checksum;
+use don_replay::harness::{self, Phase, Simulation, WorldSim};
 use don_replay::replay::{corpus, Replay};
 use std::path::{Path, PathBuf};
 
@@ -144,9 +145,9 @@ fn the_derived_value_occurs_in_the_corpus_and_the_corpus_is_not_unanimous() {
 /// walks 36,896 bytes and none of the agreement is empty-state; and survival is exactly the
 /// recordings whose first checksummed turn carries the derived value.
 ///
-/// The producer is deliberately frozen at `Game::init` — nothing in `don-sim` drives
-/// `Groups::push_group` `0x0070f9e0` or any `Group::action_*` — so this reports the first
-/// divergence rather than demanding there is none.
+/// The producer is the canonical live `Sim.groups` pool. The replay setup still cannot
+/// supply the post-worldgen Unit authority needed by the first selected-member package,
+/// so this reports that next measured divergence rather than inventing those members.
 #[test]
 fn the_harness_installs_channel_five_and_never_agrees_by_walking_nothing() {
     let reps = checksummed_replays();
@@ -161,7 +162,12 @@ fn the_harness_installs_channel_five_and_never_agrees_by_walking_nothing() {
         let mut sim = WorldSim::from_replay(rep);
         assert_eq!(
             sim.initial_groups.checksum, CORPUS_INITIAL_GROUPS_CHANNEL,
-            "the harness must install the derived value, not a recorded one"
+            "the diagnostic initializer must remain independently derived"
+        );
+        assert_eq!(
+            sim_groups_checksum(sim.groups()).unwrap().checksum,
+            CORPUS_INITIAL_GROUPS_CHANNEL,
+            "the live Sim owner must begin at the derived value, not a recorded one"
         );
         let run = harness::run(rep, &mut sim, Phase::BeforeCommands, 0);
         let ch = run.channels[g];
@@ -232,6 +238,34 @@ fn the_harness_installs_channel_five_and_never_agrees_by_walking_nothing() {
         survived_any,
         "no scanned recording exercised the agreeing branch"
     );
+}
+
+#[test]
+fn the_harness_reprojects_live_sim_groups_and_fails_closed_on_a_bad_pool() {
+    let mut sim = WorldSim::new();
+    sim.step_turn(0);
+    let initial = sim.check_all().0.get(Channel::Groups);
+    assert_eq!(initial, CORPUS_INITIAL_GROUPS_CHANNEL);
+
+    sim.groups_mut().list[0].stamp = 0x1234_5678;
+    sim.groups_mut().last_group[7] = 509;
+    let expected = sim_groups_checksum(sim.groups()).unwrap();
+    sim.step_turn(0);
+    let (channels, evidence) = sim.check_all_with_evidence();
+    let group_evidence = evidence[Channel::Groups as usize];
+    assert_eq!(channels.get(Channel::Groups), expected.checksum);
+    assert_ne!(channels.get(Channel::Groups), initial);
+    assert!(group_evidence.installed);
+    assert!(group_evidence.walk_complete);
+    assert!(group_evidence.exact_producer);
+    assert_eq!(group_evidence.bytes_walked, expected.bytes_walked);
+    assert_eq!(group_evidence.unsourced_walked, 0);
+
+    sim.groups_mut().list.pop();
+    sim.step_turn(0);
+    assert!(sim.groups_channel_error.is_some());
+    let (_, evidence) = sim.check_all_with_evidence();
+    assert!(!evidence[Channel::Groups as usize].installed);
 }
 
 /// The comparator bites on this channel: a state one slot away from the derived one must

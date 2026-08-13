@@ -2154,7 +2154,7 @@
         "name": "groups",
         "walker": "CheckSums::check_groups",
         "element_class": "Group",
-        "producer": "groups_init_frozen",
+        "producer": "sim_groups_live",
         "compares": 222938,
         "matches": 140,
         "nontrivial_compares": 222938,

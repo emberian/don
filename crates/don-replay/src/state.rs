@@ -11,10 +11,11 @@
 //! channels walk — builds, walls, ammo, deaths, guys, leaders and goods — has no producer
 //! in `don-sim` at all. Cities are projected by a separate exact adapter from
 //! `don_sim::tick::Sim`, whose canonical `CityPool` must self-consistently join the Leader,
-//! Build, object-registry, and production-type owners. `groups` and `scenario_data` are the two
-//! channels whose *initial* state is derived from a retail initializer rather than from a
-//! `don_sim::World`, installed by `populate_groups_initial` /
-//! `populate_scenario_initial`; both are frozen at `Game::init` and both expire.
+//! Build, object-registry, and production-type owners. `groups` is projected from the canonical
+//! tick-owned [`don_sim::systems::groups_guys::Groups`] store; its fresh image is derived
+//! from the retail initializer, but later comparisons read the live store rather than a
+//! frozen checksum. `scenario_data` is still installed from its retail initializer and
+//! frozen at `Game::init`.
 //! Items are projected from
 //! the optional authoritative `World::item_runtime`; unavailable and initialized-empty
 //! are distinct bridge states. Channel 15 has two producers: every `populate` installs
@@ -406,7 +407,7 @@ impl SimBridge {
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
         "AmmoData flat list (ammo)",
         "DeathObjData ring, stride 0xa4 (deaths)",
-        "Group mutation (groups) — the 512 slots Groups::clear 0x00713f20 leaves at Game::init are produced, together with the 32-byte last_group tail check_groups hashes through 0x00e85f4c, but nothing drives Groups::push_group / Group::action_*, so the channel is frozen at Game::init and expires at the recording's first group command; see docs/assembly/groups-initial-state.md",
+        "Replay Group mutation inputs (groups) — the canonical Sim.groups pool and its Groups::process pass are checksum producers, but replay setup still lacks the post-worldgen Unit/content authority required to execute the first selected-member package; see docs/assembly/replay-groups-pre-pair-unit-authority.md",
         "GuyData columns (guys)",
         "LeaderData records (leaders) — 27,182 statically resolved bytes, but the executed transcript is variable (28,428 with empty dynamic children); only a bounded same-frame owner frontier exists",
         "Good flat list (goods)",
@@ -634,32 +635,34 @@ impl SimBridge {
         );
     }
 
-    /// Install channel 5 with the state a retail `Game::init` leaves in `Groups`.
+    /// Install channel 5 from the canonical tick-owned `Sim.groups` store.
     ///
-    /// Outside [`SimBridge::PRODUCES`] for the same reason as
-    /// [`SimBridge::populate_scenario_initial`]: `don-sim` owns no `Groups`, so the bytes
-    /// come from the initializer rather than from a `don_sim::World`. Every one of the
-    /// 36,896 bytes is sourced — 512 slots as `Groups::clear` `0x00713f20` and
-    /// `Group::clear` `0x00713e80` leave them, plus the eight `last_group` literals
-    /// `check_groups` `0x00937530` hashes through `GroupsData::const_last_group`. The
-    /// recorded wire value is never copied in.
+    /// [`don_sim::systems::canonical_group_move_host::retail_fresh_groups`] constructs the
+    /// exact 512-slot `Groups::clear` image at `Game::init`. Unlike the former initializer
+    /// shortcut, this producer re-projects the live store on every harness refresh, after
+    /// the per-frame [`don_sim::systems::groups_guys::Groups::process`] pass. The replay
+    /// wire checksum is never an input.
     ///
-    /// **This is a frozen producer and it is guaranteed to expire.** Nothing in `don-sim`
-    /// drives `Groups::get_open_slot` `0x006fa460`, `Groups::push_group` `0x0070f9e0` or
-    /// any `Group::action_*`, so the claim it makes is "no group slot has been touched
-    /// since `Game::init`". That is true at the start of every game and false from the
-    /// first group command onward. The turn it stops matching is the measurement.
-    pub fn populate_groups_initial(
-        groups: &crate::groups_channel::InitialGroupsChannel,
+    /// The independent `don-replay` walker validates all 36,896 fresh-state bytes and every
+    /// `num`-gated member plane. A malformed pool clears the channel before returning its
+    /// typed refusal, so a stale previously exact checksum cannot survive an invalid owner.
+    pub fn populate_groups_live(
+        groups: &don_sim::systems::groups_guys::Groups,
         state: &mut SimState,
-    ) {
+    ) -> Result<
+        crate::groups_channel::GroupsChecksum,
+        crate::groups_sim_channel::GroupSimChannelError,
+    > {
+        state.clear_channel(Channel::Groups);
+        let checksum = crate::groups_sim_channel::sim_groups_checksum(groups)?;
         state.set_exact_direct_channel_elements(
             Channel::Groups,
-            groups.checksum,
-            groups.bytes_walked,
+            checksum.checksum,
+            checksum.bytes_walked,
             0,
-            groups.slots,
+            checksum.groups_walked,
         );
+        Ok(checksum)
     }
 
     /// Install channel 9 from [`don_sim::tick::Sim`]'s canonical City owner.

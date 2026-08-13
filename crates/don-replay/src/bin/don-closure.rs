@@ -138,10 +138,9 @@ fn main() {
             // path writes units_killed / builds_destroyed / city_lost_to.
             "scenario_init_frozen"
         } else if CHANNEL_NAMES[i] == "groups" {
-            // Derived from Groups::clear 0x00713f20 + Group::clear 0x00713e80 — the 512
-            // slots and the last_group tail Game::init leaves — and frozen there: no
-            // don-sim path drives Groups::push_group or any Group::action_*.
-            "groups_init_frozen"
+            // The canonical tick-owned Sim.groups pool, initialized by Groups::clear and
+            // re-walked after every Groups::process pass.
+            "sim_groups_live"
         } else {
             "absent"
         };

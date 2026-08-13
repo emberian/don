@@ -4,7 +4,9 @@ use don_replay::groups_channel::{CORPUS_INITIAL_GROUPS_CHANNEL, INITIAL_WALKED_B
 use don_replay::groups_sim_channel::{
     issue_replay_group_move, sim_groups_checksum, GroupSimChannelError, ReplayGroupMoveSource,
 };
+use don_replay::harness::{Simulation, WorldSim};
 use don_replay::replay::{corpus, Replay};
+use don_replay::Channel;
 use don_sim::systems::canonical_group_move_host::{GroupMoveAuthority, MoveMemberAuthority};
 use don_sim::systems::groups_guys::FormationMember;
 use don_sim::systems::movement::PathStack;
@@ -309,6 +311,62 @@ fn real_packet_executes_at_its_package_frame_and_cross_checks_two_walkers() {
         receipt.host.random_state_after
     );
     assert!(!receipt.installed_in_scoreboard());
+}
+
+#[test]
+fn real_packet_commits_into_the_same_sim_owner_channel_five_walks() {
+    let replays = checksum_replays();
+    if replays.is_empty() {
+        eprintln!("\n  SKIPPED — NOT A PASS. No checksum-bearing retail corpus.\n");
+        return;
+    }
+    let source = executable_source().expect("a real checksum-corpus pair must reach the host");
+    let (prepared, _) = sim_for(source);
+    let mut harness = WorldSim::new();
+    *harness.groups_sim_mut() = prepared;
+
+    let receipt = issue_replay_group_move(harness.groups_sim_mut(), source).unwrap();
+    harness.step_turn(0);
+
+    let (channels, evidence) = harness.check_all_with_evidence();
+    let group_evidence = evidence[Channel::Groups as usize];
+    assert_eq!(channels.get(Channel::Groups), receipt.after.checksum);
+    assert_eq!(
+        sim_groups_checksum(harness.groups()).unwrap(),
+        receipt.after
+    );
+    assert!(group_evidence.substantive());
+    assert_eq!(group_evidence.bytes_walked, receipt.after.bytes_walked);
+    assert_eq!(group_evidence.unsourced_walked, 0);
+}
+
+#[test]
+fn live_owner_reprojects_the_scheduled_groups_process_tail() {
+    let mut harness = WorldSim::new();
+    harness.groups_sim_mut().leaders[0].active = true;
+    harness.groups_sim_mut().groups.proc_group = 0;
+    let group = &mut harness.groups_mut().list[0];
+    group.who = 0;
+    group.num = 1;
+    group.list[0] = 3;
+    group.speed = 123;
+    group.new_speed = 123;
+    harness.step_turn(0);
+    let armed = sim_groups_checksum(harness.groups()).unwrap();
+    assert_eq!(harness.groups().list[0].speed, 123);
+    let frame = harness.groups_sim().world.frame;
+
+    harness.step_turn(1);
+
+    let scheduled = sim_groups_checksum(harness.groups()).unwrap();
+    assert_eq!(harness.groups_sim().world.frame, frame.wrapping_add(1));
+    assert_eq!(harness.groups().list[0].speed, 0);
+    assert_eq!(harness.groups().list[0].new_speed, 0);
+    assert_ne!(scheduled.checksum, armed.checksum);
+    assert_eq!(
+        harness.check_all().0.get(Channel::Groups),
+        scheduled.checksum
+    );
 }
 
 #[test]

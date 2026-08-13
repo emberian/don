@@ -377,6 +377,13 @@ impl Simulation for NullSim {
 /// reports it as `seed_units`, never as fidelity.
 pub struct WorldSim {
     pub world: don_sim::World,
+    /// Canonical production owner for checksum channel 5. The older harness installed a
+    /// detached `Groups::clear` checksum; this `Sim.groups` store now survives and advances
+    /// across every replay turn.
+    groups_sim: don_sim::tick::Sim,
+    groups_live_mutated: bool,
+    groups_dirty: bool,
+    pub groups_channel_error: Option<crate::groups_sim_channel::GroupSimChannelError>,
     pub state: SimState,
     pub turns: u64,
     pub frames: u64,
@@ -435,6 +442,10 @@ impl WorldSim {
     pub fn new() -> WorldSim {
         WorldSim {
             world: don_sim::World::with_capacity(4096, 1),
+            groups_sim: don_sim::tick::Sim::new(1, 1),
+            groups_live_mutated: false,
+            groups_dirty: true,
+            groups_channel_error: None,
             state: SimState::new(),
             turns: 0,
             frames: 0,
@@ -458,6 +469,21 @@ impl WorldSim {
     /// its first command: map dimensions, default rule limits, and map seed.
     pub fn from_replay(rep: &Replay) -> WorldSim {
         let mut s = WorldSim::new();
+        let wcells = rep
+            .initial
+            .info
+            .settings
+            .map_edge_world_cells()
+            .and_then(|edge| u16::try_from(edge).ok())
+            .unwrap_or(1);
+        s.groups_sim = don_sim::tick::Sim::new(u64::from(rep.initial.info.seed), wcells);
+        s.groups_sim.world.frame = rep.initial.game.frame;
+        for player in rep.initial.active_players() {
+            let who = usize::from(player.who);
+            if who < s.groups_sim.leaders.len() {
+                s.groups_sim.leaders[who].active = true;
+            }
+        }
         s.initial_world = rep.initial.reconstruct_world();
         let (items, style_error, continent, execution_error) =
             initial_items_for_replay(rep, s.initial_world.as_mut());
@@ -485,6 +511,41 @@ impl WorldSim {
         s
     }
 
+    /// Read the canonical channel-5 owner. Callers that need to mutate it must use
+    /// [`WorldSim::groups_mut`], which invalidates the cached exact walk.
+    pub fn groups(&self) -> &don_sim::systems::groups_guys::Groups {
+        &self.groups_sim.groups
+    }
+
+    /// Read the canonical Sim owner behind channel 5.
+    ///
+    /// This is the integration seam for setup receipts and exact package hosts: they must
+    /// populate and mutate the same [`don_sim::tick::Sim`] whose `groups` field the checksum
+    /// bridge walks, rather than publish a detached Group after-image.
+    pub fn groups_sim(&self) -> &don_sim::tick::Sim {
+        &self.groups_sim
+    }
+
+    /// Mutate the canonical Sim owner and invalidate channel 5's projected checksum.
+    ///
+    /// The mutation bit is sticky because the Sim's frame scheduler can later normalize a
+    /// reached Group. Callers remain responsible for using a transaction which fails closed;
+    /// this method only closes the ownership join between that transaction and the scoreboard.
+    pub fn groups_sim_mut(&mut self) -> &mut don_sim::tick::Sim {
+        self.groups_live_mutated = true;
+        self.groups_dirty = true;
+        &mut self.groups_sim
+    }
+
+    /// Mutate the canonical channel-5 owner and arm per-frame checksum refreshes.
+    ///
+    /// The sticky mutation bit is intentional: once a live Group exists,
+    /// `Groups::process` may change its checksum-visible normalization/speed fields on the
+    /// slot's scheduled frame. A pristine 512-slot pool can reuse its exact fresh walk.
+    pub fn groups_mut(&mut self) -> &mut don_sim::systems::groups_guys::Groups {
+        &mut self.groups_sim_mut().groups
+    }
+
     fn populate_state(&mut self) {
         if let Some(map) = &self.initial_world {
             crate::state::SimBridge::populate_with_map_checksum(
@@ -503,7 +564,14 @@ impl WorldSim {
         if let Some(scenario) = &self.initial_scenario {
             crate::state::SimBridge::populate_scenario_initial(scenario, &mut self.state);
         }
-        crate::state::SimBridge::populate_groups_initial(&self.initial_groups, &mut self.state);
+        if self.groups_dirty {
+            self.groups_channel_error = crate::state::SimBridge::populate_groups_live(
+                &self.groups_sim.groups,
+                &mut self.state,
+            )
+            .err();
+            self.groups_dirty = false;
+        }
         if let Some(setup) = &self.initial_setup {
             crate::state::SimBridge::populate_starting_setup(setup, &mut self.state);
             crate::state::SimBridge::populate_sim_cities(&setup.sim, &mut self.state)
@@ -539,6 +607,24 @@ impl Simulation for WorldSim {
         self.turns += 1;
         for _ in 0..frames {
             self.world.step();
+            if self.groups_live_mutated {
+                // Advance the canonical owner through the production 29-step scheduler. Its
+                // step-12 tail is the one and only Groups::process call; future setup/package
+                // receipts therefore cannot be checksum-visible while bypassing frame work.
+                // The scheduler currently supplies conservative `Keep`/no-speed callbacks;
+                // exact object-removal and leader-speed facts remain an explicit authority
+                // boundary rather than being inferred here.
+                self.groups_sim.do_frame();
+                self.groups_dirty = true;
+            } else {
+                // On the instruction-derived fresh pool every reached Group has `num == 0`
+                // and all normalized scalars are already zero. The exact pass therefore has
+                // one effect only: advance `proc_group`, which check_groups does not walk.
+                // Preserve that save-visible cursor without spending the corpus run on
+                // repeated 512-slot checksum work.
+                self.groups_sim.groups.proc_group = (self.groups_sim.groups.proc_group + 1) % 64;
+                self.groups_sim.world.frame = self.groups_sim.world.frame.wrapping_add(1);
+            }
             self.frames += 1;
         }
         self.populate_state();

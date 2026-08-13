@@ -69,13 +69,12 @@
 //!
 //! Every compare hands the visitor 36,896 real bytes, so an agreement here is **not**
 //! empty-state agreement: an absent channel walks zero bytes and reads 1, and this reads
-//! `0x1c78f3f5`. But the producer is **frozen at `Game::init`** exactly as
-//! `scenario_data` is: nothing in `don-sim` drives `Groups::get_open_slot` `0x006fa460`,
-//! `Groups::push_group` `0x0070f9e0` or any `Group::action_*`, so the claim it makes is
-//! *"no group slot has been touched since `Game::init`"*. That is true from the start of
-//! the game and false from the first group command onward, and the turn it stops matching
-//! is the measurement. No value here is fitted: the state is the two initializers' stores
-//! and nothing else, and the recorded wire value is never an input to the producer.
+//! `0x1c78f3f5`. [`crate::state::SimBridge::populate_groups_live`] applies this same walker
+//! to canonical `Sim.groups` after every frame, so later in-memory mutations are visible.
+//! Current corpus survival still ends at the first unowned retail group mutation because
+//! replay setup cannot yet supply its post-worldgen Unit/content authority. No value here
+//! is fitted: the fresh state is the two initializers' stores, and the recorded wire value
+//! is never an input to the producer.
 
 #![forbid(unsafe_code)]
 

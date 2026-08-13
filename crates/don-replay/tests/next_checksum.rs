@@ -444,13 +444,13 @@ fn the_world_record_is_one_on_this_stream() {
     eprintln!("  world == 1 in {seen} recordings on this stream");
 }
 
-/// The frozen `groups` producer is compared here and it loses, on purpose.
+/// The live `Sim.groups` producer is compared here and it loses, on purpose.
 ///
 /// The sweep reaches `CHECKSUM_GROUPS` several hundred turns in, long after the
 /// first `GroupCommand`, so the `Game::init` image cannot still hold. Recording
 /// the divergence is the point: it is a real falsification opportunity taken.
 #[test]
-fn the_frozen_groups_image_is_compared_and_diverges() {
+fn the_fresh_live_groups_pool_is_compared_and_diverges() {
     let reps = next_replays();
     if reps.is_empty() {
         skip_banner();
@@ -475,7 +475,7 @@ fn the_frozen_groups_image_is_compared_and_diverges() {
     );
     assert_eq!(
         matches, 0,
-        "the frozen Game::init groups image started matching a mid-game record — \
+        "the fresh live Sim.groups pool started matching a mid-game record — \
          that would be news, and this test should be updated to say what changed"
     );
 }

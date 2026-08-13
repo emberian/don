@@ -5,10 +5,10 @@ Lane: `replay-groups`, wave 3. Every address here was read from
 `re/symtab.json`; every number is **[measured]**. Nothing here is verified in the
 proof-assistant sense — see [`docs/CHARTER.md`](../CHARTER.md).
 
-Companion to [`scenario-initial-state.md`](scenario-initial-state.md), and the same
-shape of result: an initial state derived entirely from a retail initializer, with a
-single 32-bit statement against the corpus and a producer that is frozen at `Game::init`
-and therefore guaranteed to expire.
+Companion to [`scenario-initial-state.md`](scenario-initial-state.md): an initial state
+derived entirely from a retail initializer, with a single 32-bit statement against the corpus.
+The initializer remains the fresh-state proof; the replay harness now projects the same exact
+walker from live canonical `Sim.groups` on every compare.
 
 ---
 
@@ -210,10 +210,22 @@ has 512 slots.
 
 ## 4. The deadline, measured per recording
 
-`SimBridge::populate_groups_initial` installs it, and it is **frozen at `Game::init`**:
-nothing in `don-sim` drives `Groups::get_open_slot` `0x006fa460`, `Groups::push_group`
-`0x0070f9e0`, `Groups::process` `0x006fa210` or any `Group::action_*`, so the claim the
-producer makes is *"no group slot has been touched since `Game::init`"*.
+`SimBridge::populate_groups_live` now installs the independent walk of the canonical
+tick-owned `Sim.groups` pool. `Sim::new` creates that pool through the instruction-derived
+`retail_fresh_groups`, and the replay harness advances that owner through `Sim::do_frame`'s
+29-step scheduler, including the single `Groups::process` `0x006fa210` call at step 12, before
+re-projecting channel 5. The scheduler's current callback shell conservatively returns
+`MemberState::Keep` and no leader speed; exact object-leaves-group and leader-speed authority
+remain open. That is a simulation residual, not a checksum shortcut: a direct mutation of any
+walked field or `last_group` word changes the scoreboard value, and an invalid slot count clears
+the producer rather than leaving a stale exact checksum.
+
+The corpus result remains the same, for a measured reason rather than because the checksum is
+frozen. The canonical replay package hosts require post-worldgen Unit identity, content,
+formation, order and path authority. The replay setup pipeline cannot yet produce those facts,
+so the live pool remains at its initializer image until the first unowned retail mutation.
+[`replay-groups-pre-pair-unit-authority.md`](replay-groups-pre-pair-unit-authority.md) pins that
+boundary down to the exact missing receipts and preceding package chronology.
 
 The corpus splits on exactly the same seven recordings as channels 14 and 15, and the
 deadline is short — groups are the most-commanded object in the game
@@ -249,21 +261,18 @@ Two observations worth keeping:
 
 ## 5. What this does *not* establish, and what comes next
 
-- It is **not** evidence about group mechanics. It is evidence about the traversal
-  (`check_groups` + `Group::walk_data`), about `Groups::clear`, and about the claim that
-  no group has been touched. Nothing in it exercises `Group::add`, `Group::kill`,
-  `Groups::push_group` or any `Group::action_*`.
+- It is **not yet retail-package evidence about group mechanics**. It proves that the
+  canonical `Sim.groups` owner, its per-frame process pass, and the independent checksum
+  projection are one live path. The real corpus still cannot reach `Group::add`,
+  `Groups::push_group` or a `Group::action_*` without the missing setup Unit authority.
+- Once live groups reach scheduled normalization, `SimGameDaemonHost::groups_process` still
+  needs the source-backed object-removal predicate and leader-speed callback. The live owner
+  closes the checksum bridge; it does not make those two absent inputs exact.
 - The 140 matches are a small number and should be quoted as one. `rules` still walks
   997,846 bytes on 222,938 agreeing compares and remains the headline.
-- **The next increment is not more `Groups` archaeology.** Every remaining loss is a
-  `Group` slot that a command mutated, and the mutating bodies are the nine
-  movement/attack `Group::action_*` rows plus `Groups::push_group` and
-  `Groups::get_open_slot`. Those already have a claimed lane (`op-move`), whose own
-  finding is that `Group::action_move_near` `0x00704990` (9,205 bytes) has **no file in
-  `re/decomp-all/`** and is the root of the family's dependency graph. Channel 5's next
-  turn of survival is that function, not this document.
-- The one cheap thing left inside this channel: `Groups::process` `0x006fa210` (582 B)
-  runs per frame and is the only per-frame writer of `Groups` state that is *not* command
-  driven. It was not read for this lane. If it writes `think_frame` or `stamp` on a
-  schedule, it would move the channel with no command at all, and the seven survivals
-  above bound how much it can be doing — at most nothing for 64 turns in one recording.
+- **The next increment is the setup-to-package authority join.** The full move-near body,
+  canonical Group transaction and channel walker now exist. The earliest strict witness still
+  needs real `Setup::place_unit` / `Objects::init_unit` receipts, eight preceding Farm package
+  transactions and their intervening frames; the clear-pool witness needs the four exact
+  starting Citizen objects. Selecting either set from its eventual checksum would be fitting,
+  not replay reconstruction.

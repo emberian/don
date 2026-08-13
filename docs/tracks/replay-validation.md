@@ -173,7 +173,12 @@ is `0x1c78f3f5` — **derived, with no free parameter and without consulting the
 value**. Full derivation:
 [`docs/assembly/groups-initial-state.md`](../assembly/groups-initial-state.md).
 
-`SimBridge::populate_groups_initial` installs it. The result, per recording:
+`SimBridge::populate_groups_live` independently walks the canonical tick-owned `Sim.groups`
+pool after `Sim::do_frame` reaches its per-frame `Groups::process` pass. The fresh pool derives
+to the same value above; later in-memory mutations are no longer hidden by a frozen direct
+checksum. The current scheduler callback shell still supplies conservative `Keep`/no-speed
+answers, so source-backed object-removal and leader-speed authority remain required once live
+groups reach normalization. The result, per recording:
 
 | recording | AI | `groups` survived | first divergence |
 |---|---:|---:|---|
@@ -190,11 +195,12 @@ value**. Full derivation:
 honest one. What the channel is *not* is empty-state: retail's own `groups` value is never
 1 (it always has 512 slots), so `retail_empty_compares` is 0, and our walker hands the
 visitor 36,896 real bytes on all 222,938 comparisons — `trivial` and `unmodelled` are both
-0. What agrees is the derived `Game::init` image plus the claim "no group slot has been
-touched yet"; the producer is frozen there, because nothing in `don-sim` drives
-`Groups::push_group` `0x0070f9e0` or any `Group::action_*`, and `GroupCommand` `0x00` is
-the corpus's largest player-order opcode (78,197 commands). It is evidence about the
-traversal and about `Groups::clear`; it is **no** evidence about group mechanics.
+0. What agrees is the live Sim owner's derived `Game::init` image plus the claim "no group
+slot has been touched yet". The producer itself is no longer frozen, but the real replay cannot
+yet execute its first selected-member package because post-worldgen Unit/content authority is
+missing. `GroupCommand` `0x00` is the corpus's largest player-order opcode (78,197 commands).
+The 140 matches therefore remain evidence about the traversal, initializer and live ownership
+path; they are **not yet** evidence about a retail Group action.
 
 Two measurements fell out that are worth keeping. The fourteen AI recordings lose channel 5
 on turn **2** while they lose channel 14 on turn **3** — so an AI's first group creation
@@ -269,7 +275,7 @@ the numbers above:
 | channel | whole-channel turns | compares | matches | what it means |
 |---|---:|---:|---:|---|
 | `rules` | 38 | **5** | **5** | 997,846 bytes walked per compare |
-| `groups` | 27 | 27 | 0 | frozen `Game::init` image against a turn-300+ record |
+| `groups` | 27 | 27 | 0 | live Sim pool still at `Game::init` against a turn-300+ record |
 | `world` | 25 | 18 | 0 | retail reads `1` here; we walk 780k bytes |
 | `walls` / `ammo` / `deaths` | 76 | 0 | 0 | **no producer — not scored** |
 
@@ -662,11 +668,13 @@ slot, so today only op 0 executes; the other six are written, tested and dormant
   `scenario_data` produces the derived `ScenarioFuncSet::init` image and then **freezes**:
   no `don-sim` path writes `units_killed`, `builds_destroyed`, `last_razed` or
   `city_lost_to`, and no `ScenarioFuncSet` builtin reaches it, so it is
-  the `Game::init` state and nothing after it. `groups` is the same shape: the derived
-  `Groups::clear` 512-slot image, frozen because nothing drives `Groups::push_group`
-  `0x0070f9e0`, `Groups::get_open_slot` `0x006fa460` or any `Group::action_*`. The prefix
-  proves world dimensions and seed, not generated contents; their walked zeros are counted as
-  unsourced and the channel is expected to diverge.
+  the `Game::init` state and nothing after it. `groups` differs: the checksum is re-projected
+  from canonical `Sim.groups` after every scheduled `Groups::process` pass. The exact walker and
+  ownership join are complete; the scheduler's object-removal and leader-speed callback facts
+  are not. The channel remains at the fresh image on the corpus because replay setup cannot yet
+  provide the Unit/content receipts required by `Groups::push_group` and the first
+  `Group::action_*`. The prefix proves world dimensions and seed, not generated contents; their
+  walked zeros are counted as unsourced and the channel is expected to diverge.
 
 ---
 
@@ -694,16 +702,14 @@ slot, so today only op 0 executes; the other six are written, tested and dormant
    distinguishable instead of invisible. Settle it before any dynamic channel is credited
    with survival.
 
-And a fourth, newly cheap because channel 5 now exists: **`Group::action_*` is now the
-only thing between us and more `groups` survival.** Every one of the seven human recordings
-loses the channel at its first `GroupCommand`, between turns 9 and 66 — not at a subtle
-mechanic but at the single most common player order in the corpus. The six `num`-gated
-member walks are already written and tested in `groups_channel.rs`; what is missing is a
-`don-sim` producer for `Groups`, and the `op-move` lane's finding that
-`Group::action_move_near` `0x00704990` (9,205 bytes) has **no file in `re/decomp-all/`**
-names the exact blocker. `groups` is the shortest path from an order stream to a moving
-channel, because unlike `units` it needs no initial object state at all — the initial state
-is a constant.
+And a fourth, newly sharp because channel 5 now reads canonical state: **finish the replay
+setup-to-package Unit authority join.** Every one of the seven human recordings loses the
+channel at its first `GroupCommand`, between turns 9 and 66. The exact walker, live Groups
+owner, full move-near decompilation and bounded Sim transaction now exist. What remains is the
+source-backed Unit/content/formation/order/path state at that package frame, including preceding
+Farm packages for the strict 2018 witness, followed by the object-removal and leader-speed facts
+used when a live slot reaches `Groups::process`. The exact receipts and chronology are in
+[`docs/assembly/replay-groups-pre-pair-unit-authority.md`](../assembly/replay-groups-pre-pair-unit-authority.md).
 
 Deferred, and deliberately: **`deaths` and `ammo`**. Their divergence turns (847 / 1,584 in
 the 2025 game) are still the first place a real mechanic has to be right, but both start
