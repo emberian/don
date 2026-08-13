@@ -324,7 +324,7 @@ fn reached_army_authority_is_unavailable_and_rolls_back_every_owner() {
 fn armies_off_force_process_executes_exact_entry_arm_and_resumes_with_v17_armies_owner() {
     with_large_stack(|| {
         let mut uninterrupted = configured_sim();
-        uninterrupted.vic_leaders.slots[2].leader_flags |= 0x40;
+        uninterrupted.vic_leaders.slots[2].leader_flags |= leader_flag::DEFEATED;
         let army = &mut uninterrupted.armies.lists[2][3];
         army.valid = 1;
         army.army = 3;
@@ -531,6 +531,149 @@ fn retail_alliance_accept_stages_generic_victory_and_resumes_identically() {
 
         let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("victory state reloads");
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn defeated_winner_noop_victory_then_armies_off_processes_atomically_after_resume() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        uninterrupted.vic_leaders.slots[2].leader_flags |= leader_flag::DEFEATED;
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.human_frame = 9;
+        let checkpoint = save_sim(&uninterrupted).expect("mixed Victory/Army input is savable");
+        let mut resumed = load_sim(&checkpoint).expect("mixed Victory/Army input reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2941, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2941, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        for receipt in [&resumed_receipt, &uninterrupted_receipt] {
+            assert_eq!(receipt.status, CanonicalDiplomacyStatus::Applied);
+            assert!(receipt.validates(&receipt.request));
+            assert_eq!(receipt.completed_authority.len(), 2);
+            assert!(matches!(
+                receipt.completed_authority[0],
+                ExternalDiplomacyAuthority::Accept(
+                    don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
+                        call: SetDiploAuthority::Victory {
+                            winner: 2,
+                            victory_type: 0,
+                            instant: 0,
+                        },
+                        ..
+                    }
+                )
+            ));
+            assert!(matches!(
+                receipt.completed_authority[1],
+                ExternalDiplomacyAuthority::Accept(
+                    don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
+                        call: SetDiploAuthority::ForceArmyProcess {
+                            owner: 2,
+                            army_slot: 3,
+                            forced: 1,
+                        },
+                        ..
+                    }
+                )
+            ));
+            assert_eq!(receipt.victory_receipts.len(), 1);
+            assert_eq!(receipt.army_process_receipts.len(), 1);
+            let victory = &receipt.victory_receipts[0];
+            assert_eq!(victory.leaders_before, victory.leaders_after);
+            assert_eq!(victory.match_before, victory.match_after);
+            assert!(victory.events.is_empty());
+            let army = &receipt.army_process_receipts[0];
+            assert!(army.validates());
+            assert_ne!(army.leader_flags & leader_flag::DEFEATED as u32, 0);
+            assert_eq!(army.before.human_frame, 9);
+            assert_eq!(army.after.human_frame, 8);
+        }
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
+            0
+        );
+        assert_ne!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::DEFEATED,
+            0
+        );
+        assert_ne!(
+            resumed.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
+            0
+        );
+        assert_eq!(resumed.armies.lists[2][3].human_frame, 8);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("mixed result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+
+        let mut reordered = resumed_receipt.clone();
+        reordered.completed_authority.swap(0, 1);
+        assert!(!reordered.validates(&reordered.request));
+    });
+}
+
+#[test]
+fn active_winner_mixed_victory_and_general_army_body_remain_atomic_unavailable() {
+    with_large_stack(|| {
+        let mut sim = configured_alliance_victory_sim();
+        let army = &mut sim.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.human_frame = 9;
+        let before = save_sim(&sim).unwrap();
+
+        let receipt = sim
+            .process_diplomacy_package(2, 0x2942, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
+        assert!(receipt.validates(&receipt.request));
+        assert!(matches!(
+            receipt.error,
+            Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(ref calls))
+                if calls.len() == 2
+                    && matches!(
+                        calls[0],
+                        ExternalDiplomacyAuthority::Accept(
+                            don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
+                                call: SetDiploAuthority::Victory { winner: 2, .. },
+                                ..
+                            }
+                        )
+                    )
+                    && matches!(
+                        calls[1],
+                        ExternalDiplomacyAuthority::Accept(
+                            don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
+                                call: SetDiploAuthority::ForceArmyProcess {
+                                    owner: 2,
+                                    army_slot: 3,
+                                    forced: 1,
+                                },
+                                ..
+                            }
+                        )
+                    )
+        ));
+        assert_eq!(save_sim(&sim).unwrap(), before);
+        assert_eq!(sim.vic_leaders.slots[2].leader_flags & leader_flag::WON, 0);
+        assert_eq!(
+            sim.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
+            0
+        );
+        assert_eq!(sim.armies.lists[2][3].human_frame, 9);
     });
 }
 

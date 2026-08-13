@@ -44,8 +44,10 @@ address, containment link, and channel digest. It exposes the complete instructi
 `ComeOut`/`KillContainedUnit`/`AddAirStrafeOrder` cone from a real opcode-38 packet. The shared Sim
 receiver still rejects those mutation calls. `ForceArmyProcess` is admitted only for the exact
 v17-owned early-return arm where `human_frame` decrements and leader bit `0x40` returns before
-normalization; its general AI body remains unavailable. Generic Victory is admitted only through
-its canonical Leader/Match transaction and the explicitly
+normalization; that bit is also retail's `DEFEATED` bit, so a preceding Victory call on the same
+winner takes its exact no-op return. The runtime now preserves that mixed instruction order and
+publishes the no-op Victory plus Army decrement atomically. Its general AI body remains
+unavailable. Generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
 image, including its
 transposed positive-value tribute stamp and conditional gift stamp; even zero-valued goods emit
@@ -90,7 +92,10 @@ original root bytes and restore the constructor-empty Army owner.
 
 Opcodes 38 and 41 now execute production transactions whose ordered external-authority list is
 empty, consists only of staged generic-Victory authority, or consists only of exact
-armies-off `ForceArmyProcess(1)` calls. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
+armies-off `ForceArmyProcess(1)` calls. They also execute the exact mixed cohort in which a
+defeated winner's Victory call returns unchanged before its armies-off calls decrement their
+v17-owned countdowns. An active winner followed by the unresolved general Army body still refuses
+the entire transaction, including the staged Victory. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
 clears publish together. Generic alliance Victory is also mounted when its staged canonical
 Leader/Match transaction has an exact staged defeated-player Army/Unit cleanup: relation rows are
@@ -114,7 +119,7 @@ rows remain `StateWired`. Opcode 41's ordinary accepted-deal roots use
 ally. The measured contained-ejection branch is therefore reached by opcode-38 alliance
 revocation, not manufactured through an impossible op41 downgrade.
 
-Focused status: the live opcode-38/opcode-41 runtime suite passes 12/12 and includes a real opcode-38
+Focused status: the live opcode-38/opcode-41 runtime suite passes 14/14 and includes a real opcode-38
 packet-to-current-v18-save/load-to-resume ejection projection covering success, failure/kill, and
 successful air/Strafe arms. A second real opcode-38 war packet crosses the same current save/load,
 whose Army section remains the exact v17 owner, reinstalls only transient query facts, decrements
@@ -122,7 +127,9 @@ the exact armies-off countdown, and matches uninterrupted save bytes and channel
 focused Army transaction suite passes 4/4, including stale Army and stale Leader rollback. It also
 covers multi-opponent alliance Victory with empty cleanup, active-ground-Unit save/resume, and
 standing-Army packet-to-current-save/load-to-resume equality; plane and missing-type paths remain
-atomic refusals.
+atomic refusals. A real opcode-41 packet also crosses save/load through the ordered no-op Victory
+plus armies-off transaction; its active-winner counterpart proves the staged Victory and Army
+countdown both roll back when the general Army body is reached.
 The callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 46 private

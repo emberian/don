@@ -7,7 +7,8 @@
 //! through the canonical Leader/Match transaction; its defeated-player cleanup admits exact
 //! empty Army rosters and on-map ground Unit bands. It also owns the exact forced-Army arm where
 //! the entry countdown decrements and the leader's armies-off bit returns before normalization.
-//! Every broader external authority remains unavailable before publication.
+//! The exact instruction-ordered no-op Victory plus armies-off cohort publishes atomically too;
+//! every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
     commit_diplomacy_transaction, prepare_diplomacy_transaction, CanonicalLeaderDiplomacyFields,
@@ -27,7 +28,7 @@ use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
 use crate::systems::diplomacy_force_army_authority::{
     commit_force_army_process, prepare_force_army_process, ForceArmyProcessReceipt,
-    ForceArmyProcessRequest, PreparedForceArmyProcess,
+    ForceArmyProcessRequest,
 };
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::leader_match_host::{
@@ -345,12 +346,27 @@ fn set_plan_has_victory(plan: &super::leader_set_diplo::SetDiploPlan) -> bool {
 }
 
 /// The staged Leader/Match body must observe the relation image at the retail call site. The
-/// current generic-victory cohort has one Victory and no later relation write, so the complete
-/// diplomacy after-image is exactly that view. More complex ordering remains fail-closed.
+/// supported generic-victory cohort has one Victory and no later relation write. It may then run
+/// only that winner's exact armies-off calls, matching `Leader::set_diplo`'s instruction order.
+/// More complex ordering remains fail-closed.
 fn victory_order_isolated(prepared: &PreparedDiplomacyTransaction) -> bool {
-    if prepared.required_external_authority.len() != 1
-        || victory_request(&prepared.required_external_authority[0]).is_err()
-    {
+    let mut winner = None;
+    for call in &prepared.required_external_authority {
+        match set_diplo_call(call) {
+            SetDiploAuthority::Victory { .. } => {
+                let Ok(LeaderMatchRequest::Victory { who, .. }) = victory_request(call) else {
+                    return false;
+                };
+                if winner.replace(who).is_some() {
+                    return false;
+                }
+            }
+            SetDiploAuthority::ForceArmyProcess { owner, .. }
+                if winner.is_some_and(|winner| owner == winner) => {}
+            _ => return false,
+        }
+    }
+    if winner.is_none() {
         return false;
     }
     let mut saw_victory = false;
@@ -549,6 +565,32 @@ struct StagedVictoryAuthority {
     production_runtime: super::production::runtime::LiveProductionRuntime,
     receipts: Vec<LeaderMatchReceipt>,
     defeat_cleanup: DiplomacyDefeatCleanupReceipt,
+}
+
+struct StagedForceArmyAuthority {
+    armies: Box<super::armies::Armies>,
+    receipts: Vec<ForceArmyProcessReceipt>,
+}
+
+impl StagedForceArmyAuthority {
+    fn current_error(
+        &self,
+        armies: &super::armies::Armies,
+    ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
+        self.receipts.iter().find_map(|receipt| {
+            (armies
+                .lists
+                .get(receipt.request.owner)
+                .and_then(|list| list.get(receipt.request.army_slot))
+                != Some(&receipt.before))
+            .then_some(
+                super::diplomacy_force_army_authority::ForceArmyProcessError::StaleArmy {
+                    owner: receipt.request.owner,
+                    army_slot: receipt.request.army_slot,
+                },
+            )
+        })
+    }
 }
 
 fn stage_ground_defeat_cleanup(
@@ -822,37 +864,51 @@ fn stage_ground_defeat_cleanup(
 
 fn stage_force_army_authority(
     sim: &Sim,
+    leader_flags: &[u32; NUM_LEADERS],
+    leader_flags2: &[u32; NUM_LEADERS],
     authority: &[ExternalDiplomacyAuthority],
-) -> Result<Option<PreparedForceArmyProcess>, CanonicalDiplomacyRuntimeError> {
+) -> Result<Option<StagedForceArmyAuthority>, CanonicalDiplomacyRuntimeError> {
     if authority.is_empty() {
         return Ok(None);
     }
     let mut requests = Vec::with_capacity(authority.len());
     for call in authority {
-        let SetDiploAuthority::ForceArmyProcess {
-            owner,
-            army_slot,
-            forced,
-        } = set_diplo_call(call)
-        else {
-            return Ok(None);
-        };
-        // Every broader forced body is deliberately left for the generic external-authority
-        // refusal below. Bit 0x40 is the exact early return after `human_frame` decrements.
-        if sim.vic_leaders.slots[owner].leader_flags as u32 & super::armies::LF_ARMIES_OFF == 0 {
-            return Ok(None);
+        match set_diplo_call(call) {
+            SetDiploAuthority::Victory { .. } => continue,
+            SetDiploAuthority::ForceArmyProcess {
+                owner,
+                army_slot,
+                forced,
+            } => {
+                // Every broader forced body is deliberately left for the generic external-
+                // authority refusal. Bit 0x40 is the exact early return after the decrement.
+                if leader_flags[owner] & super::armies::LF_ARMIES_OFF == 0 {
+                    return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
+                        authority.to_vec(),
+                    ));
+                }
+                requests.push(ForceArmyProcessRequest {
+                    owner,
+                    army_slot,
+                    forced,
+                });
+            }
+            _ => {
+                return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
+                    authority.to_vec(),
+                ));
+            }
         }
-        requests.push(ForceArmyProcessRequest {
-            owner,
-            army_slot,
-            forced,
-        });
     }
-    let leader_flags = std::array::from_fn(|who| sim.vic_leaders.slots[who].leader_flags as u32);
-    let leader_flags2 = std::array::from_fn(|who| sim.vic_leaders.slots[who].leader_flags2 as u32);
-    prepare_force_army_process(&sim.armies, &leader_flags, &leader_flags2, &requests)
-        .map(Some)
-        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)
+    if requests.is_empty() {
+        return Ok(None);
+    }
+    let prepared = prepare_force_army_process(&sim.armies, leader_flags, leader_flags2, &requests)
+        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
+    let mut armies = Box::new(sim.armies.clone());
+    let receipts = commit_force_army_process(&mut armies, leader_flags, leader_flags2, prepared)
+        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
+    Ok(Some(StagedForceArmyAuthority { armies, receipts }))
 }
 
 fn stage_victory_authority(
@@ -865,17 +921,26 @@ fn stage_victory_authority(
     if authority.is_empty() {
         return Ok(None);
     }
-    if authority
+    let victory_calls = authority
         .iter()
-        .any(|call| !matches!(set_diplo_call(call), SetDiploAuthority::Victory { .. }))
-    {
+        .filter(|call| matches!(set_diplo_call(call), SetDiploAuthority::Victory { .. }))
+        .collect::<Vec<_>>();
+    if authority.iter().any(|call| {
+        !matches!(
+            set_diplo_call(call),
+            SetDiploAuthority::Victory { .. } | SetDiploAuthority::ForceArmyProcess { .. }
+        )
+    }) {
         // Preserve the whole instruction-ordered mutation cone for the next host. Returning
         // only the first call would make a typed producer look more complete than it is.
         return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
             authority.to_vec(),
         ));
     }
-    for call in authority {
+    if victory_calls.is_empty() {
+        return Ok(None);
+    }
+    for call in &victory_calls {
         victory_request(call)?;
     }
     if sim.vic_leaders.pending_cleanup_masks() != (0, 0) || sim.defeat_cleanup_error.is_some() {
@@ -889,12 +954,12 @@ fn stage_victory_authority(
     let mut game = sim.vic_match.clone();
     let mut builds = sim.builds.clone();
     let mut production_runtime = sim.production_runtime.clone();
-    let mut receipts = Vec::with_capacity(authority.len());
+    let mut receipts = Vec::with_capacity(victory_calls.len());
 
     // `set_diplo` publishes both relation rows before its Victory call. Stage those exact
     // canonical fields first, while leaving the semaphore mutation ordered after the call.
     fold_owner_into_leaders(&mut leaders, after);
-    for call in authority {
+    for call in victory_calls {
         let request = victory_request(call)?;
         let receipt = apply_leader_match(&mut leaders, &mut game, request)
             .map_err(CanonicalDiplomacyRuntimeError::Victory)?;
@@ -1003,18 +1068,46 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let mut committed = before.clone();
             commit_diplomacy_transaction(&mut committed, &prepared, &completed_authority)
                 .map_err(CanonicalDiplomacyRuntimeError::Commit)?;
-            let staged_army = stage_force_army_authority(self.sim, &completed_authority)?;
-            let staged_victory = match if staged_army.is_some() {
-                Ok(None)
-            } else {
-                stage_victory_authority(
-                    self.sim,
-                    &before,
-                    &committed,
-                    &prepared,
-                    &completed_authority,
-                )
-            } {
+            let staged_victory = match stage_victory_authority(
+                self.sim,
+                &before,
+                &committed,
+                &prepared,
+                &completed_authority,
+            ) {
+                Ok(staged) => staged,
+                Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)) => {
+                    return Ok(CanonicalDiplomacyReceipt::unavailable_prepared(
+                        request.clone(),
+                        self.sim.diplomacy_authority.clone(),
+                        prepared,
+                        authority,
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            // A mixed cohort reaches Armies only after `Leader::victory`, so the exact owner
+            // gates observe the staged post-Victory Leader words rather than the old live copy.
+            let leader_flags = std::array::from_fn(|who| {
+                staged_victory
+                    .as_ref()
+                    .map_or(self.sim.vic_leaders.slots[who].leader_flags, |staged| {
+                        staged.leaders.slots[who].leader_flags
+                    }) as u32
+            });
+            let leader_flags2 = std::array::from_fn(|who| {
+                staged_victory
+                    .as_ref()
+                    .map_or(self.sim.vic_leaders.slots[who].leader_flags2, |staged| {
+                        staged.leaders.slots[who].leader_flags2
+                    }) as u32
+            });
+            let staged_army = match stage_force_army_authority(
+                self.sim,
+                &leader_flags,
+                &leader_flags2,
+                &completed_authority,
+            ) {
                 Ok(staged) => staged,
                 Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(authority)) => {
                     return Ok(CanonicalDiplomacyReceipt::unavailable_prepared(
@@ -1029,21 +1122,12 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             if project_owner(self.sim)? != before {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
-            let army_process_receipts = if let Some(staged) = staged_army {
-                let leader_flags =
-                    std::array::from_fn(|who| self.sim.vic_leaders.slots[who].leader_flags as u32);
-                let leader_flags2 =
-                    std::array::from_fn(|who| self.sim.vic_leaders.slots[who].leader_flags2 as u32);
-                commit_force_army_process(
-                    &mut self.sim.armies,
-                    &leader_flags,
-                    &leader_flags2,
-                    staged,
-                )
-                .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?
-            } else {
-                Vec::new()
-            };
+            if let Some(error) = staged_army
+                .as_ref()
+                .and_then(|staged| staged.current_error(&self.sim.armies))
+            {
+                return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));
+            }
             fold_owner(self.sim, committed);
             let victory_receipts = if let Some(staged) = staged_victory {
                 self.sim.vic_leaders = staged.leaders;
@@ -1064,6 +1148,12 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 (receipts, defeat_cleanup)
             } else {
                 (Vec::new(), None)
+            };
+            let army_process_receipts = if let Some(staged) = staged_army {
+                self.sim.armies = *staged.armies;
+                staged.receipts
+            } else {
+                Vec::new()
             };
             Ok(CanonicalDiplomacyReceipt {
                 request: request.clone(),
