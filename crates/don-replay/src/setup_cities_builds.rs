@@ -29,7 +29,7 @@ use crate::build_spawn_runtime::{
     CanonicalBuildSpawnRequest,
 };
 use crate::builds_runtime::{BuildWalkFacts, BuildsChannelValue, BuildsWalkAuthority};
-use crate::cities_runtime::{check_sim_cities, CitiesChannelValue, CitiesRuntimeError};
+use crate::cities_runtime::{check_sim_owned_cities, CitiesChannelValue, CitiesRuntimeError};
 use crate::city_build_constructor_runtime::{
     apply_fresh_starting_village_projection, FreshStartingVillageReceipt,
     FreshStartingVillageRequest, StartingCityConstructorError,
@@ -232,7 +232,11 @@ impl StartingSetupState {
             });
         }
 
-        let cities_channel = check_sim_cities(&sim, &cities).map_err(SetupCitiesError::Cities)?;
+        // Publish the completed constructor into Sim's canonical checksum owner before
+        // walking it. `StartingSetupState::cities` remains as a diagnostic snapshot for
+        // the downstream census lane, but replay integration never selects that mirror.
+        sim.cities = cities.clone();
+        let cities_channel = check_sim_owned_cities(&sim).map_err(SetupCitiesError::Cities)?;
         let expected_bytes = u64::try_from(receipts.len())
             .ok()
             .and_then(|count| {

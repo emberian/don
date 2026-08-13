@@ -18,8 +18,8 @@ compared against the `CheckSumsCommand` the retail client recorded on that turn.
 The first diverging turn and the diverging channel are reported per channel, per
 file, and rolled up into `schema/replay-validation.json`.
 
-Over the whole corpus — 61 files, 21 with checksums, **585,152 turns**,
-**488,557 checksum packets**, 30 seconds wall clock:
+Over the whole corpus — 62 files, 21 with `0x39` checksums, **645,554 turns**,
+**488,557 checksum packets** in the full fidelity run:
 
 | channel | best survival (turns) | matches / compares | trivial matches | unmodelled | non-trivial compares |
 |---|---:|---:|---:|---:|---:|
@@ -31,20 +31,22 @@ Over the whole corpus — 61 files, 21 with checksums, **585,152 turns**,
 | **`script_run_time`** | **18,069** | **60,342 / 222,938** | **0** | **0** | **222,938** |
 | **`scenario_data`** | **6,320** | **24,245 / 222,938** | **0** | **0** | **222,938** |
 | **`groups`** | **64** | **140 / 222,938** | **0** | **0** | **222,938** |
+| `cities` | 0 | 0 / 222,938 | 0 | 0 | **36,955** |
 | **`world`** | 0 | 0 / 222,938 | 0 | 0 | **222,938** |
-| every other channel | 0 | 0 / 222,938 | 0 | 0 | 0 |
+| every remaining channel | 0 | 0 / 222,938 | 0 | 0 | 0 |
 
 `survived` = consecutive agreeing turns from the recording's first checksummed
 turn. **The honest headline is still 25,442 substantive turns on `rules`.** The
 replay's static Rules SaveGame section is independently parsed and projected through the
 retail checksum traversal; all 222,938 comparisons walk 997,846 bytes and agree. The
-scoreboard now has **1,114,690** comparisons in which our walker touched a byte: `rules`
+scoreboard now has **1,151,645** comparisons in which our walker touched a byte: `rules`
 agrees throughout, `script_run_time` agrees on seven recordings and diverges on fourteen,
 `scenario_data` walks the derived 8,453-byte `Game::init` image on every compare and holds
 for thousands of turns on those same seven, `groups` walks the derived 36,896-byte
 `Groups::clear` image on every compare and holds for 7–64 turns on those same seven, and
-every `world` comparison walks real prefix-derived state and exposes the first dynamic
-divergence.
+the conditional `cities` producer walks 228 fully sourced constructor bytes on 36,955
+comparisons. Every `world` comparison walks real prefix-derived state and exposes the first
+dynamic divergence.
 
 The previous 25,442-turn `walls` headline remains a weak empty-state result: `walls` was
 empty in every recorded game, and adler-32 over nothing is 1 on both sides. `trivial` counts
@@ -54,9 +56,11 @@ exactly that case.
 until retail creates the first projectile or corpse. Their measured deadlines
 remain useful, but those matches are explicitly labelled `unmodelled`.
 
-`units`, `builds`, `leaders`, `cities`, `goods`, `guys` diverge
-on the **first** checksummed turn, because those are non-empty from game start and we hold
-none of them. `scenario_data` now agrees on the first checksummed turn and diverges on the
+`units`, `builds`, `leaders`, `cities`, `goods`, `guys` diverge on the **first**
+checksummed turn. Cities is no longer absent: three recordings now compare an exact frozen
+constructor producer, and the first-turn loss measures its still-missing pre-checkpoint
+schedule. We still hold none of the other five. `scenario_data` now agrees on the first
+checksummed turn and diverges on the
 second; `groups` agrees on the first checksummed turn of the seven recordings with no AI
 players and holds for 7–64 turns there. `world` also diverges on the first checksummed turn, for a better
 reason: it now hashes 280,968–780,168 bytes per comparison (map-size dependent)
@@ -200,15 +204,45 @@ elements only, so the standing "`Array<T>` capacity and growth metadata are chec
 hazard, which is real for `Groups::walk_data`'s SaveGame path, **does not apply to this
 channel**.
 
+### `cities` now has a conditional exact producer — and a measured frame-zero loss
+
+Channel 9 (zero-based id 8) is `CheckSums::check_cities` `0x00937600`. The exact dynamic
+walker was already recovered, including the checksum-only omission of City names and the
+checksum-visible allocation metadata in `Array<CaravanLink>`. What was missing was a lawful
+bridge: `don-sim::tick::Sim` now owns the canonical `CityPool`, but the replay scorer still
+treated Cities as absent.
+
+`SimBridge::populate_sim_cities` now validates that pool against all Sim-owned Leader-validity
+mirrors and each live center Build's registry id, owner, City link, position, and production
+type. It then hashes the City records in retail owner/slot order. The bridge clears the old
+channel before validation, so a broken join cannot leave a stale checksum installed. No
+recorded checksum enters the producer.
+
+Three ordinary all-land, two-human recordings admit the existing starting-City constructor:
+
+| recording | compares | bytes / compare | first retail value | frozen constructor value |
+|---|---:|---:|---:|---:|
+| 2018.11.17 | 18,069 | 228 | `0x53130d2c` | `0x71020a46` |
+| 2020.02.08 | 9,789 | 228 | `0xdd170c24` | `0x247c0992` |
+| 2020.02.21 | 9,097 | 228 | `0x7d2d0bd4` | `0xcd970956` |
+
+That is **36,955 non-trivial and substantive comparisons**, up from zero; all have zero
+unsourced bytes, a complete walk, and an exact producer. Matches and survival remain **0**.
+This is the intended result: the state is the fresh constructor, while retail runs the
+frame-zero `Leader::plan_strategy` Unit and terrain census before its first checkpoint. The
+next work is therefore localized to concrete City fields rather than hidden behind an absent
+producer. Full derivation and the fail-closed mutation proof are in
+[`docs/assembly/replay-cities-sim-channel.md`](../assembly/replay-cities-sim-channel.md).
+
 ### The corpus has a **second** checksum stream, and 39 recordings were carrying it
 
 `CheckSumsCommand` `0x39` is not the only lockstep checksum in the corpus.
 `NextCheckSumCommand` `0x3a` — six bytes, a `CheckSumTypes` index and one subsystem's
-checksum — appears in **39 of the 61 recordings**, 796,957 records, and in **no** recording
+checksum — appears in **39 of the 62 recordings**, 796,957 records, and in **no** recording
 that carries a `0x39` tuple. The two are disjoint by engine build: `0x3a` is the
 `03.02.03.2905` / `00.2014.07.1000` / `00.2014.10.0200` recorders, `0x39` is
-`00.2017.11.2900` / `00.2024.06.2000`. So "61 files, 21 with checksums" was true of `0x39`
-and wrong about the corpus: **60 of 61 recordings carry lockstep checksums**, in one of two
+`00.2017.11.2900` / `00.2024.06.2000`. So "62 files, 21 with `0x39` checksums" is not the
+whole corpus result: **60 of 62 recordings carry lockstep checksums**, in one of two
 formats. Full derivation:
 [`docs/assembly/next-checksum-stream.md`](../assembly/next-checksum-stream.md).
 

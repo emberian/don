@@ -51,7 +51,7 @@ empty-caravan City.
 All fallible work targets local staged owners. A refusal publishes no partial CityPool,
 Build row, registry append, or channel.
 
-## Why the constructor checksum is not installed
+## Why the constructor checksum is not first-checkpoint-correct
 
 The fresh City body is not the first replay-checksum body. `Game::do_frame`
 (`0x00591EF0`) calls `Leaders::strategy_all` (`0x006ED430`), which calls
@@ -67,15 +67,19 @@ remain outside this owner. The receipt consequently exposes the exact constructo
 Cities walk but declares both `first_checksum_city_image_ready` and
 `builds_channel_ready` false.
 
-State integration treats Cities and Builds as an inseparable optional pair. It first
-clears both prior direct values and exact-owner flags, and installs neither unless both
-values are complete. Expiry uses the same paired clear before any later mutable state.
+State integration still treats the setup-owned Cities/Builds *pair* as inseparable and
+installs neither pair value unless both are complete. The later checksum-cities tranche now
+separately publishes the canonical `Sim::cities` traversal as a conditional exact producer.
+That producer makes the frozen constructor image observable to the replay scoreboard; it does
+not set `first_checksum_city_image_ready`, install Builds, or assert a retail match. See
+[`replay-cities-sim-channel.md`](replay-cities-sim-channel.md).
 
 ## Verification
 
 `crates/don-replay/tests/setup_cities_builds.rs` covers the three admitted all-land
 recordings, verifies canonical owner/play/center/region/ptype/City joins and the two-city
-228-byte constructor walk, and asserts that neither exact replay channel is installed.
+228-byte constructor walk, asserts that Builds remains uninstalled, and verifies that the
+independent Sim-owned Cities producer is exact, fully sourced, and frozen across harness steps.
 It also covers fail-closed Great Lakes region, starting-town 2, and corrupt-camera cases.
 The local corpus gate passes 2/2 active tests; Persvati clean-HEAD isolated overlay job
 `replay-setup-cities-builds2-20260811T181107Z-89456-9395-ee618ca8197f` passes 2/2 source

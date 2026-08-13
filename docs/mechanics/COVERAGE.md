@@ -73,7 +73,7 @@ it is the engine telling us how much of a class is sim-critical.
 | 6 | `groups` | `check_groups` `0x00937530` | `Group::walk_data` `0x00708400` | 72 / 2516 | `groups_guys` | partial |
 | 7 | `guys` | `check_guys` `0x00937430` | `GuyData::walk_data` `0x005E0210` | 155 / 188 | `groups_guys` | partial |
 | 8 | `leaders` | inline in `check_all` | `LeaderData::walk_data` `0x006D6750` | 27182 / 28388 | `economy`, `tech_cities`, `victory_score` | partial |
-| 9 | `cities` | `check_cities` `0x00937600` | `City::walk_data` `0x00489220` | 110 / 192 | `tech_cities` | partial |
+| 9 | `cities` | `check_cities` `0x00937600` | `City::walk_data` `0x00489220` | 110-byte POD/flags prefix plus dynamic `Array<CaravanLink>` | `tech_cities`, `don-replay::cities_runtime` | partial; exact conditional Sim bridge, frozen constructor on 3 corpus recordings |
 | 10 | `items` | `check_items` `0x00937790` | `Item::walk_data` `0x00677150` | 22 bytes per live item (re-audited) / 44 | `items` | partial; compiled, no runtime producer |
 | 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 22 / 48 | `economy` (`goods_channel`) | partial |
 | 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | dynamic exact walk, 13 sections | `borders_fog`, `map_terrain`, `don-replay::initial` | partial; prefix dimensions/seed reach scoreboard, generated terrain/starts unsourced |

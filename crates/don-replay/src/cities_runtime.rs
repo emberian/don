@@ -1,11 +1,12 @@
 //! Exact, fail-closed adapter from the canonical typed City owner to the retail Cities
 //! checksum walk.
 //!
-//! `don_sim::systems::tech_cities::CityPool` owns the complete fixed City bytes and the
-//! dynamic `Array<CaravanLink>` payload, but `don_sim::tick::Sim` does not yet retain a
-//! `CityPool`.  Conversely, `Sim` owns the center Build registry, current Build types, and
-//! several mirrors of `LeaderData::leader_flags`.  This module joins those owners without
-//! installing a replay channel or pretending setup has created the starting cities.
+//! `don_sim::tick::Sim` owns the complete fixed City bytes, the dynamic
+//! `Array<CaravanLink>` payload, the center Build registry, current Build types, and several
+//! mirrors of `LeaderData::leader_flags`. This module joins those owners and exposes the
+//! resulting exact traversal to the replay bridge. It does not claim that a partially
+//! reconstructed setup City image is retail-correct; producer presence and wire equality
+//! remain separate evidence in the replay scoreboard.
 //!
 //! The generic fixed-image replay walker is not sufficient for City.  `City::walk_data`
 //! skips both `String` members for a checksum visitor, while `Array<CaravanLink>::walk_data`
@@ -488,4 +489,13 @@ pub fn check_sim_cities(
         cities_walked,
         slots_scanned,
     })
+}
+
+/// Produce the Cities channel from the canonical City owner retained by [`Sim`].
+///
+/// Keep the explicit-pool adapter above for offline reconstruction and mutation tests, but
+/// replay integration must use this entry point: accepting an arbitrary parallel pool after
+/// `Sim` gained its own [`CityPool`] would make the channel depend on caller-selected state.
+pub fn check_sim_owned_cities(sim: &Sim) -> Result<CitiesChannelValue, CitiesRuntimeError> {
+    check_sim_cities(sim, &sim.cities)
 }

@@ -134,7 +134,7 @@ fn print_setup_command_coordinates() {
 }
 
 #[test]
-fn all_land_two_human_setups_build_a_complete_fresh_constructor_but_refuse_promotion() {
+fn all_land_two_human_setups_install_a_frozen_sim_owned_cities_producer() {
     let names = [
         "Playback___2018.11.17_13_21_42__Sat_.rcx",
         "Playback___2020.02.08_10_49_15__Sat_.rcx",
@@ -189,15 +189,29 @@ fn all_land_two_human_setups_build_a_complete_fresh_constructor_but_refuse_promo
         assert!(setup.channels().cities.is_none());
 
         let (ours, evidence) = sim.check_all_with_evidence();
-        assert_eq!(ours.get(Channel::Cities), 1);
-        assert!(!evidence[Channel::Cities as usize].installed);
-        assert!(!evidence[Channel::Cities as usize].exact_producer);
+        assert_eq!(setup.sim.cities.slots, setup.cities.slots);
+        assert_eq!(setup.sim.cities.city_mark, setup.cities.city_mark);
+        assert_eq!(
+            ours.get(Channel::Cities),
+            setup.receipt.constructor_cities.checksum
+        );
+        assert!(evidence[Channel::Cities as usize].installed);
+        assert!(evidence[Channel::Cities as usize].exact_producer);
+        assert!(evidence[Channel::Cities as usize].walk_complete);
+        assert_eq!(evidence[Channel::Cities as usize].bytes_walked, 228);
+        assert_eq!(evidence[Channel::Cities as usize].unsourced_walked, 0);
         assert!(!evidence[Channel::Builds as usize].installed);
 
         sim.step_turn(0);
         let (_, expired) = sim.check_all_with_evidence();
-        assert!(!expired[Channel::Cities as usize].installed);
-        assert!(!expired[Channel::Cities as usize].exact_producer);
+        assert!(sim.initial_setup.is_none(), "the atomic setup pair expired");
+        assert!(
+            sim.frozen_initial_cities.is_some(),
+            "only the canonical Cities owner survives"
+        );
+        assert!(expired[Channel::Cities as usize].installed);
+        assert!(expired[Channel::Cities as usize].exact_producer);
+        assert_eq!(expired[Channel::Cities as usize].bytes_walked, 228);
         assert!(!expired[Channel::Builds as usize].installed);
     }
 }

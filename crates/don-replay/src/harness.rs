@@ -413,11 +413,16 @@ pub struct WorldSim {
     /// recordings all carry the same first-turn value.
     pub initial_groups: crate::groups_channel::InitialGroupsChannel,
     /// Atomic owner for the fresh post-constructor City centers and canonical Build
-    /// identities. It retains an exact constructor-time Cities walk for diagnostics, but
-    /// installs neither replay channel until the Build initializer and frame-zero City
-    /// census are both complete.
+    /// identities. Its Build/City *pair* remains unpromoted until the Build initializer and
+    /// frame-zero City census are complete. Independently, the exact Cities adapter exposes
+    /// this frozen Sim-owned constructor image as a conditional producer, so the scoreboard
+    /// measures its divergence instead of treating channel 9 as absent.
     pub initial_setup: Option<crate::setup_cities_builds::StartingSetupState>,
     pub initial_setup_error: Option<crate::setup_cities_builds::SetupCitiesError>,
+    /// Canonical Sim owner retained after the atomic setup pair expires. This is explicitly
+    /// frozen at the fresh constructor: it keeps the independently valid Cities traversal
+    /// observable without allowing a future completed Builds value to survive the first tick.
+    pub frozen_initial_cities: Option<don_sim::tick::Sim>,
 }
 
 impl Default for WorldSim {
@@ -445,6 +450,7 @@ impl WorldSim {
             initial_groups: crate::groups_channel::InitialGroupsChannel::derive(),
             initial_setup: None,
             initial_setup_error: None,
+            frozen_initial_cities: None,
         }
     }
 
@@ -500,6 +506,11 @@ impl WorldSim {
         crate::state::SimBridge::populate_groups_initial(&self.initial_groups, &mut self.state);
         if let Some(setup) = &self.initial_setup {
             crate::state::SimBridge::populate_starting_setup(setup, &mut self.state);
+            crate::state::SimBridge::populate_sim_cities(&setup.sim, &mut self.state)
+                .expect("StartingSetupState admitted the same canonical Sim City owner");
+        } else if let Some(sim) = &self.frozen_initial_cities {
+            crate::state::SimBridge::populate_sim_cities(sim, &mut self.state)
+                .expect("frozen starting Cities owner was admitted before transfer");
         }
     }
 
@@ -521,8 +532,9 @@ impl WorldSim {
 
 impl Simulation for WorldSim {
     fn step_turn(&mut self, frames: u32) {
-        if self.initial_setup.take().is_some() {
+        if let Some(setup) = self.initial_setup.take() {
             crate::state::SimBridge::clear_starting_setup(&mut self.state);
+            self.frozen_initial_cities = Some(setup.sim);
         }
         self.turns += 1;
         for _ in 0..frames {

@@ -8,8 +8,10 @@
 //! `CheckSums::check_units` `0x009371d0` uses. The `world` channel has a second,
 //! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
 //! from the authoritative `.rcx` initial setup. Everything else the fifteen
-//! channels walk — builds, walls, ammo, deaths, guys, leaders, cities and
-//! goods — has no producer in `don-sim` at all. `groups` and `scenario_data` are the two
+//! channels walk — builds, walls, ammo, deaths, guys, leaders and goods — has no producer
+//! in `don-sim` at all. Cities are projected by a separate exact adapter from
+//! `don_sim::tick::Sim`, whose canonical `CityPool` must self-consistently join the Leader,
+//! Build, object-registry, and production-type owners. `groups` and `scenario_data` are the two
 //! channels whose *initial* state is derived from a retail initializer rather than from a
 //! `don_sim::World`, installed by `populate_groups_initial` /
 //! `populate_scenario_initial`; both are frozen at `Game::init` and both expire.
@@ -391,6 +393,7 @@ impl SimBridge {
     /// `don-sim` can say".
     pub const PRODUCES: &'static [Channel] = &[
         Channel::Units,
+        Channel::Cities,
         Channel::Items,
         Channel::World,
         Channel::ScriptRunTime,
@@ -406,7 +409,6 @@ impl SimBridge {
         "Group mutation (groups) — the 512 slots Groups::clear 0x00713f20 leaves at Game::init are produced, together with the 32-byte last_group tail check_groups hashes through 0x00e85f4c, but nothing drives Groups::push_group / Group::action_*, so the channel is frozen at Game::init and expires at the recording's first group command; see docs/assembly/groups-initial-state.md",
         "GuyData columns (guys)",
         "LeaderData records, 27,182 walked bytes each (leaders)",
-        "City records (cities)",
         "Good flat list (goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
         "ScenarioData mutation (scenario_data) — the ScenarioFuncSet::init 0x00a03c30 initial state is produced, but nothing writes units_killed/builds_destroyed/city_lost_to, so the channel is frozen at Game::init and expires at the recording's first kill; see docs/assembly/scenario-initial-state.md",
@@ -658,6 +660,31 @@ impl SimBridge {
             0,
             groups.slots,
         );
+    }
+
+    /// Install channel 9 from [`don_sim::tick::Sim`]'s canonical City owner.
+    ///
+    /// The adapter validates every active City against all four Leader-validity mirrors and
+    /// the center Build's identity, owner, City slot, position, and current type before it
+    /// hashes a byte. The destination is cleared first, so a stale value cannot survive a
+    /// failed join. This certifies the producer and traversal, not equality with retail; the
+    /// current replay setup state is a frozen fresh-constructor image and is expected to
+    /// diverge until the frame-zero Unit census and remaining setup schedule are owned.
+    pub fn populate_sim_cities(
+        sim: &don_sim::tick::Sim,
+        state: &mut SimState,
+    ) -> Result<crate::cities_runtime::CitiesChannelValue, crate::cities_runtime::CitiesRuntimeError>
+    {
+        state.clear_channel(Channel::Cities);
+        let cities = crate::cities_runtime::check_sim_owned_cities(sim)?;
+        state.set_exact_direct_channel_elements(
+            Channel::Cities,
+            cities.checksum,
+            cities.bytes_walked,
+            0,
+            cities.cities_walked,
+        );
+        Ok(cities)
     }
 
     /// Atomically replace the two setup-owned City/Build channels only after their shared

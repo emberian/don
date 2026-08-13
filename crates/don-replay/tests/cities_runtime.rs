@@ -6,6 +6,7 @@ mod cities_runtime;
 use cities_runtime::*;
 use don_replay::checksum::{Channel, CheckSum};
 use don_replay::replay::{corpus, Replay};
+use don_replay::state::{SimBridge, SimState};
 use don_replay::walk::walk_class;
 use don_replay::walk_gen::class_index;
 use don_sim::objects::{Band, BUILD_BAND_BASE};
@@ -323,10 +324,45 @@ fn city_mark_and_slot_identity_are_owner_state_not_advisory_metadata() {
     );
 }
 
-/// Corpus boundary only. Recorded Cities checksums are outputs used to prove the exact
-/// adapter is still missing its setup producer; no recorded word enters `check_sim_cities`.
 #[test]
-fn corpus_first_cities_is_nonempty_while_the_replay_bridge_has_no_producer() {
+fn bridge_reads_only_the_canonical_sim_owner_and_clears_on_failed_rejoin() {
+    let mut sim = Sim::new(0x5a, 8);
+    let (_row, object_id) = spawn_center(&mut sim, 0, 0, 414, 300, 600);
+    install_city(&mut sim.cities, 0, 0, object_id, 300, 600);
+
+    let expected = don_replay::cities_runtime::check_sim_owned_cities(&sim).unwrap();
+    let mut state = SimState::new();
+    let installed = SimBridge::populate_sim_cities(&sim, &mut state).unwrap();
+    assert_eq!(installed, expected);
+    let report = don_replay::check_all::CheckAll::of_state(&state);
+    let city = &report.per[Channel::Cities as usize];
+    assert_eq!(city.value, expected.checksum);
+    assert_eq!(city.bytes, EMPTY_CARAVAN_CITY_WALK_BYTES);
+    assert_eq!(city.elements, 1);
+    assert!(city.installed);
+    assert!(city.exact_producer);
+    assert!(city.complete());
+    assert_eq!(city.unsourced_walked_bytes, 0);
+
+    let first = city.value;
+    sim.cities.slots[0][0].capture_stamp = 0x1234;
+    SimBridge::populate_sim_cities(&sim, &mut state).unwrap();
+    let mutated = don_replay::check_all::CheckAll::of_state(&state);
+    assert_ne!(mutated.per[Channel::Cities as usize].value, first);
+
+    sim.builds[0].city = 7;
+    assert!(SimBridge::populate_sim_cities(&sim, &mut state).is_err());
+    let refused = don_replay::check_all::CheckAll::of_state(&state);
+    assert_eq!(refused.per[Channel::Cities as usize].value, 1);
+    assert!(!refused.per[Channel::Cities as usize].installed);
+    assert!(!refused.per[Channel::Cities as usize].exact_producer);
+}
+
+/// Corpus boundary only. Recorded Cities checksums are outputs used to prove that an empty
+/// conditional producer is never mistaken for an empty retail channel; no recorded word enters
+/// `check_sim_owned_cities`.
+#[test]
+fn corpus_first_cities_is_nonempty_and_the_bridge_is_conditional() {
     let files = corpus(&repo_root());
     if files.is_empty() {
         skip("ron-data/replays contains no .rcx files.");
@@ -334,8 +370,8 @@ fn corpus_first_cities_is_nonempty_while_the_replay_bridge_has_no_producer() {
     }
     assert_eq!(
         don_replay::check_all::CHANNEL_SOURCE[Channel::Cities as usize],
-        don_replay::check_all::ChannelSource::Absent,
-        "an adapter without Setup::build_cities must not be advertised as a producer"
+        don_replay::check_all::ChannelSource::Conditional,
+        "Cities is installed only when a self-consistent Sim CityPool is attached"
     );
 
     let mut checksummed = 0usize;

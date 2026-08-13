@@ -2190,10 +2190,10 @@
         "name": "cities",
         "walker": "CheckSums::check_cities",
         "element_class": "City",
-        "producer": "absent",
+        "producer": "sim_bridge",
         "compares": 222938,
         "matches": 0,
-        "nontrivial_compares": 0,
+        "nontrivial_compares": 36955,
         "best_survived_turns": 0,
         "complete": false
       },

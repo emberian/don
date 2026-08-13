@@ -243,7 +243,7 @@ pub const CHANNEL_SOURCE: [ChannelSource; NUM_WALKED] = [
     ChannelSource::Absent,      // groups
     ChannelSource::Absent,      // guys
     ChannelSource::Absent,      // leaders
-    ChannelSource::Absent,      // cities
+    ChannelSource::Conditional, // cities — exact when a self-consistent Sim CityPool is attached
     ChannelSource::Conditional, // items — optional World::item_runtime
     ChannelSource::Absent,      // goods
     ChannelSource::Modelled,    // world   — exact dynamic World::walk_data bridge
@@ -638,6 +638,11 @@ mod tests {
         let map = don_sim::systems::map_terrain::World::init_default_rules(40, 40);
         w.configure_items(&map);
         SimBridge::populate_with_map(&w, &map, 0, &mut st);
+        // Cities has a different canonical host than the World-only bridge. An empty but
+        // initialized Sim CityPool is still a real conditional producer and must be
+        // attached explicitly, just as the item registry is configured explicitly above.
+        let sim = don_sim::tick::Sim::new(4, 40);
+        SimBridge::populate_sim_cities(&sim, &mut st).expect("pristine Sim City owner");
         for i in 0..NUM_WALKED {
             let filled = st.channel_is_installed(i);
             match CHANNEL_SOURCE[i] {
