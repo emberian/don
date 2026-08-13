@@ -8,8 +8,10 @@
 //! y-inner order. This tranche also follows the reached ordinary-land
 //! `BuildTypeData::blocked_tcoord` path through the exact `get_good` switch and TCoord land
 //! classification. The source-backed continuation executes the complete read-only
-//! `LandData::get_amount`, repeats the admitted ordinary-land path over the full footprint,
-//! and stops before `BuildTypeData::blocked_location`. Nothing in this module mutates Sim.
+//! `LandData::get_amount` and repeats the admitted ordinary-land path over the full footprint.
+//! The installed Farm continuation then owns the reached dry/unowned-territory exit from
+//! `BuildTypeData::blocked_location` and the final non-immediate `blocked_site` return filter.
+//! Nothing in this module mutates Sim.
 
 use crate::tick::{Sim, NUM_LEADERS};
 
@@ -46,6 +48,9 @@ pub const BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES: u32 =
 pub const BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING: u32 =
     BUILD_TYPE_BLOCKED_TCOORD_END_VA - BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA;
 pub const BUILD_TYPE_BLOCKED_LOCATION_VA: u32 = 0x0063_75b0;
+pub const BUILD_TYPE_BLOCKED_LOCATION_END_VA: u32 = 0x0063_89b0;
+pub const BUILD_TYPE_NON_FRIENDLY_TERRITORY_VA: u32 = 0x0063_89c0;
+pub const BUILD_TYPE_BLOCKED_LOCATION_NON_FRIENDLY_CALL_VA: u32 = 0x0063_768b;
 pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA: u32 = 0x0063_6d18;
 pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING: u32 =
     BUILD_TYPE_BLOCKED_SITE_END_VA - BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA;
@@ -54,7 +59,9 @@ pub const OIL_WELL_TYPE: usize = 421;
 pub const OIL_PLATFORM_TYPE: usize = 422;
 pub const DOCK_TYPE: usize = 432;
 pub const FORT_TYPE: usize = 443;
+pub const FARM_TYPE: usize = 417;
 pub const GAME_SEMAPHORE_IMMEDIATE_BIT: u32 = 11;
+pub const LAKOTA_TRIBE: i32 = 19;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildTypeBlockedTcoordBoundary {
@@ -198,6 +205,51 @@ pub struct LeaderProduceBuildingBlockedSiteFootprintReceipt {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeNonFriendlyTerritoryRead {
+    pub tile: [i32; 2],
+    pub terrain_mask: u16,
+    pub territory_owner: i8,
+}
+
+/// Complete reached Farm verdict from `blocked_location` and the final `blocked_site` filter.
+///
+/// Retail scans the footprint x-outer/y-inner. Water tiles do not consult WData ownership;
+/// every reached installed tile is dry and therefore records the canonical `WData::who` byte.
+/// An unowned byte (`-1`) raises `non_friendly_territory` to one. A non-Lakota owner then exits
+/// `blocked_location` with `0x1a`, before any Town, City-capacity, water-count, or gather reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingBlockedSiteFarmUnownedReceipt {
+    pub input: LeaderProduceBuildingBlockedSiteFootprintReceipt,
+    pub territory_reads: Vec<BuildTypeNonFriendlyTerritoryRead>,
+    pub non_friendly_territory: i32,
+    pub lakota_bonus: bool,
+    pub blocked_location_returned: i32,
+    pub immediate: bool,
+    /// Exact scalar returned by `BuildTypeData::blocked_site` to `Leader::produce_building`.
+    pub native_returned: i32,
+}
+
+impl LeaderProduceBuildingBlockedSiteFarmUnownedReceipt {
+    pub fn validates(&self) -> bool {
+        self.input.continuation.va == BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+            && self.input.continuation.callee_va == BUILD_TYPE_BLOCKED_LOCATION_VA
+            && self.input.continuation.blocked_site_bytes_remaining
+                == BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING
+            && self.input.continuation.type_index == FARM_TYPE as i32
+            && self.territory_reads.len() == self.input.tiles.len()
+            && self.territory_reads.iter().all(|read| {
+                read.terrain_mask & tflag::SURFACE_MASK != tflag::SURFACE_WATER
+                    && read.territory_owner == -1
+            })
+            && self.non_friendly_territory == 1
+            && !self.lakota_bonus
+            && !self.immediate
+            && self.blocked_location_returned == 0x1a
+            && self.native_returned == self.blocked_location_returned
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildTypeBlockedTcoordPrefixStatus {
     ReturnedToBlockedSite,
     ReadyForLandDataGetAmount,
@@ -286,6 +338,33 @@ pub enum LeaderProduceBuildingBlockedSiteFootprintError {
     Land(GatherTerrainMaterializationError),
     UnsupportedChildWithoutLandContinuation { tile: [i32; 2], raw: i32 },
     UnsupportedNonZeroChild { tile: [i32; 2], raw: i32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingBlockedSiteFarmUnownedError {
+    InvalidFootprintReceipt,
+    InvalidOwner {
+        owner: usize,
+    },
+    InvalidFarmProfile,
+    ImmediateSemaphore,
+    InvalidTile {
+        tile: [i32; 2],
+    },
+    TerrainReceiptMismatch {
+        tile: [i32; 2],
+        receipt_mask: u16,
+        actual_mask: u16,
+    },
+    UnsupportedWaterTile {
+        tile: [i32; 2],
+        terrain_mask: u16,
+    },
+    UnsupportedTerritoryOwner {
+        tile: [i32; 2],
+        territory_owner: i8,
+    },
+    UnsupportedLakotaTerritoryBypass,
 }
 
 #[inline]
@@ -818,6 +897,161 @@ pub fn apply_sim_leader_produce_building_blocked_site_land_footprint(
         locally_seen_tiles: 0,
         continuation,
     })
+}
+
+/// Execute the complete reached installed-Farm `blocked_location` verdict and its parent
+/// `blocked_site` return filter.
+///
+/// This is intentionally a narrow terminal cone. The synchronized fixture reaches only dry,
+/// unowned WData and a non-Lakota owner. Retail returns `0x1a` immediately from that territory
+/// arm, so Town lookup, per-City Farm capacity, water counting, and `calc_gather` are not read.
+/// Owned/allied/enemy territory and the immediate-game override remain separate fail-closed
+/// branches rather than being inferred from City tile masks.
+pub fn apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    input: LeaderProduceBuildingBlockedSiteFootprintReceipt,
+) -> Result<
+    LeaderProduceBuildingBlockedSiteFarmUnownedReceipt,
+    LeaderProduceBuildingBlockedSiteFarmUnownedError,
+> {
+    if !input.entry.validates()
+        || input.entry.native_returned.is_some()
+        || input.blocked_detail != 0
+        || input.locally_seen_tiles != 0
+        || input.continuation.va != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+        || input.continuation.callee_va != BUILD_TYPE_BLOCKED_LOCATION_VA
+        || input.continuation.blocked_site_bytes_remaining
+            != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING
+        || input.continuation.owner != input.entry.input.owner
+        || input.continuation.type_index != input.entry.input.type_index
+        || input.continuation.placement_coord != input.entry.input.placement_coord
+        || input.continuation.footprint_corner != input.entry.footprint_corner
+        || input.continuation.city_constraint != -1
+        || input.continuation.blocked_detail != 0
+    {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidFootprintReceipt);
+    }
+    let owner = input.continuation.owner as usize;
+    if owner >= NUM_LEADERS {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidOwner { owner });
+    }
+    let farm_index = FARM_TYPE;
+    let Some(target) = production.types.get(farm_index).and_then(Option::as_ref) else {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidFarmProfile);
+    };
+    let Some(target_row) = types.types.rows().get(farm_index) else {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidFarmProfile);
+    };
+    let visibility = target.build_visibility;
+    let footprint = visibility.and_then(|facts| facts.footprint);
+    let domain = visibility.and_then(|facts| facts.domain);
+    let is_related = |query: usize| {
+        target_row
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == query)
+    };
+    if input.continuation.type_index != FARM_TYPE as i32
+        || target.type_index != FARM_TYPE as i32
+        || target.class != LiveTypeClass::Building
+        || target_row.index != FARM_TYPE as i32
+        || target_row.domain() != TypeDomain::Build
+        || target.build_flags != 0x1000_0049
+        || domain != Some(0)
+        || footprint != Some(input.entry.target_footprint)
+        || input.entry.target_footprint
+            != (Footprint {
+                x_size: 4,
+                y_size: 4,
+            })
+        || input.tiles.len() != 16
+        || is_related(CITY_TYPE)
+        || is_related(FORT_TYPE)
+        || is_related(DOCK_TYPE)
+        || input.tiles.iter().any(|tile| {
+            !tile.prefix.validates()
+                || tile.prefix.continuation != Some(tile.amount.input)
+                || tile.raw_returned_to_blocked_site != 0
+                || tile.amount.returned == 0
+                || tile.prefix.input.tile != tile.amount.input.tile
+        })
+    {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidFarmProfile);
+    }
+
+    let immediate = sim.vic_match.semaphore & (1 << GAME_SEMAPHORE_IMMEDIATE_BIT) != 0;
+    if immediate {
+        return Err(LeaderProduceBuildingBlockedSiteFarmUnownedError::ImmediateSemaphore);
+    }
+
+    let [corner_x, corner_y] = input.entry.footprint_corner;
+    let expected_tiles =
+        (corner_x..corner_x + 4).flat_map(|tx| (corner_y..corner_y + 4).map(move |ty| [tx, ty]));
+    let mut territory_reads = Vec::with_capacity(input.tiles.len());
+    for (tile, expected) in input.tiles.iter().zip(expected_tiles) {
+        let reached = tile.prefix.input.tile;
+        if reached != expected || !sim.map.world.valid_t(reached[0], reached[1]) {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmUnownedError::InvalidTile { tile: reached },
+            );
+        }
+        let terrain_mask = sim.map.world.tmask(reached[0], reached[1]);
+        if tile.amount.input.terrain_mask != terrain_mask {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmUnownedError::TerrainReceiptMismatch {
+                    tile: reached,
+                    receipt_mask: tile.amount.input.terrain_mask,
+                    actual_mask: terrain_mask,
+                },
+            );
+        }
+        if terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmUnownedError::UnsupportedWaterTile {
+                    tile: reached,
+                    terrain_mask,
+                },
+            );
+        }
+        let territory_owner = sim.map.world.wdata(reached[0] >> 2, reached[1] >> 2).who;
+        if territory_owner != -1 {
+            return Err(
+                LeaderProduceBuildingBlockedSiteFarmUnownedError::UnsupportedTerritoryOwner {
+                    tile: reached,
+                    territory_owner,
+                },
+            );
+        }
+        territory_reads.push(BuildTypeNonFriendlyTerritoryRead {
+            tile: reached,
+            terrain_mask,
+            territory_owner,
+        });
+    }
+
+    // `LeaderData::has_tribe_bonus(0x13)`: Lakota may build in unowned territory and therefore
+    // continues to the still-separate Town/capacity tail instead of returning `0x1a` here.
+    let lakota_bonus = types.leaders[owner].tribe == LAKOTA_TRIBE;
+    if lakota_bonus {
+        return Err(
+            LeaderProduceBuildingBlockedSiteFarmUnownedError::UnsupportedLakotaTerritoryBypass,
+        );
+    }
+
+    let receipt = LeaderProduceBuildingBlockedSiteFarmUnownedReceipt {
+        input,
+        territory_reads,
+        non_friendly_territory: 1,
+        lakota_bonus,
+        blocked_location_returned: 0x1a,
+        immediate,
+        // With the immediate semaphore clear, 0x00636D5F returns the child code unchanged.
+        native_returned: 0x1a,
+    };
+    debug_assert!(receipt.validates());
+    Ok(receipt)
 }
 
 #[cfg(test)]

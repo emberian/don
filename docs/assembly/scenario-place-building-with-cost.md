@@ -103,9 +103,19 @@ returns the paired `num_make[4]` value for the first matching good, and otherwis
 its tile-index argument is not read. The source-backed continuation executes that exact body for
 all sixteen installed Farm tiles in x-outer/y-inner order. Each canonical Land row returns one
 Food, so every child returns raw zero, the parent detail word stays zero, and the negative City
-constraint keeps the locally-unseen count at zero. The next honest boundary is the
-`BuildTypeData::blocked_location` call at `0x00636D18` (callee `0x006375B0`) with 95 bytes of
-`blocked_site` remaining. `blocked_location` and the final parent return filter remain unclaimed.
+constraint keeps the locally-unseen count at zero.
+
+The reached Farm continuation now owns `BuildTypeData::blocked_location` (`0x006375B0`, 5,120
+bytes) through its exact early territory exit and all 95 remaining bytes of `blocked_site` from
+the call at `0x00636D18`. Farm is neither City nor Fort, carries neither `build_flags & 0x20` nor
+the Dock relation, and the immediate-game semaphore is clear, so retail calls
+`BuildTypeData::non_friendly_territory` at `0x0063768B` (callee `0x006389C0`). That callee walks
+the same 4x4 footprint x-outer/y-inner. It skips WData ownership only for water; every reached
+tile is dry and reads canonical `WData::who == -1`, raising the verdict to one. The owner is tribe
+zero, not Lakota tribe 19, so `blocked_location` returns `0x1A` before Town lookup, City Farm-limit,
+water-count, or gather reads. Since the immediate semaphore is still clear, the parent filter at
+`0x00636D1D..0x00636D6D` returns that child code unchanged. Owned/allied/enemy territory, Lakota's
+unowned-territory bypass, and the later Town/capacity/gather tail remain fail-closed.
 
 ## Canonical prefixes and receipts
 
@@ -173,6 +183,13 @@ child return, requires the admitted all-zero child cohort, and then exposes only
 `blocked_location` call boundary. Any nonzero child remains fail-closed until the parent's exact
 precedence filter is owned. The routine is read-only and cannot manufacture placement success.
 
+The Farm-unowned terminal receipt consumes that exact footprint boundary, revalidates the
+installed `type 417 / domain 0 / 4x4 / build_flags 0x10000049` profile, and records every dry
+tile's canonical territory-owner byte. It exposes both the raw `blocked_location` result and the
+final `blocked_site` native result as `0x1A`. This is a complete read-only candidate verdict, not
+builtin 520 placement success: `Leader::produce_building` consumes the nonzero value and resumes
+its circle search.
+
 The replay host records terminal receipts from the earlier gates and all five native-prefix
 receipts on admitted execution. A fully rejected ring returns scenario zero from the mounted
 builtin without mutation. Reaching `LandData::get_amount` (or returning a child verdict to the
@@ -181,8 +198,8 @@ unmounted `blocked_site` aggregator) raises the existing unimplemented host boun
 Groups, Builds, and all Leader mirrors. This preserves builtin 520 as the externally visible stop
 until the virtual site check and placement mutation tail are one atomic transaction. The
 installed replay gate separately executes the source-backed sixteen-tile continuation through
-`LandData::get_amount` and proves the next stop is `blocked_location`; it does not turn that
-read-only evidence into builtin 520's scalar result.
+`LandData::get_amount`, the complete Farm-unowned `blocked_location` exit, and the parent return
+filter; it does not turn that one candidate's read-only rejection into builtin 520's scalar result.
 
 ## Installed-content evidence
 
@@ -197,8 +214,13 @@ entry converts that to TCoord `(10, 10)`, derives Farm's top-left footprint corn
 the ordinary-land child observes region 64 and unexplored terrain mask `CITY`, resolves Farm to
 Food good zero and canonical land index zero. Installed `rules.xml` supplies the exact LandData
 row; all sixteen 4x4 tiles return amount one and raw child zero before the typed
-`blocked_location` stop. The test still stops at builtin 520 and rolls back, proving that no
-false placement result leaks past the native boundary. A separate mounted test marks the bounded
+`blocked_location` boundary. The continuation records sixteen dry `WData::who == -1` reads,
+native territory verdict one, no Lakota bypass, and exact `0x1A` returns from both
+`blocked_location` and `blocked_site`. The read-only gate then resumes the exact circle offset and
+executes the same cone for all 35 surviving sites before reaching native one / scenario zero at
+bounded ring exhaustion. The live host still stops at builtin 520 and rolls back, proving that a
+rejected candidate is not confused with placement success or the search's terminal scalar.
+A separate mounted test marks the bounded
 candidate ring with the exact `WData 0x4000` bit and proves the retail terminal zero return
 without Build, Group, or resource mutation.
 

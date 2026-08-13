@@ -36,17 +36,20 @@ use don_sim::systems::gather_terrain::{
 };
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_build_type_blocked_tcoord_land_prefix,
+    apply_sim_leader_produce_building_blocked_site_farm_unowned_tail,
     apply_sim_leader_produce_building_blocked_site_land_footprint,
     apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixError,
-    BuildTypeBlockedTcoordPrefixStatus, LeaderProduceBuildingBlockedSitePrefixError,
-    BUILD_TYPE_BLOCKED_LOCATION_VA, BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+    BuildTypeBlockedTcoordPrefixStatus, LeaderProduceBuildingBlockedSiteFarmUnownedError,
+    LeaderProduceBuildingBlockedSitePrefixError, BUILD_TYPE_BLOCKED_LOCATION_END_VA,
+    BUILD_TYPE_BLOCKED_LOCATION_NON_FRIENDLY_CALL_VA, BUILD_TYPE_BLOCKED_LOCATION_VA,
+    BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
     BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA,
     BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA, BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING,
     BUILD_TYPE_BLOCKED_SITE_PREFIX_BYTES, BUILD_TYPE_BLOCKED_TCOORD_BYTES_REMAINING,
     BUILD_TYPE_BLOCKED_TCOORD_GET_AMOUNT_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_GET_GOOD_CALL_VA,
     BUILD_TYPE_BLOCKED_TCOORD_GET_LAND_CALL_VA, BUILD_TYPE_BLOCKED_TCOORD_LAND_PREFIX_BYTES,
-    BUILD_TYPE_BLOCKED_TCOORD_VA, BUILD_TYPE_GET_GOOD_VA, GAME_SEMAPHORE_IMMEDIATE_BIT,
-    LAND_DATA_GET_AMOUNT_VA, WORLD_DATA_GET_LAND_TCOORD_VA,
+    BUILD_TYPE_BLOCKED_TCOORD_VA, BUILD_TYPE_GET_GOOD_VA, BUILD_TYPE_NON_FRIENDLY_TERRITORY_VA,
+    GAME_SEMAPHORE_IMMEDIATE_BIT, LAND_DATA_GET_AMOUNT_VA, WORLD_DATA_GET_LAND_TCOORD_VA,
 };
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     apply_sim_leader_produce_building_candidate_prefix, CandidatePrefixRejection,
@@ -1553,6 +1556,116 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(installed_footprint.continuation.footprint_corner, [8, 8]);
     assert_eq!(installed_footprint.continuation.city_constraint, -1);
     assert_eq!(installed_footprint.continuation.blocked_detail, 0);
+
+    let installed_site_tail = apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
+        &sim,
+        &production,
+        &types,
+        installed_footprint,
+    )
+    .expect("return the exact installed Farm dry/unowned blocked_location verdict");
+    assert!(installed_site_tail.validates());
+    assert_eq!(
+        BUILD_TYPE_BLOCKED_LOCATION_END_VA - BUILD_TYPE_BLOCKED_LOCATION_VA,
+        0x1400
+    );
+    assert_eq!(
+        BUILD_TYPE_BLOCKED_LOCATION_NON_FRIENDLY_CALL_VA,
+        0x0063_768b
+    );
+    assert_eq!(BUILD_TYPE_NON_FRIENDLY_TERRITORY_VA, 0x0063_89c0);
+    assert_eq!(installed_site_tail.territory_reads.len(), 16);
+    assert_eq!(
+        installed_site_tail
+            .territory_reads
+            .iter()
+            .map(|read| (read.tile, read.territory_owner))
+            .collect::<Vec<_>>(),
+        (8..12)
+            .flat_map(|tx| (8..12).map(move |ty| ([tx, ty], -1)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(installed_site_tail.non_friendly_territory, 1);
+    assert!(!installed_site_tail.lakota_bonus);
+    assert_eq!(installed_site_tail.blocked_location_returned, 0x1a);
+    assert!(!installed_site_tail.immediate);
+    assert_eq!(installed_site_tail.native_returned, 0x1a);
+    let prior_territory_owner = sim.map.world.wdata(2, 2).who;
+    sim.map.world.wdata_mut(2, 2).who = content_owner as i8;
+    let unsupported_owned = apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
+        &sim,
+        &production,
+        &types,
+        installed_site_tail.input.clone(),
+    );
+    sim.map.world.wdata_mut(2, 2).who = prior_territory_owner;
+    assert_eq!(
+        unsupported_owned,
+        Err(
+            LeaderProduceBuildingBlockedSiteFarmUnownedError::UnsupportedTerritoryOwner {
+                tile: [8, 8],
+                territory_owner: content_owner as i8,
+            }
+        )
+    );
+
+    // Resume retail's bounded circle immediately after the first rejected site. Every later
+    // surviving candidate must independently execute the exact sixteen-tile read cone and
+    // preserve `0x1a`; only the common native-one/scenario-zero exhaustion epilogue is terminal.
+    let mut resumed_boundary = installed_candidate.input;
+    resumed_boundary.circle_offset = installed_blocked_site.circle_offset + 1;
+    let mut territory_rejected_sites = 1usize;
+    let (search_native_returned, search_scenario_returned) = loop {
+        if resumed_boundary.circle_offset >= installed_candidate.circle_radius_end {
+            break (1, 0);
+        }
+        let resumed_candidate = apply_sim_leader_produce_building_candidate_prefix(
+            &sim,
+            &production,
+            &types,
+            resumed_boundary,
+        )
+        .expect("resume the exact candidate ring after an unowned-territory refusal");
+        if let Some(native) = resumed_candidate.native_returned {
+            break (
+                native,
+                resumed_candidate
+                    .scenario_returned
+                    .expect("candidate exhaustion carries the scenario scalar"),
+            );
+        }
+        let resumed_site_boundary = resumed_candidate
+            .continuation
+            .expect("a nonterminal candidate reaches blocked_site");
+        let resumed_site_prefix = apply_sim_leader_produce_building_blocked_site_prefix(
+            &production,
+            &types,
+            resumed_site_boundary,
+        )
+        .expect("execute the resumed candidate's blocked_site entry");
+        let resumed_footprint = apply_sim_leader_produce_building_blocked_site_land_footprint(
+            &sim,
+            &production,
+            &types,
+            &terrain,
+            resumed_site_prefix,
+        )
+        .expect("execute the resumed candidate's sixteen exact Farm tile reads");
+        let resumed_site = apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
+            &sim,
+            &production,
+            &types,
+            resumed_footprint,
+        )
+        .expect("preserve the resumed candidate's exact unowned-territory verdict");
+        assert_eq!(resumed_site.native_returned, 0x1a);
+        territory_rejected_sites += 1;
+        resumed_boundary = resumed_candidate.input;
+        resumed_boundary.circle_offset = resumed_site_boundary.circle_offset + 1;
+    };
+    assert_eq!(territory_rejected_sites, 35);
+    assert_eq!(search_native_returned, 1);
+    assert_eq!(search_scenario_returned, 0);
     assert_eq!(sim.groups.list, groups_before.list);
     assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
     assert_eq!(sim.builds[row].image(), city_build_before);
