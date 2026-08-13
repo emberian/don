@@ -260,13 +260,17 @@ path consumes exactly two ordered terrain receipts (Unit tile height, then Guy c
 and ends with the exact collision request journal; malformed graphics, reordered terrain, a stale
 prior Scout, or divergent initializer RNG refuses the whole projection.
 
-The Citizen's shared collision/common-tail/visibility body is still external at this point. The
-graphics and terrain receipts are hash-gated but are not serialized by the 2018 recording, and the
-tests exercise the fail-closed API with synthetic values. Thus ordinal one's placement,
-allocation, Guy, RNG, and location chronology are joined without claiming the real 2018
-initializer ran. Its collision/visibility continuation, three later Citizens,
-completed-worldgen/setup provenance, frame-79 execution, and the Farm/checksum channel remain
-red.
+The Citizen's shared collision/common-tail/visibility body now composes through the same atomic
+owners as the Scout. The source transaction applies collision blocks, executes the deferred
+`Object::update_seen` body, requires the complete 3,732-byte `Unit::init` after-image and captain,
+and emits an ordinary `InitUnitAuthorityReceipt` for setup ordinal one. A canonical tail mismatch
+rolls the collision and visibility owners back together.
+
+The graphics, terrain, tail-stat, Leader, and visibility receipts are hash-gated but are not
+serialized by the 2018 recording, and the tests exercise this interface with synthetic exact
+values. Thus ordinal one has a complete executable receipt shape without claiming those inputs
+came from the real 2018 run. Three later Citizens, completed-worldgen/setup provenance, frame-79
+execution, and the Farm/checksum channel remain red.
 
 ## Checksum chronology
 

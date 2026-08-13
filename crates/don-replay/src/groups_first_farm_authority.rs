@@ -680,6 +680,88 @@ pub struct FirstFarmFirstCitizenLocationReceipt {
     pub location: UnitInitLocationReceipt,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstCitizenCollisionSource {
+    CanonicalUnitInitLocationSeam,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmFirstCitizenCollisionAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: FirstFarmFirstCitizenCollisionSource,
+    pub world_checksum_before: don_sim::systems::map_terrain::WorldChecksum,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstCitizenCollisionInputs {
+    pub location: FirstFarmFirstCitizenLocationInputs,
+    pub type_line: i32,
+    pub is_1bf_strict: bool,
+    pub is_15f_strict: bool,
+    pub is_208_strict: bool,
+    pub is_3a: bool,
+    pub is_143: bool,
+    pub is_45: bool,
+    pub leader: UnitTailLeaderFacts,
+    pub stats: UnitTailStatReceipts,
+    pub mana: ManaCapacityInput,
+    pub unit_masks2_before_tail: u32,
+    pub stance_before_tail: i8,
+    pub object_flags: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstCitizenCollisionReceipt {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub source: FirstFarmFirstCitizenCollisionSource,
+    pub location: FirstFarmFirstCitizenLocationReceipt,
+    pub world_checksum_before: don_sim::systems::map_terrain::WorldChecksum,
+    pub world_checksum_after_collision: don_sim::systems::map_terrain::WorldChecksum,
+    pub tail: UnitInitCollisionTailReceipt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstCitizenVisibilitySource {
+    CanonicalFreshUnitVisibilitySeam,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstFarmFirstCitizenVisibilityAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: FirstFarmFirstCitizenVisibilitySource,
+    pub canonical_world_checksum: don_sim::systems::map_terrain::WorldChecksum,
+    pub goods_before: OilGoodRuntime,
+    pub items_before: Items,
+    pub dynamic_before: DynamicLeadersAuthority,
+    pub visibility: SetupUnitVisibilityAuthority,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstCitizenVisibilityReceipt {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub source: FirstFarmFirstCitizenVisibilitySource,
+    pub collision: FirstFarmFirstCitizenCollisionReceipt,
+    pub visibility: SetupUnitVisibilityReceipt,
+    pub world_checksum_after_visibility: don_sim::systems::map_terrain::WorldChecksum,
+}
+
+/// Complete source-produced `Objects::init_unit` receipt for setup ordinal one's Citizen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FirstFarmFirstCitizenCompleteInitReceipt {
+    pub visibility: FirstFarmFirstCitizenVisibilityReceipt,
+    pub unit_init: UnitInitReceipt,
+    pub effects: ValidatedInitUnitEffects,
+    pub canonical_after_row: usize,
+    pub canonical_after: UnitAfterInit,
+    pub setup_init: InitUnitAuthorityReceipt,
+    pub world_checksum_after: don_sim::systems::map_terrain::WorldChecksum,
+    pub rng_after: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FirstFarmFirstCitizenInitError {
     Placement(FirstFarmFirstCitizenPlacementError),
@@ -773,6 +855,130 @@ pub enum FirstFarmFirstCitizenLocationError {
     WorldShapeOverflow,
     Location(UnitInitLocationError),
     CanonicalLocationMismatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstCitizenCollisionError {
+    MissingAuthorityRevision,
+    MissingCompositionDigest,
+    Location(FirstFarmFirstCitizenLocationError),
+    Discovery(FirstFarmAuthorityError),
+    WorldChecksumMismatch,
+    WorldShapeMismatch,
+    WrongCitizenTailFacts,
+    Tail(UnitInitCollisionTailError),
+    TailIdentityMismatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstCitizenVisibilityError {
+    MissingAuthorityRevision,
+    MissingCompositionDigest,
+    CanonicalWorldChecksumMismatch,
+    GoodsPreimageMismatch,
+    ItemsPreimageMismatch,
+    DynamicPreimageMismatch,
+    Collision(FirstFarmFirstCitizenCollisionError),
+    Visibility(SetupUnitVisibilityError),
+    VisibilityChronologyMismatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FirstFarmFirstCitizenCompleteInitError {
+    Visibility(FirstFarmFirstCitizenVisibilityError),
+    Discovery(FirstFarmAuthorityError),
+    DetailedReceipt(InitUnitReceiptError),
+    WrongEffects,
+    MissingUnitInitStep,
+    WrongUnitInitExtent,
+    UnitAfterImageMismatch,
+    TailAfterImageMismatch,
+    CanonicalUnitTailMismatch,
+    PriorScoutChanged,
+    MissingFinalCaptain,
+    FinalCaptainMismatch,
+    ExternalGroupsResidual,
+    CanonicalWorldAfterMismatch,
+    CanonicalRngAfterMismatch,
+    CanonicalContainerMismatch,
+}
+
+impl fmt::Display for FirstFarmFirstCitizenCollisionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "first 2018 Farm Citizen collision/tail refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for FirstFarmFirstCitizenCollisionError {}
+
+impl From<FirstFarmFirstCitizenLocationError> for FirstFarmFirstCitizenCollisionError {
+    fn from(value: FirstFarmFirstCitizenLocationError) -> Self {
+        Self::Location(value)
+    }
+}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstCitizenCollisionError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<UnitInitCollisionTailError> for FirstFarmFirstCitizenCollisionError {
+    fn from(value: UnitInitCollisionTailError) -> Self {
+        Self::Tail(value)
+    }
+}
+
+impl fmt::Display for FirstFarmFirstCitizenVisibilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "first 2018 Farm Citizen visibility refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FirstFarmFirstCitizenVisibilityError {}
+
+impl From<FirstFarmFirstCitizenCollisionError> for FirstFarmFirstCitizenVisibilityError {
+    fn from(value: FirstFarmFirstCitizenCollisionError) -> Self {
+        Self::Collision(value)
+    }
+}
+
+impl From<SetupUnitVisibilityError> for FirstFarmFirstCitizenVisibilityError {
+    fn from(value: SetupUnitVisibilityError) -> Self {
+        Self::Visibility(value)
+    }
+}
+
+impl fmt::Display for FirstFarmFirstCitizenCompleteInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "first 2018 Farm Citizen complete initializer refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for FirstFarmFirstCitizenCompleteInitError {}
+
+impl From<FirstFarmFirstCitizenVisibilityError> for FirstFarmFirstCitizenCompleteInitError {
+    fn from(value: FirstFarmFirstCitizenVisibilityError) -> Self {
+        Self::Visibility(value)
+    }
+}
+
+impl From<FirstFarmAuthorityError> for FirstFarmFirstCitizenCompleteInitError {
+    fn from(value: FirstFarmAuthorityError) -> Self {
+        Self::Discovery(value)
+    }
+}
+
+impl From<InitUnitReceiptError> for FirstFarmFirstCitizenCompleteInitError {
+    fn from(value: InitUnitReceiptError) -> Self {
+        Self::DetailedReceipt(value)
+    }
 }
 
 impl fmt::Display for FirstFarmFirstCitizenLocationError {
@@ -2591,7 +2797,6 @@ pub fn produce_first_farm_first_citizen_location(
         || guy.init.unit.y != location.unit.y
         || guy.init.unit.angle != location.unit.angle
         || guy.init.unit.form != formation
-        || guy.init.unit.unit_masks != location.unit.unit_masks
     {
         return Err(FirstFarmFirstCitizenLocationError::CanonicalLocationMismatch);
     }
@@ -2602,6 +2807,415 @@ pub fn produce_first_farm_first_citizen_location(
         normalized_anchor,
         world_bounds,
         location,
+    })
+}
+
+/// Apply the first Citizen's exact collision/common-tail journal and stop at visibility.
+///
+/// The mutable World is staged on a clone. Every upstream receipt, Rules scalar, branch fact,
+/// stat-child result, and collision write therefore commits together or not at all.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_citizen_collision_tail(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    scout: &FirstFarmFirstScoutCompleteInitReceipt,
+    after_scout: &Sim,
+    detailed: &DetailedInitUnitReceipt,
+    after_citizen: &Sim,
+    init_authority: &FirstFarmFirstCitizenInitAuthority,
+    collision_world: &mut don_sim::systems::map_terrain::World,
+    collision_authority: &FirstFarmFirstCitizenCollisionAuthority,
+    inputs: FirstFarmFirstCitizenCollisionInputs,
+) -> Result<FirstFarmFirstCitizenCollisionReceipt, FirstFarmFirstCitizenCollisionError> {
+    if collision_authority.revision == 0 {
+        return Err(FirstFarmFirstCitizenCollisionError::MissingAuthorityRevision);
+    }
+    if collision_authority.composition_digest == [0; 32] {
+        return Err(FirstFarmFirstCitizenCollisionError::MissingCompositionDigest);
+    }
+    let world_checksum_before = collision_world.checksum_sections();
+    if world_checksum_before != collision_authority.world_checksum_before {
+        return Err(FirstFarmFirstCitizenCollisionError::WorldChecksumMismatch);
+    }
+    let location = produce_first_farm_first_citizen_location(
+        replay,
+        plan,
+        scout,
+        after_scout,
+        detailed,
+        after_citizen,
+        init_authority,
+        inputs.location,
+    )?;
+    if collision_world.xs.checked_mul(0x300) != Some(location.world_bounds.0)
+        || collision_world.ys.checked_mul(0x300) != Some(location.world_bounds.1)
+    {
+        return Err(FirstFarmFirstCitizenCollisionError::WorldShapeMismatch);
+    }
+    let citizen = discover_first_2018_farm(replay)?.citizen;
+    if citizen.domain != 0 || citizen.type_index != location.guy.init.request.type_index {
+        return Err(FirstFarmFirstCitizenCollisionError::WrongCitizenTailFacts);
+    }
+    let type_facts = UnitTailTypeFacts {
+        domain: citizen.domain,
+        type_id: citizen.type_index,
+        type_line: inputs.type_line,
+        type_unit_flags2: citizen.unit_flags2,
+        is_1bf_strict: inputs.is_1bf_strict,
+        is_15f_strict: inputs.is_15f_strict,
+        is_208_strict: inputs.is_208_strict,
+        is_3a: inputs.is_3a,
+        is_143: inputs.is_143,
+        is_45: inputs.is_45,
+    };
+    let mut next_world = collision_world.clone();
+    let tail = produce_unit_init_collision_tail(
+        &mut next_world,
+        UnitInitCollisionTailInputs {
+            location: location.location.clone(),
+            type_facts,
+            leader: inputs.leader,
+            stats: inputs.stats,
+            mana: inputs.mana,
+            unit_masks2_before_tail: inputs.unit_masks2_before_tail,
+            stance_before_tail: inputs.stance_before_tail,
+            object_flags: inputs.object_flags,
+        },
+    )?;
+    if tail.identity != location.location.identity
+        || tail.guys != location.location.guys
+        || tail.visibility.owner != FIRST_OWNER
+        || tail.visibility.o != 1
+        || tail.visibility.x != location.normalized_anchor.0
+        || tail.visibility.y != location.normalized_anchor.1
+        || tail.visibility.angle != UNIT_INIT_SET_ANGLE
+        || tail.visibility.type_domain != citizen.domain
+        || tail.visibility.type_unit_flags2 != citizen.unit_flags2
+    {
+        return Err(FirstFarmFirstCitizenCollisionError::TailIdentityMismatch);
+    }
+    let world_checksum_after_collision = next_world.checksum_sections();
+    *collision_world = next_world;
+    Ok(FirstFarmFirstCitizenCollisionReceipt {
+        authority_revision: collision_authority.revision,
+        authority_digest: collision_authority.composition_digest,
+        source: collision_authority.source,
+        location,
+        world_checksum_before,
+        world_checksum_after_collision,
+        tail,
+    })
+}
+
+/// Atomically compose the first Citizen's collision tail with fresh-Unit visibility.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_citizen_visibility(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    scout: &FirstFarmFirstScoutCompleteInitReceipt,
+    after_scout: &Sim,
+    detailed: &DetailedInitUnitReceipt,
+    after_citizen: &Sim,
+    init_authority: &FirstFarmFirstCitizenInitAuthority,
+    world: &mut don_sim::systems::map_terrain::World,
+    canonical_world: &don_sim::systems::map_terrain::World,
+    goods: &mut OilGoodRuntime,
+    items: &mut Items,
+    dynamic: &mut DynamicLeadersAuthority,
+    collision_authority: &FirstFarmFirstCitizenCollisionAuthority,
+    collision_inputs: FirstFarmFirstCitizenCollisionInputs,
+    visibility_authority: &FirstFarmFirstCitizenVisibilityAuthority,
+) -> Result<FirstFarmFirstCitizenVisibilityReceipt, FirstFarmFirstCitizenVisibilityError> {
+    if visibility_authority.revision == 0 {
+        return Err(FirstFarmFirstCitizenVisibilityError::MissingAuthorityRevision);
+    }
+    if visibility_authority.composition_digest == [0; 32] {
+        return Err(FirstFarmFirstCitizenVisibilityError::MissingCompositionDigest);
+    }
+    if canonical_world.checksum_sections() != visibility_authority.canonical_world_checksum {
+        return Err(FirstFarmFirstCitizenVisibilityError::CanonicalWorldChecksumMismatch);
+    }
+    if goods != &visibility_authority.goods_before {
+        return Err(FirstFarmFirstCitizenVisibilityError::GoodsPreimageMismatch);
+    }
+    if items != &visibility_authority.items_before {
+        return Err(FirstFarmFirstCitizenVisibilityError::ItemsPreimageMismatch);
+    }
+    if dynamic != &visibility_authority.dynamic_before {
+        return Err(FirstFarmFirstCitizenVisibilityError::DynamicPreimageMismatch);
+    }
+
+    let mut next_world = world.clone();
+    let mut next_goods = goods.clone();
+    let mut next_items = items.clone();
+    let mut next_dynamic = dynamic.clone();
+    let collision = produce_first_farm_first_citizen_collision_tail(
+        replay,
+        plan,
+        scout,
+        after_scout,
+        detailed,
+        after_citizen,
+        init_authority,
+        &mut next_world,
+        collision_authority,
+        collision_inputs,
+    )?;
+    let visibility = produce_setup_unit_visibility(
+        &mut next_world,
+        canonical_world,
+        &mut next_goods,
+        &mut next_items,
+        &mut next_dynamic,
+        &collision.tail,
+        visibility_authority.visibility.clone(),
+    )?;
+    if visibility.rng_before != collision.tail.rng_after
+        || visibility.rng_after != collision.tail.rng_after
+        || visibility.object_update_seen_call_va != collision.tail.visibility.call_va
+        || visibility.object_update_seen_body_va != collision.tail.visibility.body_va
+    {
+        return Err(FirstFarmFirstCitizenVisibilityError::VisibilityChronologyMismatch);
+    }
+    let world_checksum_after_visibility = next_world.checksum_sections();
+    *world = next_world;
+    *goods = next_goods;
+    *items = next_items;
+    *dynamic = next_dynamic;
+    Ok(FirstFarmFirstCitizenVisibilityReceipt {
+        authority_revision: visibility_authority.revision,
+        authority_digest: visibility_authority.composition_digest,
+        source: visibility_authority.source,
+        collision,
+        visibility,
+        world_checksum_after_visibility,
+    })
+}
+
+/// Finish setup ordinal one's Citizen as one complete source-produced initializer receipt.
+///
+/// The returned `setup_init` has the same generic shape consumed by
+/// `setup_unit_member_authority`; no 2018 checksum value is an input or an output.
+#[allow(clippy::too_many_arguments)]
+pub fn produce_first_farm_first_citizen_complete_init(
+    replay: &Replay,
+    plan: &BuildUnitsPlan,
+    scout: &FirstFarmFirstScoutCompleteInitReceipt,
+    after_scout: &Sim,
+    detailed: &DetailedInitUnitReceipt,
+    canonical_after: &Sim,
+    init_authority: &FirstFarmFirstCitizenInitAuthority,
+    world: &mut don_sim::systems::map_terrain::World,
+    canonical_world: &don_sim::systems::map_terrain::World,
+    goods: &mut OilGoodRuntime,
+    items: &mut Items,
+    dynamic: &mut DynamicLeadersAuthority,
+    collision_authority: &FirstFarmFirstCitizenCollisionAuthority,
+    collision_inputs: FirstFarmFirstCitizenCollisionInputs,
+    visibility_authority: &FirstFarmFirstCitizenVisibilityAuthority,
+) -> Result<FirstFarmFirstCitizenCompleteInitReceipt, FirstFarmFirstCitizenCompleteInitError> {
+    let effects = detailed.validate()?;
+    if effects.initialized_members.as_slice() != [1]
+        || effects.terminal_find_free_failure.is_some()
+        || effects.returned_captain_or_failure != 1
+        || effects.unit_mark_before != 1
+        || effects.unit_mark_after != 2
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::WrongEffects);
+    }
+    let unit_init = detailed
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            InitUnitStep::UnitInit(receipt) => Some(*receipt),
+            _ => None,
+        })
+        .ok_or(FirstFarmFirstCitizenCompleteInitError::MissingUnitInitStep)?;
+    if unit_init.extent != CompleteBody::UnitInit3732Bytes {
+        return Err(FirstFarmFirstCitizenCompleteInitError::WrongUnitInitExtent);
+    }
+
+    let mut next_world = world.clone();
+    let mut next_goods = goods.clone();
+    let mut next_items = items.clone();
+    let mut next_dynamic = dynamic.clone();
+    let visibility = produce_first_farm_first_citizen_visibility(
+        replay,
+        plan,
+        scout,
+        after_scout,
+        detailed,
+        canonical_after,
+        init_authority,
+        &mut next_world,
+        canonical_world,
+        &mut next_goods,
+        &mut next_items,
+        &mut next_dynamic,
+        collision_authority,
+        collision_inputs,
+        visibility_authority,
+    )?;
+    if visibility.visibility.next_external_residual != SetupVisibilityExternalResidual::None {
+        return Err(FirstFarmFirstCitizenCompleteInitError::ExternalGroupsResidual);
+    }
+
+    let init = &visibility.collision.location.guy.init;
+    if init.effects != effects
+        || init.request.owner != unit_init.owner
+        || init.request.type_index != unit_init.type_index
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::UnitAfterImageMismatch);
+    }
+    let tail = &visibility.collision.tail;
+    let tail_after = UnitAfterInit {
+        owner: tail.identity.owner,
+        o: tail.identity.o,
+        type_index: tail.identity.type_index,
+        x: visibility.collision.location.location.unit.x,
+        y: visibility.collision.location.location.unit.y,
+        angle: visibility.collision.location.location.unit.angle,
+        unit_masks: tail.unit.unit_masks,
+    };
+    if unit_init.after != tail_after {
+        return Err(FirstFarmFirstCitizenCompleteInitError::TailAfterImageMismatch);
+    }
+    let row = init.row;
+    let after_image = UnitAfterInit {
+        owner: i32::from(init.unit.identity.who),
+        o: i32::from(init.unit.identity.o),
+        type_index: init.request.type_index,
+        x: init.unit.x,
+        y: init.unit.y,
+        angle: init.unit.angle,
+        unit_masks: init.unit.unit_masks,
+    };
+    if after_image != tail_after {
+        return Err(FirstFarmFirstCitizenCompleteInitError::UnitAfterImageMismatch);
+    }
+    if !canonical_unit_tail_matches(canonical_after, row, &tail.unit) {
+        return Err(FirstFarmFirstCitizenCompleteInitError::CanonicalUnitTailMismatch);
+    }
+    let [scout_member] = scout.setup_init.members.as_slice() else {
+        return Err(FirstFarmFirstCitizenCompleteInitError::PriorScoutChanged);
+    };
+    let scout_row = canonical_after
+        .world
+        .unit_row_at(scout_member.identity.owner, scout_member.identity.o)
+        .ok_or(FirstFarmFirstCitizenCompleteInitError::PriorScoutChanged)?;
+    let scout_handle = canonical_after
+        .world
+        .handle_at_row(scout_row)
+        .ok_or(FirstFarmFirstCitizenCompleteInitError::PriorScoutChanged)?;
+    if (scout_handle.id, scout_handle.generation)
+        != (scout_member.identity.id, scout_member.identity.generation)
+        || !canonical_unit_tail_matches(
+            canonical_after,
+            scout_row,
+            &scout.visibility.collision.tail.unit,
+        )
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::PriorScoutChanged);
+    }
+
+    let captain = detailed
+        .steps
+        .last()
+        .and_then(|step| match step {
+            InitUnitStep::ResolveCaptain(receipt) => Some(*receipt),
+            _ => None,
+        })
+        .ok_or(FirstFarmFirstCitizenCompleteInitError::MissingFinalCaptain)?;
+    let citizen = discover_first_2018_farm(replay)?.citizen;
+    if captain.ordinal != 1
+        || captain.from_owner != tail_after.owner
+        || captain.from_o != tail_after.o
+        || captain.returned != tail_after.o
+        || detailed.returned != tail_after.o
+        || captain.captain.owner != tail_after.owner
+        || captain.captain.o != tail_after.o
+        || captain.captain.x != tail_after.x
+        || captain.captain.y != tail_after.y
+        || captain.captain.angle != tail_after.angle
+        || captain.captain.new_block_radius != citizen.new_block_radius
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::FinalCaptainMismatch);
+    }
+    let world_checksum_after = next_world.checksum_sections();
+    if world_checksum_after != init_authority.map_checksum_after
+        || world_checksum_after != canonical_after.map.world.checksum_sections()
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::CanonicalWorldAfterMismatch);
+    }
+    if visibility.visibility.rng_after != init_authority.rng_after
+        || canonical_after.world.random.state() != init_authority.rng_after
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::CanonicalRngAfterMismatch);
+    }
+    if !init.unit.orders.is_empty()
+        || !init.unit.path.is_empty()
+        || visibility.collision.location.location.guys.guys.len()
+            != visibility.collision.location.location.stable_guys.len()
+    {
+        return Err(FirstFarmFirstCitizenCompleteInitError::CanonicalContainerMismatch);
+    }
+
+    let stable_guys = &visibility.collision.location.location.stable_guys;
+    let member = UnitMemberAuthorityReceipt {
+        identity: init.allocation,
+        ptype_index: init.request.type_index,
+        launching_is_null: true,
+        path: EngineContainerShapeReceipt {
+            length: 0,
+            capacity: 10,
+            increment: -1,
+            flags: 0,
+        },
+        order_count: 0,
+        guys: EngineContainerShapeReceipt {
+            length: stable_guys.len() as i32,
+            capacity: stable_guys.len() as i32,
+            increment: 1,
+            flags: 0,
+        },
+        guy_mark: visibility.collision.location.location.guys.guy_mark,
+        guy_identities: stable_guys
+            .iter()
+            .enumerate()
+            .map(|(slot, guy)| GuyIdentityReceipt {
+                slot: slot as i32,
+                who: guy.owner,
+                o: guy.o,
+                guy_num: guy.guy_num,
+            })
+            .collect(),
+        units_authority_key: (init.allocation.id, init.allocation.generation),
+        guys_authority_key: (init.allocation.id, init.allocation.generation),
+    };
+    let setup_init = InitUnitAuthorityReceipt {
+        validated_body_va:
+            don_sim::systems::objects_init_unit_authority_frontier::OBJECTS_INIT_UNIT_VA,
+        validated_body_bytes:
+            don_sim::systems::objects_init_unit_authority_frontier::OBJECTS_INIT_UNIT_BYTES,
+        unit_mark_before: effects.unit_mark_before,
+        unit_mark_after: effects.unit_mark_after,
+        returned_captain_o: effects.returned_captain_or_failure,
+        members: vec![member],
+    };
+
+    *world = next_world;
+    *goods = next_goods;
+    *items = next_items;
+    *dynamic = next_dynamic;
+    Ok(FirstFarmFirstCitizenCompleteInitReceipt {
+        visibility,
+        unit_init,
+        effects,
+        canonical_after_row: row,
+        canonical_after: after_image,
+        setup_init,
+        world_checksum_after,
+        rng_after: init_authority.rng_after,
     })
 }
 

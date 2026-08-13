@@ -41,12 +41,12 @@ synthetic complete setup receipt and canonical Sim snapshot so mutation gates ca
 join. It is not an attestation that retail's 2024 setup ran in don-sim. The four real Citizen
 `Objects::init_unit` receipts and the canonical chronology through frame 379 remain absent.
 
-The immediately preceding 2018 setup lane now produces ordinal one's placement, allocation,
-one-Guy RNG prefix, and location continuation. Its collision/common-tail/visibility completion is
-still required before it can emit the same complete setup-member receipt without an external
-initializer digest. Once each real setup call does so, this generic join is the single handoff to
-Groups, Units/Guys, Cities' Unit census, and later first-checkpoint consumers; none needs a parallel
-Unit pool.
+The immediately preceding 2018 setup lane now carries ordinal one through placement, allocation,
+one-Guy RNG, location, collision/common tail, visibility, and the complete outer initializer. It
+emits the same generic `InitUnitAuthorityReceipt`, while honestly retaining the remaining external
+graphics/terrain/stat/Leader input provenance. Once each real setup call receives those inputs,
+this generic join is the single handoff to Groups, Units/Guys, Cities' Unit census, and later
+first-checkpoint consumers; none needs a parallel Unit pool.
 
 Focused gate:
 
