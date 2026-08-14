@@ -6,8 +6,9 @@
 //! object pool.  It replays the scalar initializer prefix into a staged copy, installs the
 //! empty-cell `Object::add_to_world` link, applies the source-owned final blocker bits,
 //! completes the Village queue and activation bytes, and normalizes the row through the
-//! first active `Build::process` pass.  Only after the 491-byte walk succeeds are the
-//! canonical row, World, and `BuildsWalkAuthority` committed.
+//! first active `Build::process` pass, including its linked-City maintenance tail.  Only
+//! after the 491-byte walk succeeds are the canonical row, World, City pool, and
+//! `BuildsWalkAuthority` committed.
 //!
 //! This is intentionally not a complete World producer. Terrain height changes, the
 //! activation-side CITY disc, content mask's blocked counters, city roads, behind masks,
@@ -52,6 +53,10 @@ pub const LEADER_PROCESS_ALL_VA: u32 = 0x006e_d2a0;
 pub const WALL_UPDATE_HITS_VA: u32 = 0x0063_f0d0;
 pub const WALL_UPDATE_LOS_VA: u32 = 0x0063_eeb0;
 pub const BUILD_PROCESS_VA: u32 = 0x0061_edf0;
+pub const BUILD_PROCESS_CITY_GATE_VA: u32 = 0x0061_faca;
+pub const BUILD_PROCESS_CITY_FLAGS_STORE_VA: u32 = 0x0061_fb28;
+pub const BUILD_PROCESS_CITY_PLUNDERED_STORE_VA: u32 = 0x0061_fb50;
+pub const BUILD_PROCESS_CITY_END_VA: u32 = 0x0061_fb53;
 pub const BUILD_DATA_WALK_VA: u32 = 0x0062_f270;
 
 pub const STARTING_VILLAGE_TYPE: i32 = tech_cities::ty::VILLAGE;
@@ -66,6 +71,7 @@ pub const STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS: u8 =
 pub const STARTING_VILLAGE_FINAL_FLAGS: u8 =
     production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE | 0x20;
 pub const STARTING_VILLAGE_WALK_BYTES: u64 = 491;
+pub const CITY_MAINTENANCE_PERIOD: i32 = 200;
 /// Set by `BuildType::mask_me` on the center WData row.  This bit is outside the currently
 /// named low WData flag set, but the `or word [wdata],0x4000` writer is instruction-exact.
 pub const WDATA_BUILD_MASK: u16 = 0x4000;
@@ -228,6 +234,76 @@ pub struct StartingBuildMiningReceipt {
     pub cliff: i8,
 }
 
+/// The linked-City tail reached by the first active `Build::process` pass.
+///
+/// Retail enters this body only for a City Build with a nonnegative City link.  The
+/// caller owns those two gates and the canonical Build/City join; this leaf owns the
+/// exact `(frame + object_id) % 200` gate and the two City mutations after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StartingBuildCityMaintenanceReceipt {
+    pub frame: i32,
+    pub object_id: i16,
+    pub modulo_input: i32,
+    pub scheduled: bool,
+    pub city_flags_before: u16,
+    pub city_flags_after: u16,
+    pub plundered_before: u8,
+    pub plundered_after: u8,
+    pub checksum_bytes_changed: u32,
+}
+
+/// Execute `Build::process` `0x0061FACA..0x0061FB53` after its Build-side City gates.
+///
+/// The x86 `add` wraps before signed `idiv`, so the schedule input deliberately uses
+/// `wrapping_add`.  A zero remainder is sign-independent.  When City flag bit 2 is set,
+/// retail clears bit 2; otherwise it clears bit 1.  A nonzero `plundered` byte decays by
+/// exactly one.
+pub fn apply_build_process_city_maintenance(
+    city: &mut tech_cities::CityRecord,
+    frame: i32,
+    object_id: i16,
+) -> StartingBuildCityMaintenanceReceipt {
+    let before_flags = city.city_flags;
+    let before_pod = city.pod_bytes();
+    let before_plundered = city.plundered;
+    let modulo_input = frame.wrapping_add(i32::from(object_id));
+    let scheduled = modulo_input % CITY_MAINTENANCE_PERIOD == 0;
+    if scheduled {
+        if city.city_flags & 0x0004 != 0 {
+            city.city_flags &= !0x0004;
+        } else {
+            city.city_flags &= !0x0002;
+        }
+        if city.plundered != 0 {
+            city.plundered -= 1;
+        }
+    }
+    let after_flags = city.city_flags;
+    let after_pod = city.pod_bytes();
+    let checksum_bytes_changed = before_flags
+        .to_le_bytes()
+        .iter()
+        .zip(after_flags.to_le_bytes())
+        .filter(|(before, after)| **before != *after)
+        .count()
+        + before_pod
+            .iter()
+            .zip(after_pod)
+            .filter(|(before, after)| **before != *after)
+            .count();
+    StartingBuildCityMaintenanceReceipt {
+        frame,
+        object_id,
+        modulo_input,
+        scheduled,
+        city_flags_before: before_flags,
+        city_flags_after: after_flags,
+        plundered_before: before_plundered,
+        plundered_after: city.plundered,
+        checksum_bytes_changed: checksum_bytes_changed as u32,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartingVillageBuildActivationReceipt {
     pub row: usize,
@@ -242,6 +318,7 @@ pub struct StartingVillageBuildActivationReceipt {
     pub wall_mask_city: WallMaskCityRequest,
     pub queue: StartingBuildQueueReceipt,
     pub mining: StartingBuildMiningReceipt,
+    pub city_maintenance: StartingBuildCityMaintenanceReceipt,
     pub wall_init_construct_hits: i32,
     pub first_checkpoint_construct_hits: i32,
     pub final_flags: u8,
@@ -290,6 +367,14 @@ pub enum StartingVillageBuildActivationError {
     },
     ConstructorReceiptIncomplete,
     ConstructorJoinMismatch,
+    CanonicalCityMissing {
+        owner: u8,
+        city_slot: i16,
+    },
+    CanonicalCityConstructorMismatch {
+        owner: u8,
+        city_slot: i16,
+    },
     WrongConstructorState {
         flags: u8,
         city: i16,
@@ -378,9 +463,9 @@ pub fn complete_starting_village_build_from_terrain(
 
 /// Complete and authorize one already-reserved, already-City-linked starting Village.
 ///
-/// All fallible work targets staged clones.  No `Err` path changes the `Sim`, World, or
-/// prior walk authority.  The World commit includes only the instruction-owned subset
-/// described by [`StartingBuildFootprintReceipt`]; the residual ledger remains red.
+/// All fallible work targets staged clones.  No `Err` path changes the `Sim`, World, City
+/// pool, or prior walk authority.  The World commit includes only the instruction-owned
+/// subset described by [`StartingBuildFootprintReceipt`]; the residual ledger remains red.
 pub fn complete_starting_village_build(
     sim: &mut Sim,
     authority: &mut BuildsWalkAuthority,
@@ -465,6 +550,19 @@ pub fn complete_starting_village_build(
     {
         return Err(StartingVillageBuildActivationError::ConstructorJoinMismatch);
     }
+    let city_slot = current.city;
+    let canonical_city = usize::try_from(city_slot)
+        .ok()
+        .and_then(|slot| sim.cities.slots.get(owner as usize)?.get(slot))
+        .ok_or(StartingVillageBuildActivationError::CanonicalCityMissing { owner, city_slot })?;
+    if canonical_city != &constructor.city {
+        return Err(
+            StartingVillageBuildActivationError::CanonicalCityConstructorMismatch {
+                owner,
+                city_slot,
+            },
+        );
+    }
     if current.flags != STARTING_VILLAGE_FINAL_FLAGS || current.city < 0 {
         return Err(StartingVillageBuildActivationError::WrongConstructorState {
             flags: current.flags,
@@ -548,11 +646,11 @@ pub fn complete_starting_village_build(
         return Err(StartingVillageBuildActivationError::ConstructorJoinMismatch);
     }
 
-    let city_slot = current.city;
     let mut staged_build = current.clone();
     let prefix = apply_build_init_prefix(&mut staged_build, prefix_request)
         .map_err(StartingVillageBuildActivationError::Prefix)?;
     let mut staged_world = sim.map.world.clone();
+    let mut staged_cities = sim.cities.clone();
 
     // Object::add_to_world, admitted only for the source-proven empty setup cell.
     write_i16(&mut staged_build.other, UP, -1);
@@ -665,6 +763,11 @@ pub fn complete_starting_village_build(
         staged_build.job_counter,
         staged_build.constr_time,
     );
+    let city_maintenance = apply_build_process_city_maintenance(
+        &mut staged_cities.slots[owner as usize][city_slot as usize],
+        facts.setup_game_frame,
+        object_id,
+    );
 
     if staged_build.flags != STARTING_VILLAGE_FINAL_FLAGS
         || staged_build.build_masks != STARTING_VILLAGE_BUILD_MASK
@@ -721,6 +824,7 @@ pub fn complete_starting_village_build(
     // The only publication point.  Walk authority is installed last and is infallible.
     sim.builds[row] = staged_build;
     sim.map.world = staged_world;
+    sim.cities = staged_cities;
     authority.install(row, walk_facts.clone());
 
     Ok(StartingVillageBuildActivationReceipt {
@@ -736,6 +840,7 @@ pub fn complete_starting_village_build(
         wall_mask_city,
         queue,
         mining,
+        city_maintenance,
         wall_init_construct_hits,
         first_checkpoint_construct_hits: sim.builds[row].construct_hits,
         final_flags: sim.builds[row].flags,

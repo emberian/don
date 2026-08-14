@@ -14,6 +14,8 @@ pub mod terrain_height_runtime {
 #[path = "../src/starting_build_activation_runtime.rs"]
 mod subject;
 
+use std::path::{Path, PathBuf};
+
 use build_init_prefix::{
     BuildInitPrefixRequest, BuildInitPrefixTerrainRequest, BuildTypeInitFacts,
 };
@@ -23,15 +25,22 @@ use city_build_constructor_runtime::{
     FreshStartingVillageRequest,
 };
 use don_replay::build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest};
+use don_replay::checksum::Channel;
+use don_replay::cities_runtime::check_sim_owned_cities;
+use don_replay::harness::WorldSim;
+use don_replay::replay::Replay;
 use don_sim::objects::BUILD_BAND_BASE;
 use don_sim::systems::map_terrain::{tflag, COORD_PER_WCELL};
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
 use don_sim::tick::Sim;
 use subject::{
-    complete_starting_village_build, complete_starting_village_build_from_terrain,
-    StartingBuildStage, StartingVillageBuildActivationError, StartingVillageBuildSourceFacts,
-    BUILD_ACTIVATE_VA, BUILD_DATA_WALK_VA, BUILD_INIT_VA, BUILD_PROCESS_VA, BUILD_QUEUE_INIT_VA,
-    BUILD_TYPE_MASK_ME_VA, LEADER_PROCESS_ALL_VA, OBJECT_ADD_TO_WORLD_VA,
+    apply_build_process_city_maintenance, complete_starting_village_build,
+    complete_starting_village_build_from_terrain, StartingBuildStage,
+    StartingVillageBuildActivationError, StartingVillageBuildSourceFacts, BUILD_ACTIVATE_VA,
+    BUILD_DATA_WALK_VA, BUILD_INIT_VA, BUILD_PROCESS_CITY_END_VA,
+    BUILD_PROCESS_CITY_FLAGS_STORE_VA, BUILD_PROCESS_CITY_GATE_VA,
+    BUILD_PROCESS_CITY_PLUNDERED_STORE_VA, BUILD_PROCESS_VA, BUILD_QUEUE_INIT_VA,
+    BUILD_TYPE_MASK_ME_VA, CITY_MAINTENANCE_PERIOD, LEADER_PROCESS_ALL_VA, OBJECT_ADD_TO_WORLD_VA,
     OBJECT_UPDATE_SEEN_ALLY_VA, OBJECT_UPDATE_SEEN_VA, STARTING_BUILD_STAGE_ORDER,
     STARTING_VILLAGE_BUILD_MASK, STARTING_VILLAGE_FINAL_FLAGS, STARTING_VILLAGE_FOOTPRINT,
     STARTING_VILLAGE_NATIVE_MASK_CITY_FLAGS, STARTING_VILLAGE_QUEUE_ROWS, STARTING_VILLAGE_TYPE,
@@ -44,6 +53,15 @@ use terrain_height_runtime::{TerrainHeightAuthority, TerrainHeightSource};
 const OWNER: u8 = 2;
 const CITY_SLOT: i16 = 0;
 const POSITION: (i32, i32) = (30 * COORD_PER_WCELL + 96, 31 * COORD_PER_WCELL + 96);
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 fn staged_center() -> BuildData {
     BuildData {
@@ -89,6 +107,8 @@ fn setup_constructor() -> (Sim, FreshStartingVillageReceipt) {
         },
     )
     .unwrap();
+    sim.cities.slots[usize::from(OWNER)][CITY_SLOT as usize] = receipt.city.clone();
+    sim.cities.city_mark[usize::from(OWNER)] = i32::from(CITY_SLOT) + 1;
     (sim, receipt)
 }
 
@@ -179,6 +199,11 @@ fn shipped_call_chain_and_temporal_order_are_pinned() {
     assert_eq!(WALL_UPDATE_HITS_VA, 0x0063_f0d0);
     assert_eq!(WALL_UPDATE_LOS_VA, 0x0063_eeb0);
     assert_eq!(BUILD_PROCESS_VA, 0x0061_edf0);
+    assert_eq!(BUILD_PROCESS_CITY_GATE_VA, 0x0061_faca);
+    assert_eq!(BUILD_PROCESS_CITY_FLAGS_STORE_VA, 0x0061_fb28);
+    assert_eq!(BUILD_PROCESS_CITY_PLUNDERED_STORE_VA, 0x0061_fb50);
+    assert_eq!(BUILD_PROCESS_CITY_END_VA, 0x0061_fb53);
+    assert_eq!(CITY_MAINTENANCE_PERIOD, 200);
     assert_eq!(BUILD_DATA_WALK_VA, 0x0062_f270);
     assert_eq!(
         STARTING_BUILD_STAGE_ORDER[0],
@@ -239,6 +264,13 @@ fn complete_row_owns_first_checkpoint_build_walk_and_installs_authority() {
     assert!(build.gather.is_empty());
     assert_eq!(receipt.wall_init_construct_hits, 21);
     assert_eq!(receipt.first_checkpoint_construct_hits, 1_200);
+    assert!(receipt.city_maintenance.scheduled);
+    assert_eq!(receipt.city_maintenance.modulo_input, 2_000);
+    assert_eq!(receipt.city_maintenance.city_flags_before, 0x4011);
+    assert_eq!(receipt.city_maintenance.city_flags_after, 0x4011);
+    assert_eq!(receipt.city_maintenance.plundered_before, 0);
+    assert_eq!(receipt.city_maintenance.plundered_after, 0);
+    assert_eq!(receipt.city_maintenance.checksum_bytes_changed, 0);
     assert_eq!(receipt.queue.walked_bytes, 20 * 18);
     assert_eq!(receipt.walk.bytes_walked, STARTING_VILLAGE_WALK_BYTES);
 
@@ -247,6 +279,129 @@ fn complete_row_owns_first_checkpoint_build_walk_and_installs_authority() {
     assert_eq!(channel.builds_walked, 1);
     assert_eq!(channel.bytes_walked, STARTING_VILLAGE_WALK_BYTES);
     assert_eq!(channel.checksum, receipt.walk.checksum);
+}
+
+#[test]
+fn build_process_city_leaf_clears_the_exact_flag_arm_and_decays_plunder() {
+    let mut bit_two = don_sim::systems::tech_cities::CityRecord {
+        city_flags: 0xffff,
+        plundered: 255,
+        ..Default::default()
+    };
+    let receipt = apply_build_process_city_maintenance(&mut bit_two, 0, 2_000);
+    assert!(receipt.scheduled);
+    assert_eq!(bit_two.city_flags, 0xfffb);
+    assert_eq!(bit_two.plundered, 254);
+    assert_eq!(receipt.checksum_bytes_changed, 2);
+
+    let mut bit_one = don_sim::systems::tech_cities::CityRecord {
+        city_flags: 0xfffb,
+        plundered: 1,
+        ..Default::default()
+    };
+    let receipt = apply_build_process_city_maintenance(&mut bit_one, 200, 2_000);
+    assert!(receipt.scheduled);
+    assert_eq!(bit_one.city_flags, 0xfff9);
+    assert_eq!(bit_one.plundered, 0);
+    assert_eq!(receipt.checksum_bytes_changed, 2);
+
+    let before = bit_one.clone();
+    let receipt = apply_build_process_city_maintenance(&mut bit_one, 1, 2_000);
+    assert!(!receipt.scheduled);
+    assert_eq!(receipt.modulo_input, 2_001);
+    assert_eq!(receipt.checksum_bytes_changed, 0);
+    assert_eq!(bit_one, before);
+}
+
+#[test]
+fn current_constructor_candidates_execute_six_exact_no_change_city_tails() {
+    let fixtures_expected = [
+        (
+            "Playback___2018.11.17_13_21_42__Sat_.rcx",
+            0x7102_0a46,
+            0x5313_0d2c,
+        ),
+        (
+            "Playback___2020.02.08_10_49_15__Sat_.rcx",
+            0x247c_0992,
+            0xdd17_0c24,
+        ),
+        (
+            "Playback___2020.02.21_09_48_48__Fri_.rcx",
+            0xcd97_0956,
+            0x7d2d_0bd4,
+        ),
+    ];
+    let mut fixtures = 0usize;
+    let mut cities = 0usize;
+    let mut changed_bytes = 0u32;
+    let mut matches = 0usize;
+
+    for (name, expected_candidate, expected_retail) in fixtures_expected {
+        let path = repo_root().join("ron-data/replays/multi").join(name);
+        if !path.exists() {
+            continue;
+        }
+        fixtures += 1;
+        let replay = Replay::open(&path)
+            .unwrap_or_else(|error| panic!("{name}: replay parse failed: {error}"));
+        let mut world_sim = WorldSim::from_replay(&replay);
+        let setup = world_sim.initial_setup.as_mut().unwrap_or_else(|| {
+            panic!("{name}: setup refused: {:?}", world_sim.initial_setup_error)
+        });
+        let before = check_sim_owned_cities(&setup.sim).expect("constructor Cities");
+        let centers: Vec<_> = setup
+            .receipt
+            .cities
+            .iter()
+            .map(|center| (center.owner, center.city_slot, center.build.row))
+            .collect();
+        for (owner, city_slot, row) in centers {
+            let build = &setup.sim.builds[row];
+            assert_ne!(build.flags & 0x20, 0, "{name}: City Build gate");
+            assert_eq!(build.city, city_slot, "{name}: Build/City join");
+            let receipt = apply_build_process_city_maintenance(
+                &mut setup.sim.cities.slots[usize::from(owner)][city_slot as usize],
+                0,
+                build.object_id(),
+            );
+            assert!(receipt.scheduled, "{name}: frame-zero modulo gate");
+            assert_eq!(receipt.modulo_input, 2_000, "{name}");
+            assert_eq!(receipt.city_flags_before, 0x4011, "{name}");
+            assert_eq!(receipt.city_flags_after, 0x4011, "{name}");
+            assert_eq!(receipt.plundered_before, 0, "{name}");
+            assert_eq!(receipt.plundered_after, 0, "{name}");
+            changed_bytes += receipt.checksum_bytes_changed;
+            cities += 1;
+        }
+        let after = check_sim_owned_cities(&setup.sim).expect("post-Build-process Cities");
+        let retail = replay
+            .turns
+            .iter()
+            .find_map(|turn| {
+                turn.any_checksums()
+                    .map(|(_, channels)| channels.get(Channel::Cities))
+            })
+            .expect("fixture has a first recorded Cities checkpoint");
+        assert_eq!(before.checksum, expected_candidate);
+        assert_eq!(after.checksum, expected_candidate);
+        assert_eq!(retail, expected_retail);
+        matches += usize::from(after.checksum == retail);
+        eprintln!(
+            "{name}: Build::process City maintenance {:08x}->{:08x} retail={retail:08x}",
+            before.checksum, after.checksum
+        );
+    }
+
+    if repo_root().join("ron-data/replays/multi").exists() {
+        assert_eq!(fixtures, 3);
+        assert_eq!(cities, 6);
+        assert_eq!(changed_bytes, 0);
+        assert_eq!(matches, 0);
+        eprintln!(
+            "starting Build::process City maintenance: fixtures=3 cities=6 scheduled=6 changed_bytes=0 matches=0"
+        );
+    }
 }
 
 #[test]
@@ -411,6 +566,40 @@ fn source_and_world_refusals_publish_neither_row_world_nor_authority() {
     );
     assert_eq!(sim.builds[0].image(), before_linked_build);
     assert_eq!(sim.map.world.checksum_sections(), before_linked_world);
+    assert!(authority.get(0).is_none());
+}
+
+#[test]
+fn stale_canonical_city_refuses_before_any_build_world_or_city_publication() {
+    let (mut sim, constructor) = setup_constructor();
+    sim.cities.slots[usize::from(OWNER)][CITY_SLOT as usize].plundered = 1;
+    let prefix = prefix_request(&sim);
+    let before_build = sim.builds[0].image();
+    let before_world = sim.map.world.checksum_sections();
+    let before_city = sim.cities.slots[usize::from(OWNER)][CITY_SLOT as usize].clone();
+    let mut authority = BuildsWalkAuthority::default();
+    let error = complete_starting_village_build(
+        &mut sim,
+        &mut authority,
+        0,
+        &constructor,
+        prefix,
+        source_facts(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        StartingVillageBuildActivationError::CanonicalCityConstructorMismatch {
+            owner: OWNER,
+            city_slot: CITY_SLOT,
+        }
+    );
+    assert_eq!(sim.builds[0].image(), before_build);
+    assert_eq!(sim.map.world.checksum_sections(), before_world);
+    assert_eq!(
+        sim.cities.slots[usize::from(OWNER)][CITY_SLOT as usize],
+        before_city
+    );
     assert!(authority.get(0).is_none());
 }
 
