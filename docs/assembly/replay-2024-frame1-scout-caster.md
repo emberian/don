@@ -1,6 +1,6 @@
 # 2024 frame-one Scout caster child
 
-Status: **exact adjacent-call contract; production capture not yet installed.**
+Status: **source-bound empty child complete; nonempty calls remain captured residuals.**
 
 The supported 2024 Great Lakes replay's first setup Unit is owner 0/object 0, with base Scout
 type 69. The shipped unit table gives that base row `unit_flags2 = 18` (`0x12`). The live
@@ -82,6 +82,38 @@ caller-owned projection unchanged; the successful publication is itself the capt
 after-image.  This gives the frame-one Unit-process parent an atomic child boundary without
 guessing post-frame-zero caster state.
 
+## Golden source chronology
+
+The supported empty call no longer depends on manufacturing a detached pre/post array image.
+`setup_2024_frame1_scout_caster` consumes four already-separated owners in order:
+
+1. the complete setup ordinal-zero receiver and its exact Scout final type;
+2. the `Unit::init` special branch at `0x00612E27`, `Specials::init_special`,
+   `Special::Special`, and the `Caster::Caster` zero-length store at `0x00739A49`;
+3. `Frame0ScoutCasterInvariantAuthority`, produced only after the exact bounded human
+   `Unit::think_spellcaster` transaction returned or reached its final distinct
+   `Unit::add_cast_order` owner; and
+4. the independently captured `Frame1PostCommandAuthority`, which binds the live stable Scout
+   Handle, current type/dispatch word, `unit.special` index, and frame-one request.
+
+The frame-zero authority explicitly claims no Unit order/path or Objects search-scratch
+invariance. Those values may differ in the post-command oracle and remain owned by the sibling
+Scout transaction. Its sole complete claim is that the setup-derived active-spell length remains
+zero. Setup ancestry and the adjacent frame-zero call entry carry separate nonzero revisions and
+composition digests; a completed-setup digest cannot be relabeled as the later call boundary.
+The adjacent values come directly from `GoldenScoutInput::{snapshot_revision,
+call_entry_composition_digest}`. On the searched arms, the sole `ObjectsData::find` child receipt
+must match both values and carry a nonzero digest of the complete ordered candidate traversal;
+static castability, mana, and range are already owned by the Scout source planner.
+`Caster::process_spells` then loads that zero at `0x00739AE0` and branches at
+`0x00739AEE` directly to the epilogue at `0x00739CA8`, proving zero entry reads, stores, or RNG
+draws.
+
+The emitted entry/exit hashes are named `source_projection` hashes. They cover the request,
+stable receiver/type join, Caster index, active-spell length, and RNG state; they are neither
+whole-Sim nor whole-tick hashes. The receipt closes only this first Scout child. It does not
+claim the enclosing Unit body, frame-zero tick, or frame-one tick is complete.
+
 ## Evidence and remaining join
 
 - executable SHA-256: `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`;
@@ -90,6 +122,6 @@ guessing post-frame-zero caster state.
 - PDB types: `Caster`, `CasterData`, `Array<ActiveSpell>`, and `ActiveSpell`;
 - Scout row: `schema/live/live-tables-unit.tsv`, type 69, `unit_flags2=18`.
 
-The remaining product join is deliberately explicit: a supported retail adjacent-call capture
-must populate this authority and bind it to the canonical post-command frame-one Scout identity.
-Neither the replay wire nor the frame-zero setup receipt proves that runtime queue image.
+The source-bound golden empty path uses the chronology above. The stronger adjacent capture
+authority remains the fail-closed route for a nonempty queue or for validating engine array
+allocation metadata; neither case is normalized into the source-empty receipt.

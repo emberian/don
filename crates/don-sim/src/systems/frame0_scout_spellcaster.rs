@@ -31,6 +31,50 @@ pub const UNIT_THINK_SPELLCASTER_SHA256: [u8; 32] = [
     0xfa, 0xfa, 0x5e, 0x59, 0x5e, 0x78, 0xe8, 0x40, 0xdc, 0x83, 0x69, 0x29, 0x3f, 0xb5, 0x69, 0x09,
     0x63, 0x8d, 0x41, 0xe4, 0x58, 0xfd, 0x38, 0x93, 0x54, 0xf7, 0xd2, 0xf9, 0x87, 0x53, 0x39, 0x04,
 ];
+
+/// Source-owned write-set receipt for the complete frame-zero spellcaster body.
+///
+/// `Unit::think_spellcaster` can write the Unit order/path owners and Objects search scratch,
+/// but the complete function contains no read or write through `CasterData::active_spells`.
+/// Keeping this as a typed receipt lets the frame-one chronology consume that narrow invariant
+/// without pretending that the rest of frame zero was reconstructed offline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0ScoutCasterWriteSetReceipt {
+    pub executable_sha256: [u8; 32],
+    pub body_va: u32,
+    pub body_bytes: u32,
+    pub body_sha256: [u8; 32],
+    pub caster_active_spell_reads: u32,
+    pub caster_active_spell_writes: u32,
+    pub add_cast_order_va: u32,
+    pub add_cast_order_bytes: u32,
+    pub add_cast_order_sha256: [u8; 32],
+    pub add_cast_order_caster_active_spell_writes: u32,
+    pub successful_write_owner_offset: u32,
+    pub successful_write_order_index: i32,
+}
+
+/// Return the immutable source receipt shared by every human-Scout outcome.
+///
+/// A successful Counterintel search opens `Unit::add_cast_order`; that owner is
+/// `UnitData+0xCC`, not the Caster active-spell array.  Consequently the invariant is valid for
+/// ready no-cast outcomes and every typed residual, including the found-target residual.
+pub const fn frame0_scout_caster_write_set() -> Frame0ScoutCasterWriteSetReceipt {
+    Frame0ScoutCasterWriteSetReceipt {
+        executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+        body_va: UNIT_THINK_SPELLCASTER_VA,
+        body_bytes: UNIT_THINK_SPELLCASTER_SIZE,
+        body_sha256: UNIT_THINK_SPELLCASTER_SHA256,
+        caster_active_spell_reads: 0,
+        caster_active_spell_writes: 0,
+        add_cast_order_va: UNIT_ADD_CAST_ORDER_VA,
+        add_cast_order_bytes: UNIT_ADD_CAST_ORDER_SIZE,
+        add_cast_order_sha256: UNIT_ADD_CAST_ORDER_SHA256,
+        add_cast_order_caster_active_spell_writes: 0,
+        successful_write_owner_offset: UNIT_ORDER_LIST_OFFSET,
+        successful_write_order_index: CAST_ORDER_INDEX,
+    }
+}
 pub const HUMAN_COUNTERINTEL_ARM_VA: u32 = 0x005F_27C3;
 pub const AI_SPELLCASTER_ARM_VA: u32 = 0x005F_28CF;
 pub const NO_CAST_RETURN_VA: u32 = 0x005F_2EB1;
@@ -46,6 +90,11 @@ pub const UNIT_DATA_MANA_VA: u32 = 0x0060_9A50;
 pub const SPELL_GET_RANGE_VA: u32 = 0x0067_6A80;
 pub const OBJECTS_FIND_VA: u32 = 0x0065_C6B0;
 pub const UNIT_ADD_CAST_ORDER_VA: u32 = 0x005E_4A60;
+pub const UNIT_ADD_CAST_ORDER_SIZE: u32 = 541;
+pub const UNIT_ADD_CAST_ORDER_SHA256: [u8; 32] = [
+    0x6a, 0xcb, 0x03, 0xec, 0x4d, 0x92, 0x32, 0x63, 0xa5, 0x91, 0x11, 0xd4, 0xb8, 0x4f, 0x54, 0xc9,
+    0xf7, 0xdc, 0xff, 0xb4, 0x54, 0x0d, 0xef, 0x5a, 0x94, 0x6b, 0xd6, 0xac, 0xdd, 0x32, 0x71, 0x58,
+];
 pub const ORDERS_GET_OBJECT_VA: u32 = 0x0073_0AC0;
 pub const UNIT_CLEAR_PARTIAL_PATH_VA: u32 = 0x005E_3920;
 pub const UNIT_UPDATE_ACTION_VA: u32 = 0x0060_A870;
@@ -378,6 +427,46 @@ pub enum PrepareOutcome {
     ExternalRequired(TypedResidual),
 }
 
+/// Canonical setup owner which established the empty Caster queue before frame zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0ScoutCasterSetupJoin {
+    pub completed_init_revision: u64,
+    pub completed_init_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame0ScoutCasterInvariantBranch {
+    ReturnedNoCast(NoCastReason),
+    /// The exact human body reached its final Unit-order child.  That child owns Unit orders,
+    /// path, Guy/action, and target UID state; it cannot alias `CasterData::active_spells`.
+    AddCastOrderOwnerResidual,
+}
+
+/// Narrow authority that the complete bounded human-Scout transaction preserved the Caster
+/// active-spell owner.  It deliberately makes no claim about Unit order/path or Objects search
+/// scratch, which remain in the enclosing prepared outcome and its sibling receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0ScoutCasterInvariantAuthority {
+    pub setup: Frame0ScoutCasterSetupJoin,
+    /// Adjacent entry revision/digest copied from the exact [`GoldenScoutInput`], not derived
+    /// from or equated with completed setup.
+    pub call_entry_revision: u64,
+    pub call_entry_composition_digest: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub who: u8,
+    pub o: i16,
+    pub type_index: i32,
+    pub branch: Frame0ScoutCasterInvariantBranch,
+    pub consumed_child_receipts: usize,
+    pub before_revision: u64,
+    pub before_length: u32,
+    pub after_revision: u64,
+    pub after_length: u32,
+    pub write_set: Frame0ScoutCasterWriteSetReceipt,
+    pub caster_owner_transaction_complete: bool,
+    pub unit_order_and_search_scratch_invariance_claimed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrepareError {
     UnsupportedExecutable,
@@ -401,6 +490,32 @@ pub enum PrepareError {
     InvalidFindResult,
     InvalidNoTargetScratch,
     UnexpectedReceipt { index: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame0ScoutCasterInvariantError {
+    Prepare(PrepareError),
+    MissingSetupJoin,
+    SetupRevisionMismatch,
+    RelabeledSetupAsCallEntry,
+    HumanTransactionStillOpen,
+    NonHumanOrDynamicBranch,
+    CasterOwnerChanged,
+    RngOwnerChanged,
+}
+
+impl fmt::Display for Frame0ScoutCasterInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "frame-zero Scout Caster invariant refused: {self:?}")
+    }
+}
+
+impl std::error::Error for Frame0ScoutCasterInvariantError {}
+
+impl From<PrepareError> for Frame0ScoutCasterInvariantError {
+    fn from(value: PrepareError) -> Self {
+        Self::Prepare(value)
+    }
 }
 
 impl fmt::Display for PrepareError {
@@ -749,6 +864,112 @@ pub fn prepare_golden_scout_spellcaster(
     ))
 }
 
+/// Execute the pure frame-zero planner and publish its narrow Caster-owner invariant.
+///
+/// Intermediate dynamic-child requests are not enough: the bounded transaction must either
+/// have returned through a complete no-cast arm or reached the final `Unit::add_cast_order`
+/// owner boundary.  The latter leaves the Caster authority complete while the distinct Unit
+/// order/search-scratch transaction remains open for its sibling receipt.
+pub fn bind_frame0_scout_caster_invariant(
+    input: &GoldenScoutInput,
+    receipts: &[ChildReceipt],
+    setup: Frame0ScoutCasterSetupJoin,
+) -> Result<(PrepareOutcome, Frame0ScoutCasterInvariantAuthority), Frame0ScoutCasterInvariantError>
+{
+    if setup.completed_init_revision == 0 || setup.completed_init_digest == [0; 32] {
+        return Err(Frame0ScoutCasterInvariantError::MissingSetupJoin);
+    }
+    if input.before.caster_active_spells_revision != setup.completed_init_revision {
+        return Err(Frame0ScoutCasterInvariantError::SetupRevisionMismatch);
+    }
+    if input.call_entry_composition_digest == setup.completed_init_digest {
+        return Err(Frame0ScoutCasterInvariantError::RelabeledSetupAsCallEntry);
+    }
+    let outcome = prepare_golden_scout_spellcaster(input, receipts)?;
+    let (branch, consumed_child_receipts, after) = match outcome {
+        PrepareOutcome::Ready(ready) => (
+            Frame0ScoutCasterInvariantBranch::ReturnedNoCast(ready.reason),
+            ready.consumed_receipts,
+            ready.after,
+        ),
+        PrepareOutcome::ExternalRequired(residual) => match residual.request {
+            ExternalRequest::AddCastOrder(_) => (
+                Frame0ScoutCasterInvariantBranch::AddCastOrderOwnerResidual,
+                residual.consumed_receipts,
+                residual.staged,
+            ),
+            ExternalRequest::AiSpellcasterArm { .. } | ExternalRequest::DynamicIsSpecial { .. } => {
+                return Err(Frame0ScoutCasterInvariantError::NonHumanOrDynamicBranch)
+            }
+            ExternalRequest::ObjectsFind(_) => {
+                return Err(Frame0ScoutCasterInvariantError::HumanTransactionStillOpen)
+            }
+        },
+    };
+    if after.caster_active_spells_revision != input.before.caster_active_spells_revision
+        || after.caster_active_spells_len != input.before.caster_active_spells_len
+    {
+        return Err(Frame0ScoutCasterInvariantError::CasterOwnerChanged);
+    }
+    if after.rng_state != input.before.rng_state {
+        return Err(Frame0ScoutCasterInvariantError::RngOwnerChanged);
+    }
+    let authority = Frame0ScoutCasterInvariantAuthority {
+        setup,
+        call_entry_revision: input.snapshot_revision,
+        call_entry_composition_digest: input.call_entry_composition_digest,
+        executable_sha256: input.executable_sha256,
+        who: input.who,
+        o: input.o,
+        type_index: input.type_index,
+        branch,
+        consumed_child_receipts,
+        before_revision: input.before.caster_active_spells_revision,
+        before_length: input.before.caster_active_spells_len,
+        after_revision: after.caster_active_spells_revision,
+        after_length: after.caster_active_spells_len,
+        write_set: frame0_scout_caster_write_set(),
+        caster_owner_transaction_complete: true,
+        unit_order_and_search_scratch_invariance_claimed: false,
+    };
+    Ok((outcome, authority))
+}
+
+/// Structural gate for downstream chronology adapters which did not execute the planner.
+pub fn validate_frame0_scout_caster_invariant(
+    authority: &Frame0ScoutCasterInvariantAuthority,
+) -> bool {
+    authority.setup.completed_init_revision != 0
+        && authority.setup.completed_init_digest != [0; 32]
+        && authority.call_entry_revision != 0
+        && authority.call_entry_composition_digest != [0; 32]
+        && authority.call_entry_composition_digest != authority.setup.completed_init_digest
+        && authority.executable_sha256 == SUPPORTED_RETAIL_EXE_SHA256
+        && authority.who == GOLDEN_OWNER
+        && authority.o == GOLDEN_SCOUT_O
+        && authority.type_index == SCOUT_TYPE
+        && authority.before_revision == authority.setup.completed_init_revision
+        && authority.before_length == 0
+        && authority.after_revision == authority.before_revision
+        && authority.after_length == authority.before_length
+        && match authority.branch {
+            Frame0ScoutCasterInvariantBranch::ReturnedNoCast(NoCastReason::NotSpecial)
+            | Frame0ScoutCasterInvariantBranch::ReturnedNoCast(
+                NoCastReason::CounterintelNotCastable,
+            )
+            | Frame0ScoutCasterInvariantBranch::ReturnedNoCast(NoCastReason::InsufficientMana) => {
+                authority.consumed_child_receipts == 0
+            }
+            Frame0ScoutCasterInvariantBranch::ReturnedNoCast(NoCastReason::NoTarget)
+            | Frame0ScoutCasterInvariantBranch::AddCastOrderOwnerResidual => {
+                authority.consumed_child_receipts == 1
+            }
+        }
+        && authority.write_set == frame0_scout_caster_write_set()
+        && authority.caster_owner_transaction_complete
+        && !authority.unit_order_and_search_scratch_invariance_claimed
+}
+
 /// Commit a complete no-cast transaction after revalidating the entire detached boundary.
 /// Found-target plans cannot reach this API; they require the product host to transact the
 /// `Unit::add_cast_order` child and its order/path/Guy side effects atomically.
@@ -781,6 +1002,26 @@ pub fn commit_no_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_frame_zero_body_publishes_the_narrow_caster_write_set() {
+        let receipt = frame0_scout_caster_write_set();
+        assert_eq!(receipt.executable_sha256, SUPPORTED_RETAIL_EXE_SHA256);
+        assert_eq!(receipt.body_va, UNIT_THINK_SPELLCASTER_VA);
+        assert_eq!(receipt.body_bytes, UNIT_THINK_SPELLCASTER_SIZE);
+        assert_eq!(receipt.body_sha256, UNIT_THINK_SPELLCASTER_SHA256);
+        assert_eq!(receipt.caster_active_spell_reads, 0);
+        assert_eq!(receipt.caster_active_spell_writes, 0);
+        assert_eq!(receipt.add_cast_order_va, UNIT_ADD_CAST_ORDER_VA);
+        assert_eq!(receipt.add_cast_order_bytes, UNIT_ADD_CAST_ORDER_SIZE);
+        assert_eq!(receipt.add_cast_order_sha256, UNIT_ADD_CAST_ORDER_SHA256);
+        assert_eq!(receipt.add_cast_order_caster_active_spell_writes, 0);
+        assert_eq!(
+            receipt.successful_write_owner_offset,
+            UNIT_ORDER_LIST_OFFSET
+        );
+        assert_eq!(receipt.successful_write_order_index, CAST_ORDER_INDEX);
+    }
 
     fn boundary() -> Frame0ScoutBoundary {
         Frame0ScoutBoundary {
@@ -899,6 +1140,72 @@ mod tests {
             result_o,
             scratch_after,
         }
+    }
+
+    #[test]
+    fn completed_human_transaction_binds_only_the_caster_owner_invariant() {
+        let i = input();
+        let setup = Frame0ScoutCasterSetupJoin {
+            completed_init_revision: i.before.caster_active_spells_revision,
+            completed_init_digest: [0x51; 32],
+        };
+        let mut no_cast = i;
+        no_cast.unit_masks = 1;
+        let (outcome, authority) =
+            bind_frame0_scout_caster_invariant(&no_cast, &[], setup).unwrap();
+        assert!(matches!(
+            outcome,
+            PrepareOutcome::Ready(PreparedNoCast {
+                reason: NoCastReason::CounterintelNotCastable,
+                ..
+            })
+        ));
+        assert!(validate_frame0_scout_caster_invariant(&authority));
+        assert_eq!(authority.call_entry_revision, no_cast.snapshot_revision);
+        assert_eq!(
+            authority.call_entry_composition_digest,
+            no_cast.call_entry_composition_digest
+        );
+        assert!(authority.caster_owner_transaction_complete);
+        assert!(!authority.unit_order_and_search_scratch_invariance_claimed);
+
+        let relabeled_setup = Frame0ScoutCasterSetupJoin {
+            completed_init_digest: i.call_entry_composition_digest,
+            ..setup
+        };
+        assert_eq!(
+            bind_frame0_scout_caster_invariant(&no_cast, &[], relabeled_setup),
+            Err(Frame0ScoutCasterInvariantError::RelabeledSetupAsCallEntry)
+        );
+
+        assert_eq!(
+            bind_frame0_scout_caster_invariant(&i, &[], setup),
+            Err(Frame0ScoutCasterInvariantError::HumanTransactionStillOpen)
+        );
+
+        let found = [find(
+            &i,
+            GOLDEN_COUNTERINTEL_RANGE,
+            4,
+            ObjectsFindScratch {
+                best_metric: 77,
+                selected_owner: 1,
+            },
+        )];
+        let (outcome, authority) = bind_frame0_scout_caster_invariant(&i, &found, setup).unwrap();
+        assert!(matches!(
+            outcome,
+            PrepareOutcome::ExternalRequired(TypedResidual {
+                request: ExternalRequest::AddCastOrder(_),
+                ..
+            })
+        ));
+        assert_eq!(
+            authority.branch,
+            Frame0ScoutCasterInvariantBranch::AddCastOrderOwnerResidual
+        );
+        assert_eq!(authority.consumed_child_receipts, 1);
+        assert!(validate_frame0_scout_caster_invariant(&authority));
     }
 
     #[test]

@@ -20,6 +20,14 @@ pub const UNIT_PROCESS_VA: u32 = 0x0061_0bc0;
 pub const CASTER_DISPATCH_VA: u32 = 0x0061_0dd7;
 pub const CASTER_PROCESS_SPELLS_VA: u32 = 0x0073_9ad0;
 pub const CASTER_PROCESS_SPELLS_BYTES: usize = 481;
+/// SHA-256 of `Caster::process_spells`' complete 481-byte body in the supported executable.
+pub const CASTER_PROCESS_SPELLS_SHA256: [u8; 32] = [
+    0x46, 0xba, 0x1c, 0x7f, 0x04, 0x4a, 0xdd, 0x4b, 0xfc, 0x00, 0x96, 0xbd, 0x2a, 0x75, 0x90, 0x6b,
+    0xc1, 0x5b, 0xda, 0x72, 0xc2, 0x58, 0x3b, 0xb4, 0x08, 0xc1, 0x72, 0xcf, 0x81, 0x9f, 0x4a, 0x0f,
+];
+pub const CASTER_ACTIVE_SPELL_LENGTH_LOAD_VA: u32 = 0x0073_9ae0;
+pub const CASTER_EMPTY_QUEUE_BRANCH_VA: u32 = 0x0073_9aee;
+pub const CASTER_EMPTY_QUEUE_RETURN_VA: u32 = 0x0073_9ca8;
 pub const FRAME_ONE: i32 = 1;
 pub const SETUP_SCOUT_WHO: u8 = 0;
 pub const SETUP_SCOUT_O: i16 = 0;
@@ -31,6 +39,60 @@ pub const UNIT_FLAGS2_CASTER: u32 = 0x02;
 pub const UNIT_FLAGS2_SPECIAL: u32 = 0x10;
 pub const UNIT_FLAGS2_HERO: u32 = 0x20;
 pub const PROCESS_SPELLS_NORMAL_MODE: i32 = 0;
+
+/// Source-derived result of entering `Caster::process_spells` with a zero active-spell length.
+///
+/// The body loads the length at `0x00739AE0`, subtracts one, and the signed-negative branch at
+/// `0x00739AEE` jumps directly to the pop/return epilogue at `0x00739CA8`.  It therefore reads no
+/// entry, executes no store, and consumes no RNG.  This narrow proof intentionally says nothing
+/// about how the entry length was established; chronological callers must supply that join.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1CasterSourceEmptyNoopReceipt {
+    pub executable_sha256: [u8; 32],
+    pub body_va: u32,
+    pub body_bytes: u32,
+    pub body_sha256: [u8; 32],
+    pub length_load_va: u32,
+    pub empty_branch_va: u32,
+    pub return_va: u32,
+    pub entry_length: i32,
+    pub exit_length: i32,
+    pub active_spell_entries_read: u32,
+    pub stores: u32,
+    pub rng_draws: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1CasterSourceNonEmptyResidual {
+    pub entry_length: i32,
+    pub body_va: u32,
+}
+
+/// Prove the exact source-local empty branch, or stop at the first nonempty queue.
+pub const fn prove_source_empty_caster_process(
+    entry_length: i32,
+) -> Result<Frame1CasterSourceEmptyNoopReceipt, Frame1CasterSourceNonEmptyResidual> {
+    if entry_length != 0 {
+        return Err(Frame1CasterSourceNonEmptyResidual {
+            entry_length,
+            body_va: CASTER_PROCESS_SPELLS_VA,
+        });
+    }
+    Ok(Frame1CasterSourceEmptyNoopReceipt {
+        executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+        body_va: CASTER_PROCESS_SPELLS_VA,
+        body_bytes: CASTER_PROCESS_SPELLS_BYTES as u32,
+        body_sha256: CASTER_PROCESS_SPELLS_SHA256,
+        length_load_va: CASTER_ACTIVE_SPELL_LENGTH_LOAD_VA,
+        empty_branch_va: CASTER_EMPTY_QUEUE_BRANCH_VA,
+        return_va: CASTER_EMPTY_QUEUE_RETURN_VA,
+        entry_length,
+        exit_length: entry_length,
+        active_spell_entries_read: 0,
+        stores: 0,
+        rng_draws: 0,
+    })
+}
 
 /// SHA-256 of the selected 2024 Great Lakes replay file.
 pub const SUPPORTED_GOLDEN_REPLAY_SHA256: [u8; 32] = [
@@ -420,6 +482,11 @@ pub fn mount_captured_frame1_scout_caster_process(
         ));
     }
 
+    // Share the source-local proof with the chronological replay binder.  The capture adapter
+    // still performs its stronger full-envelope equality checks below.
+    let _source_noop = prove_source_empty_caster_process(authority.before.active_spells.length)
+        .expect("the nonempty queue returned as a typed residual above");
+
     if !authority.after.active_spells.is_empty() || authority.before != authority.after {
         return Err(Frame1CasterProcessError::EmptyCallMutatedState);
     }
@@ -455,6 +522,26 @@ pub fn mount_captured_frame1_scout_caster_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_empty_length_branches_directly_to_the_no_store_epilogue() {
+        let receipt = prove_source_empty_caster_process(0).unwrap();
+        assert_eq!(receipt.body_sha256, CASTER_PROCESS_SPELLS_SHA256);
+        assert_eq!(receipt.length_load_va, CASTER_ACTIVE_SPELL_LENGTH_LOAD_VA);
+        assert_eq!(receipt.empty_branch_va, CASTER_EMPTY_QUEUE_BRANCH_VA);
+        assert_eq!(receipt.return_va, CASTER_EMPTY_QUEUE_RETURN_VA);
+        assert_eq!(receipt.entry_length, receipt.exit_length);
+        assert_eq!(receipt.active_spell_entries_read, 0);
+        assert_eq!(receipt.stores, 0);
+        assert_eq!(receipt.rng_draws, 0);
+        assert_eq!(
+            prove_source_empty_caster_process(1),
+            Err(Frame1CasterSourceNonEmptyResidual {
+                entry_length: 1,
+                body_va: CASTER_PROCESS_SPELLS_VA,
+            })
+        );
+    }
 
     fn request() -> CasterProcessSpellsRequest {
         CasterProcessSpellsRequest {

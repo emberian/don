@@ -53,12 +53,18 @@ adjacency, so a receiver cannot be spliced onto a different Market or World afte
 
 `bind_captured_frame1_command_entry` admits images 8 and 9 and preserves all seven stable Unit
 identities across the real frame-zero tick. Image 9 remains mandatory because Merchant scheduler
-state and the Scout's product-owned spell predicate/spatial-search receipts are not yet derivable
-from setup receipts. The Scout source path is now represented by the detached
-`frame0_scout_spellcaster` transaction: the golden human arm has no RNG draw, and it can stage
-Objects search scratch or request a Unit CastOrder but cannot mutate
+state and the Scout's Unit order/path and spatial-search after-images are not derivable from setup
+receipts. The Scout source path is now represented by the detached
+`frame0_scout_spellcaster` transaction: static castability, mana, and range are source-owned; its
+sole dynamic child is an adjacent, composition-bound `ObjectsData::find` traversal receipt. The
+golden human arm has no RNG draw, and it can stage Objects search scratch or request a Unit
+CastOrder but cannot mutate
 `CasterData::active_spells`. Its setup-empty active-spell array is therefore derivable and is not
-an independent oracle field.
+an independent oracle field. `Frame0ScoutCasterInvariantAuthority` publishes only that narrow
+owner invariant after the bounded human transaction; it explicitly does not claim Unit
+order/path or Objects search-scratch invariance. `setup_2024_frame1_scout_caster` joins it to
+setup ordinal zero and the post-command image before completing the frame-one empty Caster
+child.
 
 `bind_captured_frame1_post_command` admits oracle images 9 and 10. It independently mounts the recovered
 five LeaderOptions stance writes onto a save/load copy of image 9 and requires byte-for-byte
