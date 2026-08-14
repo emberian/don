@@ -7,7 +7,9 @@
 //! They are therefore reconstructible adapter state, not another save owner. This validator
 //! admits only the constructor-empty form, canonical PlayerSetup activation, or the exact
 //! post-sync form; every query package, persistent call counter, and non-default external host
-//! remains refused.
+//! remains refused. A canonical object allocation may append rows after the last projection;
+//! an exact prefix of the current registry is also reconstructible because synchronization
+//! deterministically appends the missing tail and preserves no external query answers there.
 
 use crate::objects::Band;
 use crate::systems::{
@@ -169,7 +171,7 @@ fn objects_are_empty(sim: &Sim) -> bool {
     })
 }
 
-fn objects_are_exact_mirrors(sim: &Sim) -> bool {
+fn objects_are_exact_prefix_mirrors(sim: &Sim) -> bool {
     for who in 0..NUM_LEADERS {
         let registry = sim.world.objects.slot(who);
         let actual = &sim.step8_env.leaders[who].objects;
@@ -178,8 +180,8 @@ fn objects_are_exact_mirrors(sim: &Sim) -> bool {
 
         if !registry.band(Band::Wall).is_empty()
             || !actual.band_3000.is_empty()
-            || actual.units.len() != unit_rows.len()
-            || actual.band_2000.len() != build_rows.len()
+            || actual.units.len() > unit_rows.len()
+            || actual.band_2000.len() > build_rows.len()
         {
             return false;
         }
@@ -256,7 +258,7 @@ pub(super) fn is_supported_derived_snapshot(sim: &Sim) -> bool {
         }
     }
 
-    objects_are_empty(sim) || objects_are_exact_mirrors(sim)
+    objects_are_empty(sim) || objects_are_exact_prefix_mirrors(sim)
 }
 
 /// Rebuild the save-supported step-8 adapter after all canonical owners have loaded.
