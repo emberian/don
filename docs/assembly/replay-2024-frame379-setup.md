@@ -56,23 +56,33 @@ no downstream caller supplies another attestation scalar.
 deterministic save/load copy, then moves the candidate into the published slot only on complete
 success. Refusal returns the candidate and leaves any existing published Sim unchanged.
 
+`bind_captured_frame379_completed_init` is now the source-capture constructor for each of those
+seven receiver authorities. It admits the supported retail executable plus exact entry/after
+DoNSave hashes and a versioned detailed-receipt hash, re-executes the placement probes, and derives
+the composition digest itself. The binder requires exactly one appended Unit, validates its whole
+native detailed receipt and stable Handle/type/position image, requires a complete canonical
+`UnitGuys` side store (including every 155-byte Guy walk image), and proves every prior Unit row,
+order, path, pathfinder input, and Guy image unchanged. Thus the Great Lakes lane can feed captured
+Scout, Merchant, and Citizen calls directly into `produce_frame379_setup`; it no longer needs a
+2018-specific complete-initializer adapter or a caller-chosen digest.
+
 Mutation gates reject missing revisions/digests, replay drift, wrong dynamic bonuses/upgrades,
 non-adjacent World/RNG states, invalid detailed receipts, stale identities, wrong types or
 positions, nonempty orders/paths, wrong Guy marks, and allocation gaps.
 
 ## Exact residual
 
-No real `Frame379SetupReceipt` can be emitted yet. The currently known executable Great Lakes
-worldgen chain stops in `place_all_mountains_add_mountain`: mountain mode 5 remains unsupported,
-and the required effects-graphics/displacement inputs are not yet installed as canonical runtime
-authority. Consequently there is no lawful post-worldgen World/RNG/Village seam and no real
-complete receiver after-image for the seven owner-0 calls.
+No real `Frame379SetupReceipt` can be emitted yet. The Great Lakes sliding mode-5 verifier is now
+source-recovered, but the exact run still stops before a final terrain/world authority: the 16
+installed displacement TGAs are absent, and the mode-5 placement result has not yet been joined to
+the exact CoordInfo/scalar cone and the post-mountain height plane. Consequently there is still no
+lawful postworldgen World/RNG/Village seam from which to capture the seven adjacent receiver Sims.
 
-After that seam lands, the remaining direct prerequisites are the complete generic Unit/Guy
-initializers (graphics, height, collision, visibility, Leader accounting, and RNG effects) for the
-Scout, both Merchants, and four Citizens. Full frame-379 replay also needs every other player's
-setup chronology and intervening frame simulation; this owner-0 receipt alone advances no corpus
-checksum.
+After that seam lands, the receiver binder needs seven coherent retail capture tranches containing
+the complete graphics, height, collision, visibility, Leader-accounting, RNG, Unit, and Guy
+after-images for the Scout, both Merchants, and four Citizens. Full frame-379 replay also needs
+every other player's setup chronology and exact intervening frame simulation; this owner-0 receipt
+alone advances no corpus checksum.
 
 The downstream command mount is `setup_2024_frame379_group_move`. It requires an explicit
 source-backed frame-zero-to-379 chronology authority, rebinds all seven owner-0 setup members at

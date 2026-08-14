@@ -20,6 +20,7 @@ use don_sim::systems::objects_init_unit_authority_frontier::{
     BhsInitUnitRequest, DetailedInitUnitReceipt, InitUnitReceiptError, InitUnitStep, UnitAfterInit,
 };
 use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
+use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use don_sim::tick::Sim;
 use don_sim::world::{WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
@@ -40,9 +41,10 @@ use crate::setup_unit_member_authority::{
 use crate::setup_units_producer::{
     build_units_plan, validate_build_units_prefix_receipt, BuildUnitsInputs, BuildUnitsPlan,
     BuildUnitsPlanError, BuildUnitsPrefixReceipt, BuildUnitsReceiptError, DirectRandomDrawReceipt,
-    InitUnitAuthorityReceipt, InitUnitRngSpan, PlaceUnitReceipt, PlacementOutcomeReceipt,
-    PlacementRngEvent, StartingUnitBonuses, StartingUnitRuleFacts, StartingUnitTypeFacts,
-    TypeResolutionFacts, BASE_PEASANT_TYPE, BASE_SCOUT_TYPE, DUTCH_MERCHANT_TYPE,
+    EngineContainerShapeReceipt, GuyIdentityReceipt, InitUnitAuthorityReceipt, InitUnitRngSpan,
+    PlaceUnitReceipt, PlacementOutcomeReceipt, PlacementRngEvent, StableUnitIdentityReceipt,
+    StartingUnitBonuses, StartingUnitRuleFacts, StartingUnitTypeFacts, TypeResolutionFacts,
+    UnitMemberAuthorityReceipt, BASE_PEASANT_TYPE, BASE_SCOUT_TYPE, DUTCH_MERCHANT_TYPE,
     OBJECTS_INIT_UNIT_BYTES, OBJECTS_INIT_UNIT_VA, PLACE_UNIT_DIRECT_RANDOM_CALL_VA,
 };
 use crate::wire::CommandView;
@@ -156,6 +158,85 @@ pub struct Frame379CompletedInitAuthority {
     pub world_checksum_after: WorldChecksum,
     pub rng_before: i32,
     pub rng_after: i32,
+}
+
+/// Source capture admitted by the generic seven-call receiver binder.
+///
+/// The two hashes are canonical DoNSave images at entry to `Setup::place_unit` and after its
+/// `Objects::init_unit` receiver returned. The detailed hash commits the independently decoded
+/// native call trace. No checksum recorded in the replay is an input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame379CompletedInitCapture {
+    pub revision: u64,
+    pub source: Frame379CompletedInitSource,
+    pub replay_file_sha256: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub setup_ordinal: usize,
+    pub before_sim_sha256: [u8; 32],
+    pub after_sim_sha256: [u8; 32],
+    pub detailed_receipt_sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame379CompletedInitBindError {
+    Setup(Frame379SetupError),
+    MissingCaptureRevision,
+    WrongCaptureSource,
+    ReplayMismatch,
+    UnsupportedExecutable,
+    WrongOrdinal,
+    Snapshot(SaveError),
+    BeforeSnapshotMismatch,
+    AfterSnapshotMismatch,
+    DetailedReceiptMismatch,
+    WrongFrame { expected: i32, actual: i32 },
+    WrongAllocationExtent,
+    ExistingOrdinal,
+    Placement(PlaceUnitProducerError),
+    PlacementDidNotReachInit,
+    InitRequestMismatch,
+    DetailedReceipt(InitUnitReceiptError),
+    WrongEffects,
+    MissingUnitInitStep,
+    MissingFinalCaptain,
+    MissingCanonicalUnit,
+    InactiveCanonicalUnit,
+    StaleCanonicalHandle,
+    CanonicalTypeMismatch,
+    CanonicalAfterImageMismatch,
+    CanonicalContainerMismatch,
+    MissingCanonicalGuys,
+    CanonicalGuysMismatch,
+    PriorUnitChanged { row: usize },
+}
+
+impl fmt::Display for Frame379CompletedInitBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-379 complete setup receiver refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame379CompletedInitBindError {}
+
+impl From<Frame379SetupError> for Frame379CompletedInitBindError {
+    fn from(value: Frame379SetupError) -> Self {
+        Self::Setup(value)
+    }
+}
+
+impl From<PlaceUnitProducerError> for Frame379CompletedInitBindError {
+    fn from(value: PlaceUnitProducerError) -> Self {
+        Self::Placement(value)
+    }
+}
+
+impl From<InitUnitReceiptError> for Frame379CompletedInitBindError {
+    fn from(value: InitUnitReceiptError) -> Self {
+        Self::DetailedReceipt(value)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -591,6 +672,375 @@ fn capture_placement_map(
         },
         sha256(&image),
     ))
+}
+
+/// Canonical capture hash used by [`Frame379CompletedInitCapture`].
+///
+/// DoNSave owns all synchronized `Sim` channels represented by the offline runtime. Hashing its
+/// exact bytes makes the receiver seam reusable without exposing a second mutable owner.
+pub fn frame379_setup_snapshot_sha256(sim: &Sim) -> Result<[u8; 32], SaveError> {
+    save_sim(sim).map(|bytes| sha256(&bytes))
+}
+
+/// Versioned digest of the independently decoded 1,603-byte receiver trace.
+pub fn frame379_detailed_init_receipt_sha256(detailed: &DetailedInitUnitReceipt) -> [u8; 32] {
+    let image = format!("don-frame379-detailed-init-v1\0{detailed:?}");
+    sha256(image.as_bytes())
+}
+
+fn prior_unit_row_equal(before: &Sim, after: &Sim, row: usize) -> bool {
+    use don_sim::generated::state::unit::{W1_PLANES, W2_PLANES, W4_PLANES};
+
+    let path_unit_equal = match (before.path_unit.get(row), after.path_unit.get(row)) {
+        (Some(before), Some(after)) => {
+            before.type_size == after.type_size
+                && before.can_board_transport == after.can_board_transport
+                && before.small_footprint == after.small_footprint
+                && before.can_transport == after.can_transport
+        }
+        (None, None) => true,
+        _ => false,
+    };
+
+    (0..W4_PLANES).all(|plane| {
+        before.world.units.w4_plane(plane).get(row) == after.world.units.w4_plane(plane).get(row)
+    }) && (0..W2_PLANES).all(|plane| {
+        before.world.units.w2_plane(plane).get(row) == after.world.units.w2_plane(plane).get(row)
+    }) && (0..W1_PLANES).all(|plane| {
+        before.world.units.w1_plane(plane).get(row) == after.world.units.w1_plane(plane).get(row)
+    }) && before.world.handle_at_row(row) == after.world.handle_at_row(row)
+        && before.world.unit_type_id(row) == after.world.unit_type_id(row)
+        && before.world.orders(row) == after.world.orders(row)
+        && before.unit_type.get(row) == after.unit_type.get(row)
+        && before.paths.get(row) == after.paths.get(row)
+        && path_unit_equal
+        && before.unit_guys.get(row) == after.unit_guys.get(row)
+}
+
+/// Bind one source-captured 2024 `Setup::place_unit -> Objects::init_unit` call to its two
+/// adjacent canonical Sims and emit the generic authority consumed by [`produce_frame379_setup`].
+///
+/// This is the reusable receiver-side constructor. It re-executes the placement probes, validates
+/// the detailed native receipt, requires exactly one appended Unit, binds the complete Guy
+/// side-store image, and proves every prior Unit row unchanged. The returned composition digest
+/// is derived from the source capture and canonical images; callers do not supply it.
+pub fn bind_captured_frame379_completed_init(
+    replay: &Replay,
+    leader: &Frame379LeaderSetupAuthority,
+    setup_ordinal: usize,
+    before: &Sim,
+    after: &Sim,
+    detailed: &DetailedInitUnitReceipt,
+    capture: &Frame379CompletedInitCapture,
+) -> Result<Frame379CompletedInitAuthority, Frame379CompletedInitBindError> {
+    let facts = discover_frame379_setup(replay, leader)?;
+    if capture.revision == 0 {
+        return Err(Frame379CompletedInitBindError::MissingCaptureRevision);
+    }
+    if capture.source != Frame379CompletedInitSource::CompleteRetailObjectsInitUnitReceiver {
+        return Err(Frame379CompletedInitBindError::WrongCaptureSource);
+    }
+    if capture.replay_file_sha256 != facts.replay_file_sha256 {
+        return Err(Frame379CompletedInitBindError::ReplayMismatch);
+    }
+    if capture.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
+        return Err(Frame379CompletedInitBindError::UnsupportedExecutable);
+    }
+    if setup_ordinal >= SETUP_CALLS || capture.setup_ordinal != setup_ordinal {
+        return Err(Frame379CompletedInitBindError::WrongOrdinal);
+    }
+    let before_sha256 =
+        frame379_setup_snapshot_sha256(before).map_err(Frame379CompletedInitBindError::Snapshot)?;
+    let after_sha256 =
+        frame379_setup_snapshot_sha256(after).map_err(Frame379CompletedInitBindError::Snapshot)?;
+    if before_sha256 != capture.before_sim_sha256 {
+        return Err(Frame379CompletedInitBindError::BeforeSnapshotMismatch);
+    }
+    if after_sha256 != capture.after_sim_sha256 {
+        return Err(Frame379CompletedInitBindError::AfterSnapshotMismatch);
+    }
+    let detailed_sha256 = frame379_detailed_init_receipt_sha256(detailed);
+    if detailed_sha256 != capture.detailed_receipt_sha256 {
+        return Err(Frame379CompletedInitBindError::DetailedReceiptMismatch);
+    }
+    for sim in [before, after] {
+        if sim.world.frame != 0 {
+            return Err(Frame379CompletedInitBindError::WrongFrame {
+                expected: 0,
+                actual: sim.world.frame,
+            });
+        }
+    }
+    let before_live = before.world.live_count() as usize;
+    let after_live = after.world.live_count() as usize;
+    if after_live != before_live.saturating_add(1) {
+        return Err(Frame379CompletedInitBindError::WrongAllocationExtent);
+    }
+    let ordinal_o = setup_ordinal as i32;
+    if before
+        .world
+        .unit_row_at(i32::from(OWNER), ordinal_o)
+        .is_some()
+    {
+        return Err(Frame379CompletedInitBindError::ExistingOrdinal);
+    }
+    if before.world.unit_mark(OWNER as usize) != Some(ordinal_o)
+        || after.world.unit_mark(OWNER as usize) != Some(ordinal_o + 1)
+    {
+        return Err(Frame379CompletedInitBindError::WrongAllocationExtent);
+    }
+    for row in 0..before_live {
+        if !prior_unit_row_equal(before, after, row) {
+            return Err(Frame379CompletedInitBindError::PriorUnitChanged { row });
+        }
+    }
+
+    let call = facts.plan.calls[setup_ordinal];
+    let center_identity = before
+        .world
+        .object_bands()
+        .live_identity(
+            don_sim::systems::sparse_object_bands_authority_frontier::RetailObjectAddress::new(
+                OWNER,
+                don_sim::systems::sparse_object_bands_authority_frontier::RetailBand::Build,
+                facts.center_build_o,
+            ),
+        )
+        .ok_or(Frame379SetupError::MissingCenterBuild)?;
+    let WorldObjectIdentity::BuildRow(center_row) = center_identity else {
+        return Err(Frame379SetupError::MissingCenterBuild.into());
+    };
+    let center = before
+        .builds
+        .get(center_row as usize)
+        .ok_or(Frame379SetupError::MissingCenterBuild)?;
+    if center.flags & don_sim::systems::production::flag::VALID == 0
+        || center.who != OWNER
+        || i32::from(center.object_id()) != facts.center_build_o
+        || center.position() != facts.center_position
+        || before
+            .production_runtime
+            .build_types
+            .get(center_row as usize)
+            .and_then(|value| *value)
+            != Some(CITY_CENTER_TYPE)
+    {
+        return Err(Frame379SetupError::CenterBuildMismatch.into());
+    }
+    let (map, _) = capture_placement_map(&before.map.world)?;
+    let placement = produce_place_unit_probe_prefix(
+        PlaceUnitInputs {
+            owner: call.owner,
+            upgraded_type: call.place_unit_upgrade,
+            requested_x: call.requested_x,
+            requested_y: call.requested_y,
+            center: Some(CenterBuildFacts {
+                owner: i32::from(OWNER),
+                o: facts.center_build_o,
+                x: facts.center_position.0,
+                y: facts.center_position.1,
+            }),
+            starting_town: replay.initial.info.settings.starting_town,
+            leader_active: 0,
+        },
+        &map,
+        before.world.random.state(),
+    )?;
+    let PlaceUnitExternalResidual::ObjectsInitUnit(request) = placement.first_external_residual
+    else {
+        return Err(Frame379CompletedInitBindError::PlacementDidNotReachInit);
+    };
+    let expected_request = BhsInitUnitRequest {
+        owner: request.owner,
+        type_index: request.type_index,
+        x: request.x,
+        y: request.y,
+        exact_o: request.exact_o,
+        external_previous: request.external_previous,
+        external_next: request.external_next,
+    };
+    if detailed.request != expected_request || detailed.type_facts.uber_size != call.uber_size {
+        return Err(Frame379CompletedInitBindError::InitRequestMismatch);
+    }
+    let effects = detailed.validate()?;
+    if effects.initialized_members.as_slice() != [ordinal_o]
+        || effects.terminal_find_free_failure.is_some()
+        || effects.returned_captain_or_failure != ordinal_o
+        || effects.unit_mark_before != ordinal_o
+        || effects.unit_mark_after != ordinal_o + 1
+    {
+        return Err(Frame379CompletedInitBindError::WrongEffects);
+    }
+
+    let row = after
+        .world
+        .unit_row_at(i32::from(OWNER), ordinal_o)
+        .ok_or(Frame379CompletedInitBindError::MissingCanonicalUnit)?;
+    if row != before_live {
+        return Err(Frame379CompletedInitBindError::WrongAllocationExtent);
+    }
+    if after.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+        return Err(Frame379CompletedInitBindError::InactiveCanonicalUnit);
+    }
+    let handle = after
+        .world
+        .handle_at_row(row)
+        .ok_or(Frame379CompletedInitBindError::StaleCanonicalHandle)?;
+    if after.world.units.get_who(row) != OWNER || i32::from(after.world.units.o()[row]) != ordinal_o
+    {
+        return Err(Frame379CompletedInitBindError::StaleCanonicalHandle);
+    }
+    if after.world.unit_type_id(row) != Some(call.place_unit_upgrade)
+        || after.unit_type.get(row).copied() != Some(call.place_unit_upgrade)
+    {
+        return Err(Frame379CompletedInitBindError::CanonicalTypeMismatch);
+    }
+    let canonical_after = UnitAfterInit {
+        owner: i32::from(OWNER),
+        o: ordinal_o,
+        type_index: call.place_unit_upgrade,
+        x: after.world.units.x_internal()[row],
+        y: after.world.units.y_internal()[row],
+        angle: after.world.units.angle()[row],
+        unit_masks: after.world.units.get_unit_masks(row),
+    };
+    let unit_init_after = detailed.steps.iter().find_map(|step| match step {
+        InitUnitStep::UnitInit(receipt) => Some(receipt.after),
+        _ => None,
+    });
+    let captain = detailed.steps.last().and_then(|step| match step {
+        InitUnitStep::ResolveCaptain(receipt) => Some(receipt.captain),
+        _ => None,
+    });
+    let type_facts = if call.place_unit_upgrade == facts.scout.type_index {
+        facts.scout
+    } else if call.place_unit_upgrade == facts.merchant.type_index {
+        facts.merchant
+    } else {
+        facts.citizen
+    };
+    match unit_init_after {
+        None => return Err(Frame379CompletedInitBindError::MissingUnitInitStep),
+        Some(after_image) if after_image != canonical_after => {
+            return Err(Frame379CompletedInitBindError::CanonicalAfterImageMismatch);
+        }
+        Some(_) => {}
+    }
+    if captain.is_none_or(|captain| {
+        captain.owner != canonical_after.owner
+            || captain.o != canonical_after.o
+            || captain.x != canonical_after.x
+            || captain.y != canonical_after.y
+            || captain.angle != canonical_after.angle
+            || captain.new_block_radius != type_facts.new_block_radius
+    }) {
+        return Err(Frame379CompletedInitBindError::MissingFinalCaptain);
+    }
+    let path = after
+        .paths
+        .get(row)
+        .ok_or(Frame379CompletedInitBindError::CanonicalContainerMismatch)?;
+    if !after.world.orders(row).is_empty() || !path.is_empty() || path.capacity != 10 {
+        return Err(Frame379CompletedInitBindError::CanonicalContainerMismatch);
+    }
+    let guys = after
+        .unit_guys
+        .get(row)
+        .and_then(Option::as_ref)
+        .ok_or(Frame379CompletedInitBindError::MissingCanonicalGuys)?;
+    let expected_guys = usize::try_from(call.squad_size.wrapping_add(call.crew_size))
+        .map_err(|_| Frame379CompletedInitBindError::CanonicalGuysMismatch)?;
+    if guys.guys.len() != expected_guys
+        || guys.size < expected_guys as i32
+        || i32::from(guys.guy_mark) != call.squad_size
+        || i32::from(after.world.units.guy_mark()[row]) != call.squad_size
+        || guys.guys.iter().enumerate().any(|(slot, guy)| {
+            guy.is_none_or(|guy| {
+                guy.ty != call.place_unit_upgrade
+                    || i32::from(guy.who) != call.owner
+                    || i32::from(guy.o) != ordinal_o
+                    || usize::try_from(guy.guy_num).ok() != Some(slot)
+            })
+        })
+    {
+        return Err(Frame379CompletedInitBindError::CanonicalGuysMismatch);
+    }
+    let identity = StableUnitIdentityReceipt {
+        id: handle.id,
+        generation: handle.generation,
+        owner: call.owner,
+        o: ordinal_o,
+    };
+    let member = UnitMemberAuthorityReceipt {
+        identity,
+        ptype_index: call.place_unit_upgrade,
+        launching_is_null: true,
+        path: EngineContainerShapeReceipt {
+            length: 0,
+            capacity: path.capacity,
+            increment: -1,
+            flags: 0,
+        },
+        order_count: 0,
+        guys: EngineContainerShapeReceipt {
+            length: guys.guys.len() as i32,
+            capacity: guys.size,
+            increment: guys.increment,
+            flags: guys.flags,
+        },
+        guy_mark: guys.guy_mark,
+        guy_identities: guys
+            .guys
+            .iter()
+            .enumerate()
+            .map(|(slot, guy)| {
+                let guy = guy.as_ref().expect("complete Guy image checked above");
+                GuyIdentityReceipt {
+                    slot: slot as i32,
+                    who: guy.who,
+                    o: guy.o,
+                    guy_num: guy.guy_num,
+                }
+            })
+            .collect(),
+        units_authority_key: (handle.id, handle.generation),
+        guys_authority_key: (handle.id, handle.generation),
+    };
+    let projected = InitUnitAuthorityReceipt {
+        validated_body_va: OBJECTS_INIT_UNIT_VA,
+        validated_body_bytes: OBJECTS_INIT_UNIT_BYTES,
+        unit_mark_before: effects.unit_mark_before,
+        unit_mark_after: effects.unit_mark_after,
+        returned_captain_o: effects.returned_captain_or_failure,
+        members: vec![member],
+    };
+    let mut image = b"don-frame379-complete-init-capture-v1".to_vec();
+    image.extend_from_slice(&capture.revision.to_le_bytes());
+    image.extend_from_slice(&facts.replay_file_sha256);
+    image.extend_from_slice(&capture.executable_sha256);
+    image.extend_from_slice(&(setup_ordinal as u64).to_le_bytes());
+    image.extend_from_slice(&before_sha256);
+    image.extend_from_slice(&after_sha256);
+    image.extend_from_slice(&detailed_sha256);
+    image.extend_from_slice(&handle.id.to_le_bytes());
+    image.extend_from_slice(&handle.generation.to_le_bytes());
+    for guy in guys.guys.iter().flatten() {
+        image.extend_from_slice(&guy.walk_bytes());
+    }
+    let composition_digest = sha256(&image);
+    Ok(Frame379CompletedInitAuthority {
+        revision: capture.revision,
+        composition_digest,
+        source: capture.source,
+        replay_file_sha256: facts.replay_file_sha256,
+        setup_ordinal,
+        detailed: detailed.clone(),
+        projected,
+        world_checksum_before: before.map.world.checksum_sections(),
+        world_checksum_after: after.map.world.checksum_sections(),
+        rng_before: placement.rng_after_probes,
+        rng_after: after.world.random.state(),
+    })
 }
 
 fn validate_canonical_prefix(
