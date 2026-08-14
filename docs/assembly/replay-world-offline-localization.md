@@ -78,8 +78,10 @@ column no longer stands in for missing provenance.
 
 The earliest lawful unknown is section 2 offset 1 in all 21 recordings. The two East Meets
 West stops now contain and own the changed bytes from all four exact start appends and the
-complete post-loop `Map::check_player_land` body. Those offsets are exclusion boundaries
-only, not observed retail/model differences.
+complete post-loop `Map::check_player_land` body. They also receipt the common first Region
+rebuild, territory stores, diagonal repair, checksum log string, exact sole-owner cleanup,
+and the allocator-free localized progress alias through its presentation-only refresh.
+Those offsets are exclusion boundaries only, not observed retail/model differences.
 
 ## Source-stage correlation
 
@@ -89,7 +91,7 @@ bytes from `schema/replay-validation.json`:
 | current exact stop | recordings |
 |---|---:|
 | `place_all_mountains_add_mountain` | 19 |
-| `map_team_continent_progress_string_constructor` | 2 |
+| `map_make_coastlines` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
 style virtual completes also receipt the common post-continent and fertility stages. This
@@ -112,11 +114,12 @@ snapshot or owners.
 
 1. **Continue the measured generator stops.** The shipped mountain range-list inputs to
    `Mountains::randomize_mountains` `0x0089ca70` block 19 files; the two East Meets West
-   recordings have completed `Map::check_player_land` and the exact caller-local
-   `String::close`, both centroid `SimpleArray<int>` frees, and the complete
-   `MapEastMeetsWest::make_continents` epilogue. They also execute the exact
-   first common `Regions::clear_all` and now stop at `Regions::find_all`
-   `0x0067eff0` (caller `0x0068be3c`).
+   recordings have completed `Map::check_player_land`, both centroid
+   `SimpleArray<int>` frees, the complete `MapEastMeetsWest::make_continents`
+   epilogue, the first common Region rebuild, territory and diagonal writes,
+   checksum-log cleanup, and the localized progress-caption ownership cone.
+   They now stop honestly at `Map::make_coastlines` `0x006947a0` (caller
+   `0x0068bef2`).
 2. **Replace the wipe baseline with later TData and visibility producers.** The baseline is
    exact, but starting objects, terrain footprints, LOS and detector passes can overwrite it
    before the turn-2 checkpoint.

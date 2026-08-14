@@ -348,12 +348,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
             "{name}"
         );
         assert!(!post_checksum_string_close.allocation.host_pointer_recorded);

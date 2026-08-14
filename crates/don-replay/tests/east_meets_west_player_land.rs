@@ -208,6 +208,34 @@ fn caller_log_string_is_the_exact_shipped_internal_table_ordinal() {
 }
 
 #[test]
+fn map_make_progress_rows_are_the_exact_shipped_default_language_ordinals() {
+    use don_replay::post_continent as pc;
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ron-data/translated_strings.xml");
+    let xml = std::fs::read_to_string(path).unwrap();
+    let table = don_content::string_table::parse_string_table_xml(&xml).unwrap();
+
+    let previous = &table.records()[pc::MAP_MAKE_PREVIOUS_PROGRESS_STRING_TABLE_INDEX as usize];
+    assert_eq!(previous.text, "Running Built-in Map Gen");
+    assert_eq!(
+        previous.declared_hash as u32,
+        pc::MAP_MAKE_PREVIOUS_PROGRESS_RESOURCE_HASH
+    );
+
+    let coastlines = &table.records()[pc::MAP_MAKE_COASTLINES_STRING_TABLE_INDEX as usize];
+    assert_eq!(coastlines.text, "Map Coastlines");
+    assert_eq!(
+        coastlines.declared_hash as u32,
+        pc::MAP_MAKE_COASTLINES_RESOURCE_HASH
+    );
+}
+
+#[test]
 fn post_fix_diag_constructor_native_graph_is_frozen() {
     use don_replay::post_continent as pc;
 
@@ -329,7 +357,40 @@ fn post_checksum_string_close_native_graph_is_frozen() {
         pc::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
         0x0068_bec4
     );
-    assert_eq!(pc::STRING_WIDE_CONSTRUCTOR_VA, 0x00a1_d590);
+    assert_eq!(pc::STRING_COPY_CONSTRUCTOR_VA, 0x00a1_d590);
+}
+
+#[test]
+fn progress_string_const_alias_graph_is_frozen() {
+    use don_replay::post_continent as pc;
+
+    assert_eq!(pc::STRING_COPY_CONSTRUCTOR_NATIVE_BODY.size, 200);
+    assert_eq!(
+        pc::STRING_COPY_CONSTRUCTOR_NATIVE_BODY.instruction_count,
+        73
+    );
+    assert_eq!(
+        pc::STRING_COPY_CONSTRUCTOR_NATIVE_BODY.sha256,
+        "b870ca7a19b559d52aead2ab867d2c6fc2aacd5cd0131ddbc29ea16b9455cf89"
+    );
+    assert_eq!(pc::LOCALIZED_STRING_TABLE_INIT_NATIVE_BODY.size, 1358);
+    assert_eq!(
+        pc::LOCALIZED_STRING_TABLE_INIT_NATIVE_BODY.sha256,
+        "fc556322e27480913363b4caa6f6b1360dce73309100d6ef670ba70d4c4cd352"
+    );
+    assert_eq!(pc::STRING_WIDE_ASSIGN_NATIVE_BODY.size, 110);
+    assert_eq!(pc::STRING_COPY_ASSIGNMENT_NATIVE_BODY.size, 482);
+    assert_eq!(
+        pc::STRING_COPY_ASSIGNMENT_NATIVE_BODY.sha256,
+        "1545068535829488cb7a2b77fdaf0633ded575d90e4ee76ee216d7e8a1e76f5a"
+    );
+    assert_eq!(pc::SPLASH_SCREEN_REFRESH_NATIVE_BODY.size, 199);
+    assert_eq!(
+        pc::SPLASH_SCREEN_REFRESH_NATIVE_BODY.sha256,
+        "c9e741eea1edf51ed91667fcd3d55edf1de92a5353c062f0dffffd62efde4907"
+    );
+    assert_eq!(pc::MAP_MAKE_COASTLINES_CALL_BODY.entry_va, 0x0068_bef2);
+    assert_eq!(pc::MAP_MAKE_COASTLINES_CALL_BODY.primitive_va, 0x0069_47a0);
 }
 
 #[test]
@@ -607,6 +668,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             post_fix_diag_string_constructor,
             game_log_say_checksum,
             post_checksum_string_close,
+            progress_string,
             next_va,
             next_mutator_va,
             ..
@@ -623,12 +685,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
             "{name}"
         );
         assert_eq!(
@@ -1011,6 +1073,56 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
+            progress_string.source.table_index,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_STRING_TABLE_INDEX,
+            "{name}"
+        );
+        assert_eq!(progress_string.source.resource_hash, 27_580_769, "{name}");
+        assert_eq!(
+            progress_string.previous_subtitle.table_index,
+            don_replay::post_continent::MAP_MAKE_PREVIOUS_PROGRESS_STRING_TABLE_INDEX,
+            "{name}"
+        );
+        assert!(progress_string.source.const_backed, "{name}");
+        assert!(progress_string.source.content_is_locale_dependent, "{name}");
+        assert!(!progress_string.ownership.allocation_performed, "{name}");
+        assert!(
+            !progress_string.ownership.allocator_return_performed,
+            "{name}"
+        );
+        assert!(!progress_string.ownership.refcount_changed, "{name}");
+        assert!(!progress_string.ownership.host_pointer_recorded, "{name}");
+        assert!(progress_string.local_after_close.data_is_null, "{name}");
+        assert!(
+            progress_string
+                .local_after_close
+                .source_length_field_is_retained,
+            "{name}"
+        );
+        assert!(
+            progress_string.presentation_host_clock_and_draw_effects_unmodeled,
+            "{name}"
+        );
+        assert_eq!(
+            progress_string.world_before, post_checksum_string_close.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            progress_string.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert!(progress_string.world_sections_changed.is_empty(), "{name}");
+        assert_eq!(
+            progress_string.next,
+            don_replay::post_continent::MapMakeProgressStringNext::MakeCoastlines {
+                caller: don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_BODY,
+                call_va: don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
+                primitive_va: don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
+            },
+            "{name}"
+        );
+        assert_eq!(
             post_checksum_string_close.next,
             don_replay::continent::MapMakePostChecksumStringCloseNext::ProgressStringConstructor {
                 prep: don_replay::post_continent::MAP_MAKE_POST_CLOSE_PROGRESS_PREP_BODY,
@@ -1029,7 +1141,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                 local_load_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA,
                 source_push_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA,
                 call_va: don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
-                primitive_va: don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+                primitive_va: don_replay::post_continent::STRING_COPY_CONSTRUCTOR_VA,
             },
             "{name}"
         );

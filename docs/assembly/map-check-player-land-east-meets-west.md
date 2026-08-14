@@ -16,9 +16,11 @@ the style-19 fallthrough, executes complete `Map::fix_diag_land` at
 `0x0068be82 -> 0x00a1d660`, executes the typed `GameLog::say_checksum` host
 observation at `0x0068be9e -> 0x00930b30`, clears the caller cleanup guard,
 executes the sole-owner `String::close` at
-`0x0068bead -> 0x00a1cf40`, and freezes before the progress-message
-wide-string constructor at `0x0068bec4 -> 0x00a1d590`. None of these tranches
-consumes RNG.
+`0x0068bead -> 0x00a1cf40`, executes the progress-message copy constructor,
+subtitle replacement, splash-refresh acknowledgement, and const-alias close
+through `0x0068beed`, then freezes at the next canonical World mutation,
+`Map::make_coastlines` at `0x0068bef2 -> 0x006947a0`. None of these tranches
+before the coastline call consumes RNG or changes World.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -344,10 +346,31 @@ it never records a native pointer or guesses whether either pool grows.
 
 The native replay call chain fixes `Map::make`'s third argument to one. The
 exact five-instruction read-only slice `0x0068beb2..0x0068bec4` therefore
-takes the progress arm, loads the wide-string-table source at
-`[0x00c8cd00] + 0xccec`, and stages it for `String::String(wchar_t const*)`.
-That constructor is the next stateful boundary; its runtime string contents
-and splash-screen owner are not inferred.
+takes the progress arm, loads localized `StringTable[2623]` at
+`[0x00c8cd00] + 0xccec`, and stages it for `String::String(String const&)`.
+The PDB names that exact 200-byte / 73-instruction constructor
+`0x00a1d590..0x00a1d658`; its SHA-256 is
+`b870ca7a19b559d52aead2ab867d2c6fc2aacd5cd0131ddbc29ea16b9455cf89`.
+`StringTable::init` installs each localized row through the const-backed
+wide assignment at `0x00a28913 -> 0x00a1db60`, so the source-flags test at
+`0x00a1d5af` takes the const fast path and returns at `0x00a1d5e7` without an
+allocation or `StringGuts` refcount change. Row 2623 has resource hash
+`27580769` (`Map Coastlines` in the shipped English table); its text remains
+locale-dependent and its native backing pointer remains owned by the table.
+
+The earlier, already executed progress block leaves
+`SplashScreen::subtitle_string` as the same kind of borrowed alias to row 2620
+(resource hash `60488566`). Consequently `String::operator=(String const&)` at
+`0x0068bed9 -> 0x00a1eeb0` takes the nonempty-source /
+existing-const-destination replacement path, closes the old borrowed alias
+without freeing it, and aliases row 2623. The exact assignment body is 482
+bytes / 178 instructions, SHA-256
+`1545068535829488cb7a2b77fdaf0633ded575d90e4ee76ee216d7e8a1e76f5a`.
+The call to `SplashScreen::refresh` is retained as a presentation boundary;
+its clock and draw effects are not replay state. The final local close takes
+`String::close`'s const fast path: it clears data/current-length/flags without
+freeing, while the now-stale source length, offset, module, and cached hashes
+remain in the dead local exactly as the native instructions leave them.
 
 ## Typed residual and gates
 
@@ -363,8 +386,11 @@ transitions; the diagonal receipt binds the final WData mutation and the
 constructor receipt binds the caller-local allocation and arguments; the log
 receipt binds the exact source/mode/line owner and GameLog-relative effects;
 the close receipt binds all four executed direct calls, both logical allocator
-returns and the zeroed local image. It exposes `next_va = 0x0068bec4`,
-`next_mutator_va = 0x00a1d590`. Owner transition
+returns and the zeroed owning local image. The progress receipt then binds the
+localized table owner, all five executed direct calls, the allocator-free
+borrowed-alias lifecycle, the subtitle replacement, and the const-close dead
+local image without recording a host pointer. It exposes
+`next_va = 0x0068bef2`, `next_mutator_va = 0x006947a0`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
@@ -372,7 +398,7 @@ unchanged RNG chronology match; its implementation
 digest includes the replay executor plus the sim Region and map-terrain
 bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_team_continent_progress_string_constructor`.
+`map_make_coastlines`.
 
 Validation gates:
 
@@ -459,3 +485,13 @@ Validation gates:
   comparisons, and names exactly two
   `map_team_continent_progress_string_constructor` / nineteen
   `place_all_mountains_add_mountain` endpoints.
+- current Cycle 11 constructor/alias gate: the PDB-correct
+  `String::String(String const&)` body and its localized-table provenance,
+  subtitle replacement, splash presentation acknowledgement, and const close
+  are exact. Focused player-land is 9/9, continent 4/4, remaining starts 2/2,
+  edge canals 4/4, cargo check is green, and owner transition is 2/2 including
+  all 21 checksum-bearing recordings. The full localizer opens 62 recordings,
+  retains 21/21 coherent ledgers and 265,619/265,619 agreeing peer comparisons,
+  reports 21/21 retail/model divergences, and names exactly two
+  `map_make_coastlines` / nineteen `place_all_mountains_add_mountain`
+  endpoints.

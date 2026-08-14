@@ -263,13 +263,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::STRING_WIDE_CONSTRUCTOR_VA,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
             "{}",
             expected.name
         );

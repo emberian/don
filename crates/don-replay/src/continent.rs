@@ -126,9 +126,9 @@ pub use crate::post_continent::{
     execute_map_fix_diag_land, execute_map_make_first_regions_clear_all,
     execute_map_make_first_regions_find_all, execute_map_make_post_checksum_string_close,
     execute_map_make_post_fix_diag_game_log_say_checksum,
-    execute_map_make_post_fix_diag_string_constructor, execute_map_make_territory_limits,
-    GameLogCheckAcceptNativeBody, GameLogSayChecksumNativeBody, MapFixDiagLandError,
-    MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
+    execute_map_make_post_fix_diag_string_constructor, execute_map_make_progress_string,
+    execute_map_make_territory_limits, GameLogCheckAcceptNativeBody, GameLogSayChecksumNativeBody,
+    MapFixDiagLandError, MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
     MapFixDiagLandWorldMutation, MapMakeFirstRegionsClearAllNext,
     MapMakeFirstRegionsClearAllReceipt, MapMakeFirstRegionsFindAllCallerBody,
     MapMakeFirstRegionsFindAllError, MapMakeFirstRegionsFindAllNext,
@@ -142,6 +142,7 @@ pub use crate::post_continent::{
     MapMakePostFixDiagLocalString, MapMakePostFixDiagStringAllocationOwner,
     MapMakePostFixDiagStringAllocationReceipt, MapMakePostFixDiagStringConstructorError,
     MapMakePostFixDiagStringConstructorNext, MapMakePostFixDiagStringConstructorReceipt,
+    MapMakeProgressStringError, MapMakeProgressStringNext, MapMakeProgressStringReceipt,
     MapMakeStringAllocationState, MapMakeStringAllocatorFacts, MapMakeTerritoryLimitsError,
     MapMakeTerritoryLimitsNativeBody, MapMakeTerritoryLimitsNext, MapMakeTerritoryLimitsReceipt,
     MapMakeTerritoryStyleBranchReceipt, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
@@ -149,7 +150,8 @@ pub use crate::post_continent::{
     RegionsFindAllNativeBody, RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall,
     RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation, StringCloseChildNativeBody,
     StringCloseNativeBody, StringConstructorCallerBody, StringConstructorHelperNativeBody,
-    StringConstructorNativeBody, StringInitConstNativeBody, StringReinitNativeBody,
+    StringConstructorNativeBody, StringCopyAssignmentNativeBody, StringCopyConstructorNativeBody,
+    StringInitConstNativeBody, StringReinitNativeBody,
     FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA, GAME_LOG_SAY_CHECKSUM_VA,
     MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA, MAP_FIX_DIAG_LAND_CORNER_X,
     MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y, MAP_FIX_DIAG_LAND_CORNER_Y_VA,
@@ -303,9 +305,10 @@ pub enum ContinentStop {
     /// World territory-limit stores, complete `Map::fix_diag_land`, and the
     /// caller-local log `String` constructor, the typed
     /// `GameLog::say_checksum` host observation, and the sole-owner
-    /// `String::close` allocator transaction. Execution is frozen at the
-    /// progress-message wide-string constructor selected by the replay's
-    /// exact `progress = 1` call chain.
+    /// `String::close` allocator transaction, then the localized progress
+    /// `String` copy, subtitle replacement, splash-refresh acknowledgement,
+    /// and allocator-free const-alias cleanup. Execution is frozen at the
+    /// next canonical World mutation, `Map::make_coastlines`.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -327,6 +330,7 @@ pub enum ContinentStop {
         post_fix_diag_string_constructor: MapMakePostFixDiagStringConstructorReceipt,
         game_log_say_checksum: MapMakePostFixDiagGameLogReceipt,
         post_checksum_string_close: MapMakePostChecksumStringCloseReceipt,
+        progress_string: MapMakeProgressStringReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -440,6 +444,7 @@ pub enum ContinentError {
     PostFixDiagStringConstructor(MapMakePostFixDiagStringConstructorError),
     PostFixDiagGameLog(MapMakePostFixDiagGameLogError),
     PostChecksumStringClose(MapMakePostChecksumStringCloseError),
+    ProgressString(MapMakeProgressStringError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1816,10 +1821,36 @@ fn east_meets_west(
                     )
                     .map_err(ContinentError::PostChecksumStringClose)?;
                     let MapMakePostChecksumStringCloseNext::ProgressStringConstructor {
+                        call_va: progress_constructor_call_va,
+                        primitive_va: progress_constructor_va,
+                        ..
+                    } = post_checksum_string_close.next;
+                    debug_assert_eq!(
+                        progress_constructor_call_va,
+                        crate::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA
+                    );
+                    debug_assert_eq!(
+                        progress_constructor_va,
+                        crate::post_continent::STRING_COPY_CONSTRUCTOR_VA
+                    );
+                    let progress_string = execute_map_make_progress_string(
+                        world,
+                        regions,
+                        rng.state(),
+                        &regions_clear_all,
+                        &regions_find_all,
+                        &territory_limits,
+                        &fix_diag_land,
+                        &post_fix_diag_string_constructor,
+                        &game_log_say_checksum,
+                        &post_checksum_string_close,
+                    )
+                    .map_err(ContinentError::ProgressString)?;
+                    let MapMakeProgressStringNext::MakeCoastlines {
                         call_va: next_va,
                         primitive_va: next_mutator_va,
                         ..
-                    } = post_checksum_string_close.next;
+                    } = progress_string.next;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1843,6 +1874,7 @@ fn east_meets_west(
                             post_fix_diag_string_constructor,
                             game_log_say_checksum,
                             post_checksum_string_close,
+                            progress_string,
                             next_mutator_va,
                         },
                         starts_added,

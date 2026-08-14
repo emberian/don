@@ -262,7 +262,91 @@ pub const MAP_MAKE_PROGRESS_STRING_BYTE_OFFSET: u32 = 0x0000_ccec;
 pub const MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA: u32 = 0x0068_bebb;
 pub const MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA: u32 = 0x0068_bec3;
 pub const MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_bec4;
-pub const STRING_WIDE_CONSTRUCTOR_VA: u32 = 0x00a1_d590;
+pub const STRING_COPY_CONSTRUCTOR_VA: u32 = 0x00a1_d590;
+pub const STRING_COPY_CONSTRUCTOR_END_VA: u32 = 0x00a1_d658;
+pub const STRING_COPY_CONSTRUCTOR_CONST_RET_VA: u32 = 0x00a1_d5e7;
+pub const STRING_COPY_CONSTRUCTOR_SIZE: u32 = 200;
+pub const STRING_COPY_CONSTRUCTOR_INSTRUCTION_COUNT: u32 = 73;
+pub const STRING_COPY_CONSTRUCTOR_SHA256: &str =
+    "b870ca7a19b559d52aead2ab867d2c6fc2aacd5cd0131ddbc29ea16b9455cf89";
+pub const STRING_COPY_CONSTRUCTOR_SOURCE_FLAGS_TEST_VA: u32 = 0x00a1_d5af;
+pub const STRING_COPY_CONSTRUCTOR_CONST_PATH_VA: u32 = 0x00a1_d5b5;
+pub const MAP_MAKE_PROGRESS_CONSTRUCTOR_RESUME_VA: u32 = 0x0068_bec9;
+pub const MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_SIZE: u32 = 5;
+pub const MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_INSTRUCTION_COUNT: u32 = 1;
+pub const MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_SHA256: &str =
+    "e6f0feced96bc9e6894044d901a133a0fe187352d497b23bc71d0fc3498362b2";
+pub const MAP_MAKE_PROGRESS_GUARD_STORE_VA: u32 = 0x0068_bec9;
+pub const MAP_MAKE_PROGRESS_ASSIGN_SOURCE_LOAD_VA: u32 = 0x0068_bed0;
+pub const MAP_MAKE_PROGRESS_ASSIGN_SOURCE_PUSH_VA: u32 = 0x0068_bed3;
+pub const MAP_MAKE_PROGRESS_ASSIGN_THIS_LOAD_VA: u32 = 0x0068_bed4;
+pub const MAP_MAKE_PROGRESS_ASSIGN_CALL_VA: u32 = 0x0068_bed9;
+pub const MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_SIZE: u32 = 16;
+pub const MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_INSTRUCTION_COUNT: u32 = 4;
+pub const MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_SHA256: &str =
+    "74c88025da7529020be3e5d22fd85ea7f6e4c27072f513a1bd892b35429ecfb3";
+pub const STRING_COPY_ASSIGN_VA: u32 = 0x00a1_eeb0;
+pub const STRING_COPY_ASSIGN_END_VA: u32 = 0x00a1_f092;
+pub const STRING_COPY_ASSIGN_CONST_RET_VA: u32 = 0x00a1_f040;
+pub const STRING_COPY_ASSIGN_SIZE: u32 = 482;
+pub const STRING_COPY_ASSIGN_INSTRUCTION_COUNT: u32 = 178;
+pub const STRING_COPY_ASSIGN_SHA256: &str =
+    "1545068535829488cb7a2b77fdaf0633ded575d90e4ee76ee216d7e8a1e76f5a";
+pub const STRING_COPY_ASSIGN_SELF_TEST_VA: u32 = 0x00a1_eeba;
+pub const STRING_COPY_ASSIGN_SOURCE_LENGTH_TEST_VA: u32 = 0x00a1_eec6;
+pub const STRING_COPY_ASSIGN_NONEMPTY_SOURCE_VA: u32 = 0x00a1_ef49;
+pub const STRING_COPY_ASSIGN_DEST_DATA_TEST_VA: u32 = 0x00a1_ef4b;
+pub const STRING_COPY_ASSIGN_DEST_CONST_TEST_VA: u32 = 0x00a1_efb6;
+pub const STRING_COPY_ASSIGN_REPLACE_VA: u32 = 0x00a1_effe;
+pub const STRING_COPY_ASSIGN_DEST_CLOSE_CALL_VA: u32 = 0x00a1_f000;
+pub const STRING_COPY_ASSIGN_SOURCE_CONST_TEST_VA: u32 = 0x00a1_f008;
+pub const MAP_MAKE_PROGRESS_SPLASH_REFRESH_CALL_VA: u32 = 0x0068_bede;
+pub const SPLASH_SCREEN_REFRESH_VA: u32 = 0x0083_8ce0;
+pub const SPLASH_SCREEN_REFRESH_END_VA: u32 = 0x0083_8da7;
+pub const SPLASH_SCREEN_REFRESH_RET_VA: u32 = 0x0083_8da6;
+pub const SPLASH_SCREEN_REFRESH_SIZE: u32 = 199;
+pub const SPLASH_SCREEN_REFRESH_INSTRUCTION_COUNT: u32 = 52;
+pub const SPLASH_SCREEN_REFRESH_SHA256: &str =
+    "c9e741eea1edf51ed91667fcd3d55edf1de92a5353c062f0dffffd62efde4907";
+pub const MAP_MAKE_PROGRESS_LOCAL_GUARD_CLEAR_VA: u32 = 0x0068_bee3;
+pub const MAP_MAKE_PROGRESS_LOCAL_CLOSE_LOAD_VA: u32 = 0x0068_beea;
+pub const MAP_MAKE_PROGRESS_LOCAL_CLOSE_CALL_VA: u32 = 0x0068_beed;
+pub const MAP_MAKE_PROGRESS_PRESENTATION_END_VA: u32 = 0x0068_bef2;
+pub const MAP_MAKE_PROGRESS_PRESENTATION_SIZE: u32 = 25;
+pub const MAP_MAKE_PROGRESS_PRESENTATION_INSTRUCTION_COUNT: u32 = 5;
+pub const MAP_MAKE_PROGRESS_PRESENTATION_SHA256: &str =
+    "8df9d8f37fc623d0b1ffc2b6876bbd861f7f75b6f81e49263a14e4a0ec596b99";
+pub const MAP_MAKE_COASTLINES_CALL_VA: u32 = 0x0068_bef2;
+pub const MAP_MAKE_COASTLINES_CALL_RESUME_VA: u32 = 0x0068_bef7;
+pub const MAP_MAKE_COASTLINES_CALL_SIZE: u32 = 5;
+pub const MAP_MAKE_COASTLINES_CALL_INSTRUCTION_COUNT: u32 = 1;
+pub const MAP_MAKE_COASTLINES_CALL_SHA256: &str =
+    "ec418cbf54e1f09a3f8e4b1811523000b5934f85e38ab1572407a2a494056212";
+pub const LOCALIZED_STRING_TABLE_ENTRY_SIZE: u32 = 20;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_STRING_TABLE_INDEX: u32 = 2620;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_STRING_BYTE_OFFSET: u32 = 0x0000_ccb0;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_RESOURCE_HASH: u32 = 60_488_566;
+pub const MAP_MAKE_COASTLINES_STRING_TABLE_INDEX: u32 = 2623;
+pub const MAP_MAKE_COASTLINES_RESOURCE_HASH: u32 = 27_580_769;
+pub const LOCALIZED_STRING_TABLE_INIT_VA: u32 = 0x00a2_8520;
+pub const LOCALIZED_STRING_TABLE_INIT_END_VA: u32 = 0x00a2_8a6e;
+pub const LOCALIZED_STRING_TABLE_INIT_RET_VA: u32 = 0x00a2_8a6b;
+pub const LOCALIZED_STRING_TABLE_INIT_SIZE: u32 = 1358;
+pub const LOCALIZED_STRING_TABLE_INIT_INSTRUCTION_COUNT: u32 = 357;
+pub const LOCALIZED_STRING_TABLE_INIT_SHA256: &str =
+    "fc556322e27480913363b4caa6f6b1360dce73309100d6ef670ba70d4c4cd352";
+pub const LOCALIZED_STRING_TABLE_CONST_ASSIGN_CALL_VA: u32 = 0x00a2_8913;
+pub const STRING_WIDE_ASSIGN_VA: u32 = 0x00a1_db60;
+pub const STRING_WIDE_ASSIGN_END_VA: u32 = 0x00a1_dbce;
+pub const STRING_WIDE_ASSIGN_RET_VA: u32 = 0x00a1_dbcb;
+pub const STRING_WIDE_ASSIGN_SIZE: u32 = 110;
+pub const STRING_WIDE_ASSIGN_INSTRUCTION_COUNT: u32 = 46;
+pub const STRING_WIDE_ASSIGN_SHA256: &str =
+    "c471dd1f943e71f204437136e9d57a184ebfad0204f7258f2737789a2de1c408";
+pub const SPLASH_SCREEN_SUBTITLE_STRING_VA: u32 = 0x00e8_0314;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_CONSTRUCTOR_CALL_VA: u32 = 0x0068_bdc8;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_ASSIGN_CALL_VA: u32 = 0x0068_bddd;
+pub const MAP_MAKE_PREVIOUS_PROGRESS_LOCAL_CLOSE_CALL_VA: u32 = 0x0068_bdf1;
 pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0069_47a0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 
@@ -2482,7 +2566,7 @@ fn map_make_post_checksum_string_close_next() -> MapMakePostChecksumStringCloseN
         local_load_va: MAP_MAKE_PROGRESS_STRING_LOCAL_LOAD_VA,
         source_push_va: MAP_MAKE_PROGRESS_STRING_SOURCE_PUSH_VA,
         call_va: MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
-        primitive_va: STRING_WIDE_CONSTRUCTOR_VA,
+        primitive_va: STRING_COPY_CONSTRUCTOR_VA,
     }
 }
 
@@ -2495,7 +2579,7 @@ fn map_make_post_checksum_string_close_next() -> MapMakePostChecksumStringCloseN
 /// identity and allocator freelist contents deliberately remain outside the
 /// receipt. The replay call chain fixes `Map::make`'s progress parameter to
 /// one, so the read-only branch preparation is also executed and the next
-/// mutator is the progress-message wide-string constructor at `0x0068bec4`.
+/// mutator is the progress-message `String` copy constructor at `0x0068bec4`.
 pub fn execute_map_make_post_checksum_string_close(
     world: &World,
     regions: &Regions,
@@ -2639,6 +2723,530 @@ pub(crate) fn validate_map_make_post_checksum_string_close_receipt(
         && receipt.random_state_before == receipt.random_state_after
         && receipt.direct_rng_sites.is_empty()
         && receipt.next == map_make_post_checksum_string_close_next()
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringCopyConstructorNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub const_source_ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub source_flags_test_va: u32,
+    pub const_source_path_va: u32,
+}
+
+pub const STRING_COPY_CONSTRUCTOR_NATIVE_BODY: StringCopyConstructorNativeBody =
+    StringCopyConstructorNativeBody {
+        entry_va: STRING_COPY_CONSTRUCTOR_VA,
+        end_va_exclusive: STRING_COPY_CONSTRUCTOR_END_VA,
+        const_source_ret_va: STRING_COPY_CONSTRUCTOR_CONST_RET_VA,
+        callee_stack_argument_bytes_popped: 4,
+        size: STRING_COPY_CONSTRUCTOR_SIZE,
+        instruction_count: STRING_COPY_CONSTRUCTOR_INSTRUCTION_COUNT,
+        sha256: STRING_COPY_CONSTRUCTOR_SHA256,
+        source_flags_test_va: STRING_COPY_CONSTRUCTOR_SOURCE_FLAGS_TEST_VA,
+        const_source_path_va: STRING_COPY_CONSTRUCTOR_CONST_PATH_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressConstructorCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub call_va: u32,
+    pub primitive_va: u32,
+}
+
+pub const MAP_MAKE_PROGRESS_CONSTRUCTOR_CALLER_BODY: MapMakeProgressConstructorCallerBody =
+    MapMakeProgressConstructorCallerBody {
+        entry_va: MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+        end_va_exclusive: MAP_MAKE_PROGRESS_CONSTRUCTOR_RESUME_VA,
+        size: MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_SIZE,
+        instruction_count: MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_PROGRESS_CONSTRUCTOR_CALL_SHA256,
+        call_va: MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+        primitive_va: STRING_COPY_CONSTRUCTOR_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressPostConstructorPrepBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_BODY: MapMakeProgressPostConstructorPrepBody =
+    MapMakeProgressPostConstructorPrepBody {
+        entry_va: MAP_MAKE_PROGRESS_CONSTRUCTOR_RESUME_VA,
+        end_va_exclusive: MAP_MAKE_PROGRESS_ASSIGN_CALL_VA,
+        size: MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_SIZE,
+        instruction_count: MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct LocalizedStringTableInitNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub const_assign_call_va: u32,
+    pub const_assign_va: u32,
+}
+
+pub const LOCALIZED_STRING_TABLE_INIT_NATIVE_BODY: LocalizedStringTableInitNativeBody =
+    LocalizedStringTableInitNativeBody {
+        entry_va: LOCALIZED_STRING_TABLE_INIT_VA,
+        end_va_exclusive: LOCALIZED_STRING_TABLE_INIT_END_VA,
+        ret_va: LOCALIZED_STRING_TABLE_INIT_RET_VA,
+        size: LOCALIZED_STRING_TABLE_INIT_SIZE,
+        instruction_count: LOCALIZED_STRING_TABLE_INIT_INSTRUCTION_COUNT,
+        sha256: LOCALIZED_STRING_TABLE_INIT_SHA256,
+        const_assign_call_va: LOCALIZED_STRING_TABLE_CONST_ASSIGN_CALL_VA,
+        const_assign_va: STRING_WIDE_ASSIGN_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringWideAssignNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const STRING_WIDE_ASSIGN_NATIVE_BODY: StringWideAssignNativeBody = StringWideAssignNativeBody {
+    entry_va: STRING_WIDE_ASSIGN_VA,
+    end_va_exclusive: STRING_WIDE_ASSIGN_END_VA,
+    ret_va: STRING_WIDE_ASSIGN_RET_VA,
+    callee_stack_argument_bytes_popped: 4,
+    size: STRING_WIDE_ASSIGN_SIZE,
+    instruction_count: STRING_WIDE_ASSIGN_INSTRUCTION_COUNT,
+    sha256: STRING_WIDE_ASSIGN_SHA256,
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct StringCopyAssignmentNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub const_source_ret_va: u32,
+    pub callee_stack_argument_bytes_popped: u8,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub dest_close_call_va: u32,
+    pub dest_close_va: u32,
+}
+
+pub const STRING_COPY_ASSIGNMENT_NATIVE_BODY: StringCopyAssignmentNativeBody =
+    StringCopyAssignmentNativeBody {
+        entry_va: STRING_COPY_ASSIGN_VA,
+        end_va_exclusive: STRING_COPY_ASSIGN_END_VA,
+        const_source_ret_va: STRING_COPY_ASSIGN_CONST_RET_VA,
+        callee_stack_argument_bytes_popped: 4,
+        size: STRING_COPY_ASSIGN_SIZE,
+        instruction_count: STRING_COPY_ASSIGN_INSTRUCTION_COUNT,
+        sha256: STRING_COPY_ASSIGN_SHA256,
+        dest_close_call_va: STRING_COPY_ASSIGN_DEST_CLOSE_CALL_VA,
+        dest_close_va: STRING_CLOSE_VA,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SplashScreenRefreshNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const SPLASH_SCREEN_REFRESH_NATIVE_BODY: SplashScreenRefreshNativeBody =
+    SplashScreenRefreshNativeBody {
+        entry_va: SPLASH_SCREEN_REFRESH_VA,
+        end_va_exclusive: SPLASH_SCREEN_REFRESH_END_VA,
+        ret_va: SPLASH_SCREEN_REFRESH_RET_VA,
+        size: SPLASH_SCREEN_REFRESH_SIZE,
+        instruction_count: SPLASH_SCREEN_REFRESH_INSTRUCTION_COUNT,
+        sha256: SPLASH_SCREEN_REFRESH_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressPresentationCallerBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+pub const MAP_MAKE_PROGRESS_PRESENTATION_CALLER_BODY: MapMakeProgressPresentationCallerBody =
+    MapMakeProgressPresentationCallerBody {
+        entry_va: MAP_MAKE_PROGRESS_ASSIGN_CALL_VA,
+        end_va_exclusive: MAP_MAKE_PROGRESS_PRESENTATION_END_VA,
+        size: MAP_MAKE_PROGRESS_PRESENTATION_SIZE,
+        instruction_count: MAP_MAKE_PROGRESS_PRESENTATION_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_PROGRESS_PRESENTATION_SHA256,
+    };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeCoastlinesCallBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub primitive_va: u32,
+}
+
+pub const MAP_MAKE_COASTLINES_CALL_BODY: MapMakeCoastlinesCallBody = MapMakeCoastlinesCallBody {
+    entry_va: MAP_MAKE_COASTLINES_CALL_VA,
+    end_va_exclusive: MAP_MAKE_COASTLINES_CALL_RESUME_VA,
+    size: MAP_MAKE_COASTLINES_CALL_SIZE,
+    instruction_count: MAP_MAKE_COASTLINES_CALL_INSTRUCTION_COUNT,
+    sha256: MAP_MAKE_COASTLINES_CALL_SHA256,
+    primitive_va: MAP_MAKE_COASTLINES_VA,
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeLocalizedStringBufferOwner {
+    LocalizedStringTable,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeLocalizedStringTableRow {
+    pub table_ptr_va: u32,
+    pub entry_size: u32,
+    pub table_index: u32,
+    pub byte_offset: u32,
+    pub resource_hash: u32,
+    pub nonempty_in_supported_locales: bool,
+    pub const_backed: bool,
+    pub content_is_locale_dependent: bool,
+    pub buffer_owner: MapMakeLocalizedStringBufferOwner,
+    pub host_pointer_recorded: bool,
+}
+
+fn map_make_previous_progress_row() -> MapMakeLocalizedStringTableRow {
+    MapMakeLocalizedStringTableRow {
+        table_ptr_va: MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA,
+        entry_size: LOCALIZED_STRING_TABLE_ENTRY_SIZE,
+        table_index: MAP_MAKE_PREVIOUS_PROGRESS_STRING_TABLE_INDEX,
+        byte_offset: MAP_MAKE_PREVIOUS_PROGRESS_STRING_BYTE_OFFSET,
+        resource_hash: MAP_MAKE_PREVIOUS_PROGRESS_RESOURCE_HASH,
+        nonempty_in_supported_locales: true,
+        const_backed: true,
+        content_is_locale_dependent: true,
+        buffer_owner: MapMakeLocalizedStringBufferOwner::LocalizedStringTable,
+        host_pointer_recorded: false,
+    }
+}
+
+fn map_make_coastlines_progress_row() -> MapMakeLocalizedStringTableRow {
+    MapMakeLocalizedStringTableRow {
+        table_ptr_va: MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA,
+        entry_size: LOCALIZED_STRING_TABLE_ENTRY_SIZE,
+        table_index: MAP_MAKE_COASTLINES_STRING_TABLE_INDEX,
+        byte_offset: MAP_MAKE_PROGRESS_STRING_BYTE_OFFSET,
+        resource_hash: MAP_MAKE_COASTLINES_RESOURCE_HASH,
+        nonempty_in_supported_locales: true,
+        const_backed: true,
+        content_is_locale_dependent: true,
+        buffer_owner: MapMakeLocalizedStringBufferOwner::LocalizedStringTable,
+        host_pointer_recorded: false,
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeProgressAliasState {
+    TableOwnedLive,
+    BorrowedConstAlias,
+    ClosedBorrowedAlias,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressStringOwnershipReceipt {
+    pub source_buffer_before: MapMakeProgressAliasState,
+    pub source_buffer_after: MapMakeProgressAliasState,
+    pub local_before_close: MapMakeProgressAliasState,
+    pub local_after_close: MapMakeProgressAliasState,
+    pub prior_subtitle_before: MapMakeProgressAliasState,
+    pub subtitle_after: MapMakeProgressAliasState,
+    pub allocation_performed: bool,
+    pub allocator_return_performed: bool,
+    pub refcount_changed: bool,
+    pub host_pointer_recorded: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressClosedConstString {
+    pub data_is_null: bool,
+    pub current_length_is_zero: bool,
+    pub flags_are_zero: bool,
+    pub source_length_field_is_retained: bool,
+    pub source_offset_is_retained: bool,
+    pub source_cached_hashes_are_retained: bool,
+    pub current_module_is_retained: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeProgressStringNext {
+    MakeCoastlines {
+        caller: MapMakeCoastlinesCallBody,
+        call_va: u32,
+        primitive_va: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeProgressStringReceipt {
+    pub caller: MapMakeProgressConstructorCallerBody,
+    pub constructor: StringCopyConstructorNativeBody,
+    pub string_table_init: LocalizedStringTableInitNativeBody,
+    pub string_table_const_assign: StringWideAssignNativeBody,
+    pub source: MapMakeLocalizedStringTableRow,
+    pub previous_subtitle: MapMakeLocalizedStringTableRow,
+    pub guard_store_va: u32,
+    pub guard_after: u8,
+    pub post_constructor_prep: MapMakeProgressPostConstructorPrepBody,
+    pub assignment: StringCopyAssignmentNativeBody,
+    pub presentation_caller: MapMakeProgressPresentationCallerBody,
+    pub splash_refresh: SplashScreenRefreshNativeBody,
+    pub string_close: StringCloseNativeBody,
+    pub executed_assignment_branch_vas: Vec<u32>,
+    pub executed_direct_calls: Vec<(u32, u32)>,
+    pub ownership: MapMakeProgressStringOwnershipReceipt,
+    pub local_after_close: MapMakeProgressClosedConstString,
+    pub splash_subtitle_va: u32,
+    pub splash_subtitle_after: MapMakeLocalizedStringTableRow,
+    pub presentation_host_clock_and_draw_effects_unmodeled: bool,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakeProgressStringNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeProgressStringError {
+    PriorStringCloseReceiptMismatch,
+}
+
+fn map_make_progress_ownership() -> MapMakeProgressStringOwnershipReceipt {
+    MapMakeProgressStringOwnershipReceipt {
+        source_buffer_before: MapMakeProgressAliasState::TableOwnedLive,
+        source_buffer_after: MapMakeProgressAliasState::TableOwnedLive,
+        local_before_close: MapMakeProgressAliasState::BorrowedConstAlias,
+        local_after_close: MapMakeProgressAliasState::ClosedBorrowedAlias,
+        prior_subtitle_before: MapMakeProgressAliasState::BorrowedConstAlias,
+        subtitle_after: MapMakeProgressAliasState::BorrowedConstAlias,
+        allocation_performed: false,
+        allocator_return_performed: false,
+        refcount_changed: false,
+        host_pointer_recorded: false,
+    }
+}
+
+fn map_make_progress_closed_local() -> MapMakeProgressClosedConstString {
+    MapMakeProgressClosedConstString {
+        data_is_null: true,
+        current_length_is_zero: true,
+        flags_are_zero: true,
+        source_length_field_is_retained: true,
+        source_offset_is_retained: true,
+        source_cached_hashes_are_retained: true,
+        current_module_is_retained: true,
+    }
+}
+
+fn map_make_progress_next() -> MapMakeProgressStringNext {
+    MapMakeProgressStringNext::MakeCoastlines {
+        caller: MAP_MAKE_COASTLINES_CALL_BODY,
+        call_va: MAP_MAKE_COASTLINES_CALL_VA,
+        primitive_va: MAP_MAKE_COASTLINES_VA,
+    }
+}
+
+/// Execute the progress-caption `String::String(const String&)` and close its
+/// complete borrowed ownership cone through the subtitle assignment, splash
+/// refresh acknowledgement, and local `String::close`.
+///
+/// `StringTable::init` installs its rows with the const-backed wide assignment
+/// at `0x00a28913 -> 0x00a1db60`. Row 2623 is therefore borrowed directly: the
+/// constructor does not allocate and does not touch a `StringGuts` refcount.
+/// The prior progress block left the subtitle as the same kind of alias to row
+/// 2620, so replacement and both closes are allocator-free. Locale-specific
+/// text and native addresses remain with the table owner. Splash refresh is a
+/// presentation boundary whose clock/draw effects are deliberately not
+/// promoted into replay state; the next canonical World mutation is
+/// `Map::make_coastlines` at `0x0068bef2 -> 0x006947a0`.
+pub fn execute_map_make_progress_string(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+) -> Result<MapMakeProgressStringReceipt, MapMakeProgressStringError> {
+    if !validate_map_make_post_checksum_string_close_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+    ) || prior_close.random_state_after != random_state
+    {
+        return Err(MapMakeProgressStringError::PriorStringCloseReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let source = map_make_coastlines_progress_row();
+    let world_after = world.checksum_sections();
+    Ok(MapMakeProgressStringReceipt {
+        caller: MAP_MAKE_PROGRESS_CONSTRUCTOR_CALLER_BODY,
+        constructor: STRING_COPY_CONSTRUCTOR_NATIVE_BODY,
+        string_table_init: LOCALIZED_STRING_TABLE_INIT_NATIVE_BODY,
+        string_table_const_assign: STRING_WIDE_ASSIGN_NATIVE_BODY,
+        source,
+        previous_subtitle: map_make_previous_progress_row(),
+        guard_store_va: MAP_MAKE_PROGRESS_GUARD_STORE_VA,
+        guard_after: 5,
+        post_constructor_prep: MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_BODY,
+        assignment: STRING_COPY_ASSIGNMENT_NATIVE_BODY,
+        presentation_caller: MAP_MAKE_PROGRESS_PRESENTATION_CALLER_BODY,
+        splash_refresh: SPLASH_SCREEN_REFRESH_NATIVE_BODY,
+        string_close: MAP_MAKE_STRING_CLOSE_NATIVE_BODY,
+        executed_assignment_branch_vas: vec![
+            STRING_COPY_ASSIGN_SELF_TEST_VA,
+            STRING_COPY_ASSIGN_SOURCE_LENGTH_TEST_VA,
+            STRING_COPY_ASSIGN_NONEMPTY_SOURCE_VA,
+            STRING_COPY_ASSIGN_DEST_DATA_TEST_VA,
+            STRING_COPY_ASSIGN_DEST_CONST_TEST_VA,
+            STRING_COPY_ASSIGN_REPLACE_VA,
+            STRING_COPY_ASSIGN_SOURCE_CONST_TEST_VA,
+            STRING_COPY_ASSIGN_CONST_RET_VA,
+        ],
+        executed_direct_calls: vec![
+            (
+                MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+                STRING_COPY_CONSTRUCTOR_VA,
+            ),
+            (MAP_MAKE_PROGRESS_ASSIGN_CALL_VA, STRING_COPY_ASSIGN_VA),
+            (STRING_COPY_ASSIGN_DEST_CLOSE_CALL_VA, STRING_CLOSE_VA),
+            (
+                MAP_MAKE_PROGRESS_SPLASH_REFRESH_CALL_VA,
+                SPLASH_SCREEN_REFRESH_VA,
+            ),
+            (MAP_MAKE_PROGRESS_LOCAL_CLOSE_CALL_VA, STRING_CLOSE_VA),
+        ],
+        ownership: map_make_progress_ownership(),
+        local_after_close: map_make_progress_closed_local(),
+        splash_subtitle_va: SPLASH_SCREEN_SUBTITLE_STRING_VA,
+        splash_subtitle_after: source,
+        presentation_host_clock_and_draw_effects_unmodeled: true,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: map_make_progress_next(),
+    })
+}
+
+pub(crate) fn validate_map_make_progress_string_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    receipt: &MapMakeProgressStringReceipt,
+) -> bool {
+    validate_map_make_post_checksum_string_close_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+    ) && receipt.caller == MAP_MAKE_PROGRESS_CONSTRUCTOR_CALLER_BODY
+        && receipt.constructor == STRING_COPY_CONSTRUCTOR_NATIVE_BODY
+        && receipt.string_table_init == LOCALIZED_STRING_TABLE_INIT_NATIVE_BODY
+        && receipt.string_table_const_assign == STRING_WIDE_ASSIGN_NATIVE_BODY
+        && receipt.source == map_make_coastlines_progress_row()
+        && receipt.previous_subtitle == map_make_previous_progress_row()
+        && receipt.guard_store_va == MAP_MAKE_PROGRESS_GUARD_STORE_VA
+        && receipt.guard_after == 5
+        && receipt.post_constructor_prep == MAP_MAKE_PROGRESS_POST_CONSTRUCTOR_PREP_BODY
+        && receipt.assignment == STRING_COPY_ASSIGNMENT_NATIVE_BODY
+        && receipt.presentation_caller == MAP_MAKE_PROGRESS_PRESENTATION_CALLER_BODY
+        && receipt.splash_refresh == SPLASH_SCREEN_REFRESH_NATIVE_BODY
+        && receipt.string_close == MAP_MAKE_STRING_CLOSE_NATIVE_BODY
+        && receipt.executed_assignment_branch_vas
+            == [
+                STRING_COPY_ASSIGN_SELF_TEST_VA,
+                STRING_COPY_ASSIGN_SOURCE_LENGTH_TEST_VA,
+                STRING_COPY_ASSIGN_NONEMPTY_SOURCE_VA,
+                STRING_COPY_ASSIGN_DEST_DATA_TEST_VA,
+                STRING_COPY_ASSIGN_DEST_CONST_TEST_VA,
+                STRING_COPY_ASSIGN_REPLACE_VA,
+                STRING_COPY_ASSIGN_SOURCE_CONST_TEST_VA,
+                STRING_COPY_ASSIGN_CONST_RET_VA,
+            ]
+        && receipt.executed_direct_calls
+            == [
+                (
+                    MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA,
+                    STRING_COPY_CONSTRUCTOR_VA,
+                ),
+                (MAP_MAKE_PROGRESS_ASSIGN_CALL_VA, STRING_COPY_ASSIGN_VA),
+                (STRING_COPY_ASSIGN_DEST_CLOSE_CALL_VA, STRING_CLOSE_VA),
+                (
+                    MAP_MAKE_PROGRESS_SPLASH_REFRESH_CALL_VA,
+                    SPLASH_SCREEN_REFRESH_VA,
+                ),
+                (MAP_MAKE_PROGRESS_LOCAL_CLOSE_CALL_VA, STRING_CLOSE_VA),
+            ]
+        && receipt.ownership == map_make_progress_ownership()
+        && receipt.local_after_close == map_make_progress_closed_local()
+        && receipt.splash_subtitle_va == SPLASH_SCREEN_SUBTITLE_STRING_VA
+        && receipt.splash_subtitle_after == map_make_coastlines_progress_row()
+        && receipt.presentation_host_clock_and_draw_effects_unmodeled
+        && receipt.world_before == prior_close.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_close.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next == map_make_progress_next()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
