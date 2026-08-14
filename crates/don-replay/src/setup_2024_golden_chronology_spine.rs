@@ -11,15 +11,36 @@
 
 use std::fmt;
 
+use don_sim::systems::air_patrol_building_search_frontier::WORLD_CELL_SEARCH_OFFSETS;
 use don_sim::systems::build_type_find_friends::{
-    BuildTypeFindFriendsReceipt, BuildTypeFindFriendsStop,
+    BuildTypeFindFriendsReceipt, BuildTypeFindFriendsStop, BUILD_TYPE_FIND_FRIENDS_VA,
 };
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     LeaderProduceBuildingMarketBlockedLocationReceipt,
     LeaderProduceBuildingMarketBlockedLocationRequest,
 };
+use don_sim::systems::objects_find_building_placed_at::{
+    ObjectsFindBuildingPlacedAtReceipt, ObjectsFindBuildingPlacedAtStop,
+    ObjectsSelectedOwnerAuthority, ObjectsSpatialBand, ObjectsSpatialKey,
+};
 use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 
+use crate::setup_2024_frame0_get_team_terr::{
+    advance_frame0_plan_strategy_first_diplomacy_read,
+    frame0_get_team_terr_call_entry_authority_digest, frame0_get_team_terr_receipt_digest,
+    frame0_plan_strategy_diplomacy_read_authority_digest,
+    frame0_plan_strategy_diplomacy_step_digest,
+    frame0_plan_strategy_opponent_get_team_terr_receipt_digest,
+    frame0_plan_strategy_post_team_terr_digest,
+    frame0_plan_strategy_reverse_diplomacy_read_authority_digest,
+    plan_frame0_owner0_after_get_team_terr, resolve_captured_frame0_get_team_terr,
+    resolve_frame0_plan_strategy_opponent_get_team_terr, Frame0GetTeamTerrCallEntryAuthority,
+    Frame0GetTeamTerrError, Frame0GetTeamTerrReceipt, Frame0PlanStrategyDiplomacyReadAuthority,
+    Frame0PlanStrategyDiplomacyStepError, Frame0PlanStrategyDiplomacyStepOpen,
+    Frame0PlanStrategyDiplomacyStepPlan, Frame0PlanStrategyOpponentGetTeamTerrError,
+    Frame0PlanStrategyOpponentGetTeamTerrReceipt, Frame0PlanStrategyPostTeamTerrError,
+    Frame0PlanStrategyPostTeamTerrPlan, Frame0PlanStrategyReverseDiplomacyReadAuthority,
+};
 use crate::setup_2024_frame0_plan_strategy::{
     bind_golden_frame0_owner0_plan_strategy_entry, frame0_plan_strategy_entry_authority_digest,
     plan_golden_frame0_owner0_plan_strategy_prefix, Frame0PlanStrategyEntryAuthority,
@@ -35,13 +56,23 @@ use crate::setup_2024_golden_capture::{
     MINIMAL_UNIQUE_SIM_SNAPSHOTS,
 };
 use crate::setup_2024_starting_market::{
-    golden_market_footprint_receipt_sha256, GoldenStartingMarketCityReceipt,
-    GoldenStartingMarketSetupEntryAuthority,
+    golden_market_footprint_receipt_sha256, GoldenStartingMarketAcceptedPlacementReceipt,
+    GoldenStartingMarketAfterFoundBuildContinuation, GoldenStartingMarketCityReceipt,
+    GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
+    GoldenStartingMarketFindFriendsCompleteReceipt, GoldenStartingMarketFindFriendsFoundBuildRead,
+    GoldenStartingMarketFindFriendsLookupDisposition,
+    GoldenStartingMarketFindFriendsOwnedRingEvent, GoldenStartingMarketFindFriendsRingAdvance,
+    GoldenStartingMarketFindFriendsRingStep, GoldenStartingMarketFirstObjectLookupReceipt,
+    GoldenStartingMarketFoundBuildPredicateOutcome, GoldenStartingMarketFoundBuildPredicateReceipt,
+    GoldenStartingMarketFoundBuildRejectReason, GoldenStartingMarketFoundBuildTypeReads,
+    GoldenStartingMarketSetupEntryAuthority, BUILD_GATHER_TYPE_MASK, GATHER_ENHANCER_TYPES,
+    MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA, MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT,
 };
 use crate::world_owner_frontier::sha256;
 
-pub const GOLDEN_CHRONOLOGY_SPINE_SCHEMA_VERSION: u64 = 1;
+pub const GOLDEN_CHRONOLOGY_SPINE_SCHEMA_VERSION: u64 = 5;
 pub const GOLDEN_FRAME0_STRATEGY_SPINE_SCHEMA_VERSION: u64 = 1;
+pub const GOLDEN_FRAME0_TEAM_TERR_SPINE_SCHEMA_VERSION: u64 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenOracleEvidence {
@@ -84,13 +115,39 @@ pub struct GoldenMarketExecutionResidual {
     /// Source-exact type/World prefix of the first scoring child.
     pub find_friends: BuildTypeFindFriendsReceipt,
     pub find_friends_receipt_sha256: [u8; 32],
-    /// Derived from the receipt's current first open child, not a hardcoded horizon.
-    pub child_call_va: u32,
-    pub child_callee_va: u32,
+    /// Complete execution-backed first Object lookup, including every World/spatial read and
+    /// the committed `ObjectsData+0x200` scratch journal.
+    pub first_object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub first_object_lookup_receipt_sha256: [u8; 32],
+    pub objects_selected_owner_before: ObjectsSelectedOwnerAuthority,
+    pub objects_selected_owner_after: ObjectsSelectedOwnerAuthority,
+    /// Typed resume boundary after the first lookup returns. This is not a `find_friends`
+    /// result or a coarse Market score.
+    pub find_friends_after_first_lookup: GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
+    pub find_friends_after_first_lookup_sha256: [u8; 32],
+    /// Complete exact multi-hit `find_friends` return, including every lookup, predicate outcome,
+    /// accumulator transition, and scratch journal in program order.
+    pub complete_find_friends: GoldenStartingMarketFindFriendsCompleteReceipt,
+    pub complete_find_friends_sha256: [u8; 32],
+    pub objects_selected_owner_find_friends_after: ObjectsSelectedOwnerAuthority,
+    pub find_friends_returned: i32,
+    /// The caller's coarse score is the next unowned operation.
+    pub market_residual: GoldenMarketResidual,
     pub market_before_sim_sha256: [u8; 32],
     pub post_market_oracle_sim_sha256: [u8; 32],
     /// Evidence identity only. A nonzero opaque digest is not an execution receipt.
     pub opaque_native_trace_sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenMarketResidual {
+    /// `find_friends` has returned exactly. The caller's coarse score and its conditional later
+    /// World/Object search are both still unowned.
+    CallerCoarseScore {
+        find_friends_returned: i32,
+        coarse_score_authority_issued: bool,
+        conditional_world_find_authority_issued: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,9 +203,74 @@ pub struct GoldenFrame0StrategySpineReceipt {
     /// Local scalar stores are executable source semantics on detached images only.
     pub local_prefix_evidence: GoldenDetachedPlanEvidence,
     pub local_prefix: Frame0PlanStrategyPrefixPlan,
-    /// The Market Object-lookup frontier in the parent remains globally earlier.
+    /// The Market caller coarse-score residual in the parent remains globally earlier.
     pub global_market_frontier_retained: bool,
     pub reachability: GoldenFrame0StrategyReachability,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenDetachedChildEvidence {
+    /// The child is evaluated exactly over a native call-entry projection, but no parent stores
+    /// or chronological completion are published.
+    SourceExactDetached,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenFrame0TeamTerrSpineReceipt {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub schema_version: u64,
+    pub parent_strategy_spine_digest: [u8; 32],
+    /// The unified whole-Sim plan-entry capture remains an image authority only.
+    pub call_entry_evidence: GoldenOracleEvidence,
+    pub call_entry_authority: Frame0GetTeamTerrCallEntryAuthority,
+    pub child_evidence: GoldenDetachedChildEvidence,
+    pub child: Frame0GetTeamTerrReceipt,
+    /// Exact detached stores and receiver-self skip after the child return. The open diplomacy
+    /// read remains unexecuted.
+    pub continuation_evidence: GoldenDetachedChildEvidence,
+    pub continuation: Frame0PlanStrategyPostTeamTerrPlan,
+    /// One relation value is projected from the same captured call-entry Sim. The image remains
+    /// capture-only even though the field identity is exact.
+    pub diplomacy_read_evidence: GoldenOracleEvidence,
+    pub diplomacy_read: Frame0PlanStrategyDiplomacyReadAuthority,
+    /// Exact branch semantics after the read; the reverse read/repeated child remains open.
+    pub diplomacy_step_evidence: GoldenDetachedChildEvidence,
+    pub diplomacy_step: Frame0PlanStrategyDiplomacyStepPlan,
+    /// Exact branch-specific final owned child. A reverse relation remains a capture projection;
+    /// the repeated team-territory result is detached source execution.
+    pub diplomacy_drain: GoldenFrame0DiplomacyDrain,
+    pub diplomacy_residual: GoldenFrame0DiplomacyResidual,
+    /// The earlier Market caller coarse-score residual in the root spine remains open.
+    pub global_market_frontier_retained: bool,
+    /// `get_team_terr` is only one child inside owner zero's larger native strategy call.
+    pub reachability: GoldenFrame0StrategyReachability,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenFrame0DiplomacyDrain {
+    ReverseReadCapture(Frame0PlanStrategyReverseDiplomacyReadAuthority),
+    OpponentTeamTerrSourceExact(Frame0PlanStrategyOpponentGetTeamTerrReceipt),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenFrame0DiplomacyResidual {
+    /// The reverse relation is exact. If it is not ally `2`, the named repeated child still has
+    /// no receipt; if it is ally, the later loop continuation remains unowned.
+    AfterReverseRead {
+        value: i32,
+        reverse_relation_is_ally: bool,
+        repeated_child_call_va_if_not_ally: u32,
+        repeated_child_authority_issued: bool,
+        owner0_strategy_complete: bool,
+    },
+    /// The repeated child has returned exactly; max/min opponent-territory stores are next.
+    AfterOpponentTeamTerrReturn {
+        result: i32,
+        return_va: u32,
+        post_return_store_authority_issued: bool,
+        owner0_strategy_complete: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,6 +292,13 @@ pub enum GoldenChronologySpineError {
     CompletedSetupJoinMismatch,
     InvalidDetachedStrategyPrefix,
     StrategyReachabilityOverclaim,
+    TeamTerr(Frame0GetTeamTerrError),
+    PostTeamTerr(Frame0PlanStrategyPostTeamTerrError),
+    DiplomacyStep(Frame0PlanStrategyDiplomacyStepError),
+    OpponentTeamTerr(Frame0PlanStrategyOpponentGetTeamTerrError),
+    InvalidDiplomacyDrain,
+    InvalidTeamTerrCallEntryAuthority,
+    InvalidDetachedTeamTerrChild,
 }
 
 impl fmt::Display for GoldenChronologySpineError {
@@ -195,6 +324,30 @@ impl From<GoldenStartingMarketTransactionError> for GoldenChronologySpineError {
 impl From<Frame0PlanStrategyError> for GoldenChronologySpineError {
     fn from(value: Frame0PlanStrategyError) -> Self {
         Self::Strategy(value)
+    }
+}
+
+impl From<Frame0GetTeamTerrError> for GoldenChronologySpineError {
+    fn from(value: Frame0GetTeamTerrError) -> Self {
+        Self::TeamTerr(value)
+    }
+}
+
+impl From<Frame0PlanStrategyPostTeamTerrError> for GoldenChronologySpineError {
+    fn from(value: Frame0PlanStrategyPostTeamTerrError) -> Self {
+        Self::PostTeamTerr(value)
+    }
+}
+
+impl From<Frame0PlanStrategyDiplomacyStepError> for GoldenChronologySpineError {
+    fn from(value: Frame0PlanStrategyDiplomacyStepError) -> Self {
+        Self::DiplomacyStep(value)
+    }
+}
+
+impl From<Frame0PlanStrategyOpponentGetTeamTerrError> for GoldenChronologySpineError {
+    fn from(value: Frame0PlanStrategyOpponentGetTeamTerrError) -> Self {
+        Self::OpponentTeamTerr(value)
     }
 }
 
@@ -328,8 +481,11 @@ pub fn golden_market_evidence_digest(
     market: &GoldenStartingMarketCityReceipt,
     blocked_location_receipt_sha256: [u8; 32],
     find_friends_receipt_sha256: [u8; 32],
+    first_object_lookup_receipt_sha256: [u8; 32],
+    find_friends_after_first_lookup_sha256: [u8; 32],
+    complete_find_friends_sha256: [u8; 32],
 ) -> [u8; 32] {
-    let mut image = b"don-2024-golden-market-evidence-v1".to_vec();
+    let mut image = b"don-2024-golden-market-evidence-v5".to_vec();
     image.extend_from_slice(&market.capture_revision.to_le_bytes());
     image.push(match market.source {
         crate::setup_2024_starting_market::GoldenStartingMarketCaptureSource::CompleteRetailLeaderProduceBuildingReturn => 1,
@@ -340,6 +496,13 @@ pub fn golden_market_evidence_digest(
     image.extend_from_slice(&market.footprint_receipt_sha256);
     image.extend_from_slice(&blocked_location_receipt_sha256);
     image.extend_from_slice(&find_friends_receipt_sha256);
+    image.extend_from_slice(&first_object_lookup_receipt_sha256);
+    append_selected_owner_authority(&mut image, market.objects_selected_owner_before);
+    append_selected_owner_authority(&mut image, market.objects_selected_owner_after);
+    image.extend_from_slice(&find_friends_after_first_lookup_sha256);
+    image.extend_from_slice(&complete_find_friends_sha256);
+    append_selected_owner_authority(&mut image, market.objects_selected_owner_find_friends_after);
+    image.extend_from_slice(&market.find_friends_returned.to_le_bytes());
     image.extend_from_slice(&market.before_sim_sha256);
     image.extend_from_slice(&market.after_sim_sha256);
     image.extend_from_slice(&market.before_cities.checksum.to_le_bytes());
@@ -359,6 +522,7 @@ pub fn golden_market_evidence_digest(
     image.extend_from_slice(&market.random_state_after.to_le_bytes());
     image.extend_from_slice(&market.selected_placement_coord[0].to_le_bytes());
     image.extend_from_slice(&market.selected_placement_coord[1].to_le_bytes());
+    image.extend_from_slice(&(market.fine_random_draws.len() as u64).to_le_bytes());
     for draw in &market.fine_random_draws {
         image.extend_from_slice(&draw.call_va.to_le_bytes());
         image.extend_from_slice(&draw.callee_va.to_le_bytes());
@@ -612,6 +776,868 @@ pub fn golden_market_find_friends_receipt_sha256(
     sha256(&image)
 }
 
+fn append_objects_spatial_key(image: &mut Vec<u8>, key: ObjectsSpatialKey) {
+    image.extend_from_slice(&key.who.to_le_bytes());
+    image.extend_from_slice(&key.o.to_le_bytes());
+}
+
+fn append_selected_owner_authority(image: &mut Vec<u8>, authority: ObjectsSelectedOwnerAuthority) {
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.extend_from_slice(&authority.source_sha256);
+    image.extend_from_slice(&authority.selected_owner.to_le_bytes());
+}
+
+fn append_object_lookup_request(
+    image: &mut Vec<u8>,
+    request: don_sim::systems::build_type_find_friends::ObjectsFindBuildingPlacedAtBoundary,
+) {
+    image.extend_from_slice(&request.call_va.to_le_bytes());
+    image.extend_from_slice(&request.callee_va.to_le_bytes());
+    for value in request.native_push_order {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&request.circle_offset.to_le_bytes());
+    for value in request.world_cell.into_iter().chain(request.tile) {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&request.owner_filter.to_le_bytes());
+    image.extend_from_slice(&request.excluded_object.to_le_bytes());
+    image.extend_from_slice(&request.excluded_owner.to_le_bytes());
+    image.extend_from_slice(&request.selected_owner_offset.to_le_bytes());
+    image.extend_from_slice(&request.selected_owner_first_write.to_le_bytes());
+}
+
+/// Stable identity for the complete execution-backed first Object lookup. Every terrain,
+/// spatial-chain, object/type/footprint read and every scratch-journal field participates.
+pub fn golden_market_first_object_lookup_receipt_sha256(
+    receipt: &ObjectsFindBuildingPlacedAtReceipt,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-market-first-object-lookup-receipt-v1".to_vec();
+    append_object_lookup_request(&mut image, receipt.request);
+
+    append_world_checksum(&mut image, &receipt.world_checksum);
+    for value in receipt.terrain.tile {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&receipt.terrain.mask.to_le_bytes());
+    image.extend_from_slice(&[
+        u8::from(receipt.terrain.building_blocker),
+        u8::from(receipt.terrain.started),
+        u8::from(receipt.terrain.spatial_walk_reached),
+    ]);
+
+    image.extend_from_slice(&(receipt.cells.len() as u64).to_le_bytes());
+    for read in &receipt.cells {
+        image.push(read.offset_index);
+        for value in read.offset.into_iter().chain(read.world_cell) {
+            image.extend_from_slice(&value.to_le_bytes());
+        }
+        image.push(u8::from(read.in_bounds));
+        match read.head {
+            Some(key) => {
+                image.push(1);
+                append_objects_spatial_key(&mut image, key);
+            }
+            None => image.push(0),
+        }
+    }
+
+    image.extend_from_slice(&(receipt.objects.len() as u64).to_le_bytes());
+    for read in &receipt.objects {
+        image.push(read.cell_offset_index);
+        append_objects_spatial_key(&mut image, read.key);
+        append_objects_spatial_key(&mut image, read.down);
+        image.push(match read.band {
+            ObjectsSpatialBand::Unit => 1,
+            ObjectsSpatialBand::Build => 2,
+            ObjectsSpatialBand::Wall => 3,
+        });
+        image.extend_from_slice(&(read.row as u64).to_le_bytes());
+        image.extend_from_slice(&[
+            u8::from(read.playable_owner),
+            u8::from(read.excluded),
+            u8::from(read.owner_filter_matches),
+        ]);
+        append_option_bool(&mut image, read.valid_build);
+        append_option_i32(&mut image, read.type_index);
+        match read.footprint {
+            Some(footprint) => {
+                image.push(1);
+                image.extend_from_slice(&footprint.x_size.to_le_bytes());
+                image.extend_from_slice(&footprint.y_size.to_le_bytes());
+            }
+            None => image.push(0),
+        }
+        for value in [read.position, read.corner] {
+            match value {
+                Some(value) => {
+                    image.push(1);
+                    for component in value {
+                        image.extend_from_slice(&component.to_le_bytes());
+                    }
+                }
+                None => image.push(0),
+            }
+        }
+        append_option_bool(&mut image, read.contains_query_tile);
+    }
+
+    image.extend_from_slice(&receipt.scratch.offset.to_le_bytes());
+    append_selected_owner_authority(&mut image, receipt.scratch.before);
+    image.extend_from_slice(&receipt.scratch.first_write.to_le_bytes());
+    image.extend_from_slice(&receipt.scratch.staged_selected_owner.to_le_bytes());
+    match receipt.scratch.after {
+        Some(authority) => {
+            image.push(1);
+            append_selected_owner_authority(&mut image, authority);
+        }
+        None => image.push(0),
+    }
+    image.push(match receipt.stop {
+        ObjectsFindBuildingPlacedAtStop::TerrainGateReturn => 1,
+        ObjectsFindBuildingPlacedAtStop::SpatialExhaustionReturn => 2,
+        ObjectsFindBuildingPlacedAtStop::ObjectHitReturn => 3,
+        ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary => 4,
+    });
+    append_option_i32(&mut image, receipt.returned);
+    append_option_i32(&mut image, receipt.returned_owner);
+    match receipt.wall_boundary {
+        Some(boundary) => {
+            image.push(1);
+            image.extend_from_slice(&boundary.instruction_va.to_le_bytes());
+            image.push(boundary.cell_offset_index);
+            append_objects_spatial_key(&mut image, boundary.key);
+            image.extend_from_slice(&(boundary.row as u64).to_le_bytes());
+            image.extend_from_slice(&boundary.wall_stored_o.to_le_bytes());
+            image.extend_from_slice(&boundary.required_banded_o.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    sha256(&image)
+}
+
+/// Stable identity for the exact `find_friends` resume boundary after its first Object lookup.
+pub fn golden_market_find_friends_after_first_lookup_sha256(
+    boundary: &GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-market-find-friends-after-first-lookup-v1".to_vec();
+    image.extend_from_slice(&boundary.instruction_va.to_le_bytes());
+    image.extend_from_slice(&boundary.function_va.to_le_bytes());
+    image.extend_from_slice(&boundary.request.call_va.to_le_bytes());
+    image.extend_from_slice(&boundary.request.callee_va.to_le_bytes());
+    image.extend_from_slice(&boundary.request.type_index.to_le_bytes());
+    for value in boundary.request.candidate_world_cell {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&boundary.request.city_filter.to_le_bytes());
+    image.extend_from_slice(&boundary.request.owner.to_le_bytes());
+    image.extend_from_slice(&boundary.circle_offset.to_le_bytes());
+    image.extend_from_slice(&boundary.accumulator_before.to_le_bytes());
+    image.extend_from_slice(&boundary.effective_city_filter.to_le_bytes());
+    image.extend_from_slice(&boundary.returned.to_le_bytes());
+    append_option_i32(&mut image, boundary.returned_owner);
+    sha256(&image)
+}
+
+fn first_object_lookup_extends_find_friends(
+    lookup: &ObjectsFindBuildingPlacedAtReceipt,
+    scratch_before: ObjectsSelectedOwnerAuthority,
+    scratch_after: ObjectsSelectedOwnerAuthority,
+    next: &GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
+    find_friends: &BuildTypeFindFriendsReceipt,
+) -> bool {
+    lookup.validates()
+        && find_friends.first_child == Some(lookup.request)
+        && lookup.returned.is_some()
+        && lookup.stop != ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary
+        && lookup.scratch.before == scratch_before
+        && lookup.scratch.after == Some(scratch_after)
+        && next.instruction_va == MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA
+        && next.function_va == BUILD_TYPE_FIND_FRIENDS_VA
+        && next.request == find_friends.request
+        && next.circle_offset == lookup.request.circle_offset
+        && next.accumulator_before == 0
+        && find_friends.effective_city_filter == Some(next.effective_city_filter)
+        && lookup.returned == Some(next.returned)
+        && lookup.returned_owner == next.returned_owner
+        && ((next.returned == -1 && next.returned_owner.is_none())
+            || (next.returned >= 0 && next.returned_owner == Some(find_friends.request.owner)))
+}
+
+fn first_lookup_from_market(
+    market: &GoldenStartingMarketCityReceipt,
+) -> GoldenStartingMarketFirstObjectLookupReceipt {
+    GoldenStartingMarketFirstObjectLookupReceipt {
+        accepted: GoldenStartingMarketAcceptedPlacementReceipt {
+            placement: market.placement.clone(),
+            blocked_location: market.blocked_location.clone(),
+            find_friends: market.find_friends.clone(),
+            before_sim_sha256: market.before_sim_sha256,
+            source_produced_city_bytes: 0,
+            installed_in_scoreboard: false,
+        },
+        object_lookup: market.first_object_lookup.clone(),
+        scratch_before: market.objects_selected_owner_before,
+        scratch_after: market.objects_selected_owner_after,
+        next: market.find_friends_after_first_lookup,
+        source_produced_city_bytes: 0,
+        installed_in_scoreboard: false,
+    }
+}
+
+fn ring_first_lookup(
+    advance: &GoldenStartingMarketFindFriendsRingAdvance,
+) -> &GoldenStartingMarketFirstObjectLookupReceipt {
+    match advance {
+        GoldenStartingMarketFindFriendsRingAdvance::ReturnedZero(receipt) => &receipt.first_lookup,
+        GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(receipt) => {
+            &receipt.first_lookup
+        }
+        GoldenStartingMarketFindFriendsRingAdvance::WallBandIdentityBoundary(receipt) => {
+            &receipt.first_lookup
+        }
+    }
+}
+
+fn found_read_matches_lookup(
+    found: GoldenStartingMarketFindFriendsFoundBuildRead,
+    lookup: &ObjectsFindBuildingPlacedAtReceipt,
+    effective_city_filter: i32,
+) -> bool {
+    lookup.returned == Some(found.object)
+        && lookup.returned_owner == Some(found.owner)
+        && found.effective_city_filter == effective_city_filter
+        && found.object >= 0
+        && found.owner >= 0
+}
+
+fn append_found_build_read(
+    image: &mut Vec<u8>,
+    found: GoldenStartingMarketFindFriendsFoundBuildRead,
+) {
+    image.extend_from_slice(&found.owner.to_le_bytes());
+    image.extend_from_slice(&found.object.to_le_bytes());
+    image.extend_from_slice(&(found.build_row as u64).to_le_bytes());
+    image.extend_from_slice(&found.type_index.to_le_bytes());
+    image.extend_from_slice(&found.city.to_le_bytes());
+    image.extend_from_slice(&found.effective_city_filter.to_le_bytes());
+}
+
+fn append_ring_step(image: &mut Vec<u8>, step: &GoldenStartingMarketFindFriendsRingStep) {
+    image.extend_from_slice(&step.circle_offset.to_le_bytes());
+    for value in step.world_cell {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    match step.child {
+        Some(child) => {
+            image.push(1);
+            append_object_lookup_request(image, child);
+        }
+        None => image.push(0),
+    }
+    match &step.object_lookup {
+        Some(lookup) => {
+            image.push(1);
+            image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(lookup));
+        }
+        None => image.push(0),
+    }
+    match step.city_mismatch {
+        Some(found) => {
+            image.push(1);
+            append_found_build_read(image, found);
+        }
+        None => image.push(0),
+    }
+    image.extend_from_slice(&step.accumulator_before.to_le_bytes());
+    image.extend_from_slice(&step.accumulator_after.to_le_bytes());
+}
+
+/// Stable identity for the entire bounded ring result, including every lookup receipt and
+/// `ObjectsData+0x200` authority transition.
+pub fn golden_market_find_friends_ring_advance_sha256(
+    advance: &GoldenStartingMarketFindFriendsRingAdvance,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-market-find-friends-ring-advance-v1".to_vec();
+    let first = ring_first_lookup(advance);
+    image.extend_from_slice(&golden_market_blocked_location_receipt_sha256(
+        &first.accepted.blocked_location,
+    ));
+    image.extend_from_slice(&golden_market_find_friends_receipt_sha256(
+        &first.accepted.find_friends,
+    ));
+    image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(
+        &first.object_lookup,
+    ));
+    append_selected_owner_authority(&mut image, first.scratch_before);
+    append_selected_owner_authority(&mut image, first.scratch_after);
+    image.extend_from_slice(&golden_market_find_friends_after_first_lookup_sha256(
+        &first.next,
+    ));
+    image.extend_from_slice(&first.accepted.before_sim_sha256);
+    image.extend_from_slice(&first.accepted.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(first.accepted.installed_in_scoreboard));
+    image.extend_from_slice(&first.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(first.installed_in_scoreboard));
+
+    match advance {
+        GoldenStartingMarketFindFriendsRingAdvance::ReturnedZero(receipt) => {
+            image.push(1);
+            append_selected_owner_authority(&mut image, receipt.scratch_entry);
+            image.extend_from_slice(&(receipt.remaining_steps.len() as u64).to_le_bytes());
+            for step in &receipt.remaining_steps {
+                append_ring_step(&mut image, step);
+            }
+            append_selected_owner_authority(&mut image, receipt.scratch_after);
+            image.extend_from_slice(&receipt.returned.to_le_bytes());
+            image.extend_from_slice(&receipt.source_produced_city_bytes.to_le_bytes());
+            image.push(u8::from(receipt.installed_in_scoreboard));
+        }
+        GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(receipt) => {
+            image.push(2);
+            append_selected_owner_authority(&mut image, receipt.scratch_entry);
+            image.extend_from_slice(&(receipt.completed_steps.len() as u64).to_le_bytes());
+            for step in &receipt.completed_steps {
+                append_ring_step(&mut image, step);
+            }
+            append_selected_owner_authority(&mut image, receipt.scratch_at_boundary);
+            image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(
+                &receipt.object_lookup,
+            ));
+            append_found_build_read(&mut image, receipt.found);
+            image.extend_from_slice(&receipt.accumulator_before.to_le_bytes());
+            image.extend_from_slice(&receipt.first_unowned_virtual_slot.to_le_bytes());
+            image.extend_from_slice(&receipt.source_produced_city_bytes.to_le_bytes());
+            image.push(u8::from(receipt.installed_in_scoreboard));
+        }
+        GoldenStartingMarketFindFriendsRingAdvance::WallBandIdentityBoundary(receipt) => {
+            image.push(3);
+            append_selected_owner_authority(&mut image, receipt.scratch_entry);
+            image.extend_from_slice(&(receipt.completed_steps.len() as u64).to_le_bytes());
+            for step in &receipt.completed_steps {
+                append_ring_step(&mut image, step);
+            }
+            append_selected_owner_authority(&mut image, receipt.scratch_at_boundary);
+            image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(
+                &receipt.object_lookup,
+            ));
+            image.extend_from_slice(&receipt.wall_boundary.instruction_va.to_le_bytes());
+            image.push(receipt.wall_boundary.cell_offset_index);
+            append_objects_spatial_key(&mut image, receipt.wall_boundary.key);
+            image.extend_from_slice(&(receipt.wall_boundary.row as u64).to_le_bytes());
+            image.extend_from_slice(&receipt.wall_boundary.wall_stored_o.to_le_bytes());
+            image.extend_from_slice(&receipt.wall_boundary.required_banded_o.to_le_bytes());
+            image.extend_from_slice(&receipt.accumulator_before.to_le_bytes());
+            image.extend_from_slice(&receipt.source_produced_city_bytes.to_le_bytes());
+            image.push(u8::from(receipt.installed_in_scoreboard));
+        }
+    }
+    sha256(&image)
+}
+
+fn append_found_build_reject_reason(
+    image: &mut Vec<u8>,
+    reason: GoldenStartingMarketFoundBuildRejectReason,
+) {
+    match reason {
+        GoldenStartingMarketFoundBuildRejectReason::GatherTypeOutsideUniversity => image.push(1),
+        GoldenStartingMarketFoundBuildRejectReason::GatherEnhancer { relation_type } => {
+            image.push(2);
+            image.extend_from_slice(&relation_type.to_le_bytes());
+        }
+        GoldenStartingMarketFoundBuildRejectReason::UncapturedMilitaryTrainer => image.push(3),
+        GoldenStartingMarketFoundBuildRejectReason::Wonder => image.push(4),
+    }
+}
+
+/// Stable identity for the complete lazy found-Build predicate receipt and its typed
+/// next-ring/return continuation.
+pub fn golden_market_found_build_predicate_receipt_sha256(
+    receipt: &GoldenStartingMarketFoundBuildPredicateReceipt,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-market-found-build-predicates-v1".to_vec();
+    image.extend_from_slice(&golden_market_find_friends_ring_advance_sha256(
+        &GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(receipt.input.clone()),
+    ));
+    let reads = &receipt.reads;
+    image.extend_from_slice(&(reads.type_rows as u64).to_le_bytes());
+    image.extend_from_slice(&reads.mutation_revision.to_le_bytes());
+    image.extend_from_slice(&reads.found_type_index.to_le_bytes());
+    image.extend_from_slice(&reads.found_build_flags.to_le_bytes());
+    image.push(u8::from(reads.is_gather_type));
+    append_option_bool(&mut image, reads.university_relation);
+    for relation in reads.gather_enhancer_relations {
+        append_option_bool(&mut image, relation);
+    }
+    match reads.basic_type_call_va {
+        Some(call_va) => {
+            image.push(1);
+            image.extend_from_slice(&call_va.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    image.extend_from_slice(&(reads.basic_type_chain.len() as u64).to_le_bytes());
+    for type_index in &reads.basic_type_chain {
+        image.extend_from_slice(&type_index.to_le_bytes());
+    }
+    append_option_i32(&mut image, reads.basic_type);
+    match reads.basic_type_build_flags {
+        Some(flags) => {
+            image.push(1);
+            image.extend_from_slice(&flags.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    append_option_bool(&mut image, reads.military_trainer);
+    append_option_bool(&mut image, reads.captured);
+    match reads.wonder_virtual_slot {
+        Some(slot) => {
+            image.push(1);
+            image.extend_from_slice(&slot.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    append_option_bool(&mut image, reads.is_wonder_type);
+    match receipt.outcome {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(reason) => {
+            image.push(1);
+            append_found_build_reject_reason(&mut image, reason);
+        }
+        GoldenStartingMarketFoundBuildPredicateOutcome::Counted { weight } => {
+            image.push(2);
+            image.extend_from_slice(&weight.to_le_bytes());
+        }
+    }
+    image.extend_from_slice(&receipt.accumulator_before.to_le_bytes());
+    image.extend_from_slice(&receipt.accumulator_after.to_le_bytes());
+    match receipt.continuation {
+        GoldenStartingMarketAfterFoundBuildContinuation::NextRingOffset {
+            circle_offset,
+            accumulator,
+        } => {
+            image.push(1);
+            image.extend_from_slice(&circle_offset.to_le_bytes());
+            image.extend_from_slice(&accumulator.to_le_bytes());
+        }
+        GoldenStartingMarketAfterFoundBuildContinuation::Returned { value } => {
+            image.push(2);
+            image.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    image.extend_from_slice(&receipt.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(receipt.installed_in_scoreboard));
+    sha256(&image)
+}
+
+fn found_build_predicate_shape_validates(
+    receipt: &GoldenStartingMarketFoundBuildPredicateReceipt,
+) -> bool {
+    let input = &receipt.input;
+    if input.first_unowned_virtual_slot != MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT
+        || input.source_produced_city_bytes != 0
+        || input.installed_in_scoreboard
+        || receipt.reads.type_rows == 0
+        || usize::try_from(receipt.reads.found_type_index)
+            .ok()
+            .is_none_or(|index| index >= receipt.reads.type_rows)
+        || receipt.reads.found_type_index != input.found.type_index
+        || receipt.reads.is_gather_type
+            != (receipt.reads.found_build_flags & BUILD_GATHER_TYPE_MASK != 0)
+        || receipt.reads.university_relation.is_some() != receipt.reads.is_gather_type
+        || receipt.accumulator_before != input.accumulator_before
+        || receipt.source_produced_city_bytes != 0
+        || receipt.installed_in_scoreboard
+    {
+        return false;
+    }
+    let expected_after = match receipt.outcome {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(reason) => {
+            let reason_matches = match reason {
+                GoldenStartingMarketFoundBuildRejectReason::GatherTypeOutsideUniversity => {
+                    receipt.reads.is_gather_type && receipt.reads.university_relation == Some(false)
+                }
+                GoldenStartingMarketFoundBuildRejectReason::GatherEnhancer { relation_type } => {
+                    GATHER_ENHANCER_TYPES
+                        .iter()
+                        .position(|&candidate| candidate as i32 == relation_type)
+                        .is_some_and(|index| {
+                            receipt.reads.gather_enhancer_relations[index] == Some(true)
+                                && receipt.reads.gather_enhancer_relations[..index]
+                                    .iter()
+                                    .all(|value| *value == Some(false))
+                        })
+                }
+                GoldenStartingMarketFoundBuildRejectReason::UncapturedMilitaryTrainer => {
+                    receipt.reads.military_trainer == Some(true)
+                        && receipt.reads.captured == Some(false)
+                }
+                GoldenStartingMarketFoundBuildRejectReason::Wonder => {
+                    receipt.reads.is_wonder_type == Some(true)
+                }
+            };
+            if !reason_matches {
+                return false;
+            }
+            receipt.accumulator_before
+        }
+        GoldenStartingMarketFoundBuildPredicateOutcome::Counted { weight } => {
+            let expected_weight = if input.object_lookup.request.circle_offset & 1 == 0 {
+                2
+            } else {
+                1
+            };
+            if weight != expected_weight || receipt.reads.is_wonder_type != Some(false) {
+                return false;
+            }
+            receipt.accumulator_before.wrapping_add(weight)
+        }
+    };
+    if receipt.accumulator_after != expected_after {
+        return false;
+    }
+    match receipt.continuation {
+        GoldenStartingMarketAfterFoundBuildContinuation::NextRingOffset {
+            circle_offset,
+            accumulator,
+        } => {
+            input.object_lookup.request.circle_offset < 8
+                && circle_offset == input.object_lookup.request.circle_offset + 1
+                && accumulator == expected_after
+        }
+        GoldenStartingMarketAfterFoundBuildContinuation::Returned { value } => {
+            input.object_lookup.request.circle_offset == 8 && value == expected_after
+        }
+    }
+}
+
+fn append_found_build_type_reads(
+    image: &mut Vec<u8>,
+    reads: &GoldenStartingMarketFoundBuildTypeReads,
+) {
+    image.extend_from_slice(&(reads.type_rows as u64).to_le_bytes());
+    image.extend_from_slice(&reads.mutation_revision.to_le_bytes());
+    image.extend_from_slice(&reads.found_type_index.to_le_bytes());
+    image.extend_from_slice(&reads.found_build_flags.to_le_bytes());
+    image.push(u8::from(reads.is_gather_type));
+    append_option_bool(image, reads.university_relation);
+    for relation in reads.gather_enhancer_relations {
+        append_option_bool(image, relation);
+    }
+    match reads.basic_type_call_va {
+        Some(call_va) => {
+            image.push(1);
+            image.extend_from_slice(&call_va.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    image.extend_from_slice(&(reads.basic_type_chain.len() as u64).to_le_bytes());
+    for type_index in &reads.basic_type_chain {
+        image.extend_from_slice(&type_index.to_le_bytes());
+    }
+    append_option_i32(image, reads.basic_type);
+    match reads.basic_type_build_flags {
+        Some(flags) => {
+            image.push(1);
+            image.extend_from_slice(&flags.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    append_option_bool(image, reads.military_trainer);
+    append_option_bool(image, reads.captured);
+    match reads.wonder_virtual_slot {
+        Some(slot) => {
+            image.push(1);
+            image.extend_from_slice(&slot.to_le_bytes());
+        }
+        None => image.push(0),
+    }
+    append_option_bool(image, reads.is_wonder_type);
+}
+
+fn append_found_build_predicate_outcome(
+    image: &mut Vec<u8>,
+    outcome: GoldenStartingMarketFoundBuildPredicateOutcome,
+) {
+    match outcome {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(reason) => {
+            image.push(1);
+            append_found_build_reject_reason(image, reason);
+        }
+        GoldenStartingMarketFoundBuildPredicateOutcome::Counted { weight } => {
+            image.push(2);
+            image.extend_from_slice(&weight.to_le_bytes());
+        }
+    }
+}
+
+fn complete_found_predicate_shape_validates(
+    found: GoldenStartingMarketFindFriendsFoundBuildRead,
+    circle_offset: i32,
+    reads: &GoldenStartingMarketFoundBuildTypeReads,
+    outcome: GoldenStartingMarketFoundBuildPredicateOutcome,
+    accumulator_before: i32,
+    accumulator_after: i32,
+) -> bool {
+    if reads.type_rows == 0
+        || usize::try_from(reads.found_type_index)
+            .ok()
+            .is_none_or(|index| index >= reads.type_rows)
+        || reads.found_type_index != found.type_index
+        || reads.is_gather_type != (reads.found_build_flags & BUILD_GATHER_TYPE_MASK != 0)
+        || reads.university_relation.is_some() != reads.is_gather_type
+    {
+        return false;
+    }
+    let expected_after = match outcome {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(reason) => {
+            let reason_matches = match reason {
+                GoldenStartingMarketFoundBuildRejectReason::GatherTypeOutsideUniversity => {
+                    reads.is_gather_type && reads.university_relation == Some(false)
+                }
+                GoldenStartingMarketFoundBuildRejectReason::GatherEnhancer { relation_type } => {
+                    GATHER_ENHANCER_TYPES
+                        .iter()
+                        .position(|&candidate| candidate as i32 == relation_type)
+                        .is_some_and(|index| {
+                            reads.gather_enhancer_relations[index] == Some(true)
+                                && reads.gather_enhancer_relations[..index]
+                                    .iter()
+                                    .all(|value| *value == Some(false))
+                        })
+                }
+                GoldenStartingMarketFoundBuildRejectReason::UncapturedMilitaryTrainer => {
+                    reads.military_trainer == Some(true) && reads.captured == Some(false)
+                }
+                GoldenStartingMarketFoundBuildRejectReason::Wonder => {
+                    reads.is_wonder_type == Some(true)
+                }
+            };
+            if !reason_matches {
+                return false;
+            }
+            accumulator_before
+        }
+        GoldenStartingMarketFoundBuildPredicateOutcome::Counted { weight } => {
+            let expected_weight = if circle_offset & 1 == 0 { 2 } else { 1 };
+            if weight != expected_weight || reads.is_wonder_type != Some(false) {
+                return false;
+            }
+            accumulator_before.wrapping_add(weight)
+        }
+    };
+    accumulator_after == expected_after
+}
+
+/// Stable identity for the complete exact multi-hit `find_friends` return.
+pub fn golden_market_complete_find_friends_receipt_sha256(
+    receipt: &GoldenStartingMarketFindFriendsCompleteReceipt,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-market-complete-find-friends-v1".to_vec();
+    let first = &receipt.first_lookup;
+    image.extend_from_slice(&golden_market_blocked_location_receipt_sha256(
+        &first.accepted.blocked_location,
+    ));
+    image.extend_from_slice(&golden_market_find_friends_receipt_sha256(
+        &first.accepted.find_friends,
+    ));
+    image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(
+        &first.object_lookup,
+    ));
+    append_selected_owner_authority(&mut image, first.scratch_before);
+    append_selected_owner_authority(&mut image, first.scratch_after);
+    image.extend_from_slice(&golden_market_find_friends_after_first_lookup_sha256(
+        &first.next,
+    ));
+    image.extend_from_slice(&first.accepted.before_sim_sha256);
+    image.extend_from_slice(&first.accepted.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(first.accepted.installed_in_scoreboard));
+    image.extend_from_slice(&first.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(first.installed_in_scoreboard));
+    image.extend_from_slice(&(receipt.events.len() as u64).to_le_bytes());
+    for event in &receipt.events {
+        match event {
+            GoldenStartingMarketFindFriendsOwnedRingEvent::OutOfBounds {
+                circle_offset,
+                world_cell,
+                accumulator,
+            } => {
+                image.push(1);
+                image.extend_from_slice(&circle_offset.to_le_bytes());
+                for value in world_cell {
+                    image.extend_from_slice(&value.to_le_bytes());
+                }
+                image.extend_from_slice(&accumulator.to_le_bytes());
+            }
+            GoldenStartingMarketFindFriendsOwnedRingEvent::Lookup(step) => {
+                image.push(2);
+                image.extend_from_slice(&step.circle_offset.to_le_bytes());
+                for value in step.world_cell {
+                    image.extend_from_slice(&value.to_le_bytes());
+                }
+                image.extend_from_slice(&golden_market_first_object_lookup_receipt_sha256(
+                    &step.object_lookup,
+                ));
+                image.push(u8::from(step.committed_by_this_receipt));
+                match &step.disposition {
+                    GoldenStartingMarketFindFriendsLookupDisposition::Miss => image.push(1),
+                    GoldenStartingMarketFindFriendsLookupDisposition::CityMismatch(found) => {
+                        image.push(2);
+                        append_found_build_read(&mut image, *found);
+                    }
+                    GoldenStartingMarketFindFriendsLookupDisposition::FoundBuildPredicate {
+                        found,
+                        reads,
+                        outcome,
+                    } => {
+                        image.push(3);
+                        append_found_build_read(&mut image, *found);
+                        append_found_build_type_reads(&mut image, reads);
+                        append_found_build_predicate_outcome(&mut image, *outcome);
+                    }
+                }
+                image.extend_from_slice(&step.accumulator_before.to_le_bytes());
+                image.extend_from_slice(&step.accumulator_after.to_le_bytes());
+            }
+        }
+    }
+    append_selected_owner_authority(&mut image, receipt.scratch_entry);
+    append_selected_owner_authority(&mut image, receipt.scratch_after);
+    image.extend_from_slice(&receipt.returned.to_le_bytes());
+    image.extend_from_slice(&receipt.source_produced_city_bytes.to_le_bytes());
+    image.push(u8::from(receipt.installed_in_scoreboard));
+    sha256(&image)
+}
+
+fn complete_find_friends_receipt_shape_validates(
+    receipt: &GoldenStartingMarketFindFriendsCompleteReceipt,
+) -> bool {
+    if !receipt.first_lookup.validates()
+        || receipt.scratch_entry != receipt.first_lookup.scratch_after
+        || receipt.source_produced_city_bytes != 0
+        || receipt.installed_in_scoreboard
+        || receipt.events.is_empty()
+        || !(1..=8).contains(&receipt.first_lookup.next.circle_offset)
+        || !matches!(
+            receipt.events.first(),
+            Some(GoldenStartingMarketFindFriendsOwnedRingEvent::Lookup(step))
+                if step.object_lookup == receipt.first_lookup.object_lookup
+        )
+    {
+        return false;
+    }
+    let city_filter = receipt.first_lookup.next.effective_city_filter;
+    let first_offset = receipt.first_lookup.next.circle_offset;
+    let mut expected_offset = first_offset;
+    let mut accumulator = 0;
+    let mut scratch = receipt.scratch_entry;
+    for (ordinal, event) in receipt.events.iter().enumerate() {
+        let (dx, dy) = WORLD_CELL_SEARCH_OFFSETS[expected_offset as usize];
+        let expected_world_cell = [
+            receipt.first_lookup.next.request.candidate_world_cell[0].wrapping_add(dx),
+            receipt.first_lookup.next.request.candidate_world_cell[1].wrapping_add(dy),
+        ];
+        match event {
+            GoldenStartingMarketFindFriendsOwnedRingEvent::OutOfBounds {
+                circle_offset,
+                world_cell,
+                accumulator: event_accumulator,
+            } => {
+                if *circle_offset != expected_offset
+                    || *world_cell != expected_world_cell
+                    || *event_accumulator != accumulator
+                {
+                    return false;
+                }
+            }
+            GoldenStartingMarketFindFriendsOwnedRingEvent::Lookup(step) => {
+                if step.circle_offset != expected_offset
+                    || step.world_cell != expected_world_cell
+                    || step.world_cell != step.object_lookup.request.world_cell
+                    || !step.object_lookup.validates()
+                    || step.accumulator_before != accumulator
+                    || step.committed_by_this_receipt != (ordinal != 0)
+                {
+                    return false;
+                }
+                if ordinal == 0 {
+                    if step.object_lookup != receipt.first_lookup.object_lookup
+                        || step.object_lookup.scratch.after != Some(scratch)
+                    {
+                        return false;
+                    }
+                } else {
+                    if step.object_lookup.scratch.before != scratch {
+                        return false;
+                    }
+                    let Some(after) = step.object_lookup.scratch.after else {
+                        return false;
+                    };
+                    scratch = after;
+                }
+                let disposition_valid = match &step.disposition {
+                    GoldenStartingMarketFindFriendsLookupDisposition::Miss => {
+                        step.object_lookup.returned == Some(-1)
+                            && step.object_lookup.returned_owner.is_none()
+                            && step.accumulator_after == accumulator
+                    }
+                    GoldenStartingMarketFindFriendsLookupDisposition::CityMismatch(found) => {
+                        found_read_matches_lookup(*found, &step.object_lookup, city_filter)
+                            && i32::from(found.city) != city_filter
+                            && step.accumulator_after == accumulator
+                    }
+                    GoldenStartingMarketFindFriendsLookupDisposition::FoundBuildPredicate {
+                        found,
+                        reads,
+                        outcome,
+                    } => {
+                        found_read_matches_lookup(*found, &step.object_lookup, city_filter)
+                            && i32::from(found.city) == city_filter
+                            && complete_found_predicate_shape_validates(
+                                *found,
+                                step.circle_offset,
+                                reads,
+                                *outcome,
+                                accumulator,
+                                step.accumulator_after,
+                            )
+                    }
+                };
+                if !disposition_valid {
+                    return false;
+                }
+                accumulator = step.accumulator_after;
+            }
+        }
+        expected_offset = expected_offset.wrapping_add(1);
+    }
+    expected_offset == 9 && receipt.scratch_after == scratch && receipt.returned == accumulator
+}
+
+fn complete_find_friends_shape_validates(
+    market: &GoldenStartingMarketCityReceipt,
+    receipt: &GoldenStartingMarketFindFriendsCompleteReceipt,
+) -> bool {
+    receipt.first_lookup == first_lookup_from_market(market)
+        && complete_find_friends_receipt_shape_validates(receipt)
+        && market.objects_selected_owner_find_friends_after == receipt.scratch_after
+        && market.find_friends_returned == receipt.returned
+}
+
+fn found_build_predicates_extend_ring(
+    advance: &GoldenStartingMarketFindFriendsRingAdvance,
+    predicates: Option<&GoldenStartingMarketFoundBuildPredicateReceipt>,
+) -> bool {
+    match (advance, predicates) {
+        (
+            GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(boundary),
+            Some(receipt),
+        ) => receipt.input == *boundary && found_build_predicate_shape_validates(receipt),
+        (GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(_), None) => false,
+        (_, None) => true,
+        (_, Some(_)) => false,
+    }
+}
+
 fn find_friends_extends_blocked_location(
     find_friends: &BuildTypeFindFriendsReceipt,
     blocked_location: &LeaderProduceBuildingMarketBlockedLocationReceipt,
@@ -647,8 +1673,25 @@ fn append_oracle_node(image: &mut Vec<u8>, node: &GoldenOracleNode) {
     image.extend_from_slice(&node.sim_sha256);
 }
 
+fn append_market_residual(image: &mut Vec<u8>, residual: &GoldenMarketResidual) {
+    match residual {
+        GoldenMarketResidual::CallerCoarseScore {
+            find_friends_returned,
+            coarse_score_authority_issued,
+            conditional_world_find_authority_issued,
+        } => {
+            image.push(1);
+            image.extend_from_slice(&find_friends_returned.to_le_bytes());
+            image.extend_from_slice(&[
+                u8::from(*coarse_score_authority_issued),
+                u8::from(*conditional_world_find_authority_issued),
+            ]);
+        }
+    }
+}
+
 pub fn golden_chronology_spine_digest(receipt: &GoldenChronologySpineReceipt) -> [u8; 32] {
-    let mut image = b"don-2024-golden-chronology-spine-v1".to_vec();
+    let mut image = b"don-2024-golden-chronology-spine-v5".to_vec();
     image.extend_from_slice(&receipt.revision.to_le_bytes());
     image.extend_from_slice(&receipt.schema_version.to_le_bytes());
     image.extend_from_slice(&receipt.replay_file_sha256);
@@ -668,8 +1711,17 @@ pub fn golden_chronology_spine_digest(receipt: &GoldenChronologySpineReceipt) ->
             image.push(1);
             image.extend_from_slice(&residual.blocked_location_receipt_sha256);
             image.extend_from_slice(&residual.find_friends_receipt_sha256);
-            image.extend_from_slice(&residual.child_call_va.to_le_bytes());
-            image.extend_from_slice(&residual.child_callee_va.to_le_bytes());
+            image.extend_from_slice(&residual.first_object_lookup_receipt_sha256);
+            append_selected_owner_authority(&mut image, residual.objects_selected_owner_before);
+            append_selected_owner_authority(&mut image, residual.objects_selected_owner_after);
+            image.extend_from_slice(&residual.find_friends_after_first_lookup_sha256);
+            image.extend_from_slice(&residual.complete_find_friends_sha256);
+            append_selected_owner_authority(
+                &mut image,
+                residual.objects_selected_owner_find_friends_after,
+            );
+            image.extend_from_slice(&residual.find_friends_returned.to_le_bytes());
+            append_market_residual(&mut image, &residual.market_residual);
             image.extend_from_slice(&residual.market_before_sim_sha256);
             image.extend_from_slice(&residual.post_market_oracle_sim_sha256);
             image.extend_from_slice(&residual.opaque_native_trace_sha256);
@@ -680,8 +1732,8 @@ pub fn golden_chronology_spine_digest(receipt: &GoldenChronologySpineReceipt) ->
 }
 
 /// Compose the strict Market join and the downstream oracle topology without issuing a false
-/// execution authority. The missing child is derived from the accepted-site receipt's current
-/// open boundary, allowing that frontier to move when the placement owner gains a decoded receipt.
+/// execution authority. The complete `find_friends` return is retained exactly; the missing child
+/// is the caller's coarse score, not a captured digest or guessed later checkpoint.
 pub fn compose_golden_chronology_spine(
     transaction: &GoldenStartingMarketTransactionManifest,
     oracle: &GoldenCaptureManifest,
@@ -696,9 +1748,21 @@ pub fn compose_golden_chronology_spine(
     }
     let blocked_location = market.blocked_location.clone();
     let find_friends = market.find_friends.clone();
+    let first_object_lookup = market.first_object_lookup.clone();
+    let objects_selected_owner_before = market.objects_selected_owner_before;
+    let objects_selected_owner_after = market.objects_selected_owner_after;
+    let find_friends_after_first_lookup = market.find_friends_after_first_lookup;
     if !blocked_location.validates()
         || blocked_location.input != market.placement.blocked_location
         || !find_friends_extends_blocked_location(&find_friends, &blocked_location)
+        || !first_object_lookup_extends_find_friends(
+            &first_object_lookup,
+            objects_selected_owner_before,
+            objects_selected_owner_after,
+            &find_friends_after_first_lookup,
+            &find_friends,
+        )
+        || !complete_find_friends_shape_validates(market, &market.complete_find_friends)
     {
         return Err(GoldenChronologySpineError::InvalidMarketPlacementPrefix);
     }
@@ -722,25 +1786,46 @@ pub fn compose_golden_chronology_spine(
     let blocked_location_receipt_sha256 =
         golden_market_blocked_location_receipt_sha256(&blocked_location);
     let find_friends_receipt_sha256 = golden_market_find_friends_receipt_sha256(&find_friends);
+    let first_object_lookup_receipt_sha256 =
+        golden_market_first_object_lookup_receipt_sha256(&first_object_lookup);
+    let find_friends_after_first_lookup_sha256 =
+        golden_market_find_friends_after_first_lookup_sha256(&find_friends_after_first_lookup);
+    let complete_find_friends_sha256 =
+        golden_market_complete_find_friends_receipt_sha256(&market.complete_find_friends);
     let market_evidence_digest = golden_market_evidence_digest(
         market,
         blocked_location_receipt_sha256,
         find_friends_receipt_sha256,
+        first_object_lookup_receipt_sha256,
+        find_friends_after_first_lookup_sha256,
+        complete_find_friends_sha256,
     );
-    let child = find_friends
-        .first_child
-        .ok_or(GoldenChronologySpineError::InvalidMarketPlacementPrefix)?;
+    let market_residual = GoldenMarketResidual::CallerCoarseScore {
+        find_friends_returned: market.find_friends_returned,
+        coarse_score_authority_issued: false,
+        conditional_world_find_authority_issued: false,
+    };
     let first_missing_authority =
         GoldenChronologyFirstMissingAuthority::MarketScoringChild(GoldenMarketExecutionResidual {
-            child_call_va: child.call_va,
-            child_callee_va: child.callee_va,
             blocked_location_receipt_sha256,
             find_friends_receipt_sha256,
+            first_object_lookup_receipt_sha256,
+            objects_selected_owner_before,
+            objects_selected_owner_after,
+            find_friends_after_first_lookup_sha256,
+            complete_find_friends: market.complete_find_friends.clone(),
+            complete_find_friends_sha256,
+            objects_selected_owner_find_friends_after: market
+                .objects_selected_owner_find_friends_after,
+            find_friends_returned: market.find_friends_returned,
+            market_residual,
             market_before_sim_sha256: market.before_sim_sha256,
             post_market_oracle_sim_sha256: market.after_sim_sha256,
             opaque_native_trace_sha256: market.native_trace_sha256,
             blocked_location,
             find_friends,
+            first_object_lookup,
+            find_friends_after_first_lookup,
         });
     let mut receipt = GoldenChronologySpineReceipt {
         revision: starting_market.revision,
@@ -823,12 +1908,57 @@ pub fn validate_golden_chronology_spine_receipt(
                 )
                 && residual.find_friends_receipt_sha256
                     == golden_market_find_friends_receipt_sha256(&residual.find_friends)
-                && residual.find_friends.first_child.is_some_and(|child| {
-                    residual.child_call_va == child.call_va
-                        && residual.child_callee_va == child.callee_va
-                })
-                && residual.child_call_va != 0
-                && residual.child_callee_va != 0
+                && first_object_lookup_extends_find_friends(
+                    &residual.first_object_lookup,
+                    residual.objects_selected_owner_before,
+                    residual.objects_selected_owner_after,
+                    &residual.find_friends_after_first_lookup,
+                    &residual.find_friends,
+                )
+                && residual.first_object_lookup_receipt_sha256
+                    == golden_market_first_object_lookup_receipt_sha256(
+                        &residual.first_object_lookup,
+                    )
+                && residual.find_friends_after_first_lookup_sha256
+                    == golden_market_find_friends_after_first_lookup_sha256(
+                        &residual.find_friends_after_first_lookup,
+                    )
+                && residual
+                    .complete_find_friends
+                    .first_lookup
+                    .accepted
+                    .blocked_location
+                    == residual.blocked_location
+                && residual
+                    .complete_find_friends
+                    .first_lookup
+                    .accepted
+                    .find_friends
+                    == residual.find_friends
+                && residual.complete_find_friends.first_lookup.object_lookup
+                    == residual.first_object_lookup
+                && residual.complete_find_friends.first_lookup.scratch_before
+                    == residual.objects_selected_owner_before
+                && residual.complete_find_friends.first_lookup.scratch_after
+                    == residual.objects_selected_owner_after
+                && residual.complete_find_friends.first_lookup.next
+                    == residual.find_friends_after_first_lookup
+                && residual.complete_find_friends.scratch_after
+                    == residual.objects_selected_owner_find_friends_after
+                && residual.complete_find_friends.returned == residual.find_friends_returned
+                && complete_find_friends_receipt_shape_validates(
+                    &residual.complete_find_friends,
+                )
+                && residual.complete_find_friends_sha256
+                    == golden_market_complete_find_friends_receipt_sha256(
+                        &residual.complete_find_friends,
+                    )
+                && residual.market_residual
+                    == (GoldenMarketResidual::CallerCoarseScore {
+                        find_friends_returned: residual.find_friends_returned,
+                        coarse_score_authority_issued: false,
+                        conditional_world_find_authority_issued: false,
+                    })
                 && residual.market_before_sim_sha256 != [0; 32]
                 && residual.post_market_oracle_sim_sha256 != [0; 32]
                 && residual.market_before_sim_sha256 != residual.post_market_oracle_sim_sha256
@@ -895,9 +2025,9 @@ fn validate_completed_setup_receipt(
 /// Extend the honest oracle spine with the detached owner-zero step-11 prefix.
 ///
 /// The returned `get_team_terr` request is the deepest source-exact local boundary, not the
-/// globally earliest replay gap: the parent's Market scoring child remains open. The captured
-/// step-11 entry and all original eleven oracle nodes remain capture-only, and no Unit actor is
-/// made reachable.
+/// globally earliest replay gap: the parent's Market caller coarse-score residual remains open.
+/// The captured step-11 entry and all original eleven oracle nodes remain capture-only, and no
+/// Unit actor is made reachable.
 pub fn compose_golden_frame0_strategy_spine(
     parent: &GoldenChronologySpineReceipt,
     setup: &Frame379SetupReceipt,
@@ -996,11 +2126,352 @@ pub fn validate_golden_frame0_strategy_spine(
     Ok(())
 }
 
+pub fn golden_frame0_team_terr_spine_digest(
+    receipt: &GoldenFrame0TeamTerrSpineReceipt,
+) -> [u8; 32] {
+    let mut image = b"don-2024-golden-frame0-team-terr-spine-v4".to_vec();
+    image.extend_from_slice(&receipt.revision.to_le_bytes());
+    image.extend_from_slice(&receipt.schema_version.to_le_bytes());
+    image.extend_from_slice(&receipt.parent_strategy_spine_digest);
+    image.push(match receipt.call_entry_evidence {
+        GoldenOracleEvidence::CaptureOnly => 1,
+    });
+    image.extend_from_slice(&receipt.call_entry_authority.composition_digest);
+    image.extend_from_slice(
+        &receipt
+            .call_entry_authority
+            .plan_strategy_entry_authority_digest,
+    );
+    image.extend_from_slice(&receipt.call_entry_authority.call_entry_sim_sha256);
+    image.extend_from_slice(&receipt.call_entry_authority.expected_request_sha256);
+    image.extend_from_slice(&receipt.call_entry_authority.local_prefix_digest);
+    image.push(u8::from(
+        receipt
+            .call_entry_authority
+            .local_prefix_preserved_input_projection,
+    ));
+    image.extend_from_slice(&receipt.call_entry_authority.game.composition_digest);
+    image.extend_from_slice(&receipt.call_entry_authority.leader.composition_digest);
+    image.push(match receipt.child_evidence {
+        GoldenDetachedChildEvidence::SourceExactDetached => 1,
+    });
+    image.extend_from_slice(&receipt.child.composition_digest);
+    image.extend_from_slice(&receipt.child.request.request_sha256);
+    image.extend_from_slice(&receipt.child.result.to_le_bytes());
+    image.push(match receipt.continuation_evidence {
+        GoldenDetachedChildEvidence::SourceExactDetached => 1,
+    });
+    image.extend_from_slice(&receipt.continuation.composition_digest);
+    image.extend_from_slice(&receipt.continuation.open.request_sha256);
+    image.extend_from_slice(&receipt.continuation.open.read_va.to_le_bytes());
+    image.extend_from_slice(&receipt.continuation.open.candidate_who.to_le_bytes());
+    image.push(u8::from(receipt.continuation.owner0_strategy_complete));
+    image.push(match receipt.diplomacy_read_evidence {
+        GoldenOracleEvidence::CaptureOnly => 1,
+    });
+    image.extend_from_slice(&receipt.diplomacy_read.composition_digest);
+    image.extend_from_slice(&receipt.diplomacy_read.request_sha256);
+    image.extend_from_slice(&receipt.diplomacy_read.value.to_le_bytes());
+    image.push(match receipt.diplomacy_step_evidence {
+        GoldenDetachedChildEvidence::SourceExactDetached => 1,
+    });
+    image.extend_from_slice(&receipt.diplomacy_step.composition_digest);
+    match &receipt.diplomacy_step.open {
+        crate::setup_2024_frame0_get_team_terr::Frame0PlanStrategyDiplomacyStepOpen::ReverseRead(
+            request,
+        ) => {
+            image.push(1);
+            image.extend_from_slice(&request.request_sha256);
+        }
+        crate::setup_2024_frame0_get_team_terr::Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(
+            request,
+        ) => {
+            image.push(2);
+            image.extend_from_slice(&request.request_sha256);
+        }
+    }
+    image.push(u8::from(receipt.diplomacy_step.owner0_strategy_complete));
+    match &receipt.diplomacy_drain {
+        GoldenFrame0DiplomacyDrain::ReverseReadCapture(authority) => {
+            image.push(1);
+            image.extend_from_slice(&authority.composition_digest);
+            image.extend_from_slice(&authority.request_sha256);
+            image.extend_from_slice(&authority.value.to_le_bytes());
+        }
+        GoldenFrame0DiplomacyDrain::OpponentTeamTerrSourceExact(opponent) => {
+            image.push(2);
+            image.extend_from_slice(&opponent.composition_digest);
+            image.extend_from_slice(&opponent.request.request_sha256);
+            image.extend_from_slice(&opponent.result.to_le_bytes());
+            image.extend_from_slice(&opponent.return_va.to_le_bytes());
+        }
+    }
+    match &receipt.diplomacy_residual {
+        GoldenFrame0DiplomacyResidual::AfterReverseRead {
+            value,
+            reverse_relation_is_ally,
+            repeated_child_call_va_if_not_ally,
+            repeated_child_authority_issued,
+            owner0_strategy_complete,
+        } => {
+            image.push(1);
+            image.extend_from_slice(&value.to_le_bytes());
+            image.push(u8::from(*reverse_relation_is_ally));
+            image.extend_from_slice(&repeated_child_call_va_if_not_ally.to_le_bytes());
+            image.extend_from_slice(&[
+                u8::from(*repeated_child_authority_issued),
+                u8::from(*owner0_strategy_complete),
+            ]);
+        }
+        GoldenFrame0DiplomacyResidual::AfterOpponentTeamTerrReturn {
+            result,
+            return_va,
+            post_return_store_authority_issued,
+            owner0_strategy_complete,
+        } => {
+            image.push(2);
+            image.extend_from_slice(&result.to_le_bytes());
+            image.extend_from_slice(&return_va.to_le_bytes());
+            image.extend_from_slice(&[
+                u8::from(*post_return_store_authority_issued),
+                u8::from(*owner0_strategy_complete),
+            ]);
+        }
+    }
+    image.push(u8::from(receipt.global_market_frontier_retained));
+    image.extend_from_slice(&[
+        u8::from(receipt.reachability.owner0_strategy_complete),
+        u8::from(receipt.reachability.owner1_strategy_started),
+        u8::from(receipt.reachability.owner1_strategy_complete),
+        u8::from(receipt.reachability.scout_reachable),
+        u8::from(receipt.reachability.merchants_reachable),
+    ]);
+    sha256(&image)
+}
+
+fn resolve_strategy_team_territory_child(
+    strategy: &GoldenFrame0StrategySpineReceipt,
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
+) -> Result<Frame0GetTeamTerrReceipt, GoldenChronologySpineError> {
+    if authority.revision != strategy.entry_authority.revision
+        || authority.composition_digest == [0; 32]
+        || authority.composition_digest
+            != frame0_get_team_terr_call_entry_authority_digest(authority)
+        || authority.plan_strategy_entry_authority_digest
+            != strategy.entry_authority.composition_digest
+        || authority.call_entry_sim_sha256 != strategy.entry_authority.capture.call_entry_sim_sha256
+        || authority.expected_request_sha256 != strategy.local_prefix.open.request_sha256
+        || authority.local_prefix_digest != strategy.local_prefix.local_prefix_digest
+        || !authority.local_prefix_preserved_input_projection
+        || authority.replay_file_sha256 != strategy.entry_authority.capture.replay_file_sha256
+        || authority.executable_sha256 != strategy.entry_authority.capture.executable_sha256
+    {
+        return Err(GoldenChronologySpineError::InvalidTeamTerrCallEntryAuthority);
+    }
+    resolve_captured_frame0_get_team_terr(&strategy.local_prefix.open, authority)
+        .map_err(GoldenChronologySpineError::TeamTerr)
+}
+
+fn derive_frame0_diplomacy_drain(
+    strategy: &GoldenFrame0StrategySpineReceipt,
+    call_entry: &Frame0GetTeamTerrCallEntryAuthority,
+    first_child: &Frame0GetTeamTerrReceipt,
+    step: &Frame0PlanStrategyDiplomacyStepPlan,
+    reverse_read: Option<&Frame0PlanStrategyReverseDiplomacyReadAuthority>,
+) -> Result<(GoldenFrame0DiplomacyDrain, GoldenFrame0DiplomacyResidual), GoldenChronologySpineError>
+{
+    match &step.open {
+        Frame0PlanStrategyDiplomacyStepOpen::ReverseRead(request) => {
+            let authority =
+                reverse_read.ok_or(GoldenChronologySpineError::InvalidDiplomacyDrain)?;
+            if authority.revision != step.revision
+                || authority.composition_digest == [0; 32]
+                || authority.source != step.first_read.source
+                || authority.replay_file_sha256 != call_entry.replay_file_sha256
+                || authority.executable_sha256 != call_entry.executable_sha256
+                || authority.call_entry_authority_digest != call_entry.composition_digest
+                || authority.diplomacy_step_digest != step.composition_digest
+                || authority.request_sha256 != request.request_sha256
+                || authority.call_entry_sim_sha256 != request.call_entry_sim_sha256
+                || authority.receiver_leader_slot != request.receiver_leader_slot
+                || authority.receiver_who != request.receiver_who
+                || authority.candidate_leader_slot != request.candidate_leader_slot
+                || authority.candidate_who != request.candidate_who
+                || authority.target_who_index != request.target_who_index
+                || authority.read_va != request.read_va
+                || authority.composition_digest
+                    != frame0_plan_strategy_reverse_diplomacy_read_authority_digest(authority)
+            {
+                return Err(GoldenChronologySpineError::InvalidDiplomacyDrain);
+            }
+            Ok((
+                GoldenFrame0DiplomacyDrain::ReverseReadCapture(authority.clone()),
+                GoldenFrame0DiplomacyResidual::AfterReverseRead {
+                    value: authority.value,
+                    reverse_relation_is_ally: authority.value == request.ally_value,
+                    repeated_child_call_va_if_not_ally: request.get_team_terr_call_va_if_not_ally,
+                    repeated_child_authority_issued: false,
+                    owner0_strategy_complete: false,
+                },
+            ))
+        }
+        Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(_) => {
+            if reverse_read.is_some() {
+                return Err(GoldenChronologySpineError::InvalidDiplomacyDrain);
+            }
+            let opponent = resolve_frame0_plan_strategy_opponent_get_team_terr(
+                &strategy.entry_authority,
+                call_entry,
+                first_child,
+                step,
+            )?;
+            Ok((
+                GoldenFrame0DiplomacyDrain::OpponentTeamTerrSourceExact(opponent.clone()),
+                GoldenFrame0DiplomacyResidual::AfterOpponentTeamTerrReturn {
+                    result: opponent.result,
+                    return_va: opponent.return_va,
+                    post_return_store_authority_issued: false,
+                    owner0_strategy_complete: false,
+                },
+            ))
+        }
+    }
+}
+
+/// Attach the strict eight-Player/eight-Leader native plan-entry projection and evaluate only
+/// owner zero's detached `get_team_terr` child.
+///
+/// The call-entry image remains capture-only. The local strategy prefix proves its own stores do
+/// not touch this projection. After the child returns, the three team-territory stores and the
+/// receiver-self skip are source-exact. One capture-bound directional diplomacy value selects the
+/// exact reverse-read/repeated-child branch; the corresponding exact authority/receipt is retained.
+/// It still cannot complete owner zero's native `plan_strategy`, begin owner one, or make any Unit
+/// actor reachable.
+pub fn compose_golden_frame0_team_terr_spine(
+    parent: &GoldenChronologySpineReceipt,
+    setup: &Frame379SetupReceipt,
+    strategy: &GoldenFrame0StrategySpineReceipt,
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
+    diplomacy_read: &Frame0PlanStrategyDiplomacyReadAuthority,
+    reverse_read: Option<&Frame0PlanStrategyReverseDiplomacyReadAuthority>,
+) -> Result<GoldenFrame0TeamTerrSpineReceipt, GoldenChronologySpineError> {
+    validate_golden_frame0_strategy_spine(parent, setup, strategy)?;
+    let child = resolve_strategy_team_territory_child(strategy, authority)?;
+    let continuation =
+        plan_frame0_owner0_after_get_team_terr(&strategy.entry_authority, authority, &child)?;
+    let diplomacy_step =
+        advance_frame0_plan_strategy_first_diplomacy_read(&continuation, diplomacy_read)?;
+    let (diplomacy_drain, diplomacy_residual) =
+        derive_frame0_diplomacy_drain(strategy, authority, &child, &diplomacy_step, reverse_read)?;
+    let mut receipt = GoldenFrame0TeamTerrSpineReceipt {
+        revision: authority.revision,
+        composition_digest: [0; 32],
+        schema_version: GOLDEN_FRAME0_TEAM_TERR_SPINE_SCHEMA_VERSION,
+        parent_strategy_spine_digest: strategy.composition_digest,
+        call_entry_evidence: GoldenOracleEvidence::CaptureOnly,
+        call_entry_authority: authority.clone(),
+        child_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+        child,
+        continuation_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+        continuation,
+        diplomacy_read_evidence: GoldenOracleEvidence::CaptureOnly,
+        diplomacy_read: diplomacy_read.clone(),
+        diplomacy_step_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+        diplomacy_step,
+        diplomacy_drain,
+        diplomacy_residual,
+        global_market_frontier_retained: true,
+        reachability: GoldenFrame0StrategyReachability::default(),
+    };
+    receipt.composition_digest = golden_frame0_team_terr_spine_digest(&receipt);
+    Ok(receipt)
+}
+
+pub fn validate_golden_frame0_team_terr_spine(
+    parent: &GoldenChronologySpineReceipt,
+    setup: &Frame379SetupReceipt,
+    strategy: &GoldenFrame0StrategySpineReceipt,
+    receipt: &GoldenFrame0TeamTerrSpineReceipt,
+) -> Result<(), GoldenChronologySpineError> {
+    validate_golden_frame0_strategy_spine(parent, setup, strategy)?;
+    if receipt.revision == 0
+        || receipt.composition_digest == [0; 32]
+        || receipt.schema_version != GOLDEN_FRAME0_TEAM_TERR_SPINE_SCHEMA_VERSION
+        || receipt.parent_strategy_spine_digest != strategy.composition_digest
+        || receipt.call_entry_evidence != GoldenOracleEvidence::CaptureOnly
+        || receipt.child_evidence != GoldenDetachedChildEvidence::SourceExactDetached
+        || receipt.continuation_evidence != GoldenDetachedChildEvidence::SourceExactDetached
+        || receipt.diplomacy_read_evidence != GoldenOracleEvidence::CaptureOnly
+        || receipt.diplomacy_step_evidence != GoldenDetachedChildEvidence::SourceExactDetached
+        || !receipt.global_market_frontier_retained
+    {
+        return Err(GoldenChronologySpineError::InvalidDetachedTeamTerrChild);
+    }
+    if receipt.reachability != GoldenFrame0StrategyReachability::default() {
+        return Err(GoldenChronologySpineError::StrategyReachabilityOverclaim);
+    }
+    let expected = resolve_strategy_team_territory_child(strategy, &receipt.call_entry_authority)?;
+    let expected_continuation = plan_frame0_owner0_after_get_team_terr(
+        &strategy.entry_authority,
+        &receipt.call_entry_authority,
+        &expected,
+    )?;
+    let expected_diplomacy_step = advance_frame0_plan_strategy_first_diplomacy_read(
+        &expected_continuation,
+        &receipt.diplomacy_read,
+    )?;
+    let reverse_read = match &receipt.diplomacy_drain {
+        GoldenFrame0DiplomacyDrain::ReverseReadCapture(authority) => Some(authority),
+        GoldenFrame0DiplomacyDrain::OpponentTeamTerrSourceExact(_) => None,
+    };
+    let (expected_drain, expected_residual) = derive_frame0_diplomacy_drain(
+        strategy,
+        &receipt.call_entry_authority,
+        &expected,
+        &expected_diplomacy_step,
+        reverse_read,
+    )?;
+    if receipt.revision != receipt.call_entry_authority.revision
+        || expected != receipt.child
+        || receipt.child.composition_digest != frame0_get_team_terr_receipt_digest(&receipt.child)
+        || expected_continuation != receipt.continuation
+        || receipt.continuation.composition_digest
+            != frame0_plan_strategy_post_team_terr_digest(&receipt.continuation)
+        || receipt.continuation.owner0_strategy_complete
+        || receipt.diplomacy_read.composition_digest
+            != frame0_plan_strategy_diplomacy_read_authority_digest(&receipt.diplomacy_read)
+        || expected_diplomacy_step != receipt.diplomacy_step
+        || receipt.diplomacy_step.composition_digest
+            != frame0_plan_strategy_diplomacy_step_digest(&receipt.diplomacy_step)
+        || receipt.diplomacy_step.owner0_strategy_complete
+        || expected_drain != receipt.diplomacy_drain
+        || expected_residual != receipt.diplomacy_residual
+        || matches!(
+            &receipt.diplomacy_drain,
+            GoldenFrame0DiplomacyDrain::OpponentTeamTerrSourceExact(opponent)
+                if opponent.composition_digest
+                    != frame0_plan_strategy_opponent_get_team_terr_receipt_digest(opponent)
+                    || opponent.owner0_strategy_complete
+        )
+        || receipt.composition_digest != golden_frame0_team_terr_spine_digest(receipt)
+    {
+        return Err(GoldenChronologySpineError::InvalidDetachedTeamTerrChild);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use don_sim::systems::map_terrain::{SectionDigest, WorldChecksum, WorldSection};
 
+    use crate::setup_2024_frame0_get_team_terr::{
+        frame0_get_team_terr_game_projection_digest, frame0_get_team_terr_leader_projection_digest,
+        Frame0GetTeamTerrCallEntrySource, Frame0GetTeamTerrGameProjection,
+        Frame0GetTeamTerrGameSource, Frame0GetTeamTerrLeaderProjection, Frame0GetTeamTerrLeaderRow,
+        Frame0GetTeamTerrLeaderSource, Frame0GetTeamTerrPlayerRow,
+        Frame0PlanStrategyDiplomacyReadSource, Frame0PlanStrategyTeamTerritoryPreimage,
+    };
     use crate::setup_2024_frame0_plan_strategy::{
         Frame0PlanStrategyCityImage, Frame0PlanStrategyEntryCapture, Frame0PlanStrategyEntrySource,
         Frame0PlanStrategyLeaderImage, GOLDEN_CENTER_BUILD_O, GOLDEN_CENTER_CITY_SLOT,
@@ -1183,6 +2654,128 @@ mod tests {
             GoldenFrame0StrategyReachability::default()
         );
         assert!(receipt.global_market_frontier_retained);
+
+        let strategy = receipt.clone();
+        let mut game = Frame0GetTeamTerrGameProjection {
+            revision: strategy.revision,
+            composition_digest: [0; 32],
+            source: Frame0GetTeamTerrGameSource::SourceBackedGameInfoPlayerTeamProjection,
+            frame: GOLDEN_FRAME,
+            team_style: 0,
+            players: std::array::from_fn(|slot| Frame0GetTeamTerrPlayerRow {
+                flags: 1,
+                who: slot as u8,
+                team: if slot < 2 { 0 } else { 1 },
+            }),
+        };
+        game.composition_digest = frame0_get_team_terr_game_projection_digest(&game);
+        let mut leader = Frame0GetTeamTerrLeaderProjection {
+            revision: strategy.revision,
+            composition_digest: [0; 32],
+            source: Frame0GetTeamTerrLeaderSource::CompleteRetailGetTeamTerrCallEntry,
+            call_entry_sim_sha256: strategy.entry_authority.capture.call_entry_sim_sha256,
+            leaders: std::array::from_fn(|slot| Frame0GetTeamTerrLeaderRow {
+                leader_flags: if slot == 0 { 0x7 } else { 0x3 },
+                who: slot as i32,
+                territory: slot as i32 + 1,
+            }),
+        };
+        leader.composition_digest = frame0_get_team_terr_leader_projection_digest(&leader);
+        let mut call_entry = Frame0GetTeamTerrCallEntryAuthority {
+            revision: strategy.revision,
+            composition_digest: [0; 32],
+            source: Frame0GetTeamTerrCallEntrySource::CompleteRetailOwnerZeroPlanStrategyEntry,
+            native_trace_sha256: strategy.entry_authority.capture.native_trace_sha256,
+            replay_file_sha256: REPLAY_FILE_SHA256,
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            plan_strategy_entry_authority_digest: strategy.entry_authority.composition_digest,
+            call_entry_sim_sha256: strategy.entry_authority.capture.call_entry_sim_sha256,
+            expected_request_sha256: strategy.local_prefix.open.request_sha256,
+            local_prefix_digest: strategy.local_prefix.local_prefix_digest,
+            local_prefix_preserved_input_projection: true,
+            frame: GOLDEN_FRAME,
+            step: GOLDEN_STEP,
+            owner: GOLDEN_FIRST_STRATEGY_OWNER,
+            strategy_ordinal: GOLDEN_FIRST_STRATEGY_ORDINAL,
+            team_territory_preimage: Frame0PlanStrategyTeamTerritoryPreimage {
+                other_team_terr: 91,
+                min_other_team_terr: 92,
+                my_team_terr: 93,
+            },
+            game,
+            leader,
+        };
+        call_entry.composition_digest =
+            frame0_get_team_terr_call_entry_authority_digest(&call_entry);
+        let child = resolve_strategy_team_territory_child(&strategy, &call_entry).unwrap();
+        assert_eq!(child.result, 3);
+        let continuation =
+            plan_frame0_owner0_after_get_team_terr(&strategy.entry_authority, &call_entry, &child)
+                .unwrap();
+        assert_eq!(continuation.after_local.my_team_terr, 3);
+        assert_eq!(continuation.open.read_va, 0x006b_9910);
+        assert!(!continuation.owner0_strategy_complete);
+        let mut diplomacy_read = Frame0PlanStrategyDiplomacyReadAuthority {
+            revision: call_entry.revision,
+            composition_digest: [0; 32],
+            source: Frame0PlanStrategyDiplomacyReadSource::CompleteRetailPlanStrategyCallEntry,
+            replay_file_sha256: REPLAY_FILE_SHA256,
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            call_entry_authority_digest: call_entry.composition_digest,
+            staged_plan_digest: continuation.composition_digest,
+            request_sha256: continuation.open.request_sha256,
+            call_entry_sim_sha256: call_entry.call_entry_sim_sha256,
+            candidate_leader_slot: continuation.open.candidate_leader_slot,
+            candidate_who: continuation.open.candidate_who,
+            target_who_index: continuation.open.target_who_index,
+            read_va: continuation.open.read_va,
+            value: 0,
+        };
+        diplomacy_read.composition_digest =
+            frame0_plan_strategy_diplomacy_read_authority_digest(&diplomacy_read);
+        let diplomacy_step =
+            advance_frame0_plan_strategy_first_diplomacy_read(&continuation, &diplomacy_read)
+                .unwrap();
+        assert!(matches!(
+            &diplomacy_step.open,
+            Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(_)
+        ));
+        assert!(!diplomacy_step.owner0_strategy_complete);
+        let (diplomacy_drain, diplomacy_residual) =
+            derive_frame0_diplomacy_drain(&strategy, &call_entry, &child, &diplomacy_step, None)
+                .unwrap();
+        assert!(matches!(
+            &diplomacy_drain,
+            GoldenFrame0DiplomacyDrain::OpponentTeamTerrSourceExact(_)
+        ));
+
+        let mut team_terr = GoldenFrame0TeamTerrSpineReceipt {
+            revision: call_entry.revision,
+            composition_digest: [0; 32],
+            schema_version: GOLDEN_FRAME0_TEAM_TERR_SPINE_SCHEMA_VERSION,
+            parent_strategy_spine_digest: strategy.composition_digest,
+            call_entry_evidence: GoldenOracleEvidence::CaptureOnly,
+            call_entry_authority: call_entry,
+            child_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+            child,
+            continuation_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+            continuation,
+            diplomacy_read_evidence: GoldenOracleEvidence::CaptureOnly,
+            diplomacy_read,
+            diplomacy_step_evidence: GoldenDetachedChildEvidence::SourceExactDetached,
+            diplomacy_step,
+            diplomacy_drain,
+            diplomacy_residual,
+            global_market_frontier_retained: true,
+            reachability: GoldenFrame0StrategyReachability::default(),
+        };
+        team_terr.composition_digest = golden_frame0_team_terr_spine_digest(&team_terr);
+        let team_digest = team_terr.composition_digest;
+        team_terr.reachability.owner0_strategy_complete = true;
+        assert_ne!(
+            team_digest,
+            golden_frame0_team_terr_spine_digest(&team_terr)
+        );
 
         let digest = receipt.composition_digest;
         receipt.reachability.scout_reachable = true;

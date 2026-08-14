@@ -16,12 +16,19 @@ image was captured and how manifests link; it does not prove that Don executed t
 The source-derived Market placement prefix now consumes the typed `WorldData::get_tregion`
 receipt and executes the exact dry/self-owned territory, Town, City Market-count-zero, and
 water-count-zero reads. It then executes the exact type and World-bounds prefix of
-`BuildTypeData::find_friends`. The spine retains and digests both complete receipts and derives its
-first missing child from `find_friends.first_child`. On the current receipt this is `0x00639335 ->
-ObjectsData::find_building_placed_at 0x00658C80`. The opaque native-trace SHA-256 remains evidence
-identity only. It cannot close that child or authorize a friend result, candidate scoring, fine
-RNG, allocation, activation, or any downstream Unit, frame-zero, frame-one, frame-2, or frame-379
-execution.
+`BuildTypeData::find_friends`, then executes its first
+`ObjectsData::find_building_placed_at` child. The spine retains and digests the full lookup receipt:
+the complete World checksum, terrain and spatial-chain reads, object/type/footprint reads, and the
+before/after `ObjectsData+0x200` scratch authority. It now also retains and digests the complete
+multi-hit clockwise ring return: every out-of-bounds row, lookup receipt, City mismatch, lazy
+gather/University/enhancer/basic-type/military/captured/Wonder predicate outcome, accumulator
+transition, and scratch journal remains in program order through offset eight.
+
+The honest global residual is now the Market caller's coarse score, parameterized by the exact
+`find_friends` return. The later conditional WData-flags/Object search is named as still unowned;
+neither it nor the coarse score is executed. The opaque native-trace SHA-256 remains evidence
+identity only. It cannot authorize fine RNG, allocation, activation, or any downstream Unit,
+frame-zero, frame-one, frame-2, or frame-379 execution.
 
 When the Market placement owner gains another decoded continuation, the receipt can move its open
 child and the spine will derive the new earliest boundary. The spine deliberately does not
@@ -36,12 +43,39 @@ image remains `CaptureOnly`: its nonzero preceding-chronology and native-trace d
 evidence but do not prove that the Market or seven Unit receivers executed.
 
 On that captured entry, the decoded prefix derives the exact escrow, active-City scratch, and 26
-Leader planning-counter stores without mutating a Sim. Its typed local residual is
-`LeaderData::get_team_terr` at `0x006B98D0 -> 0x006D62E0`. This is the deepest local strategy
-frontier, not the globally earliest replay gap; the parent's Market
-`find_building_placed_at` residual is retained.
+Leader planning-counter stores without mutating a Sim. Its first typed local child is
+`LeaderData::get_team_terr` at `0x006B98D0 -> 0x006D62E0`; the strict join below now resolves that
+child and advances farther. This detached strategy cone is not the globally earliest replay gap;
+the parent's Market caller coarse-score residual is retained.
 
 The extension records all of the following as false and refuses any receipt that changes them:
 owner-zero strategy completion, owner-one strategy start/completion, Scout reachability, and
 Merchant reachability. Those actors cannot become chronological claims until both owner-zero and
 owner-one strategy calls have completed through their exact children.
+
+### Strict team-territory input join
+
+`compose_golden_frame0_team_terr_spine` consumes the unified native plan-entry authority rather
+than a Game/Player projection retained from setup. Its binder has hashed one independent whole
+Sim at owner zero's frame-zero step-11 `Leader::plan_strategy` entry and extracted, from that same
+image, `GameInfo` frame/team style, all eight Player flags/who/team rows, and all eight current
+Leader flags/who/territory rows. The authority is ancestry-bound to the strategy entry and exact
+`get_team_terr` request.
+
+The decoded local prefix writes only escrow, City scratch, and planning scratch, so its receipt
+proves that this complete projection remains unchanged when the detached `get_team_terr` child is
+evaluated. After that source-exact child returns, the spine stages the exact writes to
+`my_team_terr`, `other_team_terr`, and `min_other_team_terr`, then proves the receiver-self row is
+skipped. A field authority bound to the same hashed call-entry Sim then supplies the first
+candidate-toward-receiver diplomacy read at `0x006B9910`. The exact comparison branches to either
+the reverse-direction read at `0x006B9925` or the repeated opponent `get_team_terr` child at
+`0x006B992E`. The spine now consumes the exact branch-specific owner: a capture-bound reverse
+relation value, or a detached repeated-child receipt returning at `0x006B9933`. After the reverse
+read, a non-ally repeated child (or the later ally loop continuation) remains open; after the
+repeated child, the max/min opponent-territory stores remain open. No Leader write is published.
+
+The child, staged continuation, live-read authorities, branch plan, and repeated-child receipt are
+self-digested, but the call-entry image and projected diplomacy fields remain `CaptureOnly`: no
+parent Sim is mutated, owner zero is not complete, owner one has not started, and Scout/Merchant
+reachability remains false. The earlier global Market caller coarse-score residual is retained
+independently.
