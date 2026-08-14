@@ -4563,6 +4563,9 @@ mod tests {
     fn ordinary_do_frame_executes_the_installed_live_production_phase() {
         let research_type = 602;
         let (mut sim, mut runtime, row) = harness(&[research_type]);
+        // This fixture owns production facts, not frame-zero's territory-child host. Use a
+        // frame where the canonical Build-band Wall prefix returns before `do_queue`.
+        sim.world.frame = 1;
         runtime.install_type(LiveProductionType::research(research_type, 1));
         sim.production_runtime = runtime;
 

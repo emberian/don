@@ -141,10 +141,11 @@ pub enum Gap {
     WallIncTime,
     DeathObjIncTime,
     FarmsIncTime,
+    BuildProcess,
 }
 
 impl Gap {
-    pub const COUNT: usize = Gap::FarmsIncTime as usize + 1;
+    pub const COUNT: usize = Gap::BuildProcess as usize + 1;
     #[inline]
     pub fn index(self) -> usize {
         self as usize
@@ -182,6 +183,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 15 Wall::inc_time 0x0063FB60 - the building band 2000..build_mark is walked, but the 2,273-byte body is unported; its simulation payload is Wall::update_hits 0x0063F0D0 on the !is_active arm plus GraphicEvents::execute_game_events",
     "step 15 DeathObj::inc_time 0x008D5240 - the exact body is systems::death_inctime, still unadmitted: no authoritative gpiece/type pack, no clear_blocking terrain adapter, no Scene::recalc_deaths field",
     "step 15 Farms::inc_time 0x008D8600 - the tail call is unconditional but its body is empty when Farms::num is 0 and its two game_random sites are per-farm and conditional; this Sim has no Farms array to establish either",
+    "step 14 Build::process 0x0061EDF0 - canonical BuildData executes the ordered Wall::process prefix; reached Wall children stop, while the unowned Build middle is charged before the bounded construction/queue adapter",
 ];
 
 // =======================================================================================
@@ -2754,6 +2756,7 @@ impl Sim {
         let row = self.builds.len();
         bd.who = who as u8;
         let o = self.world.objects.insert(who, Band::Build, row as u32);
+        bd.set_object_id(o as i16);
         self.builds.push(bd);
         self.world
             .mirror_dense_non_unit_append(who, Band::Build, row as u32, o)
@@ -5676,12 +5679,47 @@ impl Sim {
         }
     }
 
-    /// `Build::process` `0x0061EDF0`, the deterministic head we have: the `Wall::process`
-    /// helper latch plus the under-construction hit-point recompute.
-    fn build_process(&mut self, row: usize, _frame: i32) {
+    /// `Build::process` `0x0061EDF0` -> `Wall::process` `0x00640450`.
+    ///
+    /// The Build row is the canonical owner of its Wall base. Execute only the exact local
+    /// prefix, publish its ordered writes, then charge the first unowned child (or the
+    /// remaining Build body after a successful Wall return). No state from the structurally
+    /// empty Wall band is copied into the Build.
+    fn build_process(&mut self, row: usize, frame: i32) {
+        let boundary = {
+            let bd = &mut self.builds[row];
+            let mut state = walls::BuildWallPrefixState {
+                targeted: bd.targeted(),
+                build_masks: bd.build_masks,
+                helpers: bd.helpers,
+            };
+            let receipt = walls::process_build_wall_prefix(
+                &mut state,
+                frame,
+                bd.who,
+                bd.object_id(),
+                bd.is_active(),
+            );
+            bd.set_targeted(state.targeted);
+            bd.build_masks = state.build_masks;
+            bd.helpers = state.helpers;
+            receipt.boundary
+        };
+
+        self.cover.build_process += 1;
+        self.cover.gaps[Gap::BuildProcess.index()] += 1;
+
+        if boundary != walls::BuildWallPrefixBoundary::Complete {
+            return;
+        }
+
+        // The base call returned, but the mounted Sim does not yet carry all source-bound
+        // Build type/Leader/object children needed to reach `do_queue` in retail order.
+        // `Gap::BuildProcess` keeps that omission explicit. Preserve the existing bounded
+        // construction/queue adapter only on this no-Wall-child path; a reached Wall child
+        // returned above before any of these later writes.
         {
             let bd = &mut self.builds[row];
-            bd.begin_frame_construction();
             let ct = production::construct_time(
                 bd.constr_time,
                 false,
@@ -5694,7 +5732,6 @@ impl Sim {
         let mut runtime = std::mem::take(&mut self.production_runtime);
         let _production = production::runtime::process_sim_build_queue(self, &mut runtime, row);
         self.production_runtime = runtime;
-        self.cover.build_process += 1;
     }
 
     /// `Wall::process` `0x00640450` — the whole deterministic bookkeeping half, phased on
@@ -7327,6 +7364,9 @@ mod tests {
     #[test]
     fn step14_research_completion_reaches_tech_race_and_cleans_before_return() {
         let mut sim = Sim::new(14, 8);
+        // The production integration fixture has no territory-child authority. Frame one
+        // reaches a complete Wall prefix before the bounded queue cohort.
+        sim.world.frame = 1;
         sim.activate(0);
         sim.activate(1);
         sim.vic_match.options.victory = victory_score::Victory::TechRace as u8;
@@ -7600,6 +7640,117 @@ mod tests {
 
         assert_ne!(sim.step12_visibility_authority_digest(), authority_before);
         assert_eq!(sim.channel_digest(), channel_before);
+    }
+
+    fn build_with_object_id(object_id: i16) -> production::BuildData {
+        let mut build = production::BuildData {
+            flags: production::flag::VALID | production::flag::ACTIVE,
+            ..Default::default()
+        };
+        build.other
+            [production::off::OBJECT_ID..production::off::OBJECT_ID + std::mem::size_of::<i16>()]
+            .copy_from_slice(&object_id.to_le_bytes());
+        build
+    }
+
+    #[test]
+    fn build_process_mounts_periodic_wall_prefix_and_charges_the_ordering_boundary() {
+        let mut sim = Sim::new(29, 8);
+        let mut village = build_with_object_id(2000);
+        village.who = 0;
+        village.set_targeted(-7);
+        village.helpers = 3;
+        village.build_masks =
+            production::mask::WORKED_LAST_FRAME | production::mask::HELPER_COUNTED | 0x0010;
+        village.construct_hits = 777;
+        sim.builds.push(village);
+
+        sim.build_process(0, 16);
+
+        assert_eq!(sim.builds[0].targeted(), -1);
+        assert_eq!(sim.builds[0].helpers, 3);
+        assert_ne!(sim.builds[0].build_masks & 0x0010, 0);
+        assert_ne!(
+            sim.builds[0].build_masks & production::mask::HELPER_COUNTED,
+            0
+        );
+        assert_eq!(sim.builds[0].construct_hits, 777);
+        assert_eq!(sim.cover.build_process, 1);
+        assert_eq!(sim.cover.gaps[Gap::BuildProcess.index()], 1);
+    }
+
+    #[test]
+    fn build_process_market_slow_slot_publishes_local_writes_before_territory_gap() {
+        let mut sim = Sim::new(31, 8);
+        let mut market = build_with_object_id(2001);
+        market.who = 0;
+        market.helpers = 2;
+        market.build_masks = 0x0010 | 0x0020 | production::mask::HELPER_COUNTED;
+        sim.builds.push(market);
+
+        sim.build_process(0, 15);
+
+        assert_eq!(sim.builds[0].helpers, 0);
+        assert_eq!(sim.builds[0].build_masks & 0x0010, 0);
+        assert_ne!(sim.builds[0].build_masks & 0x0020, 0);
+        assert_ne!(
+            sim.builds[0].build_masks & production::mask::WORKED_LAST_FRAME,
+            0
+        );
+        assert_eq!(
+            sim.builds[0].build_masks & production::mask::HELPER_COUNTED,
+            0
+        );
+        assert_eq!(sim.cover.gaps[Gap::BuildProcess.index()], 1);
+    }
+
+    #[test]
+    fn frame_zero_territory_child_refuses_the_former_queue_approximation() {
+        let research_type = 602;
+        let producer_type = 414;
+        let mut sim = Sim::new(37, 8);
+        let row = sim.spawn_build(
+            0,
+            production::BuildData {
+                flags: production::flag::VALID | production::flag::ACTIVE,
+                myhits: 1_000,
+                construct_hits: 777,
+                helpers: 2,
+                queue: production::BuildQueue {
+                    queued: 1,
+                    entries: vec![production::BuildQueueEntry {
+                        elapsed: 1,
+                        type_index: research_type as i16,
+                        res: [-1; 3],
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        );
+        assert_eq!(sim.builds[row].object_id(), 2000);
+        sim.production_runtime.register_build(row, producer_type);
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::in_place_building(producer_type, 1),
+        );
+        sim.production_runtime
+            .install_type(production::runtime::LiveProductionType::research(
+                research_type,
+                1,
+            ));
+
+        // Village o2000 is territory-due at frame zero. The helper latch is earlier and
+        // therefore commits, but no later construct/queue write may cross the child.
+        sim.build_process(row, 0);
+
+        assert_eq!(sim.builds[row].helpers, 0);
+        assert_eq!(sim.builds[row].construct_hits, 777);
+        assert_eq!(sim.builds[row].queue.queued, 1);
+        assert!(!sim.production_runtime.leaders[0]
+            .tech
+            .tech
+            .get(research_type));
+        assert_eq!(sim.cover.gaps[Gap::BuildProcess.index()], 1);
     }
 
     /// Every `Gap` has a note, and every note names its step.

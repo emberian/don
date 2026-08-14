@@ -872,6 +872,135 @@ pub struct ProcessEffects {
     pub territory_slot_16: bool,
 }
 
+/// The checksummed `WallData` scalars that the Build-band `Wall::process` prefix owns.
+///
+/// A [`BuildData`](crate::systems::production::BuildData) carries these exact fields, but
+/// keeping this small value separate prevents the empty retail Wall band from becoming a
+/// second, divergent owner for a building's base-class state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildWallPrefixState {
+    /// `ObjectData::targeted` at `+0x3D`.
+    pub targeted: i8,
+    /// `WallData::build_masks` at `+0x60`.
+    pub build_masks: u16,
+    /// `WallData::helpers` at `+0x64`.
+    pub helpers: u8,
+}
+
+/// The first source-dependent child reached by the Build-band `Wall::process` prefix.
+///
+/// `Complete` means the base-class call returned and `Build::process` itself is next. The
+/// other variants are hard ordering boundaries: callers must not publish later helper or
+/// Build writes until that child has an authoritative host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildWallPrefixBoundary {
+    /// `Wall::check_ever_seen(0)` at the owner-phased eight-frame gate.
+    CheckEverSeenPeriodic,
+    /// The inactive-only helper-demand/oil-platform cone in the 32-frame slot.
+    InactiveSlowSlot,
+    /// The 16-frame unfriendly-territory cone.
+    TerritorySlot,
+    /// `Wall::process` returned without reaching an unresolved child.
+    Complete,
+}
+
+/// Auditable result of the canonical Build-band `Wall::process` prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildWallPrefixReceipt {
+    pub frame: i32,
+    pub who: u8,
+    pub o: i16,
+    pub phase: i32,
+    /// Cadence facts are reported even when an earlier child prevents reaching them.
+    pub periodic_due: bool,
+    pub slow_slot_32_due: bool,
+    pub territory_slot_16_due: bool,
+    pub active: bool,
+    pub before: BuildWallPrefixState,
+    pub after: BuildWallPrefixState,
+    pub boundary: BuildWallPrefixBoundary,
+}
+
+/// Execute the maximal locally owned prefix of `Wall::process` for one canonical Build.
+///
+/// This differs deliberately from [`WallState::process`], whose detached `ProcessEffects`
+/// API models every local bookkeeping write at once. Retail interleaves source-dependent
+/// children between those writes. This function preserves that order and stops at the first
+/// child, so a periodic visibility refresh cannot be silently stepped over to clear helpers,
+/// and an inactive slow-slot child cannot be stepped over to the territory cone.
+pub fn process_build_wall_prefix(
+    state: &mut BuildWallPrefixState,
+    frame: i32,
+    who: u8,
+    o: i16,
+    active: bool,
+) -> BuildWallPrefixReceipt {
+    let before = *state;
+    let phase = frame.wrapping_add(i32::from(o));
+    let periodic_due = frame != 0 && ((frame as u32 & 7) as u8) == who;
+    let slow_slot_32_due = phase.rem_euclid(32) == 0;
+    let territory_slot_16_due = phase.rem_euclid(16) == 0;
+
+    let boundary = if periodic_due {
+        state.targeted = div4_toward_zero(state.targeted);
+        BuildWallPrefixBoundary::CheckEverSeenPeriodic
+    } else {
+        if slow_slot_32_due {
+            if state.build_masks & MASK_SEEN_A as u16 != 0 {
+                state.build_masks &= !(MASK_SEEN_A as u16);
+            } else {
+                state.build_masks &= !(MASK_SEEN_B as u16);
+            }
+            // The exact Build vtable resolves `is_active` to `flags & 4`. Active Village
+            // and Market objects jump directly to the helper latch; only inactive objects
+            // enter the source-dependent helper-demand/oil cone.
+            if !active {
+                return BuildWallPrefixReceipt {
+                    frame,
+                    who,
+                    o,
+                    phase,
+                    periodic_due,
+                    slow_slot_32_due,
+                    territory_slot_16_due,
+                    active,
+                    before,
+                    after: *state,
+                    boundary: BuildWallPrefixBoundary::InactiveSlowSlot,
+                };
+            }
+        }
+
+        if state.helpers == 0 {
+            state.build_masks &= !(MASK_HAD_HELPERS as u16);
+        } else {
+            state.helpers = 0;
+            state.build_masks |= MASK_HAD_HELPERS as u16;
+        }
+        state.build_masks &= !(MASK_WORKED_THIS_FRAME as u16);
+
+        if territory_slot_16_due {
+            BuildWallPrefixBoundary::TerritorySlot
+        } else {
+            BuildWallPrefixBoundary::Complete
+        }
+    };
+
+    BuildWallPrefixReceipt {
+        frame,
+        who,
+        o,
+        phase,
+        periodic_due,
+        slow_slot_32_due,
+        territory_slot_16_due,
+        active,
+        before,
+        after: *state,
+        boundary,
+    }
+}
+
 impl WallState {
     /// `Wall::process` `0x00640450` \[measured\], the deterministic bookkeeping half.
     ///
@@ -1515,6 +1644,93 @@ mod tests {
             .filter(|f| w.clone().process(*f).territory_slot_16)
             .collect();
         assert_eq!(hits, vec![0, 16, 32]);
+    }
+
+    #[test]
+    fn build_prefix_periodic_child_stops_before_same_frame_slow_and_helper_writes() {
+        let mut state = BuildWallPrefixState {
+            targeted: -7,
+            build_masks: MASK_SEEN_A as u16 | MASK_SEEN_B as u16 | MASK_WORKED_THIS_FRAME as u16,
+            helpers: 3,
+        };
+
+        // Village o2000: frame 16 is simultaneously owner0-periodic, slow32 and territory16.
+        let receipt = process_build_wall_prefix(&mut state, 16, 0, 2000, true);
+
+        assert!(receipt.periodic_due);
+        assert!(receipt.slow_slot_32_due);
+        assert!(receipt.territory_slot_16_due);
+        assert_eq!(
+            receipt.boundary,
+            BuildWallPrefixBoundary::CheckEverSeenPeriodic
+        );
+        assert_eq!(state.targeted, -1);
+        assert_eq!(
+            state.helpers, 3,
+            "helper reset is after the unresolved child"
+        );
+        assert_eq!(
+            state.build_masks, receipt.before.build_masks,
+            "slow toggle and helper masks are after the unresolved child"
+        );
+    }
+
+    #[test]
+    fn active_market_slow_slot_reaches_helper_latch_then_territory_boundary() {
+        let mut state = BuildWallPrefixState {
+            targeted: 64,
+            build_masks: MASK_SEEN_A as u16 | MASK_SEEN_B as u16 | MASK_WORKED_THIS_FRAME as u16,
+            helpers: 2,
+        };
+
+        // Dutch Market o2001: frame 15 is phase 2016, divisible by both 32 and 16.
+        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, true);
+
+        assert!(!receipt.periodic_due);
+        assert!(receipt.slow_slot_32_due);
+        assert!(receipt.territory_slot_16_due);
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::TerritorySlot);
+        assert_eq!(state.targeted, 64);
+        assert_eq!(state.helpers, 0);
+        assert_eq!(state.build_masks & MASK_SEEN_A as u16, 0);
+        assert_ne!(state.build_masks & MASK_SEEN_B as u16, 0);
+        assert_ne!(state.build_masks & MASK_HAD_HELPERS as u16, 0);
+        assert_eq!(state.build_masks & MASK_WORKED_THIS_FRAME as u16, 0);
+    }
+
+    #[test]
+    fn inactive_slow_slot_stops_after_seen_toggle_before_helper_latch() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            build_masks: MASK_SEEN_A as u16 | MASK_WORKED_THIS_FRAME as u16,
+            helpers: 1,
+        };
+
+        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, false);
+
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::InactiveSlowSlot);
+        assert_eq!(state.build_masks & MASK_SEEN_A as u16, 0);
+        assert_ne!(state.build_masks & MASK_WORKED_THIS_FRAME as u16, 0);
+        assert_eq!(state.helpers, 1);
+    }
+
+    #[test]
+    fn market_territory_only_slot_applies_helper_latch_before_stopping() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            build_masks: MASK_SEEN_A as u16 | MASK_WORKED_THIS_FRAME as u16,
+            helpers: 0,
+        };
+
+        // Market o2001: frame 31 is phase 2032, divisible by 16 but not by 32.
+        let receipt = process_build_wall_prefix(&mut state, 31, 0, 2001, true);
+
+        assert!(!receipt.slow_slot_32_due);
+        assert!(receipt.territory_slot_16_due);
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::TerritorySlot);
+        assert_ne!(state.build_masks & MASK_SEEN_A as u16, 0);
+        assert_eq!(state.build_masks & MASK_WORKED_THIS_FRAME as u16, 0);
+        assert_eq!(state.build_masks & MASK_HAD_HELPERS as u16, 0);
     }
 
     #[test]

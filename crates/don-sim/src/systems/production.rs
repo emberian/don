@@ -148,6 +148,8 @@ pub mod off {
     pub const DAMAGE_FRAC: usize = 59; // 0x3B
     /// `ObjectData::mylos` — signed LOS returned by `WallData::los`.
     pub const MYLOS: usize = 60; // 0x3C
+    /// `ObjectData::targeted` — signed byte decayed by `Wall::process` every eight frames.
+    pub const TARGETED: usize = 61; // 0x3D
     /// `ObjectData::visible` — nonzero reaches virtual `Wall::update_local_seen`.
     pub const VISIBLE: usize = 64; // 0x40
 
@@ -3504,6 +3506,18 @@ impl BuildData {
         hits - self.damage
     }
 
+    /// `ObjectData::targeted` (`+0x3D`), retained in the opaque base-object window.
+    #[inline]
+    pub fn targeted(&self) -> i8 {
+        self.other[off::TARGETED] as i8
+    }
+
+    /// Store `ObjectData::targeted` (`+0x3D`) into the canonical Build image.
+    #[inline]
+    pub fn set_targeted(&mut self, targeted: i8) {
+        self.other[off::TARGETED] = targeted as u8;
+    }
+
     /// Producer identity consumed by `Unit::go_inside` in `Build::train`.
     #[inline]
     pub fn object_id(&self) -> i16 {
@@ -3512,6 +3526,12 @@ impl BuildData {
                 .try_into()
                 .expect("fixed BuildData object-id window"),
         )
+    }
+
+    /// Store the engine-visible owner-list object index into the canonical Build image.
+    #[inline]
+    pub fn set_object_id(&mut self, object_id: i16) {
+        self.other[off::OBJECT_ID..off::OBJECT_ID + 2].copy_from_slice(&object_id.to_le_bytes());
     }
 
     /// Deobfuscated producer position passed to `Objects::init_unit` by `Build::train`.
