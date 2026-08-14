@@ -295,6 +295,85 @@ pub struct Frame0PlanStrategyPostTeamTerrPlan {
     pub owner0_strategy_complete: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0PlanStrategyDiplomacyReadSource {
+    /// The exact directional relation extracted from the same canonical call-entry Sim whose
+    /// DoNSave hash produced the strict team-territory authority.
+    CompleteRetailPlanStrategyCallEntry,
+}
+
+/// Source-owned value for the first `candidate.diplos[receiver_who]` read. Only this one
+/// directional cell is projected; the reverse relation remains a later boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyDiplomacyReadAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: Frame0PlanStrategyDiplomacyReadSource,
+    pub replay_file_sha256: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub call_entry_authority_digest: [u8; 32],
+    pub staged_plan_digest: [u8; 32],
+    pub request_sha256: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub candidate_leader_slot: u8,
+    pub candidate_who: i32,
+    pub target_who_index: i32,
+    pub read_va: u32,
+    pub value: i32,
+}
+
+/// The second directional read reached only when the first relation equals retail ally `2`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyReverseDiplomacyReadRequest {
+    pub request_sha256: [u8; 32],
+    pub first_read_authority_digest: [u8; 32],
+    pub staged_plan_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_leader_slot: u8,
+    pub receiver_who: i32,
+    pub candidate_leader_slot: u8,
+    pub candidate_who: i32,
+    pub target_who_index: i32,
+    pub read_va: u32,
+    pub ally_value: i32,
+    pub get_team_terr_call_va_if_not_ally: u32,
+}
+
+/// Exact repeated child call reached when either directional relation is not ally `2`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyOpponentGetTeamTerrRequest {
+    pub request_sha256: [u8; 32],
+    pub first_read_authority_digest: [u8; 32],
+    pub staged_plan_digest: [u8; 32],
+    pub call_entry_authority_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_leader_slot: u8,
+    pub receiver_who: i32,
+    pub callsite_va: u32,
+    pub callee_va: u32,
+    pub input_surface: Frame0GetTeamTerrInputSurface,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame0PlanStrategyDiplomacyStepOpen {
+    ReverseRead(Frame0PlanStrategyReverseDiplomacyReadRequest),
+    OpponentGetTeamTerr(Frame0PlanStrategyOpponentGetTeamTerrRequest),
+}
+
+/// No Leader write occurs between `0x006B9910` and either successor. The complete staged prefix
+/// is retained byte-for-byte and still cannot be installed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyDiplomacyStepPlan {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub staged: Frame0PlanStrategyPostTeamTerrPlan,
+    pub first_read: Frame0PlanStrategyDiplomacyReadAuthority,
+    pub first_relation_is_ally: bool,
+    pub open: Frame0PlanStrategyDiplomacyStepOpen,
+    pub owner0_strategy_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Frame0GetTeamTerrCallEntryBindError {
     Parent(Frame0PlanStrategyError),
@@ -347,6 +426,44 @@ pub enum Frame0PlanStrategyPostTeamTerrError {
     InvalidFirstChildReceipt,
     NoQualifyingDiplomacyCandidate,
 }
+
+#[derive(Debug)]
+pub enum Frame0PlanStrategyDiplomacyReadBindError {
+    InvalidStagedPlan,
+    InvalidCallEntryAuthority,
+    Snapshot(SaveError),
+    CallEntrySnapshotMismatch,
+    ActorProjectionMismatch,
+    TargetIndexOutsideLeaderTable,
+}
+
+impl fmt::Display for Frame0PlanStrategyDiplomacyReadBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-zero strategy diplomacy read refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame0PlanStrategyDiplomacyReadBindError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame0PlanStrategyDiplomacyStepError {
+    InvalidStagedPlan,
+    InvalidReadAuthority,
+}
+
+impl fmt::Display for Frame0PlanStrategyDiplomacyStepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-zero strategy diplomacy step refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame0PlanStrategyDiplomacyStepError {}
 
 impl fmt::Display for Frame0PlanStrategyPostTeamTerrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1062,6 +1179,262 @@ pub fn plan_frame0_owner0_after_get_team_terr(
     Ok(plan)
 }
 
+pub fn frame0_plan_strategy_diplomacy_read_authority_digest(
+    authority: &Frame0PlanStrategyDiplomacyReadAuthority,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-diplo-read-authority-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.push(authority.source as u8);
+    image.extend_from_slice(&authority.replay_file_sha256);
+    image.extend_from_slice(&authority.executable_sha256);
+    image.extend_from_slice(&authority.call_entry_authority_digest);
+    image.extend_from_slice(&authority.staged_plan_digest);
+    image.extend_from_slice(&authority.request_sha256);
+    image.extend_from_slice(&authority.call_entry_sim_sha256);
+    image.push(authority.candidate_leader_slot);
+    image.extend_from_slice(&authority.candidate_who.to_le_bytes());
+    image.extend_from_slice(&authority.target_who_index.to_le_bytes());
+    image.extend_from_slice(&authority.read_va.to_le_bytes());
+    image.extend_from_slice(&authority.value.to_le_bytes());
+    sha256(&image)
+}
+
+/// Project exactly one directional diplomacy cell from the canonical call-entry Sim. Replanning
+/// the complete detached prefix proves the request is reached before the read is admitted.
+pub fn bind_frame0_plan_strategy_first_diplomacy_read(
+    parent: &Frame0PlanStrategyEntryAuthority,
+    call_entry_authority: &Frame0GetTeamTerrCallEntryAuthority,
+    first_child: &Frame0GetTeamTerrReceipt,
+    staged: &Frame0PlanStrategyPostTeamTerrPlan,
+    call_entry: &Sim,
+) -> Result<Frame0PlanStrategyDiplomacyReadAuthority, Frame0PlanStrategyDiplomacyReadBindError> {
+    let expected =
+        plan_frame0_owner0_after_get_team_terr(parent, call_entry_authority, first_child)
+            .map_err(|_| Frame0PlanStrategyDiplomacyReadBindError::InvalidStagedPlan)?;
+    if &expected != staged
+        || staged.composition_digest != frame0_plan_strategy_post_team_terr_digest(staged)
+        || !validate_frame0_plan_strategy_diplomacy_read_request(&staged.open)
+    {
+        return Err(Frame0PlanStrategyDiplomacyReadBindError::InvalidStagedPlan);
+    }
+    if staged.call_entry_authority_digest != call_entry_authority.composition_digest
+        || staged.open.call_entry_authority_digest != call_entry_authority.composition_digest
+        || staged.open.call_entry_sim_sha256 != call_entry_authority.call_entry_sim_sha256
+    {
+        return Err(Frame0PlanStrategyDiplomacyReadBindError::InvalidCallEntryAuthority);
+    }
+    let snapshot =
+        save_sim(call_entry).map_err(Frame0PlanStrategyDiplomacyReadBindError::Snapshot)?;
+    if sha256(&snapshot) != call_entry_authority.call_entry_sim_sha256 {
+        return Err(Frame0PlanStrategyDiplomacyReadBindError::CallEntrySnapshotMismatch);
+    }
+
+    let candidate_slot = usize::from(staged.open.candidate_leader_slot);
+    let target_index = usize::try_from(staged.open.target_who_index)
+        .ok()
+        .filter(|index| *index < LEADER_SLOTS)
+        .ok_or(Frame0PlanStrategyDiplomacyReadBindError::TargetIndexOutsideLeaderTable)?;
+    let live_candidate = &call_entry.vic_leaders.slots[candidate_slot];
+    let projected_candidate = call_entry_authority.leader.leaders[candidate_slot];
+    if live_candidate.leader_flags != projected_candidate.leader_flags
+        || live_candidate.who != projected_candidate.who
+        || live_candidate.territory != projected_candidate.territory
+        || live_candidate.who != staged.open.candidate_who
+        || staged.open.target_who_index != staged.open.receiver_who
+        || staged.open.read_va != FIRST_DIRECTIONAL_DIPLO_READ_VA
+    {
+        return Err(Frame0PlanStrategyDiplomacyReadBindError::ActorProjectionMismatch);
+    }
+
+    let mut authority = Frame0PlanStrategyDiplomacyReadAuthority {
+        revision: call_entry_authority.revision,
+        composition_digest: [0; 32],
+        source: Frame0PlanStrategyDiplomacyReadSource::CompleteRetailPlanStrategyCallEntry,
+        replay_file_sha256: call_entry_authority.replay_file_sha256,
+        executable_sha256: call_entry_authority.executable_sha256,
+        call_entry_authority_digest: call_entry_authority.composition_digest,
+        staged_plan_digest: staged.composition_digest,
+        request_sha256: staged.open.request_sha256,
+        call_entry_sim_sha256: call_entry_authority.call_entry_sim_sha256,
+        candidate_leader_slot: staged.open.candidate_leader_slot,
+        candidate_who: staged.open.candidate_who,
+        target_who_index: staged.open.target_who_index,
+        read_va: staged.open.read_va,
+        value: live_candidate.diplos[target_index],
+    };
+    authority.composition_digest = frame0_plan_strategy_diplomacy_read_authority_digest(&authority);
+    Ok(authority)
+}
+
+fn reverse_diplomacy_read_request_digest(
+    request: &Frame0PlanStrategyReverseDiplomacyReadRequest,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-reverse-diplo-read-request-v1".to_vec();
+    image.extend_from_slice(&request.first_read_authority_digest);
+    image.extend_from_slice(&request.staged_plan_digest);
+    image.extend_from_slice(&request.call_entry_sim_sha256);
+    image.extend_from_slice(&[request.receiver_leader_slot, request.candidate_leader_slot]);
+    image.extend_from_slice(&request.receiver_who.to_le_bytes());
+    image.extend_from_slice(&request.candidate_who.to_le_bytes());
+    image.extend_from_slice(&request.target_who_index.to_le_bytes());
+    image.extend_from_slice(&request.read_va.to_le_bytes());
+    image.extend_from_slice(&request.ally_value.to_le_bytes());
+    image.extend_from_slice(&request.get_team_terr_call_va_if_not_ally.to_le_bytes());
+    sha256(&image)
+}
+
+pub fn validate_frame0_plan_strategy_reverse_diplomacy_read_request(
+    request: &Frame0PlanStrategyReverseDiplomacyReadRequest,
+) -> bool {
+    request.request_sha256 != [0; 32]
+        && request.first_read_authority_digest != [0; 32]
+        && request.staged_plan_digest != [0; 32]
+        && request.call_entry_sim_sha256 != [0; 32]
+        && request.receiver_leader_slot == GOLDEN_FIRST_STRATEGY_OWNER
+        && request.receiver_who == i32::from(GOLDEN_FIRST_STRATEGY_OWNER)
+        && usize::from(request.candidate_leader_slot) < LEADER_SLOTS
+        && request.candidate_leader_slot != request.receiver_leader_slot
+        && request.target_who_index == request.candidate_who
+        && request.read_va == REVERSE_DIRECTIONAL_DIPLO_READ_VA
+        && request.ally_value == DIPLO_ALLY
+        && request.get_team_terr_call_va_if_not_ally == OPPONENT_GET_TEAM_TERR_CALL_VA
+        && request.request_sha256 == reverse_diplomacy_read_request_digest(request)
+}
+
+fn opponent_get_team_terr_request_digest(
+    request: &Frame0PlanStrategyOpponentGetTeamTerrRequest,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-opponent-get-team-terr-request-v1".to_vec();
+    image.extend_from_slice(&request.first_read_authority_digest);
+    image.extend_from_slice(&request.staged_plan_digest);
+    image.extend_from_slice(&request.call_entry_authority_digest);
+    image.extend_from_slice(&request.call_entry_sim_sha256);
+    image.push(request.receiver_leader_slot);
+    image.extend_from_slice(&request.receiver_who.to_le_bytes());
+    image.extend_from_slice(&request.callsite_va.to_le_bytes());
+    image.extend_from_slice(&request.callee_va.to_le_bytes());
+    image.push(request.input_surface as u8);
+    sha256(&image)
+}
+
+pub fn validate_frame0_plan_strategy_opponent_get_team_terr_request(
+    request: &Frame0PlanStrategyOpponentGetTeamTerrRequest,
+) -> bool {
+    request.request_sha256 != [0; 32]
+        && request.first_read_authority_digest != [0; 32]
+        && request.staged_plan_digest != [0; 32]
+        && request.call_entry_authority_digest != [0; 32]
+        && request.call_entry_sim_sha256 != [0; 32]
+        && usize::from(request.receiver_leader_slot) < LEADER_SLOTS
+        && request.receiver_leader_slot != GOLDEN_FIRST_STRATEGY_OWNER
+        && request.callsite_va == OPPONENT_GET_TEAM_TERR_CALL_VA
+        && request.callee_va == GET_TEAM_TERR_VA
+        && request.input_surface
+            == Frame0GetTeamTerrInputSurface::CompleteLeaderGameTeamAndPlayerProjection
+        && request.request_sha256 == opponent_get_team_terr_request_digest(request)
+}
+
+pub fn frame0_plan_strategy_diplomacy_step_digest(
+    plan: &Frame0PlanStrategyDiplomacyStepPlan,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-diplo-step-plan-v1".to_vec();
+    image.extend_from_slice(&plan.revision.to_le_bytes());
+    image.extend_from_slice(&plan.staged.composition_digest);
+    image.extend_from_slice(&plan.first_read.composition_digest);
+    image.push(u8::from(plan.first_relation_is_ally));
+    match &plan.open {
+        Frame0PlanStrategyDiplomacyStepOpen::ReverseRead(request) => {
+            image.push(0);
+            image.extend_from_slice(&request.request_sha256);
+        }
+        Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(request) => {
+            image.push(1);
+            image.extend_from_slice(&request.request_sha256);
+        }
+    }
+    image.push(u8::from(plan.owner0_strategy_complete));
+    sha256(&image)
+}
+
+/// Execute only the first directional comparison. No staged Leader value is published and no
+/// second relation or repeated child result is guessed.
+pub fn advance_frame0_plan_strategy_first_diplomacy_read(
+    staged: &Frame0PlanStrategyPostTeamTerrPlan,
+    first_read: &Frame0PlanStrategyDiplomacyReadAuthority,
+) -> Result<Frame0PlanStrategyDiplomacyStepPlan, Frame0PlanStrategyDiplomacyStepError> {
+    if staged.composition_digest != frame0_plan_strategy_post_team_terr_digest(staged)
+        || !validate_frame0_plan_strategy_diplomacy_read_request(&staged.open)
+    {
+        return Err(Frame0PlanStrategyDiplomacyStepError::InvalidStagedPlan);
+    }
+    if first_read.revision != staged.revision
+        || first_read.composition_digest == [0; 32]
+        || first_read.source
+            != Frame0PlanStrategyDiplomacyReadSource::CompleteRetailPlanStrategyCallEntry
+        || first_read.replay_file_sha256 != REPLAY_FILE_SHA256
+        || first_read.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || first_read.call_entry_authority_digest != staged.call_entry_authority_digest
+        || first_read.staged_plan_digest != staged.composition_digest
+        || first_read.request_sha256 != staged.open.request_sha256
+        || first_read.call_entry_sim_sha256 != staged.open.call_entry_sim_sha256
+        || first_read.candidate_leader_slot != staged.open.candidate_leader_slot
+        || first_read.candidate_who != staged.open.candidate_who
+        || first_read.target_who_index != staged.open.target_who_index
+        || first_read.read_va != staged.open.read_va
+        || first_read.composition_digest
+            != frame0_plan_strategy_diplomacy_read_authority_digest(first_read)
+    {
+        return Err(Frame0PlanStrategyDiplomacyStepError::InvalidReadAuthority);
+    }
+
+    let first_relation_is_ally = first_read.value == DIPLO_ALLY;
+    let open = if first_relation_is_ally {
+        let mut request = Frame0PlanStrategyReverseDiplomacyReadRequest {
+            request_sha256: [0; 32],
+            first_read_authority_digest: first_read.composition_digest,
+            staged_plan_digest: staged.composition_digest,
+            call_entry_sim_sha256: first_read.call_entry_sim_sha256,
+            receiver_leader_slot: staged.open.receiver_leader_slot,
+            receiver_who: staged.open.receiver_who,
+            candidate_leader_slot: first_read.candidate_leader_slot,
+            candidate_who: first_read.candidate_who,
+            target_who_index: first_read.candidate_who,
+            read_va: REVERSE_DIRECTIONAL_DIPLO_READ_VA,
+            ally_value: DIPLO_ALLY,
+            get_team_terr_call_va_if_not_ally: OPPONENT_GET_TEAM_TERR_CALL_VA,
+        };
+        request.request_sha256 = reverse_diplomacy_read_request_digest(&request);
+        Frame0PlanStrategyDiplomacyStepOpen::ReverseRead(request)
+    } else {
+        let mut request = Frame0PlanStrategyOpponentGetTeamTerrRequest {
+            request_sha256: [0; 32],
+            first_read_authority_digest: first_read.composition_digest,
+            staged_plan_digest: staged.composition_digest,
+            call_entry_authority_digest: staged.call_entry_authority_digest,
+            call_entry_sim_sha256: first_read.call_entry_sim_sha256,
+            receiver_leader_slot: first_read.candidate_leader_slot,
+            receiver_who: first_read.candidate_who,
+            callsite_va: OPPONENT_GET_TEAM_TERR_CALL_VA,
+            callee_va: GET_TEAM_TERR_VA,
+            input_surface: Frame0GetTeamTerrInputSurface::CompleteLeaderGameTeamAndPlayerProjection,
+        };
+        request.request_sha256 = opponent_get_team_terr_request_digest(&request);
+        Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(request)
+    };
+
+    let mut plan = Frame0PlanStrategyDiplomacyStepPlan {
+        revision: staged.revision,
+        composition_digest: [0; 32],
+        staged: staged.clone(),
+        first_read: first_read.clone(),
+        first_relation_is_ally,
+        open,
+        owner0_strategy_complete: false,
+    };
+    plan.composition_digest = frame0_plan_strategy_diplomacy_step_digest(&plan);
+    Ok(plan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1425,6 +1798,101 @@ mod tests {
         assert_eq!(
             plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap_err(),
             Frame0PlanStrategyPostTeamTerrError::NoQualifyingDiplomacyCandidate
+        );
+    }
+
+    fn diplomacy_frontier(
+        sim: &Sim,
+    ) -> (
+        Frame0PlanStrategyEntryAuthority,
+        Frame0GetTeamTerrCallEntryAuthority,
+        Frame0GetTeamTerrReceipt,
+        Frame0PlanStrategyPostTeamTerrPlan,
+    ) {
+        let (parent, authority, request) = bind(sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
+        let staged = plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap();
+        (parent, authority, receipt, staged)
+    }
+
+    #[test]
+    fn first_nonally_direction_reaches_repeated_team_territory_child_without_writes() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags |= LEADER_ACTIVE;
+        sim.vic_leaders.slots[1].diplos[0] = 0;
+        let (parent, authority, receipt, staged) = diplomacy_frontier(&sim);
+        let read = bind_frame0_plan_strategy_first_diplomacy_read(
+            &parent, &authority, &receipt, &staged, &sim,
+        )
+        .unwrap();
+        assert_eq!(read.value, 0);
+        assert_eq!(read.read_va, 0x006b_9910);
+
+        let next = advance_frame0_plan_strategy_first_diplomacy_read(&staged, &read).unwrap();
+        assert_eq!(next.staged, staged);
+        assert!(!next.first_relation_is_ally);
+        let Frame0PlanStrategyDiplomacyStepOpen::OpponentGetTeamTerr(ref request) = next.open
+        else {
+            panic!("nonally first direction must call get_team_terr");
+        };
+        assert_eq!(request.receiver_leader_slot, 1);
+        assert_eq!(request.receiver_who, 1);
+        assert_eq!(request.callsite_va, 0x006b_992e);
+        assert_eq!(request.callee_va, 0x006d_62e0);
+        assert!(validate_frame0_plan_strategy_opponent_get_team_terr_request(&request));
+        assert!(!next.owner0_strategy_complete);
+        assert_eq!(
+            next.composition_digest,
+            frame0_plan_strategy_diplomacy_step_digest(&next)
+        );
+    }
+
+    #[test]
+    fn first_ally_direction_stops_before_reverse_relation_read() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags |= LEADER_ACTIVE;
+        sim.vic_leaders.slots[1].diplos[0] = DIPLO_ALLY;
+        let (parent, authority, receipt, staged) = diplomacy_frontier(&sim);
+        let read = bind_frame0_plan_strategy_first_diplomacy_read(
+            &parent, &authority, &receipt, &staged, &sim,
+        )
+        .unwrap();
+        let next = advance_frame0_plan_strategy_first_diplomacy_read(&staged, &read).unwrap();
+        assert!(next.first_relation_is_ally);
+        let Frame0PlanStrategyDiplomacyStepOpen::ReverseRead(request) = next.open else {
+            panic!("ally first direction must read the reverse relation");
+        };
+        assert_eq!(request.receiver_leader_slot, 0);
+        assert_eq!(request.candidate_leader_slot, 1);
+        assert_eq!(request.target_who_index, 1);
+        assert_eq!(request.read_va, 0x006b_9925);
+        assert!(validate_frame0_plan_strategy_reverse_diplomacy_read_request(&request));
+        assert!(!next.owner0_strategy_complete);
+    }
+
+    #[test]
+    fn diplomacy_read_binder_rejects_stale_sim_and_step_rejects_stale_authority() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags |= LEADER_ACTIVE;
+        let (parent, authority, receipt, staged) = diplomacy_frontier(&sim);
+
+        sim.vic_leaders.slots[1].diplos[0] ^= 1;
+        assert!(matches!(
+            bind_frame0_plan_strategy_first_diplomacy_read(
+                &parent, &authority, &receipt, &staged, &sim,
+            ),
+            Err(Frame0PlanStrategyDiplomacyReadBindError::CallEntrySnapshotMismatch)
+        ));
+        sim.vic_leaders.slots[1].diplos[0] ^= 1;
+
+        let mut read = bind_frame0_plan_strategy_first_diplomacy_read(
+            &parent, &authority, &receipt, &staged, &sim,
+        )
+        .unwrap();
+        read.value ^= 1;
+        assert_eq!(
+            advance_frame0_plan_strategy_first_diplomacy_read(&staged, &read).unwrap_err(),
+            Frame0PlanStrategyDiplomacyStepError::InvalidReadAuthority
         );
     }
 }
