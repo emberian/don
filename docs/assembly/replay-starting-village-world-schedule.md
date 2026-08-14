@@ -94,11 +94,17 @@ The typed transaction stages all in-bounds TData indices before mutating the can
 The receipt distinguishes native write instructions, newly changed cells, already-set
 cells, and edge-clipped offsets.
 
-The focused gate also reconstructs the three admitted two-human recordings (2018-11-17
-Himalayas, 2020-02-08 Old World, and 2020-02-21 Himalayas), consumes both exact setup
-centers and their source-derived radius-20/radius-24 facts, and proves that each whole
-even-circle disc is in bounds.  The test checks the post-transaction center bit and retains
-the red first-checkpoint receipt; it does not compare or fit a recorded checksum.
+`StartingSetupState` now consumes this transaction immediately after each exact center
+constructor. It revalidates the native `0x23`/`city == -1` image, the normalized `0x27` and
+allocated slot, plus the canonical Build identity and position before it publishes the
+receipt with `activation_mask_inputs_joined == true`.
+
+The focused gates reconstruct the three admitted two-human recordings (2018-11-17
+Himalayas, 2020-02-08 Old World, and 2020-02-21 Himalayas), consume both exact setup
+centers and their source-derived radius-20/radius-24 facts, and prove that each whole
+even-circle disc is in bounds. They check the post-transaction center bit and then show
+that the exact City terrain census advances into its content-backed gather arm and refuses
+atomically on the first missing coordinate fact. No recorded checksum is compared or fit.
 
 ## Setup order before the first census
 
@@ -155,15 +161,16 @@ general mutation escape hatch, and ordinary admitted replays have none.
 ## Readiness boundary
 
 This tranche closes one concrete reason the prior source census returned placement grade
-zero: `space_at_corner(..., need_city=true)` can now observe the exact CITY disc.  It does
-not promote either first-checkpoint checksum image.  The atomic constructor still must
-join:
+zero: `space_at_corner(..., need_city=true)` now observes the exact CITY disc in the
+canonical setup World. It does not promote either first-checkpoint checksum image. The
+remaining composition must join:
 
-- the activation owner's blocker/road/World rollups and canonical Build identity;
 - setup's final full territory result, including City `bordering`;
 - the earlier Unit-derived `free`, `busy`, and `peasant_dist` City fields in
   `Leader::plan_strategy`; and
-- the existing fourteen-byte terrain census transaction.
+- the generated `LandData`/`GoodTypeData` inputs required by each reached
+  `World::gather_at` call; and
+- the rest of the activation owner's blocker/road/World rollups needed by other channels.
 
 Accordingly the receipt keeps `first_checksum_world_image_ready == false` and
 `first_checksum_city_image_ready == false`.  No recorded checksum is used to fill any

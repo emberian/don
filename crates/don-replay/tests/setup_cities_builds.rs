@@ -7,6 +7,7 @@ use don_replay::setup_cities_builds::{
     SetupCitiesError, StartingRegionEvidence, StartingSetupState,
 };
 use don_replay::wire::{classify, CommandClass, CommandView};
+use don_sim::systems::map_terrain::{tflag, Coord, TCoord};
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -154,6 +155,7 @@ fn all_land_two_human_setups_install_a_frozen_sim_owned_cities_producer() {
         let setup = sim.initial_setup.as_ref().expect("ordinary setup owner");
         assert_eq!(setup.receipt.active_players, 2);
         assert_eq!(setup.receipt.cities.len(), 2);
+        assert_eq!(setup.receipt.world_city_masks.len(), 2);
         assert_eq!(
             setup.receipt.region_evidence,
             StartingRegionEvidence::AllLandSingleComponent
@@ -181,6 +183,41 @@ fn all_land_two_human_setups_install_a_frozen_sim_owned_cities_producer() {
                 && city.constructor.city.reg == city.region
                 && city.constructor.city.who == city.owner as i8
         }));
+        for (city, mask) in setup
+            .receipt
+            .cities
+            .iter()
+            .zip(&setup.receipt.world_city_masks)
+        {
+            let center = (
+                TCoord::from_coord(Coord(city.snapped_position.0)).0,
+                TCoord::from_coord(Coord(city.snapped_position.1)).0,
+            );
+            assert_eq!(mask.request.owner, city.owner);
+            assert_eq!(mask.request.object_id, city.build.object_id);
+            assert_eq!(mask.request.center_tcoord, center);
+            assert_eq!(
+                mask.request.radius_tiles,
+                city.constructor.world_fix.radius_tiles
+            );
+            let expected_cells = match mask.request.radius_tiles {
+                20 => 1_232,
+                24 => 1_788,
+                radius => panic!("unexpected starting City radius {radius}"),
+            };
+            assert_eq!(mask.table_endpoint, expected_cells);
+            assert_eq!(mask.in_bounds_offsets as usize, expected_cells);
+            assert_eq!(mask.out_of_bounds_offsets, 0);
+            assert!(mask.city_mask_complete);
+            assert!(mask.pre_strategy.schedule_attested);
+            assert!(mask.pre_strategy.activation_mask_inputs_joined);
+            assert!(!mask.pre_strategy.final_territory_image_joined);
+            assert!(!mask.pre_strategy.unit_derived_city_fields_joined);
+            assert_ne!(
+                setup.sim.map.world.tmask(center.0, center.1) & tflag::CITY,
+                0
+            );
+        }
         assert_eq!(setup.receipt.constructor_cities.cities_walked, 2);
         assert_eq!(setup.receipt.constructor_cities.bytes_walked, 228);
         assert!(!setup.receipt.first_checksum_city_image_ready);

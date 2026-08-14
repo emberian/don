@@ -11,11 +11,14 @@ by the validated `Setup::build_units` plan and receipts. Empty-action Citizens a
 the closest active same-owner, same-WData-region City and update `free` and `peasant_dist`.
 
 The transaction is exact but not yet mounted in `StartingSetupState`. That host does not
-materialize the setup allocation receipts as canonical `Sim::world` Units, and the separate
-terrain census still lacks the activated WData `CITY` footprint. Consequently the replay
-scoreboard remains at **36,955 substantive Cities comparisons, zero matches, and zero
-survival**. This increment deliberately does not consume a recorded checksum or claim that the
-first checkpoint image is complete.
+materialize the setup allocation receipts as canonical `Sim::world` Units. A sibling setup
+lane now has a complete ordinary init receipt for only the first 2018 Citizen; the remaining
+four-call prefix and the admitted 2020 recordings are still absent, so that partial receipt
+cannot lawfully activate this census. The separate terrain census now has the exact
+activation-time TData `CITY` footprint, but stops at absent generated-content gather facts.
+Consequently the replay scoreboard remains at **36,955 substantive Cities comparisons, zero
+matches, and zero survival**. This increment deliberately does not consume a recorded checksum
+or claim that the first checkpoint image is complete.
 
 ## Instruction-derived walk
 

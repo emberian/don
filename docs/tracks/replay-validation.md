@@ -238,8 +238,12 @@ This remains the intended measured result: the state is the fresh constructor, w
 runs the frame-zero `Leader::plan_strategy` Unit and terrain census before its first checkpoint.
 An exact bounded starting-Unit census transaction now owns `peasant_dist`, `free`, `busy`, and
 `gatherers`, but it is not mounted because the setup host does not yet materialize its
-receipt-backed canonical Units; the terrain census also lacks the activated WData `CITY`
-footprint. Full channel derivation and the fail-closed bridge mutation proof are in
+receipt-backed canonical Units. The setup host now installs the exact activation-time TData
+`CITY` disc (not a WData flag); the terrain census reaches grade four and then refuses at the
+first missing generated-content `World::gather_at` fact. Final territory is also not joined.
+The producer remains the same frozen constructor, so a full corpus regeneration keeps the
+**36,955 / 0 matches / 0 survival** metrics unchanged. Full channel derivation and the
+fail-closed bridge mutation proof are in
 [`docs/assembly/replay-cities-sim-channel.md`](../assembly/replay-cities-sim-channel.md).
 The new transaction and its atomic refusal boundary are in
 [`docs/assembly/replay-starting-city-unit-census.md`](../assembly/replay-starting-city-unit-census.md).

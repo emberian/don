@@ -1,6 +1,4 @@
 use don_replay::build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest};
-use don_replay::checksum::Channel;
-use don_replay::cities_runtime::check_sim_cities;
 use don_replay::harness::WorldSim;
 use don_replay::replay::Replay;
 use don_sim::systems::map_terrain::{land, tflag, wflag, World};
@@ -430,7 +428,7 @@ fn waterhalf_skips_ocean_but_retains_the_inner_land_region_path() {
 }
 
 #[test]
-fn real_style_6_and_9_worlds_reach_the_source_owned_census_boundary() {
+fn real_style_6_and_9_worlds_reach_the_missing_content_fact_boundary() {
     let names = [
         "Playback___2018.11.17_13_21_42__Sat_.rcx",
         "Playback___2020.02.08_10_49_15__Sat_.rcx",
@@ -451,14 +449,14 @@ fn real_style_6_and_9_worlds_reach_the_source_owned_census_boundary() {
         let setup = world_sim.initial_setup.as_ref().unwrap_or_else(|| {
             panic!("{name}: setup refused: {:?}", world_sim.initial_setup_error)
         });
-        let mut censused_cities = setup.cities.clone();
         for constructor in &setup.receipt.cities {
             let owner = usize::from(constructor.owner);
             let slot = constructor.city_slot as usize;
-            let city = &mut censused_cities.slots[owner][slot];
-            let receipt = subject::apply_fresh_starting_village_terrain_census(
+            let city = &setup.cities.slots[owner][slot];
+            let mut staged = city.clone();
+            let error = subject::apply_fresh_starting_village_terrain_census(
                 &setup.sim,
-                city,
+                &mut staged,
                 &setup.sim.map.world,
                 &initial_world.generation_regions,
                 subject::FreshVillageTerrainCensusFacts {
@@ -469,42 +467,16 @@ fn real_style_6_and_9_worlds_reach_the_source_owned_census_boundary() {
                     gather: &subject::CityTerrainGatherFacts::default(),
                 },
             )
-            .unwrap_or_else(|error| panic!("{name} owner {owner}: census refused: {error}"));
-            assert!(receipt.city_terrain_census_complete);
-            assert_eq!(receipt.center_wcoord, constructor.start_wcoord);
+            .expect_err("the generated LandData/Good gather facts are not yet owned");
+            assert!(matches!(
+                error,
+                subject::FreshVillageTerrainCensusError::MissingGatherAtFact { .. }
+            ));
             assert_eq!(
-                receipt.radius_tiles,
-                constructor.constructor.world_fix.radius_tiles
+                staged, *city,
+                "{name} owner {owner}: a missing terrain-content fact must not publish City bytes"
             );
-            let expected_inner = receipt.inner_table_end - 1;
-            assert_eq!(
-                receipt.table_entries_scanned as usize,
-                receipt.outer_table_end - 1
-            );
-            assert_eq!(receipt.inner_entries as usize, expected_inner);
-            assert_eq!(receipt.placement_calls as usize, expected_inner);
-            assert_eq!(receipt.placement_grades[0] as usize, expected_inner);
-            assert_eq!(receipt.gather_at_calls, 0);
-            assert_eq!(receipt.water_entries, 0);
-            assert_eq!(receipt.bytes_after.land as usize, expected_inner);
-            assert_eq!(receipt.bytes_after.filled as usize, expected_inner);
-            assert!(!receipt.first_checksum_city_image_ready);
         }
-        let projected = check_sim_cities(&setup.sim, &censused_cities)
-            .expect("source-censused Cities walk")
-            .checksum;
-        let recorded = replay
-            .turns
-            .iter()
-            .find_map(|turn| {
-                turn.any_checksums()
-                    .map(|(_, sums)| sums.get(Channel::Cities))
-            })
-            .expect("recorded Cities checkpoint");
-        assert_ne!(
-            projected, recorded,
-            "a partial setup World must not be promoted merely because the City census ran"
-        );
     }
     // The checkout containing the canonical corpus must exercise all three source fixtures;
     // clean packaging environments may intentionally omit `ron-data/replays`.

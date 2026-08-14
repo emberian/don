@@ -20,6 +20,7 @@
 
 use std::fmt;
 
+use don_sim::systems::map_terrain::{Coord, TCoord};
 use don_sim::systems::production::{self, BuildData};
 use don_sim::systems::tech_cities::{self, CityPool};
 use don_sim::tick::Sim;
@@ -36,6 +37,10 @@ use crate::city_build_constructor_runtime::{
 };
 use crate::initial::{InitialState, InitialWorld};
 use crate::replay::Replay;
+use crate::starting_village_world_schedule::{
+    apply_starting_village_city_mask, StartingVillageWorldError, StartingVillageWorldReceipt,
+    WallMaskCityRequest, FRESH_NATIVE_MASK_CITY_FLAGS, FRESH_STARTING_CENTER_FLAGS,
+};
 use crate::wire::CommandView;
 
 pub const SETUP_BUILD_GAME_VA: u32 = 0x005a_c190;
@@ -98,6 +103,8 @@ pub struct StartingSetupReceipt {
     pub active_players: usize,
     pub city_flags: u16,
     pub cities: Vec<StartingCityReceipt>,
+    /// Exact activation-time `Wall::mask_city` transactions, in Build/owner order.
+    pub world_city_masks: Vec<StartingVillageWorldReceipt>,
     /// Exact constructor-time walk, before frame-zero strategy recomputes the City census.
     pub constructor_cities: CitiesChannelValue,
     pub first_checksum_city_image_ready: bool,
@@ -147,6 +154,7 @@ impl StartingSetupState {
         let mut cities = CityPool::new();
         let mut build_walk = BuildsWalkAuthority::default();
         let mut receipts = Vec::with_capacity(assignments.len());
+        let mut world_city_masks = Vec::with_capacity(assignments.len());
 
         for assignment in assignments {
             let owner = usize::from(assignment.owner);
@@ -208,6 +216,44 @@ impl StartingSetupState {
                     actual: constructor.region,
                 });
             }
+            let current_build = &sim.builds[build.row];
+            if constructor.object_id != build.object_id
+                || constructor.position != assignment.snapped_position
+                || constructor.flags_before_activation | production::flag::STARTED
+                    != FRESH_NATIVE_MASK_CITY_FLAGS
+                || constructor.flags_after_activation != FRESH_STARTING_CENTER_FLAGS
+                || constructor.city_link_before != -1
+                || constructor.city_link_after != city_slot_i16
+                || current_build.flags != constructor.flags_after_activation
+                || current_build.city != constructor.city_link_after
+                || current_build.object_id() != constructor.object_id
+                || current_build.position() != constructor.position
+            {
+                return Err(SetupCitiesError::CityMaskConstructorJoin {
+                    owner: assignment.owner,
+                    row: build.row,
+                });
+            }
+            let mut city_mask = apply_starting_village_city_mask(
+                &mut sim.map.world,
+                WallMaskCityRequest {
+                    center_tcoord: (
+                        TCoord::from_coord(Coord(constructor.position.0)).0,
+                        TCoord::from_coord(Coord(constructor.position.1)).0,
+                    ),
+                    radius_tiles: constructor.world_fix.radius_tiles,
+                    on: 1,
+                    owner: assignment.owner,
+                    object_id: constructor.object_id,
+                    native_call_flags: constructor.flags_before_activation
+                        | production::flag::STARTED,
+                    native_call_city: constructor.city_link_before,
+                    post_activation_flags: constructor.flags_after_activation,
+                },
+            )
+            .map_err(SetupCitiesError::CityMask)?;
+            city_mask.pre_strategy.activation_mask_inputs_joined = true;
+            world_city_masks.push(city_mask);
             build_walk.install(
                 build.row,
                 BuildWalkFacts {
@@ -264,6 +310,7 @@ impl StartingSetupState {
                 active_players: receipts.len(),
                 city_flags: 0x4011,
                 cities: receipts,
+                world_city_masks,
                 constructor_cities: cities_channel,
                 first_checksum_city_image_ready: false,
                 builds_channel_ready: false,
@@ -550,6 +597,11 @@ pub enum SetupCitiesError {
     },
     BuildSpawn(CanonicalBuildSpawnError),
     CityConstructor(StartingCityConstructorError),
+    CityMaskConstructorJoin {
+        owner: u8,
+        row: usize,
+    },
+    CityMask(StartingVillageWorldError),
     CenterRegionMismatch {
         owner: u8,
         expected: i16,

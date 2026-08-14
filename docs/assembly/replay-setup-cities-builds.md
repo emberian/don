@@ -45,11 +45,15 @@ ptype, XOR position, and both dense/sparse object registries. The staged center 
 City constructor writes, reads the region from WData at the actual center, applies
 `City::fix_world_vals`, and returns the exact fresh City body. The producer links that body
 to the 160-slot `CityPool`, the Build's City slot, its canonical registry row, and the
-current ptype table. `check_sim_cities` validates all joins and walks exactly 114 bytes per
-empty-caravan City.
+current ptype table. It now also joins the constructor's temporal Build images (`0x23`,
+`city == -1` at `Wall::mask_city`, then `0x27` and the allocated City slot) to the canonical
+Build and applies the exact even-circle `TData::CITY` transaction to `Sim::map.world`.
+Radius 20 writes 1,232 TData cells and the Indian-bonus radius 24 writes 1,788 when the disc
+is wholly on-map. This is a TData bit, not a WData flag. `check_sim_cities` validates all
+City/Build joins and walks exactly 114 bytes per empty-caravan City.
 
 All fallible work targets local staged owners. A refusal publishes no partial CityPool,
-Build row, registry append, or channel.
+Build row, registry append, CITY disc, or channel.
 
 ## Why the constructor checksum is not first-checkpoint-correct
 
@@ -76,14 +80,18 @@ not set `first_checksum_city_image_ready`, install Builds, or assert a retail ma
 [`replay-cities-sim-channel.md`](replay-cities-sim-channel.md).
 The bounded exact Unit-census transaction is documented in
 [`replay-starting-city-unit-census.md`](replay-starting-city-unit-census.md); it remains
-unmounted until this setup host materializes its receipt-backed canonical Units.
+unmounted until this setup host materializes its receipt-backed canonical Units. The CITY
+disc now lets the exact terrain census enter its grade-four/content arm, where it refuses
+on the first absent `World::gather_at` fact. Generated `LandData`/`GoodTypeData` content and
+the final territory image remain separate prerequisites.
 
 ## Verification
 
 `crates/don-replay/tests/setup_cities_builds.rs` covers the three admitted all-land
-recordings, verifies canonical owner/play/center/region/ptype/City joins and the two-city
-228-byte constructor walk, asserts that Builds remains uninstalled, and verifies that the
-independent Sim-owned Cities producer is exact, fully sourced, and frozen across harness steps.
+recordings, verifies canonical owner/play/center/region/ptype/City joins, both exact CITY
+mask receipts, and the two-city 228-byte constructor walk. It asserts that Builds remains
+uninstalled and verifies that the independent Sim-owned Cities producer is exact, fully
+sourced, and frozen across harness steps.
 It also covers fail-closed Great Lakes region, starting-town 2, and corrupt-camera cases.
 The local corpus gate passes 2/2 active tests; Persvati clean-HEAD isolated overlay job
 `replay-setup-cities-builds2-20260811T181107Z-89456-9395-ee618ca8197f` passes 2/2 source

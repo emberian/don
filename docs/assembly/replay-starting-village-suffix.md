@@ -134,29 +134,25 @@ census itself makes zero World, Build, registry, or main-RNG writes.
 
 The source transaction was exercised over both starting centers in the three admitted
 recordings, using the exact replay-carried camera centers and the reconstructed style-6/9
-Worlds:
+Worlds. The setup owner now installs the exact activation-time TData `CITY` disc. As a
+result, reached clear inner cells take placement grade four instead of the former grade-zero
+partial-world path, and the census reaches `World::gather_at`. The corpus gate deliberately
+supplies no invented content values: all three recordings refuse with typed
+`MissingGatherAtFact`, without publishing any of the staged City bytes.
 
-| replay | map | source-censused partial-setup Cities | first recorded Cities |
-|---|---|---:|---:|
-| 2018-11-17 | Himalayas (9) | `e5c40bd2` | `53130d2c` |
-| 2020-02-08 | Old World (6) | `993e0b1e` | `dd170c24` |
-| 2020-02-21 | Himalayas (9) | `42680ae2` | `7d2d0bd4` |
-
-The recorded column is comparison-only.  It was never read by the producer.  In the
-current partial setup World every reached inner cell returns placement grade zero because
-the activation/territory prefix has not installed the required TData `CITY` bit; the exact
-result is `land == filled` (104 for radius 20, 144 for radius 24) and zero gather calls.
-The mismatch therefore remains a useful, explicitly localized residual rather than a value
-to fit: the post-activation World/TData producer and remaining frame-zero schedule must be
-joined before this is the retail census input.
+This advances the exact residual from a missing activation mask to generated terrain
+content. The coordinate-keyed gather results require the installed ordered `LandData` and
+`GoodTypeData` predicates; neither a zero vector nor a value inferred from the recorded
+Cities checksum is accepted. Final territory (`WData::who/who2` plus City `bordering`) also
+remains outside this owner.
 
 Nor is this the only remaining City mutation.  Earlier in `Leader::plan_strategy`, every
 live City has `gatherers`, `busy`, and `free` cleared and `peasant_dist` set to 100; the
-intervening Unit census can rewrite `free`, `busy`, and `peasant_dist`.  Those Unit/Leader
-inputs, the exact activation/territory World, and the complete pre-checkpoint scheduling
-boundary are not yet owned here.  Consequently both the constructor-suffix receipt and the
-new census receipt keep `first_checksum_city_image_ready == false` even though the fourteen
-terrain bytes themselves have an executable, source-bounded owner.
+intervening Unit census can rewrite `free`, `busy`, and `peasant_dist`. Those Unit/Leader
+inputs, final territory, terrain content, and the complete pre-checkpoint scheduling
+boundary are not yet owned here. Consequently both receipts keep
+`first_checksum_city_image_ready == false` even though the fourteen terrain bytes have an
+executable, source-bounded owner once all reached gather facts are supplied.
 
 ## Typed boundary
 
