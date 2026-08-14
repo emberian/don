@@ -57,6 +57,34 @@ post-`plan_strategy` golden authority for the complete child and no complete pos
 inventory. Setup Unit rows are therefore not reused as a live score census. The second pass is
 still detached and stops at `0x006BC51A`.
 
+## Armageddon threshold source join
+
+The third pass closes `Game::get_armageddon` without accepting copied scalar inputs. It rehashes
+the supported replay and its decompressed payload, verifies the serialized Rules span, and reads:
+
+- `Constants+0xD14` `ARMAGEDDON = 4`;
+- `Constants+0xD18` `ARMAGEDDON_PER_NATION = 1`; and
+- `Constants+0xD1C` `ARMAGEDDON_PER_TEAM = 2`.
+
+The complete replay Player table contains one active nation. The binder reruns the deterministic
+`Game::init_teams` transaction over all eight setup rows and obtains one side; it does not use the
+lightweight `Sim::new` defaults. `GameInfo::starting_resources = 0` and the replay initial
+`Game::armageddon = 0` are read from the same replay image. Setup, the Dutch Market transaction,
+and `plan_strategy` cannot launch a nuke before this score call.
+
+Retail therefore returns `4 + 1*1 + 2*1 = 7`; the immediate `0 < 7` comparison takes the open
+clock branch. The next exact reads are:
+
+```text
+006bc549  movzx ebx,word [...+0xe3fdb2] ; owner0 num_queued[50], Leader+0x5A86
+006bc551  movzx eax,word [...+0xe3fa8e] ; owner0 num_units[0],  Leader+0x5762
+006bc56c  call dword [eax+0x7c]        ; Type::get_score_value only if their sum != 0
+```
+
+No current authority proves that live post-planner pair. The source-owned Armageddon receipt thus
+emits an exact type-50 count-pair request and stops before selecting the virtual type-score child.
+The seven setup Unit receipts remain historical inputs, not post-plan Leader inventory mirrors.
+
 ## Market chronology join
 
 The binder consumes the exact `MarketLeaderAccountingReceipt` rather than accepting a caller

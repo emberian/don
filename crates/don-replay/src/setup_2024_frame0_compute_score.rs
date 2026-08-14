@@ -28,9 +28,15 @@ use don_sim::systems::leader_market_build_accounting::{
     BUILD_INIT_DIRTY_FLAG, GOLDEN_MARKET_OBJECT_ID, GOLDEN_MARKET_OWNER, MARKET_BUILDING_SLOT,
     MARKET_GATHER_SLOT, MARKET_TYPE,
 };
+use don_sim::systems::setup_diplomacy::{LeaderTeamState, PlayerSetup, SETUP_SLOTS};
+use don_sim::systems::team_setup_mutation::{
+    init_teams_atomic, InitTeamsError, InitTeamsRequest, TeamSetupState,
+};
 use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use don_sim::systems::victory_score::{self, leader_flag};
 
+use crate::initial::SHIPPED_TYPES_SERIALIZED_BYTES;
+use crate::replay::{load_payload, Replay};
 use crate::setup_2024_frame0_plan_strategy::Frame0PlanStrategyPrefixPlan;
 use crate::setup_2024_frame379::REPLAY_FILE_SHA256;
 use crate::world_owner_frontier::sha256;
@@ -48,7 +54,18 @@ pub const SCORE_UNITS_2_STORE_VA: u32 = 0x006b_c513;
 pub const GET_ARMAGEDDON_CALL_VA: u32 = 0x006b_c51a;
 pub const GET_ARMAGEDDON_VA: u32 = 0x0059_4020;
 pub const ARMAGEDDON_COMPARE_LOAD_VA: u32 = 0x006b_c51f;
+pub const ARMAGEDDON_COMPARE_VA: u32 = 0x006b_c525;
 pub const UNIT_SCORE_CENSUS_FIRST_VA: u32 = 0x006b_c540;
+pub const UNIT_SCORE_NUM_QUEUED_READ_VA: u32 = 0x006b_c549;
+pub const UNIT_SCORE_NUM_UNITS_READ_VA: u32 = 0x006b_c551;
+pub const UNIT_SCORE_VALUE_CALL_VA: u32 = 0x006b_c56c;
+pub const UNIT_SCORE_VALUE_VTABLE_OFFSET: u32 = 0x7c;
+pub const FIRST_UNIT_SCORE_TYPE: i32 = 50;
+pub const FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET: u32 = 0x5a86;
+pub const FIRST_UNIT_NUM_UNITS_LEADER_OFFSET: u32 = 0x5762;
+pub const RULES_CONSTANTS_ARMAGEDDON_OFFSET: usize = 0x0d14;
+pub const RULES_CONSTANTS_ARMAGEDDON_PER_NATION_OFFSET: usize = 0x0d18;
+pub const RULES_CONSTANTS_ARMAGEDDON_PER_TEAM_OFFSET: usize = 0x0d1c;
 
 pub const GOLDEN_FRAME: i32 = 0;
 pub const GOLDEN_STEP: u8 = 11;
@@ -199,6 +216,88 @@ pub struct Frame0ComputeUnitScorePrefixPlan {
     pub open: Frame0GetArmageddonRequest,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0GetArmageddonSource {
+    /// The supported replay's serialized Rules span, initial Game/GameInfo projection, and an
+    /// exact rerun of `Game::init_teams` over its complete eight-player setup table.
+    ReplayRulesInitialGameAndSetupTeamTransaction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0ArmageddonThresholdFacts {
+    pub armageddon: i32,
+    pub armageddon_per_nation: i32,
+    pub armageddon_per_team: i32,
+    pub num_nations: i32,
+    pub num_sides: i32,
+    pub starting_resources: u8,
+    /// `Game::armageddon +0x6E0`. The replay initial image carries zero and no setup,
+    /// Market, or plan-strategy instruction can launch a nuke before this call.
+    pub current_armageddon: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0GetArmageddonAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: Frame0GetArmageddonSource,
+    pub replay_file_sha256: [u8; 32],
+    pub replay_payload_sha256: [u8; 32],
+    pub rules_serialized_sha256: [u8; 32],
+    pub rules_constants_payload_offset: usize,
+    pub team_setup_source_sha256: [u8; 32],
+    pub parent_authority_digest: [u8; 32],
+    pub parent_local_prefix_digest: [u8; 32],
+    pub parent_request_sha256: [u8; 32],
+    pub facts: Frame0ArmageddonThresholdFacts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0UnitScoreFirstCensusInputSurface {
+    /// Live post-`plan_strategy` `num_queued[50]` and `num_units[0]`. Setup Unit rows do not
+    /// satisfy this request without a separate chronology proof that all Leader mirrors agree.
+    ExactPostPlanType50CountPair,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0UnitScoreFirstCensusRequest {
+    pub request_sha256: [u8; 32],
+    pub parent_authority_digest: [u8; 32],
+    pub armageddon_receipt_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_owner: u8,
+    pub type_index: i32,
+    pub num_queued_read_va: u32,
+    pub num_queued_leader_offset: u32,
+    pub num_units_read_va: u32,
+    pub num_units_leader_offset: u32,
+    pub input_surface: Frame0UnitScoreFirstCensusInputSurface,
+    /// Reached only if the exact count pair sums nonzero. The virtual callee is deliberately
+    /// unresolved until the admitted type row supplies its concrete receiver/vtable.
+    pub next_child_callsite_if_nonzero: u32,
+    pub next_child_vtable_offset_if_nonzero: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0ComputeUnitScoreArmageddonPlan {
+    pub authority_revision: u64,
+    pub parent_authority_digest: [u8; 32],
+    pub parent_local_prefix_digest: [u8; 32],
+    pub parent_request_sha256: [u8; 32],
+    pub source_authority_digest: [u8; 32],
+    pub get_armageddon_callsite_va: u32,
+    pub get_armageddon_callee_va: u32,
+    pub returned_threshold: i32,
+    pub current_armageddon: i32,
+    pub comparison_load_va: u32,
+    pub comparison_va: u32,
+    pub clock_open: bool,
+    pub local_prefix_digest: [u8; 32],
+    pub open: Frame0UnitScoreFirstCensusRequest,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame0ComputeScorePrefixPlan {
     pub authority_revision: u64,
@@ -240,6 +339,18 @@ pub enum Frame0ComputeScoreError {
     MissingNewUnitsDirtyBit,
     StaleAuthority,
     ComputeUnitScoreParentDisagreement,
+    GetArmageddonReplayRead(String),
+    GetArmageddonPayloadRead(String),
+    GetArmageddonReplayMismatch,
+    GetArmageddonMissingRules,
+    GetArmageddonRulesSpanMismatch,
+    GetArmageddonRosterMismatch,
+    GetArmageddonMissingSemaphore,
+    GetArmageddonTeamSetup(InitTeamsError),
+    GetArmageddonInitialStateMismatch,
+    GetArmageddonParentDisagreement,
+    GetArmageddonStaleAuthority,
+    GetArmageddonClockUnexpectedlyClosed,
 }
 
 impl fmt::Display for Frame0ComputeScoreError {
@@ -593,6 +704,121 @@ fn get_armageddon_request_digest(
     sha256(&image)
 }
 
+fn append_armageddon_facts(image: &mut Vec<u8>, facts: Frame0ArmageddonThresholdFacts) {
+    image.extend_from_slice(&facts.armageddon.to_le_bytes());
+    image.extend_from_slice(&facts.armageddon_per_nation.to_le_bytes());
+    image.extend_from_slice(&facts.armageddon_per_team.to_le_bytes());
+    image.extend_from_slice(&facts.num_nations.to_le_bytes());
+    image.extend_from_slice(&facts.num_sides.to_le_bytes());
+    image.push(facts.starting_resources);
+    image.extend_from_slice(&facts.current_armageddon.to_le_bytes());
+}
+
+fn frame0_get_armageddon_authority_digest(authority: &Frame0GetArmageddonAuthority) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-get-armageddon-authority-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.push(authority.source as u8);
+    image.extend_from_slice(&authority.replay_file_sha256);
+    image.extend_from_slice(&authority.replay_payload_sha256);
+    image.extend_from_slice(&authority.rules_serialized_sha256);
+    image.extend_from_slice(&(authority.rules_constants_payload_offset as u64).to_le_bytes());
+    image.extend_from_slice(&authority.team_setup_source_sha256);
+    image.extend_from_slice(&authority.parent_authority_digest);
+    image.extend_from_slice(&authority.parent_local_prefix_digest);
+    image.extend_from_slice(&authority.parent_request_sha256);
+    append_armageddon_facts(&mut image, authority.facts);
+    sha256(&image)
+}
+
+fn append_team_setup_source(image: &mut Vec<u8>, before: &TeamSetupState, after: &TeamSetupState) {
+    image.push(before.setup.team_style);
+    image.extend_from_slice(&before.setup.frame.to_le_bytes());
+    image.push(before.setup.semaphore_820);
+    for player in before.setup.players {
+        image.extend_from_slice(&player.flags.to_le_bytes());
+        image.push(player.who);
+        image.push(player.team as u8);
+    }
+    for leader in before.setup.leaders {
+        image.extend_from_slice(&leader.leader_flags.to_le_bytes());
+        image.extend_from_slice(&leader.who.to_le_bytes());
+    }
+    for value in after.on_team {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&after.num_teams.to_le_bytes());
+    image.extend_from_slice(&after.num_sides.to_le_bytes());
+    image.extend_from_slice(&after.semaphore_flags.to_le_bytes());
+    image.push(after.setup.semaphore_820);
+    for player in after.setup.players {
+        image.push(player.team as u8);
+    }
+}
+
+fn rules_i32(payload: &[u8], constants: usize, offset: usize) -> Option<i32> {
+    let bytes = payload.get(constants.checked_add(offset)?..constants.checked_add(offset + 4)?)?;
+    Some(i32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+fn get_armageddon_threshold(facts: Frame0ArmageddonThresholdFacts) -> i32 {
+    let mut threshold = facts
+        .armageddon_per_team
+        .wrapping_mul(facts.num_sides)
+        .wrapping_add(facts.armageddon_per_nation.wrapping_mul(facts.num_nations))
+        .wrapping_add(facts.armageddon);
+    match facts.starting_resources {
+        7 => threshold = threshold.wrapping_mul(3),
+        5 | 6 | 11 | 12 => threshold = threshold.wrapping_mul(2),
+        _ => {}
+    }
+    if facts.starting_resources == 8 && threshold < 100 {
+        threshold = 100;
+    }
+    threshold
+}
+
+fn armageddon_local_prefix_digest(
+    source: &Frame0GetArmageddonAuthority,
+    parent: &Frame0ComputeUnitScorePrefixPlan,
+    threshold: i32,
+    clock_open: bool,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-compute-unit-score-armageddon-prefix-v1".to_vec();
+    image.extend_from_slice(&source.composition_digest);
+    image.extend_from_slice(&parent.local_prefix_digest);
+    image.extend_from_slice(&parent.open.request_sha256);
+    image.extend_from_slice(&GET_ARMAGEDDON_CALL_VA.to_le_bytes());
+    image.extend_from_slice(&GET_ARMAGEDDON_VA.to_le_bytes());
+    image.extend_from_slice(&threshold.to_le_bytes());
+    image.extend_from_slice(&source.facts.current_armageddon.to_le_bytes());
+    image.extend_from_slice(&ARMAGEDDON_COMPARE_LOAD_VA.to_le_bytes());
+    image.extend_from_slice(&ARMAGEDDON_COMPARE_VA.to_le_bytes());
+    image.push(u8::from(clock_open));
+    sha256(&image)
+}
+
+fn first_unit_census_request_digest(
+    authority: &Frame0ComputeScoreEntryAuthority,
+    source: &Frame0GetArmageddonAuthority,
+    local_prefix_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-unit-score-first-census-request-v1".to_vec();
+    image.extend_from_slice(&authority.composition_digest);
+    image.extend_from_slice(&source.composition_digest);
+    image.extend_from_slice(&local_prefix_digest);
+    image.extend_from_slice(&authority.capture.call_entry_sim_sha256);
+    image.push(authority.capture.owner);
+    image.extend_from_slice(&FIRST_UNIT_SCORE_TYPE.to_le_bytes());
+    image.extend_from_slice(&UNIT_SCORE_NUM_QUEUED_READ_VA.to_le_bytes());
+    image.extend_from_slice(&FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET.to_le_bytes());
+    image.extend_from_slice(&UNIT_SCORE_NUM_UNITS_READ_VA.to_le_bytes());
+    image.extend_from_slice(&FIRST_UNIT_NUM_UNITS_LEADER_OFFSET.to_le_bytes());
+    image.push(Frame0UnitScoreFirstCensusInputSurface::ExactPostPlanType50CountPair as u8);
+    image.extend_from_slice(&UNIT_SCORE_VALUE_CALL_VA.to_le_bytes());
+    image.extend_from_slice(&UNIT_SCORE_VALUE_VTABLE_OFFSET.to_le_bytes());
+    sha256(&image)
+}
+
 /// Execute the exact local instructions through the first unowned child.
 ///
 /// No canonical Sim state is changed. The returned plan cannot be installed until the complete
@@ -712,6 +938,252 @@ pub fn plan_golden_frame0_owner0_compute_unit_score_prefix(
         writes,
         local_prefix_digest,
         market_accounting_receipt_sha256: authority.market_accounting_receipt_sha256,
+        open,
+    })
+}
+
+/// Bind `Game::get_armageddon` to the target replay's own Rules and setup inputs.
+///
+/// The replay file and decompressed payload are rehashed. The three Constants dwords are read
+/// directly from the replay-carried serialized Rules span. `num_nations` comes from the complete
+/// active Player roster, while `num_sides` is regenerated by the exact deterministic
+/// `Game::init_teams` transaction over all eight Player rows. No caller-supplied threshold or
+/// setup-era Unit count is accepted.
+pub fn bind_golden_frame0_owner0_get_armageddon(
+    replay: &Replay,
+    score_authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeUnitScorePrefixPlan,
+) -> Result<Frame0GetArmageddonAuthority, Frame0ComputeScoreError> {
+    let expected_parent = plan_golden_frame0_owner0_compute_unit_score_prefix(
+        score_authority,
+        &plan_golden_frame0_owner0_compute_score_prefix(score_authority)?,
+    )?;
+    if parent != &expected_parent
+        || parent.open.callsite_va != GET_ARMAGEDDON_CALL_VA
+        || parent.open.callee_va != GET_ARMAGEDDON_VA
+        || parent.open.receiver_owner != GOLDEN_OWNER
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonParentDisagreement);
+    }
+
+    let raw = std::fs::read(&replay.path)
+        .map_err(|error| Frame0ComputeScoreError::GetArmageddonReplayRead(error.to_string()))?;
+    let replay_file_sha256 = sha256(&raw);
+    if replay_file_sha256 != REPLAY_FILE_SHA256
+        || replay_file_sha256 != score_authority.capture.replay_file_sha256
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonReplayMismatch);
+    }
+    let payload = load_payload(&replay.path)
+        .map_err(|error| Frame0ComputeScoreError::GetArmageddonPayloadRead(error.to_string()))?;
+    let replay_payload_sha256 = sha256(&payload);
+    if replay_payload_sha256 != replay.initial.payload_sha256 {
+        return Err(Frame0ComputeScoreError::GetArmageddonReplayMismatch);
+    }
+    let rules = replay
+        .initial
+        .rules
+        .ok_or(Frame0ComputeScoreError::GetArmageddonMissingRules)?;
+    let rules_end = rules
+        .serialized_offset
+        .checked_add(rules.serialized_bytes)
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?;
+    let rules_span = payload
+        .get(rules.serialized_offset..rules_end)
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?;
+    if sha256(rules_span) != rules.serialized_sha256 {
+        return Err(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch);
+    }
+    let constants = rules
+        .serialized_offset
+        .checked_add(1 + SHIPPED_TYPES_SERIALIZED_BYTES)
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?;
+    let constants_end = constants
+        .checked_add(RULES_CONSTANTS_ARMAGEDDON_PER_TEAM_OFFSET + 4)
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?;
+    if constants_end > rules_end {
+        return Err(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch);
+    }
+
+    if replay.initial.info.players.len() != SETUP_SLOTS || replay.initial.game.frame != GOLDEN_FRAME
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonInitialStateMismatch);
+    }
+    let active: Vec<_> = replay.initial.active_players().collect();
+    if active.len() != 1
+        || active[0].who != GOLDEN_OWNER
+        || usize::from(active[0].slot) >= SETUP_SLOTS
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonRosterMismatch);
+    }
+
+    let mut team = TeamSetupState::default();
+    team.setup.team_style = replay.initial.info.settings.team_style;
+    team.setup.frame = replay.initial.game.frame;
+    team.setup.semaphore_820 = *replay
+        .initial
+        .game
+        .semaphore
+        .first()
+        .ok_or(Frame0ComputeScoreError::GetArmageddonMissingSemaphore)?;
+    for (slot, player) in replay.initial.info.players.iter().enumerate() {
+        if usize::from(player.slot) != slot {
+            return Err(Frame0ComputeScoreError::GetArmageddonRosterMismatch);
+        }
+        team.setup.players[slot] = PlayerSetup {
+            flags: player.flags,
+            who: player.who,
+            team: player.team as i8,
+        };
+    }
+    for player in &active {
+        let owner = usize::from(player.who);
+        if owner >= SETUP_SLOTS || team.setup.leaders[owner].is_present() {
+            return Err(Frame0ComputeScoreError::GetArmageddonRosterMismatch);
+        }
+        team.setup.leaders[owner] = LeaderTeamState {
+            leader_flags: 1,
+            who: i32::from(player.who),
+            diplos: [0; SETUP_SLOTS],
+        };
+    }
+    let team_before = team.clone();
+    init_teams_atomic(
+        &mut team,
+        InitTeamsRequest {
+            local_player_setup_slot: usize::from(active[0].slot),
+            ranked: false,
+        },
+    )
+    .map_err(Frame0ComputeScoreError::GetArmageddonTeamSetup)?;
+    let mut team_source = b"don-2024-frame0-armageddon-team-source-v1".to_vec();
+    team_source.extend_from_slice(&replay_payload_sha256);
+    append_team_setup_source(&mut team_source, &team_before, &team);
+    let team_setup_source_sha256 = sha256(&team_source);
+
+    let facts = Frame0ArmageddonThresholdFacts {
+        armageddon: rules_i32(&payload, constants, RULES_CONSTANTS_ARMAGEDDON_OFFSET)
+            .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?,
+        armageddon_per_nation: rules_i32(
+            &payload,
+            constants,
+            RULES_CONSTANTS_ARMAGEDDON_PER_NATION_OFFSET,
+        )
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?,
+        armageddon_per_team: rules_i32(
+            &payload,
+            constants,
+            RULES_CONSTANTS_ARMAGEDDON_PER_TEAM_OFFSET,
+        )
+        .ok_or(Frame0ComputeScoreError::GetArmageddonRulesSpanMismatch)?,
+        num_nations: i32::try_from(active.len())
+            .map_err(|_| Frame0ComputeScoreError::GetArmageddonRosterMismatch)?,
+        num_sides: team.num_sides,
+        starting_resources: replay.initial.info.settings.starting_resources,
+        current_armageddon: replay.initial.game.armageddon,
+    };
+    // These values are independently read above. The explicit target gate prevents a valid but
+    // different replay/rules image from being relabelled as this golden chronology receipt.
+    if facts
+        != (Frame0ArmageddonThresholdFacts {
+            armageddon: 4,
+            armageddon_per_nation: 1,
+            armageddon_per_team: 2,
+            num_nations: 1,
+            num_sides: 1,
+            starting_resources: 0,
+            current_armageddon: 0,
+        })
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonInitialStateMismatch);
+    }
+
+    let mut authority = Frame0GetArmageddonAuthority {
+        revision: score_authority.revision,
+        composition_digest: [0; 32],
+        source: Frame0GetArmageddonSource::ReplayRulesInitialGameAndSetupTeamTransaction,
+        replay_file_sha256,
+        replay_payload_sha256,
+        rules_serialized_sha256: rules.serialized_sha256,
+        rules_constants_payload_offset: constants,
+        team_setup_source_sha256,
+        parent_authority_digest: score_authority.composition_digest,
+        parent_local_prefix_digest: parent.local_prefix_digest,
+        parent_request_sha256: parent.open.request_sha256,
+        facts,
+    };
+    authority.composition_digest = frame0_get_armageddon_authority_digest(&authority);
+    Ok(authority)
+}
+
+/// Execute the source-owned Armageddon threshold child and its immediate comparison.
+///
+/// The golden clock is open (`0 < 7`). Retail next reads the live type-50 queue and Unit count.
+/// Those post-planner mirrors are not projected by the replay setup rows, so this plan stops at
+/// the first count pair rather than selecting a virtual score-value child.
+pub fn plan_golden_frame0_owner0_compute_unit_score_armageddon(
+    score_authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeUnitScorePrefixPlan,
+    source: &Frame0GetArmageddonAuthority,
+) -> Result<Frame0ComputeUnitScoreArmageddonPlan, Frame0ComputeScoreError> {
+    let expected_parent = plan_golden_frame0_owner0_compute_unit_score_prefix(
+        score_authority,
+        &plan_golden_frame0_owner0_compute_score_prefix(score_authority)?,
+    )?;
+    if parent != &expected_parent
+        || source.revision != score_authority.revision
+        || source.source != Frame0GetArmageddonSource::ReplayRulesInitialGameAndSetupTeamTransaction
+        || source.replay_file_sha256 != REPLAY_FILE_SHA256
+        || source.parent_authority_digest != score_authority.composition_digest
+        || source.parent_local_prefix_digest != parent.local_prefix_digest
+        || source.parent_request_sha256 != parent.open.request_sha256
+    {
+        return Err(Frame0ComputeScoreError::GetArmageddonParentDisagreement);
+    }
+    if source.composition_digest != frame0_get_armageddon_authority_digest(source) {
+        return Err(Frame0ComputeScoreError::GetArmageddonStaleAuthority);
+    }
+
+    let threshold = get_armageddon_threshold(source.facts);
+    let clock_open = source.facts.current_armageddon < threshold;
+    if !clock_open {
+        return Err(Frame0ComputeScoreError::GetArmageddonClockUnexpectedlyClosed);
+    }
+    let local_prefix_digest = armageddon_local_prefix_digest(source, parent, threshold, clock_open);
+    let open = Frame0UnitScoreFirstCensusRequest {
+        request_sha256: first_unit_census_request_digest(
+            score_authority,
+            source,
+            local_prefix_digest,
+        ),
+        parent_authority_digest: score_authority.composition_digest,
+        armageddon_receipt_digest: local_prefix_digest,
+        call_entry_sim_sha256: score_authority.capture.call_entry_sim_sha256,
+        receiver_owner: score_authority.capture.owner,
+        type_index: FIRST_UNIT_SCORE_TYPE,
+        num_queued_read_va: UNIT_SCORE_NUM_QUEUED_READ_VA,
+        num_queued_leader_offset: FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET,
+        num_units_read_va: UNIT_SCORE_NUM_UNITS_READ_VA,
+        num_units_leader_offset: FIRST_UNIT_NUM_UNITS_LEADER_OFFSET,
+        input_surface: Frame0UnitScoreFirstCensusInputSurface::ExactPostPlanType50CountPair,
+        next_child_callsite_if_nonzero: UNIT_SCORE_VALUE_CALL_VA,
+        next_child_vtable_offset_if_nonzero: UNIT_SCORE_VALUE_VTABLE_OFFSET,
+    };
+
+    Ok(Frame0ComputeUnitScoreArmageddonPlan {
+        authority_revision: score_authority.revision,
+        parent_authority_digest: score_authority.composition_digest,
+        parent_local_prefix_digest: parent.local_prefix_digest,
+        parent_request_sha256: parent.open.request_sha256,
+        source_authority_digest: source.composition_digest,
+        get_armageddon_callsite_va: GET_ARMAGEDDON_CALL_VA,
+        get_armageddon_callee_va: GET_ARMAGEDDON_VA,
+        returned_threshold: threshold,
+        current_armageddon: source.facts.current_armageddon,
+        comparison_load_va: ARMAGEDDON_COMPARE_LOAD_VA,
+        comparison_va: ARMAGEDDON_COMPARE_VA,
+        clock_open,
+        local_prefix_digest,
         open,
     })
 }
@@ -845,6 +1317,53 @@ mod tests {
         }
     }
 
+    fn score_authority_and_unit_prefix() -> (
+        Frame0ComputeScoreEntryAuthority,
+        Frame0ComputeUnitScorePrefixPlan,
+    ) {
+        let planner = planner();
+        let market = market_receipt();
+        let authority = bind_golden_frame0_owner0_compute_score_entry(
+            &planner,
+            capture(&planner, &market),
+            market,
+        )
+        .unwrap();
+        let score = plan_golden_frame0_owner0_compute_score_prefix(&authority).unwrap();
+        let unit = plan_golden_frame0_owner0_compute_unit_score_prefix(&authority, &score).unwrap();
+        (authority, unit)
+    }
+
+    fn armageddon_source(
+        authority: &Frame0ComputeScoreEntryAuthority,
+        unit: &Frame0ComputeUnitScorePrefixPlan,
+    ) -> Frame0GetArmageddonAuthority {
+        let mut source = Frame0GetArmageddonAuthority {
+            revision: authority.revision,
+            composition_digest: [0; 32],
+            source: Frame0GetArmageddonSource::ReplayRulesInitialGameAndSetupTeamTransaction,
+            replay_file_sha256: REPLAY_FILE_SHA256,
+            replay_payload_sha256: hash(0x71),
+            rules_serialized_sha256: hash(0x72),
+            rules_constants_payload_offset: 0x1234,
+            team_setup_source_sha256: hash(0x73),
+            parent_authority_digest: authority.composition_digest,
+            parent_local_prefix_digest: unit.local_prefix_digest,
+            parent_request_sha256: unit.open.request_sha256,
+            facts: Frame0ArmageddonThresholdFacts {
+                armageddon: 4,
+                armageddon_per_nation: 1,
+                armageddon_per_team: 2,
+                num_nations: 1,
+                num_sides: 1,
+                starting_resources: 0,
+                current_armageddon: 0,
+            },
+        };
+        source.composition_digest = frame0_get_armageddon_authority_digest(&source);
+        source
+    }
+
     #[test]
     fn owner_zero_stops_at_unit_score_and_preserves_market_wealth() {
         let plan = planner();
@@ -921,6 +1440,67 @@ mod tests {
         );
         assert_ne!(unit.local_prefix_digest, [0; 32]);
         assert_ne!(unit.open.request_sha256, [0; 32]);
+    }
+
+    #[test]
+    fn armageddon_child_returns_seven_then_stops_at_live_type50_counts() {
+        let (authority, unit) = score_authority_and_unit_prefix();
+        let source = armageddon_source(&authority, &unit);
+        let plan =
+            plan_golden_frame0_owner0_compute_unit_score_armageddon(&authority, &unit, &source)
+                .unwrap();
+
+        assert_eq!(plan.returned_threshold, 7);
+        assert_eq!(plan.current_armageddon, 0);
+        assert!(plan.clock_open);
+        assert_eq!(plan.comparison_load_va, ARMAGEDDON_COMPARE_LOAD_VA);
+        assert_eq!(plan.comparison_va, ARMAGEDDON_COMPARE_VA);
+        assert_eq!(plan.open.type_index, FIRST_UNIT_SCORE_TYPE);
+        assert_eq!(plan.open.num_queued_read_va, UNIT_SCORE_NUM_QUEUED_READ_VA);
+        assert_eq!(
+            plan.open.num_queued_leader_offset,
+            FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET
+        );
+        assert_eq!(plan.open.num_units_read_va, UNIT_SCORE_NUM_UNITS_READ_VA);
+        assert_eq!(
+            plan.open.num_units_leader_offset,
+            FIRST_UNIT_NUM_UNITS_LEADER_OFFSET
+        );
+        assert_eq!(
+            plan.open.input_surface,
+            Frame0UnitScoreFirstCensusInputSurface::ExactPostPlanType50CountPair
+        );
+        assert_eq!(
+            plan.open.next_child_callsite_if_nonzero,
+            UNIT_SCORE_VALUE_CALL_VA
+        );
+        assert_eq!(
+            plan.open.next_child_vtable_offset_if_nonzero,
+            UNIT_SCORE_VALUE_VTABLE_OFFSET
+        );
+        assert_ne!(plan.local_prefix_digest, [0; 32]);
+        assert_ne!(plan.open.request_sha256, [0; 32]);
+    }
+
+    #[test]
+    fn armageddon_source_drift_and_closed_clock_bite() {
+        let (authority, unit) = score_authority_and_unit_prefix();
+        let mut stale = armageddon_source(&authority, &unit);
+        stale.facts.armageddon_per_team ^= 1;
+        assert_eq!(
+            plan_golden_frame0_owner0_compute_unit_score_armageddon(&authority, &unit, &stale)
+                .unwrap_err(),
+            Frame0ComputeScoreError::GetArmageddonStaleAuthority
+        );
+
+        let mut closed = armageddon_source(&authority, &unit);
+        closed.facts.current_armageddon = 7;
+        closed.composition_digest = frame0_get_armageddon_authority_digest(&closed);
+        assert_eq!(
+            plan_golden_frame0_owner0_compute_unit_score_armageddon(&authority, &unit, &closed)
+                .unwrap_err(),
+            Frame0ComputeScoreError::GetArmageddonClockUnexpectedlyClosed
+        );
     }
 
     #[test]
