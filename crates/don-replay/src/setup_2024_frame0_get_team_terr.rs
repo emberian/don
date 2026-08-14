@@ -7,21 +7,25 @@
 //! helper represents the later ally path and is therefore not evidence for this call.
 //!
 //! This module binds the complete frame-zero input surface: `GameInfo::team_style`, all eight
-//! Player flag/who/team rows, and all eight current Leader flag/who/territory rows. The Player
-//! projection may originate in the exact post-`Game::init_teams` setup owner, but the Leader
-//! projection must be captured again at this call boundary; setup-time Leader rows and missing
-//! final-territory production are not accepted as substitutes. Resolution is detached and has
-//! no canonical writes.
+//! Player flag/who/team rows, and all eight current Leader flag/who/territory rows. Both are
+//! extracted from one canonical whole-Sim call-entry capture; post-`Game::init_teams` rows,
+//! setup-time Leader rows, and missing final-territory production are not accepted as
+//! substitutes. Resolution is detached and has no canonical writes.
 
 #![forbid(unsafe_code)]
 
 use std::fmt;
 
+use don_sim::systems::save_load::{save_sim, SaveError};
 use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
+use don_sim::tick::Sim;
 
 use crate::setup_2024_frame0_plan_strategy::{
-    validate_frame0_get_team_terr_request, Frame0GetTeamTerrInputSurface, Frame0GetTeamTerrRequest,
-    GET_TEAM_TERR_CALL_VA, GET_TEAM_TERR_VA, GOLDEN_FRAME,
+    bind_golden_frame0_owner0_plan_strategy_entry, frame0_plan_strategy_entry_authority_digest,
+    plan_golden_frame0_owner0_plan_strategy_prefix, validate_frame0_get_team_terr_request,
+    Frame0GetTeamTerrInputSurface, Frame0GetTeamTerrRequest, Frame0PlanStrategyEntryAuthority,
+    Frame0PlanStrategyError, GET_TEAM_TERR_CALL_VA, GET_TEAM_TERR_VA,
+    GOLDEN_FIRST_STRATEGY_ORDINAL, GOLDEN_FIRST_STRATEGY_OWNER, GOLDEN_FRAME, GOLDEN_STEP,
 };
 use crate::setup_2024_frame379::REPLAY_FILE_SHA256;
 use crate::world_owner_frontier::sha256;
@@ -48,9 +52,18 @@ const NORMAL_TEAM_COUNT: i8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+pub enum Frame0GetTeamTerrCallEntrySource {
+    /// One supported-retail whole-Sim capture at owner zero's frame-zero step-11
+    /// `Leader::plan_strategy` entry. The parent prefix and this child projection name the same
+    /// boundary; neither is reconstructed from the completed setup image.
+    CompleteRetailOwnerZeroPlanStrategyEntry,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Frame0GetTeamTerrGameSource {
-    /// Exact supported-replay GameInfo projection produced after `Game::init_teams` and retained
-    /// unchanged through this frame-zero call entry.
+    /// Exact live GameInfo projection extracted from the supported-retail whole-Sim call-entry
+    /// capture. Setup-time team rows alone do not produce this variant.
     SourceBackedGameInfoPlayerTeamProjection,
 }
 
@@ -94,13 +107,42 @@ pub struct Frame0GetTeamTerrLeaderProjection {
     pub leaders: [Frame0GetTeamTerrLeaderRow; LEADER_SLOTS],
 }
 
+/// Minimal source attestation for the complete whole-Sim input image. The projected rows are
+/// deliberately not caller fields: the binder extracts them from `call_entry` only after its
+/// canonical DoNSave bytes match this hash and the parent strategy authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Frame0GetTeamTerrCapture {
+pub struct Frame0GetTeamTerrCallEntryCapture {
     pub revision: u64,
+    pub source: Frame0GetTeamTerrCallEntrySource,
     pub native_trace_sha256: [u8; 32],
     pub replay_file_sha256: [u8; 32],
     pub executable_sha256: [u8; 32],
-    pub request_sha256: [u8; 32],
+    pub plan_strategy_entry_authority_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub frame: i32,
+    pub step: u8,
+    pub owner: u8,
+    pub strategy_ordinal: u8,
+}
+
+/// Complete immutable input authority for native `get_team_terr` at exact frame zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0GetTeamTerrCallEntryAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub source: Frame0GetTeamTerrCallEntrySource,
+    pub native_trace_sha256: [u8; 32],
+    pub replay_file_sha256: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub plan_strategy_entry_authority_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub expected_request_sha256: [u8; 32],
+    pub local_prefix_digest: [u8; 32],
+    pub local_prefix_preserved_input_projection: bool,
+    pub frame: i32,
+    pub step: u8,
+    pub owner: u8,
+    pub strategy_ordinal: u8,
     pub game: Frame0GetTeamTerrGameProjection,
     pub leader: Frame0GetTeamTerrLeaderProjection,
 }
@@ -152,8 +194,12 @@ pub struct Frame0GetTeamTerrReceipt {
     pub executable_sha256: [u8; 32],
     pub request: Frame0GetTeamTerrRequest,
     pub native_trace_sha256: [u8; 32],
+    pub call_entry_authority_digest: [u8; 32],
     pub game_projection_digest: [u8; 32],
     pub leader_projection_digest: [u8; 32],
+    /// The parent-produced local prefix writes only escrow, City scratch, and planning scratch;
+    /// it cannot alter any Game/Player or flags/who/territory field projected here.
+    pub local_prefix_preserved_input_projection: bool,
     pub receiver_leader_slot: u8,
     pub get_player_calls: Vec<Frame0GetPlayerReceipt>,
     pub visits: Vec<Frame0GetTeamTerrVisit>,
@@ -162,25 +208,47 @@ pub struct Frame0GetTeamTerrReceipt {
     pub is_ally_reached: bool,
 }
 
+#[derive(Debug)]
+pub enum Frame0GetTeamTerrCallEntryBindError {
+    Parent(Frame0PlanStrategyError),
+    MissingCaptureRevision,
+    WrongCaptureSource,
+    ReplayMismatch,
+    UnsupportedExecutable,
+    ParentAuthorityMismatch,
+    CaptureBoundaryMismatch,
+    MissingNativeTrace,
+    NativeTraceMismatch,
+    Snapshot(SaveError),
+    CallEntrySnapshotMismatch,
+    WrongWorldFrame { expected: i32, actual: i32 },
+    WrongGameFrame { expected: i32, actual: i32 },
+    MissingPlayerTable,
+    OwnerLeaderProjectionMismatch,
+}
+
+impl fmt::Display for Frame0GetTeamTerrCallEntryBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "2024 frame-zero get_team_terr entry refused: {self:?}")
+    }
+}
+
+impl std::error::Error for Frame0GetTeamTerrCallEntryBindError {}
+
+impl From<Frame0PlanStrategyError> for Frame0GetTeamTerrCallEntryBindError {
+    fn from(value: Frame0PlanStrategyError) -> Self {
+        Self::Parent(value)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame0GetTeamTerrError {
     InvalidParentRequest,
-    MissingCaptureRevision,
-    MissingNativeTrace,
-    ReplayMismatch,
-    UnsupportedExecutable,
-    CaptureRequestMismatch,
-    MissingGameProjectionRevision,
-    MissingGameProjectionDigest,
-    InvalidGameProjectionDigest,
-    WrongGameProjectionSource,
-    WrongFrame { expected: i32, actual: i32 },
-    MissingLeaderProjectionRevision,
-    MissingLeaderProjectionDigest,
-    InvalidLeaderProjectionDigest,
-    WrongLeaderProjectionSource,
-    MissingCallEntrySnapshot,
+    InvalidCallEntryAuthority,
+    ParentAuthorityMismatch,
     CallEntrySnapshotMismatch,
+    InvalidGameProjectionDigest,
+    InvalidLeaderProjectionDigest,
     ReceiverOutsideLeaderTable,
     ReceiverWhoMismatch,
 }
@@ -234,6 +302,155 @@ pub fn frame0_get_team_terr_leader_projection_digest(
     sha256(&image)
 }
 
+/// Stable identity of the unified call-entry authority. Both projection digests are themselves
+/// recomputable from the extracted rows, so this digest cannot retain a stale row silently.
+pub fn frame0_get_team_terr_call_entry_authority_digest(
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-get-team-terr-call-entry-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.push(authority.source as u8);
+    image.extend_from_slice(&authority.native_trace_sha256);
+    image.extend_from_slice(&authority.replay_file_sha256);
+    image.extend_from_slice(&authority.executable_sha256);
+    image.extend_from_slice(&authority.plan_strategy_entry_authority_digest);
+    image.extend_from_slice(&authority.call_entry_sim_sha256);
+    image.extend_from_slice(&authority.expected_request_sha256);
+    image.extend_from_slice(&authority.local_prefix_digest);
+    image.push(u8::from(authority.local_prefix_preserved_input_projection));
+    image.extend_from_slice(&authority.frame.to_le_bytes());
+    image.extend_from_slice(&[authority.step, authority.owner, authority.strategy_ordinal]);
+    image.extend_from_slice(&authority.game.composition_digest);
+    image.extend_from_slice(&authority.leader.composition_digest);
+    sha256(&image)
+}
+
+/// Bind the complete native child input directly from the independently captured call-entry
+/// Sim. Setup-time Leader rows and caller-supplied projections are intentionally not accepted.
+pub fn bind_captured_frame0_get_team_terr_call_entry(
+    parent: &Frame0PlanStrategyEntryAuthority,
+    call_entry: &Sim,
+    capture: Frame0GetTeamTerrCallEntryCapture,
+) -> Result<Frame0GetTeamTerrCallEntryAuthority, Frame0GetTeamTerrCallEntryBindError> {
+    let rebound = bind_golden_frame0_owner0_plan_strategy_entry(parent.capture.clone())?;
+    if &rebound != parent
+        || parent.composition_digest != frame0_plan_strategy_entry_authority_digest(&parent.capture)
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::ParentAuthorityMismatch);
+    }
+    let local_prefix = plan_golden_frame0_owner0_plan_strategy_prefix(parent)?;
+    if capture.revision == 0 {
+        return Err(Frame0GetTeamTerrCallEntryBindError::MissingCaptureRevision);
+    }
+    if capture.source != Frame0GetTeamTerrCallEntrySource::CompleteRetailOwnerZeroPlanStrategyEntry
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::WrongCaptureSource);
+    }
+    if capture.replay_file_sha256 != REPLAY_FILE_SHA256
+        || capture.replay_file_sha256 != parent.capture.replay_file_sha256
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::ReplayMismatch);
+    }
+    if capture.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || capture.executable_sha256 != parent.capture.executable_sha256
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::UnsupportedExecutable);
+    }
+    if capture.plan_strategy_entry_authority_digest != parent.composition_digest
+        || capture.revision != parent.revision
+        || capture.call_entry_sim_sha256 != parent.capture.call_entry_sim_sha256
+        || capture.frame != parent.capture.frame
+        || capture.step != parent.capture.step
+        || capture.owner != parent.capture.owner
+        || capture.strategy_ordinal != parent.capture.strategy_ordinal
+        || capture.frame != GOLDEN_FRAME
+        || capture.step != GOLDEN_STEP
+        || capture.owner != GOLDEN_FIRST_STRATEGY_OWNER
+        || capture.strategy_ordinal != GOLDEN_FIRST_STRATEGY_ORDINAL
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::CaptureBoundaryMismatch);
+    }
+    if capture.native_trace_sha256 == [0; 32] {
+        return Err(Frame0GetTeamTerrCallEntryBindError::MissingNativeTrace);
+    }
+    if capture.native_trace_sha256 != parent.capture.native_trace_sha256 {
+        return Err(Frame0GetTeamTerrCallEntryBindError::NativeTraceMismatch);
+    }
+    let snapshot = save_sim(call_entry).map_err(Frame0GetTeamTerrCallEntryBindError::Snapshot)?;
+    if sha256(&snapshot) != capture.call_entry_sim_sha256 {
+        return Err(Frame0GetTeamTerrCallEntryBindError::CallEntrySnapshotMismatch);
+    }
+    if call_entry.world.frame != GOLDEN_FRAME {
+        return Err(Frame0GetTeamTerrCallEntryBindError::WrongWorldFrame {
+            expected: GOLDEN_FRAME,
+            actual: call_entry.world.frame,
+        });
+    }
+    if call_entry.vic_match.frame != GOLDEN_FRAME {
+        return Err(Frame0GetTeamTerrCallEntryBindError::WrongGameFrame {
+            expected: GOLDEN_FRAME,
+            actual: call_entry.vic_match.frame,
+        });
+    }
+    let players = call_entry
+        .players
+        .as_ref()
+        .ok_or(Frame0GetTeamTerrCallEntryBindError::MissingPlayerTable)?;
+    let mut game = Frame0GetTeamTerrGameProjection {
+        revision: capture.revision,
+        composition_digest: [0; 32],
+        source: Frame0GetTeamTerrGameSource::SourceBackedGameInfoPlayerTeamProjection,
+        frame: call_entry.vic_match.frame,
+        team_style: call_entry.vic_match.options.team_style,
+        players: std::array::from_fn(|slot| Frame0GetTeamTerrPlayerRow {
+            flags: players.players[slot].flags,
+            who: players.players[slot].who,
+            team: players.players[slot].team,
+        }),
+    };
+    game.composition_digest = frame0_get_team_terr_game_projection_digest(&game);
+    let mut leader = Frame0GetTeamTerrLeaderProjection {
+        revision: capture.revision,
+        composition_digest: [0; 32],
+        source: Frame0GetTeamTerrLeaderSource::CompleteRetailGetTeamTerrCallEntry,
+        call_entry_sim_sha256: capture.call_entry_sim_sha256,
+        leaders: std::array::from_fn(|slot| Frame0GetTeamTerrLeaderRow {
+            leader_flags: call_entry.vic_leaders.slots[slot].leader_flags,
+            who: call_entry.vic_leaders.slots[slot].who,
+            territory: call_entry.vic_leaders.slots[slot].territory,
+        }),
+    };
+    leader.composition_digest = frame0_get_team_terr_leader_projection_digest(&leader);
+    let owner = usize::from(capture.owner);
+    if leader.leaders[owner].leader_flags != parent.capture.leader.leader_flags
+        || leader.leaders[owner].who != parent.capture.leader.who
+    {
+        return Err(Frame0GetTeamTerrCallEntryBindError::OwnerLeaderProjectionMismatch);
+    }
+
+    let mut authority = Frame0GetTeamTerrCallEntryAuthority {
+        revision: capture.revision,
+        composition_digest: [0; 32],
+        source: capture.source,
+        native_trace_sha256: capture.native_trace_sha256,
+        replay_file_sha256: capture.replay_file_sha256,
+        executable_sha256: capture.executable_sha256,
+        plan_strategy_entry_authority_digest: capture.plan_strategy_entry_authority_digest,
+        call_entry_sim_sha256: capture.call_entry_sim_sha256,
+        expected_request_sha256: local_prefix.open.request_sha256,
+        local_prefix_digest: local_prefix.local_prefix_digest,
+        local_prefix_preserved_input_projection: true,
+        frame: capture.frame,
+        step: capture.step,
+        owner: capture.owner,
+        strategy_ordinal: capture.strategy_ordinal,
+        game,
+        leader,
+    };
+    authority.composition_digest = frame0_get_team_terr_call_entry_authority_digest(&authority);
+    Ok(authority)
+}
+
 fn get_player(
     leaders: &[Frame0GetTeamTerrLeaderRow; LEADER_SLOTS],
     players: &[Frame0GetTeamTerrPlayerRow; LEADER_SLOTS],
@@ -283,8 +500,10 @@ pub fn frame0_get_team_terr_receipt_digest(receipt: &Frame0GetTeamTerrReceipt) -
     image.extend_from_slice(&receipt.executable_sha256);
     image.extend_from_slice(&receipt.request.request_sha256);
     image.extend_from_slice(&receipt.native_trace_sha256);
+    image.extend_from_slice(&receipt.call_entry_authority_digest);
     image.extend_from_slice(&receipt.game_projection_digest);
     image.extend_from_slice(&receipt.leader_projection_digest);
+    image.push(u8::from(receipt.local_prefix_preserved_input_projection));
     image.push(receipt.receiver_leader_slot);
     image.extend_from_slice(&(receipt.get_player_calls.len() as u64).to_le_bytes());
     for call in &receipt.get_player_calls {
@@ -331,7 +550,7 @@ pub fn frame0_get_team_terr_receipt_digest(receipt: &Frame0GetTeamTerrReceipt) -
 /// Resolve the exact frame-zero child without publishing any parent `plan_strategy` writes.
 pub fn resolve_captured_frame0_get_team_terr(
     request: &Frame0GetTeamTerrRequest,
-    capture: &Frame0GetTeamTerrCapture,
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
 ) -> Result<Frame0GetTeamTerrReceipt, Frame0GetTeamTerrError> {
     if !validate_frame0_get_team_terr_request(request)
         || request.callsite_va != GET_TEAM_TERR_CALL_VA
@@ -341,66 +560,59 @@ pub fn resolve_captured_frame0_get_team_terr(
     {
         return Err(Frame0GetTeamTerrError::InvalidParentRequest);
     }
-    if capture.revision == 0 {
-        return Err(Frame0GetTeamTerrError::MissingCaptureRevision);
+    if authority.revision == 0
+        || authority.composition_digest == [0; 32]
+        || authority.source
+            != Frame0GetTeamTerrCallEntrySource::CompleteRetailOwnerZeroPlanStrategyEntry
+        || authority.native_trace_sha256 == [0; 32]
+        || authority.replay_file_sha256 != REPLAY_FILE_SHA256
+        || authority.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || authority.frame != GOLDEN_FRAME
+        || authority.step != GOLDEN_STEP
+        || authority.owner != GOLDEN_FIRST_STRATEGY_OWNER
+        || authority.strategy_ordinal != GOLDEN_FIRST_STRATEGY_ORDINAL
+        || authority.game.revision != authority.revision
+        || authority.leader.revision != authority.revision
+        || authority.game.source
+            != Frame0GetTeamTerrGameSource::SourceBackedGameInfoPlayerTeamProjection
+        || authority.leader.source
+            != Frame0GetTeamTerrLeaderSource::CompleteRetailGetTeamTerrCallEntry
+        || authority.game.frame != GOLDEN_FRAME
+        || authority.leader.call_entry_sim_sha256 != authority.call_entry_sim_sha256
+        || authority.expected_request_sha256 == [0; 32]
+        || authority.local_prefix_digest == [0; 32]
+        || !authority.local_prefix_preserved_input_projection
+        || authority.composition_digest
+            != frame0_get_team_terr_call_entry_authority_digest(authority)
+    {
+        return Err(Frame0GetTeamTerrError::InvalidCallEntryAuthority);
     }
-    if capture.native_trace_sha256 == [0; 32] {
-        return Err(Frame0GetTeamTerrError::MissingNativeTrace);
+    if request.parent_authority_digest != authority.plan_strategy_entry_authority_digest {
+        return Err(Frame0GetTeamTerrError::ParentAuthorityMismatch);
     }
-    if capture.replay_file_sha256 != REPLAY_FILE_SHA256 {
-        return Err(Frame0GetTeamTerrError::ReplayMismatch);
+    if request.request_sha256 != authority.expected_request_sha256
+        || request.local_prefix_digest != authority.local_prefix_digest
+    {
+        return Err(Frame0GetTeamTerrError::InvalidParentRequest);
     }
-    if capture.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
-        return Err(Frame0GetTeamTerrError::UnsupportedExecutable);
+    if request.call_entry_sim_sha256 != authority.call_entry_sim_sha256 {
+        return Err(Frame0GetTeamTerrError::CallEntrySnapshotMismatch);
     }
-    if capture.request_sha256 != request.request_sha256 {
-        return Err(Frame0GetTeamTerrError::CaptureRequestMismatch);
-    }
-    if capture.game.revision == 0 {
-        return Err(Frame0GetTeamTerrError::MissingGameProjectionRevision);
-    }
-    if capture.game.composition_digest == [0; 32] {
-        return Err(Frame0GetTeamTerrError::MissingGameProjectionDigest);
-    }
-    if capture.game.composition_digest != frame0_get_team_terr_game_projection_digest(&capture.game)
+    if authority.game.composition_digest
+        != frame0_get_team_terr_game_projection_digest(&authority.game)
     {
         return Err(Frame0GetTeamTerrError::InvalidGameProjectionDigest);
     }
-    if capture.game.source != Frame0GetTeamTerrGameSource::SourceBackedGameInfoPlayerTeamProjection
-    {
-        return Err(Frame0GetTeamTerrError::WrongGameProjectionSource);
-    }
-    if capture.game.frame != GOLDEN_FRAME {
-        return Err(Frame0GetTeamTerrError::WrongFrame {
-            expected: GOLDEN_FRAME,
-            actual: capture.game.frame,
-        });
-    }
-    if capture.leader.revision == 0 {
-        return Err(Frame0GetTeamTerrError::MissingLeaderProjectionRevision);
-    }
-    if capture.leader.composition_digest == [0; 32] {
-        return Err(Frame0GetTeamTerrError::MissingLeaderProjectionDigest);
-    }
-    if capture.leader.composition_digest
-        != frame0_get_team_terr_leader_projection_digest(&capture.leader)
+    if authority.leader.composition_digest
+        != frame0_get_team_terr_leader_projection_digest(&authority.leader)
     {
         return Err(Frame0GetTeamTerrError::InvalidLeaderProjectionDigest);
-    }
-    if capture.leader.source != Frame0GetTeamTerrLeaderSource::CompleteRetailGetTeamTerrCallEntry {
-        return Err(Frame0GetTeamTerrError::WrongLeaderProjectionSource);
-    }
-    if capture.leader.call_entry_sim_sha256 == [0; 32] {
-        return Err(Frame0GetTeamTerrError::MissingCallEntrySnapshot);
-    }
-    if capture.leader.call_entry_sim_sha256 != request.call_entry_sim_sha256 {
-        return Err(Frame0GetTeamTerrError::CallEntrySnapshotMismatch);
     }
     let receiver = usize::from(request.receiver_owner);
     if receiver >= LEADER_SLOTS {
         return Err(Frame0GetTeamTerrError::ReceiverOutsideLeaderTable);
     }
-    if capture.leader.leaders[receiver].who != receiver as i32 {
+    if authority.leader.leaders[receiver].who != receiver as i32 {
         return Err(Frame0GetTeamTerrError::ReceiverWhoMismatch);
     }
 
@@ -408,7 +620,7 @@ pub fn resolve_captured_frame0_get_team_terr(
     let mut get_player_calls = Vec::new();
     let mut visits = Vec::with_capacity(LEADER_SLOTS);
     for slot in 0..LEADER_SLOTS {
-        let leader = capture.leader.leaders[slot];
+        let leader = authority.leader.leaders[slot];
         let sum_before = sum;
         let disposition;
         if slot == receiver {
@@ -417,14 +629,14 @@ pub fn resolve_captured_frame0_get_team_terr(
         } else if leader.leader_flags & LEADER_VALID == 0 {
             disposition = Frame0GetTeamTerrDisposition::InvalidLeader;
         } else {
-            if capture.game.team_style == TEAM_STYLE_SPECIAL {
+            if authority.game.team_style == TEAM_STYLE_SPECIAL {
                 let receiver_player = get_player(
-                    &capture.leader.leaders,
-                    &capture.game.players,
+                    &authority.leader.leaders,
+                    &authority.game.players,
                     receiver,
                     &mut get_player_calls,
                 );
-                let row = capture.game.players[receiver_player];
+                let row = authority.game.players[receiver_player];
                 if row.flags & PLAYER_VALID != 0 && row.team == TEAM_OBSERVER {
                     visits.push(Frame0GetTeamTerrVisit {
                         leader_slot: slot as u8,
@@ -437,12 +649,12 @@ pub fn resolve_captured_frame0_get_team_terr(
                     continue;
                 }
                 let candidate_player = get_player(
-                    &capture.leader.leaders,
-                    &capture.game.players,
+                    &authority.leader.leaders,
+                    &authority.game.players,
                     slot,
                     &mut get_player_calls,
                 );
-                let row = capture.game.players[candidate_player];
+                let row = authority.game.players[candidate_player];
                 if row.flags & PLAYER_VALID != 0 && row.team == TEAM_OBSERVER {
                     visits.push(Frame0GetTeamTerrVisit {
                         leader_slot: slot as u8,
@@ -457,12 +669,12 @@ pub fn resolve_captured_frame0_get_team_terr(
             }
 
             let receiver_player = get_player(
-                &capture.leader.leaders,
-                &capture.game.players,
+                &authority.leader.leaders,
+                &authority.game.players,
                 receiver,
                 &mut get_player_calls,
             );
-            let receiver_team = capture.game.players[receiver_player].team;
+            let receiver_team = authority.game.players[receiver_player].team;
             if !(FIRST_NORMAL_TEAM..FIRST_NORMAL_TEAM + NORMAL_TEAM_COUNT).contains(&receiver_team)
             {
                 disposition = Frame0GetTeamTerrDisposition::ReceiverTeamOutsideNormalRange {
@@ -470,12 +682,12 @@ pub fn resolve_captured_frame0_get_team_terr(
                 };
             } else {
                 let candidate_player = get_player(
-                    &capture.leader.leaders,
-                    &capture.game.players,
+                    &authority.leader.leaders,
+                    &authority.game.players,
                     slot,
                     &mut get_player_calls,
                 );
-                let candidate_team = capture.game.players[candidate_player].team;
+                let candidate_team = authority.game.players[candidate_player].team;
                 if candidate_team == receiver_team {
                     sum = sum.wrapping_add(leader.territory);
                     disposition = Frame0GetTeamTerrDisposition::SameFrameZeroTeam {
@@ -500,14 +712,16 @@ pub fn resolve_captured_frame0_get_team_terr(
     }
 
     let mut receipt = Frame0GetTeamTerrReceipt {
-        revision: capture.revision,
+        revision: authority.revision,
         composition_digest: [0; 32],
-        replay_file_sha256: capture.replay_file_sha256,
-        executable_sha256: capture.executable_sha256,
+        replay_file_sha256: authority.replay_file_sha256,
+        executable_sha256: authority.executable_sha256,
         request: request.clone(),
-        native_trace_sha256: capture.native_trace_sha256,
-        game_projection_digest: capture.game.composition_digest,
-        leader_projection_digest: capture.leader.composition_digest,
+        native_trace_sha256: authority.native_trace_sha256,
+        call_entry_authority_digest: authority.composition_digest,
+        game_projection_digest: authority.game.composition_digest,
+        leader_projection_digest: authority.leader.composition_digest,
+        local_prefix_preserved_input_projection: authority.local_prefix_preserved_input_projection,
         receiver_leader_slot: request.receiver_owner,
         get_player_calls,
         visits,
@@ -522,91 +736,125 @@ pub fn resolve_captured_frame0_get_team_terr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_sim::tick::lifecycle_host::PlayerTable;
+
     use crate::setup_2024_frame0_plan_strategy::{
-        Frame0GetTeamTerrInputSurface, Frame0GetTeamTerrRequest,
+        bind_golden_frame0_owner0_plan_strategy_entry,
+        plan_golden_frame0_owner0_plan_strategy_prefix, Frame0PlanStrategyCityImage,
+        Frame0PlanStrategyEntryCapture, Frame0PlanStrategyEntrySource,
+        Frame0PlanStrategyLeaderImage, GOLDEN_CENTER_BUILD_O, GOLDEN_CENTER_CITY_SLOT,
+        PLAN_ENTRY_SCRATCH_DWORDS,
     };
 
     fn hash(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
 
-    fn fixture_request() -> Frame0GetTeamTerrRequest {
-        let mut request = Frame0GetTeamTerrRequest {
-            request_sha256: [0; 32],
-            parent_authority_digest: hash(1),
-            local_prefix_digest: hash(2),
-            call_entry_sim_sha256: hash(3),
-            receiver_owner: 0,
-            callsite_va: GET_TEAM_TERR_CALL_VA,
-            callee_va: GET_TEAM_TERR_VA,
-            input_surface: Frame0GetTeamTerrInputSurface::CompleteLeaderGameTeamAndPlayerProjection,
-        };
-        let mut image = b"don-2024-frame0-get-team-terr-request-v1".to_vec();
-        image.extend_from_slice(&request.parent_authority_digest);
-        image.extend_from_slice(&request.local_prefix_digest);
-        image.extend_from_slice(&request.call_entry_sim_sha256);
-        image.push(request.receiver_owner);
-        image.extend_from_slice(&request.callsite_va.to_le_bytes());
-        image.extend_from_slice(&request.callee_va.to_le_bytes());
-        image.push(request.input_surface as u8);
-        request.request_sha256 = sha256(&image);
-        request
+    fn call_entry() -> Sim {
+        let mut sim = Sim::new(7, 1);
+        for (slot, leader) in sim.vic_leaders.slots.iter_mut().enumerate() {
+            leader.leader_flags = LEADER_VALID;
+            leader.who = slot as i32;
+            leader.territory = (slot as i32 + 1) * 10;
+        }
+        sim.vic_leaders.slots[0].leader_flags = 0x7;
+        let mut players = PlayerTable::new();
+        for slot in 0..LEADER_SLOTS {
+            players.seat(slot, PLAYER_VALID, slot as u8, slot as i8);
+        }
+        sim.players = Some(players);
+        sim
     }
 
-    fn fixture_capture() -> Frame0GetTeamTerrCapture {
-        let players = std::array::from_fn(|slot| Frame0GetTeamTerrPlayerRow {
-            flags: PLAYER_VALID,
-            who: slot as u8,
-            team: slot as i8,
-        });
-        let leaders = std::array::from_fn(|slot| Frame0GetTeamTerrLeaderRow {
-            leader_flags: LEADER_VALID,
-            who: slot as i32,
-            territory: (slot as i32 + 1) * 10,
-        });
-        let mut capture = Frame0GetTeamTerrCapture {
-            revision: 1,
-            native_trace_sha256: hash(4),
+    fn parent(sim: &Sim) -> Frame0PlanStrategyEntryAuthority {
+        let call_entry_sim_sha256 = sha256(&save_sim(sim).unwrap());
+        bind_golden_frame0_owner0_plan_strategy_entry(Frame0PlanStrategyEntryCapture {
+            revision: 3,
+            source: Frame0PlanStrategyEntrySource::CompleteRetailOwnerZeroPlanStrategyEntry,
             replay_file_sha256: REPLAY_FILE_SHA256,
             executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
-            request_sha256: fixture_request().request_sha256,
-            game: Frame0GetTeamTerrGameProjection {
-                revision: 2,
-                composition_digest: [0; 32],
-                source: Frame0GetTeamTerrGameSource::SourceBackedGameInfoPlayerTeamProjection,
-                frame: GOLDEN_FRAME,
-                team_style: 0,
-                players,
+            completed_setup_sim_sha256: hash(1),
+            setup_composition_digest: hash(2),
+            preceding_chronology_digest: hash(3),
+            call_entry_sim_sha256,
+            native_trace_sha256: hash(4),
+            frame: GOLDEN_FRAME,
+            step: GOLDEN_STEP,
+            owner: GOLDEN_FIRST_STRATEGY_OWNER,
+            strategy_ordinal: GOLDEN_FIRST_STRATEGY_ORDINAL,
+            leader: Frame0PlanStrategyLeaderImage {
+                leader_flags: sim.vic_leaders.slots[0].leader_flags,
+                who: sim.vic_leaders.slots[0].who,
+                city_num: 1,
+                village_num: 1,
+                city_mark: 1,
+                escrow_rate: [0; 6],
+                scratch: [1; PLAN_ENTRY_SCRATCH_DWORDS],
             },
-            leader: Frame0GetTeamTerrLeaderProjection {
-                revision: 3,
-                composition_digest: [0; 32],
-                source: Frame0GetTeamTerrLeaderSource::CompleteRetailGetTeamTerrCallEntry,
-                call_entry_sim_sha256: fixture_request().call_entry_sim_sha256,
-                leaders,
-            },
-        };
-        capture.game.composition_digest =
-            frame0_get_team_terr_game_projection_digest(&capture.game);
-        capture.leader.composition_digest =
-            frame0_get_team_terr_leader_projection_digest(&capture.leader);
-        capture
+            cities: vec![Frame0PlanStrategyCityImage {
+                slot: GOLDEN_CENTER_CITY_SLOT,
+                city_flags: 1,
+                city: GOLDEN_CENTER_CITY_SLOT,
+                center_o: GOLDEN_CENTER_BUILD_O,
+                who: GOLDEN_FIRST_STRATEGY_OWNER as i8,
+                peasant_dist: -1,
+                free: 1,
+                busy: 2,
+                gatherers: 3,
+            }],
+        })
+        .unwrap()
     }
 
-    fn refresh_projection_digests(capture: &mut Frame0GetTeamTerrCapture) {
-        capture.game.composition_digest =
-            frame0_get_team_terr_game_projection_digest(&capture.game);
-        capture.leader.composition_digest =
-            frame0_get_team_terr_leader_projection_digest(&capture.leader);
+    fn source_capture(
+        parent: &Frame0PlanStrategyEntryAuthority,
+    ) -> Frame0GetTeamTerrCallEntryCapture {
+        Frame0GetTeamTerrCallEntryCapture {
+            revision: parent.revision,
+            source: Frame0GetTeamTerrCallEntrySource::CompleteRetailOwnerZeroPlanStrategyEntry,
+            native_trace_sha256: parent.capture.native_trace_sha256,
+            replay_file_sha256: parent.capture.replay_file_sha256,
+            executable_sha256: parent.capture.executable_sha256,
+            plan_strategy_entry_authority_digest: parent.composition_digest,
+            call_entry_sim_sha256: parent.capture.call_entry_sim_sha256,
+            frame: parent.capture.frame,
+            step: parent.capture.step,
+            owner: parent.capture.owner,
+            strategy_ordinal: parent.capture.strategy_ordinal,
+        }
+    }
+
+    fn bind(
+        sim: &Sim,
+    ) -> (
+        Frame0PlanStrategyEntryAuthority,
+        Frame0GetTeamTerrCallEntryAuthority,
+        Frame0GetTeamTerrRequest,
+    ) {
+        let parent = parent(sim);
+        let authority =
+            bind_captured_frame0_get_team_terr_call_entry(&parent, sim, source_capture(&parent))
+                .unwrap();
+        let request = plan_golden_frame0_owner0_plan_strategy_prefix(&parent)
+            .unwrap()
+            .open;
+        (parent, authority, request)
+    }
+
+    fn refresh_authority_digests(authority: &mut Frame0GetTeamTerrCallEntryAuthority) {
+        authority.game.composition_digest =
+            frame0_get_team_terr_game_projection_digest(&authority.game);
+        authority.leader.composition_digest =
+            frame0_get_team_terr_leader_projection_digest(&authority.leader);
+        authority.composition_digest = frame0_get_team_terr_call_entry_authority_digest(authority);
     }
 
     #[test]
     fn frame_zero_uses_player_teams_not_current_diplomacy() {
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.game.players[1].team = 0;
-        refresh_projection_digests(&mut capture);
-        let receipt = resolve_captured_frame0_get_team_terr(&request, &capture).unwrap();
+        let mut sim = call_entry();
+        sim.players.as_mut().unwrap().players[1].team = 0;
+        let (_, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
 
         assert_eq!(receipt.result, 30);
         assert!(!receipt.is_ally_reached);
@@ -624,16 +872,20 @@ mod tests {
             }
         );
         assert_ne!(receipt.composition_digest, [0; 32]);
+        assert_eq!(
+            receipt.call_entry_authority_digest,
+            authority.composition_digest
+        );
+        assert!(receipt.local_prefix_preserved_input_projection);
     }
 
     #[test]
     fn team_style_seven_excludes_observer_rows_before_team_compare() {
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.game.team_style = TEAM_STYLE_SPECIAL;
-        capture.game.players[1].team = TEAM_OBSERVER;
-        refresh_projection_digests(&mut capture);
-        let receipt = resolve_captured_frame0_get_team_terr(&request, &capture).unwrap();
+        let mut sim = call_entry();
+        sim.vic_match.options.team_style = TEAM_STYLE_SPECIAL;
+        sim.players.as_mut().unwrap().players[1].team = TEAM_OBSERVER;
+        let (_, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
 
         assert_eq!(receipt.result, 10);
         assert_eq!(
@@ -644,26 +896,22 @@ mod tests {
 
     #[test]
     fn get_player_preserves_deferred_special_match_and_default_zero() {
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.game.players[0].flags = 0;
-        capture.game.players[2] = Frame0GetTeamTerrPlayerRow {
-            flags: PLAYER_VALID | PLAYER_DEFERRED_MATCH_MASK,
-            who: 0,
-            team: 1,
-        };
-        capture.game.players[5] = Frame0GetTeamTerrPlayerRow {
-            flags: PLAYER_VALID | PLAYER_DEFERRED_MATCH_MASK,
-            who: 0,
-            team: 2,
-        };
-        for player in &mut capture.game.players {
+        let mut sim = call_entry();
+        let players = &mut sim.players.as_mut().unwrap().players;
+        players[0].flags = 0;
+        players[2].flags = PLAYER_VALID | PLAYER_DEFERRED_MATCH_MASK;
+        players[2].who = 0;
+        players[2].team = 1;
+        players[5].flags = PLAYER_VALID | PLAYER_DEFERRED_MATCH_MASK;
+        players[5].who = 0;
+        players[5].team = 2;
+        for player in players {
             if player.who == 7 {
                 player.flags = 0;
             }
         }
-        refresh_projection_digests(&mut capture);
-        let receipt = resolve_captured_frame0_get_team_terr(&request, &capture).unwrap();
+        let (_, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
 
         assert_eq!(receipt.get_player_calls[0].result_player_row, 5);
         assert_eq!(
@@ -681,67 +929,66 @@ mod tests {
 
     #[test]
     fn result_addition_wraps_like_x86() {
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.game.players[1].team = 0;
-        capture.leader.leaders[0].territory = i32::MAX;
-        capture.leader.leaders[1].territory = 2;
-        refresh_projection_digests(&mut capture);
-        let receipt = resolve_captured_frame0_get_team_terr(&request, &capture).unwrap();
+        let mut sim = call_entry();
+        sim.players.as_mut().unwrap().players[1].team = 0;
+        sim.vic_leaders.slots[0].territory = i32::MAX;
+        sim.vic_leaders.slots[1].territory = 2;
+        let (_, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
         assert_eq!(receipt.result, i32::MIN + 1);
     }
 
     #[test]
-    fn missing_runtime_leader_join_and_nonzero_frame_refuse() {
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.leader.composition_digest = [0; 32];
-        assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &capture).unwrap_err(),
-            Frame0GetTeamTerrError::MissingLeaderProjectionDigest
-        );
+    fn binder_requires_exact_whole_sim_and_live_player_table() {
+        let mut sim = call_entry();
+        sim.players = None;
+        let entry = parent(&sim);
+        assert!(matches!(
+            bind_captured_frame0_get_team_terr_call_entry(&entry, &sim, source_capture(&entry)),
+            Err(Frame0GetTeamTerrCallEntryBindError::MissingPlayerTable)
+        ));
 
-        let mut capture = fixture_capture();
-        capture.game.frame = 1;
-        refresh_projection_digests(&mut capture);
-        assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &capture).unwrap_err(),
-            Frame0GetTeamTerrError::WrongFrame {
-                expected: 0,
-                actual: 1,
-            }
-        );
+        let mut sim = call_entry();
+        let entry = parent(&sim);
+        sim.vic_leaders.slots[1].territory ^= 1;
+        assert!(matches!(
+            bind_captured_frame0_get_team_terr_call_entry(&entry, &sim, source_capture(&entry)),
+            Err(Frame0GetTeamTerrCallEntryBindError::CallEntrySnapshotMismatch)
+        ));
     }
 
     #[test]
     fn stale_parent_and_call_entry_links_bite() {
-        let mut request = fixture_request();
+        let sim = call_entry();
+        let (_, authority, mut request) = bind(&sim);
         request.local_prefix_digest[0] ^= 1;
         assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &fixture_capture()).unwrap_err(),
+            resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
             Frame0GetTeamTerrError::InvalidParentRequest
         );
 
-        let request = fixture_request();
-        let mut capture = fixture_capture();
-        capture.leader.call_entry_sim_sha256[0] ^= 1;
-        refresh_projection_digests(&mut capture);
+        let (_, mut authority, request) = bind(&sim);
+        authority.call_entry_sim_sha256[0] ^= 1;
+        authority.leader.call_entry_sim_sha256 = authority.call_entry_sim_sha256;
+        refresh_authority_digests(&mut authority);
         assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &capture).unwrap_err(),
+            resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
             Frame0GetTeamTerrError::CallEntrySnapshotMismatch
         );
 
-        let mut capture = fixture_capture();
-        capture.game.players[1].team ^= 1;
+        let (_, mut authority, request) = bind(&sim);
+        authority.game.players[1].team ^= 1;
+        authority.composition_digest = frame0_get_team_terr_call_entry_authority_digest(&authority);
         assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &capture).unwrap_err(),
+            resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
             Frame0GetTeamTerrError::InvalidGameProjectionDigest
         );
 
-        let mut capture = fixture_capture();
-        capture.leader.leaders[1].territory ^= 1;
+        let (_, mut authority, request) = bind(&sim);
+        authority.leader.leaders[1].territory ^= 1;
+        authority.composition_digest = frame0_get_team_terr_call_entry_authority_digest(&authority);
         assert_eq!(
-            resolve_captured_frame0_get_team_terr(&request, &capture).unwrap_err(),
+            resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
             Frame0GetTeamTerrError::InvalidLeaderProjectionDigest
         );
     }
