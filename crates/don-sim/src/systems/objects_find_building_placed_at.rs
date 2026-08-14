@@ -9,14 +9,27 @@
 //! The scratch word is not part of [`crate::tick::Sim`]. Callers must install an explicit
 //! [`ObjectsSelectedOwnerAuthority`] from a source; a Sim hash is not a substitute. Planning is
 //! pure. Its journal may be committed only after a complete native return and can be rolled back
-//! exactly. Unit and Build bands are read from their canonical owners. The current Wall adapter
-//! stores a band-local `WallState::o` while retail spatial links use the banded ordinal, so a
-//! reached Wall is preserved as a typed boundary instead of being normalized or guessed.
+//! exactly. Unit and Build bands are read from their canonical owners. Retail has no allocatable
+//! Wall band: `Objects::init` installs `obj_base[2] == obj_end[2] == 3000`. The dereference at
+//! `0x00658d73..0x00658d81` nevertheless uses the spatial link's full signed `o` directly as the
+//! owner-array index; it does not subtract 3000. Therefore a reached adapter-only Wall row proves
+//! that the input is outside the supported retail domain. It is preserved as a typed boundary and
+//! is never normalized into a purported retail identity. Ordinary retail buildings still derive
+//! from `WallData`, but they are allocated in and resolved through the Build band.
 //!
 //! Source ledger: supported PE SHA-256
 //! `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`;
 //! body `[0x00658c80,0x00658e60)` is 480 bytes with SHA-256
 //! `125fca1a859ba30aa9cdf27e585b111918316817041875e0779d61b51aab56ed`.
+//! `Objects::init` `[0x0065ea80,0x0065f374)` is 2,292 bytes with SHA-256
+//! `24ac4efac02ff66069aa72da676cbe472e521072ab73766a6384f7ec9945d110`;
+//! its exact `obj_base`/`obj_end` stores `[0x0065eb31,0x0065eb5e)` are 45 bytes with
+//! SHA-256 `ad2602dabbe5c7e0086d46629f74136c0c0298ee22a79f1794fde68fffac842a`.
+//! The misleadingly named `Objects::init_wall` `[0x00658c50,0x00658c77)` is 39 bytes
+//! (SHA-256 `3a75074f3b085a87fa55370ccaa0be07c8720e472985e4e551fe702e6843c809`)
+//! and delegates to `Objects::init_build`; that callee `[0x0065d190,0x0065d25a)` is 202
+//! bytes (SHA-256 `3c90f8de18beb628c9554d842a89b59511f7dbd1dceb20f6a1a07a6fded175e8`)
+//! and passes allocator bounds 2000 and 3000 at `0x0065d1a3..0x0065d1ae`.
 
 #![forbid(unsafe_code)]
 
@@ -40,6 +53,16 @@ pub const OBJECTS_FIND_BUILDING_PLACED_AT_BYTES: u32 =
 pub const OBJECTS_FIND_BUILDING_PLACED_AT_FIRST_TYPE_CALL_VA: u32 = 0x0065_8db8;
 pub const OBJECTS_FIND_BUILDING_PLACED_AT_TYPE_SLOT: u32 = 0x000c;
 pub const WALL_BAND_IDENTITY_BOUNDARY_VA: u32 = 0x0065_8d7a;
+pub const OBJECTS_INIT_VA: u32 = 0x0065_ea80;
+pub const OBJECTS_INIT_END_VA: u32 = 0x0065_f374;
+pub const OBJECTS_INIT_BYTES: u32 = OBJECTS_INIT_END_VA - OBJECTS_INIT_VA;
+pub const OBJECTS_INIT_BANDS_SLICE_VA: u32 = 0x0065_eb31;
+pub const OBJECTS_INIT_BANDS_SLICE_END_VA: u32 = 0x0065_eb5e;
+pub const OBJECTS_INIT_BANDS_SLICE_BYTES: u32 =
+    OBJECTS_INIT_BANDS_SLICE_END_VA - OBJECTS_INIT_BANDS_SLICE_VA;
+/// Retail's installed third object band is `[3000, 3000)` and cannot own an object.
+pub const RETAIL_WALL_BAND_BASE: i32 = super::walls::WALL_BAND_BASE;
+pub const RETAIL_WALL_BAND_END: i32 = super::walls::WALL_BAND_END;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectsSelectedOwnerAuthority {
@@ -164,12 +187,45 @@ pub struct ObjectsFindBuildingPlacedAtObjectRead {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectsFindBuildingPlacedAtWallBoundary {
+    /// First pointer-array dereference using the full banded `o`.
     pub instruction_va: u32,
     pub cell_offset_index: u8,
     pub key: ObjectsSpatialKey,
+    /// Adapter registry row reached by `key`; no corresponding retail row can exist.
     pub row: usize,
+    /// Adapter-only local identity stored by `Sim::spawn_wall`.
     pub wall_stored_o: i16,
+    /// Full ordinal used directly by the retail pointer-array dereference.
     pub required_banded_o: i16,
+    pub retail_band_base: i32,
+    pub retail_band_end: i32,
+    /// Adapter registry state proving that this preimage exceeds retail's fixed end.
+    pub observed_registry_len: usize,
+    pub observed_registry_mark: u32,
+}
+
+impl ObjectsFindBuildingPlacedAtWallBoundary {
+    pub fn validates(&self) -> bool {
+        let Some(adapter_index) = i32::from(self.required_banded_o)
+            .checked_sub(self.retail_band_base)
+            .and_then(|value| usize::try_from(value).ok())
+        else {
+            return false;
+        };
+        let expected_adapter_mark = u32::try_from(self.retail_band_base)
+            .ok()
+            .zip(u32::try_from(self.observed_registry_len).ok())
+            .and_then(|(base, len)| base.checked_add(len));
+        self.instruction_va == WALL_BAND_IDENTITY_BOUNDARY_VA
+            && self.retail_band_base == RETAIL_WALL_BAND_BASE
+            && self.retail_band_end == RETAIL_WALL_BAND_END
+            && self.retail_band_base == self.retail_band_end
+            && self.required_banded_o == self.key.o
+            && i32::try_from(adapter_index) == Ok(i32::from(self.wall_stored_o))
+            && adapter_index < self.observed_registry_len
+            && Some(self.observed_registry_mark) == expected_adapter_mark
+            && self.observed_registry_mark > u32::try_from(self.retail_band_end).unwrap_or(u32::MAX)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,7 +297,9 @@ impl ObjectsFindBuildingPlacedAtReceipt {
             ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary => {
                 self.returned.is_none()
                     && self.returned_owner.is_none()
-                    && self.wall_boundary.is_some()
+                    && self
+                        .wall_boundary
+                        .is_some_and(|boundary| boundary.validates())
                     && self.scratch.staged_selected_owner == -1
                     && self.scratch.after.is_none()
             }
@@ -390,11 +448,15 @@ fn resolve_object(
             })
         }
         Band::Wall => {
+            let owner = usize::try_from(key.who).expect("registry lookup validated owner");
             let wall = sim
                 .walls
                 .get(row)
                 .ok_or(ObjectsFindBuildingPlacedAtError::MissingObjectRow { key, row })?;
-            if wall.who != key.who as u8 {
+            let adapter_o = i32::from(key.o)
+                .checked_sub(RETAIL_WALL_BAND_BASE)
+                .and_then(|value| i16::try_from(value).ok());
+            if wall.who != key.who as u8 || adapter_o != Some(wall.o) {
                 return Err(ObjectsFindBuildingPlacedAtError::ObjectIdentityMismatch { key, row });
             }
             Ok(ResolvedObject {
@@ -414,6 +476,10 @@ fn resolve_object(
                     row,
                     wall_stored_o: wall.o,
                     required_banded_o: key.o,
+                    retail_band_base: RETAIL_WALL_BAND_BASE,
+                    retail_band_end: RETAIL_WALL_BAND_END,
+                    observed_registry_len: sim.world.objects.band_len(owner, Band::Wall),
+                    observed_registry_mark: sim.world.objects.slot(owner).mark(Band::Wall),
                 }),
             })
         }
@@ -816,5 +882,53 @@ mod tests {
         assert_eq!(receipt.objects[0].type_index, Some(414));
         assert_eq!(receipt.objects[0].contains_query_tile, Some(true));
         assert_eq!(receipt.scratch.after.unwrap().selected_owner, 0);
+    }
+
+    #[test]
+    fn adapter_wall_chain_stops_at_zero_capacity_retail_boundary() {
+        let mut sim = Sim::new(2, 8);
+        sim.activate(0);
+        let mut wall = super::super::walls::WallState::default();
+        wall.flags = flag::VALID;
+        wall.down = -1;
+        let row = sim.spawn_wall(0, wall);
+        assert_eq!(row, 0);
+        assert_eq!(sim.walls[row].o, 0);
+        assert_eq!(sim.world.objects.slot(0).mark(Band::Wall), 3001);
+
+        sim.map.world.tdata[6 * sim.map.world.tile_xs as usize + 6] |= tflag::BLOCKER_BUILDING;
+        let cell = sim.map.world.wdata_mut(1, 1);
+        cell.down = WALL_BAND_BASE as i16;
+        cell.down_who = 0;
+
+        let before = authority();
+        let receipt = plan_objects_find_building_placed_at(
+            &sim,
+            &LiveProductionRuntime::default(),
+            &before,
+            request([6, 6]),
+        )
+        .unwrap();
+        assert!(receipt.validates_against(&sim, &LiveProductionRuntime::default()));
+        assert_eq!(
+            receipt.stop,
+            ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary
+        );
+        assert_eq!(receipt.returned, None);
+        assert_eq!(receipt.scratch.after, None);
+        let boundary = receipt.wall_boundary.unwrap();
+        assert!(boundary.validates());
+        assert_eq!(boundary.key.o, 3000);
+        assert_eq!(boundary.wall_stored_o, 0);
+        assert_eq!(boundary.retail_band_base, 3000);
+        assert_eq!(boundary.retail_band_end, 3000);
+        assert_eq!(boundary.observed_registry_len, 1);
+        assert_eq!(boundary.observed_registry_mark, 3001);
+        let mut live = before;
+        assert_eq!(
+            receipt.scratch.apply(&mut live),
+            Err(ObjectsSelectedOwnerCommitError::ReceiptDidNotReturn)
+        );
+        assert_eq!(live, before);
     }
 }
