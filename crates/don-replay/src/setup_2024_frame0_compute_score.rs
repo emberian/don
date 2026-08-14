@@ -63,6 +63,10 @@ pub const UNIT_SCORE_VALUE_VTABLE_OFFSET: u32 = 0x7c;
 pub const FIRST_UNIT_SCORE_TYPE: i32 = 50;
 pub const FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET: u32 = 0x5a86;
 pub const FIRST_UNIT_NUM_UNITS_LEADER_OFFSET: u32 = 0x5762;
+pub const TRACK_UNIT_TYPE_VA: u32 = 0x006e_0dd0;
+pub const TRACK_UNIT_TYPE_COUNT_STORE_VA: u32 = 0x006e_0de4;
+pub const TRACK_QUEUED_VA: u32 = 0x006e_0f30;
+pub const TRACK_QUEUED_COUNT_STORE_VA: u32 = 0x006e_0f58;
 pub const RULES_CONSTANTS_ARMAGEDDON_OFFSET: usize = 0x0d14;
 pub const RULES_CONSTANTS_ARMAGEDDON_PER_NATION_OFFSET: usize = 0x0d18;
 pub const RULES_CONSTANTS_ARMAGEDDON_PER_TEAM_OFFSET: usize = 0x0d1c;
@@ -298,6 +302,47 @@ pub struct Frame0ComputeUnitScoreArmageddonPlan {
     pub open: Frame0UnitScoreFirstCensusRequest,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0UnitScoreCountField {
+    NumQueued50,
+    NumUnits0,
+}
+
+/// One exact retail producer/read pair which a native post-planner projection must bind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0UnitScoreCountFieldCaptureGap {
+    pub field: Frame0UnitScoreCountField,
+    pub leader_offset: u32,
+    pub read_va: u32,
+    pub producer_va: u32,
+    pub producer_store_va: u32,
+}
+
+/// Smallest missing authority at the first live Unit-score census.
+///
+/// The canonical simulator has duplicate Victory/production mirrors for these cells, but it has
+/// not executed the complete native frame-zero planner. Conversely, the supported native capture
+/// retains the correct call-entry Sim digest but does not project these two cells. This result
+/// records that exact join gap; it does not carry guessed values or select the conditional child.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0UnitScoreCountPairCaptureGap {
+    pub parent_authority_digest: [u8; 32],
+    pub armageddon_source_digest: [u8; 32],
+    pub armageddon_prefix_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_owner: u8,
+    pub type_index: i32,
+    pub fields: [Frame0UnitScoreCountFieldCaptureGap; 2],
+    pub native_capture_projects_count_pair: bool,
+    pub canonical_sim_joined_to_native_capture: bool,
+    pub setup_receipts_admissible: bool,
+    pub can_select_next_child: bool,
+    pub conditional_next_child_callsite: u32,
+    pub conditional_next_child_vtable_offset: u32,
+    pub gap_digest: [u8; 32],
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame0ComputeScorePrefixPlan {
     pub authority_revision: u64,
@@ -351,6 +396,7 @@ pub enum Frame0ComputeScoreError {
     GetArmageddonParentDisagreement,
     GetArmageddonStaleAuthority,
     GetArmageddonClockUnexpectedlyClosed,
+    UnitScoreCountPairParentDisagreement,
 }
 
 impl fmt::Display for Frame0ComputeScoreError {
@@ -819,6 +865,30 @@ fn first_unit_census_request_digest(
     sha256(&image)
 }
 
+fn unit_score_count_pair_gap_digest(gap: &Frame0UnitScoreCountPairCaptureGap) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-unit-score-count-pair-capture-gap-v1".to_vec();
+    image.extend_from_slice(&gap.parent_authority_digest);
+    image.extend_from_slice(&gap.armageddon_source_digest);
+    image.extend_from_slice(&gap.armageddon_prefix_digest);
+    image.extend_from_slice(&gap.call_entry_sim_sha256);
+    image.push(gap.receiver_owner);
+    image.extend_from_slice(&gap.type_index.to_le_bytes());
+    for field in gap.fields {
+        image.push(field.field as u8);
+        image.extend_from_slice(&field.leader_offset.to_le_bytes());
+        image.extend_from_slice(&field.read_va.to_le_bytes());
+        image.extend_from_slice(&field.producer_va.to_le_bytes());
+        image.extend_from_slice(&field.producer_store_va.to_le_bytes());
+    }
+    image.push(u8::from(gap.native_capture_projects_count_pair));
+    image.push(u8::from(gap.canonical_sim_joined_to_native_capture));
+    image.push(u8::from(gap.setup_receipts_admissible));
+    image.push(u8::from(gap.can_select_next_child));
+    image.extend_from_slice(&gap.conditional_next_child_callsite.to_le_bytes());
+    image.extend_from_slice(&gap.conditional_next_child_vtable_offset.to_le_bytes());
+    sha256(&image)
+}
+
 /// Execute the exact local instructions through the first unowned child.
 ///
 /// No canonical Sim state is changed. The returned plan cannot be installed until the complete
@@ -1188,6 +1258,64 @@ pub fn plan_golden_frame0_owner0_compute_unit_score_armageddon(
     })
 }
 
+/// Freeze the first exact producer/capture gap after the Armageddon comparison.
+///
+/// Retail has concrete writers for both count cells, and canonical `Sim` duplicates them in its
+/// Victory and production Leader mirrors. Neither fact binds their values to the independently
+/// captured native post-`plan_strategy` call entry. The smallest admissible continuation is a
+/// two-`u16` projection from that same native snapshot, keyed by its existing Sim digest. Until
+/// then setup Unit receipts are historical only and the conditional type-score child stays shut.
+pub fn audit_golden_frame0_owner0_unit_score_count_pair_gap(
+    score_authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeUnitScorePrefixPlan,
+    armageddon_source: &Frame0GetArmageddonAuthority,
+    armageddon: &Frame0ComputeUnitScoreArmageddonPlan,
+) -> Result<Frame0UnitScoreCountPairCaptureGap, Frame0ComputeScoreError> {
+    let expected = plan_golden_frame0_owner0_compute_unit_score_armageddon(
+        score_authority,
+        parent,
+        armageddon_source,
+    )?;
+    if armageddon != &expected {
+        return Err(Frame0ComputeScoreError::UnitScoreCountPairParentDisagreement);
+    }
+
+    let fields = [
+        Frame0UnitScoreCountFieldCaptureGap {
+            field: Frame0UnitScoreCountField::NumQueued50,
+            leader_offset: FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET,
+            read_va: UNIT_SCORE_NUM_QUEUED_READ_VA,
+            producer_va: TRACK_QUEUED_VA,
+            producer_store_va: TRACK_QUEUED_COUNT_STORE_VA,
+        },
+        Frame0UnitScoreCountFieldCaptureGap {
+            field: Frame0UnitScoreCountField::NumUnits0,
+            leader_offset: FIRST_UNIT_NUM_UNITS_LEADER_OFFSET,
+            read_va: UNIT_SCORE_NUM_UNITS_READ_VA,
+            producer_va: TRACK_UNIT_TYPE_VA,
+            producer_store_va: TRACK_UNIT_TYPE_COUNT_STORE_VA,
+        },
+    ];
+    let mut gap = Frame0UnitScoreCountPairCaptureGap {
+        parent_authority_digest: score_authority.composition_digest,
+        armageddon_source_digest: armageddon.source_authority_digest,
+        armageddon_prefix_digest: armageddon.local_prefix_digest,
+        call_entry_sim_sha256: armageddon.open.call_entry_sim_sha256,
+        receiver_owner: armageddon.open.receiver_owner,
+        type_index: armageddon.open.type_index,
+        fields,
+        native_capture_projects_count_pair: false,
+        canonical_sim_joined_to_native_capture: false,
+        setup_receipts_admissible: false,
+        can_select_next_child: false,
+        conditional_next_child_callsite: armageddon.open.next_child_callsite_if_nonzero,
+        conditional_next_child_vtable_offset: armageddon.open.next_child_vtable_offset_if_nonzero,
+        gap_digest: [0; 32],
+    };
+    gap.gap_digest = unit_score_count_pair_gap_digest(&gap);
+    Ok(gap)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1480,6 +1608,82 @@ mod tests {
         );
         assert_ne!(plan.local_prefix_digest, [0; 32]);
         assert_ne!(plan.open.request_sha256, [0; 32]);
+    }
+
+    #[test]
+    fn type50_count_pair_freezes_exact_native_capture_gap() {
+        let (authority, unit) = score_authority_and_unit_prefix();
+        let source = armageddon_source(&authority, &unit);
+        let armageddon =
+            plan_golden_frame0_owner0_compute_unit_score_armageddon(&authority, &unit, &source)
+                .unwrap();
+        let gap = audit_golden_frame0_owner0_unit_score_count_pair_gap(
+            &authority,
+            &unit,
+            &source,
+            &armageddon,
+        )
+        .unwrap();
+
+        assert_eq!(
+            gap.call_entry_sim_sha256,
+            authority.capture.call_entry_sim_sha256
+        );
+        assert_eq!(gap.receiver_owner, GOLDEN_OWNER);
+        assert_eq!(gap.type_index, FIRST_UNIT_SCORE_TYPE);
+        assert_eq!(
+            gap.fields,
+            [
+                Frame0UnitScoreCountFieldCaptureGap {
+                    field: Frame0UnitScoreCountField::NumQueued50,
+                    leader_offset: FIRST_UNIT_NUM_QUEUED_LEADER_OFFSET,
+                    read_va: UNIT_SCORE_NUM_QUEUED_READ_VA,
+                    producer_va: TRACK_QUEUED_VA,
+                    producer_store_va: TRACK_QUEUED_COUNT_STORE_VA,
+                },
+                Frame0UnitScoreCountFieldCaptureGap {
+                    field: Frame0UnitScoreCountField::NumUnits0,
+                    leader_offset: FIRST_UNIT_NUM_UNITS_LEADER_OFFSET,
+                    read_va: UNIT_SCORE_NUM_UNITS_READ_VA,
+                    producer_va: TRACK_UNIT_TYPE_VA,
+                    producer_store_va: TRACK_UNIT_TYPE_COUNT_STORE_VA,
+                },
+            ]
+        );
+        assert!(!gap.native_capture_projects_count_pair);
+        assert!(!gap.canonical_sim_joined_to_native_capture);
+        assert!(!gap.setup_receipts_admissible);
+        assert!(!gap.can_select_next_child);
+        assert_eq!(
+            gap.conditional_next_child_callsite,
+            UNIT_SCORE_VALUE_CALL_VA
+        );
+        assert_eq!(
+            gap.conditional_next_child_vtable_offset,
+            UNIT_SCORE_VALUE_VTABLE_OFFSET
+        );
+        assert_ne!(gap.gap_digest, [0; 32]);
+    }
+
+    #[test]
+    fn type50_count_pair_gap_refuses_mutated_parent() {
+        let (authority, unit) = score_authority_and_unit_prefix();
+        let source = armageddon_source(&authority, &unit);
+        let mut armageddon =
+            plan_golden_frame0_owner0_compute_unit_score_armageddon(&authority, &unit, &source)
+                .unwrap();
+        armageddon.open.num_queued_read_va ^= 1;
+
+        assert_eq!(
+            audit_golden_frame0_owner0_unit_score_count_pair_gap(
+                &authority,
+                &unit,
+                &source,
+                &armageddon,
+            )
+            .unwrap_err(),
+            Frame0ComputeScoreError::UnitScoreCountPairParentDisagreement
+        );
     }
 
     #[test]

@@ -85,6 +85,28 @@ No current authority proves that live post-planner pair. The source-owned Armage
 emits an exact type-50 count-pair request and stops before selecting the virtual type-score child.
 The seven setup Unit receipts remain historical inputs, not post-plan Leader inventory mirrors.
 
+## Type-50 count-pair capture gap
+
+The next audit resolves both retail producers without assigning either live value:
+
+| Count cell | Leader offset | Census read | Producer | Indexed store |
+|---|---:|---:|---:|---:|
+| `num_queued[50]` | `+0x5A86` | `0x006BC549` | `Leader::track_queued` `0x006E0F30` | `0x006E0F58` |
+| `num_units[0]` | `+0x5762` | `0x006BC551` | `Leader::track_unit_type` `0x006E0DD0` | `0x006E0DE4` |
+
+Canonical `Sim` has Victory and production mirrors for both arrays, and its existing owner frontier
+can require those mirrors to agree. That is not yet a post-planner authority: the simulator has not
+executed and retained the complete native frame-zero `plan_strategy`. In the other direction, the
+independent native compute-score capture has the correct `call_entry_sim_sha256`, but currently
+projects only the Leader fields needed by the earlier prefix—not these two `u16` cells.
+
+`audit_golden_frame0_owner0_unit_score_count_pair_gap` therefore publishes the smallest missing
+capture surface: owner zero, type 50, both exact read/producer pairs, and the existing native
+call-entry digest. It records that the native projection and canonical-Sim join are absent, rejects
+setup receipts as admissible evidence, and cannot select `0x006BC56C`/vtable `+0x7C`. Closing this
+gap requires the two cells projected from that same supported native post-plan snapshot; a later
+canonical join is valid only once the complete planner chronology is represented.
+
 ## Market chronology join
 
 The binder consumes the exact `MarketLeaderAccountingReceipt` rather than accepting a caller
