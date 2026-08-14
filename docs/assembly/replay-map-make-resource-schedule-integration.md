@@ -17,6 +17,8 @@ post_nubify_transitions checkpoint 0x0068c12a / token 0x1ebe
   -> optional typed first BONUS row through recurrence seam 0x00690215
   -> repeated typed later BONUS rows with replayed carry
   -> final no-RNG recurrence fallthrough at category tail 0x00690225
+  -> typed BONUSES cleanup and FISH lookup/enumeration
+  -> first FISH row 0x0068fbb3, or next category tail 0x00690225 when empty
 ```
 
 `execute_map_make_resource_schedule` constructs the caller-gap prior receipt
@@ -53,6 +55,11 @@ Three outcomes are explicit:
   later row against its placement receipt. The final row adds an explicit
   `0x00690215..0x00690225` fallthrough receipt and stops before category cleanup.
   A singleton array uses a tail-only continuation from its first-row boundary.
+- `FishCategoryOpen` replays that complete BONUSES history, binds exact document-host
+  handles to the category capture, performs the four conditional category/row releases,
+  increments the ordinal, and performs the selected/default FISH lookup and ordered row
+  enumeration. It stops before FISH row zero at `0x0068fbb3`, or at the next
+  `0x00690225` cleanup when the selected/fallback FISH section is empty.
 
 Later continuations also revalidate the state-carrying caller, pool-prefix, and XML
 RNG/World/pool chronology against each other. Descriptive capture provenance retained
@@ -80,10 +87,11 @@ Each selector subreceipt includes its exact before/after six-field pool, selecte
 good/index, retry draws, and exhaustion clear. A selector row may therefore advance the
 public pool without leaving it at the prefix state while publishing a newer digest.
 
-All rows in a nonempty current `BONUSES` array can now execute in the compiled schedule.
-The new exact residual for that path is `0x00690225`, where category cleanup begins.
-The zero-row XML-to-category-tail bridge remains open. Retail then proceeds through
-GOODIES and FISH, returns to
+All rows in a nonempty current `BONUSES` array and the following BONUSES cleanup/FISH
+dispatch can now execute in the compiled schedule. The new exact residual is
+`0x0068fbb3` for a nonempty FISH section and `0x00690225` for an empty one. The zero-row
+BONUSES XML-to-category-tail bridge remains open. Retail then executes FISH rows and
+proceeds through GOODIES before returning to
 `0x0068c70c`, and eventually reaches caller checkpoint `0x0068c72d` / token `0x1ef7`.
 The boundary records that checkpoint as pending, never as completed.
 
@@ -98,9 +106,9 @@ stage-ending checkpoint.
 
 The `place_resources` schedule row now states the executable ownership split:
 zero RNG through the pool and XML bootstrap, typed direct/callee RNG and concrete pool
-continuity for every row of a nonempty current BONUS array, then the exact category-tail
-fallthrough at `0x00690225`. The zero-row bridge and category/document cleanup remain
-open.
+continuity for every row of a nonempty current BONUS array, the exact category-tail
+fallthrough, and BONUSES cleanup/FISH dispatch. The zero-row BONUSES bridge, FISH/GOODIES
+row bodies, later category cleanup, and document cleanup remain open.
 
 ## Focused proof
 
@@ -124,6 +132,9 @@ open.
   concrete-pool continuity, final recurrence fallthrough to `0x00690225`, and refusal
   to execute another row after the category is complete;
 - singleton tail-only advancement and rejection of a removed or forged category-tail receipt;
+- exact BONUSES host cleanup and selected FISH dispatch with unchanged RNG, World, pool,
+  counters, and chance carry; capture-bound document-host continuity; and an explicit stop
+  before the first FISH row;
 - a later selector row whose direct chance draw, callee pool draw, concrete bitmask
   mutation, and published digest form one chronology, plus schedule-level rollback for
   a corrupted selector subreceipt;

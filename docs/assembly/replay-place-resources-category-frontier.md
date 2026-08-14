@@ -1,7 +1,7 @@
 # Replay resource-category and placement-entry frontier
 
-`crates/don-replay/src/place_resources_category_frontier.rs` is an exclusive,
-unregistered source proof extending the current `Map::place_resources` residual at
+`crates/don-replay/src/place_resources_category_frontier.rs` is the registered
+source proof extending the current `Map::place_resources` residual at
 `0x00690225`. It owns the category cleanup/dispatch chain through `FISH` and
 `GOODIES`, plus the exact deterministic prefixes of the two large placement callees.
 It deliberately stops before their candidate-filter bodies.
@@ -127,3 +127,8 @@ Still external are the shared generic row adapter for FISH/GOODIES, divvy-select
 continuation in these exact prefix owners, both large candidate-filter bodies,
 allocations, and caller checkpoint token `0x1ef7` at `0x0068c72d`. No checksum value
 was fitted.
+
+The canonical Map schedule now composes the first bounded slice of this owner:
+completed BONUSES cleanup through FISH lookup/enumeration. That receipt stops before
+the first FISH row at `0x0068fbb3` (or at the next `0x00690225` cleanup for an empty
+section); later FISH/GOODIES execution remains separately bounded.

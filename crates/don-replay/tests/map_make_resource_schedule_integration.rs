@@ -14,10 +14,11 @@ use don_replay::map_make_resource_caller_gap_frontier::{
 use don_replay::map_make_resource_schedule_integration::{
     continue_map_make_resource_schedule_bonus_category_tail,
     continue_map_make_resource_schedule_first_bonus,
+    continue_map_make_resource_schedule_fish_category,
     continue_map_make_resource_schedule_next_bonus, execute_map_make_resource_schedule,
     execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
     MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
-    BONUS_CATEGORY_TAIL_RESTORE_VA,
+    PlaceResourcesDocumentHostAuthority, BONUS_CATEGORY_TAIL_RESTORE_VA,
 };
 use don_replay::map_style::MAP_MAKE_SCHEDULE;
 use don_replay::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
@@ -36,6 +37,12 @@ use don_replay::place_resources_bonus_rows_mutation_frontier::{
     later_bonus_facts_digest, LaterBonusMutationEvidence, LaterBonusMutationFacts,
     RemainingBonusRowsError, RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
     LATER_ROW_MUTATION_ENTRY_VA,
+};
+use don_replay::place_resources_category_frontier::{
+    CategoryAdvanceDisposition, CategoryAdvanceFacts, CategoryRowFact, CategorySectionFact,
+    HostHandles, HostRefKind, ResourceCategory, ResourceFrontierEvidence, SectionSource,
+    CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, ROW_BODY_VA,
+    SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256, SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
 };
 use don_replay::place_resources_pool_frontier::{
     resource_divvy_pool_digest, PlaceResourcesFactEvidence, PlaceResourcesLiveFacts,
@@ -1399,4 +1406,167 @@ fn xml_facts_cannot_bypass_the_pool_owner() {
         ),
         Err(MapMakeResourceScheduleError::XmlFactsWithoutPoolPrefix)
     );
+}
+
+fn fish_category_inputs(
+    state: &RemainingBonusRowsState,
+) -> (CategoryAdvanceFacts, PlaceResourcesDocumentHostAuthority) {
+    let capture_sha256 = [0x6d; 32];
+    let selected_document_handles = HostHandles {
+        head: true,
+        tail: true,
+        inline_tail_word: false,
+    };
+    let default_document_handles = HostHandles {
+        head: true,
+        tail: false,
+        inline_tail_word: true,
+    };
+    let section = CategorySectionFact {
+        lookup_token: "FISH ".to_owned(),
+        returned_element_name: "FISH".to_owned(),
+        handles: HostHandles {
+            head: true,
+            tail: true,
+            inline_tail_word: false,
+        },
+        rows: vec![CategoryRowFact {
+            capture_ordinal: 41,
+            element_name: "BONUS".to_owned(),
+            handles: HostHandles {
+                head: false,
+                tail: true,
+                inline_tail_word: false,
+            },
+        }],
+    };
+    (
+        CategoryAdvanceFacts {
+            selected_style_name_nonempty: true,
+            selected_section: Some(section),
+            default_section: None,
+            evidence: ResourceFrontierEvidence::RetailCapture {
+                executable_sha256: CATEGORY_EXE_SHA256.to_owned(),
+                pdb_sha256: CATEGORY_PDB_SHA256.to_owned(),
+                capture_sha256,
+                entry_va: CATEGORY_TAIL_VA,
+                random_state: state.mutation.random_state,
+                world_checksum: state.mutation.world_checksum.clone(),
+                sourced_walked_bytes: state.mutation.sourced_walked_bytes,
+                resource_pool_digest: state.mutation.resource_pool_digest,
+            },
+        },
+        PlaceResourcesDocumentHostAuthority {
+            selected_document_handles,
+            default_document_handles,
+            capture_sha256,
+        },
+    )
+}
+
+#[test]
+fn completed_bonus_schedule_owns_cleanup_and_stops_before_first_fish_row() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let completed =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &completed.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton BONUSES must reach category cleanup"),
+    };
+    let deterministic_before = rows.remaining_state.clone();
+    let pool_before = pool.clone();
+    let (facts, authority) = fish_category_inputs(&rows.remaining_state);
+
+    let continued = continue_map_make_resource_schedule_fish_category(
+        &mut pool, &completed, &authority, &facts,
+    )
+    .unwrap();
+    let fish = match &continued.placement {
+        MapMakeResourcePlacementReceipt::FishCategoryOpen(fish) => fish,
+        _ => panic!("category continuation must stop at the FISH boundary"),
+    };
+
+    assert_eq!(fish.category_receipt.entry_va, CATEGORY_TAIL_VA);
+    assert_eq!(
+        fish.category_receipt.completed_category,
+        ResourceCategory::Bonuses
+    );
+    assert_eq!(fish.category_state_after.category, ResourceCategory::Fish);
+    assert_eq!(fish.category_state_after.rows_remaining, 1);
+    assert_eq!(fish.fish_handoff.rows.len(), 1);
+    assert_eq!(fish.fish_handoff.rows[0].capture_ordinal, 41);
+    assert_eq!(fish.residual_va, ROW_BODY_VA);
+    assert_eq!(
+        fish.category_state_after.deterministic.random_state,
+        deterministic_before.mutation.random_state
+    );
+    assert_eq!(
+        fish.category_state_after.deterministic.world_checksum,
+        deterministic_before.mutation.world_checksum
+    );
+    assert_eq!(
+        fish.category_state_after.deterministic.last_chance_group,
+        deterministic_before.last_chance_group
+    );
+    assert_eq!(pool, pool_before);
+    assert!(matches!(
+        fish.category_receipt.disposition,
+        CategoryAdvanceDisposition::NextCategory {
+            category: ResourceCategory::Fish,
+            source: SectionSource::Selected,
+            residual_va: ROW_BODY_VA,
+            ..
+        }
+    ));
+    assert_eq!(
+        fish.category_receipt
+            .cleanup_operations
+            .iter()
+            .take(3)
+            .map(|operation| operation.call_va)
+            .collect::<Vec<_>>(),
+        vec![
+            CATEGORY_RELEASE_CALL_VAS[0],
+            CATEGORY_RELEASE_CALL_VAS[1],
+            CATEGORY_RELEASE_CALL_VAS[3],
+        ]
+    );
+    assert_eq!(
+        fish.category_receipt
+            .cleanup_operations
+            .iter()
+            .map(|operation| operation.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HostRefKind::ReleaseCategoryTail,
+            HostRefKind::ReleaseCategoryHead,
+            HostRefKind::ReleaseRowHead,
+            HostRefKind::AcquireCategoryHead,
+            HostRefKind::AcquireCategoryTail,
+        ]
+    );
+}
+
+#[test]
+fn fish_cleanup_rejects_detached_document_capture_and_preserves_pool() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let completed =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &completed.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton BONUSES must reach category cleanup"),
+    };
+    let (facts, mut authority) = fish_category_inputs(&rows.remaining_state);
+    authority.capture_sha256[0] ^= 1;
+    let pool_before = pool.clone();
+
+    assert_eq!(
+        continue_map_make_resource_schedule_fish_category(
+            &mut pool, &completed, &authority, &facts,
+        ),
+        Err(MapMakeResourceScheduleError::FishCategoryDocumentAuthorityMismatch)
+    );
+    assert_eq!(pool, pool_before);
 }

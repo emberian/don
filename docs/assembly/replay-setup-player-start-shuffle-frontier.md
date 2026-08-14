@@ -12,11 +12,12 @@ GUID-matched PDB, SHA-256
 
 ## Exact upstream boundary
 
-The current resource schedule owns all nonempty `BONUSES` rows through the
-category-tail branch. Its first independently unowned instruction is
-`Map::place_resources` category cleanup at `0x00690225`. `GOODIES`, `FISH`,
-document cleanup, the `Map::place_resources` return, the `Map::make` caller
-continuation at `0x0068C72D`, and source token `0x1EF7` remain open. Therefore
+The current resource schedule owns all nonempty `BONUSES` rows, their category-tail
+branch, and BONUSES cleanup/FISH lookup. Its first independently unowned instruction is
+the FISH row body at `0x0068FBB3` for a nonempty section, or the next category cleanup
+at `0x00690225` for an empty section. FISH row execution, `GOODIES`, document cleanup,
+the `Map::place_resources` return, the `Map::make` caller continuation at `0x0068C72D`,
+and source token `0x1EF7` remain open. Therefore
 neither the RNG at `Map::make` return nor the later shuffle-entry RNG may be
 derived from the current post-`place_all` receipt.
 
@@ -101,6 +102,6 @@ The fail-closed binding rule is therefore:
 - Market-after alone may bind the `Setup::build_units` entry boundary already
   documented by the Golden Market transaction.
 
-The first upstream implementation target remains `0x00690225`. The first
-downstream simulation target after a completed shuffle is `Leader::init` at
-`0x005ACEF7`.
+The first upstream implementation target is now the selected FISH residual described
+above. The first downstream simulation target after a completed shuffle is
+`Leader::init` at `0x005ACEF7`.

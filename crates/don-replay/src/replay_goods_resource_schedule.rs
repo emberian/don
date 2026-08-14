@@ -101,6 +101,10 @@ pub enum ResourceScheduleGoodsBoundary {
     BeforeNextBonusRow,
     /// The final BONUS recurrence reached the still-unowned category cleanup.
     BeforeBonusCategoryCleanup,
+    /// BONUSES cleanup completed and a nonempty FISH section is at row zero.
+    BeforeFirstFishRow,
+    /// BONUSES cleanup completed into an empty FISH section.
+    BeforeFishCategoryCleanup,
 }
 
 impl ResourceScheduleGoodsBoundary {
@@ -113,6 +117,10 @@ impl ResourceScheduleGoodsBoundary {
                 Some(crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_BODY_VA)
             }
             Self::BeforeBonusCategoryCleanup => Some(BONUS_CATEGORY_TAIL_VA),
+            Self::BeforeFirstFishRow => Some(crate::place_resources_category_frontier::ROW_BODY_VA),
+            Self::BeforeFishCategoryCleanup => {
+                Some(crate::place_resources_category_frontier::CATEGORY_TAIL_VA)
+            }
         }
     }
 }
@@ -353,6 +361,44 @@ fn placements_from_schedule(
                 ResourceScheduleGoodsBoundary::BeforeBonusCategoryCleanup
             } else {
                 ResourceScheduleGoodsBoundary::BeforeNextBonusRow
+            }
+        }
+        MapMakeResourcePlacementReceipt::FishCategoryOpen(fish) => {
+            let rows = &fish.bonus_rows;
+            if fish.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+                || fish.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+                || rows.remaining_state.next_row_index != rows.steps.len() + 1
+                || rows.category_tail.is_none()
+            {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "FISH boundary does not retain completed BONUS history",
+                });
+            }
+            push_first_placement(
+                &rows.first.first_bonus.disposition,
+                &rows.first.first_bonus.placement,
+                &mut placements,
+            )?;
+            for step in &rows.steps {
+                let placed = matches!(step.receipt.disposition, LaterBonusDisposition::Placed(_));
+                if placed != step.receipt.placement.is_some() {
+                    return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                        reason: "later BONUS disposition/placement mismatch",
+                    });
+                }
+                if let Some(placement) = &step.receipt.placement {
+                    placements.push(placement);
+                }
+            }
+            if fish.residual_va == crate::place_resources_category_frontier::ROW_BODY_VA {
+                ResourceScheduleGoodsBoundary::BeforeFirstFishRow
+            } else if fish.residual_va == crate::place_resources_category_frontier::CATEGORY_TAIL_VA
+            {
+                ResourceScheduleGoodsBoundary::BeforeFishCategoryCleanup
+            } else {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "FISH boundary has an unknown residual",
+                });
             }
         }
     };
