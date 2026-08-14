@@ -222,8 +222,10 @@ adapter executes that child against the same canonical pre-Market Sim and the ex
 Objects scratch authority. A complete miss or hit commits the exact scratch after-image and emits
 the typed `find_friends` resume boundary at `0x0063933A` with accumulator zero. A reached Wall-band
 identity boundary leaves scratch unchanged and remains a typed residual. Neither path invents a
-`find_friends` return or coarse score. The City binder requires the complete-lookup receipt and
-replays every World/Object/Build read against the preimage before accepting lifecycle evidence.
+`find_friends` return or coarse score. The later composer now owns every exact ring child and
+found-type predicate through the native return without inventing the caller's coarse score. The
+City binder requires that complete-return receipt and replays every World/Object/Build/type read
+against the preimage before accepting lifecycle evidence.
 
 The lookup unconditionally writes `ObjectsData+0x200 = -1` before inspecting TData and writes the
 found owner's slot there on success. The canonical `Sim` snapshot and
@@ -244,16 +246,19 @@ scratch state, then consumes the native predicate sequence from canonical owners
 found Object's lazy `CAPTURED 0x20` flag for military trainers, and finally the exact Wonder range
 `0x20E <= type < 0x21F`. Missing type rows or live basic-type facts fail closed. A survivor adds one
 at an odd ring offset or two at an even offset; a reject leaves the prior accumulator unchanged.
-The receipt stops before the next ring offset, or owns the native return only when the found Build
-was at offset eight. No result is inferred from a captured count.
+The standalone receipt stops before the next ring offset, or owns the native return only when the
+found Build was at offset eight. The complete composer feeds that exact outcome back into the same
+clockwise loop, chains every later Object scratch journal, and repeats the predicate owner for each
+same-City hit. It therefore owns the final multi-hit `find_friends` return after offset eight while
+retaining every miss, City mismatch, rejection, and odd/even contribution in program order. No
+result is inferred from a captured count.
 
 A Wall-band identity stop remains non-returning and does not publish that lookup's scratch write.
 The earlier all-miss/City-mismatch cohort still emits a native `find_friends` return of exactly
 zero without entering any found-type predicate.
 
-The next ring offset after one accepted/rejected found Build, full multi-hit `find_friends` return,
-candidate scoring, the one-through-four fine RNG draws, allocation, `Build::init`, activation, and
-City mutation still are not executed. Those later effects remain supported-retail capture evidence.
-Their main-RNG boundary is also deliberately not joined directly to post-`place_all`:
-post-placement map work and the collision-retried Setup player/start shuffle consume intervening
-draws before the Market.
+Candidate scoring, the one-through-four fine RNG draws, allocation, `Build::init`, activation, and
+City mutation still are not executed. The exact `find_friends` return is a caller input, not a score
+or placement claim. Those later effects remain supported-retail capture evidence. Their main-RNG
+boundary is also deliberately not joined directly to post-`place_all`: post-placement map work and
+the collision-retried Setup player/start shuffle consume intervening draws before the Market.

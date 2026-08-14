@@ -38,8 +38,8 @@ on `<=`, so a later equal score wins. The count is one through four on a success
 
 `GoldenStartingMarketCityReceipt` requires the source-derived plan, exact 16-tile placement
 receipt, execution-backed `get_tregion`/territory/Town/City-count/water acceptance on the hashed
-pre-Market Sim, a complete first `find_building_placed_at` lookup with explicit before/after
-Objects scratch authority, supported executable identity, adjacent pre/post Sim hashes, and the
+pre-Market Sim, the complete ordered `find_friends` ring with explicit Objects scratch and lazy
+found-type provenance, supported executable identity, adjacent pre/post Sim hashes, and the
 complete fine RNG trace. It then validates dense Build allocation as owner-0 o2001/type436 and the City
 chain `center(2000).city_down=2001`, `market.city=0`, `market.city_down=-1`. The Market is
 VALID|STARTED|ACTIVE, has Object flag `0x20` clear, and owns the training queue's 20 slots.
@@ -71,10 +71,11 @@ scratch revisions. Misses and canonical `Build.city != effective_city_filter` re
 the accumulator still zero. For a same-City Build, the predicate owner now executes the lazy
 gather flag/University relation, enhancer relations, recursive basic-type trainer flag, live
 `CAPTURED`, and Wonder-range tests from canonical TypeBuiltinState, production, and Sim facts. A
-survivor contributes one on odd offsets or two on even offsets. The receipt then stops before the
-next ring offset; only an offset-eight predicate result owns a native return. The all-miss or City
-mismatch cohort independently owns a complete return of zero. Thus no multi-hit count is
-extrapolated, and the adapter still cannot authorize the coarse-score formula, fine probes,
+survivor contributes one on odd offsets or two on even offsets. The complete composer resumes the
+clockwise loop with that exact accumulator, repeats the same child/predicate owners, and returns
+only after offset eight. Its receipt retains every ordered lookup, scratch transition, lazy type
+read, reject, and contribution; the all-miss or City-mismatch cohort remains the ordinary zero
+case. The complete return still does not authorize the caller's coarse-score formula, fine probes,
 allocation, `Build::init`, activation visibility/road effects, or the full non-City Sim mutation
 surface. Those later effects still need an exact owner before this receipt can become the golden
 frame-zero publisher. The
