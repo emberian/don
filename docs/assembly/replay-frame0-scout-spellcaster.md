@@ -5,7 +5,8 @@ plus an adjacent call-entry image now close `SpellTypeData::is_castable`, `UnitD
 `SpellTypeData::get_range`. A complete ordered `ObjectsData::find` spatial traversal remains a
 typed receipt. After a target hit, the successful Unit-order cone now owns
 `OrdersMemManager::get_obj(14)` through its exact pool-14 clean-stack prefix and stops before the
-next child on either the recycled or fresh-allocation branch.
+next child on the recycled branch. For an exactly empty pool, it also owns the
+`get_new_order(14)` switch prefix and stops before CRT allocation.
 
 ## The branch correction
 
@@ -157,12 +158,20 @@ targets the eight-byte `CastOrder::clear` adjustor thunk `0x00486091`, SHA-256
 `239eceae02ed1b1b811de41e7af9a0e17d892ca6f1f5a99630447abfe010f70a`. The fresh child
 `get_new_order` is `0x00730550`, 1,392 bytes, SHA-256
 `921305ab491316cd0e767bef3b88b1622f42c05470232fea1f90ece7984d4eae`.
+On the exact zero-length branch, its ECX input is 14. The prologue decrements that to switch index
+13 and jumps through table `0x00730A54`, entry `0x00730A88`, to case `0x00730837`. That case's
+first child is exactly `push 0x30; call [0x00AC54F0]` at `0x00730837/39`; the IAT slot is the
+retail CRT `malloc` import. There is no simulation-owner write before this call. The Rust
+transaction stops before malloc and therefore supplies neither a heap result nor the later
+CastOrder constructor state.
 
 The allocation, target-UID read, list insertion, path clear, current-order/link mutation, and
 action/Guy after-image therefore form one product-host transaction. The Rust frontier binds the
 whole pool, clean-array, selected slot, and recycled-node identities. It stages the exact length
 normalization/decrement and pop, but exposes no partial pool commit. It stops before either
-`CastOrder::clear` or `get_new_order(14)` and retains the exact later AddCastOrder continuation.
+`CastOrder::clear` or, on the zero-length path, CRT `malloc(48)` inside `get_new_order(14)`. A
+null popped slot still stops at the `get_new_order` entry because that path has already staged a
+pool write. Every residual retains the exact later AddCastOrder continuation.
 Any caller, pool, list, or node change fails stale validation without publishing the staged search
 scratch/pop or touching allocator, Unit, order, path, Guy, World, RNG, or Caster state.
 
@@ -179,7 +188,7 @@ not an `ActiveSpell { type,start,end }` in `CasterData+0x04`. Therefore the exis
 |---|---|---|---|---|
 | not special / not castable / insufficient mana | unchanged | unchanged | unchanged | unchanged |
 | search finds no target | unchanged | sentinel/query-owner write | unchanged | unchanged |
-| search finds target | residual before recycled clear or fresh order construction; pool pop and full CastOrder suffix remain atomic | selected metric/owner staged only | unchanged | unchanged |
+| search finds target | residual before recycled clear, or before CRT malloc on the zero-length pool path; pool pop/allocation and full CastOrder suffix remain atomic | selected metric/owner staged only | unchanged | unchanged |
 
 In particular, a setup-empty Caster array remains empty across this function on every branch.
 That is a proof from the reached write set, not a replay-state guess.
@@ -196,21 +205,23 @@ Objects request, search scratch, and all checksum-relevant invariant revisions.
 `OrdersGetObjectRequest` for the exact pool-14 child, with the full `AddCastOrderRequest`
 continuation nested inside it. `prepare_orders_get_object` then accepts only a composition-bound
 retail pool/list/node capture and returns the exact next-child request plus an uncommitted pop
-delta.
+delta. `prepare_empty_pool_get_new_order14` accepts only the no-pop zero-length result, validates
+that result by recomputation, and returns the exact 48-byte malloc request with no allocator
+return value.
 
 The focused gate pins both top-level branches, the owned castability result, signed mana gate,
 wrapping range formula, complete find ABI, no-target scratch, zero/positive/negative pool lengths,
 null and recycled slots, exact fresh/clear child identities, the unopened target-UID continuation,
-Rules/call-entry/traversal/recycler provenance refusal, stale no-publication, and atomic no-target
-commit invariants.
+the index-14 jump-table row and CRT malloc ABI, Rules/call-entry/traversal/recycler provenance
+refusal, stale no-publication, and atomic no-target commit invariants.
 
 ## Remaining golden evidence
 
 This closes the static child results and prevents a false Caster/RNG dependency, but it does not
 invent the golden result of the spatial `ObjectsData::find` traversal. An adjacent retail capture
 must supply that complete traversal. If it finds a target, a product host must still own the
-recycled clear or fresh construction child, target UID read, Unit list/path/action suffix, and
-their single atomic commit.
+recycled clear or CRT allocation/fresh construction child, target UID read, Unit list/path/action
+suffix, and their single atomic commit.
 The call-entry composition is intentionally independent of the completed-setup digest: earlier
 frame-zero receivers, including Merchant work, may change live orders, masks, coordinates,
 Leader/World state, object-search scratch, and RNG before the Scout call.

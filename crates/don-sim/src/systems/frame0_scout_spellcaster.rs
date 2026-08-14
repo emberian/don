@@ -13,9 +13,10 @@
 //! receipt may advance the detached transaction, but no caller state changes until
 //! [`commit_no_cast`] accepts a complete no-cast plan. A found target advances through the
 //! source-owned `Unit::add_cast_order` prefix and, given an adjacent pool-14 capture, through
-//! `OrdersMemManager::get_obj(14)`'s clean-stack prefix. It then stops before either the recycled
-//! CastOrder clear thunk or `get_new_order(14)`; the allocator/order/path/Guy after-image is not
-//! guessed.
+//! `OrdersMemManager::get_obj(14)`'s clean-stack prefix. The zero-length branch also owns
+//! `get_new_order(14)`'s exact switch entry and stops before its 48-byte CRT malloc child; the
+//! recycled branch still stops before the CastOrder clear thunk. The allocator/order/path/Guy
+//! after-image is not guessed.
 //!
 //! Most importantly, this function never reads or writes `CasterData::active_spells`.
 //! Its successful arm allocates a Unit `CastOrder` (order index `0x0E`) in `Unit+0xCC`.
@@ -135,6 +136,13 @@ pub const UNIT_ADD_CAST_ORDER_CALLSITE_VA: u32 = 0x005F_28BE;
 pub const ORDERS_GET_OBJECT_CALLSITE_VA: u32 = 0x005E_4BA5;
 pub const ORDERS_GET_OBJECT_CLEAR_CALLSITE_VA: u32 = 0x0073_0B10;
 pub const ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA: u32 = 0x0073_0B29;
+pub const GET_NEW_ORDER_JUMP_TABLE_VA: u32 = 0x0073_0A54;
+pub const GET_NEW_ORDER_INDEX14_JUMP_ENTRY_VA: u32 = 0x0073_0A88;
+pub const GET_NEW_ORDER_INDEX14_CASE_VA: u32 = 0x0073_0837;
+pub const GET_NEW_ORDER_MALLOC_CALLSITE_VA: u32 = 0x0073_0839;
+pub const GET_NEW_ORDER_AFTER_MALLOC_VA: u32 = 0x0073_083F;
+pub const CRT_MALLOC_IAT_SLOT_VA: u32 = 0x00AC_54F0;
+pub const CAST_ORDER_ALLOCATION_BYTES: u32 = 0x30;
 
 pub const SCOUT_TYPE: i32 = 69;
 pub const GOLDEN_OWNER: u8 = 0;
@@ -543,6 +551,47 @@ impl OrdersGetObjectResidual {
     }
 }
 
+/// First external child on the exact empty-pool `get_new_order(14)` case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetailMallocRequest {
+    pub callsite_va: u32,
+    pub import_address_table_slot_va: u32,
+    pub bytes: u32,
+}
+
+/// The zero-length pool branch has entered `get_new_order(14)`, selected jump-table row 13, and
+/// stopped before CRT allocation. No heap result, CastOrder constructor state, or target UID is
+/// present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmptyPoolGetNewOrder14Residual {
+    pub get_obj: OrdersGetObjectResidual,
+    pub function_va: u32,
+    pub function_size: u32,
+    pub function_sha256: [u8; 32],
+    pub order_index_in_ecx: i32,
+    pub decremented_switch_index: u32,
+    pub jump_table_va: u32,
+    pub jump_entry_va: u32,
+    pub case_entry_va: u32,
+    pub allocator: RetailMallocRequest,
+    /// Deliberately unknown until the external allocator child completes atomically.
+    pub allocator_returned_ptr: Option<u32>,
+}
+
+impl EmptyPoolGetNewOrder14Residual {
+    /// Full stale validation delegates to the unchanged caller and exact zero-length pool
+    /// capture. The malloc request is not authorized after either changes.
+    pub fn validate_allocator_before(
+        &self,
+        current_scout: &Frame0ScoutBoundary,
+        current_pool: &OrdersPool14Capture,
+    ) -> Result<(), GetNewOrder14Error> {
+        self.get_obj
+            .validate_child_before(current_scout, current_pool)
+            .map_err(GetNewOrder14Error::GetObject)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetUidSource {
     LiveObjectWordAtOffset0x30,
@@ -721,6 +770,21 @@ impl fmt::Display for OrdersGetObjectError {
 }
 
 impl std::error::Error for OrdersGetObjectError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GetNewOrder14Error {
+    GetObject(OrdersGetObjectError),
+    ResidualShapeMismatch,
+    NotEmptyPoolBranch,
+}
+
+impl fmt::Display for GetNewOrder14Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Scout get_new_order(14) prefix refused: {self:?}")
+    }
+}
+
+impl std::error::Error for GetNewOrder14Error {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame0ScoutCasterInvariantError {
@@ -1315,6 +1379,63 @@ pub fn prepare_orders_get_object(
     })
 }
 
+/// Own the exact zero-length pool path through `get_new_order`'s switch and stop before its CRT
+/// malloc child. The null-slot fallback is intentionally excluded: it already staged a pool pop
+/// and is not the smallest empty-pool branch.
+pub fn prepare_empty_pool_get_new_order14(
+    get_obj: OrdersGetObjectResidual,
+) -> Result<EmptyPoolGetNewOrder14Residual, GetNewOrder14Error> {
+    let expected = prepare_orders_get_object(get_obj.scout, get_obj.pool_before)
+        .map_err(GetNewOrder14Error::GetObject)?;
+    if expected != get_obj {
+        return Err(GetNewOrder14Error::ResidualShapeMismatch);
+    }
+    if get_obj.pool_before.free_length != 0
+        || get_obj.pool_before.slot != OrdersPool14SlotCapture::NotRead
+        || get_obj.staged_pool_pop
+            != (OrdersPool14PopMutation {
+                normalized_negative_length_to_one: false,
+                free_length_before: 0,
+                free_length_after: 0,
+                popped_unit_order_ptr: None,
+                popped_slot_index: None,
+            })
+    {
+        return Err(GetNewOrder14Error::NotEmptyPoolBranch);
+    }
+    let expected_child = GetNewOrderRequest {
+        callsite_va: ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA,
+        function_va: ORDERS_NEW_OBJECT_VA,
+        function_size: ORDERS_NEW_OBJECT_SIZE,
+        function_sha256: ORDERS_NEW_OBJECT_SHA256,
+        order_index_in_ecx: CAST_ORDER_INDEX,
+    };
+    if get_obj.child != OrdersGetObjectChildRequest::GetNewOrder(expected_child)
+        || get_obj.continuation_after_get_obj.target_uid_source
+            != TargetUidSource::LiveObjectWordAtOffset0x30
+    {
+        return Err(GetNewOrder14Error::ResidualShapeMismatch);
+    }
+
+    Ok(EmptyPoolGetNewOrder14Residual {
+        get_obj,
+        function_va: ORDERS_NEW_OBJECT_VA,
+        function_size: ORDERS_NEW_OBJECT_SIZE,
+        function_sha256: ORDERS_NEW_OBJECT_SHA256,
+        order_index_in_ecx: CAST_ORDER_INDEX,
+        decremented_switch_index: (CAST_ORDER_INDEX - 1) as u32,
+        jump_table_va: GET_NEW_ORDER_JUMP_TABLE_VA,
+        jump_entry_va: GET_NEW_ORDER_INDEX14_JUMP_ENTRY_VA,
+        case_entry_va: GET_NEW_ORDER_INDEX14_CASE_VA,
+        allocator: RetailMallocRequest {
+            callsite_va: GET_NEW_ORDER_MALLOC_CALLSITE_VA,
+            import_address_table_slot_va: CRT_MALLOC_IAT_SLOT_VA,
+            bytes: CAST_ORDER_ALLOCATION_BYTES,
+        },
+        allocator_returned_ptr: None,
+    })
+}
+
 /// Execute the pure frame-zero planner and publish its narrow Caster-owner invariant.
 ///
 /// Intermediate dynamic-child requests are not enough: the bounded transaction must either
@@ -1731,6 +1852,26 @@ mod tests {
             (0, 8, 4, 0x7C,)
         );
         assert_eq!(
+            (
+                GET_NEW_ORDER_JUMP_TABLE_VA,
+                GET_NEW_ORDER_INDEX14_JUMP_ENTRY_VA,
+                GET_NEW_ORDER_INDEX14_CASE_VA,
+                GET_NEW_ORDER_MALLOC_CALLSITE_VA,
+                GET_NEW_ORDER_AFTER_MALLOC_VA,
+                CRT_MALLOC_IAT_SLOT_VA,
+                CAST_ORDER_ALLOCATION_BYTES,
+            ),
+            (
+                0x0073_0A54,
+                0x0073_0A88,
+                0x0073_0837,
+                0x0073_0839,
+                0x0073_083F,
+                0x00AC_54F0,
+                0x30,
+            )
+        );
+        assert_eq!(
             UNIT_ADD_CAST_ORDER_SHA256,
             [
                 0x6a, 0xcb, 0x03, 0xec, 0x4d, 0x92, 0x32, 0x63, 0xa5, 0x91, 0x11, 0xd4, 0xb8, 0x4f,
@@ -2127,6 +2268,72 @@ mod tests {
             Err(OrdersGetObjectError::BoundaryChanged)
         );
         assert_eq!(stale_pool, unchanged);
+    }
+
+    #[test]
+    fn empty_pool_get_new_order14_stops_before_exact_crt_malloc_child() {
+        let (i, scout) = found_allocator_residual();
+        let pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        let get_obj = prepare_orders_get_object(scout, pool).unwrap();
+        let residual = prepare_empty_pool_get_new_order14(get_obj).unwrap();
+
+        assert_eq!(residual.function_va, ORDERS_NEW_OBJECT_VA);
+        assert_eq!(residual.function_size, ORDERS_NEW_OBJECT_SIZE);
+        assert_eq!(residual.function_sha256, ORDERS_NEW_OBJECT_SHA256);
+        assert_eq!(residual.order_index_in_ecx, 14);
+        assert_eq!(residual.decremented_switch_index, 13);
+        assert_eq!(residual.jump_table_va, 0x0073_0A54);
+        assert_eq!(residual.jump_entry_va, 0x0073_0A88);
+        assert_eq!(residual.case_entry_va, 0x0073_0837);
+        assert_eq!(
+            residual.allocator,
+            RetailMallocRequest {
+                callsite_va: 0x0073_0839,
+                import_address_table_slot_va: 0x00AC_54F0,
+                bytes: 0x30,
+            }
+        );
+        assert_eq!(residual.allocator_returned_ptr, None);
+        assert_eq!(
+            residual
+                .get_obj
+                .continuation_after_get_obj
+                .target_uid_source,
+            TargetUidSource::LiveObjectWordAtOffset0x30
+        );
+        residual
+            .validate_allocator_before(&i.before, &pool)
+            .unwrap();
+
+        let mut stale_scout = i.before;
+        stale_scout.unit_orders_revision += 1;
+        let unchanged = stale_scout;
+        assert_eq!(
+            residual.validate_allocator_before(&stale_scout, &pool),
+            Err(GetNewOrder14Error::GetObject(
+                OrdersGetObjectError::BoundaryChanged
+            ))
+        );
+        assert_eq!(stale_scout, unchanged);
+    }
+
+    #[test]
+    fn get_new_order14_prefix_refuses_null_pop_and_forged_residuals() {
+        let (_, scout) = found_allocator_residual();
+        let null_pool = pool_capture(&scout, -3, OrdersPool14SlotCapture::Null { slot_index: 0 });
+        let null_pop = prepare_orders_get_object(scout, null_pool).unwrap();
+        assert_eq!(
+            prepare_empty_pool_get_new_order14(null_pop),
+            Err(GetNewOrder14Error::NotEmptyPoolBranch)
+        );
+
+        let empty_pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        let mut forged = prepare_orders_get_object(scout, empty_pool).unwrap();
+        forged.staged_pool_pop.free_length_after = 1;
+        assert_eq!(
+            prepare_empty_pool_get_new_order14(forged),
+            Err(GetNewOrder14Error::ResidualShapeMismatch)
+        );
     }
 
     #[test]
