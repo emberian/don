@@ -5,8 +5,9 @@ use don_replay::initial::ReplayByteSpan;
 use don_replay::replay::Replay;
 use don_replay::replay_land_speed_content::produce_replay_land_speed_content;
 use don_replay::setup_group_move_authority::{
-    produce_replay_setup_group_move_authority, produce_setup_group_move_authority,
-    SetupGroupMoveAuthorityError, SetupGroupMoveAuthoritySource,
+    produce_replay_fresh_setup_group_move_authority, produce_replay_setup_group_move_authority,
+    produce_setup_group_move_authority, SetupGroupMoveAuthorityError,
+    SetupGroupMoveAuthoritySource,
 };
 use don_replay::setup_unit_member_authority::{
     CanonicalSetupMemberSource, CanonicalSetupUnitMemberReceipt,
@@ -16,7 +17,7 @@ use don_replay::setup_units_producer::{
     StableUnitIdentityReceipt, StartingUnitPhase, UnitMemberAuthorityReceipt,
     OBJECTS_INIT_UNIT_BYTES, OBJECTS_INIT_UNIT_VA,
 };
-use don_sim::systems::canonical_group_move_host::{UnitIdentity, UnitImage};
+use don_sim::systems::canonical_group_move_host::{retail_fresh_groups, UnitIdentity, UnitImage};
 use don_sim::systems::land_speed_authority::{
     produce_resolved_land_speed_authority, LandSpeedConstants, LandSpeedContent, LandSpeedTypeFacts,
 };
@@ -380,4 +381,69 @@ fn replay_rules_content_and_setup_receipts_join_only_with_the_same_file_sha() {
         .members
         .iter()
         .all(|member| member.speed == 25));
+}
+
+#[test]
+fn exact_fresh_pool_allows_type_cohort_while_final_authority_covers_every_live_unit() {
+    let path = repo_root().join("ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx");
+    let Ok(replay) = Replay::open(&path) else {
+        eprintln!("SKIPPED -- NOT A PASS: missing {}", path.display());
+        return;
+    };
+    let content = produce_replay_land_speed_content(&replay).unwrap();
+    let (mut sim, mut type_cohort, _) = fixture();
+    sim.groups = retail_fresh_groups();
+    let extra = sim.spawn_unit(1, 50, 11_000, 10_000, 1).unwrap();
+    let extra_row = sim.world.row_of(extra).unwrap();
+    sim.world.units.myspeed_mut()[extra_row] = 25;
+    for row in 0..sim.world.live_count() as usize {
+        sim.world.units.group_mut()[row] = -1;
+    }
+    for member in &mut type_cohort {
+        member.replay_file_sha256 = content.replay_file_sha256();
+        member.unit.group = -1;
+    }
+
+    let receipt = produce_replay_fresh_setup_group_move_authority(
+        &sim,
+        &type_cohort,
+        &content,
+        (5_186, 72_095),
+        false,
+    )
+    .unwrap();
+    assert_eq!(receipt.setup_members, 4);
+    assert_eq!(receipt.authority.members.len(), 5);
+    assert!(receipt
+        .authority
+        .members
+        .iter()
+        .any(|member| member.handle == extra));
+
+    sim.groups.proc_group = 1;
+    assert_eq!(
+        produce_replay_fresh_setup_group_move_authority(
+            &sim,
+            &type_cohort,
+            &content,
+            (5_186, 72_095),
+            false,
+        ),
+        Err(SetupGroupMoveAuthorityError::FreshGroupsRequired)
+    );
+    sim.groups = retail_fresh_groups();
+    sim.world.units.group_mut()[extra_row] = 0;
+    assert_eq!(
+        produce_replay_fresh_setup_group_move_authority(
+            &sim,
+            &type_cohort,
+            &content,
+            (5_186, 72_095),
+            false,
+        ),
+        Err(SetupGroupMoveAuthorityError::ActiveGroupBacklink {
+            row: extra_row,
+            group: 0,
+        })
+    );
 }

@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use don_sim::systems::canonical_group_move_host::{GroupMoveAuthority, UnitImage};
+use don_sim::systems::canonical_group_move_host::{groups_equal, GroupMoveAuthority, UnitImage};
 use don_sim::systems::group_move_authority::{
     produce_group_move_authority, GroupMoveAuthorityError, GroupMoveContent, GroupMoveTypeFacts,
 };
@@ -59,6 +59,8 @@ pub enum SetupGroupMoveAuthorityError {
     WrongFrame { expected: i32, actual: i32 },
     DuplicateSetupRow { row: usize },
     SetupCoverageMismatch { active_rows: usize, receipts: usize },
+    FreshGroupsRequired,
+    ActiveGroupBacklink { row: usize, group: i16 },
     MissingCanonicalRow { row: usize },
     InactiveCanonicalRow { row: usize },
     StaleCanonicalUnit { row: usize },
@@ -303,6 +305,135 @@ pub fn produce_replay_setup_group_move_authority(
         destination,
         force_formation_facing_zero,
     )
+}
+
+/// Produce a complete live authority from a setup-receipt type cohort while the Group pool is
+/// provably in its retail post-clear image.
+///
+/// The ordinary producer requires one setup receipt per active Unit because a non-fresh fixed
+/// allocator may normalize any earlier Group. At the first 2024 opcode-0 package there is no
+/// earlier Group: all 512 slots and owner cursors equal `Groups::clear`, and every active Unit has
+/// backlink `-1`. Under those stronger live preconditions, receipts need only bind every active
+/// *type* rather than every active row. The resulting `GroupMoveAuthority` still covers every
+/// active row and every resolved speed; this is not a partial authority.
+pub fn produce_replay_fresh_setup_group_move_authority(
+    sim: &Sim,
+    type_cohort: &[CanonicalSetupUnitMemberReceipt],
+    land_content: &ReplayLandSpeedContent,
+    destination: (i32, i32),
+    force_formation_facing_zero: bool,
+) -> Result<SetupGroupMoveAuthorityReceipt, SetupGroupMoveAuthorityError> {
+    let Some(first) = type_cohort.first() else {
+        return Err(SetupGroupMoveAuthorityError::EmptySetupMembers);
+    };
+    if first.authority_revision == 0 {
+        return Err(SetupGroupMoveAuthorityError::MissingSetupRevision);
+    }
+    if first.authority_digest == [0; 32] {
+        return Err(SetupGroupMoveAuthorityError::MissingSetupDigest);
+    }
+    if first.replay_file_sha256 != land_content.replay_file_sha256() {
+        return Err(SetupGroupMoveAuthorityError::ReplayLandSpeedFileMismatch);
+    }
+    if land_content.land_speed_revision() == 0 {
+        return Err(SetupGroupMoveAuthorityError::MissingLandSpeedRevision);
+    }
+    if land_content.land_speed_composition_digest() == [0; 32] {
+        return Err(SetupGroupMoveAuthorityError::MissingLandSpeedDigest);
+    }
+    if sim.world.frame != first.frame {
+        return Err(SetupGroupMoveAuthorityError::WrongFrame {
+            expected: first.frame,
+            actual: sim.world.frame,
+        });
+    }
+    if !groups_equal(
+        &sim.groups,
+        &don_sim::systems::canonical_group_move_host::retail_fresh_groups(),
+    ) {
+        return Err(SetupGroupMoveAuthorityError::FreshGroupsRequired);
+    }
+    if let Some((row, group)) = (0..sim.world.live_count() as usize)
+        .filter(|&row| sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0)
+        .map(|row| (row, sim.world.units.group()[row]))
+        .find(|(_, group)| *group != -1)
+    {
+        return Err(SetupGroupMoveAuthorityError::ActiveGroupBacklink { row, group });
+    }
+
+    let mut rows = BTreeSet::new();
+    let mut types = BTreeMap::new();
+    for (index, member) in type_cohort.iter().enumerate() {
+        if member.authority_revision != first.authority_revision
+            || member.authority_digest != first.authority_digest
+            || member.source != first.source
+            || member.replay_file_sha256 != first.replay_file_sha256
+            || member.frame != first.frame
+        {
+            return Err(SetupGroupMoveAuthorityError::MixedSetupAuthority { index });
+        }
+        if !rows.insert(member.row) {
+            return Err(SetupGroupMoveAuthorityError::DuplicateSetupRow { row: member.row });
+        }
+        if member.row >= sim.world.live_count() as usize {
+            return Err(SetupGroupMoveAuthorityError::MissingCanonicalRow { row: member.row });
+        }
+        if sim.world.units.get_flags(member.row) & OBJ_FLAG_ACTIVE == 0 {
+            return Err(SetupGroupMoveAuthorityError::InactiveCanonicalRow { row: member.row });
+        }
+        if sim.unit_type.get(member.row).copied() != Some(member.current_type)
+            || sim.world.unit_type_id(member.row) != Some(member.current_type)
+            || current_unit_image(sim, member.row).as_ref() != Some(&member.unit)
+        {
+            return Err(SetupGroupMoveAuthorityError::StaleCanonicalUnit { row: member.row });
+        }
+        let facts = member.group_move_type_facts();
+        if let Some(previous) = types.insert(facts.type_id, facts) {
+            if previous != facts {
+                return Err(SetupGroupMoveAuthorityError::ConflictingTypeFacts {
+                    type_id: facts.type_id,
+                });
+            }
+        }
+        let land = land_content.land_speed_type(facts.type_id).ok_or(
+            SetupGroupMoveAuthorityError::MissingLandSpeedType {
+                type_id: facts.type_id,
+            },
+        )?;
+        if land.type_id != facts.type_id
+            || land.graft != member.type_facts.graft
+            || land.domain != facts.domain
+            || land.unit_flags != facts.unit_flags
+            || land.unit_flags2 != facts.unit_flags2
+        {
+            return Err(SetupGroupMoveAuthorityError::LandSpeedTypeMismatch {
+                type_id: facts.type_id,
+            });
+        }
+    }
+
+    let content = SetupContent {
+        setup_revision: first.authority_revision,
+        types,
+        land: land_content,
+    };
+    let land_speeds = produce_resolved_land_speed_authority(sim, &content)?;
+    let bound = land_speeds.bind(sim, &content)?;
+    let authority =
+        produce_group_move_authority(sim, &bound, destination, force_formation_facing_zero)?;
+    Ok(SetupGroupMoveAuthorityReceipt {
+        source: SetupGroupMoveAuthoritySource::CompleteCanonicalSetupSnapshotAndBoundLandSpeed,
+        setup_source: first.source,
+        setup_revision: first.authority_revision,
+        setup_digest: first.authority_digest,
+        replay_file_sha256: first.replay_file_sha256,
+        frame: first.frame,
+        setup_members: type_cohort.len(),
+        land_speed_revision: land_speeds.content_revision,
+        land_speed_digest: land_speeds.composition_digest,
+        land_speed_state_digest: land_speeds.state_digest,
+        authority,
+    })
 }
 
 /// Stable identity helper for callers building exact speed evidence maps.
