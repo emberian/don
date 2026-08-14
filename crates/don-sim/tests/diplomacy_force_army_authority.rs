@@ -2,9 +2,10 @@
 
 use don_sim::systems::armies::{Armies, LF_ARMIES_OFF, ST_MUSTERING};
 use don_sim::systems::diplomacy_force_army_authority::{
-    commit_force_army_process, prepare_force_army_process, ForceArmyProcessError,
-    ForceArmyProcessOutcome, ForceArmyProcessRequest,
+    commit_force_army_process, prepare_force_army_process, ForceArmyMusterCityFact,
+    ForceArmyProcessError, ForceArmyProcessOutcome, ForceArmyProcessRequest,
 };
+use don_sim::systems::tech_cities::CityPool;
 
 const WORLD_SIZE: (i32, i32) = (8, 8);
 
@@ -30,15 +31,30 @@ fn armies_off_force_process_decrements_only_human_frame_and_cas_commits() {
         army_slot: 3,
         forced: 1,
     };
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &flags2, &city_num, WORLD_SIZE, &[request])
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &flags2,
+        &city_num,
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
     assert!(prepared.validates());
     city_num[2] = 6; // This early return never reads the city count.
     let current_world_size = (9, 9); // Nor does it read World dimensions.
-    assert!(prepared.is_current(&armies, &flags, &flags2, &city_num, current_world_size,));
+    assert!(prepared.is_current(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &flags2,
+        &city_num,
+        current_world_size,
+    ));
     let receipts = commit_force_army_process(
         &mut armies,
+        &CityPool::new(),
         &flags,
         &flags2,
         &city_num,
@@ -76,12 +92,27 @@ fn active_empty_army_normalizes_and_retires_without_a_live_host() {
         forced: 1,
     };
 
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &city_num, WORLD_SIZE, &[request])
-            .unwrap();
-    assert!(prepared.is_current(&armies, &flags, &[0; 8], &city_num, WORLD_SIZE));
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    assert!(prepared.is_current(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+    ));
     let receipts = commit_force_army_process(
         &mut armies,
+        &CityPool::new(),
         &flags,
         &[0; 8],
         &city_num,
@@ -127,12 +158,26 @@ fn empty_mustering_army_obeys_human_rally_without_a_group_host() {
         forced: 1,
     };
 
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &[request])
-            .unwrap();
-    let receipts =
-        commit_force_army_process(&mut armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, prepared)
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    let receipts = commit_force_army_process(
+        &mut armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        prepared,
+    )
+    .unwrap();
     let receipt = &receipts[0];
     assert!(receipt.validates());
     assert_eq!(
@@ -165,12 +210,27 @@ fn empty_human_rally_world_size_is_part_of_the_stale_cas() {
         army_slot: 3,
         forced: 1,
     };
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &[request])
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
     let before = armies.clone();
     assert_eq!(
-        commit_force_army_process(&mut armies, &flags, &[0; 8], &[0; 8], (9, 8), prepared,),
+        commit_force_army_process(
+            &mut armies,
+            &CityPool::new(),
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            (9, 8),
+            prepared,
+        ),
         Err(ForceArmyProcessError::StaleWorld)
     );
     assert_eq!(armies.lists, before.lists);
@@ -186,15 +246,23 @@ fn empty_retirement_city_count_is_part_of_the_stale_cas() {
         army_slot: 3,
         forced: 1,
     };
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &[request])
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
     let before = armies.clone();
     let mut city_num = [0; 8];
     city_num[2] = 1;
     assert_eq!(
         commit_force_army_process(
             &mut armies,
+            &CityPool::new(),
             &flags,
             &[0; 8],
             &city_num,
@@ -216,14 +284,29 @@ fn stale_army_and_unresolved_general_body_never_publish() {
     };
     let mut flags = [0; 8];
     flags[2] = 1 | LF_ARMIES_OFF;
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &[request])
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
     let mut stale = armies.clone();
     stale.lists[2][3].target_o = 99;
     let stale_before = stale.lists[2][3].clone();
     assert_eq!(
-        commit_force_army_process(&mut stale, &flags, &[0; 8], &[0; 8], WORLD_SIZE, prepared,),
+        commit_force_army_process(
+            &mut stale,
+            &CityPool::new(),
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            prepared,
+        ),
         Err(ForceArmyProcessError::StaleArmy {
             owner: 2,
             army_slot: 3,
@@ -233,7 +316,15 @@ fn stale_army_and_unresolved_general_body_never_publish() {
 
     flags[2] = 1;
     assert!(matches!(
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[1; 8], WORLD_SIZE, &[request],),
+        prepare_force_army_process(
+            &armies,
+            &CityPool::new(),
+            &flags,
+            &[0; 8],
+            &[1; 8],
+            WORLD_SIZE,
+            &[request],
+        ),
         Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
             owner: 2,
             army_slot: 3,
@@ -251,13 +342,28 @@ fn owner_gate_is_part_of_the_same_stale_cas() {
         army_slot: 3,
         forced: 1,
     };
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &[request])
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
     let before = armies.clone();
     flags[2] &= !LF_ARMIES_OFF;
     assert_eq!(
-        commit_force_army_process(&mut armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, prepared,),
+        commit_force_army_process(
+            &mut armies,
+            &CityPool::new(),
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            prepared,
+        ),
         Err(ForceArmyProcessError::StaleLeader { owner: 2 })
     );
     assert_eq!(armies.lists, before.lists);
@@ -285,16 +391,201 @@ fn multiple_slots_keep_retail_order_and_zero_countdowns_stable() {
             forced: 1,
         },
     ];
-    let prepared =
-        prepare_force_army_process(&armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, &requests)
-            .unwrap();
-    let receipts =
-        commit_force_army_process(&mut armies, &flags, &[0; 8], &[0; 8], WORLD_SIZE, prepared)
-            .unwrap();
+    let prepared = prepare_force_army_process(
+        &armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &requests,
+    )
+    .unwrap();
+    let receipts = commit_force_army_process(
+        &mut armies,
+        &CityPool::new(),
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        prepared,
+    )
+    .unwrap();
     assert_eq!(
         receipts.iter().map(|r| r.request).collect::<Vec<_>>(),
         requests
     );
     assert_eq!(armies.lists[2][3].human_frame, 8);
     assert_eq!(armies.lists[2][7].human_frame, 0);
+}
+
+#[test]
+fn expired_empty_naval_muster_releases_from_an_inactive_canonical_city() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 1;
+    army.navy = 1;
+    army.city = 4;
+    army.role = 0x55;
+    army.num_units = 12;
+    army.num_captains = 4;
+    army.num_standard = 3;
+    army.num_decoys = 2;
+    army.muster_x = 2;
+    army.muster_y = 3;
+    army.muster_angle = 0x1234_5678;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 2;
+    cities.slots[2][4].city_flags = 0x200;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    let prepared = prepare_force_army_process(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    assert!(prepared.is_current(&armies, &cities, &flags, &[0; 8], &[0; 8], WORLD_SIZE,));
+    let receipts = commit_force_army_process(
+        &mut armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        prepared,
+    )
+    .unwrap();
+    let receipt = &receipts[0];
+    assert!(receipt.validates());
+    assert_eq!(
+        receipt.outcome,
+        ForceArmyProcessOutcome::ClosedEmptyNavalMuster
+    );
+    assert_eq!(
+        receipt.muster_city,
+        Some(ForceArmyMusterCityFact::InactiveOwner {
+            who: 2,
+            flags_low: 0,
+        })
+    );
+    assert_eq!(receipt.after.human_frame, 0);
+    assert_eq!(receipt.after.valid, 0);
+    assert_eq!(receipt.after.status, 0);
+    assert_eq!(receipt.after.city, -1);
+    assert_eq!((receipt.after.x, receipt.after.y), (0x780, 0xa80));
+    assert_eq!(receipt.after.angle, 0x1234_5678);
+    assert_eq!(receipt.after.role, 0);
+    assert_eq!(receipt.after.num_units, 0);
+    assert_eq!(receipt.after.num_captains, 0);
+    assert_eq!(receipt.after.num_standard, 0);
+    assert_eq!(receipt.after.num_decoys, 0);
+    assert_eq!(armies.lists[2][3], receipt.after);
+    let mut forged = receipt.clone();
+    forged.after.valid = 1;
+    forged.after.status = 2;
+    assert!(
+        !forged.validates(),
+        "retail re-reads marching status and closes before returning"
+    );
+}
+
+#[test]
+fn naval_muster_city_witness_is_lazy_and_part_of_the_atomic_cas() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 0;
+    army.navy = 1;
+    army.city = 4;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 7;
+    cities.slots[2][4].city_flags = 1;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+    let prepared = prepare_force_army_process(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.receipts()[0].muster_city,
+        Some(ForceArmyMusterCityFact::ForeignOwner { who: 7 })
+    );
+
+    // Foreign ownership returns before retail reads city_flags, so this does not stale.
+    cities.slots[2][4].city_flags = 0;
+    assert!(prepared.is_current(&armies, &cities, &flags, &[0; 8], &[0; 8], WORLD_SIZE,));
+    // The owner byte was read and changing it invalidates the whole staged publish.
+    cities.slots[2][4].who = 6;
+    let before = armies.clone();
+    assert_eq!(
+        commit_force_army_process(
+            &mut armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            prepared,
+        ),
+        Err(ForceArmyProcessError::StaleCity { owner: 2, city: 4 })
+    );
+    assert_eq!(armies.lists, before.lists);
+}
+
+#[test]
+fn active_owned_muster_city_keeps_find_muster_spot_fail_closed() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 1;
+    army.navy = 1;
+    army.city = 4;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 2;
+    cities.slots[2][4].city_flags = 1;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+    assert!(matches!(
+        prepare_force_army_process(
+            &armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &[request],
+        ),
+        Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+            owner: 2,
+            army_slot: 3,
+        })
+    ));
 }

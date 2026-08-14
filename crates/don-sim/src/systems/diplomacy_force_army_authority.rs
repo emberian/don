@@ -2,12 +2,15 @@
 //! Atomic exact bounded arms of diplomacy-forced `Army::process(1)`.
 //!
 //! `Leader::set_diplo` calls `Army::process(1)` for every valid Army when the owner passes
-//! the ordinary Army gates. The complete general body is not mounted. Three substantive arms are
+//! the ordinary Army gates. The complete general body is not mounted. Four substantive arms are
 //! authority-complete: `leader_flags & 0x40` still reaches the entry decrement of `human_frame`,
 //! then returns before normalization; an active empty non-mustering Army with zero cities
 //! normalizes its five derived fields and takes the exact retirement/`close` path without any
 //! Group, Unit, terrain, AI, or RNG access; an empty mustering Army with a still-live human-order
-//! countdown normalizes, clamps its rally point through `send_here`, and returns before dispatch.
+//! countdown normalizes, clamps its rally point through `send_here`, and returns before dispatch;
+//! and an empty naval muster whose canonical founding City is foreign or inactive follows the
+//! exact countdown/normalize/merge/retarget/dispatch tail, releases, enters `do_marching`, then
+//! closes at its exact zero-mobile prefix before target selection or RNG.
 //!
 //! Retail evidence is the shipped PE `30478a44…625079`: `Armies::diplo_change`
 //! `0x006F30F0..0x006F3159` (105 bytes, SHA-256 `8191743c…f3eb6`) performs the owner gates,
@@ -19,12 +22,17 @@
 //! input reads no Group, and the zero-standard retirement calls `Army::close` (`0x006F8EA0`,
 //! 118 bytes), whose zero-group input likewise reaches no external host. The human-order branch
 //! calls `Army::send_here` (`0x006F98A0`, 422 bytes); with zero groups its only external reads are
-//! the World width and height used by the retail coordinate clamp.
+//! the World width and height used by the retail coordinate clamp. `Army::do_mustering`
+//! (`0x006F4260`, 337 bytes) is recovered whole. Its naval release arm reads no strategy or
+//! difficulty state; `Army::release_mustering` returns 1 immediately when the City owner differs
+//! or, for the owning player, when the low flags byte is inactive.
 
 use super::armies::{
     div3_shift8, Armies, ArmyData, LF2_SKIP_MASK, LF_ACTIVE, LF_ARMIES_OFF, LF_KIND_MASK,
-    LF_KIND_SKIP, ST_MUSTERING,
+    LF_KIND_SKIP, ST_MARCHING, ST_MUSTERING,
 };
+use super::army_do_mustering::{do_mustering, MusteringCity, MusteringExit, MusteringHost};
+use super::tech_cities::CityPool;
 use crate::trig::find_angle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +51,8 @@ pub struct ForceArmyProcessReceipt {
     pub leader_city_num: Option<i32>,
     /// Read only when an empty Army obeys its outstanding human rally order.
     pub world_size: Option<(i32, i32)>,
+    /// Exact short-circuit City fields read by `Army::release_mustering`.
+    pub muster_city: Option<ForceArmyMusterCityFact>,
     pub outcome: ForceArmyProcessOutcome,
     pub before: ArmyData,
     pub after: ArmyData,
@@ -53,9 +63,93 @@ pub enum ForceArmyProcessOutcome {
     ArmiesOff,
     RetiredEmpty,
     MovedEmptyHumanOrder,
+    ClosedEmptyNavalMuster,
+}
+
+/// The smallest canonical City witness that makes `Army::release_mustering` return 1.
+/// Retail reads `who` first; a foreign owner therefore does not read `city_flags`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForceArmyMusterCityFact {
+    ForeignOwner { who: i8 },
+    InactiveOwner { who: i8, flags_low: u8 },
+}
+
+impl ForceArmyMusterCityFact {
+    fn validates(self, before: &ArmyData) -> bool {
+        if before.city < 0 {
+            return false;
+        }
+        let owner = before.who as i8;
+        match self {
+            Self::ForeignOwner { who } => who != owner,
+            Self::InactiveOwner { who, flags_low } => who == owner && flags_low & 1 == 0,
+        }
+    }
+}
+
+struct ReleasedEmptyNavalMusterHost;
+
+impl MusteringHost for ReleasedEmptyNavalMusterHost {
+    fn release_mustering(&mut self, _army: &ArmyData) -> Option<bool> {
+        Some(true)
+    }
+
+    fn city(&mut self, _who: usize, _city: i32) -> Option<MusteringCity> {
+        None
+    }
+
+    fn find_muster_spot(
+        &mut self,
+        _army: &mut ArmyData,
+        _object: i32,
+        _who: i32,
+        _forced: i32,
+    ) -> Option<bool> {
+        None
+    }
+
+    fn strategy(&mut self, _who: usize, _region: i32) -> Option<u16> {
+        None
+    }
+
+    fn difficulty(&mut self, _who: usize) -> Option<i32> {
+        None
+    }
+
+    fn leader_flags(&mut self, _who: usize) -> Option<u32> {
+        None
+    }
+}
+
+fn observe_muster_city(
+    cities: &CityPool,
+    owner: usize,
+    city: i32,
+) -> Option<ForceArmyMusterCityFact> {
+    let city = cities.slots.get(owner)?.get(usize::try_from(city).ok()?)?;
+    if city.who != owner as i8 {
+        Some(ForceArmyMusterCityFact::ForeignOwner { who: city.who })
+    } else {
+        let flags_low = city.city_flags as u8;
+        (flags_low & 1 == 0).then_some(ForceArmyMusterCityFact::InactiveOwner {
+            who: city.who,
+            flags_low,
+        })
+    }
+}
+
+fn muster_city_is_current(cities: &CityPool, receipt: &ForceArmyProcessReceipt) -> bool {
+    let Some(expected) = receipt.muster_city else {
+        return true;
+    };
+    observe_muster_city(cities, receipt.request.owner, receipt.before.city) == Some(expected)
 }
 
 impl ForceArmyProcessReceipt {
+    pub fn muster_city_is_current(&self, cities: &CityPool) -> bool {
+        muster_city_is_current(cities, self)
+    }
+
     pub fn validates(&self) -> bool {
         if self.request.forced != 1
             || self.leader_flags & LF_ACTIVE == 0
@@ -76,6 +170,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF == 0
                     || self.leader_city_num.is_some()
                     || self.world_size.is_some()
+                    || self.muster_city.is_some()
                 {
                     return false;
                 }
@@ -86,6 +181,7 @@ impl ForceArmyProcessReceipt {
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING != 0
                     || self.world_size.is_some()
+                    || self.muster_city.is_some()
                 {
                     return false;
                 }
@@ -119,6 +215,7 @@ impl ForceArmyProcessReceipt {
                     || self.before.human_frame <= 1
                     || max_x <= 0
                     || max_y <= 0
+                    || self.muster_city.is_some()
                 {
                     return false;
                 }
@@ -145,6 +242,48 @@ impl ForceArmyProcessReceipt {
                 expected.y = y;
                 expected.muster_x = div3_shift8(x);
                 expected.muster_y = div3_shift8(y);
+            }
+            ForceArmyProcessOutcome::ClosedEmptyNavalMuster => {
+                if self.leader_flags & LF_ARMIES_OFF != 0
+                    || self.leader_city_num.is_some()
+                    || self.world_size.is_some()
+                    || self.before.num_groups != 0
+                    || self.before.status & ST_MUSTERING == 0
+                    || !matches!(self.before.human_frame, 0 | 1)
+                    || self.before.navy == 0
+                    || (self.before.target_o >= 0 && self.before.target_who >= 0)
+                    || !self
+                        .muster_city
+                        .is_some_and(|fact| fact.validates(&self.before))
+                {
+                    return false;
+                }
+                expected.role = 0;
+                expected.num_units = 0;
+                expected.num_captains = 0;
+                expected.num_standard = 0;
+                expected.num_decoys = 0;
+                let mut host = ReleasedEmptyNavalMusterHost;
+                if !matches!(
+                    do_mustering(&mut expected, &mut host),
+                    MusteringExit::Dispatched(_)
+                ) || expected.status != ST_MARCHING
+                {
+                    return false;
+                }
+                // Retail re-reads the new status, enters do_marching, and count(2, 0) is
+                // exactly zero for a zero-group Army. Its first arm calls Army::close before
+                // target validation/find_target, so no target host or RNG is reached.
+                expected.valid = 0;
+                expected.status = 0;
+                expected.human_frame = 0;
+                expected.num_groups = 0;
+                // The later non-forming is_engaged call repeats empty normalization.
+                expected.role = 0;
+                expected.num_units = 0;
+                expected.num_captains = 0;
+                expected.num_standard = 0;
+                expected.num_decoys = 0;
             }
         }
         self.after == expected
@@ -191,6 +330,7 @@ impl PreparedForceArmyProcess {
     pub fn is_current(
         &self,
         armies: &Armies,
+        cities: &CityPool,
         leader_flags: &[u32; 8],
         leader_flags2: &[u32; 8],
         leader_city_num: &[i32; 8],
@@ -205,6 +345,7 @@ impl PreparedForceArmyProcess {
                 && receipt
                     .world_size
                     .is_none_or(|expected| world_size == expected)
+                && muster_city_is_current(cities, receipt)
                 && armies
                     .lists
                     .get(receipt.request.owner)
@@ -232,11 +373,13 @@ pub enum ForceArmyProcessError {
     StaleArmy { owner: usize, army_slot: usize },
     StaleLeader { owner: usize },
     StaleWorld,
+    StaleCity { owner: usize, city: i32 },
     InvalidPrepared,
 }
 
 pub fn prepare_force_army_process(
     armies: &Armies,
+    cities: &CityPool,
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
@@ -287,8 +430,8 @@ pub fn prepare_force_army_process(
                 owner: request.owner,
             });
         }
-        let (outcome, city_num, receipt_world_size) = if flags & LF_ARMIES_OFF != 0 {
-            (ForceArmyProcessOutcome::ArmiesOff, None, None)
+        let (outcome, city_num, receipt_world_size, muster_city) = if flags & LF_ARMIES_OFF != 0 {
+            (ForceArmyProcessOutcome::ArmiesOff, None, None, None)
         } else if before.num_groups == 0
             && before.status & ST_MUSTERING != 0
             && before.human_frame > 1
@@ -305,11 +448,35 @@ pub fn prepare_force_army_process(
                 ForceArmyProcessOutcome::MovedEmptyHumanOrder,
                 None,
                 Some(world_size),
+                None,
+            )
+        } else if before.num_groups == 0
+            && before.status & ST_MUSTERING != 0
+            && matches!(before.human_frame, 0 | 1)
+            && before.navy != 0
+            && (before.target_o < 0 || before.target_who < 0)
+        {
+            let Some(muster_city) = observe_muster_city(cities, request.owner, before.city) else {
+                return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                    owner: request.owner,
+                    army_slot: request.army_slot,
+                });
+            };
+            (
+                ForceArmyProcessOutcome::ClosedEmptyNavalMuster,
+                None,
+                None,
+                Some(muster_city),
             )
         } else {
             let city_num = leader_city_num[request.owner];
             if before.num_groups == 0 && before.status & ST_MUSTERING == 0 && city_num == 0 {
-                (ForceArmyProcessOutcome::RetiredEmpty, Some(city_num), None)
+                (
+                    ForceArmyProcessOutcome::RetiredEmpty,
+                    Some(city_num),
+                    None,
+                    None,
+                )
             } else {
                 return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
                     owner: request.owner,
@@ -377,6 +544,23 @@ pub fn prepare_force_army_process(
                 army_after.muster_x = div3_shift8(x);
                 army_after.muster_y = div3_shift8(y);
             }
+            ForceArmyProcessOutcome::ClosedEmptyNavalMuster => {
+                army_after.role = 0;
+                army_after.num_units = 0;
+                army_after.num_captains = 0;
+                army_after.num_standard = 0;
+                army_after.num_decoys = 0;
+                let mut host = ReleasedEmptyNavalMusterHost;
+                let out = do_mustering(&mut army_after, &mut host);
+                debug_assert!(matches!(out, MusteringExit::Dispatched(_)));
+                debug_assert_eq!(army_after.status, ST_MARCHING);
+                // Army::do_marching begins with count(2, 0); an empty Army obtains zero and
+                // calls close before any target query or find_target/RNG work.
+                army_after.valid = 0;
+                army_after.status = 0;
+                army_after.human_frame = 0;
+                army_after.num_groups = 0;
+            }
         }
         after.lists[request.owner][request.army_slot] = army_after.clone();
         receipts.push(ForceArmyProcessReceipt {
@@ -385,6 +569,7 @@ pub fn prepare_force_army_process(
             leader_flags2: flags2,
             leader_city_num: city_num,
             world_size: receipt_world_size,
+            muster_city,
             outcome,
             before,
             after: army_after,
@@ -407,6 +592,7 @@ pub fn prepare_force_army_process(
 
 pub fn commit_force_army_process(
     armies: &mut Armies,
+    cities: &CityPool,
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
@@ -433,6 +619,16 @@ pub fn commit_force_army_process(
             .is_some_and(|expected| expected != world_size)
     }) {
         return Err(ForceArmyProcessError::StaleWorld);
+    }
+    if let Some(stale) = prepared
+        .receipts
+        .iter()
+        .find(|receipt| !muster_city_is_current(cities, receipt))
+    {
+        return Err(ForceArmyProcessError::StaleCity {
+            owner: stale.request.owner,
+            city: stale.before.city,
+        });
     }
     if let Some(stale) = prepared.receipts.iter().find(|receipt| {
         armies

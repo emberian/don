@@ -10,6 +10,9 @@
 //! The exact instruction-ordered no-op Victory plus armies-off cohort publishes atomically too;
 //! an active zero-city winner's empty non-mustering Army also normalizes and retires atomically.
 //! An empty mustering Army with a live human countdown normalizes and clamps its rally atomically.
+//! An expired empty naval muster with a foreign/inactive canonical City releases, enters the
+//! zero-mobile `do_marching` close arm, and publishes in the same Victory-plus-Army transaction,
+//! with the actually-read City bytes in its stale CAS.
 //! Every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
@@ -579,6 +582,7 @@ impl StagedForceArmyAuthority {
     fn current_error(
         &self,
         armies: &super::armies::Armies,
+        cities: &super::tech_cities::CityPool,
         leader_city_num: &[i32; NUM_LEADERS],
         world_size: (i32, i32),
     ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
@@ -599,6 +603,14 @@ impl StagedForceArmyAuthority {
             {
                 return Some(
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleWorld,
+                );
+            }
+            if !receipt.muster_city_is_current(cities) {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleCity {
+                        owner: receipt.request.owner,
+                        city: receipt.before.city,
+                    },
                 );
             }
             (armies
@@ -923,6 +935,7 @@ fn stage_force_army_authority(
     let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
     let prepared = match prepare_force_army_process(
         &sim.armies,
+        &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
@@ -944,6 +957,7 @@ fn stage_force_army_authority(
     let mut armies = Box::new(sim.armies.clone());
     let receipts = commit_force_army_process(
         &mut armies,
+        &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
@@ -1168,7 +1182,12 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
             let world_size = (self.sim.map.world.tile_xs, self.sim.map.world.tile_ys);
             if let Some(error) = staged_army.as_ref().and_then(|staged| {
-                staged.current_error(&self.sim.armies, &leader_city_num, world_size)
+                staged.current_error(
+                    &self.sim.armies,
+                    &self.sim.cities,
+                    &leader_city_num,
+                    world_size,
+                )
             }) {
                 return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));
             }

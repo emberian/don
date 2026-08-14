@@ -41,6 +41,8 @@ pub mod ammo;
 /// formation-of-groups layer executed at step 13 of `Game::do_frame`. The module keeps
 /// unported target-selection/RNG work in an explicit gap ledger.
 pub mod armies;
+/// Complete 337-byte no-RNG `Army::do_mustering` state-machine body.
+pub mod army_do_mustering;
 /// Exact ordinary `Unit::find_attack_pos` positioning transactions. Unit targets delegate
 /// to the complete nearby-spot service; building targets retain perimeter order plus the
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.

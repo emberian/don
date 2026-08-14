@@ -14,7 +14,9 @@ use don_sim::systems::diplomacy_accept_host::AcceptOutcome;
 use don_sim::systems::diplomacy_ejection_authority::{
     ContainedEjectionAnswer, ContainedEjectionAuthority,
 };
-use don_sim::systems::diplomacy_force_army_authority::ForceArmyProcessOutcome;
+use don_sim::systems::diplomacy_force_army_authority::{
+    ForceArmyMusterCityFact, ForceArmyProcessOutcome,
+};
 use don_sim::systems::groups_guys::{GroupData, Groups};
 use don_sim::systems::leader_set_diplo::{Relation, SetDiploAuthority};
 use don_sim::systems::movement::PathData;
@@ -760,35 +762,75 @@ fn active_winner_victory_then_empty_human_rally_resumes_identically() {
 }
 
 #[test]
-fn active_winner_empty_mustering_countdown_expiry_remains_atomic_unavailable() {
+fn active_winner_empty_naval_mustering_expiry_resumes_identically() {
     with_large_stack(|| {
-        let mut sim = configured_alliance_victory_sim();
-        let army = &mut sim.armies.lists[2][3];
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let army = &mut uninterrupted.armies.lists[2][3];
         army.valid = 1;
         army.army = 3;
         army.who = 2;
         army.status = ST_MUSTERING;
         army.human_frame = 1;
-        let before = save_sim(&sim).unwrap();
+        army.navy = 1;
+        army.city = 4;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        army.muster_x = 2;
+        army.muster_y = 3;
+        army.muster_angle = 0x1234_5678;
+        // The default canonical City row has owner -1. release_mustering reads that byte and
+        // returns 1 before city_flags or any unresolved strategy/difficulty policy.
+        let checkpoint = save_sim(&uninterrupted).expect("expired naval muster is savable");
+        let mut resumed = load_sim(&checkpoint).expect("expired naval muster reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
 
-        let receipt = sim
+        let resumed_receipt = resumed
             .process_diplomacy_package(2, 0x2944, &RETAIL_ACCEPT_2_3)
             .unwrap();
-        assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
-        assert!(receipt.validates(&receipt.request));
-        assert!(matches!(
-            receipt.error,
-            Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(ref calls))
-                if calls.len() == 2
-        ));
-        assert_eq!(save_sim(&sim).unwrap(), before);
-        assert_eq!(sim.vic_leaders.slots[2].leader_flags & leader_flag::WON, 0);
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2944, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.completed_authority.len(), 2);
+        assert_eq!(resumed_receipt.victory_receipts.len(), 1);
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
         assert_eq!(
-            sim.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
+            army_receipt.outcome,
+            ForceArmyProcessOutcome::ClosedEmptyNavalMuster
+        );
+        assert_eq!(
+            army_receipt.muster_city,
+            Some(ForceArmyMusterCityFact::ForeignOwner { who: -1 })
+        );
+        assert_eq!(army_receipt.after.human_frame, 0);
+        assert_eq!(army_receipt.after.valid, 0);
+        assert_eq!(army_receipt.after.status, 0);
+        assert_eq!(army_receipt.after.city, -1);
+        assert_eq!((army_receipt.after.x, army_receipt.after.y), (0x780, 0xa80));
+        assert_eq!(army_receipt.after.angle, 0x1234_5678);
+        assert_ne!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
             0
         );
-        assert_eq!(sim.armies.lists[2][3].human_frame, 1);
-        assert_eq!(sim.armies.lists[2][3].status, ST_MUSTERING);
+        assert_eq!(
+            resumed.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
+            1u32 << game_sem::VICTORY_RESOLVED
+        );
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("released Army reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
     });
 }
 
