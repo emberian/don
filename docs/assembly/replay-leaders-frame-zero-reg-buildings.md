@@ -56,6 +56,23 @@ Source-backed zeroes are justified by a complete census, not by allocating a zer
 sidecar. The distinction matters: the same binder refuses as soon as the staged Sim contains a
 Build which the setup receipts do not enumerate.
 
+## Activation high-water and registries
+
+The same exhaustive transaction now owns another 642 walked bytes. `Build::activate`
+`0x00624ba4..0x00624c16` calls `LeaderData::get_buildings` `0x006e0680` along the current
+type's `BuildTypeData::to +0x2e0` chain, then writes the count to
+`high_buildings[BuildTypeData::basic_type()]`. `basic_type` `0x00639970` recursively follows
+`TypeData::from +0x3c`. Both links are extracted from the digest-bound replay Rules section;
+out-of-range links and cycles refuse, and callers cannot supply a convenient root or count.
+The one-Village census makes the recursive count one and every other high-water slot zero.
+
+`reg_cities[64]` is independently recomputed with retail wrapping `u16` addition over the
+Village, Town, Metropolis, and Forbidden City cells of `reg_buildings`. Its single nonzero cell
+must agree with the constructor's `leader_region_cities_delta`. `reg_forts` and `reg_docks`
+remain constructor-zero because the complete setup contains only Villages and never reaches
+the Fort/Dock registry stores at `0x0073eb5f` and `0x00740b17`. No detached naval default is
+used as evidence.
+
 ## Coverage and temporal boundary
 
 Per active row:
@@ -65,9 +82,11 @@ previous unique canonical walked bytes                 6,498
 frame-zero reg_buildings plane                         16,512
 frame-zero last_building_finished history                 516
 pre-plan regional strategy histories                      256
-frame-zero unique canonical walked bytes               23,782
+high_buildings history                                    258
+regional City/Fort/Dock registries                        384
+frame-zero unique canonical walked bytes               24,424
 default empty-child transcript                          28,428
-frame-zero residual                                      4,646
+frame-zero residual                                      4,004
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -84,6 +103,10 @@ The same temporal proof owns another 256 bytes. `Leader::init` clears the four 6
 `reg_attacked`, `reg_wars`, `reg_neutrals`, and `reg_allies` arrays; their first writers are
 the later `Leader::plan_strategy` pass. The constructor receipt's explicit pre-first-checkpoint
 state therefore promotes all four zeroed arrays and expires before that pass.
+
+The 642-byte activation cohort is historical too. Later upgrades, captures, destruction, and
+Fort/Dock lifecycles require complete live maintainers; current counts cannot reconstruct a
+high-water mark. It therefore expires at precisely the same setup boundary.
 
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
@@ -110,4 +133,6 @@ does appending an unreceipted Build row. Mutating the independent final byte of
 `last_building_finished` refuses the history join. Dense and sparse object-registry views are
 rechecked by the producer before these mutation gates. Mutating the independent tail of
 `reg_allies` likewise refuses the pre-strategy join. The same test verifies the complete Leaders
-walk remains red and the global scoreboard remains uninstalled and non-substantive.
+walk remains red and the global scoreboard remains uninstalled and non-substantive. It also
+mutates the independent `high_buildings` tail and replay-source identity, proving that neither
+the historical row nor its Rules provenance can be substituted.

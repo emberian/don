@@ -78,6 +78,7 @@ pub mod leaders_generated_fixed_frontier;
 pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
 pub mod leaders_setup_build_history_frontier;
+pub mod leaders_setup_build_registry_frontier;
 pub mod leaders_setup_reg_buildings_frontier;
 pub mod leaders_setup_region_history_frontier;
 pub mod leaders_sim_owner_frontier;

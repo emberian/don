@@ -118,6 +118,8 @@ pub struct ReplayBuildTypeSpans {
 pub struct ReplayBuildTypeFacts {
     pub spans: ReplayBuildTypeSpans,
     pub type_index: i32,
+    /// `TypeData + 0x3c`, followed recursively by `BuildTypeData::basic_type`.
+    pub from: i32,
     pub job_time: u32,
     pub costs: [i32; 6],
     pub upgrade: i32,
@@ -486,6 +488,7 @@ pub fn replay_build_type_facts(
                         build: absolute_span(rules, build, BUILD_TAIL_BYTES),
                     },
                     type_index: got,
+                    from: read_i32(section, base(0x3c))?,
                     job_time: read_u32(section, base(0x08))?,
                     costs,
                     upgrade: read_i32(section, base(0x44))?,

@@ -101,8 +101,10 @@ The frame-zero setup continuation now conditionally promotes the 16,512-byte
 Builds. The adjacent setup chronology also owns the 516-byte `last_building_finished[129]`
 initializer history because `Build::activate(0, 0, 0)` bypasses its only completion-id store.
 The pre-strategy receipt also owns 256 zero bytes across the four regional strategy histories,
-whose first writers are in `Leader::plan_strategy`. Together they lower the empty-child residual
-to 4,646 bytes per active row only while the
+whose first writers are in `Leader::plan_strategy`. The setup activation chronology and
+digest-bound replay Rules additionally own 258 bytes of `high_buildings` history and 384 bytes
+of regional City/Fort/Dock registries. Together they lower the empty-child residual to 4,004
+bytes per active row only while the
 ordinary starting-town-one setup receipt is live. It does not change this module's general
 same-frame residual: the Sim does not yet maintain the regional matrix through all later Build
 lifecycle transitions. See

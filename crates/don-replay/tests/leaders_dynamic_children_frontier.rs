@@ -27,6 +27,14 @@ use don_replay::leaders_setup_build_history_frontier::{
     FRAME_ZERO_LAST_BUILDING_HISTORY_WALKED_BYTES, LEADER_INIT_LAST_BUILDING_HISTORY_FILL_VA,
     LEADER_INIT_LAST_BUILDING_HISTORY_VA, SETUP_BUILD_ACTIVATE_VIRTUAL_CALL_VA,
 };
+use don_replay::leaders_setup_build_registry_frontier::{
+    bind_frame_zero_build_registry_census, derive_frame_zero_build_registry_census,
+    FrameZeroBuildRegistryError, BUILD_ACTIVATE_HIGH_WATER_BEGIN_VA,
+    BUILD_ACTIVATE_HIGH_WATER_END_VA, BUILD_ACTIVATE_TO_LOAD_VA, BUILD_TYPE_BASIC_TYPE_VA,
+    DOCK_INIT_REGISTRY_STORE_VA, FORT_INIT_REGISTRY_STORE_VA, FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES,
+    FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
+    LEADER_GET_BUILDINGS_VA,
+};
 use don_replay::leaders_setup_reg_buildings_frontier::{
     bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
     FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
@@ -1025,7 +1033,7 @@ fn same_frame_owner_duplicate_and_shape_disagreements_refuse() {
     );
 }
 
-fn first_frame_zero_setup() -> Option<(InitialLeaderPrefix, StartingSetupState)> {
+fn first_frame_zero_setup() -> Option<(InitialLeaderPrefix, StartingSetupState, Replay)> {
     for path in corpus(&repo_root()) {
         let replay = match Replay::open(&path) {
             Ok(replay) => replay,
@@ -1037,10 +1045,33 @@ fn first_frame_zero_setup() -> Option<(InitialLeaderPrefix, StartingSetupState)>
         };
         let mut world = WorldSim::from_replay(&replay);
         if let Some(setup) = world.initial_setup.take() {
-            return Some((prefix, setup));
+            return Some((prefix, setup, replay));
         }
     }
     None
+}
+
+fn synchronize_build_registry_columns(
+    columns: &mut LeaderCols,
+    census: &don_replay::leaders_setup_build_registry_frontier::FrameZeroBuildRegistryCensus,
+    slot: usize,
+) {
+    let mut write_u16_field = |name: &str, values: &[u16]| {
+        let field = leader::FIELDS
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap_or_else(|| panic!("generated LeaderData has no {name}"));
+        let bytes: Vec<_> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        write_field(columns, slot, field, &bytes);
+    };
+    let registries = census.regional_registries(slot).unwrap();
+    write_u16_field("reg_cities", &registries[..64]);
+    write_u16_field("reg_forts", &registries[64..128]);
+    write_u16_field("reg_docks", &registries[128..]);
+    write_u16_field("high_buildings", census.high_buildings(slot).unwrap());
 }
 
 fn synchronize_setup_only_owner_columns(columns: &mut LeaderCols, sim: &Sim, slot: usize) {
@@ -1082,13 +1113,14 @@ fn frame_zero_starting_build_census_promotes_the_dominant_residual_and_stays_red
 }
 
 fn frame_zero_starting_build_census_body() {
-    let Some((prefix, mut setup)) = first_frame_zero_setup() else {
+    let Some((prefix, mut setup, replay)) = first_frame_zero_setup() else {
         skip("no replay admits the canonical all-land starting-town-one setup");
         return;
     };
     let census = derive_frame_zero_regional_building_census(&setup).unwrap();
     let history = derive_frame_zero_last_building_history(&setup).unwrap();
     let region_history = derive_frame_zero_region_strategy_history(&setup).unwrap();
+    let build_registry = derive_frame_zero_build_registry_census(&setup, &replay).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1108,9 +1140,42 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(PLAN_STRATEGY_RELATION_HISTORY_CLEAR_VA, 0x006b_bb82);
     assert_eq!(PLAN_STRATEGY_RELATION_HISTORY_LAST_STORE_VA, 0x006b_bcc2);
     assert_eq!(FRAME_ZERO_REG_STRATEGY_HISTORY_WALKED_BYTES, 256);
+    assert_eq!(BUILD_ACTIVATE_HIGH_WATER_BEGIN_VA, 0x0062_4ba4);
+    assert_eq!(BUILD_ACTIVATE_TO_LOAD_VA, 0x0062_4baa);
+    assert_eq!(BUILD_ACTIVATE_HIGH_WATER_END_VA, 0x0062_4c16);
+    assert_eq!(LEADER_GET_BUILDINGS_VA, 0x006e_0680);
+    assert_eq!(BUILD_TYPE_BASIC_TYPE_VA, 0x0063_9970);
+    assert_eq!(FORT_INIT_REGISTRY_STORE_VA, 0x0073_eb5f);
+    assert_eq!(DOCK_INIT_REGISTRY_STORE_VA, 0x0074_0b17);
+    assert_eq!(FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES, 258);
+    assert_eq!(FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, 384);
+    assert_eq!(FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES, 642);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
+    assert_eq!(build_registry.claims().len(), active_count);
+    for claim in build_registry.claims() {
+        let slot = usize::from(claim.slot);
+        assert_eq!(claim.basic_type_chain.first(), Some(&414));
+        assert_eq!(claim.basic_type, 414);
+        assert_eq!(claim.upgrade_chain.first(), Some(&414));
+        assert_eq!(claim.newly_canonical_walked_bytes, 642);
+        let high = build_registry.high_buildings(slot).unwrap();
+        assert_eq!(high[0], 1);
+        assert_eq!(
+            high.iter().map(|value| usize::from(*value)).sum::<usize>(),
+            1
+        );
+        let registries = build_registry.regional_registries(slot).unwrap();
+        assert_eq!(registries[1], 1);
+        assert_eq!(
+            registries
+                .iter()
+                .map(|value| usize::from(*value))
+                .sum::<usize>(),
+            1
+        );
+    }
     for claim in region_history.claims() {
         assert_eq!(claim.regions_per_history, 64);
         assert_eq!(claim.histories, 4);
@@ -1143,6 +1208,7 @@ fn frame_zero_starting_build_census_body() {
     let mut fixture = fixture_with_states(prefix, victory, step8);
     for slot in 0..NUM_LEADERS {
         synchronize_setup_only_owner_columns(&mut fixture.columns, &setup.sim, slot);
+        synchronize_build_registry_columns(&mut fixture.columns, &build_registry, slot);
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1162,26 +1228,74 @@ fn frame_zero_starting_build_census_body() {
     let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
     let regional = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
     let build_history = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
-    let joined =
+    let region_joined =
         bind_frame_zero_region_strategy_history(build_history, region_history.clone()).unwrap();
+    let joined =
+        bind_frame_zero_build_registry_census(region_joined, build_registry.clone()).unwrap();
     let walk = joined.walk_frontier();
 
     assert_eq!(
         joined.newly_canonicalized_walked_bytes(),
-        active_count * 256
+        active_count * 642
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 23_782 + (NUM_LEADERS - active_count) * 8
+        active_count * 24_424 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 4_646) as u64
+        (active_count * 4_004) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
 
     let active = fixture.active;
+    let high_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "high_buildings")
+        .unwrap();
+    let mut stale_high_columns = fixture.columns.clone();
+    let mut stale_high_bytes: Vec<_> = build_registry
+        .high_buildings(active)
+        .unwrap()
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    *stale_high_bytes.last_mut().unwrap() = 1;
+    write_field(
+        &mut stale_high_columns,
+        active,
+        high_field,
+        &stale_high_bytes,
+    );
+    let stale_high_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &stale_high_columns,
+        &fixed,
+    );
+    let stale_high_tech =
+        bind_sim_tech_frontier(stale_high_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_high_owners =
+        bind_sim_owner_frontier(&fixture.prefix, stale_high_tech, &setup.sim).unwrap();
+    let stale_high_regional =
+        bind_frame_zero_regional_buildings(stale_high_owners, census.clone()).unwrap();
+    let stale_high_history =
+        bind_frame_zero_last_building_history(stale_high_regional, history.clone()).unwrap();
+    let stale_high_regions =
+        bind_frame_zero_region_strategy_history(stale_high_history, region_history.clone())
+            .unwrap();
+    assert!(matches!(
+        bind_frame_zero_build_registry_census(stale_high_regions, build_registry.clone()),
+        Err(FrameZeroBuildRegistryError::ConditionalDisagreement {
+            slot,
+            field: "high_buildings",
+            ..
+        }) if slot == active
+    ));
+
     let region_history_field = leader::FIELDS
         .iter()
         .find(|field| field.name == "reg_allies")
@@ -1285,6 +1399,29 @@ fn frame_zero_starting_build_census_body() {
         Err(FrameZeroBuildHistoryError::SetupActivationChronologyDisagreement { receipt: 0 })
     );
     setup.receipt.cities[0].constructor.build_init_complete = false;
+
+    setup.receipt.replay_payload_sha256[0] ^= 1;
+    assert_eq!(
+        derive_frame_zero_build_registry_census(&setup, &replay),
+        Err(FrameZeroBuildRegistryError::ReplaySourceDisagreement)
+    );
+    setup.receipt.replay_payload_sha256[0] ^= 1;
+
+    setup.receipt.cities[0]
+        .constructor
+        .effects
+        .leader_region_cities_delta = 0;
+    assert!(matches!(
+        derive_frame_zero_build_registry_census(&setup, &replay),
+        Err(FrameZeroBuildRegistryError::RegionalCityAgreement {
+            constructor_delta: 0,
+            ..
+        })
+    ));
+    setup.receipt.cities[0]
+        .constructor
+        .effects
+        .leader_region_cities_delta = 1;
 
     let row = setup.receipt.cities[0].build.row;
     setup.sim.builds[row].orig_type += 1;

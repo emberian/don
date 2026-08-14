@@ -98,6 +98,8 @@ pub struct StartingCityReceipt {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartingSetupReceipt {
+    /// Identity of the decompressed replay which supplied every setup assignment.
+    pub replay_payload_sha256: [u8; 32],
     pub position_evidence: StartingPositionEvidence,
     pub region_evidence: StartingRegionEvidence,
     pub active_players: usize,
@@ -305,6 +307,7 @@ impl StartingSetupState {
             cities,
             build_walk,
             receipt: StartingSetupReceipt {
+                replay_payload_sha256: initial.payload_sha256,
                 position_evidence: StartingPositionEvidence::FirstCameraOnObject2000,
                 region_evidence,
                 active_players: receipts.len(),
