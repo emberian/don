@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Exact current-STRAFE retarget cone of `Group::action_flight`.
+//! Exact current-STRAFE retarget/return cones of `Group::action_flight`.
 //!
-//! This is deliberately not a general Flight implementation. It accepts only ATTACK with no
-//! modifiers, an all-Unit selection, and every actor which reaches order dispatch already in
-//! STRAFE. Retail's direct arm rewrites that existing payload, including its exact missile-mask
-//! skip and fuel-exhausted target-only tail; every fresh-install branch remains typed red.
+//! This is deliberately not a general Flight implementation. It accepts ATTACK with no modifiers
+//! under the existing exact retarget gates, plus order 1 only for fueled current-STRAFE aircraft
+//! whose actor-bound authority proves the selected Airbase can receive that actor. Every
+//! fresh-install, exhausted-return distance comparison, and other Flight branch remains typed red.
 
 use crate::command::air_launch_receivers::MISSILE_OBJECT_MASK;
 use crate::order::{Order, OrderIndex, ORDER_GROUP};
@@ -28,6 +28,7 @@ use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 pub const FLIGHT_OPCODE: u8 = 28;
 pub const ATTACK_ORDER_INDEX: i32 = 10;
+pub const RETURN_ORDER_INDEX: i32 = 1;
 pub const FLIGHT_WIRE_SIZE: usize = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +57,12 @@ pub enum CanonicalFlightStrafeError {
     NonUnitSelection,
     BuildingGroup,
     InvalidTarget { who: i32, o: i32 },
+    ReturnTargetOwnerMismatch { group: u8, target: u8 },
+    ReturnTargetNotAuthoritative(CanonicalObjectIdentity),
     MissingAirAuthority(Handle),
+    MissingReturnTargetAuthority(UnitIdentity),
+    ReturnActorHasMissileMask(UnitIdentity),
+    ReturnActorFuelExhausted(UnitIdentity),
     CurrentOrderNotStrafe(UnitIdentity),
     MalformedStrafe(UnitIdentity),
     StaleCanonicalState,
@@ -72,6 +78,7 @@ impl From<PackageError> for CanonicalFlightStrafeError {
 pub enum FlightStrafeActorEffect {
     RetargetedAndArmed,
     RetargetedFuelExhausted,
+    ReturningToBase,
     SkippedMissileMask,
 }
 
@@ -160,7 +167,7 @@ pub fn decode_flight_strafe_request(
         alt: read_i32(packet, 17),
         orders: read_i32(packet, 21),
     };
-    if request.orders != ATTACK_ORDER_INDEX
+    if !matches!(request.orders, ATTACK_ORDER_INDEX | RETURN_ORDER_INDEX)
         || request.shift != 0
         || request.ctrl != 0
         || request.alt != 0
@@ -306,6 +313,49 @@ fn rewrite_current_strafe(
     Ok(())
 }
 
+fn rewrite_current_strafe_return(
+    order: &mut Order,
+    target: CanonicalObjectIdentity,
+) -> Result<(), ()> {
+    if !current_strafe_is_coherent(order) {
+        return Err(());
+    }
+    let payload = order.strafe.as_mut().expect("coherent STRAFE payload");
+    payload.target_o = -1;
+    payload.target_who = -1;
+    payload.air.oxx = target.o;
+    payload.air.whose = i32::from(target.owner);
+    payload.air.returning = 1;
+    payload.xx = -1;
+    payload.yy = -1;
+    payload.mandatory = 1;
+    order.target_o = -1;
+    order.target_who = -1;
+    // Retail does not rewrite TargetOrder::uid on this return arm. Preserve the stale token in
+    // both the concrete STRAFE payload and flattened target header.
+    order.flags |= ORDER_GROUP;
+    Ok(())
+}
+
+fn return_target_is_authoritative(
+    authority: &AirGroupRuntimeAuthority,
+    target: FlightTargetSnapshot,
+) -> bool {
+    let CanonicalObjectGeneration::BuildRow(row) = target.identity.generation else {
+        return false;
+    };
+    let Ok(o) = i16::try_from(target.identity.o) else {
+        return false;
+    };
+    authority.builds.iter().any(|entry| {
+        entry.is_airbase
+            && entry.identity.row == row
+            && entry.identity.who == target.identity.owner
+            && entry.identity.o == o
+            && entry.identity.uid == target.uid
+    })
+}
+
 pub(crate) fn current_strafe_is_coherent(order: &Order) -> bool {
     let Some(payload) = order.strafe.as_ref() else {
         return false;
@@ -389,6 +439,18 @@ pub fn prepare_canonical_flight_strafe(
     }
     let request = decode_flight_strafe_request(flight_packet)?;
     let target = flight_target_snapshot(world, builds, request.target_who, request.target_o)?;
+    let returning = request.orders == RETURN_ORDER_INDEX;
+    if returning && target.identity.owner != group.owner {
+        return Err(CanonicalFlightStrafeError::ReturnTargetOwnerMismatch {
+            group: group.owner,
+            target: target.identity.owner,
+        });
+    }
+    if returning && !return_target_is_authoritative(authority, target) {
+        return Err(CanonicalFlightStrafeError::ReturnTargetNotAuthoritative(
+            target.identity,
+        ));
+    }
     let mut selection = prepare_air_group_selection(
         world,
         builds,
@@ -423,7 +485,7 @@ pub fn prepare_canonical_flight_strafe(
             ))
         })
         .collect::<Result<Vec<_>, CanonicalFlightStrafeError>>()?;
-    let nuclear_group = selected_units.iter().any(|(_, air)| air.is_nuclear_missile);
+    let nuclear_group = !returning && selected_units.iter().any(|(_, air)| air.is_nuclear_missile);
 
     let mut actors = Vec::with_capacity(selected_units.len());
     let mut skipped_actors = Vec::new();
@@ -451,7 +513,30 @@ pub fn prepare_canonical_flight_strafe(
                 CanonicalFlightStrafeError::CurrentOrderNotStrafe(member.identity.clone())
             });
         }
-        let effect = if air.object_masks & MISSILE_OBJECT_MASK != 0 {
+        let effect = if returning {
+            if air.object_masks & MISSILE_OBJECT_MASK != 0 {
+                return Err(CanonicalFlightStrafeError::ReturnActorHasMissileMask(
+                    member.identity.clone(),
+                ));
+            }
+            if air.return_flight_target
+                != Some((i32::from(target.identity.owner), target.identity.o))
+            {
+                return Err(CanonicalFlightStrafeError::MissingReturnTargetAuthority(
+                    member.identity.clone(),
+                ));
+            }
+            if crate::systems::air::mana_left(air.mana_cap, world.units.mana_burn()[member.row])
+                == 0
+            {
+                return Err(CanonicalFlightStrafeError::ReturnActorFuelExhausted(
+                    member.identity.clone(),
+                ));
+            }
+            rewrite_current_strafe_return(current, target.identity)
+                .expect("current STRAFE coherence was validated above");
+            FlightStrafeActorEffect::ReturningToBase
+        } else if air.object_masks & MISSILE_OBJECT_MASK != 0 {
             FlightStrafeActorEffect::SkippedMissileMask
         } else {
             let fueled =
@@ -577,10 +662,26 @@ impl CanonicalFlightStrafeReceipt {
                         false,
                     )
                     .is_ok(),
+                    FlightStrafeActorEffect::ReturningToBase => {
+                        self.request.orders == RETURN_ORDER_INDEX
+                            && rewrite_current_strafe_return(&mut expected, self.target).is_ok()
+                    }
                     FlightStrafeActorEffect::SkippedMissileMask => true,
                 };
                 effect_valid && actor.after == expected
             })
+            && if self.request.orders == RETURN_ORDER_INDEX {
+                self.actors
+                    .iter()
+                    .all(|actor| actor.effect == FlightStrafeActorEffect::ReturningToBase)
+                    && self.skipped_actors.is_empty()
+                    && self.target.owner == group.owner
+                    && self.target.band == CanonicalObjectBand::Build
+            } else {
+                self.actors
+                    .iter()
+                    .all(|actor| actor.effect != FlightStrafeActorEffect::ReturningToBase)
+            }
             && self
                 .skipped_actors
                 .iter()

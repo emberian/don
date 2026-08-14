@@ -117,8 +117,9 @@ must be an active Unit with Handle-bound air authority, clear missile mask, non-
 type answer, positive exact `mana_left`, and a coherent current typed STRAFE payload. The target
 may be an active Unit or sparse-registry-bound active Build; its identity, UID, and position are
 revalidated at commit. Fresh STRAFE insertion, non-STRAFE current orders, Shift outside the
-separately bounded empty-Airbase no-action cone, control/alt, order 1, scenario-ignore pruning,
-and every later Flight branch remain typed refusals.
+separately bounded empty-Airbase no-action cone, control/alt, order 1 outside the separately
+bounded fueled current-STRAFE return cone, scenario-ignore pruning, and every later Flight branch
+remain typed refusals.
 
 Cycle 16 keeps that fresh-install boundary red while completing the exact skip/tail behavior
 inside the existing-STRAFE arm. The 942 Unit→Build ATTACK packets span 28 replay files; 603 use
@@ -272,5 +273,12 @@ publication. The same fixture now proves that a fuel-exhausted current STRAFE re
 native target-field rewrite and survives save/load, a missile-mask peer remains order-identical
 while ordinary peers retarget, and a nuclear Group skips non-nuclear members before their empty
 order queues are inspected.
+
+The order-1 fixture separately proves two exact fueled current-STRAFE returns to an authoritative
+same-owner Build Airbase. Both payloads clear target owner/object and coordinates, preserve their
+old target UID, install the base in `AirOrder::{whose,oxx}`, set `returning`, `mandatory`, and the
+Group flag, and round-trip through save/load. Missing actor-bound carrying/home authority and the
+fuel-exhausted closer-home branch reject before selection publication; a changed target UID after
+batch prepare rolls back the Group, cache, and both orders.
 
 No closure flag is changed by this tranche.

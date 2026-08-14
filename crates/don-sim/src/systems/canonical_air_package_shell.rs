@@ -43,6 +43,7 @@ pub const TURN_DATA_OPCODE: u8 = 74;
 pub const PLAYER_SPEED_OPCODE: u8 = 79;
 pub const FLIGHT_OPCODE: u8 = 28;
 const ATTACK_ORDER_INDEX: i32 = 10;
+const RETURN_ORDER_INDEX: i32 = 1;
 pub const AIRBASE_TYPE_INDEX: i32 = 447;
 pub const NUCLEAR_MISSILE_TYPE_INDEX: i32 = 315;
 
@@ -390,8 +391,8 @@ fn decode_flight_attack_no_action(
         alt: read_i32(command, 17),
         orders: read_i32(command, 21),
     };
-    if request.orders != ATTACK_ORDER_INDEX
-        || !matches!(request.shift, 0 | 1)
+    if !((request.orders == ATTACK_ORDER_INDEX && matches!(request.shift, 0 | 1))
+        || (request.orders == RETURN_ORDER_INDEX && request.shift == 0))
         || request.ctrl != 0
         || request.alt != 0
     {
@@ -504,6 +505,9 @@ fn prepare_flight_no_action(
             return Err(CanonicalFlightNoActionError::UnsupportedRequest(request));
         }
         return Err(CanonicalFlightNoActionError::NonBuildingSelection);
+    }
+    if request.orders == RETURN_ORDER_INDEX {
+        return Err(CanonicalFlightNoActionError::UnsupportedRequest(request));
     }
 
     let mut selected_airbases = Vec::with_capacity(selection.selected_objects.len());
@@ -638,6 +642,7 @@ impl CanonicalFlightNoActionReceipt {
         };
         self.position.action_command_index == self.position.group_command_index + 1
             && request == self.request
+            && request.orders == ATTACK_ORDER_INDEX
             && !self.selected_airbases.is_empty()
             && (request.shift == 0 || self.contained_non_missiles.is_empty())
             && group.owner == self.selected_airbases[0].who

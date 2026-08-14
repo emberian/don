@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 const REPLAY_RELATIVE_PATH: &str = "ron-data/replays/Playback - 2026.08.11 11'44'38 (Tue).rcx";
 const REPLAY_FILE_SHA256: &str = "558e0cd53dbed4f820e8757c0327a58384d433e5beb8e9eeef5d64df4d67bd54";
+const RETURN_FLIGHT_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2017.07.25_19_23_32__Tue_.rcx";
+const RETURN_FLIGHT_REPLAY_SHA256: &str =
+    "275099bdfaf27d168a48906dc27ac59da1e3f0d1220cd7bc815cd8fb26aa99a2";
 const SHIFT_FLIGHT_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2018.11.17_13_21_42__Sat_.rcx";
 const SHIFT_FLIGHT_REPLAY_SHA256: &str =
@@ -64,6 +68,46 @@ struct Fixture {
     opcodes: Vec<u8>,
     group_hex: String,
     action_hex: String,
+}
+
+#[test]
+fn retail_replay_binds_unit_return_flight_to_build_packet() {
+    let path = root().join(RETURN_FLIGHT_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        RETURN_FLIGHT_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[4_536];
+    let player = turn.players.iter().find(|player| player.play == 0).unwrap();
+    assert_eq!((turn.turn, player.stamp), (4_537, 27_217));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [79, 0, 28, 58, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "4f0008000000000000",
+            "00020109000b00",
+            "1cd80700000100000000000000000000000000000001000000",
+            "3a0e1229fca5",
+            "4a50001100000000000000",
+            "4804a015000029a00000",
+        ],
+    );
 }
 
 #[test]
@@ -1396,7 +1440,7 @@ fn census_strict_group_unitmask_packets() {
 
 #[test]
 #[ignore = "full retail replay corpus"]
-fn census_residual_flight_shapes_and_shift_airbase_shell() {
+fn census_residual_flight_shapes_shift_airbase_and_return_shell() {
     let mut residual = BTreeMap::<(i32, i32, i32, i32, &'static str, &'static str), usize>::new();
     let mut shift_airbase = 0usize;
     let mut explicit = 0usize;
@@ -1404,6 +1448,13 @@ fn census_residual_flight_shapes_and_shift_airbase_shell() {
     let mut shell_admissible = 0usize;
     let mut sizes = BTreeMap::new();
     let mut files = BTreeSet::new();
+    let mut return_flights = 0usize;
+    let mut return_explicit = 0usize;
+    let mut return_cached = 0usize;
+    let mut return_shell_admissible = 0usize;
+    let mut return_same_owner = 0usize;
+    let mut return_sizes = BTreeMap::new();
+    let mut return_files = BTreeSet::new();
     for path in corpus(&root()) {
         let Ok(replay) = Replay::open(&path) else {
             continue;
@@ -1466,9 +1517,11 @@ fn census_residual_flight_shapes_and_shift_airbase_shell() {
                     *residual
                         .entry((orders, shift, ctrl, alt, selection_band, target_band))
                         .or_default() += 1;
-                    if (orders, shift, ctrl, alt, selection_band, target_band)
-                        != (10, 1, 0, 0, "Build", "Build")
-                    {
+                    let is_shift_airbase = (orders, shift, ctrl, alt, selection_band, target_band)
+                        == (10, 1, 0, 0, "Build", "Build");
+                    let is_return_flight = (orders, shift, ctrl, alt, selection_band, target_band)
+                        == (1, 0, 0, 0, "Unit", "Build");
+                    if !is_shift_airbase && !is_return_flight {
                         continue;
                     }
                     let mut package_index = 0usize;
@@ -1489,12 +1542,22 @@ fn census_residual_flight_shapes_and_shift_airbase_shell() {
                             break;
                         }
                     }
-                    shift_airbase += 1;
-                    explicit += usize::from(is_explicit);
-                    cached += usize::from(!is_explicit);
-                    shell_admissible += usize::from(supported_shell);
-                    *sizes.entry(selection.len()).or_insert(0usize) += 1;
-                    files.insert(path.clone());
+                    if is_shift_airbase {
+                        shift_airbase += 1;
+                        explicit += usize::from(is_explicit);
+                        cached += usize::from(!is_explicit);
+                        shell_admissible += usize::from(supported_shell);
+                        *sizes.entry(selection.len()).or_insert(0usize) += 1;
+                        files.insert(path.clone());
+                    } else {
+                        return_flights += 1;
+                        return_explicit += usize::from(is_explicit);
+                        return_cached += usize::from(!is_explicit);
+                        return_shell_admissible += usize::from(supported_shell);
+                        return_same_owner += usize::from(field(5) == i32::from(group.bytes[2]));
+                        *return_sizes.entry(selection.len()).or_insert(0usize) += 1;
+                        return_files.insert(path.clone());
+                    }
                 }
             }
         }
@@ -1520,6 +1583,21 @@ fn census_residual_flight_shapes_and_shift_airbase_shell() {
         (22, 2, 20, 22, 3),
     );
     assert_eq!(sizes, BTreeMap::from([(1, 1), (2, 10), (4, 11)]));
+    assert_eq!(
+        (
+            return_flights,
+            return_explicit,
+            return_cached,
+            return_shell_admissible,
+            return_same_owner,
+            return_files.len(),
+        ),
+        (13, 11, 2, 13, 13, 7),
+    );
+    assert_eq!(
+        return_sizes,
+        BTreeMap::from([(1, 1), (2, 4), (9, 2), (10, 4), (20, 2)]),
+    );
 }
 
 #[test]

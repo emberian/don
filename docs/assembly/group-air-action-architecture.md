@@ -326,3 +326,33 @@ reuses them. Both Flight packets are
 RNG, round-trips through save/load byte-identically, and a changed target UID after whole-package
 prepare rolls back both selections. Shift on Unit selections, populated Airbases, order 1,
 control/alt, and general Flight remain red.
+
+## Cycle 21: fueled current-STRAFE return to an authoritative Airbase
+
+The largest post-Cycle-20 residual shape is the 13 order-1 Unit-to-Build Flight pairs. They span
+seven replay files: 11 explicit selections and two cache reuses, with effective selection-size
+histogram `{1:1, 2:4, 9:2, 10:4, 20:2}`. All 13 use the bounded AIR package shell and all 13
+target a Build owned by the selected Group's owner. The remaining measured order-1 shape is five
+Build-to-Build pairs; the one Shift+ATTACK Unit-to-Build pair is also still red.
+
+At `Group::action_flight` `0x006FB339..0x006FB35E`, order 1 first requires a same-owner target
+whose data can carry AIR. Each selected actor then passes the object-mask and target-specific
+`can_carry(actor)` gates at `0x006FB5D7..0x006FB60F`; Fighter-Bomber type `0x134` additionally
+requires its recorded home to be that target. The admitted host fact binds all of those answers
+to one actor Handle and target address. Only positive `mana_left` reaches the exact direct return
+rewrite at `0x006FBA81..0x006FBABF`: STRAFE target owner/object and position become `-1`, the
+existing target UID is deliberately preserved, `AirOrder::{whose,oxx}` becomes the target base,
+`returning` and `mandatory` become one, and the Group-order flag is set.
+
+Fuel exhaustion remains typed red because retail compares the current home distance with the new
+base before deciding whether to rewrite. So do non-STRAFE actors, missile-mask actors, missing
+actor-bound carrying/home authority, cross-owner or non-Build targets, Build selections, and every
+other Flight order/modifier shape.
+
+The byte-exact witness is `Playback___2017.07.25_19_23_32__Tue_.rcx` (SHA-256
+`275099bdfaf27d168a48906dc27ac59da1e3f0d1220cd7bc815cd8fb26aa99a2`), turn index 4,536,
+turn/package serial 4,537, play 0, frame 27,217, opcodes `[79,0,28,58,74,72]`. Group
+`00020109000b00` selects owner-1 Units 9 and 11 and Flight
+`1cd80700000100000000000000000000000000000001000000` returns them to owner-1 Build 2,008.
+The exact after-image round-trips through save/load; target UID staleness rolls back the Group,
+cache, and both actor orders atomically.

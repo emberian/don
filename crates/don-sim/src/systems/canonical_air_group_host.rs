@@ -51,6 +51,10 @@ pub struct AirGroupUnitAuthority {
     /// reinstalled for this actor. `None` keeps every fresh STRAFE installation red.
     /// The target itself is still generation/UID checked by the canonical object host.
     pub fresh_flight_target: Option<(i32, i32)>,
+    /// Exact target address for which retail's order-1 Flight return gates are proven for this
+    /// actor: the target carries AIR, carries this actor, and (for a Fighter-Bomber) is its
+    /// recorded home base. `None` keeps the recall branch red.
+    pub return_flight_target: Option<(i32, i32)>,
     /// Exact non-strict `Unit::is(NUCLEARMISSILE = 0x13B, 0)` answer read at
     /// `Group::action_launch_flight` `0x006FC2D2`.
     pub is_nuclear_missile: bool,
