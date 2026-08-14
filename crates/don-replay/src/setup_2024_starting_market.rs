@@ -3,10 +3,11 @@
 //! `Setup::build_cities` calls `Setup::build_civ_specific` after the owner-0 Village and
 //! before `Setup::build_units`. The golden replay selects Dutch bonus 22, so retail issues
 //! exactly one `Leader::produce_building(436, 2000, 0)` call. This module derives that call
-//! from replay/Rules bytes, joins the exact Market `blocked_site` footprint owner, and binds
-//! a supported-retail pre/post capture to every City checksum byte written by the success
-//! suffix. It never uses a recorded checksum and does not manufacture the missing generated
-//! World needed to select the site.
+//! from replay/Rules bytes, joins the exact Market `blocked_site` footprint owner, executes the
+//! first `find_friends` Object lookup under explicit scratch authority, and binds a
+//! supported-retail pre/post capture to every City checksum byte written by the success suffix.
+//! It never uses a recorded checksum and does not manufacture the missing generated World needed
+//! to select the site.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +18,7 @@ use don_sim::rng::Random;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
 use don_sim::systems::build_type_find_friends::{
     produce_build_type_find_friends_prefix, BuildTypeFindFriendsError, BuildTypeFindFriendsReceipt,
-    BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop,
+    BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop, BUILD_TYPE_FIND_FRIENDS_VA,
 };
 use don_sim::systems::leader_market_build_accounting::{
     MarketLeaderAccountingError, MarketLeaderAccountingReceipt, MarketLeaderRegionAuthority,
@@ -48,6 +49,12 @@ use don_sim::systems::leader_tribe_bonus_runtime::{
     TribeBonusReceipt,
 };
 use don_sim::systems::map_terrain::{Coord, WCoord, WorldTregionError, WorldTregionQuery};
+use don_sim::systems::objects_find_building_placed_at::{
+    execute_objects_find_building_placed_at, ObjectsFindBuildingPlacedAtExecuteError,
+    ObjectsFindBuildingPlacedAtReceipt, ObjectsFindBuildingPlacedAtStop,
+    ObjectsFindBuildingPlacedAtWallBoundary, ObjectsSelectedOwnerAuthority,
+    ObjectsSelectedOwnerCommitError,
+};
 use don_sim::systems::production::{flag, runtime::LiveProductionRuntime, Footprint};
 use don_sim::systems::save_load::SaveError;
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
@@ -86,6 +93,9 @@ pub const FRESH_CITY_FLAGS: u16 = 0x4011;
 pub const MARKET_CITY_FLAGS: u16 = FRESH_CITY_FLAGS | MARKET_CITY_FLAG;
 pub const MARKET_BUILD_QUEUE_SLOTS: usize = 20;
 pub const MARKET_DOMAIN: i32 = 0;
+/// First instruction after the initial `ObjectsData::find_building_placed_at` call returns to
+/// `BuildTypeData::find_friends`.
+pub const MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA: u32 = 0x0063_933a;
 /// Independent schema for the two-image pre/post Market lifecycle contract.
 pub const GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION: u64 = 1;
 pub const MARKET_FOOTPRINT: Footprint = Footprint {
@@ -407,6 +417,169 @@ impl fmt::Display for GoldenStartingMarketAcceptedPlacementError {
 
 impl std::error::Error for GoldenStartingMarketAcceptedPlacementError {}
 
+fn accepted_placement_receipt_shape_validates(
+    accepted: &GoldenStartingMarketAcceptedPlacementReceipt,
+) -> bool {
+    accepted.placement.footprint.validates()
+        && accepted.placement.candidate.continuation
+            == Some(accepted.placement.footprint.entry.input)
+        && accepted.placement.blocked_location.validates()
+        && accepted.placement.blocked_location.input == accepted.placement.footprint
+        && accepted.placement.source_produced_city_bytes == 0
+        && !accepted.placement.installed_in_scoreboard
+        && accepted.blocked_location.validates()
+        && accepted.blocked_location.input == accepted.placement.blocked_location
+        && accepted.find_friends.validates()
+        && accepted.find_friends.request
+            == market_find_friends_request(accepted.blocked_location.next_child)
+        && accepted.find_friends.stop == BuildTypeFindFriendsStop::FirstObjectLookup
+        && accepted.find_friends.returned.is_none()
+        && accepted.find_friends.first_child.is_some()
+        && accepted.source_produced_city_bytes == 0
+        && !accepted.installed_in_scoreboard
+}
+
+/// Exact local continuation after the first placed-Build lookup returns to
+/// `BuildTypeData::find_friends`.
+///
+/// This is a resume boundary, not a `find_friends` result. The generic tail must still consume
+/// the returned object, City/type predicates, remaining ring probes, and final accumulator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsAfterFirstLookupBoundary {
+    pub instruction_va: u32,
+    pub function_va: u32,
+    pub request: BuildTypeFindFriendsRequest,
+    pub circle_offset: i32,
+    pub accumulator_before: i32,
+    pub effective_city_filter: i32,
+    pub returned: i32,
+    pub returned_owner: Option<i32>,
+}
+
+impl GoldenStartingMarketFindFriendsAfterFirstLookupBoundary {
+    fn validates_against(
+        &self,
+        find_friends: &BuildTypeFindFriendsReceipt,
+        lookup: &ObjectsFindBuildingPlacedAtReceipt,
+    ) -> bool {
+        self.instruction_va == MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA
+            && self.function_va == BUILD_TYPE_FIND_FRIENDS_VA
+            && self.request == find_friends.request
+            && self.circle_offset == lookup.request.circle_offset
+            && self.accumulator_before == 0
+            && find_friends.effective_city_filter == Some(self.effective_city_filter)
+            && lookup.returned == Some(self.returned)
+            && lookup.returned_owner == self.returned_owner
+            && ((self.returned == -1 && self.returned_owner.is_none())
+                || (self.returned >= 0 && self.returned_owner == Some(find_friends.request.owner)))
+    }
+}
+
+/// One complete execution-backed first Object lookup, committed against the separately installed
+/// `ObjectsData+0x200` authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFirstObjectLookupReceipt {
+    pub accepted: GoldenStartingMarketAcceptedPlacementReceipt,
+    pub object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub scratch_before: ObjectsSelectedOwnerAuthority,
+    pub scratch_after: ObjectsSelectedOwnerAuthority,
+    pub next: GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+impl GoldenStartingMarketFirstObjectLookupReceipt {
+    pub fn validates(&self) -> bool {
+        accepted_placement_receipt_shape_validates(&self.accepted)
+            && self.accepted.find_friends.first_child == Some(self.object_lookup.request)
+            && self.object_lookup.validates()
+            && self.object_lookup.returned.is_some()
+            && self.object_lookup.stop != ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary
+            && self.object_lookup.scratch.before == self.scratch_before
+            && self.object_lookup.scratch.after == Some(self.scratch_after)
+            && self
+                .next
+                .validates_against(&self.accepted.find_friends, &self.object_lookup)
+            && self.source_produced_city_bytes == 0
+            && !self.installed_in_scoreboard
+    }
+
+    pub fn validates_against(
+        &self,
+        before: &Sim,
+        production: &LiveProductionRuntime,
+        types: &TypeBuiltinState,
+    ) -> bool {
+        self.validates()
+            && self
+                .accepted
+                .blocked_location
+                .tregion
+                .validates_against(&before.map.world)
+            && self
+                .accepted
+                .find_friends
+                .validates_against(types, production, &before.map.world)
+            && self.object_lookup.validates_against(before, production)
+            && frame379_setup_snapshot_sha256(before)
+                .is_ok_and(|digest| digest == self.accepted.before_sim_sha256)
+    }
+}
+
+/// Typed fail-closed stop when the generic lookup reaches the unresolved Wall-band identity
+/// projection. The scratch authority is unchanged and no parent `find_friends` instruction ran.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFirstObjectLookupWallBoundaryReceipt {
+    pub accepted: GoldenStartingMarketAcceptedPlacementReceipt,
+    pub object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub scratch_authority: ObjectsSelectedOwnerAuthority,
+    pub wall_boundary: ObjectsFindBuildingPlacedAtWallBoundary,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+impl GoldenStartingMarketFirstObjectLookupWallBoundaryReceipt {
+    pub fn validates(&self) -> bool {
+        accepted_placement_receipt_shape_validates(&self.accepted)
+            && self.accepted.find_friends.first_child == Some(self.object_lookup.request)
+            && self.object_lookup.validates()
+            && self.object_lookup.stop == ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary
+            && self.object_lookup.returned.is_none()
+            && self.object_lookup.scratch.before == self.scratch_authority
+            && self.object_lookup.scratch.after.is_none()
+            && self.object_lookup.wall_boundary == Some(self.wall_boundary)
+            && self.source_produced_city_bytes == 0
+            && !self.installed_in_scoreboard
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFirstObjectLookupAdvance {
+    Complete(GoldenStartingMarketFirstObjectLookupReceipt),
+    WallBandIdentityBoundary(GoldenStartingMarketFirstObjectLookupWallBoundaryReceipt),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFirstObjectLookupError {
+    InvalidAcceptedPlacementReceipt,
+    Snapshot(SaveError),
+    BeforeSnapshotMismatch,
+    Lookup(ObjectsFindBuildingPlacedAtExecuteError),
+    InvalidLookupReceipt,
+    Rollback(ObjectsSelectedOwnerCommitError),
+}
+
+impl fmt::Display for GoldenStartingMarketFirstObjectLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "golden starting Market first Object lookup refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketFirstObjectLookupError {}
+
 fn market_find_friends_request(
     boundary: LeaderProduceBuildingFindFriendsBoundary,
 ) -> BuildTypeFindFriendsRequest {
@@ -477,6 +650,115 @@ pub fn advance_golden_starting_market_blocked_location(
     })
 }
 
+/// Execute the first generic placed-Build lookup and advance only the independently installed
+/// Objects scratch word. The canonical Sim remains read-only. A complete lookup publishes the
+/// exact `+0x200` after-image; a Wall identity boundary publishes nothing and is returned as a
+/// typed residual.
+pub fn advance_golden_starting_market_first_object_lookup(
+    before: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    scratch: &mut ObjectsSelectedOwnerAuthority,
+    accepted: GoldenStartingMarketAcceptedPlacementReceipt,
+) -> Result<GoldenStartingMarketFirstObjectLookupAdvance, GoldenStartingMarketFirstObjectLookupError>
+{
+    if !accepted_placement_receipt_shape_validates(&accepted) {
+        return Err(GoldenStartingMarketFirstObjectLookupError::InvalidAcceptedPlacementReceipt);
+    }
+    let before_sim_sha256 = frame379_setup_snapshot_sha256(before)
+        .map_err(GoldenStartingMarketFirstObjectLookupError::Snapshot)?;
+    if before_sim_sha256 != accepted.before_sim_sha256
+        || !accepted
+            .blocked_location
+            .tregion
+            .validates_against(&before.map.world)
+        || !accepted
+            .find_friends
+            .validates_against(types, production, &before.map.world)
+    {
+        return Err(GoldenStartingMarketFirstObjectLookupError::BeforeSnapshotMismatch);
+    }
+
+    let request = accepted
+        .find_friends
+        .first_child
+        .expect("validated first Object child");
+    let scratch_before = *scratch;
+    let object_lookup =
+        execute_objects_find_building_placed_at(before, production, scratch, request)
+            .map_err(GoldenStartingMarketFirstObjectLookupError::Lookup)?;
+    if object_lookup.request != request
+        || object_lookup.scratch.before != scratch_before
+        || !object_lookup.validates_against(before, production)
+    {
+        if object_lookup.returned.is_some() {
+            object_lookup
+                .scratch
+                .rollback(scratch)
+                .map_err(GoldenStartingMarketFirstObjectLookupError::Rollback)?;
+        }
+        return Err(GoldenStartingMarketFirstObjectLookupError::InvalidLookupReceipt);
+    }
+
+    if object_lookup.stop == ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary {
+        if *scratch != scratch_before || object_lookup.returned.is_some() {
+            return Err(GoldenStartingMarketFirstObjectLookupError::InvalidLookupReceipt);
+        }
+        let wall_boundary = object_lookup
+            .wall_boundary
+            .expect("validated Wall boundary receipt");
+        let receipt = GoldenStartingMarketFirstObjectLookupWallBoundaryReceipt {
+            accepted,
+            object_lookup,
+            scratch_authority: scratch_before,
+            wall_boundary,
+            source_produced_city_bytes: 0,
+            installed_in_scoreboard: false,
+        };
+        debug_assert!(receipt.validates());
+        return Ok(GoldenStartingMarketFirstObjectLookupAdvance::WallBandIdentityBoundary(receipt));
+    }
+
+    let returned = object_lookup.returned.expect("validated complete lookup");
+    let scratch_after = object_lookup
+        .scratch
+        .after
+        .expect("validated complete lookup journal");
+    if *scratch != scratch_after {
+        object_lookup
+            .scratch
+            .rollback(scratch)
+            .map_err(GoldenStartingMarketFirstObjectLookupError::Rollback)?;
+        return Err(GoldenStartingMarketFirstObjectLookupError::InvalidLookupReceipt);
+    }
+    let next = GoldenStartingMarketFindFriendsAfterFirstLookupBoundary {
+        instruction_va: MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA,
+        function_va: BUILD_TYPE_FIND_FRIENDS_VA,
+        request: accepted.find_friends.request,
+        circle_offset: request.circle_offset,
+        accumulator_before: 0,
+        effective_city_filter: accepted
+            .find_friends
+            .effective_city_filter
+            .expect("validated Market find_friends prefix"),
+        returned,
+        returned_owner: object_lookup.returned_owner,
+    };
+    let receipt = GoldenStartingMarketFirstObjectLookupReceipt {
+        accepted,
+        object_lookup,
+        scratch_before,
+        scratch_after,
+        next,
+        source_produced_city_bytes: 0,
+        installed_in_scoreboard: false,
+    };
+    debug_assert!(receipt.validates());
+    Ok(GoldenStartingMarketFirstObjectLookupAdvance::Complete(
+        receipt,
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenStartingMarketCaptureSource {
     /// A supported retail process was captured at `Leader::produce_building` entry/return,
@@ -526,8 +808,14 @@ pub struct GoldenStartingMarketCityReceipt {
     /// Execution-derived read-only placement acceptance on the hashed pre-Market Sim.
     pub blocked_location: LeaderProduceBuildingMarketBlockedLocationReceipt,
     /// Execution-derived type/World prefix of the first scoring child. Its typed
-    /// `find_building_placed_at` child remains unresolved.
+    /// `find_building_placed_at` child is retained separately below.
     pub find_friends: BuildTypeFindFriendsReceipt,
+    /// Complete execution-derived first spatial lookup on the same pre-Market Sim.
+    pub first_object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub objects_selected_owner_before: ObjectsSelectedOwnerAuthority,
+    pub objects_selected_owner_after: ObjectsSelectedOwnerAuthority,
+    /// The exact unexecuted `find_friends` resume boundary after the first child returns.
+    pub find_friends_after_first_lookup: GoldenStartingMarketFindFriendsAfterFirstLookupBoundary,
     pub capture_revision: u64,
     pub source: GoldenStartingMarketCaptureSource,
     pub executable_sha256: [u8; 32],
@@ -821,17 +1109,29 @@ fn build_row(sim: &Sim, object: i32) -> Option<usize> {
 }
 
 /// Bind a complete supported-retail Market call to the exact golden City checksum after-image.
-/// The placement receipt is mandatory: an object-shaped after-image without its generated-World
-/// `blocked_site` provenance is refused.
+/// The placement and first Object-lookup receipts are mandatory: an object-shaped after-image
+/// without its generated-World and Objects scratch provenance is refused.
 pub fn bind_golden_starting_market_city(
     replay: &Replay,
     before: &Sim,
     after: &Sim,
     production: &LiveProductionRuntime,
     types: &TypeBuiltinState,
-    accepted: GoldenStartingMarketAcceptedPlacementReceipt,
+    first_lookup: GoldenStartingMarketFirstObjectLookupReceipt,
     capture: &GoldenStartingMarketCapture,
 ) -> Result<GoldenStartingMarketCityReceipt, GoldenStartingMarketBindError> {
+    if !first_lookup.validates() {
+        return Err(GoldenStartingMarketBindError::InvalidPlacementReceipt);
+    }
+    let GoldenStartingMarketFirstObjectLookupReceipt {
+        accepted,
+        object_lookup: first_object_lookup,
+        scratch_before: objects_selected_owner_before,
+        scratch_after: objects_selected_owner_after,
+        next: find_friends_after_first_lookup,
+        source_produced_city_bytes: first_lookup_city_bytes,
+        installed_in_scoreboard: first_lookup_installed,
+    } = first_lookup;
     let GoldenStartingMarketAcceptedPlacementReceipt {
         placement,
         blocked_location,
@@ -858,6 +1158,8 @@ pub fn bind_golden_starting_market_city(
         || find_friends.first_child.is_none()
         || accepted_city_bytes != 0
         || accepted_installed
+        || first_lookup_city_bytes != 0
+        || first_lookup_installed
     {
         return Err(GoldenStartingMarketBindError::InvalidPlacementReceipt);
     }
@@ -888,6 +1190,10 @@ pub fn bind_golden_starting_market_city(
             .tregion
             .validates_against(&before.map.world)
         || !find_friends.validates_against(types, production, &before.map.world)
+        || !first_object_lookup.validates_against(before, production)
+        || first_object_lookup.scratch.before != objects_selected_owner_before
+        || first_object_lookup.scratch.after != Some(objects_selected_owner_after)
+        || !find_friends_after_first_lookup.validates_against(&find_friends, &first_object_lookup)
     {
         return Err(GoldenStartingMarketBindError::BeforeSnapshotMismatch);
     }
@@ -1043,6 +1349,10 @@ pub fn bind_golden_starting_market_city(
         placement,
         blocked_location,
         find_friends,
+        first_object_lookup,
+        objects_selected_owner_before,
+        objects_selected_owner_after,
+        find_friends_after_first_lookup,
         capture_revision: capture.revision,
         source: capture.source,
         executable_sha256: capture.executable_sha256,

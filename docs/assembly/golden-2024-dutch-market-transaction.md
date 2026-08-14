@@ -76,12 +76,42 @@ mutating Object lookup.
 
 After a zero `blocked_site` result, retail calls `BuildTypeData::find_friends`. The source-owned
 prefix now reaches that function's first `ObjectsData::find_building_placed_at` child, but the
-child and the eventual return remain unresolved. If a later execution-backed authority proves the
-ordinary fresh-Market result of zero, retail next calls `vector_dist` between candidate and origin.
-The base score is 1,000 through distance four and 333 above four. It then adds
-`255 - WData::val`. Market is not a gather enhancer and is not the Farm/Mine cohort, so it consumes
-**no coarse RNG draw**. Later equal-scoring candidates replace earlier ones because the comparison
-is `best <= candidate`. Those formulas are source facts, not a current execution claim.
+child and the eventual return remain unresolved.
+
+The remaining `find_friends` body is nevertheless source-complete. It visits circle offsets one
+through eight without deduplicating returned objects. After every nonnegative Object lookup it
+requires the found Build's signed `city` to equal the effective City filter. Market's flags leave
+that filter at slot zero. The general Market branch then applies these predicates in order:
+
+1. a found gather type (vtable `+0x90`, `BuildTypeData::is_gather_type`) survives only when it is
+   related to University type 420;
+2. a found gather enhancer (relations 423 through 426) is rejected;
+3. a found military trainer (`basic_type` `build_flags & 0x40000000`) survives only when its live
+   Object flags carry `CAPTURED` `0x20`;
+4. a found Wonder (vtable `+0x1c`, `TypeData::is_wonder_type`) is rejected.
+
+Each survivor adds one at odd circle offsets and two at even offsets. The golden Village type 414
+has build flags `0xA4002011`: it is not a gather type, is a military trainer, and is not a Wonder.
+The pre-Market lifecycle binder requires its live `CAPTURED` flag, so a lookup that actually
+returns that Village contributes. This does not predict how many of the eight footprint probes
+return it; the complete Object-chain receipt must establish each result and the final count.
+
+At `0x006E1F64`, a nonzero return `n` produces base score `(n + 2) * 1000`. Market does not select
+the Tower-only squaring arm. A zero return instead calls `vector_dist` on the candidate and origin
+**WCoord** deltas: the base is 1,000 through distance four and 333 from distance five onward. The
+Market's non-gather-enhancer tail then adds `255 - WData::val` at the candidate cell. Market is not
+the Farm/Mine cohort, so it consumes **no coarse RNG draw**. Later equal-scoring candidates replace
+earlier ones because the comparison is `best <= candidate`. These formulas and branch conditions
+are source facts only; replay must not execute them until a complete `find_friends` return is bound
+to the canonical Object/Build/World preimage.
+
+An improving score next tests candidate `WData::flags & 0x2`. When set, the first remaining child
+is `0x006E2444 -> ObjectsData::find 0x0065C6B0`; a negative return clears that WData bit. When clear,
+the branch is skipped without an Object scratch write. The later hostile-neighbor scan is guarded
+by linked `City.city_flags & 0x2`; the canonical fresh pre-Market value `0x4011` clears that guard.
+Only after those conditions does retail publish the candidate as the current coarse winner. Thus
+a future score owner can remain read-only for the exact clear-bit cohort, but must fail closed at
+`ObjectsData::find` when the generated candidate WData carries bit `0x2`.
 
 The chosen coarse cell produces a 2x2 fine scan, again x outer / y inner. Every fine candidate
 first calls `blocked_site`. Only a zero result consumes `Random::get(0,65535)` at `0x006E2C00` and
@@ -187,12 +217,23 @@ coarse-site acceptance through self-owned territory, Town selection, the zero ex
 count, and the zero water count. `GoldenStartingMarketAcceptedPlacementReceipt` hashes the full
 pre-Market Sim that supplied those reads. It also consumes the generic exact
 `BuildTypeData::find_friends` prefix and stops at the typed
-`0x00639335 -> ObjectsData::find_building_placed_at 0x00658C80` child. The prefix has no return
-value and authorizes no score. The City binder replays both receipts against the same preimage and
-refuses a lifecycle capture that is not rooted there.
+`0x00639335 -> ObjectsData::find_building_placed_at 0x00658C80` child. The separate first-lookup
+adapter executes that child against the same canonical pre-Market Sim and the explicitly installed
+Objects scratch authority. A complete miss or hit commits the exact scratch after-image and emits
+the typed `find_friends` resume boundary at `0x0063933A` with accumulator zero. A reached Wall-band
+identity boundary leaves scratch unchanged and remains a typed residual. Neither path invents a
+`find_friends` return or coarse score. The City binder requires the complete-lookup receipt and
+replays every World/Object/Build read against the preimage before accepting lifecycle evidence.
 
-This still does not execute candidate scoring, the one-through-four fine RNG draws, allocation,
-`Build::init`, activation, or City mutation. Those later effects remain supported-retail capture
-evidence. Their main-RNG boundary is also deliberately not joined directly to post-`place_all`:
-post-placement map work and the collision-retried Setup player/start shuffle consume intervening
-draws before the Market.
+The lookup unconditionally writes `ObjectsData+0x200 = -1` before inspecting TData and writes the
+found owner's slot there on success. The canonical `Sim` snapshot and
+`GoldenStartingMarketCapture` do not contain this process-global scratch word. A replay adapter
+therefore consumes a separately revisioned Objects scratch authority and journals the native
+before-to-minus-one-to-final transition transactionally; the pre-Market Sim hash never authorizes
+or defaults the missing prior word.
+
+This still does not execute the remainder of `find_friends`, candidate scoring, the
+one-through-four fine RNG draws, allocation, `Build::init`, activation, or City mutation. Those
+later effects remain supported-retail capture evidence. Their main-RNG boundary is also
+deliberately not joined directly to post-`place_all`: post-placement map work and the
+collision-retried Setup player/start shuffle consume intervening draws before the Market.

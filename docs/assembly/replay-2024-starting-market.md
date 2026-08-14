@@ -38,8 +38,9 @@ on `<=`, so a later equal score wins. The count is one through four on a success
 
 `GoldenStartingMarketCityReceipt` requires the source-derived plan, exact 16-tile placement
 receipt, execution-backed `get_tregion`/territory/Town/City-count/water acceptance on the hashed
-pre-Market Sim, supported executable identity, adjacent pre/post Sim hashes, and the complete fine
-RNG trace. It then validates dense Build allocation as owner-0 o2001/type436 and the City
+pre-Market Sim, a complete first `find_building_placed_at` lookup with explicit before/after
+Objects scratch authority, supported executable identity, adjacent pre/post Sim hashes, and the
+complete fine RNG trace. It then validates dense Build allocation as owner-0 o2001/type436 and the City
 chain `center(2000).city_down=2001`, `market.city=0`, `market.city_down=-1`. The Market is
 VALID|STARTED|ACTIVE, has Object flag `0x20` clear, and owns the training queue's 20 slots.
 
@@ -60,13 +61,15 @@ pre/post process capture or complete generated World is currently installed.
 
 ## Residual
 
-The `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` prefix is now execution-backed through
-its type and World-bounds gates. Its first unresolved child is
-`0x00639335 -> ObjectsData::find_building_placed_at 0x00658C80`, whose first instruction writes
-Objects scratch state. The prefix therefore has no `find_friends` return and cannot authorize the
-source-known coarse-score formula, fine probes, allocation, `Build::init`, activation
-visibility/road effects, or the full non-City Sim mutation surface. Those later effects still need
-an exact owner before this receipt can become the golden frame-zero publisher. The
+The `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` prefix is execution-backed through its
+type and World-bounds gates. The first `0x00639335 -> ObjectsData::find_building_placed_at
+0x00658C80` child is now executed transactionally from a separately installed `ObjectsData+0x200`
+authority. A complete native miss/hit commits its exact scratch after-image and resumes at
+`0x0063933A`; a Wall-band identity mismatch remains uncommitted and typed. The remaining
+`find_friends` ring/type tail is still unresolved, so the adapter has no `find_friends` return and
+cannot authorize the source-known coarse-score formula, fine probes, allocation, `Build::init`,
+activation visibility/road effects, or the full non-City Sim mutation surface. Those later effects
+still need an exact owner before this receipt can become the golden frame-zero publisher. The
 post-`place_all` RNG state is not the Market-before state: intervening post-placement work and
 Setup's collision-retried player/start shuffle remain separate owners. Recorded checksum words are
 never inputs.
