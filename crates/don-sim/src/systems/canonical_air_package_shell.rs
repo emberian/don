@@ -138,8 +138,9 @@ impl From<CanonicalPatrolFlightError> for CanonicalAirPackageShellError {
     }
 }
 
-/// An exact retail Flight no-action subdomain: selected Airbases, ATTACK, no modifier, and a
-/// complete containment walk with no Nuclear Missile.
+/// An exact retail Flight no-action subdomain: selected Airbases, ATTACK to a live
+/// generational Unit or Build, no modifier, and a complete containment walk with no Nuclear
+/// Missile.
 /// Retail filters every child at the type-315 test before reading busy/mana/range/order state, so
 /// this arm mutates only the opcode-0 Group/cache selection and has no Flight order tail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

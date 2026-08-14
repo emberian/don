@@ -4,7 +4,7 @@
 use don_sim::command::air_launch_receivers::MISSILE_OBJECT_MASK;
 use don_sim::order::{Order, OrderIndex, ORDER_GROUP};
 use don_sim::systems::air_group_action_transaction::{
-    AirGroupActionPlan, AirTransactionStatus, CommandPackagePosition,
+    AirGroupActionPlan, AirTransactionStatus, CanonicalObjectBand, CommandPackagePosition,
 };
 use don_sim::systems::canonical_air_group_host::{AirGroupRuntimeAuthority, AirGroupUnitAuthority};
 use don_sim::systems::canonical_air_package_shell::{
@@ -63,6 +63,11 @@ const RETAIL_PATROL_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackage
     game_frame: 65_215,
     package_serial: 10_870,
     play: 2,
+};
+const RETAIL_BUILD_UNIT_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 39_338,
+    package_serial: 39_550,
+    play: 0,
 };
 
 fn hex(value: &str) -> Vec<u8> {
@@ -148,6 +153,15 @@ fn retail_patrol_flight_commands() -> Vec<Vec<u8>> {
         "391e8b520b61cba8e901000000a457ee4a2db56e168965b7cce3503e37273aecb6cb22493301000000c5e3f22ab4d137630431ba12cf1dbf9601000400fd7a2b7c",
         "4a48001000000000000000",
         "4804cb0901009d280000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_build_unit_flight_commands() -> Vec<Vec<u8>> {
+    [
+        "0001001008",
+        "1c9f000000030000000000000000000000000000000a000000",
     ]
     .map(hex)
     .to_vec()
@@ -801,6 +815,21 @@ fn build_flight_fixture() -> Sim {
     sim
 }
 
+fn build_unit_flight_fixture() -> (Sim, Handle) {
+    let mut sim = build_flight_fixture();
+    sim.world.frame = RETAIL_BUILD_UNIT_FLIGHT_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_BUILD_UNIT_FLIGHT_IDENTITY.game_frame;
+    let mut target = None;
+    for o in 0..=159i16 {
+        let handle = sim
+            .spawn_unit(3, 91, 48_000 + i32::from(o), 37_000, 4)
+            .unwrap();
+        assert_eq!(sim.world.units.o()[sim.world.row_of(handle).unwrap()], o);
+        target = Some(handle);
+    }
+    (sim, target.unwrap())
+}
+
 fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
     assert_eq!(left.world.frame, right.world.frame);
     assert_eq!(left.world.random.state(), right.world.random.state());
@@ -870,6 +899,114 @@ fn exact_retail_cached_airbase_flight_to_build_is_no_action_and_save_resumable()
     let saved = save_sim(&sim).unwrap();
     let loaded = load_sim(&saved).unwrap();
     assert_eq!(save_sim(&loaded).unwrap(), saved);
+}
+
+#[test]
+fn exact_retail_explicit_airbase_flight_to_unit_is_no_action_and_save_resumable() {
+    let (mut sim, target) = build_unit_flight_fixture();
+    let commands = retail_build_unit_flight_commands();
+    let target_row = sim.world.row_of(target).unwrap();
+    let target_orders = sim.world.orders(target_row).clone();
+    let target_uid = sim.world.units.get_uid(target_row);
+    let target_position = (
+        sim.world.units.x_internal()[target_row],
+        sim.world.units.y_internal()[target_row],
+    );
+    let before_rng = sim.world.random.state();
+    let before_builds = sim.builds.iter().map(BuildData::image).collect::<Vec<_>>();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_BUILD_UNIT_FLIGHT_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.command_image, commands);
+    assert_eq!(receipt.flight_no_action.len(), 1);
+    assert!(receipt.flight_strafe.is_empty());
+    assert!(receipt.flight_fresh_strafe.is_empty());
+    assert!(receipt.air.is_empty());
+    let flight = &receipt.flight_no_action[0];
+    assert_eq!(flight.target.band, CanonicalObjectBand::Unit);
+    assert_eq!(flight.target.address(), (3, 159));
+    assert!(matches!(
+        flight.target.generation,
+        don_sim::systems::air_group_action_transaction::CanonicalObjectGeneration::Unit {
+            id,
+            generation,
+        } if (id, generation) == (target.id, target.generation)
+    ));
+    assert_eq!(flight.target_uid, target_uid);
+    assert_eq!(flight.target_position, target_position);
+    assert_eq!(flight.selected_airbases.len(), 1);
+    assert_eq!(
+        (
+            flight.selected_airbases[0].who,
+            flight.selected_airbases[0].o,
+        ),
+        (0, 2_064),
+    );
+    assert!(flight.contained_non_missiles.is_empty());
+    assert_eq!(sim.world.orders(target_row), &target_orders);
+    assert_eq!(sim.world.random.state(), before_rng);
+    assert_eq!(
+        sim.builds.iter().map(BuildData::image).collect::<Vec<_>>(),
+        before_builds,
+    );
+
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(save_sim(&loaded).unwrap(), saved);
+}
+
+#[test]
+fn changed_no_action_unit_target_rejects_before_explicit_airbase_selection_publication() {
+    let (mut sim, target) = build_unit_flight_fixture();
+    let commands = retail_build_unit_flight_commands();
+    let players = std::array::from_fn(|play| (play == 0).then_some(0));
+    let map_tiles = (sim.map.world.xs, sim.map.world.ys);
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        map_tiles,
+        RETAIL_BUILD_UNIT_FLIGHT_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_groups = sim.groups.clone();
+    let before_cache = sim.command_package_state.clone();
+    let target_row = sim.world.row_of(target).unwrap();
+    sim.world.units.set_uid(
+        target_row,
+        sim.world.units.get_uid(target_row).wrapping_add(1),
+    );
+
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            map_tiles,
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.groups.last_group, before_groups.last_group);
+    assert_eq!(sim.groups.proc_group, before_groups.proc_group);
+    assert_eq!(sim.command_package_state, before_cache);
 }
 
 #[test]

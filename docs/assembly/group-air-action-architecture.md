@@ -237,3 +237,29 @@ save/load byte identity, changed-map stale rollback, standalone Patrol rejection
 fresh-range authority rejection are executable gates. The Unit-to-Build wire/shell census is
 therefore 942/942 shell-admissible. Standalone Patrol, ground/mixed Patrol, QueueNew, and
 general AIR_PATROL-to-Flight remain deliberately fail-closed.
+
+## Cycle 18: Build-to-Unit Flight no-action target
+
+The all-Airbase no-action Flight cone is target-class independent after the target's live
+identity has been resolved. Cycle 18 exercises its Unit target rather than projecting it
+through the earlier Build fixture. The shipped solo replay (SHA-256
+`558e0cd53dbed4f820e8757c0327a58384d433e5beb8e9eeef5d64df4d67bd54`) supplies the exact
+witness at turn index 39,549, turn 39,550, play 0, frame 39,338:
+`0001001008` explicitly selects owner 0 Build 2064, and
+`1c9f000000030000000000000000000000000000000a000000` issues unmodified ATTACK Flight
+against owner 3 Unit 159.
+
+The canonical host resolves that target through the Unit band and binds its Handle,
+generation, UID, active flag, and position. It then walks the selected Airbase's complete
+containment chain. With no type-315 Nuclear Missile child, retail reaches no order-changing
+Flight tail: only the opcode-0 Group/cache selection publishes. A changed Unit UID between
+prepare and commit rejects before that selection, and the applied no-action result round-trips
+through save/load byte-identically with unchanged target orders, Builds, RNG, and Flight order
+receipts.
+
+The full replay corpus contains 301 Build-to-Unit ATTACK/no-modifier Flight pairs across 17
+files: 29 explicit and 272 cached selections, with effective group sizes
+`{1:41, 2:21, 3:48, 4:147, 6:37, 7:6, 8:1}`. All 301 packages use only the bounded AIR shell
+grammar. This closes the measured wire/shell and exact empty-containment execution cone; it
+does not authorize non-Airbase selections, incomplete containment, Nuclear Missile children,
+modifiers, or any general Flight mutation.
