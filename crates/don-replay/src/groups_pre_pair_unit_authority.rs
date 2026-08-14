@@ -33,6 +33,8 @@ pub const UNIT_TYPE_FIRST: i32 = 50;
 pub const UNIT_TYPE_LAST: i32 = 413;
 pub const SPELL_TYPE_FIRST: i32 = 629;
 pub const SPELL_TYPE_LAST: i32 = 683;
+pub const GOOD_TYPE_FIRST: i32 = 0;
+pub const GOOD_TYPE_LAST: i32 = 49;
 
 pub const SETUP_BUILD_UNITS_VA: u32 = 0x005a_afc0;
 pub const LEADER_HAS_TRIBE_BONUS_VA: u32 = 0x006e_1370;
@@ -97,6 +99,36 @@ pub struct ReplayUnitTypeFacts {
     pub uber_size: i32,
     pub crew_size: i32,
     pub base_form: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayGoodTypeSpans {
+    /// `TypeData + 0x04 .. +0x5e`.
+    pub type_base: ReplayByteSpan,
+    /// `ObjectTypeData + 0x1e4 .. +0x27c`. The following variable-length arrays are
+    /// admitted by the complete Rules digest but are not read by this availability cone.
+    pub object: ReplayByteSpan,
+    /// `GoodTypeData + 0x2b4 .. +0x2f8`.
+    pub good: ReplayByteSpan,
+}
+
+/// Exact replay-carried TypeData fields reached by
+/// `LeaderData::type_avail(GoodType, 1)`.
+///
+/// GoodType's virtual `num_preq` is the executable constant two (`0x00470810`). The two
+/// prerequisite values, `tribe_mask`, and `obs` therefore decide the whole strict Good path
+/// before any Leader tech-mask bit can be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayGoodTypeFacts {
+    pub spans: ReplayGoodTypeSpans,
+    pub type_index: i32,
+    pub tribe_mask: u32,
+    pub preq: [i32; 3],
+    pub from_type: i32,
+    pub where_type: i32,
+    pub upgrade: i32,
+    pub jump: i32,
+    pub obs: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -365,6 +397,69 @@ fn absolute_span(rules: &InitialRules, relative: usize, bytes: usize) -> ReplayB
         offset: rules.serialized_offset + relative,
         bytes,
     }
+}
+
+/// Extract one exact GoodType row from the replay's already-admitted Rules section.
+///
+/// This walks the same variable-length Type prefix as the other content projections. It does
+/// not use the installed Good catalog or infer availability from the numeric `0..=49` class.
+pub fn replay_good_type_facts(
+    payload: &[u8],
+    rules: &InitialRules,
+    type_index: i32,
+) -> Result<ReplayGoodTypeFacts, PrePairUnitAuthorityError> {
+    if !(GOOD_TYPE_FIRST..=GOOD_TYPE_LAST).contains(&type_index) {
+        return Err(PrePairUnitAuthorityError::TypeIndexOutOfRange { type_index });
+    }
+    let section = admitted_section(payload, rules)?;
+    let mut cursor = 1usize;
+    for slot in 0..=type_index as usize {
+        let type_base = cursor;
+        need(section, cursor, TYPE_BASE_WALK_BYTES)?;
+        let got = read_i32(section, cursor)?;
+        if got != slot as i32 {
+            return Err(PrePairUnitAuthorityError::WrongSerializedType {
+                expected: slot as i32,
+                got,
+            });
+        }
+        cursor += TYPE_BASE_WALK_BYTES;
+        skip_string(section, &mut cursor)?;
+
+        let object = cursor;
+        need(section, cursor, OBJECT_WALK_BYTES)?;
+        cursor += OBJECT_WALK_BYTES;
+        skip_u16_array(section, &mut cursor)?;
+        skip_u16_array(section, &mut cursor)?;
+        let good = cursor;
+        need(section, good, GOOD_TAIL_BYTES)?;
+
+        if slot as i32 == type_index {
+            let base = |runtime_offset: usize| type_base + (runtime_offset - 4);
+            return Ok(ReplayGoodTypeFacts {
+                spans: ReplayGoodTypeSpans {
+                    type_base: absolute_span(rules, type_base, TYPE_BASE_WALK_BYTES),
+                    object: absolute_span(rules, object, OBJECT_WALK_BYTES),
+                    good: absolute_span(rules, good, GOOD_TAIL_BYTES),
+                },
+                type_index: got,
+                tribe_mask: read_u32(section, base(0x10))?,
+                preq: [
+                    read_i32(section, base(0x30))?,
+                    read_i32(section, base(0x34))?,
+                    read_i32(section, base(0x38))?,
+                ],
+                from_type: read_i32(section, base(0x3c))?,
+                where_type: read_i32(section, base(0x40))?,
+                upgrade: read_i32(section, base(0x44))?,
+                jump: read_i32(section, base(0x48))?,
+                obs: read_i32(section, base(0x4c))?,
+            });
+        }
+        cursor += GOOD_TAIL_BYTES;
+        need(section, cursor, 0)?;
+    }
+    unreachable!("validated Good TypeIndex must be reached")
 }
 
 /// Extract one exact UnitType row from a replay's already-admitted Rules section.

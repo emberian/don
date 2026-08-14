@@ -20,16 +20,23 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use don_sim::systems::bhs_type_table::TypeBuiltinState;
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use don_sim::systems::world_oil_goods::{OilGoodRuntime, OIL_GOOD_TYPE};
 use don_sim::tick::Sim;
 use don_sim::world::{Handle, WorldObjectIdentity};
 
+use crate::groups_pre_pair_unit_authority::{
+    replay_good_type_facts, PrePairUnitAuthorityError, ReplayGoodTypeFacts,
+};
+use crate::initial::ReplayByteSpan;
+use crate::replay::{load_payload, Replay};
 use crate::setup_2024_frame0_merchant_search::{
     validate_frame0_merchant_good_lookup_request, Frame0MerchantGoodLookupRequest,
     Frame0MerchantSearchError, OBJECTS_FIND_GOOD_AT_WCOORD_VA,
 };
 use crate::setup_2024_frame0_merchant_unpack::Frame0MerchantSpotRequest;
+use crate::setup_2024_frame379::REPLAY_FILE_SHA256;
 use crate::setup_unit_member_authority::CanonicalSetupUnitMemberReceipt;
 use crate::world_owner_frontier::sha256;
 
@@ -138,10 +145,94 @@ pub struct Frame0MerchantTypeAvailCapture {
     pub available: bool,
 }
 
+/// One exact `LeaderData::has_preq` prerequisite read on the Good path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantTypeAvailPreqRead {
+    pub ordinal: u8,
+    pub resolved_type: i32,
+    pub has_tech: bool,
+}
+
+/// Source-owned answer for the golden strict Good `type_avail` child.
+///
+/// The `leader_tech_bit_read` field is intentionally `None`: GoodType returns through the
+/// non-Unit/non-Build/non-government arm before retail reaches `LeaderData + 0x6c18`. Keeping
+/// that negative read fact in the receipt prevents a later adapter from silently treating the
+/// leader's availability mask as an input to this path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantTypeAvailReceipt {
+    pub receipt_sha256: [u8; 32],
+    pub request_sha256: [u8; 32],
+    pub replay_file_sha256: [u8; 32],
+    pub replay_payload_sha256: [u8; 32],
+    pub serialized_rules_sha256: [u8; 32],
+    pub type_base_span: ReplayByteSpan,
+    pub object_span: ReplayByteSpan,
+    pub good_span: ReplayByteSpan,
+    pub leader: i32,
+    pub leader_tribe: i32,
+    pub type_index: i32,
+    pub tribe_mask: u32,
+    pub prerequisite_reads: [Frame0MerchantTypeAvailPreqRead; 2],
+    pub obs_type: i32,
+    pub strict_obs_has_tech: bool,
+    pub has_preq_raw: i32,
+    pub tribe_can_type_raw: i32,
+    pub type_eligible_raw: i32,
+    pub leader_tech_bit_read: Option<bool>,
+    pub raw_availability: i32,
+    pub available: bool,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub rng_draws: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame0MerchantGoodLookupFrontier {
     Resolved(Frame0MerchantGoodLookupReceipt),
     NeedsTypeAvail(Frame0MerchantTypeAvailRequest),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame0MerchantTypeAvailError {
+    Lookup(Frame0MerchantGoodLookupError),
+    ReplayRead(String),
+    WrongGoldenReplayFile,
+    ReplayPayloadDisagreement,
+    MissingReplayRules,
+    Rules(PrePairUnitAuthorityError),
+    StaleRequest,
+    MissingReplayLeader { leader: i32 },
+    InvalidLeader { leader: i32 },
+    LeaderIdentityDisagreement,
+    LeaderTribeDisagreement { replay: i32, owner: i32 },
+    TypeOwnerDisagreement,
+    WrongGoldenGoodFacts,
+    InvalidReceiptDigest,
+    StaleReceipt,
+}
+
+impl fmt::Display for Frame0MerchantTypeAvailError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-zero Merchant type availability refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame0MerchantTypeAvailError {}
+
+impl From<Frame0MerchantGoodLookupError> for Frame0MerchantTypeAvailError {
+    fn from(value: Frame0MerchantGoodLookupError) -> Self {
+        Self::Lookup(value)
+    }
+}
+
+impl From<PrePairUnitAuthorityError> for Frame0MerchantTypeAvailError {
+    fn from(value: PrePairUnitAuthorityError) -> Self {
+        Self::Rules(value)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,6 +400,51 @@ pub fn frame0_merchant_type_avail_capture_digest(
     image.extend_from_slice(&capture.request_sha256);
     image.extend_from_slice(&capture.installed_query_input_sha256);
     image.push(u8::from(capture.available));
+    sha256(&image)
+}
+
+fn append_span(image: &mut Vec<u8>, span: ReplayByteSpan) {
+    image.extend_from_slice(&(span.offset as u64).to_le_bytes());
+    image.extend_from_slice(&(span.bytes as u64).to_le_bytes());
+}
+
+pub fn frame0_merchant_type_avail_receipt_digest(
+    receipt: &Frame0MerchantTypeAvailReceipt,
+) -> [u8; 32] {
+    let mut image = Vec::with_capacity(320);
+    image.extend_from_slice(&receipt.request_sha256);
+    image.extend_from_slice(&receipt.replay_file_sha256);
+    image.extend_from_slice(&receipt.replay_payload_sha256);
+    image.extend_from_slice(&receipt.serialized_rules_sha256);
+    append_span(&mut image, receipt.type_base_span);
+    append_span(&mut image, receipt.object_span);
+    append_span(&mut image, receipt.good_span);
+    image.extend_from_slice(&receipt.leader.to_le_bytes());
+    image.extend_from_slice(&receipt.leader_tribe.to_le_bytes());
+    image.extend_from_slice(&receipt.type_index.to_le_bytes());
+    image.extend_from_slice(&receipt.tribe_mask.to_le_bytes());
+    for read in receipt.prerequisite_reads {
+        image.push(read.ordinal);
+        image.extend_from_slice(&read.resolved_type.to_le_bytes());
+        image.push(u8::from(read.has_tech));
+    }
+    image.extend_from_slice(&receipt.obs_type.to_le_bytes());
+    image.push(u8::from(receipt.strict_obs_has_tech));
+    image.extend_from_slice(&receipt.has_preq_raw.to_le_bytes());
+    image.extend_from_slice(&receipt.tribe_can_type_raw.to_le_bytes());
+    image.extend_from_slice(&receipt.type_eligible_raw.to_le_bytes());
+    match receipt.leader_tech_bit_read {
+        None => image.push(0),
+        Some(value) => {
+            image.push(1);
+            image.push(u8::from(value));
+        }
+    }
+    image.extend_from_slice(&receipt.raw_availability.to_le_bytes());
+    image.push(u8::from(receipt.available));
+    image.extend_from_slice(&receipt.random_state_before.to_le_bytes());
+    image.extend_from_slice(&receipt.random_state_after.to_le_bytes());
+    image.extend_from_slice(&receipt.rng_draws.to_le_bytes());
     sha256(&image)
 }
 
@@ -689,6 +825,181 @@ pub fn advance_frame0_merchant_good_lookup(
     evaluate_prevalidated(sim, child, goods)
 }
 
+fn live_type_row_agrees(facts: ReplayGoodTypeFacts, types: &TypeBuiltinState) -> bool {
+    let Ok(index) = usize::try_from(facts.type_index) else {
+        return false;
+    };
+    let Some(row) = types.types.rows().get(index) else {
+        return false;
+    };
+    row.index == facts.type_index
+        && row.common.tribe_mask == facts.tribe_mask
+        && row.common.preq == facts.preq
+        && row.from == facts.from_type
+        && row.where_type == facts.where_type
+}
+
+fn source_owned_type_avail_receipt(
+    request: &Frame0MerchantTypeAvailRequest,
+    replay_file_sha256: [u8; 32],
+    replay_payload_sha256: [u8; 32],
+    serialized_rules_sha256: [u8; 32],
+    facts: ReplayGoodTypeFacts,
+    leader_tribe: i32,
+) -> Result<Frame0MerchantTypeAvailReceipt, Frame0MerchantTypeAvailError> {
+    // GoodTypeData::num_preq is the constant two. In the admitted golden Rules every Good
+    // has the two identity prerequisites and the strict observation sentinel. A different
+    // row is not this golden cone and must not be approximated with the same proof.
+    if facts.preq != [-1, -1, -1] || facts.obs != -2 {
+        return Err(Frame0MerchantTypeAvailError::WrongGoldenGoodFacts);
+    }
+    let prerequisite_reads = [
+        Frame0MerchantTypeAvailPreqRead {
+            ordinal: 0,
+            resolved_type: -1,
+            has_tech: true,
+        },
+        Frame0MerchantTypeAvailPreqRead {
+            ordinal: 1,
+            resolved_type: -1,
+            has_tech: true,
+        },
+    ];
+    let tribe_bit = u32::try_from(leader_tribe)
+        .ok()
+        .and_then(|shift| 1u32.checked_shl(shift))
+        .unwrap_or(0);
+    let tribe_can_type_raw = if facts.tribe_mask & tribe_bit != 0 {
+        4
+    } else {
+        0
+    };
+    // `type_eligible(type,1)` returns the tribe result before its strict Good arm. When the
+    // tribe admits the row, `has_tech(obs=-2)` is false and that arm returns 4.
+    let type_eligible_raw = if tribe_can_type_raw == 4 { 4 } else { 0 };
+    // GoodType is neither Unit, Build, nor government. `type_avail` therefore returns 4 at
+    // 0x006e3458 before the Unit-only availability-mask block at 0x006e34ab.
+    let raw_availability = type_eligible_raw;
+    let random_state = request.random_state;
+    let mut receipt = Frame0MerchantTypeAvailReceipt {
+        receipt_sha256: [0; 32],
+        request_sha256: request.request_sha256,
+        replay_file_sha256,
+        replay_payload_sha256,
+        serialized_rules_sha256,
+        type_base_span: facts.spans.type_base,
+        object_span: facts.spans.object,
+        good_span: facts.spans.good,
+        leader: request.leader,
+        leader_tribe,
+        type_index: facts.type_index,
+        tribe_mask: facts.tribe_mask,
+        prerequisite_reads,
+        obs_type: facts.obs,
+        strict_obs_has_tech: false,
+        has_preq_raw: 1,
+        tribe_can_type_raw,
+        type_eligible_raw,
+        leader_tech_bit_read: None,
+        raw_availability,
+        available: raw_availability != 0,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        rng_draws: 0,
+    };
+    receipt.receipt_sha256 = frame0_merchant_type_avail_receipt_digest(&receipt);
+    Ok(receipt)
+}
+
+/// Resolve the golden Good `LeaderData::type_avail(type,1)` child from replay-carried Rules
+/// and the canonical live Leader/type owner.
+///
+/// The World/Object/Good prefix is re-evaluated first, so the request cannot be transplanted
+/// across a changed chain. No replay checksum or post-state is accepted as an input.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_frame0_merchant_type_avail(
+    replay: &Replay,
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    child: &Frame0MerchantGoodLookupRequest,
+    goods: &OilGoodRuntime,
+    types: &TypeBuiltinState,
+    request: &Frame0MerchantTypeAvailRequest,
+) -> Result<Frame0MerchantTypeAvailReceipt, Frame0MerchantTypeAvailError> {
+    let current = advance_frame0_merchant_good_lookup(sim, parent, member, child, goods)?;
+    let Frame0MerchantGoodLookupFrontier::NeedsTypeAvail(current) = current else {
+        return Err(Frame0MerchantTypeAvailError::StaleRequest);
+    };
+    if current != *request {
+        return Err(Frame0MerchantTypeAvailError::StaleRequest);
+    }
+
+    let replay_bytes = std::fs::read(&replay.path)
+        .map_err(|error| Frame0MerchantTypeAvailError::ReplayRead(error.to_string()))?;
+    let replay_file_sha256 = sha256(&replay_bytes);
+    if replay_file_sha256 != REPLAY_FILE_SHA256 {
+        return Err(Frame0MerchantTypeAvailError::WrongGoldenReplayFile);
+    }
+    let payload = load_payload(&replay.path)
+        .map_err(|error| Frame0MerchantTypeAvailError::ReplayRead(error.to_string()))?;
+    let replay_payload_sha256 = sha256(&payload);
+    if replay_payload_sha256 != replay.initial.payload_sha256 {
+        return Err(Frame0MerchantTypeAvailError::ReplayPayloadDisagreement);
+    }
+    let rules = replay
+        .initial
+        .rules
+        .ok_or(Frame0MerchantTypeAvailError::MissingReplayRules)?;
+    let facts = replay_good_type_facts(&payload, &rules, request.type_index)?;
+    if !live_type_row_agrees(facts, types) {
+        return Err(Frame0MerchantTypeAvailError::TypeOwnerDisagreement);
+    }
+
+    let leader = usize::try_from(request.leader)
+        .ok()
+        .filter(|&leader| leader < types.leaders.len())
+        .ok_or(Frame0MerchantTypeAvailError::InvalidLeader {
+            leader: request.leader,
+        })?;
+    let live_leader = &types.leaders[leader];
+    let sim_leader =
+        sim.vic_leaders
+            .slots
+            .get(leader)
+            .ok_or(Frame0MerchantTypeAvailError::InvalidLeader {
+                leader: request.leader,
+            })?;
+    if sim_leader.who != request.leader {
+        return Err(Frame0MerchantTypeAvailError::LeaderIdentityDisagreement);
+    }
+    let replay_leader = replay
+        .initial
+        .info
+        .players
+        .iter()
+        .find(|player| player.present && i32::from(player.who) == request.leader)
+        .ok_or(Frame0MerchantTypeAvailError::MissingReplayLeader {
+            leader: request.leader,
+        })?;
+    let replay_tribe = i32::from(replay_leader.tribe);
+    if live_leader.tribe != replay_tribe {
+        return Err(Frame0MerchantTypeAvailError::LeaderTribeDisagreement {
+            replay: replay_tribe,
+            owner: live_leader.tribe,
+        });
+    }
+
+    source_owned_type_avail_receipt(
+        request,
+        replay_file_sha256,
+        replay_payload_sha256,
+        rules.serialized_sha256,
+        facts,
+        live_leader.tribe,
+    )
+}
+
 fn complete_prevalidated(
     sim: &Sim,
     child: &Frame0MerchantGoodLookupRequest,
@@ -775,6 +1086,44 @@ pub fn complete_frame0_merchant_good_lookup(
     complete_prevalidated(sim, child, goods, request, capture)
 }
 
+/// Compose one source-owned Good availability receipt into the existing atomic lookup
+/// transaction.
+///
+/// The generated detached capture is only a transport wrapper: its installed-input digest is
+/// the source receipt digest, and the receipt is recomputed against every current owner before
+/// the wrapper is accepted.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_frame0_merchant_good_lookup_from_rules(
+    replay: &Replay,
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    child: &Frame0MerchantGoodLookupRequest,
+    goods: &OilGoodRuntime,
+    types: &TypeBuiltinState,
+    request: &Frame0MerchantTypeAvailRequest,
+    receipt: &Frame0MerchantTypeAvailReceipt,
+) -> Result<Frame0MerchantGoodLookupReceipt, Frame0MerchantTypeAvailError> {
+    if receipt.receipt_sha256 != frame0_merchant_type_avail_receipt_digest(receipt) {
+        return Err(Frame0MerchantTypeAvailError::InvalidReceiptDigest);
+    }
+    let current = resolve_frame0_merchant_type_avail(
+        replay, sim, parent, member, child, goods, types, request,
+    )?;
+    if current != *receipt {
+        return Err(Frame0MerchantTypeAvailError::StaleReceipt);
+    }
+    let mut capture = Frame0MerchantTypeAvailCapture {
+        capture_sha256: [0; 32],
+        request_sha256: request.request_sha256,
+        installed_query_input_sha256: receipt.receipt_sha256,
+        available: receipt.available,
+    };
+    capture.capture_sha256 = frame0_merchant_type_avail_capture_digest(&capture);
+    complete_frame0_merchant_good_lookup(sim, parent, member, child, goods, request, &capture)
+        .map_err(Frame0MerchantTypeAvailError::Lookup)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,6 +1132,49 @@ mod tests {
     };
     use don_sim::systems::economy::GoodNode;
     use don_sim::systems::world_oil_goods::{OilGoodSlot, CLOSED_COORD_INTERNAL};
+
+    fn type_avail_request(type_index: i32) -> Frame0MerchantTypeAvailRequest {
+        let mut request = Frame0MerchantTypeAvailRequest {
+            request_sha256: [0; 32],
+            lookup_request_sha256: [1; 32],
+            traversal_prefix_sha256: [2; 32],
+            call_va: LEADER_TYPE_AVAIL_VA,
+            leader: 0,
+            type_index,
+            strict: 1,
+            good_slot: 0,
+            random_state: 0x1234_5678,
+        };
+        request.request_sha256 = frame0_merchant_type_avail_request_digest(&request);
+        request
+    }
+
+    fn good_type_facts(type_index: i32) -> ReplayGoodTypeFacts {
+        ReplayGoodTypeFacts {
+            spans: crate::groups_pre_pair_unit_authority::ReplayGoodTypeSpans {
+                type_base: ReplayByteSpan {
+                    offset: 0x100,
+                    bytes: 90,
+                },
+                object: ReplayByteSpan {
+                    offset: 0x200,
+                    bytes: 152,
+                },
+                good: ReplayByteSpan {
+                    offset: 0x300,
+                    bytes: 68,
+                },
+            },
+            type_index,
+            tribe_mask: u32::MAX,
+            preq: [-1, -1, -1],
+            from_type: -1,
+            where_type: -1,
+            upgrade: -1,
+            jump: -2,
+            obs: -2,
+        }
+    }
 
     fn child() -> Frame0MerchantGoodLookupRequest {
         let mut request = Frame0MerchantGoodLookupRequest {
@@ -1093,5 +1485,82 @@ mod tests {
             complete_prevalidated(&sim, &lookup, &goods, &request, &capture),
             Err(Frame0MerchantGoodLookupError::StaleTypeAvailRequest)
         );
+    }
+
+    #[test]
+    fn setup_2024_frame0_merchant_type_avail_returns_four_before_leader_tech_mask() {
+        let request = type_avail_request(17);
+        let receipt = source_owned_type_avail_receipt(
+            &request,
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            good_type_facts(17),
+            22,
+        )
+        .unwrap();
+        assert_eq!(receipt.prerequisite_reads[0].resolved_type, -1);
+        assert_eq!(receipt.prerequisite_reads[1].resolved_type, -1);
+        assert_eq!(receipt.has_preq_raw, 1);
+        assert!(!receipt.strict_obs_has_tech);
+        assert_eq!(receipt.tribe_can_type_raw, 4);
+        assert_eq!(receipt.type_eligible_raw, 4);
+        assert_eq!(receipt.leader_tech_bit_read, None);
+        assert_eq!(receipt.raw_availability, 4);
+        assert!(receipt.available);
+        assert_eq!(receipt.rng_draws, 0);
+        assert_eq!(receipt.random_state_before, request.random_state);
+        assert_eq!(receipt.random_state_after, request.random_state);
+    }
+
+    #[test]
+    fn setup_2024_frame0_merchant_type_avail_resolves_unavailable_without_tech_read() {
+        let request = type_avail_request(17);
+        let mut facts = good_type_facts(17);
+        facts.tribe_mask = 1 << 3;
+        let receipt =
+            source_owned_type_avail_receipt(&request, [3; 32], [4; 32], [5; 32], facts, 22)
+                .unwrap();
+        assert_eq!(receipt.tribe_can_type_raw, 0);
+        assert_eq!(receipt.type_eligible_raw, 0);
+        assert_eq!(receipt.leader_tech_bit_read, None);
+        assert_eq!(receipt.raw_availability, 0);
+        assert!(!receipt.available);
+        assert_eq!(receipt.rng_draws, 0);
+    }
+
+    #[test]
+    fn setup_2024_frame0_merchant_type_avail_stops_at_non_golden_prerequisite() {
+        let request = type_avail_request(17);
+        let mut facts = good_type_facts(17);
+        facts.preq[1] = 544;
+        assert_eq!(
+            source_owned_type_avail_receipt(&request, [3; 32], [4; 32], [5; 32], facts, 22,),
+            Err(Frame0MerchantTypeAvailError::WrongGoldenGoodFacts)
+        );
+    }
+
+    #[test]
+    fn setup_2024_frame0_merchant_type_avail_digest_binds_every_source() {
+        let request = type_avail_request(17);
+        let receipt = source_owned_type_avail_receipt(
+            &request,
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            good_type_facts(17),
+            22,
+        )
+        .unwrap();
+        let digest = receipt.receipt_sha256;
+        let mut mutant = receipt.clone();
+        mutant.leader_tribe = 21;
+        assert_ne!(digest, frame0_merchant_type_avail_receipt_digest(&mutant));
+        mutant = receipt.clone();
+        mutant.available = false;
+        assert_ne!(digest, frame0_merchant_type_avail_receipt_digest(&mutant));
+        mutant = receipt;
+        mutant.serialized_rules_sha256[0] ^= 1;
+        assert_ne!(digest, frame0_merchant_type_avail_receipt_digest(&mutant));
     }
 }

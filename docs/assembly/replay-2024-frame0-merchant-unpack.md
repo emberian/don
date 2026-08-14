@@ -82,9 +82,24 @@ or Good coordinates. It filters the selected Good's active bit, dereferences its
 rejects TypeIndex 5 (Oil), then—because the fourth argument is zero and `who` is nonnegative—
 calls `LeaderData::type_avail(good_type, 1)` at `0x006e33a0`. `OilGoodRuntime` supplies the exact
 base-Good slot image; the historical name does not restrict its rows to Oil. The first remaining
-typed child is now that exact Leader/type query, bound to the complete WData/Object/Good read
-prefix. A false installed answer resolves the lookup to `-1`; a true answer resolves it to the
-Good TypeIndex. Neither branch mutates state or consumes RNG.
+typed child is that exact Leader/type query, bound to the complete WData/Object/Good read prefix.
+
+That child is now source-owned for the golden replay. `GoodTypeData::num_preq` at `0x00470810`
+returns the constant two. Every replay-carried Good row 6..49 has `tribe_mask == 0xffffffff`,
+`preq == [-1,-1,-1]`, and `obs == -2`. Consequently `has_preq` resolves its two ordered
+`get_preq` reads to `-1`, for which `has_tech(-1)` is true. `type_eligible(type,1)` then returns
+four: `tribe_can_type` admits the live Leader's replay-bound tribe, and the strict Good arm sees
+`has_tech(obs=-2) == false`. Finally, Good is neither Unit, Build, nor government, so
+`type_avail` returns four before the Unit-only availability-bit read at `LeaderData + 0x6c18`.
+No Leader tech-mask bit or `Type::is(123,0)` relation is reached on this path.
+
+The source receipt binds the replay file and payload digests, admitted Rules digest and exact
+Good spans, current type-row agreement, live Leader/tribe identity, ordered prerequisite reads,
+raw `has_preq`/`tribe_can_type`/`type_eligible`/`type_avail` results, and unchanged RNG. Its digest
+is installed as the existing detached capture's query-input digest, after which the whole
+WData/Object/Good prefix is rerun and the transaction resolves to the Good TypeIndex. The legacy
+capture-only API remains for native composition; the golden path no longer needs it to guess
+availability. Neither branch mutates state or consumes RNG.
 
 Malformed or cyclic object chains, an absent terminal Good slot, and an active Good with a null
 type pointer fail closed. No WData resource/occupancy bit is treated as proof of a Good identity,
