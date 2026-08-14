@@ -56,6 +56,10 @@ use don_replay::leaders_sim_tech_frontier::{
     bind_sim_tech_frontier, SimTechFrontierError, ECON_DISCOVERED_INDEX,
     SIM_TECH_EXISTING_DUPLICATE_BYTES, SIM_TECH_NEWLY_CANONICAL_BYTES, SIM_TECH_SOURCE_BYTES,
 };
+use don_replay::leaders_type_mask_owner_frontier::{
+    bind_type_mask_owner, TypeMaskOwnerError, OBS_FLAGS_WALKED_BYTES,
+    TYPE_MASK_HEADER_WALKED_BYTES, TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES,
+};
 use don_replay::replay::{corpus, Replay};
 use don_replay::{harness::WorldSim, setup_cities_builds::StartingSetupState};
 use don_sim::generated::state::{leader, FieldDesc, LeaderCols, Pool};
@@ -1206,6 +1210,11 @@ fn frame_zero_starting_build_census_body() {
     let victory = setup.sim.vic_leaders.clone();
     let step8 = setup.sim.step8.clone();
     let mut fixture = fixture_with_states(prefix, victory, step8);
+    let mut mask_types = fixture.types.clone();
+    for slot in 0..NUM_LEADERS {
+        mask_types.leaders[slot].tech.bytes = fixture.authority.rows[slot].tech.payload;
+        mask_types.leaders[slot].obs_flags.bytes = fixture.authority.rows[slot].obs_flags.payload;
+    }
     for slot in 0..NUM_LEADERS {
         synchronize_setup_only_owner_columns(&mut fixture.columns, &setup.sim, slot);
         synchronize_build_registry_columns(&mut fixture.columns, &build_registry, slot);
@@ -1230,26 +1239,66 @@ fn frame_zero_starting_build_census_body() {
     let build_history = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
     let region_joined =
         bind_frame_zero_region_strategy_history(build_history, region_history.clone()).unwrap();
-    let joined =
+    let registry_joined =
         bind_frame_zero_build_registry_census(region_joined, build_registry.clone()).unwrap();
+    let joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
     let walk = joined.walk_frontier();
 
     assert_eq!(
         joined.newly_canonicalized_walked_bytes(),
-        active_count * 642
+        active_count * 117
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 24_424 + (NUM_LEADERS - active_count) * 8
+        active_count * 24_541 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 4_004) as u64
+        (active_count * 3_887) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
 
     let active = fixture.active;
+    assert_eq!(TYPE_MASK_HEADER_WALKED_BYTES, 8);
+    assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
+    assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
+    assert_eq!(joined.claims().len(), active_count);
+    assert_eq!(joined.claims()[0].tech_duplicate_payload_bytes, 101);
+
+    let mut stale_masks = mask_types.clone();
+    stale_masks.leaders[active].obs_flags.bytes[100] ^= 1;
+    let stale_mask_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &fixture.columns,
+        &fixed,
+    );
+    let stale_mask_tech =
+        bind_sim_tech_frontier(stale_mask_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_mask_owners =
+        bind_sim_owner_frontier(&fixture.prefix, stale_mask_tech, &setup.sim).unwrap();
+    let stale_mask_regional =
+        bind_frame_zero_regional_buildings(stale_mask_owners, census.clone()).unwrap();
+    let stale_mask_history =
+        bind_frame_zero_last_building_history(stale_mask_regional, history.clone()).unwrap();
+    let stale_mask_regions =
+        bind_frame_zero_region_strategy_history(stale_mask_history, region_history.clone())
+            .unwrap();
+    let stale_mask_registry =
+        bind_frame_zero_build_registry_census(stale_mask_regions, build_registry.clone()).unwrap();
+    assert!(matches!(
+        bind_type_mask_owner(stale_mask_registry, &stale_masks),
+        Err(TypeMaskOwnerError::TranscriptDisagreement {
+            slot,
+            field: "obs_flags",
+            byte: 108,
+            ..
+        }) if slot == active
+    ));
+
     let high_field = leader::FIELDS
         .iter()
         .find(|field| field.name == "high_buildings")

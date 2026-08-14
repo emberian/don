@@ -104,7 +104,8 @@ The pre-strategy receipt also owns 256 zero bytes across the four regional strat
 whose first writers are in `Leader::plan_strategy`. The setup activation chronology and
 digest-bound replay Rules additionally own 258 bytes of `high_buildings` history and 384 bytes
 of regional City/Fort/Dock registries. Together they lower the empty-child residual to 4,004
-bytes per active row only while the
+bytes per active row. The canonical BHS type owner further owns the eight-byte `tech` header and
+all 109 walked `obs_flags` bytes, reaching a 3,887-byte residual per active row only while the
 ordinary starting-town-one setup receipt is live. It does not change this module's general
 same-frame residual: the Sim does not yet maintain the regional matrix through all later Build
 lifecycle transitions. See

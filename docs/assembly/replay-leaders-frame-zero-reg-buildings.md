@@ -84,9 +84,10 @@ frame-zero last_building_finished history                 516
 pre-plan regional strategy histories                      256
 high_buildings history                                    258
 regional City/Fort/Dock registries                        384
-frame-zero unique canonical walked bytes               24,424
+canonical type-owner masks                               117
+frame-zero unique canonical walked bytes               24,541
 default empty-child transcript                          28,428
-frame-zero residual                                      4,004
+frame-zero residual                                      3,887
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -107,6 +108,12 @@ state therefore promotes all four zeroed arrays and expires before that pass.
 The 642-byte activation cohort is historical too. Later upgrades, captures, destruction, and
 Fort/Dock lifecycles require complete live maintainers; current counts cannot reconstruct a
 high-water mark. It therefore expires at precisely the same setup boundary.
+
+The canonical BHS type owner supplies another 117 dynamic bytes: the eight-byte `tech` mask
+header and the complete 109-byte `obs_flags` header/payload. Its current `tech` payload is
+duplicate-checked but not counted twice because the production-tech join already owns it. The
+type owner is not yet mounted directly on `Sim`; this join therefore remains nested under and
+expires with the setup receipt rather than claiming later-frame survival.
 
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
@@ -135,4 +142,5 @@ rechecked by the producer before these mutation gates. Mutating the independent 
 `reg_allies` likewise refuses the pre-strategy join. The same test verifies the complete Leaders
 walk remains red and the global scoreboard remains uninstalled and non-substantive. It also
 mutates the independent `high_buildings` tail and replay-source identity, proving that neither
-the historical row nor its Rules provenance can be substituted.
+the historical row nor its Rules provenance can be substituted. A tail mutation in the
+canonical type owner's observation mask also refuses against the already-bound dynamic child.

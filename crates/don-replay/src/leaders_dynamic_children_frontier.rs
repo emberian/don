@@ -327,6 +327,15 @@ impl DynamicChildrenRow {
     pub fn walked_bytes(&self) -> &[u8] {
         &self.transcript
     }
+
+    /// Exact visitor bytes for one named child. This exposes the already-bound transcript for
+    /// later canonical-owner agreement gates without reopening caller authority.
+    pub fn walked_field(&self, field: &str) -> Option<&[u8]> {
+        self.claims
+            .iter()
+            .find(|claim| claim.field == field)
+            .map(|claim| &self.transcript[claim.transcript_begin..claim.transcript_end])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

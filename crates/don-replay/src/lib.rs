@@ -83,6 +83,7 @@ pub mod leaders_setup_reg_buildings_frontier;
 pub mod leaders_setup_region_history_frontier;
 pub mod leaders_sim_owner_frontier;
 pub mod leaders_sim_tech_frontier;
+pub mod leaders_type_mask_owner_frontier;
 pub mod map_make_resource_caller_gap_frontier;
 pub mod map_make_resource_schedule_integration;
 pub mod map_style;
