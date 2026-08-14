@@ -96,12 +96,14 @@ This comparison sharply reduces the setup identity question, but it cannot repla
 adapter witness: its checksum is delayed by two serials and TurnData lies between the pair and the
 later checksum. Treating it as a same-package checksum would loosen the admission boundary.
 
-Before this clear-pool pair, the conservative command inventory is 93 PlayerSpeed, 128 TurnData,
-and two LeaderOptions commands. PE `CommandPackage::process_leader_options` `0x009441d0` shows
-that LeaderOptions can cascade into Unit stance/mask writes, so they cannot be globally discarded.
-For this selected Citizen cohort, the observed options are retained as provenance; a future
-whole-package replay still has to execute their exact tails rather than inferring harmlessness from
-the eventual Groups checksum.
+Before this clear-pool pair, the package inventory is 93 PlayerSpeed, 128 TurnData, and two
+LeaderOptions commands. The actual Rust replay classifier identifies only the two LeaderOptions
+rows as simulation commands: serial 1/frame 1 for play 0 and play 1. There is no classified
+frame-205 Follow command. PE `CommandPackage::process_leader_options` `0x009441d0` shows that
+LeaderOptions can cascade into Unit stance writes, so they cannot be globally discarded. The
+exact reached five-write tail is now derived in
+[`replay-2024-frame1-leader-options.md`](replay-2024-frame1-leader-options.md); canonical frame-1
+Sim binding and the later idle chronology remain open.
 
 ## PE/PDB comparison
 

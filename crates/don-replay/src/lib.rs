@@ -126,6 +126,7 @@ pub mod resource_divvy_pool_selection_frontier;
 pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
+pub mod setup_2024_frame1_leader_options;
 pub mod setup_2024_frame379;
 pub mod setup_2024_frame379_group_move;
 pub mod setup_2024_frame384_groups_process;
