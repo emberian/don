@@ -2115,7 +2115,16 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
     // Gather-Farm adapter binds that index to the canonical v16 FarmStruct owner plus a
     // revision/digest Guy/content authority after load. Preserve this already-owned scalar;
     // keep every other union interpretation closed.
-    let unsupported_special_index = build.dock >= 0 && build.orig_type != 0x1a1;
+    let farm_special_index = build.dock >= 0 && build.orig_type == 0x1a1;
+    let unsupported_special_index = build.dock >= 0 && !farm_special_index;
+    // `BuildData::BuildData` initializes both MiningList selectors to -1. The exact Farm
+    // constructor retains those sentinels beside its serialized FarmStruct index; they are
+    // not live mining state. Every other special-family interpretation stays closed.
+    let unsupported_mining_selectors = if farm_special_index {
+        build.gather_from.mtn != -1 || build.gather_from.cliff != -1
+    } else {
+        build.gather_from.mtn != 0 || build.gather_from.cliff != 0
+    };
     if build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
         || build.demolition != 0
         || build.gather_down >= 0
@@ -2126,8 +2135,7 @@ fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveErr
         || build.gather_max != 0
         || build.infiltrate != 0
         || build.infiltrate2 != 0
-        || build.gather_from.mtn != 0
-        || build.gather_from.cliff != 0
+        || unsupported_mining_selectors
         || !build.gather_from.tiles.is_empty()
         || !build.gather.is_empty()
     {
@@ -3902,6 +3910,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         sim.vic_match.frame = sim.world.frame;
         sim.vic_match.tick = sim.world.seconds;
     }
+    step8_views::restore_supported_derived_snapshot(&mut sim);
     let restored_world = sim.world.export_save_state()?;
     validate_build_city_pool(&sim.builds, &restored_world, &sim.cities)?;
     if !sim.command_package_state.is_empty() && sim.players.is_none() {
@@ -3919,7 +3928,10 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
 mod tests {
     use super::*;
     use crate::order::{OrderIndex, SpecialAnimType};
-    use crate::systems::items::{self, GoodyRules, LeaderGoody, DOWN_ITEM, WFLAG_ITEM};
+    use crate::systems::{
+        items::{self, GoodyRules, LeaderGoody, DOWN_ITEM, WFLAG_ITEM},
+        leaders,
+    };
 
     fn supported_sim() -> Sim {
         let mut sim = Sim::new(0x1234_5678, 4);
@@ -5515,6 +5527,72 @@ mod tests {
                 .band(crate::objects::Band::Unit)
         );
         assert_eq!(save_sim(&loaded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn wall_activation_step8_after_image_rehydrates_from_saved_owners() {
+        let mut original = Sim::new(0x1234_5678, 4);
+        original.map.world.seed = 0x1234_5678;
+        let mut setup = ManualPlayerSetup {
+            active_mask: 1,
+            local_player_setup_slot: 0,
+            ..ManualPlayerSetup::default()
+        };
+        setup.teams[0] = 0;
+        original.start_manual_player_setup(setup).unwrap();
+        let flags = leaders::flag::IN_GAME
+            | leaders::flag::PROCESS
+            | 0x0200_0000
+            | leaders::flag::WALL_STATS_DIRTY;
+        original.vic_leaders.slots[0].leader_flags = flags as i32;
+        original.step8.leaders[0].flags = flags;
+        original.leaders[0].econ.stockpile = [88, 88, 95, 100, 100, 100];
+        original.step8.leaders[0].econ = original.leaders[0].econ;
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+
+        assert_eq!(loaded.step8.leaders[0].flags, flags);
+        assert_eq!(loaded.step8.leaders[0].city_num, 0);
+        assert_eq!(loaded.step8.leaders[0].econ, original.leaders[0].econ);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn partial_or_unowned_step8_activation_state_stays_refused() {
+        let mut partial = supported_sim();
+        let partial_flags =
+            leaders::flag::IN_GAME | leaders::flag::PROCESS | leaders::flag::WALL_STATS_DIRTY;
+        partial.vic_leaders.slots[0].leader_flags = partial_flags as i32;
+        partial.step8.leaders[0].flags = partial_flags;
+        assert_eq!(
+            save_sim(&partial),
+            Err(SaveError::Unsupported("step-8 leader state/hosts"))
+        );
+
+        let mut unowned_city_count = supported_sim();
+        let flags = leaders::flag::IN_GAME
+            | leaders::flag::PROCESS
+            | 0x0200_0000
+            | leaders::flag::WALL_STATS_DIRTY;
+        unowned_city_count.vic_leaders.slots[0].leader_flags = flags as i32;
+        unowned_city_count.step8.leaders[0].flags = flags;
+        unowned_city_count.step8.leaders[0].city_num = 1;
+        assert_eq!(
+            save_sim(&unowned_city_count),
+            Err(SaveError::Unsupported("step-8 leader state/hosts"))
+        );
+
+        let mut unresolved_query = supported_sim();
+        unresolved_query.vic_leaders.slots[0].leader_flags = flags as i32;
+        unresolved_query.step8.leaders[0].flags = flags;
+        unresolved_query.step8.leaders[0]
+            .build_stats
+            .buildings_created_faster = true;
+        assert_eq!(
+            save_sim(&unresolved_query),
+            Err(SaveError::Unsupported("step-8 leader state/hosts"))
+        );
     }
 
     #[test]

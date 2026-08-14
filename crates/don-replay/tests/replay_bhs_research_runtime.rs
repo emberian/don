@@ -81,12 +81,13 @@ use don_sim::systems::leader_produce_building_search_setup::{
     LEADER_PRODUCE_BUILDING_CANDIDATE_LOOP_VA, LEADER_PRODUCE_BUILDING_SEARCH_SETUP_BYTES,
 };
 use don_sim::systems::map_terrain::{land, tflag};
+use don_sim::systems::player_setup::ManualPlayerSetup;
 use don_sim::systems::production::runtime::{
     LiveBuildVisibilityTypeFacts, LiveProductionRuntime, LiveProductionType,
     SingleLibraryResearchStatus,
 };
 use don_sim::systems::production::{flag, off, BuildData, BuildQueue, BuildQueueEntry, Footprint};
-use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
+use don_sim::systems::save_load::{load_sim, save_sim};
 use don_sim::tick::Sim;
 
 const OWNER: usize = 0;
@@ -1269,6 +1270,18 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let call_before = call;
     let (types, upgrades) = canonical_type_owners(content_owner);
     let (mut sim, mut production, row) = production_owners(content_owner);
+    // The replay-selected player is a real configured participant. Install that canonical
+    // frame-zero owner so the post-Farm victory Leader flags can be reconstructed on load.
+    sim.step8.leaders[content_owner].flags = 0;
+    sim.vic_leaders.slots[content_owner].leader_flags = 0;
+    let mut setup = ManualPlayerSetup {
+        active_mask: 1 << content_owner,
+        local_player_setup_slot: content_owner,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[content_owner] = 0;
+    sim.start_manual_player_setup(setup)
+        .expect("install replay-selected player setup owner");
     // The installed production image below owns one live Athens City. Keep the canonical
     // construct-time view coherent with that image for the reached Farm initializer.
     sim.step8.leaders[content_owner].city_num = 1;
@@ -2142,11 +2155,46 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     );
     assert!(builds_walk.get(1).is_some());
 
-    // Wall::activate's exact dirty flags make this immediate frame-zero state ineligible for
-    // the current save tranche, which deliberately accepts only pristine step-8 hosts. Keep
-    // that pre-existing boundary explicit rather than fabricating a resumable after-image.
+    // The canonical victory Leader and CityPool own the two non-pristine step-8 values left
+    // by Build::init/Wall::activate. Loading rehydrates that exact adapter after-image and an
+    // immediate resave is byte-identical.
+    let saved = save_sim(&sim).expect("save exact frame-zero Farm after-image");
+    let resumed = load_sim(&saved).expect("resume exact frame-zero Farm after-image");
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+    assert_eq!(resumed.world.random.state(), sim.world.random.state());
+    assert_eq!(resumed.builds[row].flags, sim.builds[row].flags);
+    assert_eq!(resumed.builds[row].who, sim.builds[row].who);
+    assert_eq!(resumed.builds[row].city, sim.builds[row].city);
+    assert_eq!(resumed.builds[row].city_down, sim.builds[row].city_down);
+    assert_eq!(resumed.builds[row].other, sim.builds[row].other);
     assert_eq!(
-        save_sim(&sim),
-        Err(SaveError::Unsupported("step-8 leader state/hosts"))
+        resumed.builds[row].queue.entries,
+        sim.builds[row].queue.entries
     );
+    assert_eq!(resumed.farms.records(), sim.farms.records());
+    assert_eq!(
+        resumed.cities.slots[content_owner][0],
+        sim.cities.slots[content_owner][0]
+    );
+    assert_eq!(
+        resumed.step8.leaders[content_owner].flags,
+        sim.step8.leaders[content_owner].flags
+    );
+    assert_eq!(
+        resumed.step8.leaders[content_owner].city_num,
+        sim.step8.leaders[content_owner].city_num
+    );
+    assert_eq!(
+        resumed.step8.leaders[content_owner].econ,
+        sim.step8.leaders[content_owner].econ
+    );
+    assert_eq!(
+        resumed.vic_leaders.slots[content_owner].leader_flags,
+        sim.vic_leaders.slots[content_owner].leader_flags
+    );
+    assert_eq!(
+        resumed.vic_leaders.slots[content_owner].num_buildings,
+        sim.vic_leaders.slots[content_owner].num_buildings
+    );
+    assert_eq!(resumed.channel_digest(), sim.channel_digest());
 }

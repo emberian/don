@@ -2981,7 +2981,7 @@ impl Sim {
     /// object bands are rebuilt from `ObjectRegistry` so the stat passes visit the same
     /// owner-local rows as the real object tick; unresolved virtual answers and their call
     /// counters are preserved in place.
-    fn sync_step8_inputs(&mut self) {
+    pub(crate) fn sync_step8_inputs(&mut self) {
         for who in 0..NUM_LEADERS {
             let src = &self.leaders[who];
             let dst = &mut self.step8.leaders[who];

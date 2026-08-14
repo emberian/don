@@ -17,6 +17,19 @@ use crate::systems::{
 use crate::tick::{Sim, NUM_LEADERS};
 use crate::world::OBJ_FLAG_ACTIVE;
 
+// `Build::init` and `Wall::activate(0, 1, 0)` leave these two inbound LeaderData dirty
+// bits set together. They are also written to the checksum-owned victory Leader row by the
+// canonical Farm transaction. Keeping this mask local to save admission avoids treating an
+// arbitrary victory/lifecycle flag as a reconstructible step-8 byte.
+const WALL_ACTIVATION_DIRTY: u32 = 0x0200_0000 | leaders::flag::WALL_STATS_DIRTY;
+
+fn wall_activation_after_image(sim: &Sim, who: usize) -> Option<(u32, i32)> {
+    let flags = sim.vic_leaders.slots[who].leader_flags as u32;
+    let allowed = leaders::flag::IN_GAME | leaders::flag::PROCESS | WALL_ACTIVATION_DIRTY;
+    (flags & WALL_ACTIVATION_DIRTY == WALL_ACTIVATION_DIRTY && flags & !allowed == 0)
+        .then(|| (flags, sim.cities.count(who)))
+}
+
 fn leader_has_only_mirrors(
     actual: &leaders::Leader,
     fresh: &leaders::Leader,
@@ -57,11 +70,18 @@ fn leader_has_only_mirrors(
         && actual.ai.script_result == fresh.ai.script_result
         && actual.ai.make_stuff_result == fresh.ai.make_stuff_result;
 
-    let expected_flags = if sim.vic_leaders.setup_owner.is_configured(who) {
+    let setup_flags = if sim.vic_leaders.setup_owner.is_configured(who) {
         fresh.flags | leaders::flag::IN_GAME | leaders::flag::PROCESS
     } else {
         fresh.flags
     };
+    let activation_after_image = wall_activation_after_image(sim, who);
+    let expected_flags = activation_after_image
+        .map(|(flags, _)| flags)
+        .unwrap_or(setup_flags);
+    let expected_city_num = activation_after_image
+        .map(|(_, city_num)| city_num)
+        .unwrap_or(fresh.city_num);
 
     (mirror_is_empty || mirror_is_synchronized)
         && (policy_is_empty || policy_is_synchronized)
@@ -86,11 +106,9 @@ fn leader_has_only_mirrors(
         && actual.rare_a == fresh.rare_a
         && actual.rare_b == fresh.rare_b
         && actual.unit_stats == fresh.unit_stats
-        // Decoded `LeaderData` answers for `Wall::update_construct_time` `0x0063D560`,
-        // in the same fail-closed position as `unit_stats`: DoNSave has no chunk for
-        // `city_num` or the `BUILDINGS_FASTER`/`BUILDINGS_CREATED_FASTER` preqs, so a
-        // non-default value here is state without a save owner and is refused.
-        && actual.city_num == fresh.city_num
+        // The exact activation after-image can reconstruct `city_num` from the saved
+        // CityPool. Outside that boundary it remains an unsupported independent host.
+        && actual.city_num == expected_city_num
         && actual.build_stats == fresh.build_stats
 }
 
@@ -239,4 +257,20 @@ pub(super) fn is_supported_derived_snapshot(sim: &Sim) -> bool {
     }
 
     objects_are_empty(sim) || objects_are_exact_mirrors(sim)
+}
+
+/// Rebuild the save-supported step-8 adapter after all canonical owners have loaded.
+///
+/// The ordinary sync restores economy, diplomacy, policy, AI and object query mirrors. The
+/// one persistent pre-step-8 edge that sync deliberately does not overwrite is the exact
+/// `Build::init`/`Wall::activate` dirty after-image; its flags live in the saved victory
+/// Leader row and its `city_num` is the saved CityPool's live count.
+pub(super) fn restore_supported_derived_snapshot(sim: &mut Sim) {
+    for who in 0..NUM_LEADERS {
+        if let Some((flags, city_num)) = wall_activation_after_image(sim, who) {
+            sim.step8.leaders[who].flags = flags;
+            sim.step8.leaders[who].city_num = city_num;
+        }
+    }
+    sim.sync_step8_inputs();
 }
