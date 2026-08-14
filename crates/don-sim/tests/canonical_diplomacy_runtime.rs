@@ -265,7 +265,7 @@ fn retail_packet_runs_bridge_sim_current_load_and_resumed_packet_identically() {
         let checkpoint = save_sim(&uninterrupted).expect("applied declaration is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            20
+            21
         );
         let mut resumed = load_sim(&checkpoint).expect("declaration state reloads");
 
@@ -338,7 +338,7 @@ fn armies_off_force_process_executes_exact_entry_arm_and_resumes_with_v17_armies
         let checkpoint = save_sim(&uninterrupted).expect("armies-off force target is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            20
+            21
         );
         let mut resumed = load_sim(&checkpoint).expect("armies-off force target reloads");
         resumed.replace_diplomacy_authority(complete_facts());
@@ -835,6 +835,70 @@ fn active_winner_empty_naval_mustering_expiry_resumes_identically() {
 }
 
 #[test]
+fn active_winner_empty_land_mustering_strategy_resumes_identically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.status = ST_MUSTERING;
+        army.human_frame = 1;
+        army.navy = 0;
+        army.city = 4;
+        army.reg = 5;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        army.muster_x = 2;
+        army.muster_y = 3;
+        army.muster_angle = 0x1234_5678;
+        // release_mustering returns at the default foreign City owner. Bit 8 then performs
+        // the exact Leader flags read, whose transport bits are clear, and falls to marching.
+        uninterrupted.vic_leaders.slots[2].strategy[5] = 8;
+        let checkpoint = save_sim(&uninterrupted).expect("land muster strategy is savable");
+        let mut resumed = load_sim(&checkpoint).expect("land muster strategy reloads");
+        assert_eq!(resumed.vic_leaders.slots[2].strategy[5], 8);
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2945, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2945, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
+        assert_eq!(
+            army_receipt.outcome,
+            ForceArmyProcessOutcome::ClosedEmptyLandMuster
+        );
+        assert_eq!(army_receipt.muster_strategy.unwrap().region, 5);
+        assert_eq!(army_receipt.muster_strategy.unwrap().value, 8);
+        assert_eq!(army_receipt.after.human_frame, 0);
+        assert_eq!(army_receipt.after.valid, 0);
+        assert_eq!(army_receipt.after.status, 0);
+        assert_eq!(army_receipt.after.city, -1);
+        assert_eq!((army_receipt.after.x, army_receipt.after.y), (0x780, 0xa80));
+        assert_eq!(army_receipt.after.angle, 0x1234_5678);
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("land muster result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
 fn alliance_victory_executes_vacuous_defeated_owner_cleanup_and_resumes_identically() {
     with_large_stack(|| {
         let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();
@@ -993,7 +1057,7 @@ fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
             save_sim(&uninterrupted).expect("standing Army is savable through the v17 owner");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            20
+            21
         );
         let mut resumed = load_sim(&checkpoint).expect("standing Army reloads");
         resumed.replace_diplomacy_authority(complete_facts());
@@ -1054,7 +1118,7 @@ fn alliance_revocation_projects_the_full_contained_ejection_cone_after_current_s
         let checkpoint = save_sim(&uninterrupted).expect("contained Unit roster is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            20
+            21
         );
         let mut resumed = load_sim(&checkpoint).expect("contained Unit roster reloads");
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());

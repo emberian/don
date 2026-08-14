@@ -48,10 +48,13 @@ that bit is also retail's `DEFEATED` bit, so a preceding Victory call on the sam
 exact no-op return. It also admits an active zero-city owner's empty non-mustering Army: normalize
 zeros the five derived aggregates and the zero-standard path closes the formation without reaching
 a Group, Unit, terrain, AI, or RNG host. An empty mustering Army with more than one human-order
-frame remaining takes a third exact arm: normalize zeros those aggregates, `send_here` clamps its
+frame remaining takes another exact arm: normalize zeros those aggregates, `send_here` clamps its
 rally using the saved World dimensions, and the zero-group fanout returns before dispatch. The
-runtime preserves all three mixed instruction orders and publishes each Victory/Army cohort
-atomically. The remaining general AI body stays unavailable.
+expired empty naval muster and the saved-strategy-safe empty land muster both preserve retail's
+post-`do_mustering` status re-read: they enter `do_marching`, obtain zero from its first mobile
+count, and close before target selection or RNG. The released land arm receipts and stale-CAS binds
+the exact `LeaderData::strategy[ArmyData::reg]` word. The remaining general AI body stays
+unavailable.
 Generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
 image, including its
@@ -81,6 +84,13 @@ remaining 150-byte `ArmyData` image only for live slots. Decode validates live o
 bounded prefixes, Group backlinks, and unique Group predecessors; malformed references and
 duplicate/cyclic ownership fail before constructing a Sim. Formats v7 through v16 retain their
 original root bytes and restore the constructor-empty Army owner.
+
+## DoNSave v21 Leader strategy owner
+
+The existing `LEADER_MATCH` row now carries `LeaderData::strategy[64]` at the v21 edge. Older
+streams restore the retail constructor-zero array. The array remains in the canonical Leader owner,
+participates in the Leader checksum walk at its real `+0xA68` order, and is not duplicated in the
+Armies or diplomacy sections.
 
 ## Mounted and remaining boundary
 

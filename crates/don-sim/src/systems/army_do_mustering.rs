@@ -11,6 +11,8 @@ pub const RETAIL_VA: u32 = 0x006F_4260;
 pub const RETAIL_SIZE: u32 = 337;
 pub const WCOORD_SCALE: i32 = 0x300;
 pub const WCOORD_HALF: i32 = 0x180;
+/// `LeaderData::strategy[64]` at `+0xA68`, indexed directly by `ArmyData::reg`.
+pub const MUSTER_STRATEGY_REGIONS: usize = 64;
 
 /// The two City fields read before `Army::find_muster_spot` is called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

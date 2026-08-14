@@ -27,9 +27,12 @@ the checksum otherwise. This correction does not add Armies to `CheckSums::check
 
 ## What is not derived
 
+`Army::do_mustering` `0x006F4260` is now recovered whole. Its external City/rally,
+Leader strategy/difficulty/flags, and `find_muster_spot` calls are typed fail-closed seams;
+the 337-byte body itself consumes no RNG.
+
 The following retail bodies are reached by the step-13 control flow and remain absent:
 
-- `Army::do_mustering` `0x006F4260`
 - `Army::do_defending` `0x006F4070`
 - `Army::do_marching` `0x006F3DF0`
 - `Army::do_forming` `0x006F43C0`

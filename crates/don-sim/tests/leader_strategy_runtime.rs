@@ -535,7 +535,7 @@ fn v14_save_resume_matches_the_next_natural_four_seat_tick_across_seeds() {
         original.do_frame();
         let first_rows = canonical_ai_rows(&original);
         let bytes = save_sim(&original).expect("current format must own production-AI progress");
-        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 20);
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 21);
         let mut resumed = load_sim(&bytes).expect("current production-AI rows must load");
         assert_eq!(canonical_ai_rows(&resumed), first_rows);
         assert_eq!(resumed.channel_digest(), original.channel_digest());

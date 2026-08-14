@@ -7,6 +7,7 @@
 //! authority; this snapshot then restores the mutable mid-match rows over that owner.
 
 use super::{Reader, SaveError, Writer};
+use crate::systems::army_do_mustering::MUSTER_STRATEGY_REGIONS;
 use crate::systems::leader_init_diplomacy_loop::LeaderInitDiplomacyRow;
 use crate::systems::leader_production_ai::strategy_runtime::{
     CanonicalProductionAi, LEADER_MATCH_AI_EXTENSION_VALUES, LEADER_MATCH_AI_FORMAT_VERSION,
@@ -29,6 +30,9 @@ const MAX_CITY_ROWS_PER_PLAYER: usize = 4096;
 const MAX_CITY_CARAVAN_LINKS: usize = 1 << 16;
 const MAX_CITY_STRING_BYTES: usize = 1 << 20;
 const CITY_POOL_FORMAT_VERSION: u32 = 12;
+/// First DoNSave version that carries `LeaderData::strategy[64]`, now consumed by the exact
+/// released-land `Army::do_mustering` transaction.
+pub(crate) const LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION: u32 = 21;
 
 pub(super) struct LeaderMatchState {
     game: Match,
@@ -621,6 +625,13 @@ fn write_leader(w: &mut Writer, row: &LeaderState, format_version: u32) -> Resul
     } else if production_ai.extension_values() != [0; LEADER_MATCH_AI_EXTENSION_VALUES] {
         return Err(SaveError::Unsupported("production AI Leader extension"));
     }
+    if format_version >= LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION {
+        write_u16s(w, &row.strategy);
+    } else if row.strategy != [0; MUSTER_STRATEGY_REGIONS] {
+        return Err(SaveError::Unsupported(
+            "Army muster strategy Leader extension",
+        ));
+    }
     Ok(())
 }
 
@@ -690,6 +701,13 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
     let production_ai =
         CanonicalProductionAi::for_save_version(format_version, leader_flags2, extension)
             .map_err(|_| SaveError::Invalid("production AI Leader extension"))?;
+    let strategy = if format_version >= LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION {
+        read_u16s(r, MUSTER_STRATEGY_REGIONS)?
+            .try_into()
+            .map_err(|_| SaveError::Invalid("Army muster strategy Leader extension"))?
+    } else {
+        [0; MUSTER_STRATEGY_REGIONS]
+    };
     Ok(LeaderState {
         leader_flags,
         leader_flags2,
@@ -737,6 +755,7 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
         rare,
         territory,
         effective_pop: production_ai.effective_pop,
+        strategy,
         economy,
         has_tech,
         researching,
@@ -845,7 +864,7 @@ fn read_players(r: &mut Reader<'_>) -> Result<Option<PlayerTable>, SaveError> {
 }
 
 pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
-    write_for_version(sim, LEADER_MATCH_AI_FORMAT_VERSION)
+    write_for_version(sim, LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION)
 }
 
 pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {

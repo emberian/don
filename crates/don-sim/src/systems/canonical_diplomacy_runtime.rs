@@ -13,6 +13,8 @@
 //! An expired empty naval muster with a foreign/inactive canonical City releases, enters the
 //! zero-mobile `do_marching` close arm, and publishes in the same Victory-plus-Army transaction,
 //! with the actually-read City bytes in its stale CAS.
+//! An empty released land muster mounts the same close arm when its saved Leader strategy word
+//! cannot route through unresolved difficulty/defending or transporting authority.
 //! Every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
@@ -32,8 +34,8 @@ use crate::objects::Band;
 use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
 use crate::systems::diplomacy_force_army_authority::{
-    commit_force_army_process, prepare_force_army_process, ForceArmyProcessReceipt,
-    ForceArmyProcessRequest,
+    commit_force_army_process_with_strategy, prepare_force_army_process_with_strategy,
+    ForceArmyProcessReceipt, ForceArmyProcessRequest,
 };
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::leader_match_host::{
@@ -585,6 +587,7 @@ impl StagedForceArmyAuthority {
         cities: &super::tech_cities::CityPool,
         leader_city_num: &[i32; NUM_LEADERS],
         world_size: (i32, i32),
+        leader_strategy: &[[u16; super::army_do_mustering::MUSTER_STRATEGY_REGIONS]; NUM_LEADERS],
     ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
         self.receipts.iter().find_map(|receipt| {
             if receipt
@@ -610,6 +613,17 @@ impl StagedForceArmyAuthority {
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleCity {
                         owner: receipt.request.owner,
                         city: receipt.before.city,
+                    },
+                );
+            }
+            if !receipt.muster_strategy_is_current(leader_strategy) {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleStrategy {
+                        owner: receipt.request.owner,
+                        region: receipt
+                            .muster_strategy
+                            .expect("stale strategy requires a strategy receipt")
+                            .region,
                     },
                 );
             }
@@ -932,14 +946,16 @@ fn stage_force_army_authority(
         return Ok(None);
     }
     let leader_city_num = std::array::from_fn(|who| sim.step8.leaders[who].city_num);
+    let leader_strategy = std::array::from_fn(|who| sim.vic_leaders.slots[who].strategy);
     let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
-    let prepared = match prepare_force_army_process(
+    let prepared = match prepare_force_army_process_with_strategy(
         &sim.armies,
         &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
         world_size,
+        &leader_strategy,
         &requests,
     ) {
         Ok(prepared) => prepared,
@@ -955,13 +971,14 @@ fn stage_force_army_authority(
         Err(error) => return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error)),
     };
     let mut armies = Box::new(sim.armies.clone());
-    let receipts = commit_force_army_process(
+    let receipts = commit_force_army_process_with_strategy(
         &mut armies,
         &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
         world_size,
+        &leader_strategy,
         prepared,
     )
     .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
@@ -1180,6 +1197,8 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
             let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
+            let leader_strategy =
+                std::array::from_fn(|who| self.sim.vic_leaders.slots[who].strategy);
             let world_size = (self.sim.map.world.tile_xs, self.sim.map.world.tile_ys);
             if let Some(error) = staged_army.as_ref().and_then(|staged| {
                 staged.current_error(
@@ -1187,6 +1206,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                     &self.sim.cities,
                     &leader_city_num,
                     world_size,
+                    &leader_strategy,
                 )
             }) {
                 return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));

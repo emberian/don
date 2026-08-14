@@ -873,6 +873,10 @@ pub struct LeaderState {
     /// `+0x9E0` `effective_pop`, the most recent queued-units plus control result.
     pub effective_pop: i32,
 
+    /// `+0xA68` `strategy[64]`. `Army::do_mustering` reads the row selected by
+    /// `ArmyData::reg`; unlike production-AI host answers, this is persistent LeaderData.
+    pub strategy: [u16; super::army_do_mustering::MUSTER_STRATEGY_REGIONS],
+
     pub economy: EncryptedEconomy,
 
     /// `LeaderData::has_tech(TypeIndex)` @ `0x006E0C80` — indexed by raw `TypeIndex`.
@@ -944,6 +948,7 @@ impl Default for LeaderState {
             rare: 0,
             territory: 0,
             effective_pop: 0,
+            strategy: [0; super::army_do_mustering::MUSTER_STRATEGY_REGIONS],
             economy: EncryptedEconomy::default(),
             has_tech: vec![false; NUM_TYPES],
             researching: [vec![false; NUM_TYPES], vec![false; NUM_TYPES]],
@@ -1053,6 +1058,9 @@ impl LeaderState {
             self.effective_pop,
         ] {
             out.extend_from_slice(&v.to_le_bytes());
+        }
+        for value in self.strategy {
+            out.extend_from_slice(&value.to_le_bytes());
         }
         out.push(self.init_diplomacy.ally_mask);
     }
@@ -2607,13 +2615,17 @@ mod tests {
         leader.control = 0x4D5E_6F70;
         leader.territory = 0x5162_7384;
         leader.effective_pop = 0x5566_7788;
+        leader.strategy[0] = 0x1234;
+        leader.strategy[63] = 0xabcd;
 
         let mut walked = Vec::new();
         leader.walk_bytes(&mut walked);
         // The three adjacent +0x788..+0x790 words precede `victory_type`. Seven compact
         // words then separate that marker from the +0x7F8 attrition start.
         let ally_mask = walked.len() - 1;
-        let attrition_start = ally_mask - 9 * 4;
+        let strategy_start =
+            ally_mask - crate::systems::army_do_mustering::MUSTER_STRATEGY_REGIONS * 2;
+        let attrition_start = strategy_start - 9 * 4;
         let production_start = attrition_start - 7 * 4;
         let mut production_expected = Vec::new();
         for value in [
@@ -2629,10 +2641,9 @@ mod tests {
             production_expected.as_slice()
         );
 
-        // `ally_mask` at +0x6929 remains the final currently-owned field. The later
-        // canonical AI words retain their real PDB order around `territory`:
-        // control +0x940, territory +0x9D8, effective_pop +0x9E0.
-        let tail = &walked[attrition_start..ally_mask];
+        // The later canonical AI words retain their real PDB order around `territory`:
+        // control +0x940, territory +0x9D8, effective_pop +0x9E0, then strategy +0xA68.
+        let tail = &walked[attrition_start..strategy_start];
         let mut expected = Vec::new();
         for value in [
             leader.give_attrition_disabled,
@@ -2648,5 +2659,13 @@ mod tests {
             expected.extend_from_slice(&value.to_le_bytes());
         }
         assert_eq!(tail, expected.as_slice());
+        let mut strategy_expected = Vec::new();
+        for value in leader.strategy {
+            strategy_expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            &walked[strategy_start..ally_mask],
+            strategy_expected.as_slice()
+        );
     }
 }

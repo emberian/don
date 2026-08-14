@@ -71,7 +71,9 @@ const SCENARIO_DATA_FORMAT_VERSION: u32 = 18;
 const UNIT_GUYS_FORMAT_VERSION: u32 = 19;
 /// First version persisting `Stack<PathData>` allocation capacity and signed-byte increment.
 const PATH_STACK_METADATA_FORMAT_VERSION: u32 = 20;
-const FORMAT_VERSION: u32 = PATH_STACK_METADATA_FORMAT_VERSION;
+const MUSTER_STRATEGY_FORMAT_VERSION: u32 =
+    leader_match::LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION;
+const FORMAT_VERSION: u32 = MUSTER_STRATEGY_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -197,6 +199,7 @@ const REQUIRED: [u16; 17] = [
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
+        MUSTER_STRATEGY_FORMAT_VERSION => &REQUIRED,
         PATH_STACK_METADATA_FORMAT_VERSION => &REQUIRED,
         UNIT_GUYS_FORMAT_VERSION => &REQUIRED,
         SCENARIO_DATA_FORMAT_VERSION => &REQUIRED[..16],
