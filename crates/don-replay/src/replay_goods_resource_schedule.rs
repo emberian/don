@@ -573,6 +573,36 @@ fn placements_from_schedule(
                 });
             }
         }
+        MapMakeResourcePlacementReceipt::SingletonGoodiesCategoryOpen(goodies) => {
+            push_first_fish_placements(
+                &goodies.fish_cleanup.recurrence.first_fish,
+                &mut placements,
+            )?;
+            if goodies.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+                || goodies.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+                || goodies.fish_cleanup.recurrence.recurrence.branch_taken
+                || goodies.resource_pool_after != goodies.fish_cleanup.resource_pool_after
+                || goodies.canonical_state_after != goodies.fish_cleanup.canonical_state_after
+                || goodies.category_receipt.completed_category != ResourceCategory::Fish
+                || goodies.category_state_after.category != ResourceCategory::Goodies
+                || goodies.category_state_after.rows_remaining != goodies.goodies_handoff.rows.len()
+            {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "singleton GOODIES lookup does not retain exact FISH history",
+                });
+            }
+            if goodies.residual_va == crate::place_resources_category_frontier::ROW_BODY_VA {
+                ResourceScheduleGoodsBoundary::BeforeFirstGoodiesRow
+            } else if goodies.residual_va
+                == crate::place_resources_category_frontier::CATEGORY_TAIL_VA
+            {
+                ResourceScheduleGoodsBoundary::BeforeGoodiesCategoryCleanup
+            } else {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "singleton GOODIES lookup has an unknown residual",
+                });
+            }
+        }
         MapMakeResourcePlacementReceipt::GoodiesCategoryOpen(goodies) => {
             let rows = &goodies.fish_category.bonus_rows;
             if goodies.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA

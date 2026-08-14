@@ -273,6 +273,23 @@ pub struct PlaceResourcesFishCleanupBoundary {
     pub pending_source_token: u32,
 }
 
+/// Selected/default GOODIES lookup and ordered row enumeration after exact
+/// singleton-FISH cleanup. The first GOODIES row remains a child.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceResourcesSingletonGoodiesBoundary {
+    pub fish_cleanup: PlaceResourcesFishCleanupBoundary,
+    pub facts: CategoryAdvanceFacts,
+    pub document_host_authority: PlaceResourcesDocumentHostAuthority,
+    pub category_receipt: CategoryAdvanceReceipt,
+    pub category_state_after: CategoryLoopState,
+    pub goodies_handoff: crate::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff,
+    pub resource_pool_after: ResourceDivvyPoolState,
+    pub canonical_state_after: CanonicalPlaceResourcesState,
+    pub residual_va: u32,
+    pub pending_checkpoint_call_va: u32,
+    pub pending_source_token: u32,
+}
+
 /// Empty-FISH fallthrough after FISH cleanup and GOODIES lookup/enumeration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlaceResourcesGoodiesCategoryBoundary {
@@ -300,6 +317,7 @@ pub enum MapMakeResourcePlacementReceipt {
     FirstFishRowOpen(PlaceResourcesFirstFishRowBoundary),
     FishRecurrenceOpen(PlaceResourcesFishRecurrenceBoundary),
     FishCleanupOpen(PlaceResourcesFishCleanupBoundary),
+    SingletonGoodiesCategoryOpen(PlaceResourcesSingletonGoodiesBoundary),
     GoodiesCategoryOpen(PlaceResourcesGoodiesCategoryBoundary),
 }
 
@@ -341,6 +359,10 @@ pub enum MapMakeResourceScheduleError {
     FishCleanupContinuationRequiresCompletedRecurrence,
     FishCleanupContinuityMismatch,
     FishCleanup(CategoryCleanupToLookupError),
+    SingletonGoodiesLookupRequiresFishCleanup,
+    SingletonGoodiesContinuityMismatch,
+    SingletonGoodiesDocumentAuthorityMismatch,
+    SingletonGoodiesFrontier(CategoryAdvanceError),
     EmptyFishContinuationRequiresEmptyFish,
     EmptyFishContinuityMismatch,
     EmptyFishDocumentAuthorityMismatch,
@@ -1379,6 +1401,22 @@ pub fn continue_map_make_resource_schedule_fish_recurrence(
     })
 }
 
+fn singleton_fish_cleanup_entry_state(
+    first: &PlaceResourcesFirstFishRowBoundary,
+    canonical_state: &CanonicalPlaceResourcesState,
+) -> CategoryLoopState {
+    let fish = &first.fish_category;
+    CategoryLoopState {
+        category: ResourceCategory::Fish,
+        rows_remaining: 0,
+        category_handles: fish.category_state_after.category_handles,
+        row_handles: category_host_handles(first.remaining_state.rows[0].handles),
+        selected_document_handles: canonical_state.selected_document_handles,
+        default_document_handles: canonical_state.default_document_handles,
+        deterministic: deterministic_resource_state(&first.remaining_state),
+    }
+}
+
 /// Execute singleton-FISH cleanup and ordinal dispatch without acquiring new
 /// XML authority. The exact first GOODIES `get_element` call remains open.
 pub fn continue_map_make_resource_schedule_singleton_fish_cleanup(
@@ -1411,15 +1449,7 @@ pub fn continue_map_make_resource_schedule_singleton_fish_cleanup(
         .receipt
         .selected_style_name
         .is_empty();
-    let mut category_state = CategoryLoopState {
-        category: ResourceCategory::Fish,
-        rows_remaining: 0,
-        category_handles: fish.category_state_after.category_handles,
-        row_handles: category_host_handles(first.remaining_state.rows[0].handles),
-        selected_document_handles: canonical_state.selected_document_handles,
-        default_document_handles: canonical_state.default_document_handles,
-        deterministic: deterministic_resource_state(&first.remaining_state),
-    };
+    let mut category_state = singleton_fish_cleanup_entry_state(first, canonical_state);
     let cleanup =
         execute_fish_cleanup_to_goodies_lookup(&mut category_state, selected_style_name_nonempty)
             .map_err(MapMakeResourceScheduleError::FishCleanup)?;
@@ -1449,6 +1479,152 @@ pub fn continue_map_make_resource_schedule_singleton_fish_cleanup(
                 recurrence: recurrence.clone(),
                 cleanup,
                 category_state_after: category_state,
+                resource_pool_after: pool.clone(),
+                canonical_state_after: canonical_state.clone(),
+                residual_va,
+                pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
+                pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
+            },
+        ),
+    })
+}
+
+fn replay_singleton_fish_cleanup_boundary(
+    schedule: &MapMakeResourceScheduleReceipt,
+    boundary: &PlaceResourcesFishCleanupBoundary,
+) -> Result<(), MapMakeResourceScheduleError> {
+    replay_fish_recurrence_boundary(schedule, &boundary.recurrence)?;
+    if boundary.recurrence.recurrence.branch_taken {
+        return Err(MapMakeResourceScheduleError::FishCleanupContinuityMismatch);
+    }
+    let first = &boundary.recurrence.first_fish;
+    let fish = &first.fish_category;
+    let selected_style_name_nonempty = !fish
+        .bonus_rows
+        .first
+        .xml
+        .xml_frontier
+        .receipt
+        .selected_style_name
+        .is_empty();
+    let mut category_state =
+        singleton_fish_cleanup_entry_state(first, &boundary.canonical_state_after);
+    let expected =
+        execute_fish_cleanup_to_goodies_lookup(&mut category_state, selected_style_name_nonempty)
+            .map_err(MapMakeResourceScheduleError::FishCleanup)?;
+    if boundary.cleanup != expected
+        || boundary.category_state_after != category_state
+        || boundary.resource_pool_after != boundary.recurrence.resource_pool_after
+        || boundary.canonical_state_after != boundary.recurrence.canonical_state_after
+        || boundary.residual_va != expected.residual_va
+        || boundary.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+        || boundary.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+    {
+        return Err(MapMakeResourceScheduleError::FishCleanupContinuityMismatch);
+    }
+    Ok(())
+}
+
+/// Execute the selected/default GOODIES lookup sequence and row enumeration
+/// after singleton-FISH cleanup. The original document authority must match the
+/// new capture; RNG, World, pool, counters, Good, and Item state do not move.
+pub fn continue_map_make_resource_schedule_singleton_goodies_lookup(
+    pool: &ResourceDivvyPoolState,
+    canonical_state: &CanonicalPlaceResourcesState,
+    schedule: &MapMakeResourceScheduleReceipt,
+    document_authority: &PlaceResourcesDocumentHostAuthority,
+    facts: &CategoryAdvanceFacts,
+) -> Result<MapMakeResourceScheduleReceipt, MapMakeResourceScheduleError> {
+    let MapMakeResourcePlacementReceipt::FishCleanupOpen(cleanup) = &schedule.placement else {
+        return Err(MapMakeResourceScheduleError::SingletonGoodiesLookupRequiresFishCleanup);
+    };
+    replay_singleton_fish_cleanup_boundary(schedule, cleanup)?;
+    if pool != &cleanup.resource_pool_after
+        || canonical_state != &cleanup.canonical_state_after
+        || facts.selected_style_name_nonempty != cleanup.cleanup.selected_style_name_nonempty
+    {
+        return Err(MapMakeResourceScheduleError::SingletonGoodiesContinuityMismatch);
+    }
+
+    let first = &cleanup.recurrence.first_fish;
+    let fish = &first.fish_category;
+    if *document_authority != fish.document_host_authority
+        || document_authority.selected_document_handles
+            != cleanup.category_state_after.selected_document_handles
+        || document_authority.default_document_handles
+            != cleanup.category_state_after.default_document_handles
+        || !document_authority_matches(document_authority, facts, &fish.fish_handoff)
+    {
+        return Err(MapMakeResourceScheduleError::SingletonGoodiesDocumentAuthorityMismatch);
+    }
+
+    let mut category_state = singleton_fish_cleanup_entry_state(first, canonical_state);
+    let category_receipt = advance_completed_category(&mut category_state, facts)
+        .map_err(MapMakeResourceScheduleError::SingletonGoodiesFrontier)?;
+    let first_lookup_call_va = category_receipt
+        .selected_lookup_call_va
+        .or(category_receipt.default_lookup_call_va)
+        .ok_or(MapMakeResourceScheduleError::SingletonGoodiesContinuityMismatch)?;
+    let (source, goodies_rows, residual_va) = match &category_receipt.disposition {
+        CategoryAdvanceDisposition::NextCategory {
+            category: ResourceCategory::Goodies,
+            source,
+            rows,
+            residual_va,
+        } => (*source, rows.clone(), *residual_va),
+        _ => return Err(MapMakeResourceScheduleError::SingletonGoodiesContinuityMismatch),
+    };
+    if category_receipt.entry_va != cleanup.cleanup.entry_va
+        || category_receipt.completed_category != cleanup.cleanup.completed_category
+        || !category_receipt
+            .cleanup_operations
+            .starts_with(&cleanup.cleanup.cleanup_operations)
+        || category_receipt.category_increment_va != cleanup.cleanup.category_increment_va
+        || category_receipt.category_dispatch_va != Some(cleanup.cleanup.category_dispatch_va)
+        || first_lookup_call_va != cleanup.cleanup.lookup_call_va
+        || category_receipt.deterministic_before != cleanup.cleanup.deterministic_before
+        || category_receipt.deterministic_after != cleanup.cleanup.deterministic_after
+        || category_state.category != ResourceCategory::Goodies
+        || category_state.rows_remaining != goodies_rows.len()
+        || category_state.deterministic != cleanup.category_state_after.deterministic
+        || category_state.deterministic.resource_pool_digest != resource_divvy_pool_digest(pool)
+    {
+        return Err(MapMakeResourceScheduleError::SingletonGoodiesContinuityMismatch);
+    }
+
+    let goodies_handoff = crate::place_resources_xml_frontier::PlaceResourcesBonusRowsHandoff {
+        resume_va: fish.fish_handoff.resume_va,
+        first_row_body_va: fish.fish_handoff.first_row_body_va,
+        player_count_argument: fish.fish_handoff.player_count_argument,
+        section_source: category_section_source(source),
+        current_category_handles: xml_host_handles(category_state.category_handles),
+        rows: goodies_rows
+            .iter()
+            .map(|row| crate::place_resources_xml_frontier::BonusXmlRowFact {
+                capture_ordinal: row.capture_ordinal,
+                element_name: row.element_name.clone(),
+                handles: xml_host_handles(row.handles),
+            })
+            .collect(),
+        selected_document_live: category_state.selected_document_handles.valid(),
+        default_document_live: category_state.default_document_handles.valid(),
+        random_state: category_state.deterministic.random_state,
+        world_checksum: category_state.deterministic.world_checksum.clone(),
+        sourced_walked_bytes: category_state.deterministic.sourced_walked_bytes,
+        resource_pool_digest: category_state.deterministic.resource_pool_digest,
+    };
+
+    Ok(MapMakeResourceScheduleReceipt {
+        post_nubify_checkpoint: schedule.post_nubify_checkpoint.clone(),
+        caller_gap: schedule.caller_gap.clone(),
+        placement: MapMakeResourcePlacementReceipt::SingletonGoodiesCategoryOpen(
+            PlaceResourcesSingletonGoodiesBoundary {
+                fish_cleanup: cleanup.clone(),
+                facts: facts.clone(),
+                document_host_authority: *document_authority,
+                category_receipt,
+                category_state_after: category_state,
+                goodies_handoff,
                 resource_pool_after: pool.clone(),
                 canonical_state_after: canonical_state.clone(),
                 residual_va,

@@ -131,7 +131,7 @@ was fitted.
 The canonical Map schedule now composes completed BONUSES cleanup through FISH
 lookup/enumeration and, for a nonempty section, the exact first FISH row plus its
 no-mutation recurrence through `0x0069021c`. Singleton FISH then composes cleanup and
-GOODIES dispatch to the first XML lookup at `0x0068f79b`/`0x0068f855`, without section
-facts. For empty FISH it composes this owner again through FISH cleanup and
+GOODIES dispatch, then binds explicit document authority and executes selected/default
+GOODIES lookup through row enumeration. It stops at `0x0068fbb3`/`0x00690225`. For empty FISH it composes this owner again through FISH cleanup and
 GOODIES lookup/enumeration, stopping at `0x0068fbb3` or `0x00690225`. FISH recurrence,
 later rows, and final GOODIES cleanup remain separately bounded.

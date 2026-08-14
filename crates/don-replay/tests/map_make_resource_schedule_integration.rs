@@ -19,10 +19,12 @@ use don_replay::map_make_resource_schedule_integration::{
     continue_map_make_resource_schedule_fish_category,
     continue_map_make_resource_schedule_fish_recurrence,
     continue_map_make_resource_schedule_next_bonus,
-    continue_map_make_resource_schedule_singleton_fish_cleanup, execute_map_make_resource_schedule,
-    execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
-    MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
-    PlaceResourcesDocumentHostAuthority, BONUS_CATEGORY_TAIL_RESTORE_VA,
+    continue_map_make_resource_schedule_singleton_fish_cleanup,
+    continue_map_make_resource_schedule_singleton_goodies_lookup,
+    execute_map_make_resource_schedule, execute_map_make_resource_schedule_with_xml,
+    MapMakeResourceOwnerProvenance, MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError,
+    MapMakeResourceScheduleReceipt, PlaceResourcesDocumentHostAuthority,
+    BONUS_CATEGORY_TAIL_RESTORE_VA,
 };
 use don_replay::map_style::MAP_MAKE_SCHEDULE;
 use don_replay::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
@@ -55,8 +57,8 @@ use don_replay::place_resources_canonical_transaction::{
 use don_replay::place_resources_category_frontier::{
     CategoryAdvanceDisposition, CategoryAdvanceFacts, CategoryRowFact, CategorySectionFact,
     HostHandles, HostRefKind, ResourceCategory, ResourceFrontierEvidence, SectionSource,
-    CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, ROW_BODY_VA, ROW_COUNT_TEST_VA,
-    ROW_ENUMERATE_CALL_VA, SELECTED_GOODIES_GET_ELEMENT_CALL_VA,
+    CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, DEFAULT_GOODIES_GET_ELEMENT_CALL_VA, ROW_BODY_VA,
+    ROW_COUNT_TEST_VA, ROW_ENUMERATE_CALL_VA, SELECTED_GOODIES_GET_ELEMENT_CALL_VA,
     SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256, SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
 };
 use don_replay::place_resources_pool_frontier::{
@@ -1902,6 +1904,98 @@ fn singleton_fish_recurrence_falls_through_without_mutating_any_authority() {
     assert_eq!(
         cleanup.category_state_after.deterministic.random_state,
         canonical.mutation.random_state
+    );
+
+    let fish = &cleanup.recurrence.first_fish.fish_category;
+    let authority = fish.document_host_authority;
+    let mut selected_facts = goodies_category_facts(fish);
+    let ResourceFrontierEvidence::RetailCapture {
+        random_state,
+        world_checksum,
+        sourced_walked_bytes,
+        resource_pool_digest,
+        ..
+    } = &mut selected_facts.evidence
+    else {
+        unreachable!()
+    };
+    *random_state = cleanup.category_state_after.deterministic.random_state;
+    *world_checksum = cleanup
+        .category_state_after
+        .deterministic
+        .world_checksum
+        .clone();
+    *sourced_walked_bytes = cleanup
+        .category_state_after
+        .deterministic
+        .sourced_walked_bytes;
+    *resource_pool_digest = cleanup
+        .category_state_after
+        .deterministic
+        .resource_pool_digest;
+    let selected_schedule = continue_map_make_resource_schedule_singleton_goodies_lookup(
+        &pool,
+        &canonical,
+        &cleanup_schedule,
+        &authority,
+        &selected_facts,
+    )
+    .unwrap();
+    let selected = match &selected_schedule.placement {
+        MapMakeResourcePlacementReceipt::SingletonGoodiesCategoryOpen(goodies) => goodies,
+        _ => panic!("selected GOODIES lookup must stop before row zero"),
+    };
+    assert_eq!(selected.residual_va, ROW_BODY_VA);
+    assert_eq!(selected.goodies_handoff.rows.len(), 1);
+    assert_eq!(selected.goodies_handoff.rows[0].capture_ordinal, 51);
+    assert_eq!(
+        selected.category_receipt.selected_lookup_call_va,
+        Some(SELECTED_GOODIES_GET_ELEMENT_CALL_VA)
+    );
+    assert_eq!(selected.category_receipt.default_lookup_call_va, None);
+    assert!(matches!(
+        selected.category_receipt.disposition,
+        CategoryAdvanceDisposition::NextCategory {
+            category: ResourceCategory::Goodies,
+            source: SectionSource::Selected,
+            ..
+        }
+    ));
+
+    let mut fallback_facts = selected_facts.clone();
+    fallback_facts.default_section = fallback_facts.selected_section.take();
+    let fallback_schedule = continue_map_make_resource_schedule_singleton_goodies_lookup(
+        &pool,
+        &canonical,
+        &cleanup_schedule,
+        &authority,
+        &fallback_facts,
+    )
+    .unwrap();
+    let fallback = match &fallback_schedule.placement {
+        MapMakeResourcePlacementReceipt::SingletonGoodiesCategoryOpen(goodies) => goodies,
+        _ => panic!("default GOODIES lookup must stop before row zero"),
+    };
+    assert_eq!(fallback.residual_va, ROW_BODY_VA);
+    assert_eq!(
+        fallback.category_receipt.selected_lookup_call_va,
+        Some(SELECTED_GOODIES_GET_ELEMENT_CALL_VA)
+    );
+    assert_eq!(
+        fallback.category_receipt.default_lookup_call_va,
+        Some(DEFAULT_GOODIES_GET_ELEMENT_CALL_VA)
+    );
+    assert!(matches!(
+        fallback.category_receipt.disposition,
+        CategoryAdvanceDisposition::NextCategory {
+            category: ResourceCategory::Goodies,
+            source: SectionSource::Default,
+            ..
+        }
+    ));
+    assert_eq!(
+        fallback.category_state_after.deterministic,
+        cleanup.category_state_after.deterministic
     );
     assert_eq!(pool, pool_before);
     assert_eq!(canonical, canonical_before);
