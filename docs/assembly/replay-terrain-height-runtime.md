@@ -19,9 +19,10 @@ admitted by this producer.
 The producer boundary is intentionally upstream of render-resolution samples. The canonical
 constructor now derives both initialized `Fractal` byte planes from the parsed replay initial
 state and canonical World. A sealed producer now derives the WCoord-resolution
-`CoordInfo::flags` grid from the same final World. The remaining non-map inputs are three
-installed scalar words (`land_height`, mountain height, and height scale). Keeping those
-explicit means a tileset/configuration change cannot silently reuse a plane.
+`CoordInfo::flags` grid from the same final World. A second sealed producer installs the three
+supported-executable words by their actual identities: global `land_height`,
+`TerrainOut::coast_depth`, and global `beach_steepness`. They are neither sampled from SVX nor
+accepted as caller-selected height parameters.
 
 ## Exact pre-mountain producer
 
@@ -37,6 +38,9 @@ supported-PE bodies:
 | `TerrainList::add_new_coord_info(...)` | `0x0084ba10` | 956 | `be78a6cf99430a312db6c87383cf174df1f6e1dbbe7bf99aac0e5ba920c7bbb2` |
 | `CoordInfo::CoordInfo(...)` | `0x0084d490` | 164 | `7f245e88623b7d50a0b2b5b096041c9dc42b123afd0cab2c418078c45e5f3804` |
 | `TerrainOut::fill_coord_info_mapper()` | `0x0086beb0` | 178 | `f0e859ce0718c7768ac267545c80d2d68a4b946ff98903851c8acdd32b489b86` |
+| `Terrain::init(...)` | `0x00850f70` | 6,886 | `af106348bbbc415564cc4048f1a2ed19ce8ce253759841e5517b0a0c1795c2fd` |
+| scalar-write slice | `0x00851bf2` | 30 | `59502d7d89f00c03eeff18c8636bd277080cf2ab6b1a7e2f4ddd2765d1b27791` |
+| `beach_steepness` initialized-data word | `0x00c0629c` | 4 | `e00e5eb9444182f352323374ef4e08ebcb784725fdd4fd612d7730540b3e0c8c` |
 | `TerrainOut::generate_land(int,int)` | `0x0085f8d0` | 2,789 | `5cc1f8e243fcf7556492ca1215df4785a5bd810c3550c7a5a0cb27b79e38445a` |
 | `TerrainOut::get_vert_codes` | `0x0086bf70` | 609 | `8eee1044d69671f26222f6801813dbd9e72547a6f9dca4a7b9c4cfbfedaf6695` |
 | `TerrainOut::determine_land_height_color` | `0x0086c1e0` | 434 | `720e687b621b9fb72acb922e6097956462adb0fe31b59d4afd589cae57a1eb68` |
@@ -85,10 +89,20 @@ does not mutate flags. The native diagonal traversals and mapper are square-only
 allocates `xs*xs` and loops `xs` on both axes—so rectangular Worlds are rejected at this
 producer instead of claiming a generalized retail domain.
 
+The scalar producer uses PDB field/global identity and the instruction bytes rather than names
+inferred from arithmetic. `Terrain::init` unconditionally writes `land_height = 30.0f`
+(`0x41f00000`) and `TerrainOut::coast_depth = -303.0f` (`0xc3978000`). The supported PE's
+initialized `beach_steepness` word is `1.0f` (`0x3f800000`). Its only other absolute reference
+before the consumers is registration as a live debug parameter; the admitted replay path is
+the unmodified supported default. A sealed authority and receipt bind the full init body, the
+consecutive scalar-write slice, the initialized-data word, all addresses, and all three exact
+binary32 words.
+
 1. `get_vert_codes(...,1)` ORs `TData::RIVER` across the four tiles touching a vertex. Any
    hit locks the vertex and returns height zero.
 2. `get_vert_codes(...,0)` ORs the touching `CoordInfo::flags`. Bits `0x1000`, `0x4`, and
-   `0x2` select, in that order, scaled mountain height, zero, and fixed height 100.
+   `0x2` select, in that order, `(coast_depth + land_height) * beach_steepness`, zero, and
+   fixed height 100. `0x1000` originates on deep-water WCoords; it is not a mountain bit.
 3. All other vertices call `Fractal::get_height(x,y)` on both initialized Fractal states.
    The port reproduces its double-precision half-coordinate scaling, bilinear interpolation,
    `cvttsd2si` clamp, and either raw-byte, percentage, or 16-threshold partition return. The
@@ -151,8 +165,9 @@ source-vertex, matched, and unmatched counts.
 This closes the deterministic height operation once upstream state exists. Exact mode-5
 mountain placement is now available in `MountainAddRuntime`; reaching this seam for Great
 Lakes still requires the 16 installed displacement TGAs. The other explicit residuals are
-the three installed scalar producers feeding the pre-mountain plane and the remaining
-map-generation path into a final World and those retained placements.
+the remaining map-generation path into a final World and retained placements. Installed
+displacement bytes remain a mandatory explicit source; no scalar or geometry is fitted from a
+save or desired checksum.
 
 ## Exact shipped body
 

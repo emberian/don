@@ -70,6 +70,15 @@ pub const TERRAIN_FILL_COORD_INFO_MAPPER_BYTES: u32 = 178;
 /// `CoordInfo::CoordInfo`, proving that the flags word starts at zero.
 pub const TERRAIN_COORD_INFO_CTOR_VA: u32 = 0x0084_d490;
 pub const TERRAIN_COORD_INFO_CTOR_BYTES: u32 = 164;
+/// `Terrain::init`, which unconditionally installs land height and coast depth.
+pub const TERRAIN_INIT_VA: u32 = 0x0085_0f70;
+pub const TERRAIN_INIT_BYTES: u32 = 6_886;
+/// Consecutive `Terrain::init` writes of `land_height`, `coast_depth`, and `ocean_depth`.
+pub const TERRAIN_HEIGHT_SCALAR_WRITES_VA: u32 = 0x0085_1bf2;
+pub const TERRAIN_HEIGHT_SCALAR_WRITES_BYTES: u32 = 30;
+/// Supported PE initialized-data word for global `beach_steepness`.
+pub const TERRAIN_BEACH_STEEPNESS_DATA_VA: u32 = 0x00c0_629c;
+pub const TERRAIN_BEACH_STEEPNESS_DATA_BYTES: u32 = 4;
 
 /// Exact supported-PE body identity for `0x008544a0..0x00854564`.
 pub const TERRAIN_FIND_TCOORD_Z_SHA256: &str =
@@ -102,6 +111,16 @@ pub const TERRAIN_FILL_COORD_INFO_MAPPER_SHA256: &str =
     "f0e859ce0718c7768ac267545c80d2d68a4b946ff98903851c8acdd32b489b86";
 pub const TERRAIN_COORD_INFO_CTOR_SHA256: &str =
     "7f245e88623b7d50a0b2b5b096041c9dc42b123afd0cab2c418078c45e5f3804";
+pub const TERRAIN_INIT_SHA256: &str =
+    "af106348bbbc415564cc4048f1a2ed19ce8ce253759841e5517b0a0c1795c2fd";
+pub const TERRAIN_HEIGHT_SCALAR_WRITES_SHA256: &str =
+    "59502d7d89f00c03eeff18c8636bd277080cf2ab6b1a7e2f4ddd2765d1b27791";
+pub const TERRAIN_BEACH_STEEPNESS_DATA_SHA256: &str =
+    "e00e5eb9444182f352323374ef4e08ebcb784725fdd4fd612d7730540b3e0c8c";
+
+pub const TERRAIN_RETAIL_LAND_HEIGHT_BITS: u32 = 0x41f0_0000;
+pub const TERRAIN_RETAIL_COAST_DEPTH_BITS: u32 = 0xc397_8000;
+pub const TERRAIN_RETAIL_BEACH_STEEPNESS_BITS: u32 = 0x3f80_0000;
 
 /// `0x00adcaf4`, consumed as 24 signed dword X offsets by `add_new_coord_info`.
 pub const TERRAIN_COORD_INFO_NEIGHBOR_X_SHA256: &str =
@@ -171,6 +190,37 @@ pub struct TerrainCoordInfoFlagsReceipt {
     pub authority_digest: [u8; 32],
 }
 
+/// Supported-PE scalar words consumed by the exact height-producing slice.
+///
+/// These are not map assets and are not inferred from an output plane. `Terrain::init`
+/// unconditionally writes `land_height` and `TerrainOut::coast_depth`; the third word is the
+/// supported executable's initialized `beach_steepness` default. Fields remain private so the
+/// canonical refresh path cannot admit caller-selected height parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainHeightScalarAuthority {
+    land_height_bits: u32,
+    coast_depth_bits: u32,
+    beach_steepness_bits: u32,
+    source_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainHeightScalarReceipt {
+    pub terrain_init_va: u32,
+    pub scalar_writes_va: u32,
+    pub beach_steepness_data_va: u32,
+    pub land_height_bits: u32,
+    pub coast_depth_bits: u32,
+    pub beach_steepness_bits: u32,
+    pub source_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainHeightNonFractalReceipt {
+    pub coord_info: TerrainCoordInfoFlagsReceipt,
+    pub scalars: TerrainHeightScalarReceipt,
+}
+
 /// Exact completed-worldgen inputs consumed by the height-only `generate_land` slice.
 ///
 /// Both initialized Fractals are sampled by the shipped body. `coord_info_flags` is the
@@ -184,22 +234,20 @@ pub struct TerrainHeightWorldgenInputs {
     pub coord_info_flags: Vec<u16>,
     /// Exact IEEE-754 global `land_height` word (`0x00cbe54c`).
     pub land_height_bits: u32,
-    /// Exact IEEE-754 `TerrainOut+0x5630` mountain-height word.
-    pub mountain_height_bits: u32,
-    /// Exact IEEE-754 global height scale word (`0x00c0629c`).
-    pub height_scale_bits: u32,
+    /// Exact IEEE-754 `TerrainOut::coast_depth` word (`TerrainOut+0x5630`).
+    pub coast_depth_bits: u32,
+    /// Exact IEEE-754 global `beach_steepness` word (`0x00c0629c`).
+    pub beach_steepness_bits: u32,
     /// Nonzero identity of the `generate_land_lists` CoordInfo production boundary.
     pub coord_info_source_digest: [u8; 32],
 }
 
-/// Non-Fractal completed-worldgen sources retained while installed height scalars remain
-/// separate exact producers. The CoordInfo authority is sealed and source-derived from World.
+/// Sealed non-Fractal sources: CoordInfo derives from final World and scalar defaults derive
+/// from the supported executable's `Terrain::init` code and initialized data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerrainHeightNonFractalInputs {
     coord_info: TerrainCoordInfoFlagsAuthority,
-    pub land_height_bits: u32,
-    pub mountain_height_bits: u32,
-    pub height_scale_bits: u32,
+    scalars: TerrainHeightScalarAuthority,
 }
 
 /// Evidence for the two `Fractal::init` calls in `TerrainOut::refresh_data`.
@@ -242,7 +290,7 @@ pub struct TerrainHeightWorldgenReceipt {
     pub vertices: usize,
     pub locked_zero_vertices: usize,
     pub coordinfo_zero_vertices: usize,
-    pub mountain_vertices: usize,
+    pub deep_water_vertices: usize,
     pub fixed_height_vertices: usize,
     pub fractal_vertices: usize,
     pub smoothing_vertices: usize,
@@ -354,23 +402,65 @@ impl TerrainCoordInfoFlagsAuthority {
     }
 }
 
+impl TerrainHeightScalarAuthority {
+    /// Reconstruct the supported retail defaults directly pinned by executable code/data.
+    pub fn supported_retail_defaults() -> (Self, TerrainHeightScalarReceipt) {
+        let source_digest = terrain_height_scalar_source_digest(
+            TERRAIN_RETAIL_LAND_HEIGHT_BITS,
+            TERRAIN_RETAIL_COAST_DEPTH_BITS,
+            TERRAIN_RETAIL_BEACH_STEEPNESS_BITS,
+        );
+        let authority = Self {
+            land_height_bits: TERRAIN_RETAIL_LAND_HEIGHT_BITS,
+            coast_depth_bits: TERRAIN_RETAIL_COAST_DEPTH_BITS,
+            beach_steepness_bits: TERRAIN_RETAIL_BEACH_STEEPNESS_BITS,
+            source_digest,
+        };
+        let receipt = TerrainHeightScalarReceipt {
+            terrain_init_va: TERRAIN_INIT_VA,
+            scalar_writes_va: TERRAIN_HEIGHT_SCALAR_WRITES_VA,
+            beach_steepness_data_va: TERRAIN_BEACH_STEEPNESS_DATA_VA,
+            land_height_bits: authority.land_height_bits,
+            coast_depth_bits: authority.coast_depth_bits,
+            beach_steepness_bits: authority.beach_steepness_bits,
+            source_digest,
+        };
+        (authority, receipt)
+    }
+
+    pub fn land_height_bits(&self) -> u32 {
+        self.land_height_bits
+    }
+
+    pub fn coast_depth_bits(&self) -> u32 {
+        self.coast_depth_bits
+    }
+
+    pub fn beach_steepness_bits(&self) -> u32 {
+        self.beach_steepness_bits
+    }
+
+    pub fn source_digest(&self) -> [u8; 32] {
+        self.source_digest
+    }
+}
+
 impl TerrainHeightNonFractalInputs {
-    /// Join final World-derived CoordInfo with the three still-explicit installed scalar words.
+    /// Join final World-derived CoordInfo with supported-PE scalar defaults.
     pub fn from_world(
         world: &World,
-        land_height_bits: u32,
-        mountain_height_bits: u32,
-        height_scale_bits: u32,
-    ) -> Result<(Self, TerrainCoordInfoFlagsReceipt), TerrainHeightError> {
-        let (coord_info, receipt) = TerrainCoordInfoFlagsAuthority::from_world(world)?;
+    ) -> Result<(Self, TerrainHeightNonFractalReceipt), TerrainHeightError> {
+        let (coord_info, coord_info_receipt) = TerrainCoordInfoFlagsAuthority::from_world(world)?;
+        let (scalars, scalar_receipt) = TerrainHeightScalarAuthority::supported_retail_defaults();
         Ok((
             Self {
                 coord_info,
-                land_height_bits,
-                mountain_height_bits,
-                height_scale_bits,
+                scalars,
             },
-            receipt,
+            TerrainHeightNonFractalReceipt {
+                coord_info: coord_info_receipt,
+                scalars: scalar_receipt,
+            },
         ))
     }
 }
@@ -459,13 +549,13 @@ impl TerrainHeightPreMountainPlane {
         );
 
         let land_height = f32::from_bits(inputs.land_height_bits);
-        let mountain_height = f32::from_bits(inputs.mountain_height_bits);
-        let height_scale = f32::from_bits(inputs.height_scale_bits);
+        let coast_depth = f32::from_bits(inputs.coast_depth_bits);
+        let beach_steepness = f32::from_bits(inputs.beach_steepness_bits);
         let mut heights = vec![inputs.land_height_bits; expected_vertices];
         let mut smoothing_coords = Vec::new();
         let mut locked_zero_vertices = 0;
         let mut coordinfo_zero_vertices = 0;
-        let mut mountain_vertices = 0;
+        let mut deep_water_vertices = 0;
         let mut fixed_height_vertices = 0;
         let mut fractal_vertices = 0;
 
@@ -482,8 +572,8 @@ impl TerrainHeightPreMountainPlane {
 
                 let codes = get_coordinfo_vertex_codes(world, &inputs.coord_info_flags, tx, ty);
                 if codes & 0x1000 != 0 {
-                    heights[index] = ((mountain_height + land_height) * height_scale).to_bits();
-                    mountain_vertices += 1;
+                    heights[index] = ((coast_depth + land_height) * beach_steepness).to_bits();
+                    deep_water_vertices += 1;
                 } else if codes & 0x4 != 0 {
                     heights[index] = 0;
                     coordinfo_zero_vertices += 1;
@@ -555,7 +645,7 @@ impl TerrainHeightPreMountainPlane {
             vertices: expected_vertices,
             locked_zero_vertices,
             coordinfo_zero_vertices,
-            mountain_vertices,
+            deep_water_vertices,
             fixed_height_vertices,
             fractal_vertices,
             smoothing_vertices: smoothing_coords.len(),
@@ -904,6 +994,7 @@ pub enum TerrainHeightError {
         ys: i32,
     },
     CoordInfoAuthorityMismatch,
+    HeightScalarAuthorityMismatch,
     MountainCatalogShapeMismatch {
         sources: usize,
         displacement_tgas: usize,
@@ -1133,6 +1224,55 @@ fn validate_coord_info_authority(
     Ok(expected_authority)
 }
 
+fn terrain_height_scalar_source_digest(
+    land_height_bits: u32,
+    coast_depth_bits: u32,
+    beach_steepness_bits: u32,
+) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(256);
+    bytes.extend_from_slice(b"don-terrain-height-supported-pe-scalars-v1\0");
+    for body in [
+        TERRAIN_INIT_SHA256,
+        TERRAIN_HEIGHT_SCALAR_WRITES_SHA256,
+        TERRAIN_BEACH_STEEPNESS_DATA_SHA256,
+    ] {
+        bytes.extend_from_slice(body.as_bytes());
+    }
+    for value in [
+        TERRAIN_INIT_VA,
+        TERRAIN_INIT_BYTES,
+        TERRAIN_HEIGHT_SCALAR_WRITES_VA,
+        TERRAIN_HEIGHT_SCALAR_WRITES_BYTES,
+        TERRAIN_BEACH_STEEPNESS_DATA_VA,
+        TERRAIN_BEACH_STEEPNESS_DATA_BYTES,
+        land_height_bits,
+        coast_depth_bits,
+        beach_steepness_bits,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    sha256(&bytes)
+}
+
+fn validate_height_scalar_authority(
+    authority: &TerrainHeightScalarAuthority,
+) -> Result<(), TerrainHeightError> {
+    let expected = terrain_height_scalar_source_digest(
+        TERRAIN_RETAIL_LAND_HEIGHT_BITS,
+        TERRAIN_RETAIL_COAST_DEPTH_BITS,
+        TERRAIN_RETAIL_BEACH_STEEPNESS_BITS,
+    );
+    if authority.land_height_bits != TERRAIN_RETAIL_LAND_HEIGHT_BITS
+        || authority.coast_depth_bits != TERRAIN_RETAIL_COAST_DEPTH_BITS
+        || authority.beach_steepness_bits != TERRAIN_RETAIL_BEACH_STEEPNESS_BITS
+        || authority.source_digest == [0; 32]
+        || authority.source_digest != expected
+    {
+        return Err(TerrainHeightError::HeightScalarAuthorityMismatch);
+    }
+    Ok(())
+}
+
 fn derive_refresh_worldgen_inputs(
     world: &World,
     replay_payload_sha256: [u8; 32],
@@ -1146,6 +1286,7 @@ fn derive_refresh_worldgen_inputs(
     TerrainHeightError,
 > {
     let coord_info_authority_digest = validate_coord_info_authority(world, &remaining.coord_info)?;
+    validate_height_scalar_authority(&remaining.scalars)?;
     let xs = world
         .tile_xs
         .checked_add(1)
@@ -1214,9 +1355,9 @@ fn derive_refresh_worldgen_inputs(
             height_fractal,
             height_fractal_detail,
             coord_info_flags: remaining.coord_info.flags,
-            land_height_bits: remaining.land_height_bits,
-            mountain_height_bits: remaining.mountain_height_bits,
-            height_scale_bits: remaining.height_scale_bits,
+            land_height_bits: remaining.scalars.land_height_bits,
+            coast_depth_bits: remaining.scalars.coast_depth_bits,
+            beach_steepness_bits: remaining.scalars.beach_steepness_bits,
             coord_info_source_digest: coord_info_authority_digest,
         },
         receipt,
@@ -1575,8 +1716,8 @@ fn worldgen_plane_digest(
     }
     for value in [
         inputs.land_height_bits,
-        inputs.mountain_height_bits,
-        inputs.height_scale_bits,
+        inputs.coast_depth_bits,
+        inputs.beach_steepness_bits,
     ] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -1686,14 +1827,23 @@ mod refresh_fractal_tests {
     use super::*;
 
     fn remaining(world: &World) -> TerrainHeightNonFractalInputs {
-        TerrainHeightNonFractalInputs::from_world(
-            world,
-            30.0f32.to_bits(),
-            (-303.0f32).to_bits(),
-            1.0f32.to_bits(),
-        )
-        .unwrap()
-        .0
+        TerrainHeightNonFractalInputs::from_world(world).unwrap().0
+    }
+
+    #[test]
+    fn supported_pe_scalar_authority_carries_exact_named_words() {
+        let (authority, receipt) = TerrainHeightScalarAuthority::supported_retail_defaults();
+        assert_eq!(authority.land_height_bits(), 30.0f32.to_bits());
+        assert_eq!(authority.coast_depth_bits(), (-303.0f32).to_bits());
+        assert_eq!(authority.beach_steepness_bits(), 1.0f32.to_bits());
+        assert_eq!(authority.source_digest(), receipt.source_digest);
+        assert_eq!(receipt.terrain_init_va, TERRAIN_INIT_VA);
+        assert_eq!(receipt.scalar_writes_va, TERRAIN_HEIGHT_SCALAR_WRITES_VA);
+        assert_eq!(
+            receipt.beach_steepness_data_va,
+            TERRAIN_BEACH_STEEPNESS_DATA_VA
+        );
+        validate_height_scalar_authority(&authority).unwrap();
     }
 
     #[test]

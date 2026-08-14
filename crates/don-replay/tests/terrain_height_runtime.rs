@@ -8,26 +8,29 @@ use don_replay::build_init_prefix::{
 };
 use don_replay::terrain_height_runtime::{
     TerrainCoordInfoFlagsAuthority, TerrainFractalAuthority, TerrainHeightAuthority,
-    TerrainHeightError, TerrainHeightPreMountainPlane, TerrainHeightSource,
-    TerrainHeightWorldgenInputs, FRACTAL_GET_HEIGHT_BYTES, FRACTAL_GET_HEIGHT_SHA256,
-    FRACTAL_GET_HEIGHT_VA, FRACTAL_INIT_BYTES, FRACTAL_INIT_SHA256, FRACTAL_INIT_VA,
-    TERRAIN_ADD_NEW_COORD_INFO_BYTES, TERRAIN_ADD_NEW_COORD_INFO_SHA256,
+    TerrainHeightError, TerrainHeightPreMountainPlane, TerrainHeightScalarAuthority,
+    TerrainHeightSource, TerrainHeightWorldgenInputs, FRACTAL_GET_HEIGHT_BYTES,
+    FRACTAL_GET_HEIGHT_SHA256, FRACTAL_GET_HEIGHT_VA, FRACTAL_INIT_BYTES, FRACTAL_INIT_SHA256,
+    FRACTAL_INIT_VA, TERRAIN_ADD_NEW_COORD_INFO_BYTES, TERRAIN_ADD_NEW_COORD_INFO_SHA256,
     TERRAIN_ADD_NEW_COORD_INFO_VA, TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES,
     TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256, TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
-    TERRAIN_COORD_INFO_CTOR_BYTES, TERRAIN_COORD_INFO_CTOR_SHA256, TERRAIN_COORD_INFO_CTOR_VA,
-    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256,
-    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA, TERRAIN_FILL_COORD_INFO_MAPPER_BYTES,
-    TERRAIN_FILL_COORD_INFO_MAPPER_SHA256, TERRAIN_FILL_COORD_INFO_MAPPER_VA,
-    TERRAIN_FILL_MOUNTAIN_DATA_BYTES, TERRAIN_FILL_MOUNTAIN_DATA_SHA256,
-    TERRAIN_FILL_MOUNTAIN_DATA_VA, TERRAIN_FIND_CLOSEST_COORDINFO_BYTES,
-    TERRAIN_FIND_CLOSEST_COORDINFO_SHA256, TERRAIN_FIND_CLOSEST_COORDINFO_VA,
-    TERRAIN_FIND_TCOORD_Z_BYTES, TERRAIN_FIND_TCOORD_Z_SHA256, TERRAIN_FIND_TCOORD_Z_VA,
-    TERRAIN_GENERATE_LAND_BYTES, TERRAIN_GENERATE_LAND_LISTS_BYTES,
+    TERRAIN_BEACH_STEEPNESS_DATA_BYTES, TERRAIN_BEACH_STEEPNESS_DATA_SHA256,
+    TERRAIN_BEACH_STEEPNESS_DATA_VA, TERRAIN_COORD_INFO_CTOR_BYTES, TERRAIN_COORD_INFO_CTOR_SHA256,
+    TERRAIN_COORD_INFO_CTOR_VA, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES,
+    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA,
+    TERRAIN_FILL_COORD_INFO_MAPPER_BYTES, TERRAIN_FILL_COORD_INFO_MAPPER_SHA256,
+    TERRAIN_FILL_COORD_INFO_MAPPER_VA, TERRAIN_FILL_MOUNTAIN_DATA_BYTES,
+    TERRAIN_FILL_MOUNTAIN_DATA_SHA256, TERRAIN_FILL_MOUNTAIN_DATA_VA,
+    TERRAIN_FIND_CLOSEST_COORDINFO_BYTES, TERRAIN_FIND_CLOSEST_COORDINFO_SHA256,
+    TERRAIN_FIND_CLOSEST_COORDINFO_VA, TERRAIN_FIND_TCOORD_Z_BYTES, TERRAIN_FIND_TCOORD_Z_SHA256,
+    TERRAIN_FIND_TCOORD_Z_VA, TERRAIN_GENERATE_LAND_BYTES, TERRAIN_GENERATE_LAND_LISTS_BYTES,
     TERRAIN_GENERATE_LAND_LISTS_SHA256, TERRAIN_GENERATE_LAND_LISTS_VA,
     TERRAIN_GENERATE_LAND_SHA256, TERRAIN_GENERATE_LAND_VA, TERRAIN_GET_VERT_CODES_BYTES,
-    TERRAIN_GET_VERT_CODES_SHA256, TERRAIN_GET_VERT_CODES_VA, TERRAIN_REFRESH_DATA_BYTES,
-    TERRAIN_REFRESH_DATA_SHA256, TERRAIN_REFRESH_DATA_VA, TERRAIN_SMOOTH_TCOORD_BYTES,
-    TERRAIN_SMOOTH_TCOORD_SHA256, TERRAIN_SMOOTH_TCOORD_VA,
+    TERRAIN_GET_VERT_CODES_SHA256, TERRAIN_GET_VERT_CODES_VA, TERRAIN_HEIGHT_SCALAR_WRITES_BYTES,
+    TERRAIN_HEIGHT_SCALAR_WRITES_SHA256, TERRAIN_HEIGHT_SCALAR_WRITES_VA, TERRAIN_INIT_BYTES,
+    TERRAIN_INIT_SHA256, TERRAIN_INIT_VA, TERRAIN_REFRESH_DATA_BYTES, TERRAIN_REFRESH_DATA_SHA256,
+    TERRAIN_REFRESH_DATA_VA, TERRAIN_SMOOTH_TCOORD_BYTES, TERRAIN_SMOOTH_TCOORD_SHA256,
+    TERRAIN_SMOOTH_TCOORD_VA,
 };
 use don_replay::world_owner_frontier::sha256;
 use don_sim::systems::map_terrain::{tflag, wflag, World};
@@ -75,8 +78,8 @@ fn worldgen_inputs(world: &World) -> TerrainHeightWorldgenInputs {
         height_fractal_detail: fractal(world, 0, 0xa2),
         coord_info_flags: vec![0; world.size as usize],
         land_height_bits: 30.0f32.to_bits(),
-        mountain_height_bits: (-303.0f32).to_bits(),
-        height_scale_bits: 1.0f32.to_bits(),
+        coast_depth_bits: (-303.0f32).to_bits(),
+        beach_steepness_bits: 1.0f32.to_bits(),
         coord_info_source_digest: digest(0xa5),
     }
 }
@@ -474,7 +477,7 @@ fn world_and_coordinfo_codes_drive_native_height_branches() {
         terrain.master_land_height_bits[2 * width + 2],
         (-273.0f32).to_bits()
     );
-    assert!(receipt.mountain_vertices > 0);
+    assert!(receipt.deep_water_vertices > 0);
 
     let mut fixed = worldgen_inputs(&world);
     fixed.coord_info_flags[0] = 0x2;
@@ -567,6 +570,15 @@ fn coord_info_authority_is_derived_from_world_land_and_coast_only() {
     assert_eq!(receipt.authority_digest, authority.authority_digest());
 }
 
+#[test]
+fn supported_pe_scalar_authority_names_the_deep_water_inputs() {
+    let (authority, receipt) = TerrainHeightScalarAuthority::supported_retail_defaults();
+    assert_eq!(authority.land_height_bits(), 30.0f32.to_bits());
+    assert_eq!(authority.coast_depth_bits(), (-303.0f32).to_bits());
+    assert_eq!(authority.beach_steepness_bits(), 1.0f32.to_bits());
+    assert_eq!(authority.source_digest(), receipt.source_digest);
+}
+
 fn pe_span(image: &[u8], va: u32, size: usize) -> &[u8] {
     let pe = u32::from_le_bytes(image[0x3c..0x40].try_into().unwrap()) as usize;
     assert_eq!(&image[pe..pe + 4], b"PE\0\0");
@@ -614,6 +626,17 @@ fn supported_pe_freezes_the_height_query_and_producer_bodies() {
             TERRAIN_REFRESH_DATA_VA,
             TERRAIN_REFRESH_DATA_BYTES,
             TERRAIN_REFRESH_DATA_SHA256,
+        ),
+        (TERRAIN_INIT_VA, TERRAIN_INIT_BYTES, TERRAIN_INIT_SHA256),
+        (
+            TERRAIN_HEIGHT_SCALAR_WRITES_VA,
+            TERRAIN_HEIGHT_SCALAR_WRITES_BYTES,
+            TERRAIN_HEIGHT_SCALAR_WRITES_SHA256,
+        ),
+        (
+            TERRAIN_BEACH_STEEPNESS_DATA_VA,
+            TERRAIN_BEACH_STEEPNESS_DATA_BYTES,
+            TERRAIN_BEACH_STEEPNESS_DATA_SHA256,
         ),
         (
             TERRAIN_GENERATE_LAND_LISTS_VA,
