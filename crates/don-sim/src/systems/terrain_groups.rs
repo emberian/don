@@ -12,6 +12,7 @@
 //! a fractal generator or tileset frequencies.
 
 use super::map_terrain::{land, tflag, wflag, World};
+use super::mountain_add_runtime::{AddMountainCall, MountainAddRuntime};
 use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::regions::{Regions, WCoordList};
 use super::terrain_doobers::{
@@ -25,14 +26,16 @@ use super::terrain_drop_tile::{
 };
 use super::terrain_player_group::{
     PlacePlayerGroupCall, PlacePlayerGroupError, PlacePlayerGroupOutcome, PlacePlayerGroupReceipt,
-    PlayerGroupExternalRequest, PlayerGroupExternalResolution,
+    PlayerGroupExternalRequest, PlayerGroupExternalResolution, PlayerMountainResolution,
+    PlayerMountainResolver,
 };
 use super::terrain_player_mountain_retry::{
     PlayerMountainTemplateRetryError, PlayerMountainTemplateRetryReceipt,
 };
 use super::terrain_region_continuation::{
-    PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupOwnerReceipt,
-    PlaceRegionGroupOwners, PlaceRegionGroupReceipt,
+    build_world_receipt, MountainOwnerExecutionReceipt, PlaceRegionGroupError,
+    PlaceRegionGroupOutcome, PlaceRegionGroupOwnerReceipt, PlaceRegionGroupOwners,
+    PlaceRegionGroupReceipt,
 };
 use super::terrain_region_patterns::{
     RegionPatternError, RegionPatternOutcome, RegionPatternReceipt,
@@ -565,6 +568,67 @@ struct PlacementBounds {
     primary_max: i32,
     secondary_min: i32,
     secondary_max: i32,
+}
+
+struct OwnedPlayerMountainResolver<'a> {
+    runtime: &'a mut MountainAddRuntime,
+    receipts: Vec<MountainOwnerExecutionReceipt>,
+}
+
+impl PlayerMountainResolver for OwnedPlayerMountainResolver<'_> {
+    fn resolve(
+        &mut self,
+        request: PlayerGroupExternalRequest,
+        world: &mut World,
+    ) -> Result<Option<PlayerMountainResolution>, PlacePlayerGroupError> {
+        let PlayerGroupExternalRequest::MountainsAddMountain {
+            template,
+            world_x,
+            world_y,
+            pattern,
+            mountain_space,
+            forest_space,
+            rock_space,
+            coast_space,
+            start_min,
+        } = request
+        else {
+            return Ok(None);
+        };
+        let world_before = world.clone();
+        let walked_before = self.runtime.walked_bytes();
+        let execution = self
+            .runtime
+            .apply_add_mountain(
+                world,
+                AddMountainCall {
+                    template,
+                    world_x,
+                    world_y,
+                    verification_mode: pattern,
+                    mountain_space,
+                    forest_space,
+                    rock_space,
+                    coast_space,
+                    start_min,
+                },
+            )
+            .map_err(PlacePlayerGroupError::InvalidMountainRuntime)?;
+        let walked_after = self.runtime.walked_bytes();
+        let liberr = execution.liberr;
+        self.receipts.push(MountainOwnerExecutionReceipt {
+            execution,
+            world: build_world_receipt(&world_before, world),
+            mountain_walk_adler_before: crate::checksum::adler32(1, &walked_before),
+            mountain_walk_adler_after: crate::checksum::adler32(1, &walked_after),
+            mountain_walk_bytes_before: walked_before.len(),
+            mountain_walk_bytes_after: walked_after.len(),
+        });
+        Ok(Some(PlayerMountainResolution {
+            liberr,
+            recorded_external: false,
+        }))
+    }
 }
 
 impl TerrainGroups {
@@ -1900,9 +1964,44 @@ impl TerrainGroups {
         ),
         PlaceAllError,
     > {
+        if group.group_type == 5 {
+            if owners.mountains.is_none() {
+                return Self::execute_player_pattern_group(
+                    group, world, random, mountains, prepared, externals, host,
+                )
+                .map(|receipt| (receipt, Vec::new()));
+            }
+
+            let mut staged_group = group.clone();
+            let mut staged_world = world.clone();
+            let mut staged_random = *random;
+            let mut staged_mountains = mountains.clone();
+            let mut staged_owners = owners.clone();
+            let runtime = staged_owners
+                .mountains
+                .as_mut()
+                .expect("checked before staging the player mountain owner");
+            let (execution, owner_receipts) = Self::execute_player_mountain_pattern_group_owned(
+                &mut staged_group,
+                &mut staged_world,
+                &mut staged_random,
+                &mut staged_mountains,
+                prepared,
+                runtime,
+                host,
+            )?;
+            if execution.outcome == PlayerPatternGroupOutcome::Complete {
+                *group = staged_group;
+                *world = staged_world;
+                *random = staged_random;
+                *mountains = staged_mountains;
+                *owners = staged_owners;
+            }
+            return Ok((execution, owner_receipts));
+        }
+
         // Without the exact Good owner this is precisely the legacy red
-        // boundary. Mountain mode 5 and Cliffs remain recorded-only red
-        // boundaries even when the region-mode-4 owner is present.
+        // boundary. Cliffs remain recorded-only red.
         if owners.oil_goods.is_none() {
             return Self::execute_player_pattern_group(
                 group, world, random, mountains, prepared, externals, host,
@@ -2002,6 +2101,162 @@ impl TerrainGroups {
         Err(PlaceAllError::InvalidPlayerGroupInputs {
             group_index: prepared.group_index,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_player_mountain_pattern_group_owned(
+        group: &mut TerrainGroup,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        prepared: &TerrainGroupPlacementPreparation,
+        runtime: &mut MountainAddRuntime,
+        host: &mut impl FnMut(PlaceAllHostEvent),
+    ) -> Result<
+        (
+            PlayerPatternGroupReceipt,
+            Vec<PlaceAllOwnerExecutionReceipt>,
+        ),
+        PlaceAllError,
+    > {
+        let group_index = prepared.group_index;
+        if group.group_type != 5
+            || prepared.primary_sizes.is_empty()
+            || prepared.primary_sizes.len() != prepared.secondary_sizes.len()
+        {
+            return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
+        }
+
+        let mut receipt = PlayerPatternGroupReceipt {
+            group_index,
+            calls: Vec::new(),
+            mountain_retries: Vec::new(),
+            host_events: Vec::new(),
+            placed_after: group.placed.clone(),
+            formation_x_after: Vec::new(),
+            formation_y_after: Vec::new(),
+            external_resolutions_consumed: 0,
+            outcome: PlayerPatternGroupOutcome::Complete,
+            rng_state_after: random.state(),
+        };
+        if world.start_x.items.is_empty() {
+            return Ok((receipt, Vec::new()));
+        }
+
+        let mut resolver = OwnedPlayerMountainResolver {
+            runtime,
+            receipts: Vec::new(),
+        };
+        let mut owner_receipts = Vec::new();
+
+        'clumps: for (clump_index, (&target_tiles, &oil_deposits)) in prepared
+            .primary_sizes
+            .iter()
+            .zip(&prepared.secondary_sizes)
+            .enumerate()
+        {
+            for player_index in 0..world.start_x.items.len() {
+                let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                    group_index,
+                    clump_index,
+                    player_index,
+                };
+                host(event);
+                receipt.host_events.push(event);
+
+                let land_subtype = mountains.get_range_raw(target_tiles);
+                let call = PlacePlayerGroupCall {
+                    target_tiles,
+                    player_index,
+                    land_subtype,
+                    oil_deposits,
+                    group_index,
+                    strict_type_four: false,
+                };
+                let first = group
+                    .apply_place_player_group_with_mountain_resolver(
+                        world,
+                        random,
+                        call,
+                        &mut receipt.formation_x_after,
+                        &mut receipt.formation_y_after,
+                        &[],
+                        &mut resolver,
+                    )
+                    .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                let mut outcome = first.outcome.clone();
+                receipt.calls.push(first);
+
+                if let PlacePlayerGroupOutcome::Returned(0) = outcome {
+                    let retry = group
+                        .apply_player_mountain_template_retry_with_resolver(
+                            world,
+                            random,
+                            mountains,
+                            call,
+                            land_subtype,
+                            &mut receipt.formation_x_after,
+                            &mut receipt.formation_y_after,
+                            &[],
+                            &mut resolver,
+                            &mut || {
+                                let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                                    group_index,
+                                    clump_index,
+                                    player_index,
+                                };
+                                host(event);
+                                receipt.host_events.push(event);
+                            },
+                        )
+                        .map_err(PlaceAllError::InvalidPlayerMountainTemplateRetry)?;
+                    receipt.calls.extend(
+                        retry
+                            .attempts
+                            .iter()
+                            .map(|attempt| attempt.placement.clone()),
+                    );
+                    outcome = retry.outcome.clone();
+                    receipt.mountain_retries.push(retry);
+                }
+
+                owner_receipts.extend(resolver.receipts.drain(..).map(|execution| {
+                    PlaceAllOwnerExecutionReceipt {
+                        group_index,
+                        source: PlaceAllOwnerSource::Player {
+                            clump_index,
+                            player_index,
+                        },
+                        execution: PlaceRegionGroupOwnerReceipt::Mountain(execution),
+                    }
+                }));
+
+                match outcome {
+                    PlacePlayerGroupOutcome::Returned(return_value) => {
+                        group.placed.push(return_value);
+                    }
+                    PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
+                        receipt.outcome = PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                            clump_index,
+                            player_index,
+                            request,
+                        };
+                        break 'clumps;
+                    }
+                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                        receipt.outcome = PlayerPatternGroupOutcome::GrowthKernel {
+                            clump_index,
+                            player_index,
+                        };
+                        break 'clumps;
+                    }
+                }
+            }
+        }
+
+        receipt.placed_after = group.placed.clone();
+        receipt.rng_state_after = random.state();
+        Ok((receipt, owner_receipts))
     }
 
     #[allow(clippy::too_many_arguments)]

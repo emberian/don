@@ -9,6 +9,7 @@
 use super::ammo::vector_dist;
 use super::borders_fog::{CircleTable, CIRCLE_MAX_R};
 use super::map_terrain::{wflag, World};
+use super::mountain_add_runtime::MountainAddRuntimeError;
 use super::terrain_drop_tile::{DropTileError, DropTileReceipt};
 use super::terrain_groups::TerrainGroup;
 use super::terrain_player_growth::{
@@ -201,6 +202,7 @@ pub enum PlacePlayerGroupError {
     },
     InvalidDropTile(DropTileError),
     InvalidGrowth(PlayerGroupGrowthError),
+    InvalidMountainRuntime(MountainAddRuntimeError),
     ExternalResolutionMismatch {
         expected: PlayerGroupExternalRequest,
         actual: PlayerGroupExternalRequest,
@@ -208,6 +210,60 @@ pub enum PlacePlayerGroupError {
     ExternalResolutionKindMismatch {
         expected: PlayerGroupExternalRequest,
     },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlayerMountainResolution {
+    pub liberr: i32,
+    /// True only for the compatibility path that consumed one caller-supplied
+    /// result row. Exact owners execute against `world` at this call site and
+    /// therefore do not advance the recorded-external cursor.
+    pub recorded_external: bool,
+}
+
+pub(crate) trait PlayerMountainResolver {
+    fn resolve(
+        &mut self,
+        request: PlayerGroupExternalRequest,
+        world: &mut World,
+    ) -> Result<Option<PlayerMountainResolution>, PlacePlayerGroupError>;
+}
+
+pub(crate) struct RecordedPlayerMountainResolver<'a> {
+    externals: &'a [PlayerGroupExternalResolution],
+    consumed: usize,
+}
+
+impl<'a> RecordedPlayerMountainResolver<'a> {
+    pub(crate) const fn new(externals: &'a [PlayerGroupExternalResolution]) -> Self {
+        Self {
+            externals,
+            consumed: 0,
+        }
+    }
+}
+
+impl PlayerMountainResolver for RecordedPlayerMountainResolver<'_> {
+    fn resolve(
+        &mut self,
+        request: PlayerGroupExternalRequest,
+        _world: &mut World,
+    ) -> Result<Option<PlayerMountainResolution>, PlacePlayerGroupError> {
+        let Some(external) = self.externals.get(self.consumed).copied() else {
+            return Ok(None);
+        };
+        ensure_request(request, external.request())?;
+        let PlayerGroupExternalResolution::Mountains { liberr, .. } = external else {
+            return Err(PlacePlayerGroupError::ExternalResolutionKindMismatch {
+                expected: request,
+            });
+        };
+        self.consumed += 1;
+        Ok(Some(PlayerMountainResolution {
+            liberr,
+            recorded_external: true,
+        }))
+    }
 }
 
 impl TerrainGroup {
@@ -224,13 +280,37 @@ impl TerrainGroup {
         formation_y: &mut Vec<i32>,
         externals: &[PlayerGroupExternalResolution],
     ) -> Result<PlacePlayerGroupReceipt, PlacePlayerGroupError> {
-        let mut receipt = self.apply_place_player_group_prefix(
+        let mut resolver = RecordedPlayerMountainResolver::new(externals);
+        self.apply_place_player_group_with_mountain_resolver(
             world,
             random,
             call,
             formation_x,
             formation_y,
             externals,
+            &mut resolver,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_place_player_group_with_mountain_resolver(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        call: PlacePlayerGroupCall,
+        formation_x: &mut Vec<i32>,
+        formation_y: &mut Vec<i32>,
+        externals: &[PlayerGroupExternalResolution],
+        mountain_resolver: &mut impl PlayerMountainResolver,
+    ) -> Result<PlacePlayerGroupReceipt, PlacePlayerGroupError> {
+        let mut receipt = self.apply_place_player_group_prefix_with_mountain_resolver(
+            world,
+            random,
+            call,
+            formation_x,
+            formation_y,
+            externals,
+            mountain_resolver,
         )?;
         if matches!(
             receipt.outcome,
@@ -274,6 +354,29 @@ impl TerrainGroup {
         formation_x: &mut Vec<i32>,
         formation_y: &mut Vec<i32>,
         externals: &[PlayerGroupExternalResolution],
+    ) -> Result<PlacePlayerGroupReceipt, PlacePlayerGroupError> {
+        let mut resolver = RecordedPlayerMountainResolver::new(externals);
+        self.apply_place_player_group_prefix_with_mountain_resolver(
+            world,
+            random,
+            call,
+            formation_x,
+            formation_y,
+            externals,
+            &mut resolver,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_place_player_group_prefix_with_mountain_resolver(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        call: PlacePlayerGroupCall,
+        formation_x: &mut Vec<i32>,
+        formation_y: &mut Vec<i32>,
+        externals: &[PlayerGroupExternalResolution],
+        mountain_resolver: &mut impl PlayerMountainResolver,
     ) -> Result<PlacePlayerGroupReceipt, PlacePlayerGroupError> {
         validate_inputs(self, world, call, formation_x, formation_y)?;
 
@@ -376,30 +479,24 @@ impl TerrainGroup {
                             coast_space: self.coast_space,
                             start_min: self.start_min,
                         };
-                        let Some(external) = externals.get(receipt.external_resolutions_consumed)
-                        else {
+                        let Some(resolution) = mountain_resolver.resolve(request, world)? else {
                             receipt.attempts.push(attempt);
                             receipt.outcome =
                                 PlacePlayerGroupOutcome::ExternalResolutionRequired { request };
                             finish_receipt(&mut receipt, formation_x, formation_y, random);
                             return Ok(receipt);
                         };
-                        ensure_request(request, external.request())?;
-                        let PlayerGroupExternalResolution::Mountains { liberr, .. } = *external
-                        else {
-                            return Err(PlacePlayerGroupError::ExternalResolutionKindMismatch {
-                                expected: request,
-                            });
-                        };
-                        receipt.external_resolutions_consumed += 1;
-                        if liberr == 0 {
+                        receipt.external_resolutions_consumed +=
+                            usize::from(resolution.recorded_external);
+                        if resolution.liberr == 0 {
                             receipt.attempts.push(attempt);
                             receipt.outcome = PlacePlayerGroupOutcome::Returned(1);
                             finish_receipt(&mut receipt, formation_x, formation_y, random);
                             return Ok(receipt);
                         }
-                        attempt.rejection =
-                            Some(PlayerCandidateRejection::MountainRejected { liberr });
+                        attempt.rejection = Some(PlayerCandidateRejection::MountainRejected {
+                            liberr: resolution.liberr,
+                        });
                     }
                     8 => {
                         if land_subtype != 4 {

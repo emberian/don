@@ -4,7 +4,10 @@
 
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, World};
-use don_sim::systems::mountains::Mountains;
+use don_sim::systems::mountain_add_runtime::{
+    GridOffset, MountainAddRuntime, MountainTemplateRuntime, SLIDING_EXCLUDING_VERIFY_MODE,
+};
+use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
 use don_sim::systems::regions::Regions;
 use don_sim::systems::terrain_groups::{
     PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, PlaceAllOwnerSource, TerrainGroup,
@@ -324,6 +327,117 @@ fn owned_player_oil_replays_at_the_call_site_and_outer_boundary_is_atomic() {
     assert_eq!(world.wdata, before.0.wdata);
     assert_eq!(world.tdata, before.0.tdata);
     assert_eq!(world.checksum_image().0, before.0.checksum_image().0);
+    assert_eq!(groups, before.1);
+    assert_eq!(mountains, before.2);
+    assert_eq!(random, before.3);
+    assert_eq!(owners, before.4);
+}
+
+#[test]
+fn owned_player_mode_five_mutates_world_at_the_exact_candidate_boundary() {
+    let mut world = world();
+    let regions = regions();
+    let mountain_group = TerrainGroup {
+        group_type: 5,
+        chance: 100,
+        min_clumps: 1,
+        max_clumps: 1,
+        pattern: 0,
+        min_size: 1,
+        max_size: 1,
+        start_min: 0,
+        start_max: 1,
+        ..TerrainGroup::default()
+    };
+    let mut groups = TerrainGroups {
+        groups: vec![mountain_group],
+        ..TerrainGroups::default()
+    };
+    let mut mountains = Mountains {
+        small_ranges: MountainRangeList::new(vec![MountainRangeEntry::new(0, 0)]),
+        ..Mountains::default()
+    };
+    let mut random = Random::new(0x1234_5678);
+    let template = MountainTemplateRuntime {
+        mount_tiles: vec![GridOffset::new(0, 0)],
+        mount_wcoords: vec![GridOffset::new(0, 0)],
+        solid_mount_wcoords: vec![GridOffset::new(0, 0)],
+    };
+    let mut owners = PlaceRegionGroupOwners {
+        mountains: Some(MountainAddRuntime::new(
+            world.wdata.len(),
+            vec![Some(template)],
+        )),
+        oil_goods: None,
+    };
+    let before = (
+        world.clone(),
+        groups.clone(),
+        mountains.clone(),
+        random,
+        owners.clone(),
+    );
+    let inputs = [PlaceAllGroupInput::Player {
+        group_index: 0,
+        externals: Vec::new(),
+    }];
+
+    let error = groups
+        .place_all_with_group_owned_inputs(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            &mut owners,
+            0,
+            1,
+            Some(helping()),
+            &inputs,
+            None,
+            None,
+            None,
+            |_| {},
+        )
+        .unwrap_err();
+    let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
+        panic!("unexpected place_all result: {error:?}");
+    };
+
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0]);
+    assert_eq!(preview.owner_receipts.len(), 1);
+    assert_eq!(
+        preview.owner_receipts[0].source,
+        PlaceAllOwnerSource::Player {
+            clump_index: 0,
+            player_index: 0,
+        }
+    );
+    let PlaceRegionGroupOwnerReceipt::Mountain(mountain) = &preview.owner_receipts[0].execution
+    else {
+        panic!("expected an exact player mountain owner receipt");
+    };
+    assert_eq!(
+        mountain.execution.call.verification_mode,
+        SLIDING_EXCLUDING_VERIFY_MODE
+    );
+    assert_eq!(mountain.execution.liberr, 0);
+    assert_eq!(mountain.execution.rng_draws, 0);
+    assert_eq!(mountain.execution.sliding_attempts, 1);
+    assert_ne!(
+        mountain.world.checksum_before,
+        mountain.world.checksum_after
+    );
+    assert!(mountain.mountain_walk_bytes_after > mountain.mountain_walk_bytes_before);
+    assert_ne!(
+        mountain.mountain_walk_adler_before,
+        mountain.mountain_walk_adler_after
+    );
+
+    // `place_all_with_group_owned_inputs` publishes a preview at the next red
+    // boundary, so none of the caller's canonical owners move yet.
+    assert_eq!(world.wdata, before.0.wdata);
+    assert_eq!(world.tdata, before.0.tdata);
     assert_eq!(groups, before.1);
     assert_eq!(mountains, before.2);
     assert_eq!(random, before.3);

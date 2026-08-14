@@ -14,7 +14,8 @@ use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::terrain_groups::TerrainGroup;
 use super::terrain_player_group::{
     PlacePlayerGroupCall, PlacePlayerGroupError, PlacePlayerGroupOutcome, PlacePlayerGroupReceipt,
-    PlayerGroupExternalRequest, PlayerGroupExternalResolution,
+    PlayerGroupExternalRequest, PlayerGroupExternalResolution, PlayerMountainResolver,
+    RecordedPlayerMountainResolver,
 };
 use crate::rng::Random;
 
@@ -83,6 +84,35 @@ impl TerrainGroup {
         externals: &[PlayerGroupExternalResolution],
         mut pump: impl FnMut(),
     ) -> Result<PlayerMountainTemplateRetryReceipt, PlayerMountainTemplateRetryError> {
+        let mut resolver = RecordedPlayerMountainResolver::new(externals);
+        self.apply_player_mountain_template_retry_with_resolver(
+            world,
+            random,
+            mountains,
+            call,
+            initial_template,
+            formation_x,
+            formation_y,
+            externals,
+            &mut resolver,
+            &mut pump,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_player_mountain_template_retry_with_resolver(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        call: PlacePlayerGroupCall,
+        initial_template: i32,
+        formation_x: &mut Vec<i32>,
+        formation_y: &mut Vec<i32>,
+        externals: &[PlayerGroupExternalResolution],
+        mountain_resolver: &mut impl PlayerMountainResolver,
+        pump: &mut impl FnMut(),
+    ) -> Result<PlayerMountainTemplateRetryReceipt, PlayerMountainTemplateRetryError> {
         if self.group_type != 5 {
             return Err(PlayerMountainTemplateRetryError::UnsupportedGroupType {
                 group_type: self.group_type,
@@ -117,8 +147,9 @@ impl TerrainGroup {
             formation_x,
             formation_y,
             externals,
+            mountain_resolver,
             &mut receipt,
-            &mut pump,
+            pump,
         )?;
         let primary_result = match primary {
             PhaseOutcome::Returned(value) => value,
@@ -154,8 +185,9 @@ impl TerrainGroup {
             formation_x,
             formation_y,
             externals,
+            mountain_resolver,
             &mut receipt,
-            &mut pump,
+            pump,
         )?;
         let smaller_result = match smaller {
             PhaseOutcome::Returned(value) => value,
@@ -188,8 +220,9 @@ impl TerrainGroup {
             formation_x,
             formation_y,
             externals,
+            mountain_resolver,
             &mut receipt,
-            &mut pump,
+            pump,
         )?;
         if let PhaseOutcome::ExternalResolutionRequired(request) = smallest {
             return Ok(finish(receipt, random, request));
@@ -216,6 +249,7 @@ fn run_phase(
     formation_x: &mut Vec<i32>,
     formation_y: &mut Vec<i32>,
     externals: &[PlayerGroupExternalResolution],
+    mountain_resolver: &mut impl PlayerMountainResolver,
     receipt: &mut PlayerMountainTemplateRetryReceipt,
     pump: &mut impl FnMut(),
 ) -> Result<PhaseOutcome, PlayerMountainTemplateRetryError> {
@@ -224,7 +258,7 @@ fn run_phase(
     loop {
         pump();
         let placement = group
-            .apply_place_player_group(
+            .apply_place_player_group_with_mountain_resolver(
                 world,
                 random,
                 PlacePlayerGroupCall {
@@ -235,6 +269,7 @@ fn run_phase(
                 formation_x,
                 formation_y,
                 &externals[receipt.external_resolutions_consumed..],
+                mountain_resolver,
             )
             .map_err(PlayerMountainTemplateRetryError::InvalidPlayerGroup)?;
         receipt.external_resolutions_consumed += placement.external_resolutions_consumed;

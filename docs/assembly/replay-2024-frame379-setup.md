@@ -72,11 +72,12 @@ positions, nonempty orders/paths, wrong Guy marks, and allocation gaps.
 
 ## Exact residual
 
-No real `Frame379SetupReceipt` can be emitted yet. The Great Lakes sliding mode-5 verifier is now
-source-recovered, but the exact run still stops before a final terrain/world authority: the 16
-installed displacement TGAs are absent, and the mode-5 placement result has not yet been joined to
-the exact CoordInfo/scalar cone and the post-mountain height plane. Consequently there is still no
-lawful postworldgen World/RNG/Village seam from which to capture the seven adjacent receiver Sims.
+No real `Frame379SetupReceipt` can be emitted yet. Mountain mode 5 and its exact player-group
+owner adapter are implemented, but the required effects-graphics/displacement inputs are not
+installed as canonical runtime authority. A cold Great Lakes replay therefore still stops at
+`place_all_mountains_add_mountain`; its placement result also has not yet been joined to the exact
+CoordInfo/scalar cone and post-mountain height plane. Consequently there is no lawful
+postworldgen World/RNG/Village seam from which to bind the seven adjacent receiver Sims.
 
 After that seam lands, the receiver binder needs seven coherent retail capture tranches containing
 the complete graphics, height, collision, visibility, Leader-accounting, RNG, Unit, and Guy

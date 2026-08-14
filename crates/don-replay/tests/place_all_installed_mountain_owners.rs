@@ -305,11 +305,23 @@ fn mediterranean_region_owner_consumes_the_installed_mode_four_runtime() {
 }
 
 #[test]
-fn great_lakes_player_mode_five_stays_explicit_with_installed_templates() {
+fn great_lakes_player_mode_five_consumes_the_installed_runtime() {
     let Some(replay) = open_replay("Playback___2024.02.24_21_25_53__Sat_.rcx") else {
         return;
     };
     let fixture = InstalledFixture::new(MOUNTAIN_TEMPLATE_CAPACITY);
+    // One native sampled TCoord and its enclosing WCoord give every range an
+    // explicit, small installed footprint. The fixture remains synthetic;
+    // this test pins owner plumbing, not shipped geometry.
+    let mut alpha = vec![0; 36 * 36];
+    for y in [2, 6] {
+        for x in [2, 6] {
+            alpha[y * 36 + x] = 1;
+        }
+    }
+    for index in 0..MOUNTAIN_TEMPLATE_CAPACITY {
+        fixture.write_template(index, &alpha);
+    }
     let initialization =
         ReplayPlaceAllOwnerInitialization::from_installed_content(fixture.provider()).unwrap();
     let sim = WorldSim::from_replay(&replay);
@@ -326,16 +338,31 @@ fn great_lakes_player_mode_five_stays_explicit_with_installed_templates() {
     assert!(owners.mountains.is_some(), "the catalog is installed");
     let advance = advance_place_all_boundary_owned(plan, map, continent, &facts, &owners).unwrap();
 
-    assert!(matches!(
-        advance.stop,
-        PlaceAllStop::MountainsAddMountain { group_index: 2, .. }
-    ));
-    assert_eq!(advance.completed_groups, [0, 1]);
-    assert!(advance
+    let player_mountains = advance
         .owner_receipts
         .iter()
-        .all(|receipt| matches!(receipt.execution, PlaceRegionGroupOwnerReceipt::OilGood(_))));
-    // The player arm passes verification mode 5. MountainAddRuntime is the
-    // proven mode-4 excluding-verify owner only, so installed geometry must not
-    // turn Great Lakes into an asserted success or route it through mode 4.
+        .filter(|receipt| {
+            matches!(receipt.source, PlaceAllOwnerSource::Player { .. })
+                && matches!(receipt.execution, PlaceRegionGroupOwnerReceipt::Mountain(_))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !player_mountains.is_empty(),
+        "Great Lakes group two must execute the installed player mountain owner"
+    );
+    for receipt in player_mountains {
+        let PlaceRegionGroupOwnerReceipt::Mountain(execution) = &receipt.execution else {
+            unreachable!();
+        };
+        assert_eq!(execution.execution.call.verification_mode, 5);
+        assert_eq!(execution.execution.rng_draws, 0);
+    }
+    assert!(advance.completed_groups.contains(&2));
+    assert!(
+        !matches!(
+            advance.stop,
+            PlaceAllStop::MountainsAddMountain { group_index: 2, .. }
+        ),
+        "the installed mode-5 owner must move Great Lakes past its former group-two stop"
+    );
 }

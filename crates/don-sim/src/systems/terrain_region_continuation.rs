@@ -635,7 +635,10 @@ fn finalize_place_region_group_receipt(
     receipt
 }
 
-fn build_world_receipt(world_before: &World, world_after: &World) -> PlaceRegionGroupWorldReceipt {
+pub(crate) fn build_world_receipt(
+    world_before: &World,
+    world_after: &World,
+) -> PlaceRegionGroupWorldReceipt {
     let checksum_before = world_before.checksum_sections();
     let checksum_after = world_after.checksum_sections();
     let changed_sections = checksum_before.differing_sections(&checksum_after);

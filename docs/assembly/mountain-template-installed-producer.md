@@ -213,9 +213,9 @@ using generated 32-bit TGA fixtures only:
 - the real Mediterranean replay consumes the installed mode-4 region owner, records a
   `PlaceAllOwnerSource::Region` mountain receipt, grows `Mountains::walk_data`, and crosses its
   former group-zero stop; and
-- the real Great Lakes replay retains its group-two player-mode-5 stop until the map cone
-  supplies its exact placement inputs; `MountainAddRuntime` now owns the mode-5
-  sliding/excluding transaction and installed catalog consumption.
+- the real Great Lakes replay consumes a synthetic installed catalog through the exact
+  player-mode-5 owner, retains player-source World/mountain-walk receipts, and crosses its former
+  group-two stop without routing the call through mode 4.
 
 Local gate (actual replays present, synthetic displacement art):
 
@@ -242,13 +242,14 @@ The installed replay owner now enforces the following coherent hook:
 4. retain the provider, source rows, exact file evidence, and derived templates in one immutable
    initialization receipt, then install `catalog.templates` directly as the
    `MountainAddRuntime` vector; and
-5. only then release `DropTileExternalRequest::MountainsAddMountain` to the recovered mode-4
-   transaction.
+5. only then release region and player `MountainsAddMountain` requests to the recovered mode-4
+   and mode-5 transactions respectively.
 
 No empty vector, all-transparent placeholder, hand-authored shape, checksum-fitted table, or
 retail-derived precomputed geometry file is an acceptable fallback.
 
-The supported calls are verification mode 4 (`excluding_verify`), reached by the
-Mediterranean region arm, and mode 5 (`sliding_excluding_verify`), reached by Great Lakes'
-player arm. Installed templates establish geometry provenance; the two modes retain their
-distinct instruction-derived verification algorithms.
+The supported calls are verification mode 4 (`excluding_verify`), reached by the Mediterranean
+region arm, and mode 5 (`sliding_excluding_verify`), reached by the Great Lakes player arm. The
+player owner mutates the staged live World at each exact candidate/retry boundary. Installed
+templates establish geometry provenance; absent installed geometry remains a typed stop, and no
+verification algorithm is substituted for another.

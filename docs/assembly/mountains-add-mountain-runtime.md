@@ -30,15 +30,16 @@ The runtime consumes zero RNG.  It owns:
   native 4/doubling capacities and walked metadata; and
 - atomic rejection/error rollback over both World and MountainsData.
 
-This does **not** close the replay mountain boundary yet.  The sixteen
+This does **not** close the replay mountain boundary on the checked-in corpus
+by itself.  The sixteen
 `MountainRangeData` geometry products are not in `.rcx` and are not present in
 the checked-in XML.  `effects_graphics.xml` names proprietary displacement
 images such as `.\art\h1_disp_0.tga`; `MountainRange::init` `0x008998b0`
 turns those inputs into the three coordinate pairs consumed here.  No lawful,
 redistributable extractor/decoder currently supplies them.  Tests use small
 synthetic geometry only to pin the instruction-derived transaction.  Synthetic
-geometry is not evidence that a shipped template was reconstructed, so the
-producer and replay gate remain explicitly red.
+geometry is not evidence that a shipped template was reconstructed, so a cold
+replay without an installed catalog remains explicitly red.
 
 Fidelity tier is **C, structural/instruction-derived**.  No call to retail
 `Mountains::add_mountain` has been oracle-executed and no checksum agreement is
@@ -226,8 +227,8 @@ world-mutation test. The exact source was restored before the final green gate.
 
 ## Exact integration hooks
 
-No shared registration or replay schedule file is edited by this lane.  The
-integration owner needs all of the following, in dependency order:
+The runtime is now registered and both placement callers have exact owner
+adapters. The dependency order is:
 
 1. Add `pub mod mountain_add_runtime;` to
    `crates/don-sim/src/systems/mod.rs`.
@@ -240,17 +241,19 @@ integration owner needs all of the following, in dependency order:
    cursor state in the composed `TerrainGroups::place_all` runtime.  Do not
    initialize its template catalog from synthetic/default geometry.
 4. At either region or player `MountainsAddMountain` request, convert the nine
-   fields one-for-one into `AddMountainCall`. A receipt supplies both the
-   requested call and the mode-5 resolved origin. A typed error remains a named
-   transaction stop and releases no asserted external resolution.
+   fields one-for-one into `AddMountainCall`. The player adapter executes on the
+   live staged World at the exact candidate boundary, including every native
+   template retry; it does not replay a successful `Liberr` against an
+   unmodified World. A receipt supplies both the requested call and the mode-5
+   resolved origin. A typed error remains a named transaction stop and releases
+   no asserted external resolution.
 5. Build a lawful installed-content producer for the sixteen
    `MountainRangeData` rows.  Only after that producer is mutation-pinned against
    the shipped loader may replay schedules replace
    `place_all_mountains_add_mountain` with the next executed primitive.
 
-The installed-content owner and region/mode-4 adapter now exist. The player
-adapter deliberately remains red until a real installed template catalog is
-available: executing mode 5 with synthetic geometry would create plausible but
-noncanonical World bytes. The missing shipped geometry is therefore still why
-this tranche is a real runtime advance but not a replay-compatibility closure
-claim.
+The installed-content producer, region/mode-4 adapter, and player/mode-5
+adapter now exist. The adapters run only when a `MountainAddRuntime` has been
+explicitly mounted; they never synthesize/default geometry. The missing shipped
+geometry is therefore still why this tranche is a real runtime advance but not
+a cold replay-compatibility closure claim.
