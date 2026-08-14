@@ -52,6 +52,9 @@ those immutable Unit images with independently exact land-speed authority.
 `Frame379SetupReceipt::canonical_snapshot_authority` projects the composed worldgen, Leader,
 seven receiver, stable-identity, and final World/RNG digest directly into the generic selector;
 no downstream caller supplies another attestation scalar.
+`publish_frame379_setup_sim` is the direct Sim-owner boundary: it validates through an isolated
+deterministic save/load copy, then moves the candidate into the published slot only on complete
+success. Refusal returns the candidate and leaves any existing published Sim unchanged.
 
 Mutation gates reject missing revisions/digests, replay drift, wrong dynamic bonuses/upgrades,
 non-adjacent World/RNG states, invalid detailed receipts, stale identities, wrong types or

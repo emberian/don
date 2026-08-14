@@ -19,6 +19,7 @@ use don_sim::systems::map_terrain::{World, WorldChecksum};
 use don_sim::systems::objects_init_unit_authority_frontier::{
     BhsInitUnitRequest, DetailedInitUnitReceipt, InitUnitReceiptError, InitUnitStep, UnitAfterInit,
 };
+use don_sim::systems::save_load::{load_sim, save_sim, SaveError};
 use don_sim::tick::Sim;
 use don_sim::world::{WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
@@ -286,6 +287,7 @@ pub enum Frame379SetupError {
     },
     RegistryNotDenseEquivalent,
     SetupReceipt(BuildUnitsReceiptError),
+    UnsupportedCanonicalSnapshot(SaveError),
 }
 
 impl fmt::Display for Frame379SetupError {
@@ -317,6 +319,12 @@ impl From<PlaceUnitProducerError> for Frame379SetupError {
 impl From<BuildUnitsReceiptError> for Frame379SetupError {
     fn from(value: BuildUnitsReceiptError) -> Self {
         Self::SetupReceipt(value)
+    }
+}
+
+impl From<SaveError> for Frame379SetupError {
+    fn from(value: SaveError) -> Self {
+        Self::UnsupportedCanonicalSnapshot(value)
     }
 }
 
@@ -994,4 +1002,52 @@ pub fn produce_frame379_setup(
         canonical_world_checksum: final_state.map.world.checksum_sections(),
         canonical_random_state: final_state.world.random.state(),
     })
+}
+
+/// Atomic ownership-transfer boundary for the canonical post-setup Sim.
+///
+/// `Sim` is intentionally not `Clone`. This helper therefore validates the complete seven-call
+/// chronology against an isolated deterministic save/load copy first and moves `candidate` into
+/// `published` only after every gate succeeds. Any refusal leaves `published` untouched and
+/// returns the original candidate to the caller.
+#[allow(clippy::type_complexity)]
+pub fn publish_frame379_setup_sim(
+    replay: &Replay,
+    entry_and_intermediate: &[&Sim],
+    candidate: Sim,
+    completed_inits: &[Frame379CompletedInitAuthority],
+    worldgen: &Frame379WorldgenAuthority,
+    leader: &Frame379LeaderSetupAuthority,
+    published: &mut Option<Sim>,
+) -> Result<Frame379SetupReceipt, (Frame379SetupError, Sim)> {
+    let snapshot_bytes = match save_sim(&candidate) {
+        Ok(bytes) => bytes,
+        Err(source) => {
+            return Err((
+                Frame379SetupError::UnsupportedCanonicalSnapshot(source),
+                candidate,
+            ));
+        }
+    };
+    let validation_copy = match load_sim(&snapshot_bytes) {
+        Ok(sim) => sim,
+        Err(source) => {
+            return Err((
+                Frame379SetupError::UnsupportedCanonicalSnapshot(source),
+                candidate,
+            ));
+        }
+    };
+    if entry_and_intermediate.len() != SETUP_CALLS {
+        return Err((Frame379SetupError::WrongReceiptCount, candidate));
+    }
+    let mut states = Vec::with_capacity(SETUP_CALLS + 1);
+    states.extend_from_slice(entry_and_intermediate);
+    states.push(&validation_copy);
+    let receipt = match produce_frame379_setup(replay, &states, completed_inits, worldgen, leader) {
+        Ok(receipt) => receipt,
+        Err(error) => return Err((error, candidate)),
+    };
+    *published = Some(candidate);
+    Ok(receipt)
 }

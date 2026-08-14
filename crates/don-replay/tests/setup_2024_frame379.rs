@@ -2,15 +2,16 @@ use std::path::{Path, PathBuf};
 
 use don_replay::replay::Replay;
 use don_replay::setup_2024_frame379::{
-    discover_frame379_setup, produce_frame379_setup, Frame379LeaderSetupAuthority,
-    Frame379LeaderSetupSource, Frame379SetupError, Frame379WorldgenAuthority,
-    Frame379WorldgenSource, REPLAY_FILE_SHA256,
+    discover_frame379_setup, produce_frame379_setup, publish_frame379_setup_sim,
+    Frame379LeaderSetupAuthority, Frame379LeaderSetupSource, Frame379SetupError,
+    Frame379WorldgenAuthority, Frame379WorldgenSource, REPLAY_FILE_SHA256,
 };
 use don_replay::setup_units_producer::{
     StartingUnitBonuses, StartingUnitPhase, StartingUnitTypeFacts, TypeResolutionFacts,
     BASE_PEASANT_TYPE, BASE_SCOUT_TYPE, DUTCH_MERCHANT_TYPE,
 };
 use don_sim::systems::map_terrain::{SectionDigest, WorldChecksum, WorldSection};
+use don_sim::tick::Sim;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -170,4 +171,36 @@ fn chronology_refuses_to_substitute_an_empty_receipt_set_for_real_units() {
         produce_frame379_setup(&replay, &[], &[], &missing, &leader()),
         Err(Frame379SetupError::MissingCompositionDigest)
     );
+}
+
+#[test]
+fn atomic_publication_preserves_existing_owner_on_refusal() {
+    let Some(replay) = installed_witness() else {
+        return;
+    };
+    let edge = u16::try_from(replay.initial.info.settings.map_edge_world_cells().unwrap()).unwrap();
+    let candidate = Sim::new(u64::from(replay.initial.info.seed), edge);
+    let mut published = Some(Sim::new(0x5151, edge));
+    published.as_mut().unwrap().world.frame = 123;
+    let worldgen = Frame379WorldgenAuthority {
+        revision: 1,
+        composition_digest: [0x5a; 32],
+        source: Frame379WorldgenSource::CompletedGreatLakesWorldgenAndStartingVillage,
+        replay_file_sha256: REPLAY_FILE_SHA256,
+        world_checksum: candidate.map.world.checksum_sections(),
+        random_state: candidate.world.random.state(),
+    };
+    let (error, returned) = publish_frame379_setup_sim(
+        &replay,
+        &[],
+        candidate,
+        &[],
+        &worldgen,
+        &leader(),
+        &mut published,
+    )
+    .unwrap_err();
+    assert_eq!(error, Frame379SetupError::WrongReceiptCount);
+    assert_eq!(returned.world.frame, 0);
+    assert_eq!(published.as_ref().unwrap().world.frame, 123);
 }
