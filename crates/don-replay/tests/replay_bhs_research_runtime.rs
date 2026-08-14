@@ -13,7 +13,7 @@ use don_replay::replay_bhs_research_runtime::run_production_research_call;
 use don_replay::replay_bhs_runtime::{
     load_replay_bhs_program, ReplayBhsBinding, LEADER_FLAG_HUMAN,
 };
-use don_sim::objects::BUILD_BAND_BASE;
+use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::script_runtime::{ExternalGameSeconds, ScriptRuntime};
 use don_sim::systems::bhs_create_unit_runtime::{
     BhsCreateUnitRuntime, CreateUnitLeaderProjection, CreateUnitProjectionWitness,
@@ -39,7 +39,8 @@ use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_leader_produce_building_blocked_site_farm_owned_tail,
     apply_sim_leader_produce_building_blocked_site_farm_unowned_tail,
     apply_sim_leader_produce_building_blocked_site_land_footprint,
-    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixError,
+    apply_sim_leader_produce_building_blocked_site_prefix,
+    apply_sim_leader_produce_building_farm_success_preflight, BuildTypeBlockedTcoordPrefixError,
     BuildTypeBlockedTcoordPrefixStatus, LeaderProduceBuildingBlockedSiteFarmUnownedError,
     LeaderProduceBuildingBlockedSitePrefixError, BUILD_TYPE_BLOCKED_LOCATION_END_VA,
     BUILD_TYPE_BLOCKED_LOCATION_NON_FRIENDLY_CALL_VA, BUILD_TYPE_BLOCKED_LOCATION_VA,
@@ -1665,6 +1666,83 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     assert_eq!(owned_site.continuation.circle_offset, 1);
     assert_eq!(owned_site.continuation.candidate_world_cell, [2, 2]);
     assert_eq!(owned_site.continuation.placement_coord, [1920, 1920]);
+
+    // The remaining success cone is staged without publishing either canonical RNG draw. Farm
+    // sees no TData building/started bit at any ring-one probe, so every nested
+    // `find_building_placed_at` returns -1 before scanning WData and the distance score consumes
+    // one draw. All 34 later W candidates fail in territory before scoring. The fine 2x2
+    // re-probe admits only corner (8,8); the other three cross unowned WData, so exactly one
+    // more draw selects the same placement before `Objects::init_build`.
+    let random_state_before = sim.world.random.state();
+    let build_rows_before = sim.builds.len();
+    let build_mark_before = sim.world.objects.slot(content_owner).mark(Band::Build);
+    let success = apply_sim_leader_produce_building_farm_success_preflight(
+        &sim,
+        &production,
+        &types,
+        &terrain,
+        installed_candidate.clone(),
+        owned_site.clone(),
+    )
+    .expect("stage exact Farm scoring/RNG/fine-site/allocation cone");
+    assert!(success.validates());
+    assert_eq!(success.find_friends.len(), 8);
+    assert!(success
+        .find_friends
+        .iter()
+        .all(|probe| probe.found_build_object.is_none()));
+    assert!(success
+        .find_friends
+        .iter()
+        .all(|probe| probe.terrain_mask == tflag::CITY));
+    assert_eq!(success.find_friends[7].circle_offset, 8);
+    assert_eq!(success.find_friends[7].world_cell, [3, 3]);
+    assert_eq!(success.find_friends[7].tile, [14, 14]);
+    assert_eq!(success.find_friends_returned, 0);
+    assert_eq!(success.origin_city_filter, 0);
+    assert_eq!(success.distance_to_origin, 6);
+    assert_eq!(success.distance_score, 666);
+    assert_eq!(success.coarse_random.state_before, 0x357);
+    assert_eq!(success.coarse_random.raw, 51_401);
+    assert_eq!(success.coarse_random.remainder, 401);
+    assert_eq!(success.coarse_random.state_after as u32, 0x9142_c8ca);
+    assert_eq!(success.wdata_value, 0);
+    assert_eq!(success.terrain_value_bonus, 255);
+    assert_eq!(success.coarse_score, 1_322);
+    assert_eq!(success.later_territory_rejected_sites, 34);
+    assert_eq!(
+        success
+            .fine_sites
+            .iter()
+            .map(|site| (
+                site.footprint_corner,
+                site.placement_coord,
+                site.blocked_site_returned,
+                site.random.map(|draw| draw.remainder),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ([8, 8], [1920, 1920], 0, Some(76)),
+            ([8, 9], [1920, 2112], 0x1a, None),
+            ([9, 8], [2112, 1920], 0x1a, None),
+            ([9, 9], [2112, 2112], 0x1a, None),
+        ]
+    );
+    assert_eq!(success.selected_placement_coord, [1920, 1920]);
+    assert_eq!(success.staged_random_state_after as u32, 0xd48d_a1a1);
+    assert_eq!(success.continuation.va, 0x006e_2ca3);
+    assert_eq!(success.continuation.callee_va, 0x0065_d190);
+    assert_eq!(success.continuation.bytes_remaining, 0x44b);
+    assert_eq!(success.continuation.fifth_argument, 0);
+    assert_eq!(success.continuation.sixth_argument, -1);
+    assert_eq!(success.continuation.expected_build_row, 1);
+    assert_eq!(success.continuation.expected_object_id, 2001);
+    assert_eq!(sim.world.random.state(), random_state_before);
+    assert_eq!(sim.builds.len(), build_rows_before);
+    assert_eq!(
+        sim.world.objects.slot(content_owner).mark(Band::Build),
+        build_mark_before
+    );
     sim.map.world.wdata_mut(2, 2).who = prior_territory_owner;
 
     // Resume retail's bounded circle immediately after the first rejected site. Every later

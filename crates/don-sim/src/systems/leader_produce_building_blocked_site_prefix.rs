@@ -14,14 +14,16 @@
 //! the final non-immediate `blocked_site` return filter.
 //! Nothing in this module mutates Sim.
 
-use crate::objects::{Band, BUILD_BAND_BASE};
+use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use crate::tick::{Sim, NUM_LEADERS};
 
-use super::bhs_type_table::{TypeBuiltinState, TypeDomain};
+use super::bhs_type_table::{TypeBody, TypeBuiltinState, TypeDomain};
 use super::gather_terrain::{GatherTerrainMaterialization, GatherTerrainMaterializationError};
 use super::gathering::LandGatherData;
 use super::leader_produce_building_candidate_prefix::{
-    LeaderProduceBuildingBlockedSiteBoundary, BUILD_TYPE_BLOCKED_SITE_VA,
+    apply_sim_leader_produce_building_candidate_prefix, LeaderProduceBuildingBlockedSiteBoundary,
+    LeaderProduceBuildingCandidatePrefixError, LeaderProduceBuildingCandidatePrefixReceipt,
+    LeaderProduceBuildingCandidatePrefixStatus, BUILD_TYPE_BLOCKED_SITE_VA,
     LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING,
     LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA,
 };
@@ -68,6 +70,13 @@ pub const GAME_SEMAPHORE_IMMEDIATE_BIT: u32 = 11;
 pub const LAKOTA_TRIBE: i32 = 19;
 pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA: u32 = 0x006e_1e82;
 pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING: u32 = 0x126c;
+pub const LEADER_PRODUCE_BUILDING_FARM_SCORE_RANDOM_CALL_VA: u32 = 0x006e_2094;
+pub const LEADER_PRODUCE_BUILDING_FINE_BLOCKED_SITE_CALL_VA: u32 = 0x006e_2beb;
+pub const LEADER_PRODUCE_BUILDING_FINE_RANDOM_CALL_VA: u32 = 0x006e_2c00;
+pub const LEADER_PRODUCE_BUILDING_INIT_BUILD_CALL_VA: u32 = 0x006e_2ca3;
+pub const RANDOM_GET_VA: u32 = 0x00a3_9d70;
+pub const OBJECTS_INIT_BUILD_VA: u32 = 0x0065_d190;
+pub const LEADER_PRODUCE_BUILDING_END_VA: u32 = 0x006e_30ee;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildTypeBlockedTcoordBoundary {
@@ -331,6 +340,155 @@ impl LeaderProduceBuildingBlockedSiteFarmOwnedReceipt {
             && self.continuation.candidate_world_cell == self.input.entry.input.candidate_world_cell
             && self.continuation.placement_coord == self.input.continuation.placement_coord
     }
+}
+
+/// One of the eight `BuildTypeData::find_friends` ring-one probes used by Farm scoring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeFindFriendsFarmProbe {
+    pub circle_offset: i32,
+    pub world_cell: [i32; 2],
+    pub tile: [i32; 2],
+    pub terrain_mask: u16,
+    pub found_build_object: Option<i16>,
+    pub found_type: Option<i32>,
+    pub farm_or_granary_relation: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingFarmRandomDraw {
+    pub call_va: u32,
+    pub callee_va: u32,
+    pub state_before: i32,
+    pub raw: i32,
+    pub modulus: i32,
+    pub remainder: i32,
+    pub state_after: i32,
+}
+
+/// One exact fine-grid `blocked_site` re-probe after coarse Farm scoring selects a W cell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingFarmFineSiteProbe {
+    pub call_va: u32,
+    pub footprint_corner: [i32; 2],
+    pub placement_coord: [i32; 2],
+    pub territory_reads: Vec<BuildTypeNonFriendlyTerritoryRead>,
+    pub blocked_site_returned: i32,
+    pub random: Option<LeaderProduceBuildingFarmRandomDraw>,
+}
+
+/// Exact live arguments and dense phase-1 identity preview immediately before
+/// `Objects::init_build`. The canonical RNG after-image is staged in the parent receipt and is
+/// not published here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingInitBuildBoundary {
+    pub va: u32,
+    pub callee_va: u32,
+    pub bytes_remaining: u32,
+    pub owner: u8,
+    pub type_index: i32,
+    pub placement_coord: [i32; 2],
+    pub fifth_argument: i32,
+    pub sixth_argument: i32,
+    pub expected_build_row: usize,
+    pub expected_object_id: i16,
+    pub build_mark_before: u32,
+}
+
+/// Complete read-only after-image of the reached installed Farm success cone through the last
+/// instruction before allocation. Retail consumes one coarse score draw, rejects every later W
+/// candidate before scoring, then consumes one draw for the only successful fine-grid re-probe.
+/// The receipt deliberately stages both RNG transitions without mutating `World::random`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingFarmSuccessPreflightReceipt {
+    pub input: LeaderProduceBuildingBlockedSiteFarmOwnedReceipt,
+    pub find_friends: Vec<BuildTypeFindFriendsFarmProbe>,
+    pub find_friends_returned: i32,
+    pub origin_city_filter: i32,
+    pub distance_to_origin: i32,
+    pub distance_score: i32,
+    pub coarse_random: LeaderProduceBuildingFarmRandomDraw,
+    pub wdata_value: u8,
+    pub terrain_value_bonus: i32,
+    pub coarse_score: i32,
+    pub later_territory_rejected_sites: usize,
+    pub fine_sites: Vec<LeaderProduceBuildingFarmFineSiteProbe>,
+    pub selected_placement_coord: [i32; 2],
+    pub staged_random_state_after: i32,
+    pub continuation: LeaderProduceBuildingInitBuildBoundary,
+}
+
+impl LeaderProduceBuildingFarmSuccessPreflightReceipt {
+    pub fn validates(&self) -> bool {
+        self.input.validates()
+            && self.find_friends.len() == 8
+            && self.find_friends_returned == 0
+            && self.origin_city_filter == self.input.town.city_slot as i32
+            && self
+                .find_friends
+                .iter()
+                .all(|probe| !probe.farm_or_granary_relation)
+            && self.distance_to_origin >= 0
+            && self.distance_score == 4000 / self.distance_to_origin.max(1)
+            && self.coarse_random.call_va == LEADER_PRODUCE_BUILDING_FARM_SCORE_RANDOM_CALL_VA
+            && self.coarse_random.callee_va == RANDOM_GET_VA
+            && self.coarse_random.modulus == 500
+            && self.terrain_value_bonus == 255 - i32::from(self.wdata_value)
+            && self.coarse_score
+                == self.distance_score + self.coarse_random.remainder + self.terrain_value_bonus
+            && self.later_territory_rejected_sites == 34
+            && self.fine_sites.len() == 4
+            && self
+                .fine_sites
+                .iter()
+                .filter(|site| site.blocked_site_returned == 0)
+                .count()
+                == 1
+            && self
+                .fine_sites
+                .iter()
+                .filter_map(|site| site.random)
+                .count()
+                == 1
+            && self.selected_placement_coord == self.input.continuation.placement_coord
+            && self.staged_random_state_after
+                == self
+                    .fine_sites
+                    .iter()
+                    .filter_map(|site| site.random)
+                    .last()
+                    .map_or(self.coarse_random.state_after, |draw| draw.state_after)
+            && self.continuation.va == LEADER_PRODUCE_BUILDING_INIT_BUILD_CALL_VA
+            && self.continuation.callee_va == OBJECTS_INIT_BUILD_VA
+            && self.continuation.bytes_remaining
+                == LEADER_PRODUCE_BUILDING_END_VA - LEADER_PRODUCE_BUILDING_INIT_BUILD_CALL_VA
+            && self.continuation.owner == self.input.continuation.owner
+            && self.continuation.type_index == self.input.continuation.type_index
+            && self.continuation.placement_coord == self.selected_placement_coord
+            && self.continuation.fifth_argument == 0
+            && self.continuation.sixth_argument == -1
+            && self.continuation.expected_object_id == self.continuation.build_mark_before as i16
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingFarmSuccessPreflightError {
+    InvalidOwnedSite,
+    InvalidCandidateReceipt,
+    UnsupportedFarmScoreProfile,
+    MissingBuildType { row: usize },
+    MissingBuildFootprint { type_index: i32 },
+    AmbiguousBuildingAtTile { tile: [i32; 2] },
+    QualifyingFriend { tile: [i32; 2], type_index: i32 },
+    Candidate(LeaderProduceBuildingCandidatePrefixError),
+    CandidateSite(LeaderProduceBuildingBlockedSitePrefixError),
+    CandidateFootprint(LeaderProduceBuildingBlockedSiteFootprintError),
+    CandidateTerritory(LeaderProduceBuildingBlockedSiteFarmUnownedError),
+    FineTile(BuildTypeBlockedTcoordPrefixError),
+    FineLand(GatherTerrainMaterializationError),
+    UnsupportedFineSite { footprint_corner: [i32; 2] },
+    RegistryNotDenseEquivalent,
+    BuildBandFull { owner: usize, build_mark: u32 },
+    FutureBuildTypeAlreadyOwned { row: usize, type_index: i32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1509,6 +1667,463 @@ pub fn apply_sim_leader_produce_building_blocked_site_farm_owned_tail(
         continuation,
     };
     debug_assert!(receipt.validates());
+    Ok(receipt)
+}
+
+#[inline]
+fn type_relation(types: &TypeBuiltinState, type_index: i32, query: usize) -> bool {
+    usize::try_from(type_index)
+        .ok()
+        .and_then(|index| types.types.rows().get(index))
+        .is_some_and(|row| {
+            row.is_list
+                .iter()
+                .any(|&related| usize::from(related) == query)
+        })
+}
+
+fn farm_find_friends_probes(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    owner: usize,
+    city_filter: i32,
+    candidate_world_cell: [i32; 2],
+) -> Result<Vec<BuildTypeFindFriendsFarmProbe>, LeaderProduceBuildingFarmSuccessPreflightError> {
+    let circle = super::combat::circle_table();
+    let mut probes = Vec::with_capacity(8);
+    for circle_offset in 1..9 {
+        let offset = circle_offset as usize;
+        let world_cell = [
+            candidate_world_cell[0].wrapping_add(i32::from(circle.x[offset])),
+            candidate_world_cell[1].wrapping_add(i32::from(circle.y[offset])),
+        ];
+        let tile = [
+            world_cell[0].wrapping_mul(4).wrapping_add(2),
+            world_cell[1].wrapping_mul(4).wrapping_add(2),
+        ];
+        let mut found = None;
+        let terrain_mask = if sim.map.world.valid_t(tile[0], tile[1]) {
+            sim.map.world.tmask(tile[0], tile[1])
+        } else {
+            0
+        };
+        // `ObjectsData::find_building_placed_at` returns -1 before touching WData unless the
+        // addressed TData is a building blocker or carries the started-building bit.
+        let lookup_reached = terrain_mask & tflag::BLOCKER_MASK == tflag::BLOCKER_BUILDING
+            || terrain_mask & tflag::STARTED != 0;
+        if lookup_reached {
+            for (row, build) in sim.builds.iter().enumerate() {
+                if !build.is_valid()
+                    || build.who as usize != owner
+                    || (city_filter >= 0 && build.city != city_filter as i16)
+                {
+                    continue;
+                }
+                let type_index = production.build_types.get(row).copied().flatten().ok_or(
+                    LeaderProduceBuildingFarmSuccessPreflightError::MissingBuildType { row },
+                )?;
+                let footprint = production
+                    .types
+                    .get(usize::try_from(type_index).unwrap_or(usize::MAX))
+                    .and_then(Option::as_ref)
+                    .and_then(|target| target.build_visibility)
+                    .and_then(|visibility| visibility.footprint)
+                    .ok_or(
+                        LeaderProduceBuildingFarmSuccessPreflightError::MissingBuildFootprint {
+                            type_index,
+                        },
+                    )?;
+                let position = build.position();
+                let center = [
+                    TCoord::from_coord(Coord(position.0)).0,
+                    TCoord::from_coord(Coord(position.1)).0,
+                ];
+                let corner = [
+                    center[0].wrapping_sub(footprint.x_size >> 1),
+                    center[1].wrapping_sub(footprint.y_size >> 1),
+                ];
+                let contains = tile[0] >= corner[0]
+                    && tile[0] < corner[0].wrapping_add(footprint.x_size)
+                    && tile[1] >= corner[1]
+                    && tile[1] < corner[1].wrapping_add(footprint.y_size);
+                if !contains {
+                    continue;
+                }
+                if found.is_some() {
+                    return Err(
+                        LeaderProduceBuildingFarmSuccessPreflightError::AmbiguousBuildingAtTile {
+                            tile,
+                        },
+                    );
+                }
+                found = Some((build.object_id(), type_index));
+            }
+        }
+        let farm_or_granary_relation = found.is_some_and(|(_, type_index)| {
+            type_relation(types, type_index, FARM_TYPE) || type_relation(types, type_index, 423)
+        });
+        if let Some((_, type_index)) = found.filter(|_| farm_or_granary_relation) {
+            return Err(
+                LeaderProduceBuildingFarmSuccessPreflightError::QualifyingFriend {
+                    tile,
+                    type_index,
+                },
+            );
+        }
+        probes.push(BuildTypeFindFriendsFarmProbe {
+            circle_offset,
+            world_cell,
+            tile,
+            terrain_mask,
+            found_build_object: found.map(|value| value.0),
+            found_type: found.map(|value| value.1),
+            farm_or_granary_relation,
+        });
+    }
+    Ok(probes)
+}
+
+fn staged_random_draw(
+    random: &mut crate::rng::Random,
+    call_va: u32,
+    modulus: i32,
+) -> LeaderProduceBuildingFarmRandomDraw {
+    let state_before = random.state();
+    let raw = random.get(0, 0xffff);
+    LeaderProduceBuildingFarmRandomDraw {
+        call_va,
+        callee_va: RANDOM_GET_VA,
+        state_before,
+        raw,
+        modulus,
+        remainder: raw % modulus,
+        state_after: random.state(),
+    }
+}
+
+fn fine_farm_site_probe(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    terrain: &GatherTerrainMaterialization,
+    input: &LeaderProduceBuildingBlockedSiteFarmOwnedReceipt,
+    footprint_corner: [i32; 2],
+    random: &mut crate::rng::Random,
+) -> Result<LeaderProduceBuildingFarmFineSiteProbe, LeaderProduceBuildingFarmSuccessPreflightError>
+{
+    let placement_coord = [
+        footprint_corner[0].wrapping_mul(192).wrapping_add(384),
+        footprint_corner[1].wrapping_mul(192).wrapping_add(384),
+    ];
+    if footprint_corner == input.input.entry.footprint_corner {
+        let draw = staged_random_draw(random, LEADER_PRODUCE_BUILDING_FINE_RANDOM_CALL_VA, 100);
+        return Ok(LeaderProduceBuildingFarmFineSiteProbe {
+            call_va: LEADER_PRODUCE_BUILDING_FINE_BLOCKED_SITE_CALL_VA,
+            footprint_corner,
+            placement_coord,
+            territory_reads: input.territory_reads.clone(),
+            blocked_site_returned: 0,
+            random: Some(draw),
+        });
+    }
+
+    let mut territory_reads = Vec::with_capacity(16);
+    for tx in footprint_corner[0]..footprint_corner[0] + 4 {
+        for ty in footprint_corner[1]..footprint_corner[1] + 4 {
+            let boundary = BuildTypeBlockedTcoordBoundary {
+                va: BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA,
+                callee_va: BUILD_TYPE_BLOCKED_TCOORD_VA,
+                blocked_site_bytes_remaining: BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING,
+                owner: input.continuation.owner,
+                type_index: input.continuation.type_index,
+                candidate_world_cell: [footprint_corner[0] >> 2, footprint_corner[1] >> 2],
+                placement_coord,
+                footprint_corner,
+                tile: [tx, ty],
+                city_constraint: -1,
+                blocked_detail_initial: 0,
+            };
+            let prefix =
+                apply_sim_build_type_blocked_tcoord_land_prefix(sim, production, types, boundary)
+                    .map_err(LeaderProduceBuildingFarmSuccessPreflightError::FineTile)?;
+            let amount_boundary = prefix.continuation.ok_or(
+                LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFineSite {
+                    footprint_corner,
+                },
+            )?;
+            let amount = apply_sim_land_data_get_amount(sim, terrain, amount_boundary)
+                .map_err(LeaderProduceBuildingFarmSuccessPreflightError::FineLand)?;
+            let terrain_mask = sim.map.world.tmask(tx, ty);
+            if amount.returned == 0
+                || terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER
+                || terrain_mask & tflag::CITY == 0
+            {
+                return Err(
+                    LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFineSite {
+                        footprint_corner,
+                    },
+                );
+            }
+            territory_reads.push(BuildTypeNonFriendlyTerritoryRead {
+                tile: [tx, ty],
+                terrain_mask,
+                territory_owner: sim.map.world.wdata(tx >> 2, ty >> 2).who,
+            });
+        }
+    }
+    if input.lakota_bonus
+        || input.immediate
+        || !territory_reads
+            .iter()
+            .any(|read| read.territory_owner == -1)
+    {
+        return Err(
+            LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFineSite {
+                footprint_corner,
+            },
+        );
+    }
+    Ok(LeaderProduceBuildingFarmFineSiteProbe {
+        call_va: LEADER_PRODUCE_BUILDING_FINE_BLOCKED_SITE_CALL_VA,
+        footprint_corner,
+        placement_coord,
+        territory_reads,
+        blocked_site_returned: 0x1a,
+        random: None,
+    })
+}
+
+/// Stage the exact reached Farm scoring, candidate exhaustion, fine re-probe, RNG, and dense
+/// allocation identity cone without publishing any after-image.
+pub fn apply_sim_leader_produce_building_farm_success_preflight(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    terrain: &GatherTerrainMaterialization,
+    first_candidate: LeaderProduceBuildingCandidatePrefixReceipt,
+    input: LeaderProduceBuildingBlockedSiteFarmOwnedReceipt,
+) -> Result<
+    LeaderProduceBuildingFarmSuccessPreflightReceipt,
+    LeaderProduceBuildingFarmSuccessPreflightError,
+> {
+    if !input.validates() {
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::InvalidOwnedSite);
+    }
+    if !first_candidate.validates()
+        || first_candidate.status != LeaderProduceBuildingCandidatePrefixStatus::ReadyForBlockedSite
+        || first_candidate.continuation != Some(input.input.entry.input)
+        || input.continuation.circle_offset != 1
+    {
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::InvalidCandidateReceipt);
+    }
+    let owner = input.continuation.owner as usize;
+    let target_row = types
+        .types
+        .rows()
+        .get(FARM_TYPE)
+        .ok_or(LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFarmScoreProfile)?;
+    let target = production
+        .types
+        .get(FARM_TYPE)
+        .and_then(Option::as_ref)
+        .ok_or(LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFarmScoreProfile)?;
+    let farm_is_only = target_row.is_list.len() == 1 && target_row.is_list[0] == FARM_TYPE as u16;
+    let farm_attack_zero = matches!(
+        &target_row.body,
+        TypeBody::Build { object, .. } if object.attack == 0
+    );
+    if target.type_index != FARM_TYPE as i32
+        || target.build_flags != 0x1000_0049
+        || !farm_is_only
+        || !farm_attack_zero
+        || first_candidate.input.resource_sensitive_search
+        || sim
+            .map
+            .world
+            .wdata(
+                input.continuation.candidate_world_cell[0],
+                input.continuation.candidate_world_cell[1],
+            )
+            .flags
+            & wflag::DEAD_BUILD
+            != 0
+    {
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFarmScoreProfile);
+    }
+
+    let origin_row = farm_owned_build_row(sim, owner, input.continuation.origin_build_object)
+        .map_err(|_| LeaderProduceBuildingFarmSuccessPreflightError::InvalidOwnedSite)?;
+    let origin = &sim.builds[origin_row];
+    if origin.flags & (flag::ACTIVE | 0x20) != (flag::ACTIVE | 0x20)
+        || origin.city < 0
+        || origin.city as usize != input.town.city_slot
+    {
+        // Farm has no `build_flags & 0x10` fallback. Entry reaches the search only when the
+        // active origin retains its City link through the ObjectData 0x20 arm.
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::UnsupportedFarmScoreProfile);
+    }
+    let origin_city_filter = i32::from(origin.city);
+    let find_friends = farm_find_friends_probes(
+        sim,
+        production,
+        types,
+        owner,
+        origin_city_filter,
+        input.continuation.candidate_world_cell,
+    )?;
+    let origin_position = sim.builds[origin_row].position();
+    let origin_tcoord = [
+        TCoord::from_coord(Coord(origin_position.0)).0,
+        TCoord::from_coord(Coord(origin_position.1)).0,
+    ];
+    let placement_tcoord = [
+        TCoord::from_coord(Coord(input.continuation.placement_coord[0])).0,
+        TCoord::from_coord(Coord(input.continuation.placement_coord[1])).0,
+    ];
+    let distance_to_origin = vector_dist(
+        placement_tcoord[0].wrapping_sub(origin_tcoord[0]),
+        placement_tcoord[1].wrapping_sub(origin_tcoord[1]),
+    ) as i32;
+    let distance_score = 4000 / distance_to_origin.max(1);
+    let mut staged_random = sim.world.random;
+    let coarse_random = staged_random_draw(
+        &mut staged_random,
+        LEADER_PRODUCE_BUILDING_FARM_SCORE_RANDOM_CALL_VA,
+        500,
+    );
+    let wdata_value = sim
+        .map
+        .world
+        .wdata(
+            input.continuation.candidate_world_cell[0],
+            input.continuation.candidate_world_cell[1],
+        )
+        .val;
+    let terrain_value_bonus = 255 - i32::from(wdata_value);
+    let coarse_score = distance_score + coarse_random.remainder + terrain_value_bonus;
+
+    let mut boundary = first_candidate.input;
+    boundary.circle_offset = input.continuation.circle_offset + 1;
+    let mut later_territory_rejected_sites = 0usize;
+    loop {
+        let candidate =
+            apply_sim_leader_produce_building_candidate_prefix(sim, production, types, boundary)
+                .map_err(LeaderProduceBuildingFarmSuccessPreflightError::Candidate)?;
+        if let Some(native) = candidate.native_returned {
+            if native != 1 || candidate.scenario_returned != Some(0) {
+                return Err(
+                    LeaderProduceBuildingFarmSuccessPreflightError::InvalidCandidateReceipt,
+                );
+            }
+            break;
+        }
+        let site_boundary = candidate
+            .continuation
+            .ok_or(LeaderProduceBuildingFarmSuccessPreflightError::InvalidCandidateReceipt)?;
+        let site_prefix =
+            apply_sim_leader_produce_building_blocked_site_prefix(production, types, site_boundary)
+                .map_err(LeaderProduceBuildingFarmSuccessPreflightError::CandidateSite)?;
+        let footprint = apply_sim_leader_produce_building_blocked_site_land_footprint(
+            sim,
+            production,
+            types,
+            terrain,
+            site_prefix,
+        )
+        .map_err(LeaderProduceBuildingFarmSuccessPreflightError::CandidateFootprint)?;
+        let rejected = apply_sim_leader_produce_building_blocked_site_farm_unowned_tail(
+            sim, production, types, footprint,
+        )
+        .map_err(LeaderProduceBuildingFarmSuccessPreflightError::CandidateTerritory)?;
+        if rejected.native_returned != 0x1a {
+            return Err(LeaderProduceBuildingFarmSuccessPreflightError::InvalidCandidateReceipt);
+        }
+        later_territory_rejected_sites += 1;
+        boundary = candidate.input;
+        boundary.circle_offset = site_boundary.circle_offset + 1;
+    }
+
+    let base_corner = input.input.entry.footprint_corner;
+    let mut fine_sites = Vec::with_capacity(4);
+    for fx in base_corner[0]..=base_corner[0] + 1 {
+        for fy in base_corner[1]..=base_corner[1] + 1 {
+            fine_sites.push(fine_farm_site_probe(
+                sim,
+                production,
+                types,
+                terrain,
+                &input,
+                [fx, fy],
+                &mut staged_random,
+            )?);
+        }
+    }
+    let selected = fine_sites
+        .iter()
+        .filter_map(|site| {
+            site.random
+                .map(|draw| (draw.remainder, site.placement_coord))
+        })
+        .max_by_key(|&(score, _)| score)
+        .map(|(_, placement)| placement)
+        .ok_or(LeaderProduceBuildingFarmSuccessPreflightError::InvalidOwnedSite)?;
+
+    if !sim.world.object_bands_are_dense_equivalent() {
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::RegistryNotDenseEquivalent);
+    }
+    let build_mark_before = sim.world.objects.slot(owner).mark(Band::Build);
+    if build_mark_before >= WALL_BAND_BASE {
+        return Err(
+            LeaderProduceBuildingFarmSuccessPreflightError::BuildBandFull {
+                owner,
+                build_mark: build_mark_before,
+            },
+        );
+    }
+    let expected_build_row = sim.builds.len();
+    if let Some(Some(type_index)) = production.build_types.get(expected_build_row) {
+        return Err(
+            LeaderProduceBuildingFarmSuccessPreflightError::FutureBuildTypeAlreadyOwned {
+                row: expected_build_row,
+                type_index: *type_index,
+            },
+        );
+    }
+    let continuation = LeaderProduceBuildingInitBuildBoundary {
+        va: LEADER_PRODUCE_BUILDING_INIT_BUILD_CALL_VA,
+        callee_va: OBJECTS_INIT_BUILD_VA,
+        bytes_remaining: LEADER_PRODUCE_BUILDING_END_VA
+            - LEADER_PRODUCE_BUILDING_INIT_BUILD_CALL_VA,
+        owner: input.continuation.owner,
+        type_index: input.continuation.type_index,
+        placement_coord: selected,
+        fifth_argument: 0,
+        sixth_argument: -1,
+        expected_build_row,
+        expected_object_id: build_mark_before as i16,
+        build_mark_before,
+    };
+    let receipt = LeaderProduceBuildingFarmSuccessPreflightReceipt {
+        input,
+        find_friends,
+        find_friends_returned: 0,
+        origin_city_filter,
+        distance_to_origin,
+        distance_score,
+        coarse_random,
+        wdata_value,
+        terrain_value_bonus,
+        coarse_score,
+        later_territory_rejected_sites,
+        fine_sites,
+        selected_placement_coord: selected,
+        staged_random_state_after: staged_random.state(),
+        continuation,
+    };
+    if !receipt.validates() {
+        return Err(LeaderProduceBuildingFarmSuccessPreflightError::InvalidOwnedSite);
+    }
     Ok(receipt)
 }
 
