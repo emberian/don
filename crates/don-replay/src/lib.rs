@@ -144,6 +144,7 @@ pub mod setup_2024_frame379_group_move;
 pub mod setup_2024_frame384_groups_process;
 pub mod setup_2024_frame8_build_wall;
 pub mod setup_2024_golden_capture;
+pub mod setup_2024_golden_chronology_spine;
 pub mod setup_2024_phase32_attrition;
 pub mod setup_2024_starting_market;
 pub mod setup_cities_builds;
