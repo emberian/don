@@ -5,6 +5,7 @@ use don_replay::initial::ReplayByteSpan;
 use don_replay::replay::Replay;
 use don_replay::replay_land_speed_content::produce_replay_land_speed_content;
 use don_replay::setup_group_move_authority::{
+    produce_replay_current_type_cohort_group_move_authority,
     produce_replay_fresh_setup_group_move_authority, produce_replay_setup_group_move_authority,
     produce_setup_group_move_authority, SetupGroupMoveAuthorityError,
     SetupGroupMoveAuthoritySource,
@@ -445,5 +446,62 @@ fn exact_fresh_pool_allows_type_cohort_while_final_authority_covers_every_live_u
             row: extra_row,
             group: 0,
         })
+    );
+}
+
+#[test]
+fn reached_nonfresh_pool_regenerates_current_dynamic_authority_from_type_cohort() {
+    let path = repo_root().join("ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx");
+    let Ok(replay) = Replay::open(&path) else {
+        eprintln!("SKIPPED -- NOT A PASS: missing {}", path.display());
+        return;
+    };
+    let content = produce_replay_land_speed_content(&replay).unwrap();
+    let (mut sim, mut type_cohort, _) = fixture();
+    sim.groups = retail_fresh_groups();
+    let extra = sim.spawn_unit(1, 50, 11_000, 10_000, 1).unwrap();
+    let extra_row = sim.world.row_of(extra).unwrap();
+    sim.world.units.myspeed_mut()[extra_row] = 25;
+
+    for (row, member) in type_cohort.iter_mut().enumerate() {
+        member.replay_file_sha256 = content.replay_file_sha256();
+        sim.world.units.group_mut()[row] = 0;
+        member.unit.group = 0;
+        assert!(sim.groups.get_mut(0, 0).add(
+            sim.world.units.o()[row],
+            0,
+            false,
+            member.type_facts.role,
+            sim.world.frame,
+        ));
+    }
+    sim.groups.proc_group = 0;
+
+    let receipt = produce_replay_current_type_cohort_group_move_authority(
+        &sim,
+        &type_cohort,
+        &content,
+        (5_186, 72_095),
+        false,
+    )
+    .unwrap();
+    assert_eq!(receipt.frame, 379);
+    assert_eq!(receipt.setup_members, 4);
+    assert_eq!(receipt.authority.members.len(), 5);
+    assert!(receipt
+        .authority
+        .members
+        .iter()
+        .any(|member| member.handle == extra));
+
+    assert_eq!(
+        produce_replay_fresh_setup_group_move_authority(
+            &sim,
+            &type_cohort,
+            &content,
+            (5_186, 72_095),
+            false,
+        ),
+        Err(SetupGroupMoveAuthorityError::FreshGroupsRequired)
     );
 }

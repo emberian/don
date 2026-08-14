@@ -407,7 +407,7 @@ impl SimBridge {
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
         "AmmoData flat list (ammo)",
         "DeathObjData ring, stride 0xa4 (deaths)",
-        "Replay Group mutation inputs (groups) — the canonical Sim.groups pool and its Groups::process pass are checksum producers, but replay setup still lacks the post-worldgen Unit/content authority required to execute the first selected-member package; see docs/assembly/replay-groups-pre-pair-unit-authority.md",
+        "Replay Group mutation inputs (groups) — the first 2024 Group+Move and exact frame-384 Groups::process normalization are mounted fail-closed, but replay setup still lacks the real Great Lakes post-worldgen Sim and exact frame-zero-to-384 chronology needed to admit them; see docs/assembly/replay-2024-frame379-setup.md",
         "GuyData columns (guys)",
         "LeaderData records (leaders) — 27,182 statically resolved bytes, but the executed transcript is variable (28,428 with empty dynamic children); only a bounded same-frame owner frontier exists",
         "Good flat list (goods)",

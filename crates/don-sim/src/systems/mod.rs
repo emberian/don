@@ -199,6 +199,10 @@ pub mod graphics_turret;
 /// Exact 1,022-byte `Group::action_trade` transaction and order-install chronology.
 pub mod group_action_trade_frontier;
 pub mod groups_guys;
+/// Detached, fail-closed `Groups::process` normalization transaction over the canonical
+/// fixed pool. Unit liveness/backlinks come from `World`; role and dynamic leader speed come
+/// from the same Handle-bound authority used by the canonical Group-Move host.
+pub mod groups_process_authority;
 /// Fail-closed product authority join for canonical Group→Move packages.
 pub mod group_move_authority;
 /// `do_job` arm 12: the snapshot-bound atomic host boundary, concrete payload and same-tick

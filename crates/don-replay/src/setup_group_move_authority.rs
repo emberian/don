@@ -323,6 +323,49 @@ pub fn produce_replay_fresh_setup_group_move_authority(
     destination: (i32, i32),
     force_formation_facing_zero: bool,
 ) -> Result<SetupGroupMoveAuthorityReceipt, SetupGroupMoveAuthorityError> {
+    produce_replay_type_cohort_group_move_authority(
+        sim,
+        type_cohort,
+        land_content,
+        destination,
+        force_formation_facing_zero,
+        true,
+    )
+}
+
+/// Regenerate complete live Group authority from a canonical current-state setup-type cohort.
+///
+/// Unlike [`produce_replay_fresh_setup_group_move_authority`], this producer is for a reached
+/// scheduler state, not the fixed-pool allocator. It does not require an empty Group pool or
+/// `-1` backlinks. Every cohort receipt is still rebound to the same immutable Sim, the cohort
+/// must provide exact Rules facts for every active Unit type, and the returned authority and
+/// land speeds cover every active Unit row. This is the dynamic authority needed by the later
+/// `Groups::process` normalization tail.
+pub fn produce_replay_current_type_cohort_group_move_authority(
+    sim: &Sim,
+    type_cohort: &[CanonicalSetupUnitMemberReceipt],
+    land_content: &ReplayLandSpeedContent,
+    destination: (i32, i32),
+    force_formation_facing_zero: bool,
+) -> Result<SetupGroupMoveAuthorityReceipt, SetupGroupMoveAuthorityError> {
+    produce_replay_type_cohort_group_move_authority(
+        sim,
+        type_cohort,
+        land_content,
+        destination,
+        force_formation_facing_zero,
+        false,
+    )
+}
+
+fn produce_replay_type_cohort_group_move_authority(
+    sim: &Sim,
+    type_cohort: &[CanonicalSetupUnitMemberReceipt],
+    land_content: &ReplayLandSpeedContent,
+    destination: (i32, i32),
+    force_formation_facing_zero: bool,
+    require_fresh_groups: bool,
+) -> Result<SetupGroupMoveAuthorityReceipt, SetupGroupMoveAuthorityError> {
     let Some(first) = type_cohort.first() else {
         return Err(SetupGroupMoveAuthorityError::EmptySetupMembers);
     };
@@ -347,18 +390,20 @@ pub fn produce_replay_fresh_setup_group_move_authority(
             actual: sim.world.frame,
         });
     }
-    if !groups_equal(
-        &sim.groups,
-        &don_sim::systems::canonical_group_move_host::retail_fresh_groups(),
-    ) {
-        return Err(SetupGroupMoveAuthorityError::FreshGroupsRequired);
-    }
-    if let Some((row, group)) = (0..sim.world.live_count() as usize)
-        .filter(|&row| sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0)
-        .map(|row| (row, sim.world.units.group()[row]))
-        .find(|(_, group)| *group != -1)
-    {
-        return Err(SetupGroupMoveAuthorityError::ActiveGroupBacklink { row, group });
+    if require_fresh_groups {
+        if !groups_equal(
+            &sim.groups,
+            &don_sim::systems::canonical_group_move_host::retail_fresh_groups(),
+        ) {
+            return Err(SetupGroupMoveAuthorityError::FreshGroupsRequired);
+        }
+        if let Some((row, group)) = (0..sim.world.live_count() as usize)
+            .filter(|&row| sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0)
+            .map(|row| (row, sim.world.units.group()[row]))
+            .find(|(_, group)| *group != -1)
+        {
+            return Err(SetupGroupMoveAuthorityError::ActiveGroupBacklink { row, group });
+        }
     }
 
     let mut rows = BTreeSet::new();

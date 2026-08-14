@@ -605,19 +605,27 @@ pub(crate) fn group_leader_speed(
     group_leader(group, world, authority).map(|leader| leader.map(|(_, _, _, facts)| facts.speed))
 }
 
-fn recompute_group(
+pub(crate) fn recompute_group(
     group: &mut GroupData,
     world: &World,
     authority: &GroupMoveAuthority,
 ) -> Result<(), PackageError> {
     let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
     let mut role = 0;
-    for &o in &group.list[..n] {
-        let (_, _, facts) = unit_authority(world, authority, group.who, o)?;
-        role |= facts.role;
+    // `Group::find_role` `0x007081F0` zeroes the accumulator and returns immediately for
+    // a building Group. Unit-band Groups OR the retained members' Type roles.
+    if group.buildings == 0 {
+        for &o in &group.list[..n] {
+            let (_, _, facts) = unit_authority(world, authority, group.who, o)?;
+            role |= facts.role;
+        }
     }
     group.role = role;
-    let speed = group_leader(group, world, authority)?.map(|(_, _, _, facts)| facts.speed);
+    let speed = if group.buildings == 0 {
+        group_leader(group, world, authority)?.map(|(_, _, _, facts)| facts.speed)
+    } else {
+        None
+    };
     group.compute_speed(speed);
     Ok(())
 }

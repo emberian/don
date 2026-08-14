@@ -91,3 +91,10 @@ and issues serial 64. It does not relabel frame zero. Playback checks before pro
 record, so the delayed frame-385 clear checksum is not evidence that the Group was absent. The
 next exact boundary is installed-Group processing at frame 384 before its first recorded
 checksum-visible value at frame 391.
+
+That handoff is now composed by `setup_2024_frame384_groups_process`. It accepts only an
+independently canonical Sim immediately before the frame-384 Groups callback, proves its Groups
+pool is still the serial-64 after-image, regenerates current-state land speed/Unit authority, and
+commits the exact slot-zero normalization transaction. It deliberately does not run or skip the
+intervening frames. Until the real Great Lakes/setup and frame-0-to-384 chronology authorities
+exist, both mounts refuse and the replay scoreboard remains unchanged.
