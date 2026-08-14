@@ -68,12 +68,16 @@ authority. A complete native miss/hit commits its exact scratch after-image and 
 `0x0063933A`; a Wall-band identity mismatch remains uncommitted and typed. From that resume, the
 ring adapter executes each later in-bounds lookup in clockwise offset order and chains the exact
 scratch revisions. Misses and canonical `Build.city != effective_city_filter` results advance with
-the accumulator still zero. A same-City Build stops before the first found-type virtual at vtable
-slot `+0x90`. The all-miss/City-mismatch cohort alone owns a complete `find_friends` return of zero;
-the adapter never extrapolates a nonzero count. The found-type tail therefore remains unresolved
-and cannot authorize the source-known coarse-score formula, fine probes, allocation, `Build::init`,
-activation visibility/road effects, or the full non-City Sim mutation surface. Those later effects
-still need an exact owner before this receipt can become the golden frame-zero publisher. The
+the accumulator still zero. For a same-City Build, the predicate owner now executes the lazy
+gather flag/University relation, enhancer relations, recursive basic-type trainer flag, live
+`CAPTURED`, and Wonder-range tests from canonical TypeBuiltinState, production, and Sim facts. A
+survivor contributes one on odd offsets or two on even offsets. The receipt then stops before the
+next ring offset; only an offset-eight predicate result owns a native return. The all-miss or City
+mismatch cohort independently owns a complete return of zero. Thus no multi-hit count is
+extrapolated, and the adapter still cannot authorize the coarse-score formula, fine probes,
+allocation, `Build::init`, activation visibility/road effects, or the full non-City Sim mutation
+surface. Those later effects still need an exact owner before this receipt can become the golden
+frame-zero publisher. The
 post-`place_all` RNG state is not the Market-before state: intervening post-placement work and
 Setup's collision-retried player/start shuffle remain separate owners. Recorded checksum words are
 never inputs.

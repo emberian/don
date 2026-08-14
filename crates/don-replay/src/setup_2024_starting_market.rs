@@ -4,8 +4,8 @@
 //! before `Setup::build_units`. The golden replay selects Dutch bonus 22, so retail issues
 //! exactly one `Leader::produce_building(436, 2000, 0)` call. This module derives that call
 //! from replay/Rules bytes, joins the exact Market `blocked_site` footprint owner, executes exact
-//! `find_friends` Object lookups under explicit scratch authority until the first found-type
-//! boundary, and binds a
+//! `find_friends` Object lookups under explicit scratch authority, consumes the bounded found-Build
+//! type predicates from canonical type/production owners, and binds a
 //! supported-retail pre/post capture to every City checksum byte written by the success suffix.
 //! It never uses a recorded checksum and does not manufacture the missing generated World needed
 //! to select the site.
@@ -17,7 +17,7 @@ use std::fmt;
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::rng::Random;
 use don_sim::systems::air_patrol_building_search_frontier::WORLD_CELL_SEARCH_OFFSETS;
-use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::bhs_type_table::{TypeBody, TypeBuiltinState, TypeDomain};
 use don_sim::systems::build_type_find_friends::{
     produce_build_type_find_friends_prefix, BuildTypeFindFriendsError, BuildTypeFindFriendsReceipt,
     BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop, ObjectsFindBuildingPlacedAtBoundary,
@@ -59,7 +59,11 @@ use don_sim::systems::objects_find_building_placed_at::{
     ObjectsFindBuildingPlacedAtWallBoundary, ObjectsSelectedOwnerAuthority,
     ObjectsSelectedOwnerCommitError, ObjectsSpatialBand,
 };
-use don_sim::systems::production::{flag, runtime::LiveProductionRuntime, Footprint};
+use don_sim::systems::production::{
+    flag,
+    runtime::{LiveProductionRuntime, LiveTypeClass},
+    Footprint,
+};
 use don_sim::systems::save_load::SaveError;
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
 use don_sim::systems::tech_cities::CityRecord;
@@ -102,6 +106,15 @@ pub const MARKET_DOMAIN: i32 = 0;
 pub const MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA: u32 = 0x0063_933a;
 /// `BuildTypeData::is_gather_type` vtable slot reached after a found Build passes the City gate.
 pub const MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT: u32 = 0x90;
+pub const MARKET_FIND_FRIENDS_WONDER_VIRTUAL_SLOT: u32 = 0x1c;
+pub const BUILD_TYPE_BASIC_TYPE_VA: u32 = 0x0063_9970;
+pub const UNIVERSITY_TYPE: usize = 420;
+pub const GATHER_ENHANCER_TYPES: [usize; 4] = [423, 424, 425, 426];
+pub const BUILD_GATHER_TYPE_MASK: u32 = 0x40;
+pub const BUILD_MILITARY_TRAINER_MASK: u32 = 0x4000_0000;
+pub const OBJECT_CAPTURED_MASK: u8 = 0x20;
+pub const WONDER_TYPE_FIRST: i32 = 0x20e;
+pub const WONDER_TYPE_END: i32 = 0x21f;
 /// Independent schema for the two-image pre/post Market lifecycle contract.
 pub const GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION: u64 = 1;
 pub const MARKET_FOOTPRINT: Footprint = Footprint {
@@ -1164,6 +1177,376 @@ pub fn advance_golden_starting_market_find_friends_ring(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFoundBuildRejectReason {
+    GatherTypeOutsideUniversity,
+    GatherEnhancer { relation_type: i32 },
+    UncapturedMilitaryTrainer,
+    Wonder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFoundBuildPredicateOutcome {
+    Rejected(GoldenStartingMarketFoundBuildRejectReason),
+    Counted { weight: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketAfterFoundBuildContinuation {
+    NextRingOffset {
+        circle_offset: i32,
+        accumulator: i32,
+    },
+    Returned {
+        value: i32,
+    },
+}
+
+/// Exact lazy Type/Build reads after a same-City found Build reaches vtable slot `+0x90`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFoundBuildTypeReads {
+    pub type_rows: usize,
+    pub mutation_revision: u64,
+    pub found_type_index: i32,
+    pub found_build_flags: u32,
+    pub is_gather_type: bool,
+    /// Reached only for a gather type.
+    pub university_relation: Option<bool>,
+    /// Non-strict relations 423..=426 in native short-circuit order. Entries after the first
+    /// true result remain absent.
+    pub gather_enhancer_relations: [Option<bool>; 4],
+    /// Recursive `BuildTypeData::basic_type` chain, reached only after the preceding rejects pass.
+    pub basic_type_call_va: Option<u32>,
+    pub basic_type_chain: Vec<i32>,
+    pub basic_type: Option<i32>,
+    pub basic_type_build_flags: Option<u32>,
+    pub military_trainer: Option<bool>,
+    /// Live Object flag `CAPTURED`; lazily read only for a military trainer.
+    pub captured: Option<bool>,
+    /// `TypeData::is_wonder_type`, reached only after the military-trainer gate passes.
+    pub wonder_virtual_slot: Option<u32>,
+    pub is_wonder_type: Option<bool>,
+}
+
+/// Complete exact predicate sequence for one same-City found Build. This receipt owns no Object,
+/// scratch, Sim, or City mutation and stops before the next ring lookup or caller scoring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFoundBuildPredicateReceipt {
+    pub input: GoldenStartingMarketFindFriendsTypeBoundaryReceipt,
+    pub reads: GoldenStartingMarketFoundBuildTypeReads,
+    pub outcome: GoldenStartingMarketFoundBuildPredicateOutcome,
+    pub accumulator_before: i32,
+    pub accumulator_after: i32,
+    pub continuation: GoldenStartingMarketAfterFoundBuildContinuation,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+impl GoldenStartingMarketFoundBuildPredicateReceipt {
+    pub fn validates_against(
+        &self,
+        before: &Sim,
+        production: &LiveProductionRuntime,
+        types: &TypeBuiltinState,
+    ) -> bool {
+        produce_golden_starting_market_found_build_predicates(
+            before,
+            production,
+            types,
+            self.input.clone(),
+        )
+        .is_ok_and(|expected| expected == *self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFoundBuildPredicateError {
+    InvalidTypeBoundary,
+    MissingFoundType { type_index: i32 },
+    FoundTypeIsNotBuilding { type_index: i32 },
+    MissingFoundProductionType { type_index: i32 },
+    FoundProductionTypeMismatch { type_index: i32 },
+    InvalidBasicTypeChain { type_index: i32 },
+    MissingBasicProductionType { type_index: i32 },
+    BasicProductionTypeMismatch { type_index: i32 },
+}
+
+impl fmt::Display for GoldenStartingMarketFoundBuildPredicateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "golden starting Market found-Build predicates refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketFoundBuildPredicateError {}
+
+fn market_type_relation(types: &TypeBuiltinState, type_index: usize, query: usize) -> bool {
+    types.types.rows()[type_index]
+        .is_list
+        .iter()
+        .any(|&candidate| usize::from(candidate) == query)
+}
+
+fn market_basic_type_chain(
+    types: &TypeBuiltinState,
+    type_index: i32,
+) -> Result<Vec<i32>, GoldenStartingMarketFoundBuildPredicateError> {
+    let mut chain = Vec::new();
+    let mut current = type_index;
+    loop {
+        let index = usize::try_from(current)
+            .ok()
+            .filter(|&index| index < types.types.rows().len())
+            .ok_or(
+                GoldenStartingMarketFoundBuildPredicateError::InvalidBasicTypeChain {
+                    type_index: current,
+                },
+            )?;
+        if chain.contains(&current) || types.types.rows()[index].domain() != TypeDomain::Build {
+            return Err(
+                GoldenStartingMarketFoundBuildPredicateError::InvalidBasicTypeChain {
+                    type_index: current,
+                },
+            );
+        }
+        chain.push(current);
+        let from = types.types.rows()[index].from;
+        if from < 0 {
+            return Ok(chain);
+        }
+        current = from;
+    }
+}
+
+/// Execute only the source-exact found-Build predicate chain after a same-City ring hit.
+///
+/// Type relations come from the canonical mutable `TypeBuiltinState`; Build flags come from the
+/// exact live production projection; Object `CAPTURED` comes from the same hashed Sim used by the
+/// ring. The native short-circuit shape is retained. Missing rows or basic-type facts fail closed.
+/// The result stops before another Object lookup or any Market score calculation.
+pub fn produce_golden_starting_market_found_build_predicates(
+    before: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    input: GoldenStartingMarketFindFriendsTypeBoundaryReceipt,
+) -> Result<
+    GoldenStartingMarketFoundBuildPredicateReceipt,
+    GoldenStartingMarketFoundBuildPredicateError,
+> {
+    if input.first_unowned_virtual_slot != MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT
+        || input.source_produced_city_bytes != 0
+        || input.installed_in_scoreboard
+        || !GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(input.clone())
+            .validates_against(before, production, types)
+    {
+        return Err(GoldenStartingMarketFoundBuildPredicateError::InvalidTypeBoundary);
+    }
+
+    let found_index = usize::try_from(input.found.type_index)
+        .ok()
+        .filter(|&index| index < types.types.rows().len())
+        .ok_or(
+            GoldenStartingMarketFoundBuildPredicateError::MissingFoundType {
+                type_index: input.found.type_index,
+            },
+        )?;
+    if types.types.rows()[found_index].domain() != TypeDomain::Build
+        || !matches!(
+            &types.types.rows()[found_index].body,
+            TypeBody::Build { .. }
+        )
+    {
+        return Err(
+            GoldenStartingMarketFoundBuildPredicateError::FoundTypeIsNotBuilding {
+                type_index: input.found.type_index,
+            },
+        );
+    }
+    let found_live = production
+        .types
+        .get(found_index)
+        .and_then(Option::as_ref)
+        .ok_or(
+            GoldenStartingMarketFoundBuildPredicateError::MissingFoundProductionType {
+                type_index: input.found.type_index,
+            },
+        )?;
+    if found_live.type_index != input.found.type_index
+        || found_live.class != LiveTypeClass::Building
+    {
+        return Err(
+            GoldenStartingMarketFoundBuildPredicateError::FoundProductionTypeMismatch {
+                type_index: input.found.type_index,
+            },
+        );
+    }
+
+    let accumulator_before = input.accumulator_before;
+    let found_build_flags = found_live.build_flags;
+    let is_gather_type = found_build_flags & BUILD_GATHER_TYPE_MASK != 0;
+    let university_relation =
+        is_gather_type.then(|| market_type_relation(types, found_index, UNIVERSITY_TYPE));
+    let mut gather_enhancer_relations = [None; 4];
+    let mut basic_type_call_va = None;
+    let mut basic_type_chain = Vec::new();
+    let mut basic_type = None;
+    let mut basic_type_build_flags = None;
+    let mut military_trainer = None;
+    let mut captured = None;
+    let mut wonder_virtual_slot = None;
+    let mut is_wonder_type = None;
+
+    let outcome = if university_relation == Some(false) {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(
+            GoldenStartingMarketFoundBuildRejectReason::GatherTypeOutsideUniversity,
+        )
+    } else {
+        let mut enhancer = None;
+        for (slot, &relation_type) in GATHER_ENHANCER_TYPES.iter().enumerate() {
+            let related = market_type_relation(types, found_index, relation_type);
+            gather_enhancer_relations[slot] = Some(related);
+            if related {
+                enhancer = Some(relation_type);
+                break;
+            }
+        }
+        if let Some(relation_type) = enhancer {
+            GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(
+                GoldenStartingMarketFoundBuildRejectReason::GatherEnhancer {
+                    relation_type: relation_type as i32,
+                },
+            )
+        } else {
+            basic_type_call_va = Some(BUILD_TYPE_BASIC_TYPE_VA);
+            basic_type_chain = market_basic_type_chain(types, input.found.type_index)?;
+            let resolved_basic_type = *basic_type_chain
+                .last()
+                .expect("basic-type chain contains the found type");
+            basic_type = Some(resolved_basic_type);
+            let basic_index = usize::try_from(resolved_basic_type).map_err(|_| {
+                GoldenStartingMarketFoundBuildPredicateError::InvalidBasicTypeChain {
+                    type_index: resolved_basic_type,
+                }
+            })?;
+            let basic_live = production
+                .types
+                .get(basic_index)
+                .and_then(Option::as_ref)
+                .ok_or(
+                    GoldenStartingMarketFoundBuildPredicateError::MissingBasicProductionType {
+                        type_index: resolved_basic_type,
+                    },
+                )?;
+            if basic_live.type_index != resolved_basic_type
+                || basic_live.class != LiveTypeClass::Building
+            {
+                return Err(
+                    GoldenStartingMarketFoundBuildPredicateError::BasicProductionTypeMismatch {
+                        type_index: resolved_basic_type,
+                    },
+                );
+            }
+            basic_type_build_flags = Some(basic_live.build_flags);
+            let is_military_trainer = basic_live.build_flags & BUILD_MILITARY_TRAINER_MASK != 0;
+            military_trainer = Some(is_military_trainer);
+            if is_military_trainer {
+                let build = before
+                    .builds
+                    .get(input.found.build_row)
+                    .ok_or(GoldenStartingMarketFoundBuildPredicateError::InvalidTypeBoundary)?;
+                let is_captured = build.flags & OBJECT_CAPTURED_MASK != 0;
+                captured = Some(is_captured);
+                if !is_captured {
+                    GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(
+                        GoldenStartingMarketFoundBuildRejectReason::UncapturedMilitaryTrainer,
+                    )
+                } else {
+                    wonder_virtual_slot = Some(MARKET_FIND_FRIENDS_WONDER_VIRTUAL_SLOT);
+                    let wonder =
+                        (WONDER_TYPE_FIRST..WONDER_TYPE_END).contains(&input.found.type_index);
+                    is_wonder_type = Some(wonder);
+                    if wonder {
+                        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(
+                            GoldenStartingMarketFoundBuildRejectReason::Wonder,
+                        )
+                    } else {
+                        GoldenStartingMarketFoundBuildPredicateOutcome::Counted {
+                            weight: if input.object_lookup.request.circle_offset & 1 == 0 {
+                                2
+                            } else {
+                                1
+                            },
+                        }
+                    }
+                }
+            } else {
+                wonder_virtual_slot = Some(MARKET_FIND_FRIENDS_WONDER_VIRTUAL_SLOT);
+                let wonder = (WONDER_TYPE_FIRST..WONDER_TYPE_END).contains(&input.found.type_index);
+                is_wonder_type = Some(wonder);
+                if wonder {
+                    GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(
+                        GoldenStartingMarketFoundBuildRejectReason::Wonder,
+                    )
+                } else {
+                    GoldenStartingMarketFoundBuildPredicateOutcome::Counted {
+                        weight: if input.object_lookup.request.circle_offset & 1 == 0 {
+                            2
+                        } else {
+                            1
+                        },
+                    }
+                }
+            }
+        }
+    };
+
+    let accumulator_after = match outcome {
+        GoldenStartingMarketFoundBuildPredicateOutcome::Rejected(_) => accumulator_before,
+        GoldenStartingMarketFoundBuildPredicateOutcome::Counted { weight } => {
+            accumulator_before.wrapping_add(weight)
+        }
+    };
+    let circle_offset = input.object_lookup.request.circle_offset;
+    let continuation = if circle_offset < 8 {
+        GoldenStartingMarketAfterFoundBuildContinuation::NextRingOffset {
+            circle_offset: circle_offset + 1,
+            accumulator: accumulator_after,
+        }
+    } else {
+        GoldenStartingMarketAfterFoundBuildContinuation::Returned {
+            value: accumulator_after,
+        }
+    };
+    Ok(GoldenStartingMarketFoundBuildPredicateReceipt {
+        input,
+        reads: GoldenStartingMarketFoundBuildTypeReads {
+            type_rows: types.types.rows().len(),
+            mutation_revision: types.mutation_revision(),
+            found_type_index: found_index as i32,
+            found_build_flags,
+            is_gather_type,
+            university_relation,
+            gather_enhancer_relations,
+            basic_type_call_va,
+            basic_type_chain,
+            basic_type,
+            basic_type_build_flags,
+            military_trainer,
+            captured,
+            wonder_virtual_slot,
+            is_wonder_type,
+        },
+        outcome,
+        accumulator_before,
+        accumulator_after,
+        continuation,
+        source_produced_city_bytes: 0,
+        installed_in_scoreboard: false,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenStartingMarketCaptureSource {
     /// A supported retail process was captured at `Leader::produce_building` entry/return,
     /// with every fine-grid `Random::get` call recorded in program order.
@@ -1847,6 +2230,33 @@ pub fn commit_golden_starting_market_leader_accounting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_sim::systems::bhs_type_table::{
+        LeaderTypeMasks, TribeRoster, TypeBackup, TypeRow, TypeTable, BUILD_BEGIN, BUILD_END,
+        NUM_TRIBES, NUM_TYPES, REGULAR_UNIT_BEGIN, REGULAR_UNIT_END,
+    };
+
+    fn predicate_types(cycle: bool) -> TypeBuiltinState {
+        let mut rows = (0..NUM_TYPES).map(TypeRow::empty).collect::<Vec<_>>();
+        rows[415].from = 414;
+        rows[415].is_list.push(423);
+        if cycle {
+            rows[414].from = 415;
+        }
+        let backups = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                ((REGULAR_UNIT_BEGIN..REGULAR_UNIT_END).contains(&index)
+                    || (BUILD_BEGIN..BUILD_END).contains(&index))
+                .then(|| TypeBackup::capture_pristine(row))
+            })
+            .collect();
+        TypeBuiltinState::new(
+            TypeTable::new(rows, backups).unwrap(),
+            TribeRoster::new((0..NUM_TRIBES).map(|i| format!("Tribe {i}")).collect()).unwrap(),
+            std::array::from_fn(|_| LeaderTypeMasks::default()),
+        )
+    }
 
     #[test]
     fn market_find_friends_request_preserves_the_native_parent_arguments() {
@@ -1913,6 +2323,24 @@ mod tests {
                 && child.selected_owner_offset == OBJECTS_SELECTED_OWNER_OFFSET
                 && child.selected_owner_first_write == -1
         }));
+    }
+
+    #[test]
+    fn market_found_build_relations_and_basic_type_chain_use_canonical_rows() {
+        let types = predicate_types(false);
+        assert!(market_type_relation(&types, 415, 423));
+        assert!(!market_type_relation(&types, 415, 424));
+        assert_eq!(market_basic_type_chain(&types, 415).unwrap(), [415, 414]);
+
+        let cycle = predicate_types(true);
+        assert_eq!(
+            market_basic_type_chain(&cycle, 415),
+            Err(
+                GoldenStartingMarketFoundBuildPredicateError::InvalidBasicTypeChain {
+                    type_index: 415,
+                }
+            )
+        );
     }
 
     #[test]

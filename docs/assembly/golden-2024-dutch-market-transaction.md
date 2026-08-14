@@ -237,15 +237,23 @@ retail clockwise offsets `1..=8`. Out-of-bounds offsets do not call the Object c
 scratch. Each in-bounds offset executes the same generic lookup and chains its revision from the
 previous returned call. A `-1` miss advances immediately. A nonnegative Build result first reads
 the canonical live `Build.city`; an exact mismatch with the effective City filter also advances
-without changing the accumulator. A same-City Build stops before vtable slot `+0x90`
-(`BuildTypeData::is_gather_type`) and retains the returned lookup plus its published scratch state
-as a typed boundary. A Wall-band identity stop remains non-returning and does not publish that
-lookup's scratch write. Consequently only the cohort in which every reached lookup misses or
-fails the City equality gate emits a native `find_friends` return, and that return is exactly zero.
-No type predicate or count is inferred from a captured result.
+without changing the accumulator. A same-City Build retains the returned lookup plus its published
+scratch state, then consumes the native predicate sequence from canonical owners: current live
+`build_flags & 0x40`, a lazy University-420 relation for gather types, short-circuited relations
+423 through 426, the recursive `basic_type` chain and its live `build_flags & 0x40000000`, the
+found Object's lazy `CAPTURED 0x20` flag for military trainers, and finally the exact Wonder range
+`0x20E <= type < 0x21F`. Missing type rows or live basic-type facts fail closed. A survivor adds one
+at an odd ring offset or two at an even offset; a reject leaves the prior accumulator unchanged.
+The receipt stops before the next ring offset, or owns the native return only when the found Build
+was at offset eight. No result is inferred from a captured count.
 
-The same-City found-type tail, nonzero `find_friends` counts, candidate scoring, the one-through-four
-fine RNG draws, allocation, `Build::init`, activation, and City mutation still are not executed.
-Those later effects remain supported-retail capture evidence. Their main-RNG boundary is also
-deliberately not joined directly to post-`place_all`: post-placement map work and the
-collision-retried Setup player/start shuffle consume intervening draws before the Market.
+A Wall-band identity stop remains non-returning and does not publish that lookup's scratch write.
+The earlier all-miss/City-mismatch cohort still emits a native `find_friends` return of exactly
+zero without entering any found-type predicate.
+
+The next ring offset after one accepted/rejected found Build, full multi-hit `find_friends` return,
+candidate scoring, the one-through-four fine RNG draws, allocation, `Build::init`, activation, and
+City mutation still are not executed. Those later effects remain supported-retail capture evidence.
+Their main-RNG boundary is also deliberately not joined directly to post-`place_all`:
+post-placement map work and the collision-retried Setup player/start shuffle consume intervening
+draws before the Market.
