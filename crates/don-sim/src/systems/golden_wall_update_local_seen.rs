@@ -9,11 +9,13 @@
 //! vtable to `BuildData::is_wonder` `0x00472320`.
 //!
 //! This module owns that child for the ordinary `BuildTypeData` vtable, follows
-//! the golden Village's false result through mask composition, and stops before
-//! `WallData::tile_corner` at `0x0063EDD6 -> 0x00643440`.
+//! the golden Village's false result through mask composition, source-owns
+//! `WallData::tile_corner` at `0x0063EDD6 -> 0x00643440`, and walks the
+//! x-outer/y-inner footprint prefix to its next child, `World::set_seen2` at
+//! `0x0063EE58 -> 0x006B4BB0`.
 //! Planning keeps the pre-child `ever_seen` write staged: the input Build is a
 //! before-image, [`GoldenEverSeenJournal::rollback`] is the exact rollback byte,
-//! and no state is published without the unavailable footprint continuation.
+//! and no state is published before the unavailable `World::set_seen2` child.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +24,7 @@ use crate::systems::golden_build_post_wall::{
     GoldenVillageTargetGateExit, GoldenVillageTargetGateReceipt,
 };
 use crate::systems::leader_get_target_runtime;
+use crate::systems::map_terrain::{self, Coord, TCoord};
 use crate::systems::production::{self, BuildData};
 
 pub const WALL_UPDATE_LOCAL_SEEN_ENTRY_VA: u32 = 0x0063_ed50;
@@ -36,6 +39,9 @@ pub const WONDER_TYPE_FIRST: i32 = 0x020e;
 pub const WONDER_TYPE_END: i32 = 0x021f;
 pub const WALL_UPDATE_LOCAL_SEEN_TILE_CORNER_CALL_VA: u32 = 0x0063_edd6;
 pub const WALL_DATA_TILE_CORNER_VA: u32 = 0x0064_3440;
+pub const WALL_UPDATE_LOCAL_SEEN_SET_SEEN2_CALL_VA: u32 = 0x0063_ee58;
+pub const WORLD_SET_SEEN2_VA: u32 = 0x006b_4bb0;
+pub const WALL_UPDATE_LOCAL_SEEN_RETURN_VA: u32 = 0x0063_ee98;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenJournalState {
@@ -61,6 +67,12 @@ pub enum BuildDataIsWonderExit {
 pub struct BuildDataIsWonderTypeFacts {
     pub type_index: i32,
     pub type_vtable_va: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenWallLocalSeenTypeFacts {
+    pub is_wonder: BuildDataIsWonderTypeFacts,
+    pub footprint: production::Footprint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,8 +118,64 @@ pub struct GoldenWallLocalSeenMask {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WallDataTileCornerReceipt {
+    pub function_va: u32,
+    pub position_x: i32,
+    pub position_y: i32,
+    pub footprint: production::Footprint,
+    pub corner_x: i32,
+    pub corner_y: i32,
+    pub writes: u8,
+    pub rng_draws: u8,
+}
+
+/// Complete source-owned `WallData::tile_corner` result over the canonical coordinate
+/// lookup semantics (`TCoord::from_coord`).
+pub fn wall_data_tile_corner(
+    build: &BuildData,
+    footprint: production::Footprint,
+) -> WallDataTileCornerReceipt {
+    let (position_x, position_y) = build.position();
+    let corner_axis = |position: i32, size: i32| {
+        let tile = TCoord::from_coord(Coord(position)).0;
+        let mut snapped = tile.wrapping_mul(map_terrain::COORD_PER_TILE);
+        if size & 1 != 0 {
+            snapped = snapped.wrapping_add(map_terrain::COORD_PER_TILE / 2);
+        }
+        TCoord::from_coord(Coord(snapped)).0.wrapping_sub(size >> 1)
+    };
+    WallDataTileCornerReceipt {
+        function_va: WALL_DATA_TILE_CORNER_VA,
+        position_x,
+        position_y,
+        footprint,
+        corner_x: corner_axis(position_x, footprint.x_size),
+        corner_y: corner_axis(position_y, footprint.y_size),
+        writes: 0,
+        rng_draws: 0,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenWallSetSeen2Call {
+    pub tile_x: i32,
+    pub tile_y: i32,
+    pub fog_x: i32,
+    pub fog_y: i32,
+    pub player_mask: u8,
+    pub explored_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenWallUpdateLocalSeenContinuation {
-    WallDataTileCorner { call_va: u32, callee_va: u32 },
+    WorldSetSeen2 {
+        call_va: u32,
+        callee_va: u32,
+        call: GoldenWallSetSeen2Call,
+    },
+    NoValidFootprintCell {
+        return_va: u32,
+    },
 }
 
 /// Pure prefix receipt. Stack-local prologue writes are not simulation state and are not
@@ -130,6 +198,11 @@ pub struct GoldenWallUpdateLocalSeenPrefixReceipt {
     pub is_wonder_vtable_slot: u32,
     pub is_wonder: BuildDataIsWonderReceipt,
     pub mask: GoldenWallLocalSeenMask,
+    pub tile_corner_call_va: u32,
+    pub tile_corner: WallDataTileCornerReceipt,
+    /// Exact `World +0x18/+0x1C` bounds read by the inlined validity checks.
+    pub world_tile_xs: i32,
+    pub world_tile_ys: i32,
     pub continuation: GoldenWallUpdateLocalSeenContinuation,
     /// Neither the staged caller write nor this callee prefix consumes RNG.
     pub rng_draws: u8,
@@ -161,19 +234,27 @@ pub enum GoldenWallUpdateLocalSeenPrefixError {
         vtable_slot: u32,
     },
     GoldenVillageReportedAsWonder,
+    InvalidFootprint {
+        x_size: i32,
+        y_size: i32,
+        tile_xs: i32,
+        tile_ys: i32,
+    },
+    FootprintRangeOverflow,
 }
 
-/// Source-own `Wall::update_local_seen` through `BuildData::is_wonder`, stopping at the
-/// next child boundary.
+/// Source-own `Wall::update_local_seen` through `BuildData::is_wonder` and
+/// `WallData::tile_corner`, stopping at the next child boundary.
 ///
 /// The Build must still be the immediate pre-`0x0061FBCD` image used by
 /// [`golden_build_post_wall::plan_village_target_gate`]. The returned journal is sufficient
 /// to apply and roll back retail's caller write later, but this detached transaction does
-/// neither because the later footprint transaction has not executed here.
+/// neither because the later `World::set_seen2` transaction has not executed here.
 pub fn plan_wall_update_local_seen_prefix(
     prior: &GoldenVillageTargetGateReceipt,
     build: &BuildData,
-    type_facts: BuildDataIsWonderTypeFacts,
+    type_facts: GoldenWallLocalSeenTypeFacts,
+    world: &map_terrain::World,
 ) -> Result<GoldenWallUpdateLocalSeenPrefixReceipt, GoldenWallUpdateLocalSeenPrefixError> {
     if prior.exit != GoldenVillageTargetGateExit::UpdateLocalSeenBoundary {
         return Err(GoldenWallUpdateLocalSeenPrefixError::PriorDidNotReachUpdateLocalSeen);
@@ -247,13 +328,13 @@ pub fn plan_wall_update_local_seen_prefix(
             },
         );
     }
-    if type_facts.type_index != prior.type_index {
+    if type_facts.is_wonder.type_index != prior.type_index {
         return Err(GoldenWallUpdateLocalSeenPrefixError::TypeFactsMismatch {
             expected: prior.type_index,
-            actual: type_facts.type_index,
+            actual: type_facts.is_wonder.type_index,
         });
     }
-    let is_wonder = build_data_is_wonder(type_facts);
+    let is_wonder = build_data_is_wonder(type_facts.is_wonder);
     let is_wonder_result = match is_wonder.exit {
         BuildDataIsWonderExit::Returned { is_wonder } => is_wonder,
         BuildDataIsWonderExit::DynamicTypeVirtual {
@@ -284,6 +365,67 @@ pub fn plan_wall_update_local_seen_prefix(
         player_mask,
         explored_only: true,
     };
+    let footprint = type_facts.footprint;
+    // Retail trusts its type/World invariants. This detached golden planner rejects
+    // impossible dimensions rather than constructing an unbounded synthetic loop.
+    if footprint.x_size <= 0
+        || footprint.y_size <= 0
+        || world.tile_xs <= 0
+        || world.tile_ys <= 0
+        || footprint.x_size > world.tile_xs
+        || footprint.y_size > world.tile_ys
+    {
+        return Err(GoldenWallUpdateLocalSeenPrefixError::InvalidFootprint {
+            x_size: footprint.x_size,
+            y_size: footprint.y_size,
+            tile_xs: world.tile_xs,
+            tile_ys: world.tile_ys,
+        });
+    }
+    let tile_corner = wall_data_tile_corner(build, footprint);
+    let start_x = tile_corner
+        .corner_x
+        .checked_sub(1)
+        .ok_or(GoldenWallUpdateLocalSeenPrefixError::FootprintRangeOverflow)?;
+    let start_y = tile_corner
+        .corner_y
+        .checked_sub(1)
+        .ok_or(GoldenWallUpdateLocalSeenPrefixError::FootprintRangeOverflow)?;
+    let end_x = tile_corner
+        .corner_x
+        .checked_add(footprint.x_size)
+        .ok_or(GoldenWallUpdateLocalSeenPrefixError::FootprintRangeOverflow)?;
+    let end_y = tile_corner
+        .corner_y
+        .checked_add(footprint.y_size)
+        .ok_or(GoldenWallUpdateLocalSeenPrefixError::FootprintRangeOverflow)?;
+    let mut first_valid_cell = None;
+    'outer: for tile_x in start_x..=end_x {
+        for tile_y in start_y..=end_y {
+            if world.valid_t(tile_x, tile_y) {
+                first_valid_cell = Some(GoldenWallSetSeen2Call {
+                    tile_x,
+                    tile_y,
+                    fog_x: tile_x >> 1,
+                    fog_y: tile_y >> 1,
+                    player_mask: mask.player_mask as u8,
+                    explored_only: mask.explored_only,
+                });
+                break 'outer;
+            }
+        }
+    }
+    let continuation = if let Some(call) = first_valid_cell {
+        GoldenWallUpdateLocalSeenContinuation::WorldSetSeen2 {
+            call_va: WALL_UPDATE_LOCAL_SEEN_SET_SEEN2_CALL_VA,
+            callee_va: WORLD_SET_SEEN2_VA,
+            call,
+        }
+    } else {
+        GoldenWallUpdateLocalSeenContinuation::NoValidFootprintCell {
+            return_va: WALL_UPDATE_LOCAL_SEEN_RETURN_VA,
+        }
+    };
 
     Ok(GoldenWallUpdateLocalSeenPrefixReceipt {
         frame: prior.frame,
@@ -306,10 +448,11 @@ pub fn plan_wall_update_local_seen_prefix(
         is_wonder_vtable_slot: WALL_UPDATE_LOCAL_SEEN_FIRST_CHILD_SLOT,
         is_wonder,
         mask,
-        continuation: GoldenWallUpdateLocalSeenContinuation::WallDataTileCorner {
-            call_va: WALL_UPDATE_LOCAL_SEEN_TILE_CORNER_CALL_VA,
-            callee_va: WALL_DATA_TILE_CORNER_VA,
-        },
+        tile_corner_call_va: WALL_UPDATE_LOCAL_SEEN_TILE_CORNER_CALL_VA,
+        tile_corner,
+        world_tile_xs: world.tile_xs,
+        world_tile_ys: world.tile_ys,
+        continuation,
         rng_draws: 0,
     })
 }
@@ -327,6 +470,15 @@ mod tests {
     };
     use crate::systems::{production, tech_cities};
 
+    const TEST_POSITION: i32 = 10 * map_terrain::COORD_PER_TILE;
+
+    fn set_position(build: &mut BuildData, x: i32, y: i32) {
+        build.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+            .copy_from_slice(&(x ^ 0x63637).to_le_bytes());
+        build.other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+            .copy_from_slice(&(y ^ 0x63637).to_le_bytes());
+    }
+
     fn build() -> BuildData {
         let mut build = BuildData::default();
         build.flags =
@@ -338,7 +490,12 @@ mod tests {
         build.attack_whom = -1;
         build.other[0x34..0x36].copy_from_slice(&(-1_i16).to_le_bytes());
         build.other[0x36..0x38].copy_from_slice(&(-1_i16).to_le_bytes());
+        set_position(&mut build, TEST_POSITION, TEST_POSITION);
         build
+    }
+
+    fn world() -> map_terrain::World {
+        map_terrain::World::init(20, 20, 44, 4, 4)
     }
 
     fn city() -> tech_cities::CityRecord {
@@ -385,20 +542,28 @@ mod tests {
         .unwrap()
     }
 
-    fn village_type_facts() -> BuildDataIsWonderTypeFacts {
-        BuildDataIsWonderTypeFacts {
-            type_index: GOLDEN_VILLAGE_TYPE,
-            type_vtable_va: BUILD_TYPE_VTABLE_VA,
+    fn test_village_type_facts() -> GoldenWallLocalSeenTypeFacts {
+        GoldenWallLocalSeenTypeFacts {
+            is_wonder: BuildDataIsWonderTypeFacts {
+                type_index: GOLDEN_VILLAGE_TYPE,
+                type_vtable_va: BUILD_TYPE_VTABLE_VA,
+            },
+            footprint: production::Footprint {
+                x_size: 4,
+                y_size: 4,
+            },
         }
     }
 
     #[test]
-    fn source_owned_is_wonder_false_branch_stages_write_then_names_tile_corner() {
+    fn source_owned_tile_corner_stages_write_then_names_first_set_seen2() {
         let build = build();
+        let world = world();
         let before_image = build.image();
         let gate = reached_gate(&build);
         let receipt =
-            plan_wall_update_local_seen_prefix(&gate, &build, village_type_facts()).unwrap();
+            plan_wall_update_local_seen_prefix(&gate, &build, test_village_type_facts(), &world)
+                .unwrap();
 
         assert_eq!(build.image(), before_image);
         assert_eq!(
@@ -439,14 +604,111 @@ mod tests {
                 explored_only: true,
             }
         );
+        assert_eq!(receipt.tile_corner_call_va, 0x0063_edd6);
+        assert_eq!((receipt.world_tile_xs, receipt.world_tile_ys), (80, 80));
+        assert_eq!(
+            receipt.tile_corner,
+            WallDataTileCornerReceipt {
+                function_va: 0x0064_3440,
+                position_x: TEST_POSITION,
+                position_y: TEST_POSITION,
+                footprint: production::Footprint {
+                    x_size: 4,
+                    y_size: 4,
+                },
+                corner_x: 8,
+                corner_y: 8,
+                writes: 0,
+                rng_draws: 0,
+            }
+        );
         assert_eq!(
             receipt.continuation,
-            GoldenWallUpdateLocalSeenContinuation::WallDataTileCorner {
-                call_va: 0x0063_edd6,
-                callee_va: 0x0064_3440,
+            GoldenWallUpdateLocalSeenContinuation::WorldSetSeen2 {
+                call_va: 0x0063_ee58,
+                callee_va: 0x006b_4bb0,
+                call: GoldenWallSetSeen2Call {
+                    tile_x: 7,
+                    tile_y: 7,
+                    fog_x: 3,
+                    fog_y: 3,
+                    player_mask: 1,
+                    explored_only: true,
+                },
             }
         );
         assert_eq!(receipt.rng_draws, 0);
+    }
+
+    #[test]
+    fn tile_corner_reproduces_even_odd_and_negative_coordinate_snapping() {
+        let mut build = build();
+        set_position(
+            &mut build,
+            TEST_POSITION + map_terrain::COORD_PER_TILE - 1,
+            -1,
+        );
+        let even = wall_data_tile_corner(
+            &build,
+            production::Footprint {
+                x_size: 4,
+                y_size: 4,
+            },
+        );
+        assert_eq!((even.corner_x, even.corner_y), (8, -3));
+        let odd = wall_data_tile_corner(
+            &build,
+            production::Footprint {
+                x_size: 3,
+                y_size: 3,
+            },
+        );
+        assert_eq!((odd.corner_x, odd.corner_y), (9, -2));
+        assert_eq!((even.writes, even.rng_draws), (0, 0));
+        assert_eq!((odd.writes, odd.rng_draws), (0, 0));
+    }
+
+    #[test]
+    fn wholly_off_map_footprint_returns_without_a_world_child() {
+        let mut build = build();
+        set_position(
+            &mut build,
+            100 * map_terrain::COORD_PER_TILE,
+            100 * map_terrain::COORD_PER_TILE,
+        );
+        let gate = reached_gate(&build);
+        let receipt =
+            plan_wall_update_local_seen_prefix(&gate, &build, test_village_type_facts(), &world())
+                .unwrap();
+        assert_eq!(
+            receipt.continuation,
+            GoldenWallUpdateLocalSeenContinuation::NoValidFootprintCell {
+                return_va: 0x0063_ee98,
+            }
+        );
+        assert_eq!(receipt.journal.rollback, build.ever_seen);
+        assert_eq!(
+            receipt.journal.state,
+            GoldenJournalState::StagedNotPublished
+        );
+    }
+
+    #[test]
+    fn impossible_footprint_fails_before_the_tile_loop() {
+        let build = build();
+        let gate = reached_gate(&build);
+        let world = world();
+        let mut type_facts = test_village_type_facts();
+        type_facts.footprint.x_size = 0;
+        assert_eq!(
+            plan_wall_update_local_seen_prefix(&gate, &build, type_facts, &world),
+            Err(GoldenWallUpdateLocalSeenPrefixError::InvalidFootprint {
+                x_size: 0,
+                y_size: 4,
+                tile_xs: 80,
+                tile_ys: 80,
+            })
+        );
     }
 
     #[test]
@@ -493,7 +755,7 @@ mod tests {
         let gate = reached_gate(&build);
         build.ever_seen = 1;
         assert_eq!(
-            plan_wall_update_local_seen_prefix(&gate, &build, village_type_facts()),
+            plan_wall_update_local_seen_prefix(&gate, &build, test_village_type_facts(), &world()),
             Err(GoldenWallUpdateLocalSeenPrefixError::BuildSnapshotMismatch)
         );
     }
@@ -518,7 +780,12 @@ mod tests {
             GoldenVillageTargetGateContinuation::NextBuildCone { .. }
         ));
         assert_eq!(
-            plan_wall_update_local_seen_prefix(&ordinary_team, &build, village_type_facts()),
+            plan_wall_update_local_seen_prefix(
+                &ordinary_team,
+                &build,
+                test_village_type_facts(),
+                &world(),
+            ),
             Err(GoldenWallUpdateLocalSeenPrefixError::PriorDidNotReachUpdateLocalSeen)
         );
     }
