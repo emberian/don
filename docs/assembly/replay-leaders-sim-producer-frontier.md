@@ -153,6 +153,13 @@ the AI selection body; the existing runtime `raid` owner accounts for the other 
 The composed residual is therefore 809 bytes per active row. This remains constructor-bound
 and uninstalled because no live Personality maintainer is mounted.
 
+The existing canonical `Game::init_teams` mutation seam then supplies all 32 bytes of each
+active row's `chat_status[8]`. The starting setup retains its exact pre-state, post-state, and
+ordered receipt; the Leader join re-executes that source and agreement-checks the result against
+the independent conditional image. This reduces the residual to 777 bytes per active row.
+Later team/diplomacy changes are not mounted here, so the channel remains uninstalled with zero
+survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

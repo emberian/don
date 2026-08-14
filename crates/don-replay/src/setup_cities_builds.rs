@@ -22,6 +22,10 @@ use std::fmt;
 
 use don_sim::systems::map_terrain::{Coord, TCoord};
 use don_sim::systems::production::{self, BuildData};
+use don_sim::systems::setup_diplomacy::{LeaderTeamState, PlayerSetup};
+use don_sim::systems::team_setup_mutation::{
+    init_teams_atomic, InitTeamsError, InitTeamsReceipt, InitTeamsRequest, TeamSetupState,
+};
 use don_sim::systems::tech_cities::{self, CityPool};
 use don_sim::tick::Sim;
 
@@ -104,6 +108,12 @@ pub struct StartingSetupReceipt {
     pub region_evidence: StartingRegionEvidence,
     pub active_players: usize,
     pub city_flags: u16,
+    /// Exact pre-`Game::init_teams` state used for stale-state/source validation.
+    pub team_setup_before: TeamSetupState,
+    /// Exact post-`Game::init_teams` owner, including every active row's `chat_status[8]`.
+    pub team_setup: TeamSetupState,
+    /// Ordered deterministic setup/team receipt which produced [`Self::team_setup`].
+    pub team_setup_receipt: InitTeamsReceipt,
     pub cities: Vec<StartingCityReceipt>,
     /// Exact activation-time `Wall::mask_city` transactions, in Build/owner order.
     pub world_city_masks: Vec<StartingVillageWorldReceipt>,
@@ -145,6 +155,8 @@ impl StartingSetupState {
         validate_top_level(initial, map)?;
         let (region, region_evidence) = start_region(initial.info.settings.map_style)?;
         let assignments = derive_assignments(replay, map, region)?;
+        let (team_setup_before, team_setup, team_setup_receipt) =
+            derive_team_setup(initial, &assignments)?;
 
         let wcells = u16::try_from(map.world.xs)
             .map_err(|_| SetupCitiesError::MapDimensionOutOfRange { xs: map.world.xs })?;
@@ -312,6 +324,9 @@ impl StartingSetupState {
                 region_evidence,
                 active_players: receipts.len(),
                 city_flags: 0x4011,
+                team_setup_before,
+                team_setup,
+                team_setup_receipt,
                 cities: receipts,
                 world_city_masks,
                 constructor_cities: cities_channel,
@@ -324,6 +339,55 @@ impl StartingSetupState {
             },
         })
     }
+}
+
+fn derive_team_setup(
+    initial: &InitialState,
+    assignments: &[Assignment],
+) -> Result<(TeamSetupState, TeamSetupState, InitTeamsReceipt), SetupCitiesError> {
+    let Some(&semaphore_820) = initial.game.semaphore.first() else {
+        return Err(SetupCitiesError::MissingSetupSemaphore);
+    };
+    if initial.info.players.len() != tech_cities::NUM_PLAYERS {
+        return Err(SetupCitiesError::SetupPlayerCount {
+            players: initial.info.players.len(),
+        });
+    }
+    let mut state = TeamSetupState::default();
+    state.setup.team_style = initial.info.settings.team_style;
+    state.setup.frame = initial.game.frame;
+    state.setup.semaphore_820 = semaphore_820;
+    for (slot, player) in initial.info.players.iter().enumerate() {
+        state.setup.players[slot] = PlayerSetup {
+            flags: player.flags,
+            who: player.who,
+            team: player.team as i8,
+        };
+    }
+    for assignment in assignments {
+        let owner = usize::from(assignment.owner);
+        state.setup.leaders[owner] = LeaderTeamState {
+            leader_flags: 1,
+            who: i32::from(assignment.owner),
+            diplos: [0; 8],
+        };
+    }
+    let local_player_setup_slot = usize::from(
+        assignments
+            .first()
+            .expect("derive_assignments refuses an empty active roster")
+            .replay_player_slot,
+    );
+    let before = state.clone();
+    let receipt = init_teams_atomic(
+        &mut state,
+        InitTeamsRequest {
+            local_player_setup_slot,
+            ranked: false,
+        },
+    )
+    .map_err(SetupCitiesError::InitTeams)?;
+    Ok((before, state, receipt))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -540,6 +604,11 @@ pub enum SetupCitiesError {
     ActivePlayerCount {
         active: usize,
     },
+    SetupPlayerCount {
+        players: usize,
+    },
+    MissingSetupSemaphore,
+    InitTeams(InitTeamsError),
     UnsupportedPlayerFlags {
         slot: u8,
         flags: u16,

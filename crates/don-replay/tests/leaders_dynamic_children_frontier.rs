@@ -45,6 +45,11 @@ use don_replay::leaders_setup_build_registry_frontier::{
     FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
     LEADER_GET_BUILDINGS_VA,
 };
+use don_replay::leaders_setup_chat_status_frontier::{
+    bind_frame_zero_chat_status, derive_frame_zero_chat_status, FrameZeroChatStatusError,
+    CHAT_STATUS_BEGIN, CHAT_STATUS_END, FRAME_ZERO_CHAT_STATUS_WALKED_BYTES,
+    GAME_INIT_TEAMS_CHAT_BEGIN_VA, GAME_INIT_TEAMS_CHAT_END_VA, GAME_INIT_TEAMS_VA,
+};
 use don_replay::leaders_setup_city_stat_frontier::{
     bind_frame_zero_city_stats, derive_frame_zero_city_stats, FrameZeroCityStatsError,
     CITIES_BUILT_HISTORY_BEGIN, CITIES_BUILT_HISTORY_END, FRAME_ZERO_CITY_STATS_WALKED_BYTES,
@@ -1199,6 +1204,7 @@ fn frame_zero_starting_build_census_body() {
     let action_stamps = derive_frame_zero_action_stamps(&setup).unwrap();
     let city_stats = derive_frame_zero_city_stats(&setup).unwrap();
     let human_personality = derive_frame_zero_human_personality(&setup).unwrap();
+    let chat_status = derive_frame_zero_chat_status(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1325,6 +1331,12 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(HUMAN_PERSONALITY_WALKED_BYTES, 96);
     assert_eq!(HUMAN_PERSONALITY_DUPLICATE_WALKED_BYTES, 4);
     assert_eq!(HUMAN_PERSONALITY_NEWLY_CANONICAL_WALKED_BYTES, 92);
+    assert_eq!(GAME_INIT_TEAMS_VA, 0x0058_ae70);
+    assert_eq!(GAME_INIT_TEAMS_CHAT_BEGIN_VA, 0x0058_c020);
+    assert_eq!(GAME_INIT_TEAMS_CHAT_END_VA, 0x0058_c184);
+    assert_eq!(CHAT_STATUS_BEGIN, 0x54);
+    assert_eq!(CHAT_STATUS_END, 0x74);
+    assert_eq!(FRAME_ZERO_CHAT_STATUS_WALKED_BYTES, 32);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1348,6 +1360,18 @@ fn frame_zero_starting_build_census_body() {
             && claim.duplicate_checked_walked_bytes == 4
             && claim.newly_canonical_walked_bytes == 92
     }));
+    assert_eq!(chat_status.claims().len(), active_count);
+    assert!(chat_status
+        .claims()
+        .iter()
+        .all(|claim| claim.newly_canonical_walked_bytes == 32));
+    let first_active = prefix.rows.iter().position(|row| row.active).unwrap();
+    setup.receipt.team_setup.chat_status[first_active][0] ^= 1;
+    assert_eq!(
+        derive_frame_zero_chat_status(&setup),
+        Err(FrameZeroChatStatusError::TeamSetupSourceDisagreement)
+    );
+    setup.receipt.team_setup.chat_status[first_active][0] ^= 1;
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1429,6 +1453,14 @@ fn frame_zero_starting_build_census_body() {
                 write_field(&mut fixture.columns, slot, field, &1i32.to_le_bytes());
             }
         }
+        if let Some(row) = chat_status.row(slot) {
+            let field = leader::FIELDS
+                .iter()
+                .find(|field| field.name == "chat_status")
+                .unwrap();
+            let bytes: Vec<_> = row.iter().flat_map(|value| value.to_le_bytes()).collect();
+            write_field(&mut fixture.columns, slot, field, &bytes);
+        }
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1460,31 +1492,40 @@ fn frame_zero_starting_build_census_body() {
     let stat_joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
     let stamps_joined = bind_frame_zero_action_stamps(stat_joined, action_stamps.clone()).unwrap();
     let city_joined = bind_frame_zero_city_stats(stamps_joined, city_stats.clone()).unwrap();
-    let joined = bind_frame_zero_human_personality(city_joined, human_personality.clone()).unwrap();
+    let personality_joined =
+        bind_frame_zero_human_personality(city_joined, human_personality.clone()).unwrap();
+    let joined = bind_frame_zero_chat_status(personality_joined, chat_status.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 92);
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 32);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_619 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_651 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 809) as u64
+        (active_count * 777) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    assert!(joined
+    let personality_frontier = joined.inner();
+    assert!(personality_frontier
         .inner()
         .inner()
         .inner()
         .inner()
         .header_lifetime_stable());
     assert_eq!(
-        joined.inner().inner().inner().inner().claims().len(),
+        personality_frontier
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .claims()
+            .len(),
         active_count
     );
-    assert!(joined
+    assert!(personality_frontier
         .inner()
         .inner()
         .inner()
@@ -1498,7 +1539,7 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
     assert_eq!(
-        joined
+        personality_frontier
             .inner()
             .inner()
             .inner()
@@ -1512,7 +1553,7 @@ fn frame_zero_starting_build_census_body() {
         active_count
     );
     assert_eq!(
-        joined
+        personality_frontier
             .inner()
             .inner()
             .inner()
@@ -1590,6 +1631,36 @@ fn frame_zero_starting_build_census_body() {
         let cities = bind_frame_zero_city_stats(stamps, city_stats.clone()).unwrap();
         bind_frame_zero_human_personality(cities, human_personality.clone())
     };
+    let bind_chat_columns = |columns: &LeaderCols| {
+        let cities = bind_city_columns(columns).unwrap();
+        let personality =
+            bind_frame_zero_human_personality(cities, human_personality.clone()).unwrap();
+        bind_frame_zero_chat_status(personality, chat_status.clone())
+    };
+
+    let mut stale_chat_columns = fixture.columns.clone();
+    let chat_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "chat_status")
+        .unwrap();
+    let mut stale_chat: Vec<_> = chat_status
+        .row(active)
+        .unwrap()
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    let expected_chat = stale_chat[0];
+    stale_chat[0] ^= 1;
+    write_field(&mut stale_chat_columns, active, chat_field, &stale_chat);
+    assert!(matches!(
+        bind_chat_columns(&stale_chat_columns),
+        Err(FrameZeroChatStatusError::ConditionalDisagreement {
+            slot,
+            byte: 0,
+            expected,
+            conditional,
+        }) if slot == active && expected == expected_chat && conditional == (expected_chat ^ 1)
+    ));
 
     let mut stale_personality = fixture.authority.clone();
     stale_personality.rows[active].personality.alliance_ai = 1;

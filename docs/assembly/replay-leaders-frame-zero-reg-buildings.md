@@ -93,9 +93,10 @@ setup-surviving stat/action histories                     104
 setup-surviving diplomacy/CTW/repair stamps                24
 starting-Village Leader counter history                    16
 human-only zero Personality child                          92
-frame-zero unique canonical walked bytes               27,619
+canonical init-teams chat status                           32
+frame-zero unique canonical walked bytes               27,651
 default empty-child transcript                          28,428
-frame-zero residual                                        809
+frame-zero residual                                        777
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -187,6 +188,12 @@ For an active human row, `Leader::init` tests `flags & 0x0c == 4` at
 the other 92 exact zero bytes are newly canonical. This proof expires if an AI personality is
 selected or any later personality mutator runs.
 
+The canonical `Game::init_teams` transaction closes `chat_status[8]` without assuming a zero
+row. The starting receipt retains both the complete pre-state and the exact post-state from
+`0x0058c020..0x0058c184`; re-executing the deterministic product seam must reproduce its
+ordered receipt byte-for-byte. Active rows therefore own the exact 32-byte roster/team-style
+dependent result. Later diplomacy/team mutation expires this claim.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -229,3 +236,5 @@ the 24-byte action-stamp join. Clearing either the receipt-owned `city_mine` or 
 dword refuses the 16-byte City-counter join.
 Mutating the final `alliance_ai` personality dword independently refuses the 92-byte human
 Personality join.
+Changing either the retained init-teams post-state or an independently imaged `chat_status`
+byte refuses the 32-byte chat join.
