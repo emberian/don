@@ -147,6 +147,12 @@ The complete fresh-Village chronology supplies 16 more bytes per active row: exa
 reduces the residual to 901, but later City lifecycle changes are not maintained here, so the
 receipt remains uninstalled with zero survival.
 
+The all-human setup gate additionally owns 92 previously conditional bytes in the raw
+`Personality` child. `Personality::init` clears all 96 bytes and the active-human branch skips
+the AI selection body; the existing runtime `raid` owner accounts for the other four bytes.
+The composed residual is therefore 809 bytes per active row. This remains constructor-bound
+and uninstalled because no live Personality maintainer is mounted.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

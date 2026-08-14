@@ -54,6 +54,13 @@ use don_replay::leaders_setup_diplomacy_stamp_frontier::{
     bind_frame_zero_action_stamps, derive_frame_zero_action_stamps, FrameZeroActionStampsError,
     ACTION_STAMPS_BEGIN, ACTION_STAMPS_END, FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES,
 };
+use don_replay::leaders_setup_human_personality_frontier::{
+    bind_frame_zero_human_personality, derive_frame_zero_human_personality,
+    FrameZeroHumanPersonalityError, HUMAN_PERSONALITY_DUPLICATE_WALKED_BYTES,
+    HUMAN_PERSONALITY_NEWLY_CANONICAL_WALKED_BYTES, HUMAN_PERSONALITY_WALKED_BYTES,
+    LEADER_INIT_AI_PERSONALITY_BODY_END_VA, LEADER_INIT_HUMAN_PERSONALITY_GATE_BEGIN_VA,
+    LEADER_INIT_HUMAN_PERSONALITY_GATE_END_VA, PERSONALITY_CLEAR_VA, PERSONALITY_INIT_VA,
+};
 use don_replay::leaders_setup_init_scalar_frontier::{
     bind_frame_zero_init_scalars, derive_frame_zero_init_scalars, FrameZeroInitScalarError,
     FRAME_ZERO_INIT_SCALAR_WALKED_BYTES, LEADER_INIT_GOV_STORE_VA,
@@ -1191,6 +1198,7 @@ fn frame_zero_starting_build_census_body() {
     let stat_history = derive_frame_zero_stat_history(&setup).unwrap();
     let action_stamps = derive_frame_zero_action_stamps(&setup).unwrap();
     let city_stats = derive_frame_zero_city_stats(&setup).unwrap();
+    let human_personality = derive_frame_zero_human_personality(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1309,6 +1317,14 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(CITIES_BUILT_HISTORY_BEGIN, 0x820);
     assert_eq!(CITIES_BUILT_HISTORY_END, 0x824);
     assert_eq!(FRAME_ZERO_CITY_STATS_WALKED_BYTES, 16);
+    assert_eq!(PERSONALITY_INIT_VA, 0x006d_8640);
+    assert_eq!(PERSONALITY_CLEAR_VA, 0x006d_8650);
+    assert_eq!(LEADER_INIT_HUMAN_PERSONALITY_GATE_BEGIN_VA, 0x006e_4cb9);
+    assert_eq!(LEADER_INIT_HUMAN_PERSONALITY_GATE_END_VA, 0x006e_4cc5);
+    assert_eq!(LEADER_INIT_AI_PERSONALITY_BODY_END_VA, 0x006e_4df1);
+    assert_eq!(HUMAN_PERSONALITY_WALKED_BYTES, 96);
+    assert_eq!(HUMAN_PERSONALITY_DUPLICATE_WALKED_BYTES, 4);
+    assert_eq!(HUMAN_PERSONALITY_NEWLY_CANONICAL_WALKED_BYTES, 92);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1326,6 +1342,12 @@ fn frame_zero_starting_build_census_body() {
             Some([0, 1, 0, 1])
         );
     }
+    assert_eq!(human_personality.claims().len(), active_count);
+    assert!(human_personality.claims().iter().all(|claim| {
+        claim.walked_bytes == 96
+            && claim.duplicate_checked_walked_bytes == 4
+            && claim.newly_canonical_walked_bytes == 92
+    }));
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1437,23 +1459,33 @@ fn frame_zero_starting_build_census_body() {
     let headers_joined = bind_lifetime_mask_headers(rare_joined).unwrap();
     let stat_joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
     let stamps_joined = bind_frame_zero_action_stamps(stat_joined, action_stamps.clone()).unwrap();
-    let joined = bind_frame_zero_city_stats(stamps_joined, city_stats.clone()).unwrap();
+    let city_joined = bind_frame_zero_city_stats(stamps_joined, city_stats.clone()).unwrap();
+    let joined = bind_frame_zero_human_personality(city_joined, human_personality.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 16);
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 92);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_527 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_619 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 901) as u64
+        (active_count * 809) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    assert!(joined.inner().inner().inner().header_lifetime_stable());
-    assert_eq!(joined.inner().inner().inner().claims().len(), active_count);
     assert!(joined
+        .inner()
+        .inner()
+        .inner()
+        .inner()
+        .header_lifetime_stable());
+    assert_eq!(
+        joined.inner().inner().inner().inner().claims().len(),
+        active_count
+    );
+    assert!(joined
+        .inner()
         .inner()
         .inner()
         .inner()
@@ -1474,12 +1506,14 @@ fn frame_zero_starting_build_census_body() {
             .inner()
             .inner()
             .inner()
+            .inner()
             .claims()
             .len(),
         active_count
     );
     assert_eq!(
         joined
+            .inner()
             .inner()
             .inner()
             .inner()
@@ -1529,6 +1563,44 @@ fn frame_zero_starting_build_census_body() {
         let stamps = bind_stamp_columns(columns).unwrap();
         bind_frame_zero_city_stats(stamps, city_stats.clone())
     };
+    let bind_personality_authority = |authority: &DynamicLeadersAuthority| {
+        let previous = deferred_frontier_with_authority(
+            &fixture.prefix,
+            &fixture.victory,
+            &fixture.step8,
+            &fixture.types,
+            &fixture.columns,
+            &fixed,
+        );
+        let tech = bind_sim_tech_frontier(previous, authority, &setup.sim).unwrap();
+        let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
+        let regional = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
+        let history = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
+        let regions =
+            bind_frame_zero_region_strategy_history(history, region_history.clone()).unwrap();
+        let registry =
+            bind_frame_zero_build_registry_census(regions, build_registry.clone()).unwrap();
+        let masks = bind_type_mask_owner(registry, &mask_types).unwrap();
+        let init = bind_frame_zero_init_scalars(masks, init_scalars.clone()).unwrap();
+        let plan = bind_frame_zero_plan_scratch(init, plan_scratch.clone()).unwrap();
+        let rare = bind_frame_zero_rare_history(plan, rare_history.clone()).unwrap();
+        let headers = bind_lifetime_mask_headers(rare).unwrap();
+        let stats = bind_frame_zero_stat_history(headers, stat_history.clone()).unwrap();
+        let stamps = bind_frame_zero_action_stamps(stats, action_stamps.clone()).unwrap();
+        let cities = bind_frame_zero_city_stats(stamps, city_stats.clone()).unwrap();
+        bind_frame_zero_human_personality(cities, human_personality.clone())
+    };
+
+    let mut stale_personality = fixture.authority.clone();
+    stale_personality.rows[active].personality.alliance_ai = 1;
+    assert!(matches!(
+        bind_personality_authority(&stale_personality),
+        Err(FrameZeroHumanPersonalityError::ConditionalDisagreement {
+            slot,
+            byte: 92,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let mut stale_city_mine_columns = fixture.columns.clone();
     let city_mine_field = leader::FIELDS

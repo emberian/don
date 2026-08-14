@@ -92,9 +92,10 @@ lifetime-invariant residual BitMask headers                56
 setup-surviving stat/action histories                     104
 setup-surviving diplomacy/CTW/repair stamps                24
 starting-Village Leader counter history                    16
-frame-zero unique canonical walked bytes               27,527
+human-only zero Personality child                          92
+frame-zero unique canonical walked bytes               27,619
 default empty-child transcript                          28,428
-frame-zero residual                                        901
+frame-zero residual                                        809
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -178,6 +179,14 @@ per active row. The adjacent `village_num` and `village_mine` dwords retain cons
 because the exhaustive receipt reaches no writer for them. These counters remain historical
 until a later City lifecycle event supplies a live maintainer.
 
+All-human admission also closes 92 bytes of the raw 96-byte `Personality` child.
+`Personality::init` at `0x006d8640` jumps to the complete zeroing body at `0x006d8650`.
+For an active human row, `Leader::init` tests `flags & 0x0c == 4` at
+`0x006e4cb9..0x006e4cc5` and jumps around the AI personality-selection body to
+`0x006e4df1`. The already-owned `raid` dword is duplicate-checked rather than counted twice;
+the other 92 exact zero bytes are newly canonical. This proof expires if an AI personality is
+selected or any later personality mutator runs.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -218,3 +227,5 @@ Separate mutations of the final `gather_slots_high` byte and the `gov_hero_frame
 sentinel refuse the 104-byte stat-history join. A nonzero `repair_stamp` independently refuses
 the 24-byte action-stamp join. Clearing either the receipt-owned `city_mine` or `cities_built`
 dword refuses the 16-byte City-counter join.
+Mutating the final `alliance_ai` personality dword independently refuses the 92-byte human
+Personality join.
