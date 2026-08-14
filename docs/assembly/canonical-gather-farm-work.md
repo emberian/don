@@ -2,13 +2,15 @@
 
 Status: **production `Sim::unit_work`; four stable-animation grows, exact owner-2/o-5
 animation 8→35 + Farm grow, and exact owner-2/o-9 MOVE arrival → animation 8→36 + Farm
-snip; complete UnitGuys/Path/Farm owners; DoNSave v20 save/load/resume; zero RNG**.
+snip → first 256-frame periodic gate; complete UnitGuys/Path/Farm owners; DoNSave v20
+save/load/resume; zero RNG**.
 
 Closure status remains **RED**. The owner-2/o-9 saved continuation now executes its exact
 one-Guy land movement, Guy clock, MOVE completion, queued-Gather exposure, animation mutation,
-and selected Farm snip. Collision-hit detour/repath arms, Farm relocation, periodic search,
-animation-36 wrap/events, target retirement/replacement, and the remaining charged Gather
-children still keep the row red.
+selected Farm snip, 58 steady work frames, and the exact undamaged-target miss at its first
+periodic repair gate. Collision-hit detour/repath arms, Farm relocation, the damaged-target
+repair-order tail, animation-36 wrap/events, target retirement/replacement, and the remaining
+charged Gather children still keep the row red.
 
 The fresh save contains 17 Farm `GATHER` nodes. A structural walk and exact retail
 branch audit found four bounded, checksum-changing continuations whose full mutable surface is
@@ -37,6 +39,8 @@ FarmStruct, Guy, relocation and RNG surface is available.
 | `Farms::get_farm_type` | VA `0x008d9160`, size 47; SHA-256 `637119a1a48d315f327c6c5666fd70a360bbc865e6935bacbde3533b6469f01e` |
 | `Farms::grow` | VA `0x008d91c0`, size 120; SHA-256 `c4fef6643766432d324e31fe0704a08e6c5564a8fafbac69a9b34ea174a688f6` |
 | `Farms::snip` | VA `0x008d9240`, size 59; SHA-256 `41d07ee74b50174e2eedee6c13019ec2b1856d5fbc5d8d19a187beba172d7f6b` |
+| `LeaderData::get_diff` | VA `0x006ec000`, size 58; exact effective-difficulty child |
+| `Unit::add_repair_order` | VA `0x005e4ff0`, size 533; charged damaged-target child |
 | `Unit::set_anim` | VA `0x00616f40`, size 201; SHA-256 `798f485753eb1853dc19ce55e43115674f6e3988370210dd9d5d4272d386f6ee` |
 | `Guy::set_anim` | VA `0x005da300`, size 4,723; SHA-256 `be76d8eb8e4301d6c10888efa8b2ca1dde0ca02045f46b9c0c98b576d68f68b3` |
 | `Wall::tile_corner` | VA `0x00643440`, size 136; SHA-256 `7eeec3717c4efa6ec1d9a60d05b8b1100bd50e8daf2d7d43e6b051b185ec96ba` |
@@ -161,6 +165,11 @@ frame 11: Unit/Guy arrive (2232,32760); MOVE retires; Path header remains (10,0,
           queued GATHER becomes current; Guy animation/clock remains 8 at 14/15
 frame 12: Unit::set_anim(36,0,1) changes Guy (cur,end,last,anim)=(14,15,13,8)
           -> (0,85,-1,36); Farms::snip changes status[3*4+2] 2->3; zero RNG
+frames 1211..1268: status-three work requests the existing animation 36; Guy clock advances
+          from 1/85 to 59/85; Farm/Order/Path/RNG remain byte-stable
+frame 1269: `(frame + o + who) & 0xff == 0`; effective difficulty is 3, but the exact
+          Build target has `damage=0`, so no repair order is added; status-three work falls
+          through unchanged and Guy clock advances 59/85 -> 60/85
 ```
 
 The MOVE node's saved `0x4ad30000` angle is evidence, but it is not reused as the live heading:
@@ -172,6 +181,15 @@ Direct execution and save/load/rehydrate/resume are byte-identical after every f
 type-speed composition fails before changing Unit position/angle/masks, OrderList, PathStack,
 UnitGuys, or Farms. The movement collision transaction also restores World, terrain collision,
 collision runtime, and Path on driver/store/path rejection.
+
+The periodic condition is reached before animation 36 can wrap. The shipped global difficulty
+byte is three, and the structurally decoded target Build `(who,o,uid)=(2,2002,2)` has
+`ObjectData::damage=0`. Retail therefore executes `LeaderData::get_diff`, skips
+`Unit::add_repair_order`, and continues through the already-owned status-three arm. A boundary
+save at frame 1,269 reloads, reinstalls the same authority, and produces a byte-identical frame
+1,270 image. Removing the effective-difficulty fact at that exact boundary refuses before any
+Unit, OrderList, PathStack, UnitGuys, Build, or Farm owner write, including the enclosing Guy
+process and clock tails.
 
 ## Exact transaction and ownership
 
@@ -220,10 +238,10 @@ nine already-stable status-three animation no-ops, four already-stable status-on
 two grow paths which require a Guy animation mutation. The four stable grows are owner/unit
 `0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
 The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9's complete saved frontier is
-now admitted through MOVE completion and the exact status-two snip. Thus one fresh queued
-Gather witness reaches snip; no fresh current Gather witness reaches relocation. Expired
-animation, periodic
-special effect, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
+now admitted through MOVE completion, the exact status-two snip, steady animation 36, and its
+first periodic no-repair fallthrough. Thus one fresh queued Gather witness reaches snip; no
+fresh current Gather witness reaches relocation. Expired animation, damaged-target periodic
+repair, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
 
 Focused gates:
 

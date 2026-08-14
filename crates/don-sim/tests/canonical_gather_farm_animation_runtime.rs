@@ -153,6 +153,7 @@ fn authority(sim: &Sim, actor_row: usize, site_row: usize) -> GatherWorkAuthorit
             lead_cur_time: 1,
             lead_end_time: 15,
             lead_hold_attack: 0,
+            periodic_effective_difficulty: None,
         }],
     }
 }

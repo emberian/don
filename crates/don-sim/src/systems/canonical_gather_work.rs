@@ -399,6 +399,7 @@ impl From<FreshGatherBindingError> for GatherWorkPlanError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatherWorkBranch {
     FarmUpdateOneAnimation23GateMiss,
+    FarmPeriodicNoRepairAnimation24,
     FarmStatus3Animation24,
     FarmStatus1Grow,
     FarmStatus2Snip,
@@ -436,6 +437,9 @@ pub struct GatherFarmRuntimeFacts {
     pub lead_cur_time: u32,
     pub lead_end_time: u32,
     pub lead_hold_attack: u8,
+    /// Exact `LeaderData::get_diff()` result read on this actor's 256-frame Farm phase.
+    /// `None` keeps that phase fail-closed.
+    pub periodic_effective_difficulty: Option<i32>,
 }
 
 /// Canonical mutable reads which are not part of the existing Camp snapshot.
@@ -602,7 +606,7 @@ pub fn plan_fresh_farm_tick(
     reads: GatherFarmReadImage,
     farm: FarmStruct,
 ) -> Result<GatherWorkPlan, GatherWorkPlanError> {
-    plan_fresh_farm_tick_inner(before, facts, reads, farm, false)
+    plan_fresh_farm_tick_inner(before, facts, reads, farm, false, None)
 }
 
 fn plan_fresh_farm_tick_inner(
@@ -611,6 +615,7 @@ fn plan_fresh_farm_tick_inner(
     reads: GatherFarmReadImage,
     farm: FarmStruct,
     owns_animation_8_to_farm_work: bool,
+    target_damage: Option<i32>,
 ) -> Result<GatherWorkPlan, GatherWorkPlanError> {
     if bind_fresh_gather_payload(before.actor.who, before.order)?
         != FreshGatherPayloadClass::FarmActive
@@ -639,18 +644,29 @@ fn plan_fresh_farm_tick_inner(
             site: before.site.property,
         });
     }
-    if before.actor.unit_masks & 0x0004_0000 != 0
+    let periodic_phase = before.actor.unit_masks & 0x0004_0000 != 0
         && before
             .frame
             .wrapping_add(i32::from(before.actor.o))
             .wrapping_add(i32::from(before.actor.who))
             & 0xff
-            == 0
-    {
-        return Err(GatherWorkPlanError::Unowned(
-            UnownedGatherArm::FarmPeriodicTargetSearch,
-        ));
-    }
+            == 0;
+    let periodic_no_repair = if periodic_phase {
+        let (Some(difficulty), Some(damage)) = (facts.periodic_effective_difficulty, target_damage)
+        else {
+            return Err(GatherWorkPlanError::Unowned(
+                UnownedGatherArm::FarmPeriodicTargetSearch,
+            ));
+        };
+        if difficulty > 1 && damage != 0 {
+            return Err(GatherWorkPlanError::Unowned(
+                UnownedGatherArm::FarmPeriodicTargetSearch,
+            ));
+        }
+        true
+    } else {
+        false
+    };
     if reads.site_city < 0
         || reads.site_farm_index < 0
         || reads.site_farm_index != facts.farm_index
@@ -707,6 +723,10 @@ fn plan_fresh_farm_tick_inner(
             ));
         }
         match status {
+            Some(3) if periodic_no_repair => (
+                GatherWorkBranch::FarmPeriodicNoRepairAnimation24,
+                FARM_ANIMATION_24,
+            ),
             Some(3) => (GatherWorkBranch::FarmStatus3Animation24, FARM_ANIMATION_24),
             Some(0) => {
                 return Err(GatherWorkPlanError::Unowned(
@@ -1264,14 +1284,23 @@ pub fn prepare_gather_work_activation(
             .and_then(Option::as_ref)
             .copied()
             .ok_or(GatherWorkRuntimeError::InvalidGuyArrayFacts)?;
-        if (lead.who, lead.o, lead.guy_num, lead.ty, lead.cur_anim as u8)
+        let derived_post_snip_lead = actor_facts.move_runtime.is_some()
+            && actor_facts.lead_animation == 8
+            && lead.ty == 50
+            && lead.gpiece == 6_336
+            && lead.cur_anim == FARM_ANIMATION_24 as i8
+            && lead.cur_time < 85
+            && lead.end_time == 85
+            && lead.last_time == lead.cur_time as i32 - 1
+            && lead.hold_attack == 0;
+        if (lead.who, lead.o, lead.guy_num, lead.ty)
             != (
                 actor_facts.who as i8,
                 actor_facts.o,
                 0,
                 actor_facts.type_index,
-                actor_facts.lead_animation,
             )
+            || (lead.cur_anim as u8 != actor_facts.lead_animation && !derived_post_snip_lead)
         {
             return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
         }
@@ -1318,7 +1347,9 @@ pub fn prepare_gather_work_activation(
             uid: world.units.get_uid(row),
             group: world.units.group()[row],
             unit_masks: world.units.get_unit_masks(row),
-            lead_animation: Some(actor_facts.lead_animation),
+            lead_animation: Some(
+                owned_lead.map_or(actor_facts.lead_animation, |lead| lead.cur_anim as u8),
+            ),
         },
         order,
         site: GatherSiteImage {
@@ -1336,13 +1367,16 @@ pub fn prepare_gather_work_activation(
     let (farm_facts, farm_reads, chain, unit_guys_before, unit_guys_after, plan) =
         match payload_class {
             FreshGatherPayloadClass::FarmActive => {
-                let farm_facts = authority
+                let authority_farm_facts = authority
                     .farm(actor, build.who, build.object_id(), build.uid)
                     .ok_or(GatherWorkRuntimeError::MissingAuthority)?;
-                if (farm_facts.site_who, farm_facts.site_o, farm_facts.site_uid)
-                    != (build.who, build.object_id(), build.uid)
-                    || farm_facts.farm_record_who != build.who
-                    || farm_facts.farm_record_o != build.object_id()
+                if (
+                    authority_farm_facts.site_who,
+                    authority_farm_facts.site_o,
+                    authority_farm_facts.site_uid,
+                ) != (build.who, build.object_id(), build.uid)
+                    || authority_farm_facts.farm_record_who != build.who
+                    || authority_farm_facts.farm_record_o != build.object_id()
                 {
                     return Err(GatherWorkRuntimeError::FarmAuthorityMismatch);
                 }
@@ -1362,6 +1396,35 @@ pub fn prepare_gather_work_activation(
                     .get(farm_index)
                     .copied()
                     .ok_or(GatherWorkRuntimeError::FarmAuthorityMismatch)?;
+                let mut farm_facts = authority_farm_facts;
+                let local_x = reads.actor_tx.wrapping_sub(farm_facts.corner_tx);
+                let local_y = reads.actor_ty.wrapping_sub(farm_facts.corner_ty);
+                let selected = (local_x >= 0
+                    && local_y >= 0
+                    && local_x < farm_facts.x_size
+                    && local_y < farm_facts.y_size)
+                    .then(|| (local_x * farm_facts.y_size + local_y) as usize)
+                    .and_then(|cell| farm.status.get(cell).copied());
+                let derived_post_snip = owned_lead.is_some_and(|lead| {
+                    actor_facts.move_runtime.is_some()
+                        && actor_facts.lead_animation == 8
+                        && authority_farm_facts.selected_cell_status == Some(2)
+                        && selected == Some(3)
+                        && lead.ty == 50
+                        && lead.gpiece == 6_336
+                        && lead.cur_anim == FARM_ANIMATION_24 as i8
+                        && lead.cur_time < 85
+                        && lead.end_time == 85
+                        && lead.last_time == lead.cur_time as i32 - 1
+                        && lead.hold_attack == 0
+                });
+                if derived_post_snip {
+                    let lead = owned_lead.expect("derived state retained lead Guy");
+                    farm_facts.selected_cell_status = Some(3);
+                    farm_facts.lead_cur_time = lead.cur_time;
+                    farm_facts.lead_end_time = lead.end_time;
+                    farm_facts.lead_hold_attack = lead.hold_attack as u8;
+                }
                 if owned_lead.is_some_and(|lead| {
                     (lead.cur_time, lead.end_time, lead.hold_attack as u8)
                         != (
@@ -1389,6 +1452,7 @@ pub fn prepare_gather_work_activation(
                     reads,
                     farm,
                     owns_animation_8_to_farm_work,
+                    Some(build.damage),
                 )?;
                 let (guys_before, guys_after) = if owns_animation_8_to_farm_work {
                     let before = owned_guys
@@ -1400,7 +1464,8 @@ pub fn prepare_gather_work_activation(
                         .expect("owned animation preflight retained lead Guy");
                     let requested = match plan.branch {
                         GatherWorkBranch::FarmStatus2Snip
-                        | GatherWorkBranch::FarmStatus3Animation24 => FARM_ANIMATION_24,
+                        | GatherWorkBranch::FarmStatus3Animation24
+                        | GatherWorkBranch::FarmPeriodicNoRepairAnimation24 => FARM_ANIMATION_24,
                         _ => FARM_ANIMATION_23,
                     };
                     // Unit::set_anim(requested,0,1) -> Guy::set_anim on the sole initialized

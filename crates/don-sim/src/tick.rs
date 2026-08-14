@@ -4287,6 +4287,64 @@ impl Sim {
         })
     }
 
+    /// Admission for the exact post-arrival Gather continuation.  The work transaction and
+    /// the two Guy tails are one retail activation surface: if revised content facts can no
+    /// longer prepare the work owner image, neither Guy::process nor Guy::inc_time may publish
+    /// a partial clock/pose write around that refusal.
+    fn exact_gather_work_admitted_with_guys(
+        &self,
+        row: usize,
+        unit_guys: &[Option<groups_guys::UnitGuys>],
+    ) -> Option<bool> {
+        if self.world.orders(row).order_type() != OrderIndex::Gather {
+            return None;
+        }
+        let actor = self.world.handle_at_row(row)?;
+        self.gather_work_authority.move_actor(actor)?;
+        Some(
+            canonical_gather_work::prepare_gather_work_activation(
+                &self.world,
+                &self.builds,
+                &self.farms,
+                unit_guys,
+                &self.unit_type,
+                &self.gather_work_authority,
+                row,
+            )
+            .is_ok(),
+        )
+    }
+
+    fn exact_gather_work_admitted(&self, row: usize) -> Option<bool> {
+        self.exact_gather_work_admitted_with_guys(row, &self.unit_guys)
+    }
+
+    fn exact_gather_work_admitted_for_inc_time(&self, row: usize) -> Option<bool> {
+        match self.exact_gather_work_admitted(row) {
+            Some(false) => {}
+            admitted => return admitted,
+        }
+
+        // On the MOVE_TO-arrival frame retail has already exposed Gather, but its work facts
+        // describe the lead Guy after this same frame's inc_time tail.  Admit only if that
+        // exact one-tick projection prepares the complete next Gather transaction.
+        let mut projected = self.unit_guys.clone();
+        let lead = projected
+            .get_mut(row)?
+            .as_mut()?
+            .guys
+            .first_mut()?
+            .as_mut()?;
+        let increment = u32::from(self.world.units.get_unit_masks2(row) & 0x10 == 0);
+        let next = lead.cur_time.wrapping_add(increment);
+        if next >= lead.end_time {
+            return Some(false);
+        }
+        lead.last_time = lead.cur_time as i32;
+        lead.cur_time = next;
+        self.exact_gather_work_admitted_with_guys(row, &projected)
+    }
+
     fn process_exact_gather_guy(&mut self, row: usize) -> bool {
         let Some(binding) = self.exact_gather_actor_binding(row) else {
             return false;
@@ -4385,6 +4443,9 @@ impl Sim {
         {
             return false;
         }
+        if self.exact_gather_work_admitted_for_inc_time(row) == Some(false) {
+            return false;
+        }
         let Some(binding) = self.exact_gather_actor_binding(row) else {
             return false;
         };
@@ -4447,8 +4508,12 @@ impl Sim {
             Some(Err(())) => Some(false),
             None => None,
         };
+        let exact_gather_admitted = self.exact_gather_work_admitted(row);
         self.unit_work(row);
-        if exact_move_admitted == Some(false) || !self.process_exact_gather_guy(row) {
+        if exact_move_admitted == Some(false)
+            || exact_gather_admitted == Some(false)
+            || !self.process_exact_gather_guy(row)
+        {
             self.cover.gaps[Gap::GuyProcess.index()] += 1;
         }
     }

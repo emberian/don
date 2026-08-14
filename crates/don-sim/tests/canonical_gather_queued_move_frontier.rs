@@ -303,6 +303,7 @@ fn authority(sim: &Sim, actor_row: usize) -> GatherWorkAuthority {
             lead_cur_time: 14,
             lead_end_time: 15,
             lead_hold_attack: 0,
+            periodic_effective_difficulty: Some(3),
         }],
     }
 }
@@ -320,7 +321,7 @@ fn source(sim: &Sim, row: usize) -> movement_live::LiveCollisionSource {
         spell_id: -1,
         unpacking: false,
         captain: false,
-        moving: row == ACTOR_O as usize,
+        moving: sim.world.orders(row).order_type() == OrderIndex::MoveTo,
         searching: false,
         action: if row == ACTOR_O as usize {
             OrderIndex::Gather as i32
@@ -571,6 +572,127 @@ fn exact_owner2_o9_move_arrival_then_animation36_farm_snip_is_resumable() {
     );
     assert_eq!(direct.unit_guys, resumed.unit_guys);
     assert_eq!(direct.farms, resumed.farms);
+
+    // Retail reaches the actor's 256-frame Farm phase before animation 36 can wrap.  The
+    // exact fresh target is undamaged, so difficulty three reaches and misses the repair-order
+    // gate, then falls through to the ordinary status-three animation-24 continuation.
+    assert_eq!(direct.world.frame, 1_211);
+    while direct.world.frame < 1_269 {
+        let farms_before = direct.farms.clone();
+        direct.do_frame();
+        let receipt = direct.last_gather_work_receipt.as_ref().unwrap_or_else(|| {
+            panic!(
+                "steady Farm continuation refused at frame {}: {:?}",
+                direct.world.frame - 1,
+                direct.last_gather_work_error
+            )
+        });
+        assert_eq!(receipt.branch, GatherWorkBranch::FarmStatus3Animation24);
+        assert_eq!((receipt.changed_fields, receipt.guy_changed_fields), (0, 0));
+        assert_eq!(receipt.rng_draws, 0);
+        assert_eq!(direct.farms, farms_before);
+    }
+    let periodic_lead = direct.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            periodic_lead.cur_anim,
+            periodic_lead.cur_time,
+            periodic_lead.end_time,
+            periodic_lead.last_time,
+        ),
+        (36, 59, 85, 58)
+    );
+
+    let boundary_saved = save_load::save_sim(&direct).unwrap();
+    let mut periodic_resumed = save_load::load_sim(&boundary_saved).unwrap();
+    periodic_resumed = arm(periodic_resumed, actor_row, true);
+    let orders_before = direct.world.orders(actor_row).clone();
+    let path_before = direct.paths[actor_row].clone();
+    let farms_before = direct.farms.clone();
+
+    direct.do_frame();
+    periodic_resumed.do_frame();
+    assert_eq!(
+        save_load::save_sim(&direct).unwrap(),
+        save_load::save_sim(&periodic_resumed).unwrap()
+    );
+    let receipt = direct.last_gather_work_receipt.as_ref().unwrap();
+    assert_eq!(receipt.frame, 1_269);
+    assert_eq!(
+        receipt.branch,
+        GatherWorkBranch::FarmPeriodicNoRepairAnimation24
+    );
+    assert_eq!((receipt.changed_fields, receipt.guy_changed_fields), (0, 0));
+    assert_eq!(receipt.rng_draws, 0);
+    assert_eq!(direct.world.orders(actor_row), &orders_before);
+    assert_eq!(direct.paths[actor_row], path_before);
+    assert_eq!(direct.farms, farms_before);
+    let periodic_lead = direct.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            periodic_lead.cur_anim,
+            periodic_lead.cur_time,
+            periodic_lead.end_time,
+            periodic_lead.last_time,
+        ),
+        (36, 60, 85, 59)
+    );
+
+    // Removing the recovered difficulty fact at the reached periodic gate must leave every
+    // canonical owner untouched; the enclosing Guy process/clock tails are part of the same
+    // atomic retail activation.
+    let mut stale = save_load::load_sim(&boundary_saved).unwrap();
+    stale = arm(stale, actor_row, true);
+    let mut stale_authority = authority(&stale, actor_row);
+    stale_authority.farms[0].periodic_effective_difficulty = None;
+    stale.replace_gather_work_authority(stale_authority);
+    let orders_before = stale.world.orders(actor_row).clone();
+    let path_before = stale.paths[actor_row].clone();
+    let guys_before = stale.unit_guys[actor_row].clone();
+    let farms_before = stale.farms.clone();
+    let builds_before: Vec<_> = stale
+        .builds
+        .iter()
+        .map(production::BuildData::image)
+        .collect();
+    let unit_before = (
+        stale.world.units.x_internal()[actor_row],
+        stale.world.units.y_internal()[actor_row],
+        stale.world.units.angle()[actor_row],
+        stale.world.units.group()[actor_row],
+        stale.world.units.get_unit_masks(actor_row),
+    );
+
+    stale.do_frame();
+
+    assert_eq!(stale.world.orders(actor_row), &orders_before);
+    assert_eq!(stale.paths[actor_row], path_before);
+    assert_eq!(stale.unit_guys[actor_row], guys_before);
+    assert_eq!(stale.farms, farms_before);
+    assert_eq!(
+        stale
+            .builds
+            .iter()
+            .map(production::BuildData::image)
+            .collect::<Vec<_>>(),
+        builds_before
+    );
+    assert_eq!(
+        (
+            stale.world.units.x_internal()[actor_row],
+            stale.world.units.y_internal()[actor_row],
+            stale.world.units.angle()[actor_row],
+            stale.world.units.group()[actor_row],
+            stale.world.units.get_unit_masks(actor_row),
+        ),
+        unit_before
+    );
+    assert!(stale.last_gather_work_receipt.is_none());
+    assert!(stale.last_gather_work_error.is_some());
 }
 
 #[test]
