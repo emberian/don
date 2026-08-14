@@ -328,7 +328,7 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 15] = [
     MapGenerationStage {
         name: "place_resources",
         evidence_va: Some(MAP_PLACE_RESOURCES_VA),
-        rng: "pool/XML bootstrap none; typed nonempty BONUS rows, first FISH row, and its no-draw recurrence own exact state through 0x0069021c/empty tail 0x00690225; empty FISH cleanup reaches GOODIES; later rows/categories open",
+        rng: "pool/XML bootstrap none; typed nonempty BONUS rows, first FISH row, and recurrence own exact state through tail 0x00690225; singleton FISH cleanup reaches GOODIES lookup without draws; later rows/categories open",
         checkpoint: None,
     },
     MapGenerationStage {

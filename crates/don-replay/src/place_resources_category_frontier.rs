@@ -326,6 +326,33 @@ pub struct CategoryAdvanceReceipt {
     pub disposition: CategoryAdvanceDisposition,
 }
 
+/// No-authority prefix of category cleanup, stopping before the first XML
+/// lookup for the next category. This is useful when row/category handles and
+/// the selected-style-name branch are already authenticated but the returned
+/// section is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CategoryCleanupToLookupReceipt {
+    pub entry_va: u32,
+    pub completed_category: ResourceCategory,
+    pub cleanup_operations: Vec<HostRefOperation>,
+    pub category_increment_va: u32,
+    pub category_dispatch_va: u32,
+    pub next_category: ResourceCategory,
+    pub selected_style_name_nonempty: bool,
+    pub lookup_call_va: u32,
+    pub lookup_string_offset: u32,
+    pub lookup_token: &'static str,
+    pub residual_va: u32,
+    pub deterministic_before: DeterministicResourceState,
+    pub deterministic_after: DeterministicResourceState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CategoryCleanupToLookupError {
+    RowsRemain,
+    UnsupportedCompletedCategory,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CategoryAdvanceError {
     RowsRemain,
@@ -348,6 +375,83 @@ fn release_if(out: &mut Vec<HostRefOperation>, condition: bool, call_va: u32, ki
     if condition {
         out.push(HostRefOperation { call_va, kind });
     }
+}
+
+/// Execute FISH category cleanup through the exact GOODIES dispatch, stopping
+/// before the selected/default XML lookup. RNG, World, pool, counters, chance
+/// locals, and document handles are carried unchanged.
+pub fn execute_fish_cleanup_to_goodies_lookup(
+    state: &mut CategoryLoopState,
+    selected_style_name_nonempty: bool,
+) -> Result<CategoryCleanupToLookupReceipt, CategoryCleanupToLookupError> {
+    if state.rows_remaining != 0 {
+        return Err(CategoryCleanupToLookupError::RowsRemain);
+    }
+    if state.category != ResourceCategory::Fish {
+        return Err(CategoryCleanupToLookupError::UnsupportedCompletedCategory);
+    }
+
+    let mut staged = state.clone();
+    let deterministic_before = staged.deterministic.clone();
+    let mut operations = Vec::new();
+    release_if(
+        &mut operations,
+        staged.category_handles.tail,
+        CATEGORY_RELEASE_CALL_VAS[0],
+        HostRefKind::ReleaseCategoryTail,
+    );
+    release_if(
+        &mut operations,
+        staged.category_handles.head,
+        CATEGORY_RELEASE_CALL_VAS[1],
+        HostRefKind::ReleaseCategoryHead,
+    );
+    release_if(
+        &mut operations,
+        staged.row_handles.tail,
+        CATEGORY_RELEASE_CALL_VAS[2],
+        HostRefKind::ReleaseRowTail,
+    );
+    release_if(
+        &mut operations,
+        staged.row_handles.head,
+        CATEGORY_RELEASE_CALL_VAS[3],
+        HostRefKind::ReleaseRowHead,
+    );
+    staged.category_handles = HostHandles::default();
+    staged.row_handles = HostHandles::default();
+    staged.category = ResourceCategory::Goodies;
+
+    let (lookup_call_va, lookup_string_offset, lookup_token) = if selected_style_name_nonempty {
+        (
+            SELECTED_GOODIES_GET_ELEMENT_CALL_VA,
+            GOODIES_STRING_OFFSET,
+            "GOODIES",
+        )
+    } else {
+        (
+            DEFAULT_GOODIES_GET_ELEMENT_CALL_VA,
+            GOODIES_STRING_OFFSET,
+            "GOODIES",
+        )
+    };
+    let receipt = CategoryCleanupToLookupReceipt {
+        entry_va: CATEGORY_TAIL_VA,
+        completed_category: ResourceCategory::Fish,
+        cleanup_operations: operations,
+        category_increment_va: CATEGORY_INCREMENT_VA,
+        category_dispatch_va: CATEGORY_DISPATCH_VA,
+        next_category: ResourceCategory::Goodies,
+        selected_style_name_nonempty,
+        lookup_call_va,
+        lookup_string_offset,
+        lookup_token,
+        residual_va: lookup_call_va,
+        deterministic_before,
+        deterministic_after: staged.deterministic.clone(),
+    };
+    *state = staged;
+    Ok(receipt)
 }
 
 fn validate_section(

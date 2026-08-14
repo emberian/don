@@ -15,7 +15,8 @@ GUID-matched PDB, SHA-256
 The current resource schedule owns all nonempty `BONUSES` rows, their category-tail
 branch, BONUSES cleanup/FISH lookup, and the exact first row of a nonempty FISH section.
 Its no-RNG recurrence is also owned; the first independently unowned instruction is
-the next FISH row at `0x0068fbb3`, or FISH cleanup at `0x00690225` for a singleton.
+the next FISH row at `0x0068fbb3`. Singleton FISH owns cleanup and GOODIES dispatch,
+stopping at the selected/default lookup at `0x0068f79b` or `0x0068f855`.
 If FISH is empty, its cleanup and GOODIES lookup/enumeration are owned;
 the residual is GOODIES row zero at `0x0068FBB3`, or GOODIES cleanup at `0x00690225`
 when empty. FISH recurrence/later rows, GOODIES rows, document cleanup, the

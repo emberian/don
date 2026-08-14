@@ -112,6 +112,10 @@ pub enum ResourceScheduleGoodsBoundary {
     AfterFirstFishRow,
     /// FISH recurrence selected another row at the shared row-body entry.
     BeforeNextFishRow,
+    /// Singleton FISH cleanup reached the selected-document GOODIES lookup.
+    BeforeSelectedGoodiesLookup,
+    /// Singleton FISH cleanup skipped directly to the default GOODIES lookup.
+    BeforeDefaultGoodiesLookup,
     /// Empty FISH cleanup completed and a nonempty GOODIES section is at row zero.
     BeforeFirstGoodiesRow,
     /// Empty FISH cleanup completed into an empty GOODIES section.
@@ -136,6 +140,12 @@ impl ResourceScheduleGoodsBoundary {
                 Some(crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA)
             }
             Self::BeforeNextFishRow => Some(crate::place_resources_category_frontier::ROW_BODY_VA),
+            Self::BeforeSelectedGoodiesLookup => {
+                Some(crate::place_resources_category_frontier::SELECTED_GOODIES_GET_ELEMENT_CALL_VA)
+            }
+            Self::BeforeDefaultGoodiesLookup => {
+                Some(crate::place_resources_category_frontier::DEFAULT_GOODIES_GET_ELEMENT_CALL_VA)
+            }
             Self::BeforeFirstGoodiesRow => {
                 Some(crate::place_resources_category_frontier::ROW_BODY_VA)
             }
@@ -526,6 +536,41 @@ fn placements_from_schedule(
                     });
                 }
                 ResourceScheduleGoodsBoundary::BeforeFishCategoryCleanup
+            }
+        }
+        MapMakeResourcePlacementReceipt::FishCleanupOpen(cleanup) => {
+            push_first_fish_placements(&cleanup.recurrence.first_fish, &mut placements)?;
+            if cleanup.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+                || cleanup.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+                || cleanup.recurrence.recurrence.branch_taken
+                || cleanup.recurrence.residual_va
+                    != crate::place_resources_category_frontier::CATEGORY_TAIL_VA
+                || cleanup.resource_pool_after != cleanup.recurrence.resource_pool_after
+                || cleanup.canonical_state_after != cleanup.recurrence.canonical_state_after
+                || cleanup.cleanup.entry_va
+                    != crate::place_resources_category_frontier::CATEGORY_TAIL_VA
+                || cleanup.cleanup.completed_category != ResourceCategory::Fish
+                || cleanup.cleanup.next_category != ResourceCategory::Goodies
+                || cleanup.category_state_after.category != ResourceCategory::Goodies
+                || cleanup.category_state_after.rows_remaining != 0
+                || cleanup.residual_va != cleanup.cleanup.lookup_call_va
+            {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "singleton FISH cleanup does not retain exact state/checkpoint",
+                });
+            }
+            if cleanup.residual_va
+                == crate::place_resources_category_frontier::SELECTED_GOODIES_GET_ELEMENT_CALL_VA
+            {
+                ResourceScheduleGoodsBoundary::BeforeSelectedGoodiesLookup
+            } else if cleanup.residual_va
+                == crate::place_resources_category_frontier::DEFAULT_GOODIES_GET_ELEMENT_CALL_VA
+            {
+                ResourceScheduleGoodsBoundary::BeforeDefaultGoodiesLookup
+            } else {
+                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                    reason: "singleton FISH cleanup has the wrong lookup residual",
+                });
             }
         }
         MapMakeResourcePlacementReceipt::GoodiesCategoryOpen(goodies) => {

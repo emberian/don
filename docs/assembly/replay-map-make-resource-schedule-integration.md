@@ -20,6 +20,7 @@ post_nubify_transitions checkpoint 0x0068c12a / token 0x1ebe
   -> typed BONUSES cleanup and FISH lookup/enumeration
   -> exact first FISH row through recurrence seam 0x00690215
   -> exact no-RNG row recurrence to 0x0068fbb3 or 0x00690225
+  -> singleton FISH cleanup/GOODIES dispatch to first XML lookup
      or, when FISH is empty, typed FISH cleanup and GOODIES lookup/enumeration
 ```
 
@@ -70,6 +71,11 @@ Three outcomes are explicit:
   two-phase allocation transcript. It then owns only `0x00690215..0x0069021c`: multi-row
   FISH stops before the next row at `0x0068fbb3`, while singleton FISH stops before cleanup
   at `0x00690225`. RNG, World, pool, counters, Good, and Item authority do not change.
+- `FishCleanupOpen` consumes only the completed singleton branch. It releases the retained
+  FISH category/current-row handles, increments and dispatches to GOODIES, and stops before
+  the selected/default GOODIES `get_element` call at `0x0068f79b` or `0x0068f855`. It needs
+  no section capture and preserves RNG, World, pool, counters, chance locals, documents,
+  Good, and Item authority.
 - `GoodiesCategoryOpen` is the source-complete empty-FISH branch. It authenticates the
   unchanged document authority, performs FISH cleanup and GOODIES lookup/enumeration with
   no RNG/World/pool change, then stops at GOODIES row zero (`0x0068fbb3`) or GOODIES cleanup
@@ -103,8 +109,8 @@ public pool without leaving it at the prefix state while publishing a newer dige
 
 All rows in a nonempty current `BONUSES` array, BONUSES cleanup/FISH dispatch, the first
 nonempty FISH row, and its recurrence can now execute in the compiled schedule. That branch's
-exact residual is `0x0068fbb3` when another FISH row remains or `0x00690225` before FISH
-cleanup. The empty-FISH branch advances to `0x0068fbb3` for nonempty GOODIES or
+exact residual is `0x0068fbb3` when another FISH row remains. Singleton cleanup advances to
+the first GOODIES XML lookup at `0x0068f79b`/`0x0068f855`. The empty-FISH branch advances to `0x0068fbb3` for nonempty GOODIES or
 `0x00690225` for empty GOODIES. The zero-row BONUSES XML-to-category-tail bridge remains
 open. Retail then executes FISH recurrence/later rows or GOODIES rows before returning to
 `0x0068c70c`, and eventually reaches caller checkpoint `0x0068c72d` / token `0x1ef7`.
@@ -155,6 +161,7 @@ rows, GOODIES row bodies, and final document cleanup remain open.
   an explicit `0x00690215` recurrence residual;
 - retained allocation proposals, exact row-zero replay, and no-mutation FISH recurrence to the
   next row or category cleanup;
+- singleton FISH handle cleanup and GOODIES dispatch through the first unresolved XML lookup;
 - empty-FISH cleanup and GOODIES lookup/enumeration with unchanged RNG, World, and pool;
 - a later selector row whose direct chance draw, callee pool draw, concrete bitmask
   mutation, and published digest form one chronology, plus schedule-level rollback for

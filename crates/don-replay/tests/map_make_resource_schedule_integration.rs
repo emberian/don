@@ -18,7 +18,8 @@ use don_replay::map_make_resource_schedule_integration::{
     continue_map_make_resource_schedule_first_fish,
     continue_map_make_resource_schedule_fish_category,
     continue_map_make_resource_schedule_fish_recurrence,
-    continue_map_make_resource_schedule_next_bonus, execute_map_make_resource_schedule,
+    continue_map_make_resource_schedule_next_bonus,
+    continue_map_make_resource_schedule_singleton_fish_cleanup, execute_map_make_resource_schedule,
     execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
     MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
     PlaceResourcesDocumentHostAuthority, BONUS_CATEGORY_TAIL_RESTORE_VA,
@@ -55,8 +56,8 @@ use don_replay::place_resources_category_frontier::{
     CategoryAdvanceDisposition, CategoryAdvanceFacts, CategoryRowFact, CategorySectionFact,
     HostHandles, HostRefKind, ResourceCategory, ResourceFrontierEvidence, SectionSource,
     CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, ROW_BODY_VA, ROW_COUNT_TEST_VA,
-    ROW_ENUMERATE_CALL_VA, SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256,
-    SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
+    ROW_ENUMERATE_CALL_VA, SELECTED_GOODIES_GET_ELEMENT_CALL_VA,
+    SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256, SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
 };
 use don_replay::place_resources_pool_frontier::{
     resource_divvy_pool_digest, PlaceResourcesFactEvidence, PlaceResourcesLiveFacts,
@@ -1853,6 +1854,54 @@ fn singleton_fish_recurrence_falls_through_without_mutating_any_authority() {
     assert_eq!(
         recurrence.recurrence.world_checksum,
         first.remaining_state.mutation.world_checksum
+    );
+    assert_eq!(pool, pool_before);
+    assert_eq!(canonical, canonical_before);
+
+    let cleanup_schedule =
+        continue_map_make_resource_schedule_singleton_fish_cleanup(&pool, &canonical, &continued)
+            .unwrap();
+    let cleanup = match &cleanup_schedule.placement {
+        MapMakeResourcePlacementReceipt::FishCleanupOpen(cleanup) => cleanup,
+        _ => panic!("singleton FISH cleanup must stop before the GOODIES lookup"),
+    };
+    assert_eq!(cleanup.residual_va, SELECTED_GOODIES_GET_ELEMENT_CALL_VA);
+    assert_eq!(cleanup.cleanup.lookup_token, "GOODIES");
+    assert_eq!(cleanup.cleanup.completed_category, ResourceCategory::Fish);
+    assert_eq!(cleanup.cleanup.next_category, ResourceCategory::Goodies);
+    assert_eq!(
+        cleanup
+            .cleanup
+            .cleanup_operations
+            .iter()
+            .map(|operation| operation.call_va)
+            .collect::<Vec<_>>(),
+        vec![
+            CATEGORY_RELEASE_CALL_VAS[0],
+            CATEGORY_RELEASE_CALL_VAS[1],
+            CATEGORY_RELEASE_CALL_VAS[2],
+        ]
+    );
+    assert_eq!(
+        cleanup
+            .cleanup
+            .cleanup_operations
+            .iter()
+            .map(|operation| operation.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HostRefKind::ReleaseCategoryTail,
+            HostRefKind::ReleaseCategoryHead,
+            HostRefKind::ReleaseRowTail,
+        ]
+    );
+    assert_eq!(
+        cleanup.cleanup.deterministic_before,
+        cleanup.category_state_after.deterministic
+    );
+    assert_eq!(
+        cleanup.category_state_after.deterministic.random_state,
+        canonical.mutation.random_state
     );
     assert_eq!(pool, pool_before);
     assert_eq!(canonical, canonical_before);

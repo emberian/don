@@ -81,7 +81,8 @@ There are therefore two honest residuals:
    BONUS row;
 2. after an admitted first-FISH receipt, its exact Good allocations are spliced in
    native order after BONUS allocations. After recurrence the first remaining schedule
-   boundary is the next FISH row at `0x0068fbb3` or FISH cleanup at `0x00690225`;
+   boundary is the next FISH row at `0x0068fbb3`; singleton FISH cleanup now advances
+   to the selected/default GOODIES lookup at `0x0068f79b` or `0x0068f855`;
    when FISH is empty, the boundary is GOODIES row zero at `0x0068fbb3` or GOODIES
    cleanup at `0x00690225`.
 
