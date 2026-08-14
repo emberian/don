@@ -130,6 +130,8 @@ pub mod off {
     // -- Object / ObjectData ------------------------------------------------------------
     /// `SubObjectData::o` — object index inside its owner's list.
     pub const OBJECT_ID: usize = 10; // 0x0A
+    /// XOR-obfuscated `SubObjectData::z_internal`.
+    pub const Z_INTERNAL: usize = 12; // 0x0C
     /// XOR-obfuscated `SubObjectData::x_internal`.
     pub const X_INTERNAL: usize = 16; // 0x10
     /// XOR-obfuscated `SubObjectData::y_internal`.
@@ -3526,6 +3528,17 @@ impl BuildData {
                 .expect("fixed BuildData y window"),
         );
         (encoded_x ^ 0x63637, encoded_y ^ 0x63637)
+    }
+
+    /// Deobfuscated terrain Z installed by `SubObject::init`.
+    #[inline]
+    pub fn position_z(&self) -> i32 {
+        let encoded_z = i32::from_le_bytes(
+            self.other[off::Z_INTERNAL..off::Z_INTERNAL + 4]
+                .try_into()
+                .expect("fixed BuildData z window"),
+        );
+        encoded_z ^ 0x63637
     }
 
     /// The head of `Wall::process` (`0x00640450`) that resets the per-frame helper state

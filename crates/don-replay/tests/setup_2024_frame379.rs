@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 
 use don_replay::replay::Replay;
 use don_replay::setup_2024_frame379::{
-    bind_captured_frame379_completed_init, discover_frame379_setup,
-    frame379_detailed_init_receipt_sha256, frame379_setup_snapshot_sha256, produce_frame379_setup,
-    publish_frame379_setup_sim, Frame379CompletedInitBindError, Frame379CompletedInitCapture,
-    Frame379CompletedInitSource, Frame379LeaderSetupAuthority, Frame379LeaderSetupSource,
-    Frame379SetupError, Frame379WorldgenAuthority, Frame379WorldgenSource, REPLAY_FILE_SHA256,
+    bind_captured_frame379_completed_init, bind_captured_frame379_setup_entry,
+    discover_frame379_setup, frame379_detailed_init_receipt_sha256,
+    frame379_mountain_height_receipt_sha256, frame379_setup_snapshot_sha256,
+    produce_frame379_setup, publish_frame379_setup_sim, Frame379CompletedInitBindError,
+    Frame379CompletedInitCapture, Frame379CompletedInitSource, Frame379LeaderSetupAuthority,
+    Frame379LeaderSetupSource, Frame379SetupEntryBindError, Frame379SetupEntryCapture,
+    Frame379SetupEntrySource, Frame379SetupError, Frame379WorldgenAuthority,
+    Frame379WorldgenSource, PLACE_ALL_RANDOM_STATE_BEFORE, REPLAY_FILE_SHA256,
 };
 use don_replay::setup_units_producer::{
     StartingUnitBonuses, StartingUnitPhase, StartingUnitTypeFacts, TypeResolutionFacts,
@@ -14,14 +17,26 @@ use don_replay::setup_units_producer::{
 };
 use don_replay::{
     build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest},
+    place_all_boundary::{
+        ReplayPlaceAllReceipt, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA, TERRAIN_GROUPS_PLACE_ALL_VA,
+    },
     setup_cities_builds::CITY_CENTER_TYPE,
     setup_place_unit_deep_re::{
         produce_place_unit_probe_prefix, CenterBuildFacts, PlaceUnitExternalResidual,
         PlaceUnitInputs, PlacementMapSnapshot, PlacementTileFacts,
     },
+    terrain_height_runtime::{
+        TerrainHeightAuthority, TerrainHeightSource, TerrainMountainHeightReceipt,
+        TERRAIN_ADJUST_FOR_MOUNTAINS_VA, TERRAIN_FILL_MOUNTAIN_DATA_VA,
+    },
 };
 use don_sim::systems::groups_guys::{GuyData, UnitGuys};
-use don_sim::systems::map_terrain::{land, SectionDigest, WorldChecksum, WorldSection};
+use don_sim::systems::map_terrain::{
+    land, Coord, SectionDigest, WCoord, WorldChecksum, WorldSection,
+};
+use don_sim::systems::mountain_template_producer::{
+    MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_VA,
+};
 use don_sim::systems::objects_init_unit_authority_frontier::{
     normalize_unit_init_coordinate, BhsInitUnitRequest, CaptainFacts, CompleteBody,
     DetailedInitUnitReceipt, FindFreeDisposition, FindFreeUnitReceipt, InitUnitStep,
@@ -29,6 +44,7 @@ use don_sim::systems::objects_init_unit_authority_frontier::{
     UnitInitReceipt, UnitTypeAuthorityFacts,
 };
 use don_sim::systems::production;
+use don_sim::systems::tech_cities::CityRecord;
 use don_sim::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use don_sim::tick::Sim;
 
@@ -337,6 +353,128 @@ fn captured_first_scout(
     (before, after, detailed, capture)
 }
 
+fn captured_setup_entry(
+    replay: &Replay,
+) -> (
+    Sim,
+    ReplayPlaceAllReceipt,
+    TerrainHeightAuthority,
+    TerrainMountainHeightReceipt,
+    Frame379SetupEntryCapture,
+) {
+    let facts = discover_frame379_setup(replay, &leader()).unwrap();
+    let edge = u16::try_from(replay.initial.info.settings.map_edge_world_cells().unwrap()).unwrap();
+    let mut entry = Sim::new(u64::from(replay.initial.info.seed), edge);
+    entry.map.world.seed = replay.initial.info.seed as i32;
+    for cell in &mut entry.map.world.wdata {
+        cell.land = land::FERTILE;
+        cell.region = 1;
+        cell.down = -1;
+        cell.down_who = -1;
+        cell.flags = 0;
+    }
+    entry.map.world.tdata.fill(0);
+    let mut build = production::BuildData {
+        flags: production::flag::VALID
+            | production::flag::STARTED
+            | production::flag::ACTIVE
+            | 0x20,
+        city: -1,
+        gather_down: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..production::BuildData::default()
+    };
+    // The zero height plane below returns logical Z zero; SubObject stores it XOR-obfuscated.
+    build.other[production::off::Z_INTERNAL..production::off::Z_INTERNAL + 4]
+        .copy_from_slice(&0x0006_3637_i32.to_le_bytes());
+    build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+    build.other[0x3e] = u8::MAX;
+    let center = spawn_canonical_build(
+        &mut entry,
+        CanonicalBuildSpawnRequest {
+            owner: 0,
+            type_index: CITY_CENTER_TYPE,
+            snapped_x: facts.center_position.0,
+            snapped_y: facts.center_position.1,
+            build,
+        },
+    )
+    .unwrap();
+    entry.builds[center.row].city = 0;
+    let wx = WCoord::from_coord(Coord(facts.center_position.0)).0;
+    let wy = WCoord::from_coord(Coord(facts.center_position.1)).0;
+    let wrow = (wy * entry.map.world.xs + wx) as usize;
+    entry.map.world.wdata[wrow].down = center.object_id;
+    entry.map.world.wdata[wrow].down_who = 0;
+    entry.cities.slots[0][0] = CityRecord {
+        city_flags: 0x4011,
+        city: 0,
+        o: center.object_id,
+        reg: 1,
+        x: facts.center_position.0,
+        y: facts.center_position.1,
+        who: 0,
+        ..CityRecord::default()
+    };
+    entry.cities.city_mark[0] = 1;
+    entry.world.random.reseed(0x1234_5678);
+
+    let checksum = entry.map.world.checksum_sections();
+    let place_all = ReplayPlaceAllReceipt {
+        entry_va: TERRAIN_GROUPS_PLACE_ALL_VA,
+        return_va: TERRAIN_GROUPS_PLACE_ALL_RETURN_VA,
+        return_value: 1,
+        map_style: 14,
+        generated_starts: replay.initial.active_players().count(),
+        tdata_cells: entry.map.world.tdata.len(),
+        random_state_before: PLACE_ALL_RANDOM_STATE_BEFORE,
+        random_state_after: entry.world.random.state(),
+        host_events: Vec::new(),
+        checksum_before: checksum.clone(),
+        checksum_after: checksum.clone(),
+        sourced_walked_bytes: 0,
+    };
+    let vertices = (entry.map.world.tile_xs as usize + 1) * (entry.map.world.tile_ys as usize + 1);
+    let terrain = TerrainHeightAuthority {
+        master_land_height_bits: vec![0; vertices],
+        land_height_bits: 0,
+        source: TerrainHeightSource::CompletedWorldgen,
+        source_digest: [0x33; 32],
+    };
+    let mountain_height = TerrainMountainHeightReceipt {
+        adjust_for_mountains_va: TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
+        fill_mountain_data_va: TERRAIN_FILL_MOUNTAIN_DATA_VA,
+        mountain_range_init_va: MOUNTAIN_RANGE_INIT_VA,
+        mountain_range_init_sha256: MOUNTAIN_RANGE_INIT_SHA256,
+        pre_mountain_digest: [0x11; 32],
+        catalog_digest: [0x22; 32],
+        placement_digest: [0x44; 32],
+        final_plane_digest: terrain.source_digest,
+        placements: 0,
+        source_vertices: 0,
+        matched_vertices: 0,
+        unmatched_vertices: 0,
+        load_rebuild_mode: false,
+        final_query_authority: true,
+    };
+    let capture = Frame379SetupEntryCapture {
+        revision: 1,
+        source: Frame379SetupEntrySource::CompleteRetailBuildUnitsEntry,
+        replay_file_sha256: REPLAY_FILE_SHA256,
+        executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+        entry_sim_sha256: frame379_setup_snapshot_sha256(&entry).unwrap(),
+        post_place_all_world_checksum: place_all.checksum_after.clone(),
+        post_place_all_random_state: place_all.random_state_after,
+        terrain_source_digest: terrain.source_digest,
+        mountain_height_receipt_sha256: frame379_mountain_height_receipt_sha256(&mountain_height),
+    };
+    (entry, place_all, terrain, mountain_height, capture)
+}
+
 #[test]
 fn source_backed_witness_has_exact_seven_call_schedule_and_guy_shape() {
     let Some(replay) = installed_witness() else {
@@ -384,6 +522,83 @@ fn source_backed_witness_has_exact_seven_call_schedule_and_guy_shape() {
         (0..4)
             .map(|index| StartingUnitPhase::Citizen { index })
             .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn captured_setup_entry_derives_worldgen_authority_from_map_height_and_village() {
+    let Some(replay) = installed_witness() else {
+        return;
+    };
+    let (entry, place_all, terrain, mountain_height, capture) = captured_setup_entry(&replay);
+    let bound = bind_captured_frame379_setup_entry(
+        &replay,
+        &entry,
+        &place_all,
+        &terrain,
+        &mountain_height,
+        &capture,
+    )
+    .unwrap();
+    assert_ne!(bound.worldgen.composition_digest, [0; 32]);
+    assert_eq!(
+        bound.worldgen.world_checksum,
+        entry.map.world.checksum_sections()
+    );
+    assert_eq!(bound.worldgen.random_state, entry.world.random.state());
+    assert_eq!(bound.center_build_o, 2_000);
+    assert_eq!(bound.center_city_slot, 0);
+    assert_eq!(bound.center_region, 1);
+    assert_eq!(bound.terrain_query.returned_z, 0);
+}
+
+#[test]
+fn captured_setup_entry_rejects_cross_wired_map_height_and_receiver_entry() {
+    let Some(replay) = installed_witness() else {
+        return;
+    };
+    let (entry, place_all, terrain, mountain_height, capture) = captured_setup_entry(&replay);
+
+    let mut wrong = capture.clone();
+    wrong.post_place_all_world_checksum.full ^= 1;
+    assert_eq!(
+        bind_captured_frame379_setup_entry(
+            &replay,
+            &entry,
+            &place_all,
+            &terrain,
+            &mountain_height,
+            &wrong,
+        ),
+        Err(Frame379SetupEntryBindError::PlaceAllChecksumMismatch)
+    );
+
+    let mut wrong = capture.clone();
+    wrong.terrain_source_digest[0] ^= 1;
+    assert_eq!(
+        bind_captured_frame379_setup_entry(
+            &replay,
+            &entry,
+            &place_all,
+            &terrain,
+            &mountain_height,
+            &wrong,
+        ),
+        Err(Frame379SetupEntryBindError::TerrainMountainReceiptMismatch)
+    );
+
+    let mut wrong = capture;
+    wrong.entry_sim_sha256[0] ^= 1;
+    assert_eq!(
+        bind_captured_frame379_setup_entry(
+            &replay,
+            &entry,
+            &place_all,
+            &terrain,
+            &mountain_height,
+            &wrong,
+        ),
+        Err(Frame379SetupEntryBindError::EntrySnapshotMismatch)
     );
 }
 

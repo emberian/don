@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use don_sim::systems::map_terrain::{World, WorldChecksum};
+use don_sim::systems::map_terrain::{Coord, TCoord, WCoord, World, WorldChecksum};
 use don_sim::systems::objects_init_unit_authority_frontier::{
     BhsInitUnitRequest, DetailedInitUnitReceipt, InitUnitReceiptError, InitUnitStep, UnitAfterInit,
 };
@@ -26,6 +26,9 @@ use don_sim::world::{WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 
 use crate::groups_pre_pair_unit_authority::{
     replay_tribe_type_facts, replay_unit_type_facts, PrePairUnitAuthorityError, ReplayUnitTypeFacts,
+};
+use crate::place_all_boundary::{
+    ReplayPlaceAllReceipt, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA, TERRAIN_GROUPS_PLACE_ALL_VA,
 };
 use crate::replay::{load_payload, Replay};
 use crate::setup_cities_builds::{
@@ -47,6 +50,10 @@ use crate::setup_units_producer::{
     UnitMemberAuthorityReceipt, BASE_PEASANT_TYPE, BASE_SCOUT_TYPE, DUTCH_MERCHANT_TYPE,
     OBJECTS_INIT_UNIT_BYTES, OBJECTS_INIT_UNIT_VA, PLACE_UNIT_DIRECT_RANDOM_CALL_VA,
 };
+use crate::terrain_height_runtime::{
+    TerrainHeightAuthority, TerrainHeightError, TerrainHeightSource, TerrainMountainHeightReceipt,
+    TerrainTcoordZReceipt,
+};
 use crate::wire::CommandView;
 use crate::world_owner_frontier::sha256;
 
@@ -64,6 +71,9 @@ pub const SETUP_CALLS: usize = 7;
 pub const CITIZEN_ORDINALS: [usize; 4] = [3, 4, 5, 6];
 pub const GROUP_MOVE_SERIAL: i32 = 64;
 pub const GROUP_MOVE_FRAME: i32 = 379;
+/// Exact Great Lakes RNG handoff immediately before `TerrainGroups::place_all` for the
+/// target replay. This is executable-derived procedural chronology, not a recorded checksum.
+pub const PLACE_ALL_RANDOM_STATE_BEFORE: i32 = 0x58df_377d_u32 as i32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame379WorldgenSource {
@@ -103,6 +113,98 @@ pub struct Frame379WorldgenAuthority {
     pub replay_file_sha256: [u8; 32],
     pub world_checksum: WorldChecksum,
     pub random_state: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame379SetupEntrySource {
+    /// A supported retail process completed `Terrain::init` and the ordinary starting-Village
+    /// constructor, then captured the canonical Sim immediately before `Setup::build_units`.
+    CompleteRetailBuildUnitsEntry,
+}
+
+/// Source attestation for the missing completed-worldgen/starting-Village entry image.
+///
+/// The post-`place_all` checksum is a locally walked runtime image, not a value copied from the
+/// replay. The entry snapshot is later because starting-Village construction mutates World.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame379SetupEntryCapture {
+    pub revision: u64,
+    pub source: Frame379SetupEntrySource,
+    pub replay_file_sha256: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub entry_sim_sha256: [u8; 32],
+    pub post_place_all_world_checksum: WorldChecksum,
+    pub post_place_all_random_state: i32,
+    pub terrain_source_digest: [u8; 32],
+    pub mountain_height_receipt_sha256: [u8; 32],
+}
+
+/// Joined proof which creates the otherwise manually injectable worldgen authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame379SetupEntryReceipt {
+    pub worldgen: Frame379WorldgenAuthority,
+    pub source: Frame379SetupEntrySource,
+    pub executable_sha256: [u8; 32],
+    pub entry_sim_sha256: [u8; 32],
+    pub post_place_all_world_checksum: WorldChecksum,
+    pub post_place_all_random_state: i32,
+    pub terrain_source_digest: [u8; 32],
+    pub mountain_height_receipt_sha256: [u8; 32],
+    pub terrain_query: TerrainTcoordZReceipt,
+    pub center_build_row: usize,
+    pub center_build_o: i32,
+    pub center_city_slot: i16,
+    pub center_region: i16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame379SetupEntryBindError {
+    Replay(Frame379SetupError),
+    MissingCaptureRevision,
+    WrongCaptureSource,
+    ReplayMismatch,
+    UnsupportedExecutable,
+    Snapshot(SaveError),
+    EntrySnapshotMismatch,
+    WrongFrame { expected: i32, actual: i32 },
+    MapDimensionMismatch,
+    WorldSeedMismatch,
+    PlaceAllBoundaryMismatch,
+    PlaceAllMapStyleMismatch,
+    PlaceAllDidNotComplete,
+    PlaceAllChecksumMismatch,
+    PlaceAllRandomStateMismatch,
+    MissingTerrainSourceIdentity,
+    WrongTerrainSource,
+    TerrainMountainReceiptMismatch,
+    Terrain(TerrainHeightError),
+    MissingCenterBuild,
+    CenterBuildMismatch,
+    CenterBuildTerrainMismatch { expected: i32, actual: i32 },
+    MissingCenterCity,
+    CenterCityMismatch,
+    CenterWorldLinkMismatch,
+    EntryAllocationNotFresh,
+}
+
+impl fmt::Display for Frame379SetupEntryBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "2024 frame-379 setup entry refused: {self:?}")
+    }
+}
+
+impl std::error::Error for Frame379SetupEntryBindError {}
+
+impl From<Frame379SetupError> for Frame379SetupEntryBindError {
+    fn from(value: Frame379SetupError) -> Self {
+        Self::Replay(value)
+    }
+}
+
+impl From<TerrainHeightError> for Frame379SetupEntryBindError {
+    fn from(value: TerrainHeightError) -> Self {
+        Self::Terrain(value)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -686,6 +788,270 @@ pub fn frame379_setup_snapshot_sha256(sim: &Sim) -> Result<[u8; 32], SaveError> 
 pub fn frame379_detailed_init_receipt_sha256(detailed: &DetailedInitUnitReceipt) -> [u8; 32] {
     let image = format!("don-frame379-detailed-init-v1\0{detailed:?}");
     sha256(image.as_bytes())
+}
+
+/// Stable identity for the source-derived post-mountain height transaction.
+pub fn frame379_mountain_height_receipt_sha256(receipt: &TerrainMountainHeightReceipt) -> [u8; 32] {
+    let mut image = b"don-frame379-mountain-height-v1".to_vec();
+    image.extend_from_slice(&receipt.adjust_for_mountains_va.to_le_bytes());
+    image.extend_from_slice(&receipt.fill_mountain_data_va.to_le_bytes());
+    image.extend_from_slice(&receipt.mountain_range_init_va.to_le_bytes());
+    image.extend_from_slice(receipt.mountain_range_init_sha256.as_bytes());
+    image.extend_from_slice(&receipt.pre_mountain_digest);
+    image.extend_from_slice(&receipt.catalog_digest);
+    image.extend_from_slice(&receipt.placement_digest);
+    image.extend_from_slice(&receipt.final_plane_digest);
+    image.extend_from_slice(&(receipt.placements as u64).to_le_bytes());
+    image.extend_from_slice(&(receipt.source_vertices as u64).to_le_bytes());
+    image.extend_from_slice(&(receipt.matched_vertices as u64).to_le_bytes());
+    image.extend_from_slice(&(receipt.unmatched_vertices as u64).to_le_bytes());
+    image.push(u8::from(receipt.load_rebuild_mode));
+    image.push(u8::from(receipt.final_query_authority));
+    sha256(&image)
+}
+
+fn append_world_checksum(image: &mut Vec<u8>, checksum: &WorldChecksum) {
+    image.extend_from_slice(&checksum.full.to_le_bytes());
+    image.extend_from_slice(&checksum.bytes.to_le_bytes());
+    for section in checksum.per_section {
+        image.extend_from_slice(&section.adler.to_le_bytes());
+        image.extend_from_slice(&section.bytes.to_le_bytes());
+    }
+}
+
+/// Bind the real frame-zero `Setup::build_units` entry to the exact procedural map/RNG and
+/// post-mountain height owners, then create the worldgen authority consumed by the seven-call
+/// chronology.
+///
+/// Starting-Village construction changes World after `place_all`, so equality of those two
+/// World checksums would be false. The capture instead attests both boundaries. This binder
+/// checks the earlier value against the executable `place_all` receipt and independently joins
+/// the later snapshot to the canonical Village Build, City, intrusive World link, and terrain Z.
+/// It never reads a checksum embedded in the recording.
+pub fn bind_captured_frame379_setup_entry(
+    replay: &Replay,
+    entry: &Sim,
+    place_all: &ReplayPlaceAllReceipt,
+    terrain: &TerrainHeightAuthority,
+    mountain_height: &TerrainMountainHeightReceipt,
+    capture: &Frame379SetupEntryCapture,
+) -> Result<Frame379SetupEntryReceipt, Frame379SetupEntryBindError> {
+    let raw = std::fs::read(&replay.path)
+        .map_err(|error| Frame379SetupError::ReplayRead(error.to_string()))?;
+    let replay_file_sha256 = sha256(&raw);
+    if replay_file_sha256 != REPLAY_FILE_SHA256 {
+        return Err(Frame379SetupEntryBindError::Replay(
+            Frame379SetupError::WrongReplayFile,
+        ));
+    }
+    if replay.initial.info.seed != REPLAY_SEED
+        || replay.initial.info.settings.map_style != MAP_STYLE
+        || replay.initial.info.settings.map_size != MAP_SIZE
+        || replay.initial.info.settings.starting_town != 1
+    {
+        return Err(Frame379SetupEntryBindError::Replay(
+            Frame379SetupError::WrongReplaySettings,
+        ));
+    }
+    if capture.revision == 0 {
+        return Err(Frame379SetupEntryBindError::MissingCaptureRevision);
+    }
+    if capture.source != Frame379SetupEntrySource::CompleteRetailBuildUnitsEntry {
+        return Err(Frame379SetupEntryBindError::WrongCaptureSource);
+    }
+    if capture.replay_file_sha256 != replay_file_sha256 {
+        return Err(Frame379SetupEntryBindError::ReplayMismatch);
+    }
+    if capture.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
+        return Err(Frame379SetupEntryBindError::UnsupportedExecutable);
+    }
+    let entry_sim_sha256 =
+        frame379_setup_snapshot_sha256(entry).map_err(Frame379SetupEntryBindError::Snapshot)?;
+    if capture.entry_sim_sha256 != entry_sim_sha256 {
+        return Err(Frame379SetupEntryBindError::EntrySnapshotMismatch);
+    }
+    if entry.world.frame != 0 {
+        return Err(Frame379SetupEntryBindError::WrongFrame {
+            expected: 0,
+            actual: entry.world.frame,
+        });
+    }
+    let edge = replay
+        .initial
+        .info
+        .settings
+        .map_edge_world_cells()
+        .ok_or(Frame379SetupEntryBindError::MapDimensionMismatch)?;
+    if entry.map.world.xs != edge || entry.map.world.ys != edge {
+        return Err(Frame379SetupEntryBindError::MapDimensionMismatch);
+    }
+    if entry.map.world.seed != REPLAY_SEED as i32 {
+        return Err(Frame379SetupEntryBindError::WorldSeedMismatch);
+    }
+
+    if place_all.entry_va != TERRAIN_GROUPS_PLACE_ALL_VA
+        || place_all.return_va != TERRAIN_GROUPS_PLACE_ALL_RETURN_VA
+    {
+        return Err(Frame379SetupEntryBindError::PlaceAllBoundaryMismatch);
+    }
+    if place_all.map_style != MAP_STYLE {
+        return Err(Frame379SetupEntryBindError::PlaceAllMapStyleMismatch);
+    }
+    if place_all.return_value != 1
+        || place_all.generated_starts != replay.initial.active_players().count()
+    {
+        return Err(Frame379SetupEntryBindError::PlaceAllDidNotComplete);
+    }
+    if capture.post_place_all_world_checksum != place_all.checksum_after
+        || place_all.checksum_after.bytes != entry.map.world.checksum_sections().bytes
+    {
+        return Err(Frame379SetupEntryBindError::PlaceAllChecksumMismatch);
+    }
+    if place_all.random_state_before != PLACE_ALL_RANDOM_STATE_BEFORE
+        || capture.post_place_all_random_state != place_all.random_state_after
+        || entry.world.random.state() != place_all.random_state_after
+    {
+        return Err(Frame379SetupEntryBindError::PlaceAllRandomStateMismatch);
+    }
+
+    if terrain.source_digest == [0; 32] {
+        return Err(Frame379SetupEntryBindError::MissingTerrainSourceIdentity);
+    }
+    if terrain.source != TerrainHeightSource::CompletedWorldgen || !terrain.is_initialized() {
+        return Err(Frame379SetupEntryBindError::WrongTerrainSource);
+    }
+    let mountain_height_receipt_sha256 = frame379_mountain_height_receipt_sha256(mountain_height);
+    if !mountain_height.final_query_authority
+        || mountain_height.load_rebuild_mode
+        || mountain_height.final_plane_digest != terrain.source_digest
+        || capture.terrain_source_digest != terrain.source_digest
+        || capture.mountain_height_receipt_sha256 != mountain_height_receipt_sha256
+    {
+        return Err(Frame379SetupEntryBindError::TerrainMountainReceiptMismatch);
+    }
+
+    let center_position = first_camera(replay)?;
+    let center_build_o = 2_000;
+    let center_identity = entry
+        .world
+        .object_bands()
+        .live_identity(
+            don_sim::systems::sparse_object_bands_authority_frontier::RetailObjectAddress::new(
+                OWNER,
+                don_sim::systems::sparse_object_bands_authority_frontier::RetailBand::Build,
+                center_build_o,
+            ),
+        )
+        .ok_or(Frame379SetupEntryBindError::MissingCenterBuild)?;
+    let WorldObjectIdentity::BuildRow(center_row) = center_identity else {
+        return Err(Frame379SetupEntryBindError::MissingCenterBuild);
+    };
+    let center_build_row = center_row as usize;
+    let center = entry
+        .builds
+        .get(center_build_row)
+        .ok_or(Frame379SetupEntryBindError::MissingCenterBuild)?;
+    let required_flags = don_sim::systems::production::flag::VALID
+        | don_sim::systems::production::flag::STARTED
+        | don_sim::systems::production::flag::ACTIVE
+        | 0x20;
+    if center.flags & required_flags != required_flags
+        || center.who != OWNER
+        || i32::from(center.object_id()) != center_build_o
+        || center.position() != center_position
+        || center.city < 0
+        || entry
+            .production_runtime
+            .build_types
+            .get(center_build_row)
+            .and_then(|value| *value)
+            != Some(CITY_CENTER_TYPE)
+    {
+        return Err(Frame379SetupEntryBindError::CenterBuildMismatch);
+    }
+    let tx = TCoord::from_coord(Coord(center_position.0)).0;
+    let ty = TCoord::from_coord(Coord(center_position.1)).0;
+    let terrain_query = terrain.find_tcoord_z(&entry.map.world, tx, ty, 1)?;
+    if terrain_query.uninitialized_fallback || center.position_z() != terrain_query.returned_z {
+        return Err(Frame379SetupEntryBindError::CenterBuildTerrainMismatch {
+            expected: terrain_query.returned_z,
+            actual: center.position_z(),
+        });
+    }
+
+    let center_city_slot = center.city;
+    let city = usize::try_from(center_city_slot)
+        .ok()
+        .and_then(|slot| entry.cities.slots.get(usize::from(OWNER))?.get(slot))
+        .ok_or(Frame379SetupEntryBindError::MissingCenterCity)?;
+    let wx = WCoord::from_coord(Coord(center_position.0)).0;
+    let wy = WCoord::from_coord(Coord(center_position.1)).0;
+    let world_cell = entry
+        .map
+        .world
+        .wdata
+        .get((wy * entry.map.world.xs + wx) as usize)
+        .ok_or(Frame379SetupEntryBindError::CenterWorldLinkMismatch)?;
+    if !city.active()
+        || city.city != center_city_slot
+        || city.o != center.object_id()
+        || city.who != OWNER as i8
+        || city.x != center_position.0
+        || city.y != center_position.1
+        || city.reg != world_cell.region
+    {
+        return Err(Frame379SetupEntryBindError::CenterCityMismatch);
+    }
+    if world_cell.down != center.object_id() || world_cell.down_who != i16::from(OWNER) {
+        return Err(Frame379SetupEntryBindError::CenterWorldLinkMismatch);
+    }
+    if entry.world.unit_mark(usize::from(OWNER)) != Some(0) {
+        return Err(Frame379SetupEntryBindError::EntryAllocationNotFresh);
+    }
+
+    let entry_world_checksum = entry.map.world.checksum_sections();
+    let mut image = b"don-frame379-setup-entry-v1".to_vec();
+    image.extend_from_slice(&capture.revision.to_le_bytes());
+    image.extend_from_slice(&replay_file_sha256);
+    image.extend_from_slice(&capture.executable_sha256);
+    image.extend_from_slice(&entry_sim_sha256);
+    append_world_checksum(&mut image, &place_all.checksum_before);
+    append_world_checksum(&mut image, &place_all.checksum_after);
+    image.extend_from_slice(&place_all.random_state_before.to_le_bytes());
+    image.extend_from_slice(&place_all.random_state_after.to_le_bytes());
+    image.extend_from_slice(&terrain.source_digest);
+    image.extend_from_slice(&mountain_height_receipt_sha256);
+    image.extend_from_slice(&terrain_query.returned_z.to_le_bytes());
+    image.extend_from_slice(&(center_build_row as u64).to_le_bytes());
+    image.extend_from_slice(&center_build_o.to_le_bytes());
+    image.extend_from_slice(&center_city_slot.to_le_bytes());
+    image.extend_from_slice(&city.reg.to_le_bytes());
+    append_world_checksum(&mut image, &entry_world_checksum);
+    image.extend_from_slice(&entry.world.random.state().to_le_bytes());
+    let composition_digest = sha256(&image);
+    let worldgen = Frame379WorldgenAuthority {
+        revision: capture.revision,
+        composition_digest,
+        source: Frame379WorldgenSource::CompletedGreatLakesWorldgenAndStartingVillage,
+        replay_file_sha256,
+        world_checksum: entry_world_checksum,
+        random_state: entry.world.random.state(),
+    };
+    Ok(Frame379SetupEntryReceipt {
+        worldgen,
+        source: capture.source,
+        executable_sha256: capture.executable_sha256,
+        entry_sim_sha256,
+        post_place_all_world_checksum: place_all.checksum_after.clone(),
+        post_place_all_random_state: place_all.random_state_after,
+        terrain_source_digest: terrain.source_digest,
+        mountain_height_receipt_sha256,
+        terrain_query,
+        center_build_row,
+        center_build_o,
+        center_city_slot,
+        center_region: city.reg,
+    })
 }
 
 fn prior_unit_row_equal(before: &Sim, after: &Sim, row: usize) -> bool {

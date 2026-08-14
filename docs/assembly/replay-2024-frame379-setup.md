@@ -66,18 +66,31 @@ order, path, pathfinder input, and Guy image unchanged. Thus the Great Lakes lan
 Scout, Merchant, and Citizen calls directly into `produce_frame379_setup`; it no longer needs a
 2018-specific complete-initializer adapter or a caller-chosen digest.
 
+`bind_captured_frame379_setup_entry` closes the matching upstream injection seam. It joins the
+completed `TerrainGroups::place_all` receipt and its exact post-map RNG to the source-derived
+post-mountain `TerrainHeightAuthority`, then validates a supported-retail frame-zero DoNSave at
+the `Setup::build_units` entry. The later snapshot must contain the camera-selected owner-0
+Village as canonical object 2000, its live City/region link and intrusive WData head, and the
+same terrain Z returned by the completed height plane. The binder derives the
+`Frame379WorldgenAuthority.composition_digest`; callers no longer choose that digest when a real
+entry capture is available. The post-`place_all` and setup-entry World checksums are deliberately
+distinct boundaries because Village construction changes World. Neither is read from a replay
+checksum command.
+
 Mutation gates reject missing revisions/digests, replay drift, wrong dynamic bonuses/upgrades,
 non-adjacent World/RNG states, invalid detailed receipts, stale identities, wrong types or
 positions, nonempty orders/paths, wrong Guy marks, and allocation gaps.
 
 ## Exact residual
 
-No real `Frame379SetupReceipt` can be emitted yet. Mountain mode 5 and its exact player-group
-owner adapter are implemented, but the required effects-graphics/displacement inputs are not
-installed as canonical runtime authority. A cold Great Lakes replay therefore still stops at
-`place_all_mountains_add_mountain`; its placement result also has not yet been joined to the exact
-CoordInfo/scalar cone and post-mountain height plane. Consequently there is no lawful
-postworldgen World/RNG/Village seam from which to bind the seven adjacent receiver Sims.
+No real `Frame379SetupReceipt` can be emitted yet. Mountain mode 5, its player-group owner,
+CoordInfo and scalar derivation, and the post-mountain height composition are source-recovered;
+the setup-entry binder consumes their final receipts without accepting raw Z or a caller-chosen
+authority digest. The exact run still cannot reach that binder because the 16 installed
+displacement TGAs are absent, so there is no canonical completed `place_all` World/RNG, final
+height plane, or retail setup-entry snapshot. `place_all` itself contains the selected
+trees/rocks/oil and its doober/treeify/reporting tail; there is no unnamed forest/resource/start
+placement pass after it.
 
 After that seam lands, the receiver binder needs seven coherent retail capture tranches containing
 the complete graphics, height, collision, visibility, Leader-accounting, RNG, Unit, and Guy
