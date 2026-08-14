@@ -11,8 +11,9 @@ both concrete TypeIndex 62. It is derived from `riseofnations.exe` sha256
 The executable code sizes are 1,302 bytes for `think_merchant`, 452 bytes for
 `unpack_merchant`, and 317 bytes for `find_merchant_spot`.
 
-The implementation is detached in
-`crates/don-replay/src/setup_2024_frame0_merchant_unpack.rs`. It is not mounted in
+The transaction is detached in
+`crates/don-replay/src/setup_2024_frame0_merchant_unpack.rs`; its source-owned search prefix is
+in `crates/don-replay/src/setup_2024_frame0_merchant_search.rs`. It is not mounted in
 `Sim::do_frame`: the complete frame-zero object scheduler still needs the two native child
 receipts and the surrounding Scout/Unit chronology.
 
@@ -36,15 +37,13 @@ The direct caller makes the repeated mask-clear arm unreachable in this golden c
 detached request consequently rejects a missing `0x0008_0000` bit instead of claiming that
 `think_merchant` ran.
 
-## First unsourced child
+## Read-only search prefix and first unsourced child
 
 `unpack_merchant` calls
 
 `Unit::find_merchant_spot(decoded_x, decoded_y, 3, &tile_x, &tile_y)`
 
-at `0x0060390e`. `find_merchant_spot` is read-only for this call shape, but its answer is not
-derivable from the replay file or the current incomplete Great Lakes World owner. Its exact
-read order is:
+at `0x0060390e`. `find_merchant_spot` is read-only for this call shape. Its exact read order is:
 
 1. `UnitData::calc_gather` `0x00609180` with the fixed `0,0,0,...,0,0,1,1,x,y` call shape;
 2. the radius-3 count at `0x00add1e0` and ordered offsets at `0x00adcaf0` / `0x00adc400`;
@@ -54,10 +53,41 @@ read order is:
 6. `Unit::detect_unit_collision` `0x00617060` at `(tile_x*192,tile_y*192)`, footprint 1×1,
    with the three trailing flags zero.
 
-The first passing candidate is returned. No RNG call occurs. The authority seam records a
-nonzero native digest over that complete terrain/gather/location/ordered-collision input and
-binds the result to the exact request. It also carries an independently captured canonical-Sim
-SHA-256 for the pre-call retail image; Don does not manufacture that snapshot.
+The first layer of that search is now locally evaluated rather than hidden behind the whole-call
+receipt. For concrete TypeIndex 62, `ObjectTypeData::upgrade_level` `0x00661090` reads the
+replay-carried `TypeData::from` row. The supported row is terminal (`from < 0`), so the exact
+level is zero and `calc_gather` uses radius four. A nonterminal row is rejected instead of
+guessing the missing live type-relation graph.
+
+`calc_gather` first probes a nonnegative `UnitData::good_obj` circle index when it is inside the
+radius-four endpoint, then scans `circle_x/circle_y[0..circle_radius[4])`. Each coordinate uses
+the signed `div_3_table` TCoord conversion, skips out-of-bounds tiles, rejects the Merchant
+surface value `(tmask & 0x30) == 0x20`, and requires `tmask & 0x0200`. These tables and every
+TData word come from canonical owners already in `Sim`.
+
+The first qualifying tile calls
+
+`ObjectsData::find_good_at(tile_x >> 2, tile_y >> 2, who, 0, 0)` at `0x0065bec0`.
+
+That return value is now the first typed child. `Sim` deliberately has no canonical frame-zero
+base-`Good` pool/`good_mark`; WData resource/occupancy bits do not prove which active Good slot
+the retail array search returns. The child binds the parent request, setup authority revision,
+actor identity, exact scan kind/index, TCoord/WCoord, TData mask, and all five call arguments.
+If the entire radius-four terrain scan contains no reachable call, `calc_gather` returns zero,
+so `find_merchant_spot` returns `NotFound` before its outer candidate loop; the local proof is
+composed directly into the existing `FAILED_UNPACK_TAIL_VA` boundary.
+
+The outer pieces already recovered for the next continuation are source-exact as well:
+`move_x/move_y[0..radius[3])` supplies all 49 candidates in shipped order, and
+`good_merchant_spot` checks the four `(tx,ty)` / minus-one corner masks in order. Each requires
+valid TCoord bounds, no `0x4000`, `(low & 3) != 3`, and a nonnegative signed low byte before its
+own fixed-shape `calc_gather`. The later `invalid_loc` answer remains an installed movement-host
+fact, and the final collision call is the read-only `DETOUR_PROBE` shape; neither is crossed
+before the Good lookup is answered.
+
+No RNG call occurs. The legacy whole-call capture remains available for native composition and
+carries an independently captured canonical-Sim SHA-256; Don does not manufacture that snapshot
+or replace it with a locally guessed checksum.
 
 `Unit::clear_partial_path` `0x005e3920` is the next runtime-only hazard. When the pointer at
 `Unit+0x104` is null, it returns immediately. When nonnull, it retires search objects into five

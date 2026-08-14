@@ -391,6 +391,22 @@ pub fn request_frame0_merchant_spot(
     Ok(request)
 }
 
+/// Rebind a previously issued search request to the current canonical owners.
+///
+/// This is intentionally independent of a native capture: narrower, locally recovered
+/// `find_merchant_spot` prefixes use the same stale-input guard before they inspect terrain.
+pub fn validate_frame0_merchant_spot_request(
+    sim: &Sim,
+    request: &Frame0MerchantSpotRequest,
+) -> Result<(), Frame0MerchantError> {
+    let current =
+        request_frame0_merchant_spot(sim, request.actor.handle, request.setup_composition_digest)?;
+    if current != *request {
+        return Err(Frame0MerchantError::StalePreparedInput);
+    }
+    Ok(())
+}
+
 fn validate_capture(
     request: &Frame0MerchantSpotRequest,
     capture: &Frame0MerchantSpotCapture,
@@ -556,11 +572,7 @@ pub fn prepare_frame0_merchant_resolution(
     request: Frame0MerchantSpotRequest,
     capture: Frame0MerchantSpotCapture,
 ) -> Result<Frame0MerchantResolution, Frame0MerchantError> {
-    let current =
-        request_frame0_merchant_spot(sim, request.actor.handle, request.setup_composition_digest)?;
-    if current != request {
-        return Err(Frame0MerchantError::StalePreparedInput);
-    }
+    validate_frame0_merchant_spot_request(sim, &request)?;
     validate_capture(&request, &capture)?;
     if capture.outcome == MerchantSpotOutcome::NotFound {
         return Ok(Frame0MerchantResolution::FailedUnpackTail(
@@ -589,15 +601,8 @@ pub fn commit_frame0_merchant_success(
     prepared: PreparedFrame0MerchantSuccess,
     installed_query_input_sha256: [u8; 32],
 ) -> Result<Frame0MerchantCommitReceipt, Frame0MerchantError> {
-    let current = request_frame0_merchant_spot(
-        sim,
-        prepared.request.actor.handle,
-        prepared.request.setup_composition_digest,
-    )
-    .map_err(|_| Frame0MerchantError::StalePreparedInput)?;
-    if current != prepared.request {
-        return Err(Frame0MerchantError::StalePreparedInput);
-    }
+    validate_frame0_merchant_spot_request(sim, &prepared.request)
+        .map_err(|_| Frame0MerchantError::StalePreparedInput)?;
     validate_capture(&prepared.request, &prepared.capture)?;
     if success_image(&prepared.request, &prepared.capture)? != prepared.after {
         return Err(Frame0MerchantError::StalePreparedInput);
