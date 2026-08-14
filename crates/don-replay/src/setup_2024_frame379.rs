@@ -33,6 +33,9 @@ use crate::setup_place_unit_deep_re::{
     produce_place_unit_probe_prefix, CenterBuildFacts, PlaceUnitExternalResidual, PlaceUnitInputs,
     PlaceUnitProducerError, PlaceUnitProducerReceipt, PlacementMapSnapshot, PlacementTileFacts,
 };
+use crate::setup_unit_member_authority::{
+    CanonicalSetupMemberSource, CanonicalSetupSnapshotAuthority,
+};
 use crate::setup_units_producer::{
     build_units_plan, validate_build_units_prefix_receipt, BuildUnitsInputs, BuildUnitsPlan,
     BuildUnitsPlanError, BuildUnitsPrefixReceipt, BuildUnitsReceiptError, DirectRandomDrawReceipt,
@@ -168,12 +171,30 @@ pub struct Frame379SetupReceipt {
     pub world_checksum_after: WorldChecksum,
     pub rng_before: i32,
     pub rng_after: i32,
+    pub plan: BuildUnitsPlan,
     pub calls: Vec<Frame379PlaceUnitReceipt>,
     pub setup: BuildUnitsPrefixReceipt,
     /// Exact frame-zero canonical owner after all seven completed receivers.
     pub canonical_frame: i32,
+    pub canonical_composition_digest: [u8; 32],
     pub canonical_world_checksum: WorldChecksum,
     pub canonical_random_state: i32,
+}
+
+impl Frame379SetupReceipt {
+    /// Direct authority projection consumed by `bind_canonical_setup_members` and
+    /// `bind_canonical_setup_citizens`; downstream does not invent another snapshot digest.
+    pub fn canonical_snapshot_authority(&self) -> CanonicalSetupSnapshotAuthority {
+        CanonicalSetupSnapshotAuthority {
+            revision: self.authority_revision,
+            composition_digest: self.canonical_composition_digest,
+            source: CanonicalSetupMemberSource::ReplayRulesCompleteInitReceiptAndCanonicalSim,
+            replay_file_sha256: self.replay_file_sha256,
+            frame: self.canonical_frame,
+            world_checksum: self.canonical_world_checksum.clone(),
+            random_state: self.canonical_random_state,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -621,6 +642,57 @@ fn validate_canonical_prefix(
     Ok(())
 }
 
+fn canonical_composition_digest(
+    worldgen: &Frame379WorldgenAuthority,
+    leader: &Frame379LeaderSetupAuthority,
+    completed_inits: &[Frame379CompletedInitAuthority],
+    calls: &[Frame379PlaceUnitReceipt],
+    final_state: &Sim,
+) -> [u8; 32] {
+    let mut image = b"don-frame379-canonical-setup-v1".to_vec();
+    image.extend_from_slice(&worldgen.revision.to_le_bytes());
+    image.extend_from_slice(&worldgen.composition_digest);
+    image.extend_from_slice(&leader.revision.to_le_bytes());
+    image.extend_from_slice(&leader.composition_digest);
+    for (completed, call) in completed_inits.iter().zip(calls) {
+        image.extend_from_slice(&(completed.setup_ordinal as u64).to_le_bytes());
+        image.extend_from_slice(&completed.revision.to_le_bytes());
+        image.extend_from_slice(&completed.composition_digest);
+        image.extend_from_slice(&call.placement_snapshot_sha256);
+        image.extend_from_slice(&call.canonical_after.owner.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.o.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.type_index.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.x.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.y.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.angle.to_le_bytes());
+        image.extend_from_slice(&call.canonical_after.unit_masks.to_le_bytes());
+        for member in &call.init.members {
+            image.extend_from_slice(&member.identity.id.to_le_bytes());
+            image.extend_from_slice(&member.identity.generation.to_le_bytes());
+            image.extend_from_slice(&member.identity.owner.to_le_bytes());
+            image.extend_from_slice(&member.identity.o.to_le_bytes());
+            image.extend_from_slice(&member.ptype_index.to_le_bytes());
+            image.extend_from_slice(&member.guy_mark.to_le_bytes());
+            for guy in &member.guy_identities {
+                image.extend_from_slice(&guy.slot.to_le_bytes());
+                image.extend_from_slice(&guy.who.to_le_bytes());
+                image.extend_from_slice(&guy.o.to_le_bytes());
+                image.extend_from_slice(&guy.guy_num.to_le_bytes());
+            }
+        }
+    }
+    let checksum = final_state.map.world.checksum_sections();
+    image.extend_from_slice(&final_state.world.frame.to_le_bytes());
+    image.extend_from_slice(&final_state.world.random.state().to_le_bytes());
+    image.extend_from_slice(&checksum.full.to_le_bytes());
+    image.extend_from_slice(&checksum.bytes.to_le_bytes());
+    for section in checksum.per_section {
+        image.extend_from_slice(&section.adler.to_le_bytes());
+        image.extend_from_slice(&section.bytes.to_le_bytes());
+    }
+    sha256(&image)
+}
+
 /// Execute and validate the complete seven-call setup chronology downstream of world generation.
 ///
 /// `states[0]` is the completed-worldgen/starting-Village seam. `states[n+1]` must be the exact
@@ -899,6 +971,8 @@ pub fn produce_frame379_setup(
     };
     validate_build_units_prefix_receipt(&facts.plan, &setup)?;
     let final_state = states[SETUP_CALLS];
+    let canonical_composition_digest =
+        canonical_composition_digest(worldgen, leader, completed_inits, &calls, final_state);
     Ok(Frame379SetupReceipt {
         authority_revision: worldgen.revision,
         authority_digest: worldgen.composition_digest,
@@ -912,9 +986,11 @@ pub fn produce_frame379_setup(
         world_checksum_after: final_state.map.world.checksum_sections(),
         rng_before: worldgen.random_state,
         rng_after: rng,
+        plan: facts.plan,
         calls,
         setup,
         canonical_frame: final_state.world.frame,
+        canonical_composition_digest,
         canonical_world_checksum: final_state.map.world.checksum_sections(),
         canonical_random_state: final_state.world.random.state(),
     })

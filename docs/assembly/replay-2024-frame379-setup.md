@@ -49,6 +49,9 @@ identities, and binds the detailed Unit after-image to the canonical Sim row. It
 World checksums without fitting them. The output includes a validated `BuildUnitsPrefixReceipt`,
 so `bind_canonical_setup_citizens` can select ordinals 3--6 and downstream Groups can combine
 those immutable Unit images with independently exact land-speed authority.
+`Frame379SetupReceipt::canonical_snapshot_authority` projects the composed worldgen, Leader,
+seven receiver, stable-identity, and final World/RNG digest directly into the generic selector;
+no downstream caller supplies another attestation scalar.
 
 Mutation gates reject missing revisions/digests, replay drift, wrong dynamic bonuses/upgrades,
 non-adjacent World/RNG states, invalid detailed receipts, stale identities, wrong types or
