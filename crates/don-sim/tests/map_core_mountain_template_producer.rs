@@ -15,9 +15,9 @@ mod checksum {
 mod mountain_template_producer;
 
 use mountain_template_producer::{
-    derive_mountain_template_from_tga, load_mountain_template_catalog,
-    parse_mountain_template_sources, MountainTemplateProducerError, MOUNTAIN_RANGE_INIT_SIZE,
-    MOUNTAIN_RANGE_INIT_VA,
+    derive_mountain_template_from_tga, derive_mountain_template_geometry_from_tga,
+    load_mountain_template_catalog, parse_mountain_template_sources, MountainTemplateProducerError,
+    MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_SIZE, MOUNTAIN_RANGE_INIT_VA,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -151,6 +151,24 @@ fn alpha_not_color_drives_occupancy_and_any_nonzero_alpha_counts() {
 }
 
 #[test]
+fn direct_tcoord_vertices_use_red_xml_height_and_native_float_order() {
+    let mut alpha = vec![0; 36 * 36];
+    alpha[2 * 36 + 2] = 1;
+    let mut tga = encode_tga(36, 36, &alpha, 2, 0x20);
+    // Top-left uncompressed file order; overwrite the canonical sample's TGA R byte.
+    tga[18 + (2 * 36 + 2) * 4 + 2] = 63;
+    let height_bits = 0x3d00_2717;
+    let geometry = derive_mountain_template_geometry_from_tga(&tga, height_bits).unwrap();
+
+    assert_eq!(geometry.tcoord_vertices.len(), 1);
+    let vertex = geometry.tcoord_vertices[0];
+    assert_eq!(vertex.x_bits, (-768.0f32).to_bits());
+    assert_eq!(vertex.y_bits, (-768.0f32).to_bits());
+    // Regrouping `(red * height) * 3 / 255` produces 0x3cbdf7b0 instead.
+    assert_eq!(vertex.z_bits, 0x3cbd_f7af);
+}
+
+#[test]
 fn solid_footprint_uses_the_retail_sixteen_of_twenty_five_threshold() {
     let sample_points = [0usize, 4, 8, 12, 16];
     let mut alpha = vec![0; 36 * 36];
@@ -229,13 +247,21 @@ fn malformed_or_overlong_tga_streams_fail_closed() {
         derive_mountain_template_from_tga(&overflowing_packet),
         Err(MountainTemplateProducerError::RlePixelOverflow)
     );
+
+    assert_eq!(
+        derive_mountain_template_from_tga(&encode_tga(36, 32, &vec![1; 36 * 32], 2, 0x20)),
+        Err(MountainTemplateProducerError::NonSquareTga {
+            width: 36,
+            height: 32,
+        })
+    );
 }
 
-fn fixture_xml(rows: &[(&str, &str, &str, &str)]) -> String {
+fn fixture_xml(rows: &[(&str, f32, &str, &str, &str)]) -> String {
     let mut xml = String::from("<ROOT><MOUNTAINS>");
-    for (area, disp, main, ring) in rows {
+    for (area, height, disp, main, ring) in rows {
         xml.push_str(&format!(
-            "<MOUNTAIN area=\"{area}\"><TEMPLATE_TEX file=\"{disp}\"/><MAIN_ALPHA_TEX file=\"{main}\"/><RING_ALPHA_TEX file=\"{ring}\"/></MOUNTAIN>"
+            "<MOUNTAIN area=\"{area}\" height=\"{height}\"><TEMPLATE_TEX file=\"{disp}\"/><MAIN_ALPHA_TEX file=\"{main}\"/><RING_ALPHA_TEX file=\"{ring}\"/></MOUNTAIN>"
         ));
     }
     xml.push_str("</MOUNTAINS></ROOT>");
@@ -246,18 +272,26 @@ fn fixture_xml(rows: &[(&str, &str, &str, &str)]) -> String {
 fn xml_order_is_template_identity_and_the_three_file_gate_is_strict() {
     assert_eq!(MOUNTAIN_RANGE_INIT_VA, 0x0089_98b0);
     assert_eq!(MOUNTAIN_RANGE_INIT_SIZE, 5_190);
+    assert_eq!(MOUNTAIN_RANGE_INIT_SHA256.len(), 64);
     let xml = fixture_xml(&[
-        ("lg", ".\\art\\first.tga", "first-main", "first-ring"),
-        ("sm", ".\\art\\second.tga", "second-main", "second-ring"),
+        ("lg", 450.0, ".\\art\\first.tga", "first-main", "first-ring"),
+        (
+            "sm",
+            100.0,
+            ".\\art\\second.tga",
+            "second-main",
+            "second-ring",
+        ),
     ]);
     let sources = parse_mountain_template_sources(xml.as_bytes()).unwrap();
     assert_eq!(sources.len(), 2);
     assert_eq!(sources[0].index, 0);
     assert_eq!(sources[0].area, "lg");
+    assert_eq!(sources[0].height_bits, 450.0f32.to_bits());
     assert_eq!(sources[1].index, 1);
     assert_eq!(sources[1].displacement_path, ".\\art\\second.tga");
 
-    let missing = b"<ROOT><MOUNTAINS><MOUNTAIN area=\"lg\"><TEMPLATE_TEX file=\"x\"/><MAIN_ALPHA_TEX file=\"y\"/></MOUNTAIN></MOUNTAINS></ROOT>";
+    let missing = b"<ROOT><MOUNTAINS><MOUNTAIN area=\"lg\" height=\"450\"><TEMPLATE_TEX file=\"x\"/><MAIN_ALPHA_TEX file=\"y\"/></MOUNTAIN></MOUNTAINS></ROOT>";
     assert_eq!(
         parse_mountain_template_sources(missing),
         Err(MountainTemplateProducerError::MissingTextureElement {
@@ -299,8 +333,8 @@ fn installed_catalog_reads_only_source_named_tgas_and_preserves_index_order() {
     let root = temp_root();
     fs::create_dir_all(root.join("art")).unwrap();
     let xml = fixture_xml(&[
-        ("lg", ".\\art\\first.tga", "main-a", "ring-a"),
-        ("med", ".\\art\\second.tga", "main-b", "ring-b"),
+        ("lg", 450.0, ".\\art\\first.tga", "main-a", "ring-a"),
+        ("med", 250.0, ".\\art\\second.tga", "main-b", "ring-b"),
     ]);
     let xml_path = root.join("effects_graphics.xml");
     fs::write(&xml_path, &xml).unwrap();
@@ -332,6 +366,8 @@ fn installed_catalog_reads_only_source_named_tgas_and_preserves_index_order() {
     );
     assert_eq!(catalog.templates[0].mount_tiles.len(), 64);
     assert!(catalog.templates[1].mount_tiles.is_empty());
+    assert_eq!(catalog.tcoord_vertices[0].len(), 81);
+    assert!(catalog.tcoord_vertices[1].is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -339,7 +375,7 @@ fn installed_catalog_reads_only_source_named_tgas_and_preserves_index_order() {
 fn installed_asset_path_cannot_escape_the_content_root() {
     let root = temp_root();
     fs::create_dir_all(&root).unwrap();
-    let xml = fixture_xml(&[("lg", "..\\outside.tga", "main", "ring")]);
+    let xml = fixture_xml(&[("lg", 450.0, "..\\outside.tga", "main", "ring")]);
     let xml_path = root.join("effects_graphics.xml");
     fs::write(&xml_path, xml).unwrap();
     let error = load_mountain_template_catalog(&xml_path, &root).unwrap_err();

@@ -17,6 +17,10 @@
 use std::fmt;
 
 use don_sim::systems::map_terrain::{tflag, World};
+use don_sim::systems::mountain_add_runtime::MountainAddRuntime;
+use don_sim::systems::mountain_template_producer::{
+    MountainTemplateCatalog, MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_VA,
+};
 
 use crate::world_owner_frontier::sha256;
 
@@ -144,6 +148,26 @@ pub struct TerrainHeightPreMountainPlane {
     pub master_land_height_bits: Vec<u32>,
     pub land_height_bits: u32,
     pub source_digest: [u8; 32],
+}
+
+/// Evidence for the new-map `adjust_for_mountains(arg7=0)` height transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainMountainHeightReceipt {
+    pub adjust_for_mountains_va: u32,
+    pub fill_mountain_data_va: u32,
+    pub mountain_range_init_va: u32,
+    pub mountain_range_init_sha256: &'static str,
+    pub pre_mountain_digest: [u8; 32],
+    pub catalog_digest: [u8; 32],
+    pub placement_digest: [u8; 32],
+    pub final_plane_digest: [u8; 32],
+    pub placements: usize,
+    pub source_vertices: usize,
+    pub matched_vertices: usize,
+    pub unmatched_vertices: usize,
+    /// This producer is exclusively the new-map height-adding call (`arg7=0`).
+    pub load_rebuild_mode: bool,
+    pub final_query_authority: bool,
 }
 
 /// Where the height bytes came from.  None of these variants reconstructs worldgen; each
@@ -348,6 +372,161 @@ impl TerrainHeightPreMountainPlane {
         };
         Ok((plane, receipt))
     }
+
+    /// Execute the height-writing half of new-map `adjust_for_mountains`.
+    ///
+    /// The plane is consumed so the source-derived displacement cannot be applied
+    /// twice through this API. Installed template vertices and retained placement
+    /// rows are joined by retail template index and placement ordinal; no replay Z
+    /// value or desired output height is accepted.
+    pub fn finish_new_map_mountains(
+        self,
+        world: &World,
+        catalog: &MountainTemplateCatalog,
+        mountains: &MountainAddRuntime,
+    ) -> Result<(TerrainHeightAuthority, TerrainMountainHeightReceipt), TerrainHeightError> {
+        validate_world_shape(world)?;
+        if self.source_digest == [0; 32] {
+            return Err(TerrainHeightError::MissingSourceIdentity);
+        }
+        let expected_heights = grid_len(world.tile_xs, world.tile_ys)?;
+        if self.master_land_height_bits.len() != expected_heights {
+            return Err(TerrainHeightError::HeightPlaneLengthMismatch {
+                expected: expected_heights,
+                actual: self.master_land_height_bits.len(),
+            });
+        }
+
+        let template_count = catalog.sources.len();
+        if template_count == 0
+            || catalog.displacement_tgas.len() != template_count
+            || catalog.templates.len() != template_count
+            || catalog.tcoord_vertices.len() != template_count
+        {
+            return Err(TerrainHeightError::MountainCatalogShapeMismatch {
+                sources: template_count,
+                displacement_tgas: catalog.displacement_tgas.len(),
+                templates: catalog.templates.len(),
+                tcoord_vertices: catalog.tcoord_vertices.len(),
+            });
+        }
+        if mountains.templates.len() != template_count
+            || mountains
+                .templates
+                .iter()
+                .zip(&catalog.templates)
+                .any(|(installed, source)| installed.as_ref() != Some(source))
+        {
+            return Err(TerrainHeightError::MountainRuntimeCatalogMismatch);
+        }
+
+        let placements = mountains.mountain_locs.items.len();
+        let array_lengths = [
+            mountains.mountain_loc_wcoords_x.items.len(),
+            mountains.mountain_loc_wcoords_y.items.len(),
+            mountains.mountain_types.items.len(),
+        ];
+        if array_lengths.into_iter().any(|length| length != placements) {
+            return Err(TerrainHeightError::MountainPlacementLengthMismatch {
+                locations: placements,
+                world_x: array_lengths[0],
+                world_y: array_lengths[1],
+                types: array_lengths[2],
+            });
+        }
+
+        let catalog_digest = mountain_catalog_digest(catalog);
+        let placement_digest = sha256(&mountains.walked_bytes());
+        let mut heights = self.master_land_height_bits;
+        let stride = world.tile_xs as usize + 1;
+        let mut source_vertices = 0usize;
+        let mut matched_vertices = 0usize;
+
+        for placement in 0..placements {
+            let template = mountains.mountain_types.items[placement];
+            let template_index = usize::try_from(template)
+                .ok()
+                .filter(|&index| index < template_count)
+                .ok_or(TerrainHeightError::MountainTemplateIndexOutsideCatalog {
+                    placement,
+                    template,
+                    templates: template_count,
+                })?;
+            let world_x = mountains.mountain_loc_wcoords_x.items[placement];
+            let world_y = mountains.mountain_loc_wcoords_y.items[placement];
+            let location = mountains.mountain_locs.items[placement];
+            let expected_x = world_x.wrapping_mul(0x300) as f32;
+            let expected_y = world_y.wrapping_mul(0x300) as f32;
+            if location.x_bits != expected_x.to_bits()
+                || location.y_bits != expected_y.to_bits()
+                || location.z_bits != 0
+            {
+                return Err(TerrainHeightError::MountainPlacementLocationMismatch {
+                    placement,
+                    world_x,
+                    world_y,
+                    location: [location.x_bits, location.y_bits, location.z_bits],
+                });
+            }
+
+            for vertex in &catalog.tcoord_vertices[template_index] {
+                source_vertices += 1;
+                // `fill_mountain_data` adds retained placement X/Y with scalar
+                // `addss`, then compares each component against the 192-unit
+                // terrain lattice with a strict `abs(delta) < 0.01f` gate.
+                let translated_x = f32::from_bits(vertex.x_bits) + f32::from_bits(location.x_bits);
+                let translated_y = f32::from_bits(vertex.y_bits) + f32::from_bits(location.y_bits);
+                let candidate_x = cvttss2si(translated_x / 192.0f32);
+                let candidate_y = cvttss2si(translated_y / 192.0f32);
+                let lattice_x = candidate_x as f32 * 192.0f32;
+                let lattice_y = candidate_y as f32 * 192.0f32;
+                if (translated_x - lattice_x).abs() >= 0.01f32
+                    || (translated_y - lattice_y).abs() >= 0.01f32
+                    || candidate_x < 0
+                    || candidate_y < 0
+                    || candidate_x > world.tile_xs
+                    || candidate_y > world.tile_ys
+                {
+                    continue;
+                }
+                let index = candidate_y as usize * stride + candidate_x as usize;
+                let adjusted = f32::from_bits(heights[index]) + f32::from_bits(vertex.z_bits);
+                heights[index] = adjusted.to_bits();
+                matched_vertices += 1;
+            }
+        }
+
+        let final_plane_digest = mountain_height_plane_digest(
+            self.source_digest,
+            catalog_digest,
+            placement_digest,
+            world,
+            &heights,
+        );
+        let authority = TerrainHeightAuthority {
+            master_land_height_bits: heights,
+            land_height_bits: self.land_height_bits,
+            source: TerrainHeightSource::CompletedWorldgen,
+            source_digest: final_plane_digest,
+        };
+        let receipt = TerrainMountainHeightReceipt {
+            adjust_for_mountains_va: TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
+            fill_mountain_data_va: TERRAIN_FILL_MOUNTAIN_DATA_VA,
+            mountain_range_init_va: MOUNTAIN_RANGE_INIT_VA,
+            mountain_range_init_sha256: MOUNTAIN_RANGE_INIT_SHA256,
+            pre_mountain_digest: self.source_digest,
+            catalog_digest,
+            placement_digest,
+            final_plane_digest,
+            placements,
+            source_vertices,
+            matched_vertices,
+            unmatched_vertices: source_vertices - matched_vertices,
+            load_rebuild_mode: false,
+            final_query_authority: true,
+        };
+        Ok((authority, receipt))
+    }
 }
 
 fn find_tcoord_z_from_authority(
@@ -508,6 +687,30 @@ pub enum TerrainHeightError {
     CoordInfoFlagsLengthMismatch {
         expected: usize,
         actual: usize,
+    },
+    MountainCatalogShapeMismatch {
+        sources: usize,
+        displacement_tgas: usize,
+        templates: usize,
+        tcoord_vertices: usize,
+    },
+    MountainRuntimeCatalogMismatch,
+    MountainPlacementLengthMismatch {
+        locations: usize,
+        world_x: usize,
+        world_y: usize,
+        types: usize,
+    },
+    MountainTemplateIndexOutsideCatalog {
+        placement: usize,
+        template: i32,
+        templates: usize,
+    },
+    MountainPlacementLocationMismatch {
+        placement: usize,
+        world_x: i32,
+        world_y: i32,
+        location: [u32; 3],
     },
     TcoordOutsideHeightPlane {
         tx: i32,
@@ -849,6 +1052,75 @@ fn worldgen_plane_digest(
     }
     for &value in heights {
         bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    sha256(&bytes)
+}
+
+fn mountain_catalog_digest(catalog: &MountainTemplateCatalog) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"don-mountain-height-catalog-v1\0");
+    bytes.extend_from_slice(MOUNTAIN_RANGE_INIT_SHA256.as_bytes());
+    bytes.extend_from_slice(&(catalog.sources.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&(catalog.effects_graphics_xml.byte_length as u64).to_le_bytes());
+    bytes.extend_from_slice(&catalog.effects_graphics_xml.adler32.to_le_bytes());
+    for (((source, evidence), runtime), vertices) in catalog
+        .sources
+        .iter()
+        .zip(&catalog.displacement_tgas)
+        .zip(&catalog.templates)
+        .zip(&catalog.tcoord_vertices)
+    {
+        bytes.extend_from_slice(&(source.index as u64).to_le_bytes());
+        digest_string(&mut bytes, &source.area);
+        bytes.extend_from_slice(&source.height_bits.to_le_bytes());
+        digest_string(&mut bytes, &source.displacement_path);
+        digest_string(&mut bytes, &source.main_alpha_path);
+        digest_string(&mut bytes, &source.ring_alpha_path);
+        bytes.extend_from_slice(&(evidence.byte_length as u64).to_le_bytes());
+        bytes.extend_from_slice(&evidence.adler32.to_le_bytes());
+        for offsets in [
+            &runtime.mount_tiles,
+            &runtime.mount_wcoords,
+            &runtime.solid_mount_wcoords,
+        ] {
+            bytes.extend_from_slice(&(offsets.len() as u64).to_le_bytes());
+            for offset in offsets {
+                bytes.extend_from_slice(&offset.x.to_le_bytes());
+                bytes.extend_from_slice(&offset.y.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&(vertices.len() as u64).to_le_bytes());
+        for vertex in vertices {
+            bytes.extend_from_slice(&vertex.x_bits.to_le_bytes());
+            bytes.extend_from_slice(&vertex.y_bits.to_le_bytes());
+            bytes.extend_from_slice(&vertex.z_bits.to_le_bytes());
+        }
+    }
+    sha256(&bytes)
+}
+
+fn digest_string(bytes: &mut Vec<u8>, value: &str) {
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn mountain_height_plane_digest(
+    pre_mountain_digest: [u8; 32],
+    catalog_digest: [u8; 32],
+    placement_digest: [u8; 32],
+    world: &World,
+    heights: &[u32],
+) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(128 + heights.len() * 4);
+    bytes.extend_from_slice(b"don-terrain-height-post-mountain-v1\0");
+    bytes.extend_from_slice(&pre_mountain_digest);
+    bytes.extend_from_slice(&catalog_digest);
+    bytes.extend_from_slice(&placement_digest);
+    for value in [world.xs, world.ys, world.tile_xs, world.tile_ys] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for &height in heights {
+        bytes.extend_from_slice(&height.to_le_bytes());
     }
     sha256(&bytes)
 }

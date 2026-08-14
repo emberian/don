@@ -1,4 +1,6 @@
+use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use don_replay::build_init_prefix::{
     apply_build_init_prefix_from_terrain, BuildInitPrefixTerrainRequest, BuildTypeInitFacts,
@@ -21,6 +23,13 @@ use don_replay::terrain_height_runtime::{
 };
 use don_replay::world_owner_frontier::sha256;
 use don_sim::systems::map_terrain::{tflag, World};
+use don_sim::systems::mountain_add_runtime::{
+    MountainAddRuntime, MountainLocationVertex, RetailMountainArray,
+};
+use don_sim::systems::mountain_template_producer::{
+    load_mountain_template_catalog, MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_SIZE,
+    MOUNTAIN_RANGE_INIT_VA,
+};
 use don_sim::systems::production::BuildData;
 
 fn digest(byte: u8) -> [u8; 32] {
@@ -94,6 +103,49 @@ fn request(x: i32, y: i32) -> BuildInitPrefixTerrainRequest {
             sets_flat_flag: true,
             sets_detector_flag: false,
         },
+    }
+}
+
+static MOUNTAIN_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+fn one_pixel_mountain_catalog(
+    red: u8,
+    height: &str,
+) -> (
+    PathBuf,
+    don_sim::systems::mountain_template_producer::MountainTemplateCatalog,
+) {
+    let root = std::env::temp_dir().join(format!(
+        "don-terrain-height-mountain-{}-{}",
+        std::process::id(),
+        MOUNTAIN_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(root.join("art")).unwrap();
+    let xml = format!(
+        "<ROOT><MOUNTAINS><MOUNTAIN area=\"sm\" height=\"{height}\"><TEMPLATE_TEX file=\"art/one.tga\"/><MAIN_ALPHA_TEX file=\"main\"/><RING_ALPHA_TEX file=\"ring\"/></MOUNTAIN></MOUNTAINS></ROOT>"
+    );
+    let xml_path = root.join("effects_graphics.xml");
+    fs::write(&xml_path, xml).unwrap();
+    let mut tga = vec![0u8; 18 + 36 * 36 * 4];
+    tga[2] = 2;
+    tga[12..14].copy_from_slice(&36u16.to_le_bytes());
+    tga[14..16].copy_from_slice(&36u16.to_le_bytes());
+    tga[16] = 32;
+    tga[17] = 0x28;
+    let sample = 18 + (2 * 36 + 2) * 4;
+    tga[sample + 2] = red;
+    tga[sample + 3] = 1;
+    fs::write(root.join("art/one.tga"), tga).unwrap();
+    let catalog = load_mountain_template_catalog(&xml_path, &root).unwrap();
+    (root, catalog)
+}
+
+fn retail_array<T>(items: Vec<T>) -> RetailMountainArray<T> {
+    RetailMountainArray {
+        items,
+        capacity: 4,
+        increment: -1,
+        flags: 0,
     }
 }
 
@@ -279,6 +331,90 @@ fn initialized_fractals_derive_the_pre_mountain_plane() {
         changed_receipt.derived_plane_digest,
         receipt.derived_plane_digest
     );
+}
+
+#[test]
+fn installed_vertices_and_retained_placements_finish_the_query_height_plane() {
+    let world = World::init_default_rules(2, 2);
+    let (root, catalog) = one_pixel_mountain_catalog(63, "0.031287279");
+    let location = MountainLocationVertex {
+        x_bits: 768.0f32.to_bits(),
+        y_bits: 768.0f32.to_bits(),
+        z_bits: 0,
+    };
+    let runtime = MountainAddRuntime {
+        templates: vec![Some(catalog.templates[0].clone())],
+        verify_bits: vec![0; (world.size as usize + 7) / 8],
+        mountain_loc_wcoords_x: retail_array(vec![1]),
+        mountain_loc_wcoords_y: retail_array(vec![1]),
+        mountain_locs: retail_array(vec![location]),
+        mountain_types: retail_array(vec![0]),
+    };
+    let mut pre = TerrainHeightPreMountainPlane {
+        master_land_height_bits: vec![
+            100.0f32.to_bits();
+            ((world.tile_xs + 1) * (world.tile_ys + 1)) as usize
+        ],
+        land_height_bits: 30.0f32.to_bits(),
+        source_digest: digest(0xc1),
+    };
+    let before = pre.master_land_height_bits.clone();
+    let expected_z = 0x3cbd_f7af;
+    assert_eq!(catalog.tcoord_vertices[0][0].z_bits, expected_z);
+
+    let (authority, receipt) = pre
+        .clone()
+        .finish_new_map_mountains(&world, &catalog, &runtime)
+        .unwrap();
+    assert_eq!(
+        authority.master_land_height_bits[0],
+        (100.0f32 + f32::from_bits(expected_z)).to_bits()
+    );
+    assert_eq!(authority.master_land_height_bits[1..], before[1..]);
+    assert_eq!((receipt.placements, receipt.source_vertices), (1, 1));
+    assert_eq!(
+        (receipt.matched_vertices, receipt.unmatched_vertices),
+        (1, 0)
+    );
+    assert_eq!(receipt.mountain_range_init_va, MOUNTAIN_RANGE_INIT_VA);
+    assert_eq!(
+        receipt.mountain_range_init_sha256,
+        MOUNTAIN_RANGE_INIT_SHA256
+    );
+    assert!(receipt.final_query_authority && !receipt.load_rebuild_mode);
+    assert_eq!(authority.source_digest, receipt.final_plane_digest);
+
+    pre.master_land_height_bits.pop();
+    assert!(matches!(
+        pre.finish_new_map_mountains(&world, &catalog, &runtime),
+        Err(TerrainHeightError::HeightPlaneLengthMismatch { .. })
+    ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn mountain_height_join_rejects_runtime_catalog_and_parallel_array_drift() {
+    let world = World::init_default_rules(2, 2);
+    let (root, catalog) = one_pixel_mountain_catalog(63, "450");
+    let pre = TerrainHeightPreMountainPlane {
+        master_land_height_bits: vec![0; ((world.tile_xs + 1) * (world.tile_ys + 1)) as usize],
+        land_height_bits: 0,
+        source_digest: digest(0xc2),
+    };
+    let mut runtime = MountainAddRuntime::new(world.size as usize, Vec::new());
+    assert_eq!(
+        pre.clone()
+            .finish_new_map_mountains(&world, &catalog, &runtime),
+        Err(TerrainHeightError::MountainRuntimeCatalogMismatch)
+    );
+
+    runtime.templates = vec![Some(catalog.templates[0].clone())];
+    runtime.mountain_types.items.push(0);
+    assert!(matches!(
+        pre.finish_new_map_mountains(&world, &catalog, &runtime),
+        Err(TerrainHeightError::MountainPlacementLengthMismatch { .. })
+    ));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -488,6 +624,11 @@ fn supported_pe_freezes_the_height_query_and_producer_bodies() {
             TERRAIN_FILL_MOUNTAIN_DATA_VA,
             TERRAIN_FILL_MOUNTAIN_DATA_BYTES,
             TERRAIN_FILL_MOUNTAIN_DATA_SHA256,
+        ),
+        (
+            MOUNTAIN_RANGE_INIT_VA,
+            MOUNTAIN_RANGE_INIT_SIZE,
+            MOUNTAIN_RANGE_INIT_SHA256,
         ),
     ] {
         assert_eq!(hex(&sha256(pe_span(&image, va, bytes as usize))), expected);

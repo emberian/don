@@ -10,22 +10,25 @@ Capstone over that PE. `re/decomp-all/008998b0.c` was used only as a control-flo
 
 `crates/don-sim/src/systems/mountain_template_producer.rs` is a lawful installed-content
 producer for the three `MountainRangeData` coordinate pairs consumed by
-`Mountains::add_mountain`:
+`Mountains::add_mountain` and the direct displacement vertices consumed by the later
+height-writing `TerrainOut::fill_mountain_data` call:
 
 - `mount_tx / mount_ty`;
 - `mount_wx / mount_wy`; and
 - `solid_mount_wx / solid_mount_wy`.
+- ordered `MountainRangeOut::tcoord_verts` binary32 XYZ words.
 
 The producer parses the existing `MOUNTAINS` catalog in `effects_graphics.xml`, preserves
-document order as the native template index, loads each source-named `TEMPLATE_TEX` from an
-explicit content root, decodes the supported TGA surface, and derives the three footprints.
+document order as the native template index, parses its required binary32 `height`, loads each
+source-named `TEMPLATE_TEX` from an explicit content root, decodes the supported TGA surface,
+and derives the three footprints plus the direct displacement vertices.
 It contains no shipped pixel data and no precomputed geometry rows. Proprietary art remains
 in the user's installation and is read only at runtime.
 
 This remains a **Tier-C, instruction-derived producer**. The implementation has not yet run
 against the sixteen proprietary displacement images or against a retail
 `MountainRange::init` oracle. The checked-in shipped XML establishes the sixteen ordered
-source bindings (7 `lg`, 8 `med`, 1 `sm`); synthetic TGA tests establish the decoded algorithm
+source bindings (7 `lg`, 8 `med`, 1 `sm`; heights 450/250/100); synthetic TGA tests establish the decoded algorithm
 and fail-closed boundary. No release or full replay-compatibility claim follows until a user
 supplies the actual installed art and its outputs are compared with retail.
 
@@ -34,7 +37,7 @@ place-all owner by `crates/don-replay/src/replay_place_all_owners.rs`. The calle
 `ReplayMountainContentProvider`; `from_installed_content` admits no owner unless the provider
 produces exactly sixteen source rows and exactly sixteen derived templates. The resulting
 `ReplayInstalledMountainOwnerReceipt` retains the provider, all source strings, XML and TGA
-path/byte-length/Adler evidence, and all derived geometry atomically. Each file receipt and
+path/byte-length/Adler evidence, and all derived placement/height geometry atomically. Each file receipt and
 its geometry are computed from the same read buffer; proprietary bytes are not retained.
 `entry_owners(world_cells)` then constructs a fresh
 `MountainAddRuntime` whose verification bitset is sized to the caller's actual World.
@@ -85,12 +88,15 @@ The producer follows the image path used by retail:
 - `ImageIO::decode_tga` `0x00546e10` starts from the appropriate destination edge and
   applies signed X/Y strides (`0x00546e5d`–`0x00546eae`), leaving a top-left, left-to-right
   texture surface; and
-- 32-bit TGA `B,G,R,A` becomes the decoded dword whose high byte is the original alpha.
+- 32-bit TGA `B,G,R,A` becomes an in-memory R,G,B,A dword: byte zero supplies displacement
+  height and byte three supplies occupancy.
   The producer also accepts retail's 24-bit true-color form, whose implicit alpha is `0xff`.
 
 Both TGA image types 2 and 10 are decoded. RLE packets are bounded against the declared pixel
 count before expansion. Color-mapped images, non-zero TGA X/Y origins, truncated data, zero
-dimensions, and packet overflow remain typed failures. This is intentionally narrower than
+dimensions, packet overflow, and rectangular images remain typed failures. Retail's direct
+vertex/face loops use swapped width/height bounds and are only memory-safe on the shipped
+square domain. This is intentionally narrower than
 every presentation format accepted elsewhere in the renderer; it covers the true-color
 domain used by this producer without inventing palette behavior.
 
@@ -147,14 +153,28 @@ sample is present **or the occupied count is greater than 15**. The observable p
 therefore `occupied >= 16`; an exactly-16 fixture is accepted and its one-bit 15-sample
 mutation is rejected. Appended coordinates use the `c16` formula above.
 
-The intermediate 8-pixel vertex/face mesh, peak coordinates, height-scaled Z values,
-texture-coordinate arrays, alpha textures, GPU buffers, and presentation bounds are not
-consumed by `Mountains::add_mountain` and are not emitted by this runtime producer.
+### Direct height vertices
+
+The first four-pixel pass also appends one direct vertex for every sampled pixel with nonzero
+alpha. Order is Y-major then X-minor. With the XML height parsed as binary32, retail executes:
+
+```text
+height3 = height * 3.0f
+x = ((sample_x - w/2) * 192.0f) * 0.25f
+y = ((sample_y - h/2) * 192.0f) * 0.25f
+z = (red * height3) / 255.0f
+```
+
+The producer retains the exact XYZ words and does not regroup those scalar operations. These
+are the vertices selected by `fill_mountain_data(..., arg6=0)` and therefore the only template
+mesh rows that can add to `master_land_heights`. The later 8-pixel fcoord vertex/face mesh,
+peak coordinates, texture-coordinate arrays, alpha textures, GPU buffers, and presentation
+bounds remain excluded.
 
 ## Verification and mutation sensitivity
 
 `crates/don-sim/tests/map_core_mountain_template_producer.rs` mounts the source directly and
-currently has ten tests covering:
+currently has eleven tests covering:
 
 - non-multiple-of-32 center alignment and Y-major/X-minor output order;
 - alpha-vs-RGB occupancy and the `alpha != 0` predicate;
@@ -165,12 +185,13 @@ currently has ten tests covering:
 - XML document identity, the three-file gate, and the shipped 16-row census;
 - source-name-only installed reads and index preservation; and
 - content-root confinement.
+- red-channel/XML-height Z derivation, exact float ordering, and rectangular-image refusal.
 
 Persvati gate:
 
 ```text
 cargo test -p don-sim --test map_core_mountain_template_producer
-10 passed; 0 failed
+11 passed; 0 failed
 ```
 
 Two reversible Persvati mutations were executed against the focused assertions, on remote
@@ -192,8 +213,9 @@ using generated 32-bit TGA fixtures only:
 - the real Mediterranean replay consumes the installed mode-4 region owner, records a
   `PlaceAllOwnerSource::Region` mountain receipt, grows `Mountains::walk_data`, and crosses its
   former group-zero stop; and
-- the real Great Lakes replay retains its group-two player-mode-5 stop even with a complete
-  installed catalog. Mode 5 is not routed through or asserted by the mode-4 runtime.
+- the real Great Lakes replay retains its group-two player-mode-5 stop until the map cone
+  supplies its exact placement inputs; `MountainAddRuntime` now owns the mode-5
+  sliding/excluding transaction and installed catalog consumption.
 
 Local gate (actual replays present, synthetic displacement art):
 
@@ -226,7 +248,7 @@ The installed replay owner now enforces the following coherent hook:
 No empty vector, all-transparent placeholder, hand-authored shape, checksum-fitted table, or
 retail-derived precomputed geometry file is an acceptable fallback.
 
-The supported call remains verification mode 4 (`excluding_verify`), reached by the
-Mediterranean region arm. Great Lakes' player arm passes mode 5; it deliberately remains an
-explicit boundary pending its own instruction-derived runtime. Installed templates establish
-geometry provenance, not permission to substitute one verification algorithm for another.
+The supported calls are verification mode 4 (`excluding_verify`), reached by the
+Mediterranean region arm, and mode 5 (`sliding_excluding_verify`), reached by Great Lakes'
+player arm. Installed templates establish geometry provenance; the two modes retain their
+distinct instruction-derived verification algorithms.

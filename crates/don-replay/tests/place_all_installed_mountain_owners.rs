@@ -76,7 +76,7 @@ impl InstalledFixture {
                 _ => "sm",
             };
             xml.push_str(&format!(
-                "<MOUNTAIN area=\"{area}\"><TEMPLATE_TEX file=\".\\art\\template-{index}.tga\"/><MAIN_ALPHA_TEX file=\"synthetic-main-{index}\"/><RING_ALPHA_TEX file=\"synthetic-ring-{index}\"/></MOUNTAIN>"
+                "<MOUNTAIN area=\"{area}\" height=\"450\"><TEMPLATE_TEX file=\".\\art\\template-{index}.tga\"/><MAIN_ALPHA_TEX file=\"synthetic-main-{index}\"/><RING_ALPHA_TEX file=\"synthetic-ring-{index}\"/></MOUNTAIN>"
             ));
         }
         xml.push_str("</MOUNTAINS></ROOT>");

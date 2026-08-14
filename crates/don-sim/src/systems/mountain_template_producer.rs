@@ -22,6 +22,9 @@ use std::path::{Component, Path, PathBuf};
 /// PDB `MountainRange::init` and matching code size.
 pub const MOUNTAIN_RANGE_INIT_VA: u32 = 0x0089_98b0;
 pub const MOUNTAIN_RANGE_INIT_SIZE: u32 = 5_190;
+/// Exact supported-PE body identity for `0x008998b0..0x0089acf6`.
+pub const MOUNTAIN_RANGE_INIT_SHA256: &str =
+    "1b7ac0662a6c23c7a74a23d301255763e636ef952b2e0a90dfd8929478d6f819";
 /// Shipped `MountainsData::ranges` capacity established by `Mountains::add_range`.
 pub const MOUNTAIN_TEMPLATE_CAPACITY: usize = 16;
 
@@ -30,6 +33,8 @@ pub const MOUNTAIN_TEMPLATE_CAPACITY: usize = 16;
 pub struct MountainTemplateSource {
     pub index: usize,
     pub area: String,
+    /// Exact IEEE-754 word parsed from the required `<MOUNTAIN height>` attribute.
+    pub height_bits: u32,
     pub displacement_path: String,
     pub main_alpha_path: String,
     pub ring_alpha_path: String,
@@ -54,6 +59,23 @@ pub struct MountainTemplateCatalog {
     pub sources: Vec<MountainTemplateSource>,
     pub displacement_tgas: Vec<MountainTemplateFileEvidence>,
     pub templates: Vec<MountainTemplateRuntime>,
+    /// Ordered `MountainRangeOut::tcoord_verts` rows from the same decoded images.
+    pub tcoord_vertices: Vec<Vec<MountainTcoordVertex>>,
+    // Prevent downstream code from asserting a catalog without executing the
+    // installed-content loader above. The public rows remain immutable evidence.
+    source_boundary: (),
+}
+
+/// One exact `Vert3` produced by the first, four-pixel `MountainRange::init` pass.
+///
+/// The height-writing `fill_mountain_data(..., arg6=0, arg7=0)` call consumes this
+/// array, not the later eight-pixel face mesh. Raw float words prevent host-side
+/// canonicalisation of the source-derived coordinates and height.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct MountainTcoordVertex {
+    pub x_bits: u32,
+    pub y_bits: u32,
+    pub z_bits: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +112,12 @@ pub enum MountainTemplateProducerError {
         element: &'static str,
         attribute: &'static str,
     },
+    InvalidFloatAttribute {
+        mountain: usize,
+        element: &'static str,
+        attribute: &'static str,
+        value: String,
+    },
     TooManyTemplates {
         actual: usize,
     },
@@ -106,6 +134,10 @@ pub enum MountainTemplateProducerError {
         y_origin: u16,
     },
     EmptyTga,
+    NonSquareTga {
+        width: usize,
+        height: usize,
+    },
     TruncatedTga,
     TgaPixelOverflow,
     RlePixelOverflow,
@@ -141,6 +173,15 @@ impl fmt::Display for MountainTemplateProducerError {
                 element,
                 attribute,
             } => write!(f, "mountain {mountain} {element} has empty {attribute}"),
+            Self::InvalidFloatAttribute {
+                mountain,
+                element,
+                attribute,
+                value,
+            } => write!(
+                f,
+                "mountain {mountain} {element} has invalid {attribute} float {value}"
+            ),
             Self::TooManyTemplates { actual } => write!(
                 f,
                 "{actual} mountain templates exceed the retail capacity of {MOUNTAIN_TEMPLATE_CAPACITY}"
@@ -160,6 +201,10 @@ impl fmt::Display for MountainTemplateProducerError {
                 "unsupported TGA type={image_type} cmap={color_map_type} depth={pixel_depth} origin=({x_origin},{y_origin})"
             ),
             Self::EmptyTga => write!(f, "TGA has a zero dimension"),
+            Self::NonSquareTga { width, height } => write!(
+                f,
+                "TGA {width}x{height} is outside the exact square MountainRange domain"
+            ),
             Self::TruncatedTga => write!(f, "TGA pixel stream is truncated"),
             Self::TgaPixelOverflow => write!(f, "TGA dimensions overflow the host"),
             Self::RlePixelOverflow => write!(f, "TGA RLE packet exceeds the declared image"),
@@ -173,6 +218,7 @@ impl std::error::Error for MountainTemplateProducerError {}
 struct MountainSourceBuilder {
     index: usize,
     area: String,
+    height_bits: u32,
     displacement_path: Option<String>,
     main_alpha_path: Option<String>,
     ring_alpha_path: Option<String>,
@@ -197,6 +243,7 @@ pub fn load_mountain_template_catalog(
     let effects_graphics_xml = file_evidence(effects_graphics_xml, &xml);
     let mut displacement_tgas = Vec::with_capacity(sources.len());
     let mut templates = Vec::with_capacity(sources.len());
+    let mut tcoord_vertices = Vec::with_capacity(sources.len());
     for source in &sources {
         let path = confined_asset_path(content_root, source.index, &source.displacement_path)?;
         let bytes = fs::read(&path).map_err(|error| MountainTemplateProducerError::Read {
@@ -204,13 +251,17 @@ pub fn load_mountain_template_catalog(
             message: error.to_string(),
         })?;
         displacement_tgas.push(file_evidence(&path, &bytes));
-        templates.push(derive_mountain_template_from_tga(&bytes)?);
+        let geometry = derive_mountain_template_geometry_from_tga(&bytes, source.height_bits)?;
+        templates.push(geometry.runtime);
+        tcoord_vertices.push(geometry.tcoord_vertices);
     }
     Ok(MountainTemplateCatalog {
         effects_graphics_xml,
         sources,
         displacement_tgas,
         templates,
+        tcoord_vertices,
+        source_boundary: (),
     })
 }
 
@@ -255,9 +306,28 @@ pub fn parse_mountain_template_sources(
                     }
                     let index = result.len();
                     let area = required_attr(element, index, "MOUNTAIN", b"area", "area")?;
+                    let height = required_attr(element, index, "MOUNTAIN", b"height", "height")?;
+                    let parsed_height = height.parse::<f32>().map_err(|_| {
+                        MountainTemplateProducerError::InvalidFloatAttribute {
+                            mountain: index,
+                            element: "MOUNTAIN",
+                            attribute: "height",
+                            value: height.clone(),
+                        }
+                    })?;
+                    if !parsed_height.is_finite() {
+                        return Err(MountainTemplateProducerError::InvalidFloatAttribute {
+                            mountain: index,
+                            element: "MOUNTAIN",
+                            attribute: "height",
+                            value: height,
+                        });
+                    }
+                    let height_bits = parsed_height.to_bits();
                     current = Some(MountainSourceBuilder {
                         index,
                         area,
+                        height_bits,
                         ..MountainSourceBuilder::default()
                     });
                 }
@@ -398,6 +468,7 @@ fn finish_source(
     Ok(MountainTemplateSource {
         index: builder.index,
         area: builder.area,
+        height_bits: builder.height_bits,
         displacement_path: require(builder.displacement_path, "TEMPLATE_TEX")?,
         main_alpha_path: require(builder.main_alpha_path, "MAIN_ALPHA_TEX")?,
         ring_alpha_path: require(builder.ring_alpha_path, "RING_ALPHA_TEX")?,
@@ -433,14 +504,16 @@ fn confined_asset_path(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AlphaImage {
+struct MountainImage {
     width: usize,
     height: usize,
-    /// Top-left row-major alpha, matching `ImageIO::decode_tga`'s normalized texture surface.
+    /// Top-left row-major red and alpha, matching `ImageIO::decode_tga`'s normalized
+    /// in-memory R,G,B,A texture surface.
+    red: Vec<u8>,
     alpha: Vec<u8>,
 }
 
-impl AlphaImage {
+impl MountainImage {
     #[inline]
     fn present(&self, x: usize, y: usize) -> bool {
         x < self.width && y < self.height && self.alpha[y * self.width + x] != 0
@@ -451,10 +524,31 @@ impl AlphaImage {
 pub fn derive_mountain_template_from_tga(
     tga: &[u8],
 ) -> Result<MountainTemplateRuntime, MountainTemplateProducerError> {
-    derive_from_alpha(decode_tga_alpha(tga)?)
+    Ok(derive_from_image(decode_tga(tga)?)?.runtime)
 }
 
-fn decode_tga_alpha(tga: &[u8]) -> Result<AlphaImage, MountainTemplateProducerError> {
+/// Atomic source product used by mountain placement and the later terrain-height pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountainTemplateGeometry {
+    pub runtime: MountainTemplateRuntime,
+    pub tcoord_vertices: Vec<MountainTcoordVertex>,
+}
+
+/// Decode one installed displacement TGA once and derive both native consumers.
+pub fn derive_mountain_template_geometry_from_tga(
+    tga: &[u8],
+    height_bits: u32,
+) -> Result<MountainTemplateGeometry, MountainTemplateProducerError> {
+    derive_geometry(decode_tga(tga)?, height_bits)
+}
+
+#[derive(Copy, Clone)]
+struct MountainPixel {
+    red: u8,
+    alpha: u8,
+}
+
+fn decode_tga(tga: &[u8]) -> Result<MountainImage, MountainTemplateProducerError> {
     if tga.len() < 18 {
         return Err(MountainTemplateProducerError::TgaTooShort);
     }
@@ -491,6 +585,12 @@ fn decode_tga_alpha(tga: &[u8]) -> Result<AlphaImage, MountainTemplateProducerEr
     if width == 0 || height == 0 {
         return Err(MountainTemplateProducerError::EmptyTga);
     }
+    // Retail's first vertex and face loops compare y with image width and x with
+    // image height while indexing y*width+x. Shipped displacement maps are square;
+    // a rectangular input would make the native body walk out of bounds.
+    if width != height {
+        return Err(MountainTemplateProducerError::NonSquareTga { width, height });
+    }
     let pixel_count = width
         .checked_mul(height)
         .ok_or(MountainTemplateProducerError::TgaPixelOverflow)?;
@@ -502,27 +602,27 @@ fn decode_tga_alpha(tga: &[u8]) -> Result<AlphaImage, MountainTemplateProducerEr
         return Err(MountainTemplateProducerError::TruncatedTga);
     }
 
-    let mut file_alpha = Vec::with_capacity(pixel_count);
+    let mut file_pixels = Vec::with_capacity(pixel_count);
     if image_type == 2 {
-        while file_alpha.len() < pixel_count {
-            file_alpha.push(read_tga_alpha(tga, &mut cursor, pixel_bytes)?);
+        while file_pixels.len() < pixel_count {
+            file_pixels.push(read_tga_pixel(tga, &mut cursor, pixel_bytes)?);
         }
     } else {
-        while file_alpha.len() < pixel_count {
+        while file_pixels.len() < pixel_count {
             let packet = *tga
                 .get(cursor)
                 .ok_or(MountainTemplateProducerError::TruncatedTga)?;
             cursor += 1;
             let count = usize::from(packet & 0x7f) + 1;
-            if file_alpha.len().saturating_add(count) > pixel_count {
+            if file_pixels.len().saturating_add(count) > pixel_count {
                 return Err(MountainTemplateProducerError::RlePixelOverflow);
             }
             if packet & 0x80 != 0 {
-                let alpha = read_tga_alpha(tga, &mut cursor, pixel_bytes)?;
-                file_alpha.extend(std::iter::repeat_n(alpha, count));
+                let pixel = read_tga_pixel(tga, &mut cursor, pixel_bytes)?;
+                file_pixels.extend(std::iter::repeat_n(pixel, count));
             } else {
                 for _ in 0..count {
-                    file_alpha.push(read_tga_alpha(tga, &mut cursor, pixel_bytes)?);
+                    file_pixels.push(read_tga_pixel(tga, &mut cursor, pixel_bytes)?);
                 }
             }
         }
@@ -532,6 +632,7 @@ fn decode_tga_alpha(tga: &[u8]) -> Result<AlphaImage, MountainTemplateProducerEr
     // surface before MountainRange::init asks the Texture for mip-0 pixels.
     let right_origin = descriptor & 0x10 != 0;
     let top_origin = descriptor & 0x20 != 0;
+    let mut red = vec![0; pixel_count];
     let mut alpha = vec![0; pixel_count];
     for file_y in 0..height {
         for file_x in 0..width {
@@ -545,21 +646,24 @@ fn decode_tga_alpha(tga: &[u8]) -> Result<AlphaImage, MountainTemplateProducerEr
             } else {
                 height - 1 - file_y
             };
-            alpha[y * width + x] = file_alpha[file_y * width + file_x];
+            let pixel = file_pixels[file_y * width + file_x];
+            red[y * width + x] = pixel.red;
+            alpha[y * width + x] = pixel.alpha;
         }
     }
-    Ok(AlphaImage {
+    Ok(MountainImage {
         width,
         height,
+        red,
         alpha,
     })
 }
 
-fn read_tga_alpha(
+fn read_tga_pixel(
     tga: &[u8],
     cursor: &mut usize,
     pixel_bytes: usize,
-) -> Result<u8, MountainTemplateProducerError> {
+) -> Result<MountainPixel, MountainTemplateProducerError> {
     let end = cursor
         .checked_add(pixel_bytes)
         .ok_or(MountainTemplateProducerError::TgaPixelOverflow)?;
@@ -567,13 +671,24 @@ fn read_tga_alpha(
         .get(*cursor..end)
         .ok_or(MountainTemplateProducerError::TruncatedTga)?;
     *cursor = end;
-    // TGA is B,G,R,(A). ImageIO stores R,G,B,A; MountainRange::init tests byte 3.
-    Ok(if pixel_bytes == 4 { pixel[3] } else { 0xff })
+    // TGA is B,G,R,(A). ImageIO stores R,G,B,A. MountainRange::init reads byte 0
+    // for displacement Z and independently tests byte 3 for vertex presence.
+    Ok(MountainPixel {
+        red: pixel[2],
+        alpha: if pixel_bytes == 4 { pixel[3] } else { 0xff },
+    })
 }
 
-fn derive_from_alpha(
-    image: AlphaImage,
-) -> Result<MountainTemplateRuntime, MountainTemplateProducerError> {
+fn derive_from_image(
+    image: MountainImage,
+) -> Result<MountainTemplateGeometry, MountainTemplateProducerError> {
+    derive_geometry(image, 0)
+}
+
+fn derive_geometry(
+    image: MountainImage,
+    height_bits: u32,
+) -> Result<MountainTemplateGeometry, MountainTemplateProducerError> {
     let width =
         i32::try_from(image.width).map_err(|_| MountainTemplateProducerError::TgaPixelOverflow)?;
     let height =
@@ -584,6 +699,30 @@ fn derive_from_alpha(
     let center_y4 = (height / 2 - start_y) / 4;
     let center_x16 = (width / 2 - start_x) / 16;
     let center_y16 = (height / 2 - start_y) / 16;
+
+    // `0x00899c47..0x00899ed9`: y-major then x-major, both stepping by four.
+    // Presence is alpha; displacement height is the normalized surface's red byte.
+    let mut tcoord_vertices = Vec::new();
+    let height3 = f32::from_bits(height_bits) * 3.0f32;
+    let mut y = start_y;
+    while y < width {
+        let mut x = start_x;
+        while x < height {
+            let index = y as usize * image.width + x as usize;
+            if image.alpha[index] != 0 {
+                let vertex_x = ((x - width / 2) as f32 * 192.0f32) * 0.25f32;
+                let vertex_y = ((y - height / 2) as f32 * 192.0f32) * 0.25f32;
+                let vertex_z = (f32::from(image.red[index]) * height3) / 255.0f32;
+                tcoord_vertices.push(MountainTcoordVertex {
+                    x_bits: vertex_x.to_bits(),
+                    y_bits: vertex_y.to_bits(),
+                    z_bits: vertex_z.to_bits(),
+                });
+            }
+            x += 4;
+        }
+        y += 4;
+    }
 
     let mut mount_tiles = Vec::new();
     let mut mount_wcoords = Vec::new();
@@ -632,9 +771,12 @@ fn derive_from_alpha(
         y += 16;
     }
 
-    Ok(MountainTemplateRuntime {
-        mount_tiles,
-        mount_wcoords,
-        solid_mount_wcoords,
+    Ok(MountainTemplateGeometry {
+        runtime: MountainTemplateRuntime {
+            mount_tiles,
+            mount_wcoords,
+            solid_mount_wcoords,
+        },
+        tcoord_vertices,
     })
 }

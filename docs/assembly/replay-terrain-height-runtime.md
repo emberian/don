@@ -2,17 +2,19 @@
 
 Lane: `replay-builds-checksum` · 2026-08-13.
 
-This lane removes raw Z from the exact starting-Build entrypoint and installs a bounded
-pre-mountain height-plane producer. A completed-worldgen intermediate authority plus the
-canonical World now executes the height-producing slice of `TerrainOut::generate_land`. No
-desired checksum, desired Z, SVX Z, or master height word is an input.
+This lane removes raw Z from the exact starting-Build entrypoint and installs bounded pre- and
+post-mountain height-plane producers. A completed-worldgen intermediate authority plus the
+canonical World executes the height-producing slice of `TerrainOut::generate_land`. The
+post-pass then joins installed displacement geometry with retained `MountainsData` placements
+and produces a `TerrainHeightAuthority` able to feed Builds. No desired checksum, desired Z,
+SVX Z, or master height word is an input.
 
-The result is deliberately typed `TerrainHeightPreMountainPlane`, not
-`TerrainHeightAuthority`, and therefore cannot feed the Build entrypoint. Normal
-`Terrain::init` later calls `adjust_for_mountains`; its `fill_mountain_data` child can add to
-height words at `0x008695f9`. Installing that post-pass is required before the derived plane
-may answer `find_tcoord_z` or make a first-checkpoint claim. The earlier complete-plane/live
-snapshot authority remains the only admitted query source today.
+The intermediate remains deliberately typed `TerrainHeightPreMountainPlane`, not
+`TerrainHeightAuthority`. It can become an authority only through
+`finish_new_map_mountains`, the height-writing (`arg7=0`) new-map half of
+`adjust_for_mountains`. Consuming `self` makes accidental double application unavailable
+through this API. Load/rebuild calls pass `arg7=1`, preserve existing height, and are not
+admitted by this producer.
 
 The producer boundary is intentionally upstream of render-resolution samples but downstream
 of three still-unported deterministic owners: the two initialized `Fractal` byte planes and
@@ -37,12 +39,13 @@ supported-PE bodies:
 | `TerrainOut::find_closest_coordinfo` | `0x0086a260` | 664 | `7968498a530c49764f8b0a2b6c2453a2384d807e1cde2b2090182add5fba75b2` |
 | `TerrainOut::smooth_tcoord` | `0x0086c3a0` | 410 | `7f8898b51371d97cd937b44c8a2a40c3b192e6d739f3f7faf935bb117852b8b9` |
 
-The exact downstream red boundary is frozen too:
+The exact downstream bodies are frozen too:
 
 | residual body | VA | bytes | SHA-256 |
 |---|---:|---:|---|
 | `TerrainOut::adjust_for_mountains(int)` | `0x008703c0` | 3,305 | `4aea3b9267fa1a3bc09b3bcd49cd52e9e4b326f6cf6edc42ae754fdfe5edda5e` |
 | `TerrainOut::fill_mountain_data(...)` | `0x00869380` | 1,030 | `8a85b4f8a9beeff18e562523fbfec5d626c1035e5541c225cad9972732a71cd0` |
+| `MountainRange::init(...)` | `0x008998b0` | 5,190 | `1b7ac0662a6c23c7a74a23d301255763e636ef952b2e0a90dfd8929478d6f819` |
 
 `Terrain::init` fixes the render tesselation at four vertices per WCoord. `generate_land`
 first appends `land_height` for `(tile_xs+1)*(tile_ys+1)` vertices, then overwrites every
@@ -81,6 +84,42 @@ canonical TData plane, and every output height word. Receipt counters expose eac
 branch plus smoothing vertices/passes. Invalid Fractal increments, sample bounds, shape
 mismatches, and anonymous authorities fail before any plane is published.
 
+## Exact post-mountain producer
+
+`MountainRange::init` parses each shipped `<MOUNTAIN height>` as binary32 and decodes the
+referenced TGA into a top-left, row-major R,G,B,A surface. The installed producer retains red
+and alpha from the same decoded byte buffer and file receipt. On the first four-pixel pass,
+alpha decides whether a direct tcoord vertex exists and red supplies Z:
+
+```text
+height3 = xml_height * 3.0f
+x = ((sample_x - width/2) * 192.0f) * 0.25f
+y = ((sample_y - height/2) * 192.0f) * 0.25f
+z = (red * height3) / 255.0f
+```
+
+All operations remain separate scalar-binary32 operations. A rounding discriminator locks
+the ordering: XML height bits `0x3d002717` and red 63 produce Z bits `0x3cbdf7af`; regrouping
+the multiplies produces `0x3cbdf7b0`. Vertices append y-major then x-minor, only at nonzero
+alpha samples. Retail compares y with width and x with height in this pass while addressing
+`pixels[y*width+x]`; shipped inputs are square, so the producer rejects rectangular TGAs
+rather than publish a false general-domain claim or reproduce native out-of-bounds access.
+
+New-map `adjust_for_mountains` walks retained placements in ordinal order, obtains the
+template index from `mountain_types[i]`, and uses `mountain_locs[i]` as the translation. The
+producer requires those locations to equal the source-built WCoord locations and requires the
+placement runtime's immutable template footprints to match the installed catalog. For each
+ordered direct vertex it reproduces the `addss` translation, strict
+`abs(component - lattice) < 0.01f` match, and height-word `addss`. Catalog, placement walk,
+pre-plane, and final words receive independent digests. Receipt metrics expose placement,
+source-vertex, matched, and unmatched counts.
+
+This closes the deterministic height operation once upstream state exists. Exact mode-5
+mountain placement is now available in `MountainAddRuntime`; reaching this seam for Great
+Lakes still requires the 16 installed displacement TGAs. The other explicit residuals are
+the exact Fractal/CoordInfo/scalar producers feeding the pre-mountain plane and the remaining
+map-generation path into those retained placements.
+
 ## Exact shipped body
 
 The supported PE body is `TerrainOut::find_tcoord_z(TCoord,TCoord,int)` at
@@ -109,8 +148,7 @@ fallback is exposed by the read-only query but refused by the starting-Build wra
 `Setup::build_cities` runs after `Terrain::init`.
 
 `TerrainHeightAuthority` carries exact float words and a nonzero identity for a coherent
-completed-worldgen or live snapshot. The new derived plane cannot become that authority until
-the mountain pass is installed. Retail saves do not walk this render-owned plane. The
+completed-worldgen or live snapshot. Retail saves do not walk this render-owned plane. The
 authority validates the canonical World dimensions, TData length, full height-plane length,
 and query bounds before reading. Invalid pointer-domain queries are refused rather than
 trying to reproduce retail's out-of-range memory access; every replay Build query is inside
@@ -152,6 +190,8 @@ the replay's worldgen plane and does not increase first-turn checksum survival b
 
 ```sh
 cargo test -p don-replay --test terrain_height_runtime \
-  --test starting_build_activation_runtime
+  --test starting_build_activation_runtime \
+  --test place_all_installed_mountain_owners
+cargo test -p don-sim --test map_core_mountain_template_producer
 python3 re/scripts/test_savegame_unit_orderlist_census.py -v
 ```
