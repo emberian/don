@@ -128,6 +128,13 @@ fn build(o: i16, uid: u16, farm_index: i16) -> production::BuildData {
         attack_whom: -1,
         ..Default::default()
     };
+    if farm_index >= 0 {
+        // Retail BuildData construction leaves both MiningList selectors at -1.
+        // A completed Farm reuses the dock union as its FarmStruct index but does
+        // not turn either selector into live mining state.
+        build.gather_from.mtn = -1;
+        build.gather_from.cliff = -1;
+    }
     build.other[0x0a..0x0c].copy_from_slice(&o.to_le_bytes());
     build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
     build
