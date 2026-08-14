@@ -63,9 +63,10 @@ Per active row:
 ```text
 previous unique canonical walked bytes                 6,494
 frame-zero reg_buildings plane                         16,512
-frame-zero unique canonical walked bytes               23,006
+frame-zero last_building_finished history                 516
+frame-zero unique canonical walked bytes               23,522
 default empty-child transcript                          28,428
-frame-zero residual                                      5,422
+frame-zero residual                                      4,906
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -73,7 +74,10 @@ the denominator and residual. After the setup boundary expires, this producer ex
 the general same-frame lower bound returns to 6,494 bytes with a 21,934-byte default residual.
 Promotion beyond frame zero requires the canonical Sim to execute every increment/decrement,
 capture/type-change and destruction path which maintains both aggregate and regional Building
-counts.
+counts. The adjacent 516-byte `last_building_finished[129]` setup receipt is narrower: retail
+initializes all entries to `-1`, and ordinary setup's `Build::activate(0, 0, 0)` bypasses the
+only activation-time completion-id store. Later completed Buildings still require a live owner,
+so that history promotion expires at the same boundary.
 
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
@@ -96,6 +100,7 @@ The focused test derives the census from a real admitted setup, checks the exact
 layout, one-hot rows and byte accounting, then binds all 16,512 bytes per active row. Clearing
 the independent conditional Village cell refuses at the first differing byte. Mutating the
 canonical Build type while leaving its setup receipt stale refuses during census derivation, as
-does appending an unreceipted Build row. Dense and sparse object-registry views are rechecked by
-the producer before either mutation gate. The same test verifies the complete Leaders walk
-remains red and the global scoreboard remains uninstalled and non-substantive.
+does appending an unreceipted Build row. Mutating the independent final byte of
+`last_building_finished` refuses the history join. Dense and sparse object-registry views are
+rechecked by the producer before these mutation gates. The same test verifies the complete
+Leaders walk remains red and the global scoreboard remains uninstalled and non-substantive.

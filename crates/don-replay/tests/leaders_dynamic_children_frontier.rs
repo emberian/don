@@ -20,6 +20,13 @@ use don_replay::leaders_runtime_frontier::{
     LEADER_DIPLOMACY_BYTES, LEADER_FIXED_BODY_BEGIN, LEADER_FIXED_BODY_END,
 };
 use don_replay::leaders_runtime_tribe_frontier::{bind_live_tribes, LEADER_TRIBE_OFFSET};
+use don_replay::leaders_setup_build_history_frontier::{
+    bind_frame_zero_last_building_history, derive_frame_zero_last_building_history,
+    FrameZeroBuildHistoryError, BUILD_ACTIVATE_LAST_BUILDING_GUARD_VA,
+    BUILD_ACTIVATE_LAST_BUILDING_STORE_VA, BUILD_ACTIVATE_VA,
+    FRAME_ZERO_LAST_BUILDING_HISTORY_WALKED_BYTES, LEADER_INIT_LAST_BUILDING_HISTORY_FILL_VA,
+    LEADER_INIT_LAST_BUILDING_HISTORY_VA, SETUP_BUILD_ACTIVATE_VIRTUAL_CALL_VA,
+};
 use don_replay::leaders_setup_reg_buildings_frontier::{
     bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
     FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
@@ -1049,22 +1056,51 @@ fn synchronize_setup_only_owner_columns(columns: &mut LeaderCols, sim: &Sim, slo
         last_finished.extend_from_slice(&value.to_le_bytes());
     }
     write_named("last_unit_finished", &last_finished);
+    let mut last_building_finished = Vec::with_capacity(129 * 4);
+    for _ in 0..129 {
+        last_building_finished.extend_from_slice(&(-1i32).to_le_bytes());
+    }
+    write_named("last_building_finished", &last_building_finished);
 }
 
 #[test]
 fn frame_zero_starting_build_census_promotes_the_dominant_residual_and_stays_red() {
+    std::thread::Builder::new()
+        .name("leaders-frame-zero-census".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(frame_zero_starting_build_census_body)
+        .expect("spawn large frame-zero proof stack")
+        .join()
+        .expect("frame-zero proof thread panicked");
+}
+
+fn frame_zero_starting_build_census_body() {
     let Some((prefix, mut setup)) = first_frame_zero_setup() else {
         skip("no replay admits the canonical all-land starting-town-one setup");
         return;
     };
     let census = derive_frame_zero_regional_building_census(&setup).unwrap();
+    let history = derive_frame_zero_last_building_history(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
     assert_eq!(WALL_INCREMENT_STATS_TOTAL_STORE_VA, 0x0064_32e2);
     assert_eq!(WALL_INCREMENT_STATS_REGION_STORE_VA, 0x0064_3307);
     assert_eq!(FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES, 16_512);
+    assert_eq!(LEADER_INIT_LAST_BUILDING_HISTORY_VA, 0x006e_4bef);
+    assert_eq!(LEADER_INIT_LAST_BUILDING_HISTORY_FILL_VA, 0x006e_4bfa);
+    assert_eq!(SETUP_BUILD_ACTIVATE_VIRTUAL_CALL_VA, 0x005a_babf);
+    assert_eq!(BUILD_ACTIVATE_VA, 0x0062_3e20);
+    assert_eq!(BUILD_ACTIVATE_LAST_BUILDING_GUARD_VA, 0x0062_3f2d);
+    assert_eq!(BUILD_ACTIVATE_LAST_BUILDING_STORE_VA, 0x0062_3f47);
+    assert_eq!(FRAME_ZERO_LAST_BUILDING_HISTORY_WALKED_BYTES, 516);
     assert_eq!(census.claims().len(), active_count);
+    assert_eq!(history.claims().len(), active_count);
+    for claim in history.claims() {
+        assert_eq!(claim.entries, 129);
+        assert_eq!(claim.newly_canonical_walked_bytes, 516);
+        assert_eq!(history.row(usize::from(claim.slot)).unwrap(), &[-1; 129]);
+    }
     for claim in census.claims() {
         assert_eq!(claim.builds_censused, 1);
         assert_eq!(claim.newly_canonical_walked_bytes, 16_512);
@@ -1100,26 +1136,60 @@ fn frame_zero_starting_build_census_promotes_the_dominant_residual_and_stays_red
     );
     let tech = bind_sim_tech_frontier(previous, &fixture.authority, &setup.sim).unwrap();
     let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
-    let joined = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
+    let regional = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
+    let joined = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
     let walk = joined.walk_frontier();
 
     assert_eq!(
         joined.newly_canonicalized_walked_bytes(),
-        active_count * 16_512
+        active_count * 516
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 23_006 + (NUM_LEADERS - active_count) * 8
+        active_count * 23_522 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 5_422) as u64
+        (active_count * 4_906) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
 
-    let mut stale_fixed = fixed;
     let active = fixture.active;
+    let history_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "last_building_finished")
+        .unwrap();
+    let mut stale_history_columns = fixture.columns.clone();
+    let mut stale_history_bytes = vec![0xff; history_field.size as usize];
+    stale_history_bytes[history_field.size as usize - 1] = 0xfe;
+    write_field(
+        &mut stale_history_columns,
+        active,
+        history_field,
+        &stale_history_bytes,
+    );
+    let stale_history_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &stale_history_columns,
+        &fixed,
+    );
+    let stale_history_tech =
+        bind_sim_tech_frontier(stale_history_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_history_owners =
+        bind_sim_owner_frontier(&fixture.prefix, stale_history_tech, &setup.sim).unwrap();
+    let stale_history_regional =
+        bind_frame_zero_regional_buildings(stale_history_owners, census.clone()).unwrap();
+    assert!(matches!(
+        bind_frame_zero_last_building_history(stale_history_regional, history),
+        Err(FrameZeroBuildHistoryError::ConditionalDisagreement { slot, .. })
+            if slot == active
+    ));
+
+    let mut stale_fixed = fixed;
     stale_fixed.rows[active].reg_buildings_by_region_then_type[REG_BUILDING_TYPE_SLOTS] = 0;
     let stale_previous = deferred_frontier_with_authority(
         &fixture.prefix,
@@ -1148,6 +1218,13 @@ fn frame_zero_starting_build_census_promotes_the_dominant_residual_and_stays_red
         })
     );
     setup.sim.builds.pop();
+
+    setup.receipt.cities[0].constructor.build_init_complete = true;
+    assert_eq!(
+        derive_frame_zero_last_building_history(&setup),
+        Err(FrameZeroBuildHistoryError::SetupActivationChronologyDisagreement { receipt: 0 })
+    );
+    setup.receipt.cities[0].constructor.build_init_complete = false;
 
     let row = setup.receipt.cities[0].build.row;
     setup.sim.builds[row].orig_type += 1;

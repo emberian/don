@@ -98,7 +98,9 @@ which still lack a same-frame owner.
 
 The frame-zero setup continuation now conditionally promotes the 16,512-byte
 `reg_buildings[64][129]` plane from a complete canonical census of starting City-center
-Builds. That lowers the empty-child residual to 5,422 bytes per active row only while the
+Builds. The adjacent setup chronology also owns the 516-byte `last_building_finished[129]`
+initializer history because `Build::activate(0, 0, 0)` bypasses its only completion-id store.
+Together they lower the empty-child residual to 4,906 bytes per active row only while the
 ordinary starting-town-one setup receipt is live. It does not change this module's general
 same-frame residual: the Sim does not yet maintain the regional matrix through all later Build
 lifecycle transitions. See
