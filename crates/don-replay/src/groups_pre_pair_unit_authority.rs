@@ -125,6 +125,8 @@ pub struct ReplayBuildTypeFacts {
     pub upgrade: i32,
     pub jump: i32,
     pub obj_masks: u32,
+    /// `ObjectTypeData + 0x1e8`, the first type-owned branch in live `Build::process`.
+    pub attack: i32,
     pub hits: i32,
     pub domain: i32,
     pub x_size: i32,
@@ -494,6 +496,7 @@ pub fn replay_build_type_facts(
                     upgrade: read_i32(section, base(0x44))?,
                     jump: read_i32(section, base(0x48))?,
                     obj_masks: read_u32(section, object_at(0x1e4))?,
+                    attack: read_i32(section, object_at(0x1e8))?,
                     hits: read_i32(section, object_at(0x210))?,
                     domain: read_i32(section, object_at(0x218))?,
                     x_size: read_i32(section, object_at(0x234))?,
