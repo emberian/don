@@ -274,6 +274,8 @@ fn authority(sim: &Sim, actor_row: usize) -> GatherWorkAuthority {
                 turn_scale2: 2,
                 ai_speed: 1,
                 lead_gpiece: 6_336,
+                farm_reap_animation_frames: Some(85),
+                farm_reap_simulation_event_count: Some(0),
             }),
         }],
         sites: vec![GatherSiteRuntimeFacts {
@@ -693,6 +695,151 @@ fn exact_owner2_o9_move_arrival_then_animation36_farm_snip_is_resumable() {
     );
     assert!(stale.last_gather_work_receipt.is_none());
     assert!(stale.last_gather_work_error.is_some());
+}
+
+fn exact_wrap_boundary() -> (Sim, usize) {
+    let (fixture, actor_row) = fixture();
+    let mut sim = arm(fixture, actor_row, false);
+    while sim.world.frame < 1_294 {
+        sim.do_frame();
+    }
+    let lead = sim.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (lead.cur_anim, lead.cur_time, lead.end_time, lead.last_time),
+        (36, 84, 85, 83)
+    );
+    (sim, actor_row)
+}
+
+#[test]
+fn exact_owner2_o9_animation36_wrap_and_empty_sim_event_bucket_are_resumable() {
+    // Animation 36's first wrap is the next reached boundary. The installed Citizen
+    // `CHAR_REAP` bucket has no RELEASE/PLANERELEASE rows, so step 15 owns the complete
+    // simulation surface: the clock loop is two exact writes and the event pass is a no-op.
+    let (mut direct, actor_row) = exact_wrap_boundary();
+    let wrap_saved = save_load::save_sim(&direct).unwrap();
+    let orders_before = direct.world.orders(actor_row).clone();
+    let path_before = direct.paths[actor_row].clone();
+    let farms_before = direct.farms.clone();
+    let guy_before = direct.unit_guys[actor_row].clone().unwrap().guys[0]
+        .unwrap()
+        .walk_bytes();
+    let rng_before = direct.world.random.state();
+    let wraps_before = direct.cover.gather_animation36_wraps;
+    let event_noops_before = direct.cover.gather_reap_event_noops;
+
+    {
+        let mut wrap_resumed = save_load::load_sim(&wrap_saved).unwrap();
+        wrap_resumed = arm(wrap_resumed, actor_row, true);
+        direct.do_frame();
+        wrap_resumed.do_frame();
+        assert_eq!(
+            save_load::save_sim(&direct).unwrap(),
+            save_load::save_sim(&wrap_resumed).unwrap()
+        );
+    }
+
+    assert_eq!(direct.world.frame, 1_295);
+    let receipt = direct.last_gather_work_receipt.as_ref().unwrap();
+    assert_eq!(receipt.frame, 1_294);
+    assert_eq!(receipt.branch, GatherWorkBranch::FarmStatus3Animation24);
+    assert_eq!((receipt.changed_fields, receipt.guy_changed_fields), (0, 0));
+    assert_eq!(receipt.rng_draws, 0);
+    assert_eq!(direct.world.orders(actor_row), &orders_before);
+    assert_eq!(direct.paths[actor_row], path_before);
+    assert_eq!(direct.farms, farms_before);
+    assert_eq!(direct.world.random.state(), rng_before);
+    assert_eq!(direct.cover.gather_animation36_wraps, wraps_before + 1);
+    assert_eq!(direct.cover.gather_reap_event_noops, event_noops_before + 1);
+    let wrap_after = direct.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            wrap_after.cur_anim,
+            wrap_after.cur_time,
+            wrap_after.end_time,
+            wrap_after.last_time,
+        ),
+        (36, 0, 85, -1)
+    );
+    let guy_after = wrap_after.walk_bytes();
+    let guy_changed: Vec<_> = guy_before
+        .iter()
+        .zip(guy_after.iter())
+        .enumerate()
+        .filter_map(|(index, (before, after))| (before != after).then_some(index))
+        .collect();
+    assert_eq!(guy_changed, vec![108, 116, 117, 118, 119]);
+
+    // Withhold either the packet length or the negative simulation-event census. Work,
+    // Guy::process, the wrap itself, and event classification must then refuse as one owner
+    // transaction.
+    for stale_case in 0..3 {
+        let mut stale_wrap = save_load::load_sim(&wrap_saved).unwrap();
+        stale_wrap = arm(stale_wrap, actor_row, true);
+        let mut stale_authority = authority(&stale_wrap, actor_row);
+        let move_runtime = stale_authority.actors[0].move_runtime.as_mut().unwrap();
+        match stale_case {
+            0 => move_runtime.farm_reap_animation_frames = None,
+            1 => move_runtime.farm_reap_simulation_event_count = None,
+            2 => move_runtime.farm_reap_simulation_event_count = Some(1),
+            _ => unreachable!(),
+        }
+        stale_wrap.replace_gather_work_authority(stale_authority);
+        let orders_before = stale_wrap.world.orders(actor_row).clone();
+        let path_before = stale_wrap.paths[actor_row].clone();
+        let guys_before = stale_wrap.unit_guys[actor_row].clone();
+        let farms_before = stale_wrap.farms.clone();
+        let builds_before: Vec<_> = stale_wrap
+            .builds
+            .iter()
+            .map(production::BuildData::image)
+            .collect();
+        let unit_before = (
+            stale_wrap.world.units.x_internal()[actor_row],
+            stale_wrap.world.units.y_internal()[actor_row],
+            stale_wrap.world.units.angle()[actor_row],
+            stale_wrap.world.units.group()[actor_row],
+            stale_wrap.world.units.get_unit_masks(actor_row),
+        );
+
+        stale_wrap.do_frame();
+
+        assert_eq!(stale_wrap.world.orders(actor_row), &orders_before);
+        assert_eq!(stale_wrap.paths[actor_row], path_before);
+        assert_eq!(stale_wrap.unit_guys[actor_row], guys_before);
+        assert_eq!(stale_wrap.farms, farms_before);
+        assert_eq!(
+            stale_wrap
+                .builds
+                .iter()
+                .map(production::BuildData::image)
+                .collect::<Vec<_>>(),
+            builds_before
+        );
+        assert_eq!(
+            (
+                stale_wrap.world.units.x_internal()[actor_row],
+                stale_wrap.world.units.y_internal()[actor_row],
+                stale_wrap.world.units.angle()[actor_row],
+                stale_wrap.world.units.group()[actor_row],
+                stale_wrap.world.units.get_unit_masks(actor_row),
+            ),
+            unit_before
+        );
+        assert!(stale_wrap.last_gather_work_receipt.is_none());
+        assert!(matches!(
+            stale_wrap.last_gather_work_error,
+            Some(GatherWorkRuntimeError::Plan(GatherWorkPlanError::Unowned(
+                UnownedGatherArm::FarmAnimationLoopAndEvents
+            )))
+        ));
+        assert_eq!(stale_wrap.cover.gather_animation36_wraps, 0);
+        assert_eq!(stale_wrap.cover.gather_reap_event_noops, 0);
+    }
 }
 
 #[test]

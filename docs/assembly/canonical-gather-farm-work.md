@@ -2,15 +2,16 @@
 
 Status: **production `Sim::unit_work`; four stable-animation grows, exact owner-2/o-5
 animation 8→35 + Farm grow, and exact owner-2/o-9 MOVE arrival → animation 8→36 + Farm
-snip → first 256-frame periodic gate; complete UnitGuys/Path/Farm owners; DoNSave v20
-save/load/resume; zero RNG**.
+snip → first 256-frame periodic gate → first animation-36 wrap and empty simulation-event
+bucket; complete UnitGuys/Path/Farm owners; DoNSave v20 save/load/resume; zero RNG**.
 
 Closure status remains **RED**. The owner-2/o-9 saved continuation now executes its exact
 one-Guy land movement, Guy clock, MOVE completion, queued-Gather exposure, animation mutation,
 selected Farm snip, 58 steady work frames, and the exact undamaged-target miss at its first
-periodic repair gate. Collision-hit detour/repath arms, Farm relocation, the damaged-target
-repair-order tail, animation-36 wrap/events, target retirement/replacement, and the remaining
-charged Gather children still keep the row red.
+periodic repair gate. It also executes the first exact animation-36 loop and classifies the
+installed `CHAR_REAP` bucket's reached events as presentation-only. Collision-hit detour/repath
+arms, Farm relocation, the damaged-target repair-order tail, global `Farms::inc_time`, target
+retirement/replacement, and the remaining charged Gather children still keep the row red.
 
 The fresh save contains 17 Farm `GATHER` nodes. A structural walk and exact retail
 branch audit found four bounded, checksum-changing continuations whose full mutable surface is
@@ -43,6 +44,9 @@ FarmStruct, Guy, relocation and RNG surface is available.
 | `Unit::add_repair_order` | VA `0x005e4ff0`, size 533; charged damaged-target child |
 | `Unit::set_anim` | VA `0x00616f40`, size 201; SHA-256 `798f485753eb1853dc19ce55e43115674f6e3988370210dd9d5d4272d386f6ee` |
 | `Guy::set_anim` | VA `0x005da300`, size 4,723; SHA-256 `be76d8eb8e4301d6c10888efa8b2ca1dde0ca02045f46b9c0c98b576d68f68b3` |
+| `Guy::inc_time` | VA `0x005d9e10`, size 1,251; exact clock/loop dispatcher |
+| `Unit::execute_events` | VA `0x0060edc0`, size 131; exact Guy-event dispatcher |
+| installed `unit_graphics.xml` | 3,440,809 bytes; SHA-256 `f01b091f1df8c79207683f54daa417c2fb9861fbbb6595e33e4a0d74d108e54d` |
 | `Wall::tile_corner` | VA `0x00643440`, size 136; SHA-256 `7eeec3717c4efa6ec1d9a60d05b8b1100bd50e8daf2d7d43e6b051b185ec96ba` |
 | `Wall::covers_tile` | VA `0x006439b0`, size 90; SHA-256 `3a62e3ea46c48891d34b82030ded7efbda16bcca7985e7e1859734e18ed04879` |
 
@@ -170,6 +174,11 @@ frames 1211..1268: status-three work requests the existing animation 36; Guy clo
 frame 1269: `(frame + o + who) & 0xff == 0`; effective difficulty is 3, but the exact
           Build target has `damage=0`, so no repair order is added; status-three work falls
           through unchanged and Guy clock advances 59/85 -> 60/85
+frames 1270..1293: the same status-three work advances the Guy clock to 84/85
+frame 1294: `Guy::inc_time` advances to the boundary, finds animation 36 in the shipped
+          packet, and `Guy::set_anim(36,0,1)` loops it: `(cur,end,last)=(84,85,83)`
+          -> `(0,85,-1)`; the selected `CHAR_REAP` bucket has zero simulation events;
+          Farm/Order/Path/Build/Unit/RNG remain unchanged
 ```
 
 The MOVE node's saved `0x4ad30000` angle is evidence, but it is not reused as the live heading:
@@ -191,6 +200,19 @@ save at frame 1,269 reloads, reinstalls the same authority, and produces a byte-
 Unit, OrderList, PathStack, UnitGuys, Build, or Farm owner write, including the enclosing Guy
 process and clock tails.
 
+At the next boundary, `Guy::inc_time` calls the same-animation `Guy::set_anim` path. Animation
+36 is its own class, not WALK/default/attack, so none of `set_anim`'s three game-RNG sites is
+reachable. The same-class tail subtracts the old 85-frame length, reloads that identical
+length, and resets `last_time`: only walked Guy byte 108 and bytes 116..119 change.
+
+The supported installed XML contains 42 `CITIZENS*` graphic variants. Across every variant,
+`CHAR_REAP` contains 126 PARTICLEEVENT and 43 EXISTEVENT rows, but zero RELEASEEVENT,
+PLANERELEASE, or SOUNDEVENT rows. The first two kinds are presentation and the latter census
+means no simulation event is due on any reap clock interval. The production authority binds
+both the 85-frame packet length and the zero simulation-event count. A frame-1,294 save resumes
+byte-identically through the wrap; withholding either fact refuses work, Guy process/clock,
+and event classification before any canonical owner write.
+
 ## Exact transaction and ownership
 
 The host atomically revalidates actor Handle/identity/type, complete current Move/Gather queue,
@@ -201,7 +223,8 @@ walked lead-Guy bytes, Build
 target/UID/valid/active/Farm property/city/Farm index, actor tile,
 4x4 footprint and covers result, Unit periodic-search phase, Farm array header and record
 identity, x-then-y cell bytes, Guy animation/clock/hold byte, frame, RNG, and installed
-authority revision/digest.
+authority revision/digest. At an animation-36 boundary it additionally requires the exact
+shipped packet length and negative RELEASE/PLANERELEASE census before any owner publishes.
 
 The canonical `Farms` owner stores the exact array header and 190-byte records. Float values
 remain raw IEEE-754 bits. `Farms::grow` is reproduced as the shipped single-precision add of
@@ -239,9 +262,11 @@ two grow paths which require a Guy animation mutation. The four stable grows are
 `0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
 The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9's complete saved frontier is
 now admitted through MOVE completion, the exact status-two snip, steady animation 36, and its
-first periodic no-repair fallthrough. Thus one fresh queued Gather witness reaches snip; no
-fresh current Gather witness reaches relocation. Expired animation, damaged-target periodic
-repair, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
+first periodic no-repair fallthrough and animation loop. Its `CHAR_REAP` event bucket is also
+closed for simulation (the remaining rows are presentation). Thus one fresh queued Gather
+witness reaches snip; no fresh current Gather witness reaches relocation. Damaged-target
+periodic repair, invalid Farm binding, Mine, capacity, global Farm aging, and retirement still
+refuse before a write.
 
 Focused gates:
 

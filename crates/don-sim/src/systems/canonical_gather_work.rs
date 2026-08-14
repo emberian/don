@@ -373,6 +373,7 @@ pub enum UnownedGatherArm {
     FarmCellMutation(u8),
     FarmRelocationAndRng,
     FarmAnimationMutation { current: u8, requested: u8 },
+    FarmAnimationLoopAndEvents,
     MineWorldAndMiningList,
     NonFlatDestinationAndCollision,
     AllGatheringAndRng,
@@ -828,6 +829,12 @@ pub struct GatherMoveRuntimeFacts {
     pub turn_scale2: i32,
     pub ai_speed: i32,
     pub lead_gpiece: i32,
+    /// Shipped `AnimationPacket` frame count for Citizen `CHAR_REAP` (UnitAnim 36).
+    /// `None` keeps the first reached loop boundary fail-closed.
+    pub farm_reap_animation_frames: Option<u32>,
+    /// Count of simulation events (RELEASE/PLANERELEASE) in the selected Citizen
+    /// `CHAR_REAP` bucket. Presentation-only EXIST/PARTICLE rows are deliberately excluded.
+    pub farm_reap_simulation_event_count: Option<u16>,
 }
 
 /// Revision-bound result of the target's Build/Wall virtual projection. Canonical
@@ -1424,6 +1431,26 @@ pub fn prepare_gather_work_activation(
                     farm_facts.lead_cur_time = lead.cur_time;
                     farm_facts.lead_end_time = lead.end_time;
                     farm_facts.lead_hold_attack = lead.hold_attack as u8;
+                }
+                let animation_loop_due = derived_post_snip
+                    && owned_lead.is_some_and(|lead| {
+                        lead.cur_time
+                            .wrapping_add(u32::from(world.units.get_unit_masks2(row) & 0x10 == 0))
+                            >= lead.end_time
+                    });
+                if animation_loop_due {
+                    let move_runtime = actor_facts
+                        .move_runtime
+                        .expect("derived queued-Move state retained runtime facts");
+                    let lead = owned_lead.expect("derived state retained lead Guy");
+                    if move_runtime.farm_reap_animation_frames != Some(lead.end_time)
+                        || move_runtime.farm_reap_simulation_event_count != Some(0)
+                    {
+                        return Err(GatherWorkPlanError::Unowned(
+                            UnownedGatherArm::FarmAnimationLoopAndEvents,
+                        )
+                        .into());
+                    }
                 }
                 if owned_lead.is_some_and(|lead| {
                     (lead.cur_time, lead.end_time, lead.hold_attack as u8)

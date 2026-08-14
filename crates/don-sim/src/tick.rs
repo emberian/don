@@ -348,12 +348,17 @@ pub struct Coverage {
     /// Unit-band entries the same gate rejected. Retail does nothing for these, so this
     /// count is exactly reproduced work, not a gap.
     pub inc_time_units_gated: u64,
+    /// Exact Citizen/Farm animation-36 loops completed by the bounded Gather continuation.
+    pub gather_animation36_wraps: u64,
     /// Step-15 building-band `Wall::inc_time` `0x0063FB60` call sites reached.
     pub inc_time_builds: u64,
     /// `Unit::execute_events` `0x0060EDC0` entries that took the `VerifyGraphicLoads` arm —
     /// `GraphicEvents::verify_load` `0x008E4780` over the guy prefix, which is graphics
     /// resource admission rather than simulation.
     pub inc_time_verify_paths: u64,
+    /// Exact Gather `CHAR_REAP` event passes whose installed bucket contains no simulation
+    /// event. Presentation-only EXIST/PARTICLE rows are intentionally not executed headless.
+    pub gather_reap_event_noops: u64,
     /// Nonzero-`valid` corpses the step-15 death loop reached.
     pub inc_time_deaths_visited: u64,
     pub crash_spawned: u64,
@@ -411,8 +416,10 @@ impl Default for Coverage {
             ammo_closed: 0,
             inc_time_units: 0,
             inc_time_units_gated: 0,
+            gather_animation36_wraps: 0,
             inc_time_builds: 0,
             inc_time_verify_paths: 0,
+            gather_reap_event_noops: 0,
             inc_time_deaths_visited: 0,
             crash_spawned: 0,
             crash_ineligible: 0,
@@ -4345,6 +4352,28 @@ impl Sim {
         self.exact_gather_work_admitted_with_guys(row, &projected)
     }
 
+    fn exact_gather_reap_events_are_presentation_only(&self, row: usize) -> bool {
+        if self.exact_gather_work_admitted(row) != Some(true) {
+            return false;
+        }
+        let Some(binding) = self.exact_gather_actor_binding(row) else {
+            return false;
+        };
+        let Some(lead) = self
+            .unit_guys
+            .get(row)
+            .and_then(Option::as_ref)
+            .and_then(|guys| guys.guys.first())
+            .and_then(Option::as_ref)
+        else {
+            return false;
+        };
+        lead.cur_anim == 36
+            && lead.gpiece == binding.move_facts.lead_gpiece
+            && binding.move_facts.farm_reap_animation_frames == Some(lead.end_time)
+            && binding.move_facts.farm_reap_simulation_event_count == Some(0)
+    }
+
     fn process_exact_gather_guy(&mut self, row: usize) -> bool {
         let Some(binding) = self.exact_gather_actor_binding(row) else {
             return false;
@@ -4486,6 +4515,20 @@ impl Sim {
         let increment = u32::from(self.world.units.get_unit_masks2(row) & 0x10 == 0);
         let next = lead.cur_time.wrapping_add(increment);
         if next >= lead.end_time {
+            if lead.cur_anim == 36
+                && next - lead.end_time < lead.end_time
+                && binding.move_facts.farm_reap_animation_frames == Some(lead.end_time)
+                && binding.move_facts.farm_reap_simulation_event_count == Some(0)
+            {
+                // `Guy::inc_time` finds the same shipped animation, then
+                // `Guy::set_anim(36,0,1)` takes the non-walk same-animation wrap: subtract
+                // the old end time, reset last_time, and reload the identical packet length.
+                // Class 36 has no `Guy::set_anim` RNG site.
+                lead.last_time = -1;
+                lead.cur_time = next - lead.end_time;
+                self.cover.gather_animation36_wraps += 1;
+                return true;
+            }
             if lead.cur_anim != 8 || next - lead.end_time >= lead.end_time {
                 return false;
             }
@@ -5801,7 +5844,11 @@ impl Sim {
                     };
                     match events.path() {
                         unit_inctime::UnitEventPath::ExecuteGuyEvents => {
-                            self.cover.gaps[Gap::UnitExecuteEvents.index()] += 1;
+                            if self.exact_gather_reap_events_are_presentation_only(row) {
+                                self.cover.gather_reap_event_noops += 1;
+                            } else {
+                                self.cover.gaps[Gap::UnitExecuteEvents.index()] += 1;
+                            }
                         }
                         unit_inctime::UnitEventPath::VerifyGraphicLoads => {
                             self.cover.inc_time_verify_paths += 1;
