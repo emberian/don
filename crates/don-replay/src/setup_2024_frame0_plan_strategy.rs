@@ -498,6 +498,32 @@ fn get_team_terr_request_digest(
     sha256(&image)
 }
 
+/// Revalidate a detached child request before a source-owned `get_team_terr` adapter consumes
+/// it. This deliberately validates only the parent-produced request; the child remains
+/// responsible for binding its complete Game/Player/Leader input projection.
+pub fn validate_frame0_get_team_terr_request(request: &Frame0GetTeamTerrRequest) -> bool {
+    if request.parent_authority_digest == [0; 32]
+        || request.local_prefix_digest == [0; 32]
+        || request.call_entry_sim_sha256 == [0; 32]
+        || request.receiver_owner != GOLDEN_FIRST_STRATEGY_OWNER
+        || request.callsite_va != GET_TEAM_TERR_CALL_VA
+        || request.callee_va != GET_TEAM_TERR_VA
+        || request.input_surface
+            != Frame0GetTeamTerrInputSurface::CompleteLeaderGameTeamAndPlayerProjection
+    {
+        return false;
+    }
+    let mut image = b"don-2024-frame0-get-team-terr-request-v1".to_vec();
+    image.extend_from_slice(&request.parent_authority_digest);
+    image.extend_from_slice(&request.local_prefix_digest);
+    image.extend_from_slice(&request.call_entry_sim_sha256);
+    image.push(request.receiver_owner);
+    image.extend_from_slice(&request.callsite_va.to_le_bytes());
+    image.extend_from_slice(&request.callee_va.to_le_bytes());
+    image.push(request.input_surface as u8);
+    request.request_sha256 == sha256(&image)
+}
+
 /// Plan owner zero's exact local prefix without publishing any of its partial native writes.
 ///
 /// The returned candidate may not be installed until a later transaction closes
