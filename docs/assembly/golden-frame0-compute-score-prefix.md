@@ -24,10 +24,38 @@ The source capture must retain that exact bit after `plan_strategy`; a zero/defa
 refused. The local prefix therefore owns one instruction-ordered same-value-or-changing store
 to `score_explored` and stops at `compute_unit_score`.
 
-The typed request names the complete child input surface: `num_queued[50..=401]`,
+The first request originally names the complete child input surface: `num_queued[50..=401]`,
 `num_units[352]`, the admitted type cost/support/attack projection, and the Game/Rules
-Armageddon comparison. These inputs do not yet have one golden call-boundary owner, so no score
-component, total, flag clear, diplomacy call, or next-Leader dispatch is published.
+Armageddon comparison. These inputs do not yet have one golden call-boundary owner, so no full
+score component, total, flag clear, diplomacy call, or next-Leader dispatch is published.
+
+## Unit-score second pass
+
+The open child can nevertheless advance through two unconditional local instructions before it
+needs any inventory:
+
+```text
+006bc50c  mov dword [edi+0x24],0       ; score_units
+006bc513  mov dword [edi+0x28],0       ; score_units_2 / attack-unit score
+006bc51a  call 0x00594020              ; Game::get_armageddon
+006bc51f  mov edx,dword [0x00c061ec]   ; first post-child instruction
+```
+
+`plan_golden_frame0_owner0_compute_unit_score_prefix` replays and compares the entire parent
+prefix, publishes the two ordered zero stores, and replaces the coarse Unit-score request with
+the narrower exact first child. It does not invent before-values for the overwritten score cells:
+the complete native call-entry image remains retained by digest, while only the two post-store
+values are projected.
+
+The new typed request asks for the three `RulesData` Armageddon constants, live
+`Game::num_nations`, live `Game::num_sides`, and `GameInfo::starting_resources` read by
+`Game::get_armageddon`. The separate live nuke counter is first read after the child returns.
+Only if that comparison is open does retail begin the Unit/queue census at `0x006BC540`.
+
+Replay settings and setup receipts contain pieces of this surface, but there is no joined
+post-`plan_strategy` golden authority for the complete child and no complete post-plan Unit/type
+inventory. Setup Unit rows are therefore not reused as a live score census. The second pass is
+still detached and stops at `0x006BC51A`.
 
 ## Market chronology join
 

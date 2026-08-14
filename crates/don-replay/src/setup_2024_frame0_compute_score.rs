@@ -43,6 +43,12 @@ pub const COMPUTE_UNIT_SCORE_CALL_VA: u32 = 0x006e_c5ab;
 pub const COMPUTE_UNIT_SCORE_VA: u32 = 0x006b_c500;
 pub const COMPUTE_BUILD_SCORE_CALL_VA: u32 = 0x006e_c5b8;
 pub const COMPUTE_BUILD_SCORE_VA: u32 = 0x006b_c3f0;
+pub const SCORE_UNITS_STORE_VA: u32 = 0x006b_c50c;
+pub const SCORE_UNITS_2_STORE_VA: u32 = 0x006b_c513;
+pub const GET_ARMAGEDDON_CALL_VA: u32 = 0x006b_c51a;
+pub const GET_ARMAGEDDON_VA: u32 = 0x0059_4020;
+pub const ARMAGEDDON_COMPARE_LOAD_VA: u32 = 0x006b_c51f;
+pub const UNIT_SCORE_CENSUS_FIRST_VA: u32 = 0x006b_c540;
 
 pub const GOLDEN_FRAME: i32 = 0;
 pub const GOLDEN_STEP: u8 = 11;
@@ -134,6 +140,65 @@ pub struct Frame0ComputeUnitScoreRequest {
     pub next_callee_if_complete: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0ComputeUnitScoreField {
+    ScoreUnits,
+    ScoreUnitsAttack,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0ComputeUnitScoreWrite {
+    pub store_va: u32,
+    pub field: Frame0ComputeUnitScoreField,
+    pub after: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0GetArmageddonInputSurface {
+    /// `RulesData::{armageddon,armageddon_per_nation,armageddon_per_team}` plus the live
+    /// `Game::{num_nations,num_sides}` and `GameInfo::starting_resources` projection read by
+    /// `0x00594020`. The later comparison against `Game::armageddon` is deliberately outside
+    /// this child request.
+    CompleteRulesAndLiveGameThresholdProjection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0GetArmageddonRequest {
+    pub request_sha256: [u8; 32],
+    pub parent_request_sha256: [u8; 32],
+    pub parent_authority_digest: [u8; 32],
+    pub local_prefix_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_owner: u8,
+    pub callsite_va: u32,
+    pub callee_va: u32,
+    pub input_surface: Frame0GetArmageddonInputSurface,
+    /// First instruction after the child. It reads the separate live nuke counter.
+    pub comparison_load_va_if_complete: u32,
+    /// First Unit/queue census instruction if the Armageddon comparison falls through.
+    pub census_first_va_if_clock_open: u32,
+}
+
+/// Exact unconditional prefix of `Leader::compute_unit_score`.
+///
+/// The pre-store values are intentionally absent: both retail stores overwrite their cells and
+/// the post-planner call-entry snapshot is retained by hash, not relabelled as a projected Leader
+/// inventory. This receipt is detached and cannot be installed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0ComputeUnitScorePrefixPlan {
+    pub authority_revision: u64,
+    pub parent_authority_digest: [u8; 32],
+    pub parent_request_sha256: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_owner: u8,
+    pub writes: [Frame0ComputeUnitScoreWrite; 2],
+    pub local_prefix_digest: [u8; 32],
+    pub market_accounting_receipt_sha256: [u8; 32],
+    pub open: Frame0GetArmageddonRequest,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame0ComputeScorePrefixPlan {
     pub authority_revision: u64,
@@ -174,6 +239,7 @@ pub enum Frame0ComputeScoreError {
     LeaderWhoMismatch,
     MissingNewUnitsDirtyBit,
     StaleAuthority,
+    ComputeUnitScoreParentDisagreement,
 }
 
 impl fmt::Display for Frame0ComputeScoreError {
@@ -489,6 +555,44 @@ fn compute_unit_score_request_digest(
     sha256(&image)
 }
 
+fn compute_unit_score_local_prefix_digest(
+    authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeScorePrefixPlan,
+    writes: &[Frame0ComputeUnitScoreWrite; 2],
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-compute-unit-score-local-prefix-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.extend_from_slice(&authority.composition_digest);
+    image.extend_from_slice(&parent.open.request_sha256);
+    image.extend_from_slice(&parent.call_entry_sim_sha256);
+    image.push(parent.open.receiver_owner);
+    for write in writes {
+        image.extend_from_slice(&write.store_va.to_le_bytes());
+        image.push(write.field as u8);
+        image.extend_from_slice(&write.after.to_le_bytes());
+    }
+    sha256(&image)
+}
+
+fn get_armageddon_request_digest(
+    authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeScorePrefixPlan,
+    local_prefix_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-get-armageddon-request-v1".to_vec();
+    image.extend_from_slice(&parent.open.request_sha256);
+    image.extend_from_slice(&authority.composition_digest);
+    image.extend_from_slice(&local_prefix_digest);
+    image.extend_from_slice(&parent.call_entry_sim_sha256);
+    image.push(parent.open.receiver_owner);
+    image.extend_from_slice(&GET_ARMAGEDDON_CALL_VA.to_le_bytes());
+    image.extend_from_slice(&GET_ARMAGEDDON_VA.to_le_bytes());
+    image.push(Frame0GetArmageddonInputSurface::CompleteRulesAndLiveGameThresholdProjection as u8);
+    image.extend_from_slice(&ARMAGEDDON_COMPARE_LOAD_VA.to_le_bytes());
+    image.extend_from_slice(&UNIT_SCORE_CENSUS_FIRST_VA.to_le_bytes());
+    sha256(&image)
+}
+
 /// Execute the exact local instructions through the first unowned child.
 ///
 /// No canonical Sim state is changed. The returned plan cannot be installed until the complete
@@ -550,6 +654,65 @@ pub fn plan_golden_frame0_owner0_compute_score_prefix(
         market_accounting_receipt_sha256: authority.market_accounting_receipt_sha256,
         local_prefix_digest: prefix_digest,
         open: request,
+    })
+}
+
+/// Advance the open Unit-score child through its two unconditional score resets.
+///
+/// This function replays and compares the complete parent prefix before advancing it. The next
+/// retail instruction is `Game::get_armageddon`; its six scalar inputs do not yet have one
+/// post-planner golden authority, so the returned plan stops at that exact child. It does not
+/// consume setup-time Unit rows as if they were the live frame-zero census.
+pub fn plan_golden_frame0_owner0_compute_unit_score_prefix(
+    authority: &Frame0ComputeScoreEntryAuthority,
+    parent: &Frame0ComputeScorePrefixPlan,
+) -> Result<Frame0ComputeUnitScorePrefixPlan, Frame0ComputeScoreError> {
+    let expected = plan_golden_frame0_owner0_compute_score_prefix(authority)?;
+    if parent != &expected
+        || parent.open.callsite_va != COMPUTE_UNIT_SCORE_CALL_VA
+        || parent.open.callee_va != COMPUTE_UNIT_SCORE_VA
+        || parent.open.receiver_owner != GOLDEN_OWNER
+    {
+        return Err(Frame0ComputeScoreError::ComputeUnitScoreParentDisagreement);
+    }
+
+    let writes = [
+        Frame0ComputeUnitScoreWrite {
+            store_va: SCORE_UNITS_STORE_VA,
+            field: Frame0ComputeUnitScoreField::ScoreUnits,
+            after: 0,
+        },
+        Frame0ComputeUnitScoreWrite {
+            store_va: SCORE_UNITS_2_STORE_VA,
+            field: Frame0ComputeUnitScoreField::ScoreUnitsAttack,
+            after: 0,
+        },
+    ];
+    let local_prefix_digest = compute_unit_score_local_prefix_digest(authority, parent, &writes);
+    let open = Frame0GetArmageddonRequest {
+        request_sha256: get_armageddon_request_digest(authority, parent, local_prefix_digest),
+        parent_request_sha256: parent.open.request_sha256,
+        parent_authority_digest: authority.composition_digest,
+        local_prefix_digest,
+        call_entry_sim_sha256: parent.call_entry_sim_sha256,
+        receiver_owner: parent.open.receiver_owner,
+        callsite_va: GET_ARMAGEDDON_CALL_VA,
+        callee_va: GET_ARMAGEDDON_VA,
+        input_surface: Frame0GetArmageddonInputSurface::CompleteRulesAndLiveGameThresholdProjection,
+        comparison_load_va_if_complete: ARMAGEDDON_COMPARE_LOAD_VA,
+        census_first_va_if_clock_open: UNIT_SCORE_CENSUS_FIRST_VA,
+    };
+
+    Ok(Frame0ComputeUnitScorePrefixPlan {
+        authority_revision: authority.revision,
+        parent_authority_digest: authority.composition_digest,
+        parent_request_sha256: parent.open.request_sha256,
+        call_entry_sim_sha256: parent.call_entry_sim_sha256,
+        receiver_owner: parent.open.receiver_owner,
+        writes,
+        local_prefix_digest,
+        market_accounting_receipt_sha256: authority.market_accounting_receipt_sha256,
+        open,
     })
 }
 
@@ -710,6 +873,57 @@ mod tests {
     }
 
     #[test]
+    fn unit_score_resets_both_scores_then_stops_at_armageddon_threshold() {
+        let planner = planner();
+        let market = market_receipt();
+        let authority = bind_golden_frame0_owner0_compute_score_entry(
+            &planner,
+            capture(&planner, &market),
+            market,
+        )
+        .unwrap();
+        let score = plan_golden_frame0_owner0_compute_score_prefix(&authority).unwrap();
+        let unit = plan_golden_frame0_owner0_compute_unit_score_prefix(&authority, &score).unwrap();
+
+        assert_eq!(
+            unit.writes,
+            [
+                Frame0ComputeUnitScoreWrite {
+                    store_va: SCORE_UNITS_STORE_VA,
+                    field: Frame0ComputeUnitScoreField::ScoreUnits,
+                    after: 0,
+                },
+                Frame0ComputeUnitScoreWrite {
+                    store_va: SCORE_UNITS_2_STORE_VA,
+                    field: Frame0ComputeUnitScoreField::ScoreUnitsAttack,
+                    after: 0,
+                },
+            ]
+        );
+        assert_eq!(unit.parent_request_sha256, score.open.request_sha256);
+        assert_eq!(
+            unit.market_accounting_receipt_sha256,
+            score.market_accounting_receipt_sha256
+        );
+        assert_eq!(unit.open.callsite_va, GET_ARMAGEDDON_CALL_VA);
+        assert_eq!(unit.open.callee_va, GET_ARMAGEDDON_VA);
+        assert_eq!(
+            unit.open.input_surface,
+            Frame0GetArmageddonInputSurface::CompleteRulesAndLiveGameThresholdProjection
+        );
+        assert_eq!(
+            unit.open.comparison_load_va_if_complete,
+            ARMAGEDDON_COMPARE_LOAD_VA
+        );
+        assert_eq!(
+            unit.open.census_first_va_if_clock_open,
+            UNIT_SCORE_CENSUS_FIRST_VA
+        );
+        assert_ne!(unit.local_prefix_digest, [0; 32]);
+        assert_ne!(unit.open.request_sha256, [0; 32]);
+    }
+
+    #[test]
     fn market_or_planner_cross_wiring_refuses() {
         let plan = planner();
         let market = market_receipt();
@@ -753,6 +967,35 @@ mod tests {
         assert_eq!(
             plan_golden_frame0_owner0_compute_score_prefix(&authority).unwrap_err(),
             Frame0ComputeScoreError::StaleAuthority
+        );
+    }
+
+    #[test]
+    fn unit_score_refuses_a_cross_wired_or_mutated_parent() {
+        let planner = planner();
+        let market = market_receipt();
+        let authority = bind_golden_frame0_owner0_compute_score_entry(
+            &planner,
+            capture(&planner, &market),
+            market,
+        )
+        .unwrap();
+        let score = plan_golden_frame0_owner0_compute_score_prefix(&authority).unwrap();
+
+        let mut wrong_request = score.clone();
+        wrong_request.open.request_sha256[0] ^= 1;
+        assert_eq!(
+            plan_golden_frame0_owner0_compute_unit_score_prefix(&authority, &wrong_request)
+                .unwrap_err(),
+            Frame0ComputeScoreError::ComputeUnitScoreParentDisagreement
+        );
+
+        let mut wrong_store = score;
+        wrong_store.score_explored_store_after = 1;
+        assert_eq!(
+            plan_golden_frame0_owner0_compute_unit_score_prefix(&authority, &wrong_store)
+                .unwrap_err(),
+            Frame0ComputeScoreError::ComputeUnitScoreParentDisagreement
         );
     }
 }
