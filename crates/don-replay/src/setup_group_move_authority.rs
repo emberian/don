@@ -16,12 +16,13 @@ use don_sim::systems::group_move_authority::{
     produce_group_move_authority, GroupMoveAuthorityError, GroupMoveContent, GroupMoveTypeFacts,
 };
 use don_sim::systems::land_speed_authority::{
-    LandSpeedAuthorityError, LandSpeedConstants, LandSpeedContent, LandSpeedTypeFacts,
-    ResolvedLandSpeedAuthority,
+    produce_resolved_land_speed_authority, LandSpeedAuthorityError, LandSpeedConstants,
+    LandSpeedContent, LandSpeedTypeFacts, ResolvedLandSpeedAuthority,
 };
 use don_sim::tick::Sim;
 use don_sim::world::{Handle, OBJ_FLAG_ACTIVE};
 
+use crate::replay_land_speed_content::ReplayLandSpeedContent;
 use crate::setup_unit_member_authority::{
     CanonicalSetupMemberSource, CanonicalSetupUnitMemberReceipt,
 };
@@ -53,6 +54,7 @@ pub enum SetupGroupMoveAuthorityError {
     MissingSetupDigest,
     MissingLandSpeedRevision,
     MissingLandSpeedDigest,
+    ReplayLandSpeedFileMismatch,
     MixedSetupAuthority { index: usize },
     WrongFrame { expected: i32, actual: i32 },
     DuplicateSetupRow { row: usize },
@@ -271,6 +273,36 @@ pub fn produce_setup_group_move_authority<C: LandSpeedContent>(
         land_speed_state_digest: land_speeds.state_digest,
         authority,
     })
+}
+
+/// Produce setup-derived Group-Move authority using content from the same replay file.
+///
+/// This is the production replay join. It prevents a separately admitted Rules image from a
+/// different recording from being attached to the setup receipt merely because its overlapping
+/// Type fields happen to agree. The exact land-speed transaction is produced and rebound to the
+/// same immutable Sim inside the generic fail-closed join.
+pub fn produce_replay_setup_group_move_authority(
+    sim: &Sim,
+    members: &[CanonicalSetupUnitMemberReceipt],
+    land_content: &ReplayLandSpeedContent,
+    destination: (i32, i32),
+    force_formation_facing_zero: bool,
+) -> Result<SetupGroupMoveAuthorityReceipt, SetupGroupMoveAuthorityError> {
+    let Some(first) = members.first() else {
+        return Err(SetupGroupMoveAuthorityError::EmptySetupMembers);
+    };
+    if first.replay_file_sha256 != land_content.replay_file_sha256() {
+        return Err(SetupGroupMoveAuthorityError::ReplayLandSpeedFileMismatch);
+    }
+    let land_speeds = produce_resolved_land_speed_authority(sim, land_content)?;
+    produce_setup_group_move_authority(
+        sim,
+        members,
+        land_content,
+        &land_speeds,
+        destination,
+        force_formation_facing_zero,
+    )
 }
 
 /// Stable identity helper for callers building exact speed evidence maps.

@@ -2,8 +2,11 @@ use std::collections::BTreeMap;
 
 use don_replay::groups_pre_pair_unit_authority::{ReplayUnitTypeFacts, ReplayUnitTypeSpans};
 use don_replay::initial::ReplayByteSpan;
+use don_replay::replay::Replay;
+use don_replay::replay_land_speed_content::produce_replay_land_speed_content;
 use don_replay::setup_group_move_authority::{
-    produce_setup_group_move_authority, SetupGroupMoveAuthorityError, SetupGroupMoveAuthoritySource,
+    produce_replay_setup_group_move_authority, produce_setup_group_move_authority,
+    SetupGroupMoveAuthorityError, SetupGroupMoveAuthoritySource,
 };
 use don_replay::setup_unit_member_authority::{
     CanonicalSetupMemberSource, CanonicalSetupUnitMemberReceipt,
@@ -20,6 +23,16 @@ use don_sim::systems::land_speed_authority::{
 use don_sim::systems::movement::PathStack;
 use don_sim::tick::Sim;
 use don_sim::world::Handle;
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 #[derive(Clone)]
 struct Content {
@@ -76,6 +89,8 @@ fn type_facts() -> ReplayUnitTypeFacts {
             },
         },
         type_index: 50,
+        from_type: -1,
+        where_type: 414,
         upgrade: -1,
         jump: -2,
         obj_masks: 4_227_108,
@@ -237,8 +252,8 @@ fn fixture() -> (Sim, Vec<CanonicalSetupUnitMemberReceipt>, Content) {
             50,
             LandSpeedTypeFacts {
                 type_id: 50,
-                from: -1,
-                where_type: -1,
+                from: facts.from_type,
+                where_type: facts.where_type,
                 graft: facts.graft,
                 domain: facts.domain,
                 unit_flags: facts.unit_flags,
@@ -335,4 +350,34 @@ fn partial_stale_or_cross_wired_authority_is_rejected() {
         ),
         Err(SetupGroupMoveAuthorityError::LandSpeed(_))
     ));
+}
+
+#[test]
+fn replay_rules_content_and_setup_receipts_join_only_with_the_same_file_sha() {
+    let path = repo_root().join("ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx");
+    let Ok(replay) = Replay::open(&path) else {
+        eprintln!("SKIPPED -- NOT A PASS: missing {}", path.display());
+        return;
+    };
+    let content = produce_replay_land_speed_content(&replay).unwrap();
+    let (sim, mut members, _) = fixture();
+
+    assert_eq!(
+        produce_replay_setup_group_move_authority(&sim, &members, &content, (5_186, 72_095), false,),
+        Err(SetupGroupMoveAuthorityError::ReplayLandSpeedFileMismatch)
+    );
+
+    for member in &mut members {
+        member.replay_file_sha256 = content.replay_file_sha256();
+    }
+    let receipt =
+        produce_replay_setup_group_move_authority(&sim, &members, &content, (5_186, 72_095), false)
+            .unwrap();
+    assert_eq!(receipt.setup_members, 4);
+    assert_eq!(receipt.land_speed_digest, content.rules_serialized_sha256());
+    assert!(receipt
+        .authority
+        .members
+        .iter()
+        .all(|member| member.speed == 25));
 }

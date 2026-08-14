@@ -58,6 +58,10 @@ pub struct ReplayUnitTypeSpans {
 pub struct ReplayUnitTypeFacts {
     pub spans: ReplayUnitTypeSpans,
     pub type_index: i32,
+    /// `TypeData::from +0x3c`, consumed by the non-strict ObjectType relation walk.
+    pub from_type: i32,
+    /// Direct `TypeData::where +0x40`, consumed by the Stable speed modifiers.
+    pub where_type: i32,
     pub upgrade: i32,
     pub jump: i32,
     pub obj_masks: u32,
@@ -374,6 +378,8 @@ pub fn replay_unit_type_facts(
                         unit: absolute_span(rules, unit, UNIT_WALK_BYTES),
                     },
                     type_index: got,
+                    from_type: read_i32(section, base(0x3c))?,
+                    where_type: read_i32(section, base(0x40))?,
                     upgrade: read_i32(section, base(0x44))?,
                     jump: read_i32(section, base(0x48))?,
                     obj_masks: read_u32(section, object_at(0x1e4))?,

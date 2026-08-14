@@ -109,6 +109,7 @@ pub mod replay_bhs_research_runtime;
 pub mod replay_bhs_runtime;
 pub mod replay_goods_initial;
 pub mod replay_goods_resource_schedule;
+pub mod replay_land_speed_content;
 pub mod replay_world_owner_transitions;
 pub mod report;
 pub mod resource_divvy_pool_selection_frontier;

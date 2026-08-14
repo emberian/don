@@ -60,6 +60,22 @@ The existing Group-Move producer remains the owner of path availability, on-map,
 captain/subordinate, containment, blown-unit, entering/exiting `SpecialAnim`, and destination
 water/effective-type gates.
 
+## Replay-carried content owner
+
+`replay_land_speed_content` now supplies the immutable side of that contract directly from the
+recording's admitted Rules section. It revalidates the decompressed payload SHA, the complete
+serialized Rules SHA and checkpoints, projects all 364 shipped Unit rows (including direct
+`from`, `where`, and `graft` relations), and reads the twelve Constants cells from their exact
+runtime offsets inside the serialized Constants image. Its revision and composition digest bind
+the complete Rules section. It neither depends on the separately installed DONPACK nor turns a
+Unit row's `MOVES` value into a resolved speed.
+
+`produce_replay_setup_group_move_authority` additionally requires that this replay content and
+the canonical setup receipts name the same raw replay-file SHA. It then resolves live speed and
+produces Group-Move authority against one immutable Sim borrow. This closes the downstream
+content adapter for replay setup, while still requiring the real post-worldgen Unit, WData,
+Leader, diplomacy, hero-registry, path, and collision owners.
+
 ## DONPACK4
 
 `DONPACK4` replaces `DONPACK3`; older packs are rejected by magic and shape, never defaulted

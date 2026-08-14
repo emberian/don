@@ -75,6 +75,8 @@ fn type_facts(type_index: i32, control_cost: i32, offset: usize) -> ReplayUnitTy
             },
         },
         type_index,
+        from_type: -1,
+        where_type: -1,
         upgrade: type_index,
         jump: type_index,
         obj_masks: 0,

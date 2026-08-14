@@ -41,6 +41,11 @@ generation-bound land-speed product against that Sim, and only then produces the
 Group-Move authority. Partial cohorts, stale Unit images or speeds, duplicate rows, and mixed
 revisions fail closed. This adapter creates no Units and supplies no fallback values.
 
+The replay-specific entry point obtains its static speed relations and Constants from the same
+SHA-admitted Rules section already used for setup types, and refuses a setup/content replay-file
+SHA mismatch. Thus the real seven-call setup chain does not need a browser DONPACK or a copied
+speed table before it can produce the exact live land-speed transaction.
+
 ## Evidence boundary
 
 The focused fixture uses the real replay file and serialized Rules, but deliberately supplies a
@@ -64,4 +69,5 @@ Focused gate:
 ```sh
 cargo test -p don-replay --test setup_unit_member_authority -- --nocapture
 cargo test -p don-replay --test setup_group_move_authority -- --nocapture
+cargo test -p don-replay --test replay_land_speed_content -- --nocapture
 ```
