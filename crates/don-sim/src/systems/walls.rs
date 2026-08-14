@@ -881,6 +881,10 @@ pub struct ProcessEffects {
 pub struct BuildWallPrefixState {
     /// `ObjectData::targeted` at `+0x3D`.
     pub targeted: i8,
+    /// `WallData::ever_seen` at `+0x62`.
+    pub ever_seen: u8,
+    /// `WallData::ever_seen_completed` at `+0x63`.
+    pub ever_seen_completed: u8,
     /// `WallData::build_masks` at `+0x60`.
     pub build_masks: u16,
     /// `WallData::helpers` at `+0x64`.
@@ -904,6 +908,86 @@ pub enum BuildWallPrefixBoundary {
     Complete,
 }
 
+/// One immutable golden Build identity admitted to the frame-8/16/24 periodic no-op lane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildWallPeriodicIdentity {
+    pub row: usize,
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub type_index: i32,
+}
+
+/// Owner-0 visibility slots reached before the supported frame-31 golden checkpoint.
+pub const GOLDEN_BUILD_WALL_PERIODIC_FRAMES: [i32; 3] = [8, 16, 24];
+
+/// Reinstalled Game::everyone_mask authority for the two supported golden starting Builds.
+///
+/// The scalar is written once by the retail loop at `0x0058A2DB..0x0058A301`, from the
+/// eight `LeaderData::leader_flags & 1` bytes. It is not part of the compact Sim save, so
+/// replay setup must re-bind this sidecar after load. A missing or tampered authority simply
+/// leaves `check_ever_seen` at its existing fail-closed boundary.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuildWallPeriodicAuthority {
+    pub revision: u64,
+    pub composition_digest: u32,
+    pub everyone_mask: u8,
+    /// The only owner-0 periodic slots admitted before the frame-31 golden checkpoint.
+    pub frames: [i32; 3],
+    pub builds: [BuildWallPeriodicIdentity; 2],
+}
+
+/// Stable structural digest verified at every authority lookup.
+pub fn build_wall_periodic_authority_digest(authority: &BuildWallPeriodicAuthority) -> u32 {
+    let mut image = b"don-build-wall-periodic-authority-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.push(authority.everyone_mask);
+    for frame in authority.frames {
+        image.extend_from_slice(&frame.to_le_bytes());
+    }
+    for build in authority.builds {
+        image.extend_from_slice(&(build.row as u64).to_le_bytes());
+        image.push(build.who);
+        image.extend_from_slice(&build.o.to_le_bytes());
+        image.extend_from_slice(&build.uid.to_le_bytes());
+        image.extend_from_slice(&build.type_index.to_le_bytes());
+    }
+    adler32(1, &image)
+}
+
+impl BuildWallPeriodicAuthority {
+    /// Return the exact Game mask only for an identity-complete, still-started bound Build.
+    pub fn everyone_mask_for(
+        &self,
+        frame: i32,
+        row: usize,
+        build: &crate::systems::production::BuildData,
+        type_index: Option<i32>,
+    ) -> Option<u8> {
+        if self.revision == 0
+            || self.composition_digest == 0
+            || self.everyone_mask == 0
+            || self.frames != GOLDEN_BUILD_WALL_PERIODIC_FRAMES
+            || !self.frames.contains(&frame)
+            || self.composition_digest != build_wall_periodic_authority_digest(self)
+            || !build.is_started()
+            || !build.is_active()
+        {
+            return None;
+        }
+        self.builds
+            .iter()
+            .find(|identity| {
+                identity.row == row
+                    && identity.who == build.who
+                    && identity.o == build.object_id()
+                    && identity.uid == build.uid
+                    && Some(identity.type_index) == type_index
+            })
+            .map(|_| self.everyone_mask)
+    }
+}
+
 /// Auditable result of the canonical Build-band `Wall::process` prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildWallPrefixReceipt {
@@ -916,6 +1000,8 @@ pub struct BuildWallPrefixReceipt {
     pub slow_slot_32_due: bool,
     pub territory_slot_16_due: bool,
     pub active: bool,
+    /// The periodic child returned at its exact pre-footprint no-op gate.
+    pub periodic_child_completed_noop: bool,
     pub before: BuildWallPrefixState,
     pub after: BuildWallPrefixState,
     pub boundary: BuildWallPrefixBoundary,
@@ -934,6 +1020,7 @@ pub fn process_build_wall_prefix(
     who: u8,
     o: i16,
     active: bool,
+    periodic_everyone_mask: Option<u8>,
 ) -> BuildWallPrefixReceipt {
     let before = *state;
     let phase = frame.wrapping_add(i32::from(o));
@@ -941,9 +1028,70 @@ pub fn process_build_wall_prefix(
     let slow_slot_32_due = phase.rem_euclid(32) == 0;
     let territory_slot_16_due = phase.rem_euclid(16) == 0;
 
+    let mut periodic_child_completed_noop = false;
     let boundary = if periodic_due {
         state.targeted = div4_toward_zero(state.targeted);
-        BuildWallPrefixBoundary::CheckEverSeenPeriodic
+        // `Wall::check_ever_seen(0)` 0x0063CE70 returns at 0x0063CFD4..0x0063CFE1
+        // before `get_corner`, World reads, Leader notifications, and update_local_seen when
+        // both bytes already contain Game::everyone_mask. The optional mask is a
+        // revision-bound Game-field authority, never a value inferred from the Build.
+        periodic_child_completed_noop = periodic_everyone_mask.is_some_and(|mask| {
+            state.ever_seen & mask == mask && state.ever_seen_completed & mask == mask
+        });
+        if !periodic_child_completed_noop {
+            return BuildWallPrefixReceipt {
+                frame,
+                who,
+                o,
+                phase,
+                periodic_due,
+                slow_slot_32_due,
+                territory_slot_16_due,
+                active,
+                periodic_child_completed_noop,
+                before,
+                after: *state,
+                boundary: BuildWallPrefixBoundary::CheckEverSeenPeriodic,
+            };
+        }
+        // Exact no-op return: resume at Wall::process 0x00640499, before the phase32 gate.
+        if slow_slot_32_due {
+            if state.build_masks & MASK_SEEN_A as u16 != 0 {
+                state.build_masks &= !(MASK_SEEN_A as u16);
+            } else {
+                state.build_masks &= !(MASK_SEEN_B as u16);
+            }
+            if !active {
+                return BuildWallPrefixReceipt {
+                    frame,
+                    who,
+                    o,
+                    phase,
+                    periodic_due,
+                    slow_slot_32_due,
+                    territory_slot_16_due,
+                    active,
+                    periodic_child_completed_noop,
+                    before,
+                    after: *state,
+                    boundary: BuildWallPrefixBoundary::InactiveSlowSlot,
+                };
+            }
+        }
+
+        if state.helpers == 0 {
+            state.build_masks &= !(MASK_HAD_HELPERS as u16);
+        } else {
+            state.helpers = 0;
+            state.build_masks |= MASK_HAD_HELPERS as u16;
+        }
+        state.build_masks &= !(MASK_WORKED_THIS_FRAME as u16);
+
+        if territory_slot_16_due {
+            BuildWallPrefixBoundary::TerritorySlot
+        } else {
+            BuildWallPrefixBoundary::Complete
+        }
     } else {
         if slow_slot_32_due {
             if state.build_masks & MASK_SEEN_A as u16 != 0 {
@@ -964,6 +1112,7 @@ pub fn process_build_wall_prefix(
                     slow_slot_32_due,
                     territory_slot_16_due,
                     active,
+                    periodic_child_completed_noop,
                     before,
                     after: *state,
                     boundary: BuildWallPrefixBoundary::InactiveSlowSlot,
@@ -995,6 +1144,7 @@ pub fn process_build_wall_prefix(
         slow_slot_32_due,
         territory_slot_16_due,
         active,
+        periodic_child_completed_noop,
         before,
         after: *state,
         boundary,
@@ -1650,12 +1800,14 @@ mod tests {
     fn build_prefix_periodic_child_stops_before_same_frame_slow_and_helper_writes() {
         let mut state = BuildWallPrefixState {
             targeted: -7,
+            ever_seen: 0,
+            ever_seen_completed: 0,
             build_masks: MASK_SEEN_A as u16 | MASK_SEEN_B as u16 | MASK_WORKED_THIS_FRAME as u16,
             helpers: 3,
         };
 
         // Village o2000: frame 16 is simultaneously owner0-periodic, slow32 and territory16.
-        let receipt = process_build_wall_prefix(&mut state, 16, 0, 2000, true);
+        let receipt = process_build_wall_prefix(&mut state, 16, 0, 2000, true, None);
 
         assert!(receipt.periodic_due);
         assert!(receipt.slow_slot_32_due);
@@ -1676,15 +1828,102 @@ mod tests {
     }
 
     #[test]
+    fn covered_periodic_child_returns_noop_and_resumes_the_wall_prefix() {
+        let mut state = BuildWallPrefixState {
+            targeted: 64,
+            ever_seen: 1,
+            ever_seen_completed: 1,
+            build_masks: MASK_WORKED_THIS_FRAME as u16,
+            helpers: 2,
+        };
+
+        // At frame 8 neither golden o2000 nor o2001 has a phase16/32 slot. Once the exact
+        // everyone-mask gate returns, the helper latch is therefore the next write.
+        let receipt = process_build_wall_prefix(&mut state, 8, 0, 2000, true, Some(1));
+
+        assert!(receipt.periodic_due);
+        assert!(receipt.periodic_child_completed_noop);
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::Complete);
+        assert_eq!(state.targeted, 16);
+        assert_eq!(state.helpers, 0);
+        assert_ne!(state.build_masks & MASK_HAD_HELPERS as u16, 0);
+        assert_eq!(state.build_masks & MASK_WORKED_THIS_FRAME as u16, 0);
+    }
+
+    #[test]
+    fn village_frame16_noop_periodic_child_exposes_the_later_territory_boundary() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            ever_seen: 1,
+            ever_seen_completed: 1,
+            build_masks: MASK_SEEN_A as u16 | MASK_SEEN_B as u16,
+            helpers: 0,
+        };
+
+        let receipt = process_build_wall_prefix(&mut state, 16, 0, 2000, true, Some(1));
+
+        assert!(receipt.periodic_child_completed_noop);
+        assert!(receipt.slow_slot_32_due);
+        assert!(receipt.territory_slot_16_due);
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::TerritorySlot);
+        assert_eq!(state.build_masks & MASK_SEEN_A as u16, 0);
+        assert_ne!(state.build_masks & MASK_SEEN_B as u16, 0);
+    }
+
+    #[test]
+    fn periodic_authority_is_identity_complete_and_self_hashing() {
+        let mut build = crate::systems::production::BuildData {
+            flags: FLAG_ALIVE | FLAG_STARTED | FLAG_ACTIVE,
+            who: 0,
+            uid: 9,
+            ..Default::default()
+        };
+        build.set_object_id(2000);
+        let mut authority = BuildWallPeriodicAuthority {
+            revision: 7,
+            composition_digest: 0,
+            everyone_mask: 1,
+            frames: [8, 16, 24],
+            builds: [
+                BuildWallPeriodicIdentity {
+                    row: 0,
+                    who: 0,
+                    o: 2000,
+                    uid: 9,
+                    type_index: 414,
+                },
+                BuildWallPeriodicIdentity {
+                    row: 1,
+                    who: 0,
+                    o: 2001,
+                    uid: 10,
+                    type_index: 436,
+                },
+            ],
+        };
+        authority.composition_digest = build_wall_periodic_authority_digest(&authority);
+        assert_eq!(
+            authority.everyone_mask_for(8, 0, &build, Some(414)),
+            Some(1)
+        );
+        assert_eq!(authority.everyone_mask_for(32, 0, &build, Some(414)), None);
+
+        authority.everyone_mask = 3;
+        assert_eq!(authority.everyone_mask_for(8, 0, &build, Some(414)), None);
+    }
+
+    #[test]
     fn active_market_slow_slot_reaches_helper_latch_then_territory_boundary() {
         let mut state = BuildWallPrefixState {
             targeted: 64,
+            ever_seen: 0,
+            ever_seen_completed: 0,
             build_masks: MASK_SEEN_A as u16 | MASK_SEEN_B as u16 | MASK_WORKED_THIS_FRAME as u16,
             helpers: 2,
         };
 
         // Dutch Market o2001: frame 15 is phase 2016, divisible by both 32 and 16.
-        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, true);
+        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, true, None);
 
         assert!(!receipt.periodic_due);
         assert!(receipt.slow_slot_32_due);
@@ -1702,11 +1941,13 @@ mod tests {
     fn inactive_slow_slot_stops_after_seen_toggle_before_helper_latch() {
         let mut state = BuildWallPrefixState {
             targeted: 0,
+            ever_seen: 0,
+            ever_seen_completed: 0,
             build_masks: MASK_SEEN_A as u16 | MASK_WORKED_THIS_FRAME as u16,
             helpers: 1,
         };
 
-        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, false);
+        let receipt = process_build_wall_prefix(&mut state, 15, 0, 2001, false, None);
 
         assert_eq!(receipt.boundary, BuildWallPrefixBoundary::InactiveSlowSlot);
         assert_eq!(state.build_masks & MASK_SEEN_A as u16, 0);
@@ -1718,12 +1959,14 @@ mod tests {
     fn market_territory_only_slot_applies_helper_latch_before_stopping() {
         let mut state = BuildWallPrefixState {
             targeted: 0,
+            ever_seen: 0,
+            ever_seen_completed: 0,
             build_masks: MASK_SEEN_A as u16 | MASK_WORKED_THIS_FRAME as u16,
             helpers: 0,
         };
 
         // Market o2001: frame 31 is phase 2032, divisible by 16 but not by 32.
-        let receipt = process_build_wall_prefix(&mut state, 31, 0, 2001, true);
+        let receipt = process_build_wall_prefix(&mut state, 31, 0, 2001, true, None);
 
         assert!(!receipt.slow_slot_32_due);
         assert!(receipt.territory_slot_16_due);

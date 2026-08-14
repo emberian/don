@@ -339,6 +339,9 @@ pub struct Coverage {
     pub deaths: u64,
     pub hold_decrements: u64,
     pub build_process: u64,
+    /// Periodic `Wall::check_ever_seen(0)` calls which returned at the exact mask-covered
+    /// no-op gate and allowed the owning Build's Wall prefix to resume.
+    pub build_wall_periodic_noops: u64,
     pub build_construct_steps: u64,
     pub builds_completed: u64,
     pub wall_process: u64,
@@ -411,6 +414,7 @@ impl Default for Coverage {
             deaths: 0,
             hold_decrements: 0,
             build_process: 0,
+            build_wall_periodic_noops: 0,
             build_construct_steps: 0,
             builds_completed: 0,
             wall_process: 0,
@@ -969,6 +973,9 @@ pub struct Sim {
     // ---- step 14: the object bands ----------------------------------------------------
     pub prod_rules: production::ProdRules,
     pub production_runtime: production::runtime::LiveProductionRuntime,
+    /// Reinstalled golden Game::everyone_mask/Build identity join for the periodic
+    /// `Wall::check_ever_seen(0)` fast return. It is deliberately absent after load.
+    pub build_wall_periodic_authority: walls::BuildWallPeriodicAuthority,
     pub combat_rules: combat::CombatConstants,
     /// Band 2000, indexed by the row an [`crate::objects::ObjectRegistry`] entry carries.
     pub builds: Vec<production::BuildData>,
@@ -1698,6 +1705,7 @@ impl Sim {
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
             production_runtime: production::runtime::LiveProductionRuntime::default(),
+            build_wall_periodic_authority: walls::BuildWallPeriodicAuthority::default(),
             combat_rules: combat::CombatConstants::shipped(),
             builds: Vec::new(),
             walls: Vec::new(),
@@ -1728,6 +1736,15 @@ impl Sim {
         authority: crate::systems::canonical_group_move_host::GroupMoveAuthority,
     ) {
         self.group_move_authority = authority;
+    }
+
+    /// Reinstall the revision-bound golden Build/`Game::everyone_mask` projection used by
+    /// the periodic Build-band `Wall::check_ever_seen(0)` no-op lane.
+    pub fn replace_build_wall_periodic_authority(
+        &mut self,
+        authority: walls::BuildWallPeriodicAuthority,
+    ) {
+        self.build_wall_periodic_authority = authority;
     }
 
     /// Install the target/formation facts consumed by the bounded canonical GUARD host.
@@ -5774,10 +5791,23 @@ impl Sim {
     /// remaining Build body after a successful Wall return). No state from the structurally
     /// empty Wall band is copied into the Build.
     fn build_process(&mut self, row: usize, frame: i32) {
-        let boundary = {
+        let type_index = self
+            .production_runtime
+            .build_types
+            .get(row)
+            .and_then(|value| *value);
+        let periodic_everyone_mask = self.build_wall_periodic_authority.everyone_mask_for(
+            frame,
+            row,
+            &self.builds[row],
+            type_index,
+        );
+        let receipt = {
             let bd = &mut self.builds[row];
             let mut state = walls::BuildWallPrefixState {
                 targeted: bd.targeted(),
+                ever_seen: bd.ever_seen,
+                ever_seen_completed: bd.ever_seen_completed,
                 build_masks: bd.build_masks,
                 helpers: bd.helpers,
             };
@@ -5787,17 +5817,21 @@ impl Sim {
                 bd.who,
                 bd.object_id(),
                 bd.is_active(),
+                periodic_everyone_mask,
             );
             bd.set_targeted(state.targeted);
+            bd.ever_seen = state.ever_seen;
+            bd.ever_seen_completed = state.ever_seen_completed;
             bd.build_masks = state.build_masks;
             bd.helpers = state.helpers;
-            receipt.boundary
+            receipt
         };
 
         self.cover.build_process += 1;
+        self.cover.build_wall_periodic_noops += u64::from(receipt.periodic_child_completed_noop);
         self.cover.gaps[Gap::BuildProcess.index()] += 1;
 
-        if boundary != walls::BuildWallPrefixBoundary::Complete {
+        if receipt.boundary != walls::BuildWallPrefixBoundary::Complete {
             return;
         }
 
@@ -6397,6 +6431,7 @@ impl Sim {
             ("deaths filed", c.deaths),
             ("hold_frames decrements", c.hold_decrements),
             ("Build::process", c.build_process),
+            ("Build Wall periodic no-ops", c.build_wall_periodic_noops),
             ("Wall::do_construct steps", c.build_construct_steps),
             ("buildings completed", c.builds_completed),
             ("Wall::process", c.wall_process),
@@ -7765,6 +7800,64 @@ mod tests {
         assert_eq!(sim.builds[0].construct_hits, 777);
         assert_eq!(sim.cover.build_process, 1);
         assert_eq!(sim.cover.gaps[Gap::BuildProcess.index()], 1);
+    }
+
+    #[test]
+    fn golden_periodic_authority_advances_both_frame8_builds_past_check_ever_seen() {
+        let mut sim = Sim::new(30, 8);
+        let mut rows = Vec::new();
+        for (uid, type_index) in [(9, 414), (10, 436)] {
+            let row = sim.spawn_build(
+                0,
+                production::BuildData {
+                    flags: production::flag::VALID
+                        | production::flag::STARTED
+                        | production::flag::ACTIVE,
+                    uid,
+                    ever_seen: 1,
+                    ever_seen_completed: 1,
+                    helpers: 2,
+                    ..Default::default()
+                },
+            );
+            sim.production_runtime.register_build(row, type_index);
+            rows.push(row);
+        }
+        let mut authority = walls::BuildWallPeriodicAuthority {
+            revision: 1,
+            composition_digest: 0,
+            everyone_mask: 1,
+            frames: [8, 16, 24],
+            builds: [
+                walls::BuildWallPeriodicIdentity {
+                    row: rows[0],
+                    who: 0,
+                    o: 2000,
+                    uid: 9,
+                    type_index: 414,
+                },
+                walls::BuildWallPeriodicIdentity {
+                    row: rows[1],
+                    who: 0,
+                    o: 2001,
+                    uid: 10,
+                    type_index: 436,
+                },
+            ],
+        };
+        authority.composition_digest = walls::build_wall_periodic_authority_digest(&authority);
+        sim.replace_build_wall_periodic_authority(authority);
+
+        for row in rows {
+            sim.build_process(row, 8);
+            assert_eq!(sim.builds[row].helpers, 0);
+            assert_ne!(
+                sim.builds[row].build_masks & production::mask::WORKED_LAST_FRAME,
+                0
+            );
+        }
+        assert_eq!(sim.cover.build_wall_periodic_noops, 2);
+        assert_eq!(sim.cover.gaps[Gap::BuildProcess.index()], 2);
     }
 
     #[test]
