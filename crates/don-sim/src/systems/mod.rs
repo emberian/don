@@ -189,6 +189,8 @@ pub mod game_daemon_step12;
 pub mod golden_build_post_wall;
 /// Detached exact owner-0 early-return attrition transactions at golden frames 26..=32.
 pub mod golden_phase32_attrition;
+/// Detached golden Village entry into `Wall::update_local_seen` through its first child.
+pub mod golden_wall_update_local_seen;
 /// `do_job` arm 26: the snapshot-bound atomic host boundary and queue integration that turns
 /// [`garrison_order`]'s pure transcription into a dispatched `Unit::do_garrison`.
 pub mod garrison_dispatch;
