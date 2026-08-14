@@ -55,10 +55,11 @@ post-`do_mustering` status re-read: they enter `do_marching`, obtain zero from i
 count, and close before target selection or RNG. The released land arm receipts and stale-CAS binds
 the exact `LeaderData::strategy[ArmyData::reg]` word. Strategy bit 4 is additionally mounted on
 the replay/network `LeaderData::get_diff` arm: semaphore bit 2 forces the saved per-Leader
-`multi_diff`, a signed result below three enters `do_defending`, and the empty Army closes at that
-body's first `count(2, 0)` check. Receipts and stale-CAS bind the influencing semaphore bit and
-`multi_diff`; the global-difficulty arms, nonempty defending body, and remaining general AI stay
-unavailable.
+`multi_diff`. A signed result below three enters `do_defending`; a result at least three falls
+through to `do_marching` (including the saved value 3 written by DropControl state 3). The empty
+Army closes at either body's first mobile-count check. Receipts and stale-CAS bind the influencing
+semaphore bit and `multi_diff`; the global-difficulty arms, nonempty bodies, and remaining general
+AI stay unavailable.
 Generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
 image, including its

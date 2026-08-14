@@ -14,8 +14,8 @@
 //! The same released empty land-muster transaction is complete when its saved
 //! `LeaderData::strategy[reg]` cannot select transporting. Strategy bit 4 is also complete
 //! on the replay/network `get_diff` arm: the match semaphore forces the saved per-Leader
-//! `multi_diff`; values below three enter defending and the empty Army closes at the exact
-//! zero-count prefix before any host read.
+//! `multi_diff`; values below three enter defending and values at least three continue to
+//! marching. Both empty-Army bodies close at their exact zero-count prefix before host/RNG work.
 //!
 //! Retail evidence is the shipped PE `30478a44…625079`: `Armies::diplo_change`
 //! `0x006F30F0..0x006F3159` (105 bytes, SHA-256 `8191743c…f3eb6`) performs the owner gates,
@@ -395,6 +395,13 @@ impl ForceArmyProcessReceipt {
                 let Some(strategy) = self.muster_strategy else {
                     return false;
                 };
+                let difficulty_valid = if strategy.value & 4 != 0 {
+                    self.muster_difficulty
+                        .and_then(ForceArmyMusterDifficultyFact::value)
+                        .is_some_and(|value| value >= 3)
+                } else {
+                    self.muster_difficulty.is_none()
+                };
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
                     || self.world_size.is_some()
@@ -408,12 +415,11 @@ impl ForceArmyProcessReceipt {
                         .is_some_and(|fact| fact.validates(&self.before))
                     || usize::try_from(self.before.reg).ok() != Some(strategy.region)
                     || strategy.region >= MUSTER_STRATEGY_REGIONS
-                    // This outcome is the marching arm, so bit 4 must not enter defending.
-                    // Bit 8 may read leader_flags, which is already receipt-bound, but it must
-                    // not select do_transporting.
-                    || strategy.value & 4 != 0
+                    // Bit 4 may reach marching only through an exact get_diff result >= 3.
+                    // Bit 8 may then read leader_flags, which is already receipt-bound, but it
+                    // must not select do_transporting.
+                    || !difficulty_valid
                     || (strategy.value & 8 != 0 && self.leader_flags & 0x300 != 0)
-                    || self.muster_difficulty.is_some()
                 {
                     return false;
                 }
@@ -424,7 +430,7 @@ impl ForceArmyProcessReceipt {
                 expected.num_decoys = 0;
                 let mut host = ReleasedEmptyMusterHost {
                     strategy: Some(strategy),
-                    difficulty: None,
+                    difficulty: self.muster_difficulty,
                     leader_flags: self.leader_flags,
                 };
                 if !matches!(
@@ -907,9 +913,7 @@ fn prepare_force_army_process_impl(
             let defending = muster_difficulty
                 .and_then(ForceArmyMusterDifficultyFact::value)
                 .is_some_and(|value| value < 3);
-            if (value & 4 != 0 && !defending)
-                || (!defending && value & 8 != 0 && flags & 0x300 != 0)
-            {
+            if !defending && value & 8 != 0 && flags & 0x300 != 0 {
                 return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
                     owner: request.owner,
                     army_slot: request.army_slot,
@@ -1034,7 +1038,7 @@ fn prepare_force_army_process_impl(
                 army_after.num_decoys = 0;
                 let mut host = ReleasedEmptyMusterHost {
                     strategy: muster_strategy,
-                    difficulty: None,
+                    difficulty: muster_difficulty,
                     leader_flags: flags,
                 };
                 let out = do_mustering(&mut army_after, &mut host);

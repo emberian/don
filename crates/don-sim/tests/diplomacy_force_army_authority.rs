@@ -832,6 +832,87 @@ fn released_empty_bit4_muster_uses_forced_leader_difficulty_then_defends_and_clo
 }
 
 #[test]
+fn released_empty_bit4_muster_with_drop_difficulty_falls_through_to_marching_and_closes() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 1;
+    army.navy = 0;
+    army.city = 4;
+    army.reg = 5;
+    army.role = 0x55;
+    army.num_units = 12;
+    army.num_captains = 4;
+    army.num_standard = 3;
+    army.num_decoys = 2;
+    army.muster_x = 2;
+    army.muster_y = 3;
+    army.muster_angle = 0x1234_5678;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 7;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut strategy = [[0u16; 64]; 8];
+    strategy[2][5] = 4;
+    let match_semaphore = 1u32 << game_sem::NET_OR_RECORDING;
+    let mut multi_diff = [0; 8];
+    // DropControl::process_drop state 3 writes this saved value.
+    multi_diff[2] = 3;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    let prepared = prepare_force_army_process_with_strategy_and_difficulty(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+        &[request],
+    )
+    .unwrap();
+    let receipts = commit_force_army_process_with_strategy_and_difficulty(
+        &mut armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+        prepared,
+    )
+    .unwrap();
+
+    let receipt = &receipts[0];
+    assert!(receipt.validates());
+    assert_eq!(
+        receipt.outcome,
+        ForceArmyProcessOutcome::ClosedEmptyLandMuster
+    );
+    assert_eq!(
+        receipt.muster_difficulty,
+        Some(ForceArmyMusterDifficultyFact {
+            match_flags_820: 4,
+            multi_diff: 3,
+        })
+    );
+    assert_eq!(receipt.after.human_frame, 0);
+    assert_eq!(receipt.after.valid, 0);
+    assert_eq!(receipt.after.status, 0);
+    assert_eq!(receipt.after.city, -1);
+    assert_eq!((receipt.after.x, receipt.after.y), (0x780, 0xa80));
+    assert_eq!(receipt.after.angle, 0x1234_5678);
+}
+
+#[test]
 fn bit4_muster_difficulty_inputs_are_atomic_and_global_arm_stays_fail_closed() {
     let mut armies = live_army();
     let army = &mut armies.lists[2][3];
