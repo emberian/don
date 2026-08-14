@@ -116,10 +116,10 @@ does not visit slot 2.
 - current-source full localizer: 62 recordings opened, 21 checksum-bearing,
   21/21 coherent owner ledgers, and 265,619/265,619 agreeing same-group peer
   comparisons;
-- exact corpus census: 13,119,476 walked / 7,917,082 owned / 5,202,394 unknown
+- exact corpus census: 13,119,476 walked / 7,919,362 owned / 5,200,114 unknown
   bytes, with 4,484 / 4,274 / 210 in StartArrays;
 - exact current integrated boundary set: 2
-  map_make_coastlines and 19
+  terrain_groups_place_all and 19
   place_all_mountains_add_mountain; all 21 earliest lawful unknowns remain
   section 2 + 1;
 - Persvati clean-HEAD overlay lib check:

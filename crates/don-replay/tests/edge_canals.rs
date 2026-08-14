@@ -227,6 +227,7 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             post_fix_diag_string_constructor,
             game_log_say_checksum,
             post_checksum_string_close,
+            coastlines,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -348,12 +349,12 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
         assert_eq!(prefix.rng_final, remaining.random_state_after, "{name}");
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
+            don_replay::post_continent::TERRAIN_GROUPS_FILL_FERTILE_VA,
             "{name}"
         );
         assert!(!post_checksum_string_close.allocation.host_pointer_recorded);
@@ -400,18 +401,13 @@ fn both_checksum_bearing_style19_replays_execute_the_whole_body() {
             territory_limits.world_after, fix_diag_land.world_before,
             "{name}"
         );
-        assert_eq!(
-            fix_diag_land.world_after,
-            map.world.checksum_sections(),
-            "{name}"
-        );
+        assert_eq!(fix_diag_land.world_after, coastlines.world_before, "{name}");
         assert_eq!(
             post_fix_diag_string_constructor.world_before, fix_diag_land.world_after,
             "{name}"
         );
         assert_eq!(
-            game_log_say_checksum.world_after,
-            map.world.checksum_sections(),
+            game_log_say_checksum.world_after, coastlines.world_before,
             "{name}"
         );
         assert!(territory_limits.world_sections_changed.is_empty(), "{name}");

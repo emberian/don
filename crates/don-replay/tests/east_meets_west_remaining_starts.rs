@@ -212,6 +212,8 @@ fn both_style19_headers_execute_every_remaining_active_start() {
             post_fix_diag_string_constructor,
             game_log_say_checksum,
             post_checksum_string_close,
+            coastlines,
+            second_regions_find_all,
             next_mutator_va,
             ..
         } = &prefix.stop
@@ -263,13 +265,13 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(prefix.starts_added, 4, "{}", expected.name);
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA,
             "{}",
             expected.name
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
+            don_replay::post_continent::TERRAIN_GROUPS_FILL_FERTILE_VA,
             "{}",
             expected.name
         );
@@ -496,12 +498,21 @@ fn both_style19_headers_execute_every_remaining_active_start() {
         assert_eq!(regions_find_all.world_before, regions_clear_all.world_after);
         assert_eq!(territory_limits.world_before, regions_find_all.world_after);
         assert_eq!(fix_diag_land.world_before, territory_limits.world_after);
-        assert_eq!(checksum, fix_diag_land.world_after, "{}", expected.name);
+        assert_eq!(
+            coastlines.world_before, fix_diag_land.world_after,
+            "{}",
+            expected.name
+        );
+        assert_eq!(
+            checksum, second_regions_find_all.world_after,
+            "{}",
+            expected.name
+        );
         assert_eq!(
             post_fix_diag_string_constructor.world_before,
             fix_diag_land.world_after
         );
-        assert_eq!(game_log_say_checksum.world_after, checksum);
+        assert_eq!(game_log_say_checksum.world_after, coastlines.world_before);
         assert_eq!(
             regions_find_all.successful_find_calls, 3,
             "{}",
@@ -560,13 +571,47 @@ fn later_selector_failure_stops_before_visiting_another_active_slot() {
         regions_clear_all,
         regions_find_all,
         fix_diag_land,
+        coastlines,
+        second_regions_clear_all,
+        second_regions_find_all,
         ..
     } = prefix.stop
     else {
         panic!("unexpected stop {:?}", prefix.stop);
     };
 
-    for mutation in &fix_diag_land.mutations {
+    for mutation in &second_regions_find_all.world_mutations {
+        map.world.wdata[mutation.cell].region = mutation.region_before;
+        map.world.wdata[mutation.cell].region2 = mutation.region2_before;
+    }
+    for record in &second_regions_find_all.region_records {
+        map.generation_regions.list[usize::from(record.region)] = record.before.clone();
+    }
+    map.generation_regions.coords = second_regions_find_all.scratch.before.clone();
+    map.generation_regions.land = second_regions_find_all.regions_land_before;
+    map.generation_regions.sea = second_regions_find_all.regions_sea_before;
+    assert_eq!(
+        map.world.checksum_sections(),
+        second_regions_clear_all.world_after
+    );
+
+    for mutation in &second_regions_clear_all.world_region_mutations {
+        map.world.wdata[mutation.cell].region = mutation.region_before;
+    }
+    for record in &second_regions_clear_all.region_records {
+        map.generation_regions.list[usize::from(record.region)] = record.before.clone();
+    }
+    map.generation_regions.coords = second_regions_clear_all.regions_coords_before.clone();
+    map.generation_regions.land = second_regions_clear_all.regions_land_before;
+    map.generation_regions.sea = second_regions_clear_all.regions_sea_before;
+    assert_eq!(map.world.checksum_sections(), coastlines.world_after);
+
+    for mutation in coastlines.mutations.iter().rev() {
+        map.world.wdata[mutation.cell] = mutation.before.clone();
+    }
+    assert_eq!(map.world.checksum_sections(), coastlines.world_before);
+
+    for mutation in fix_diag_land.mutations.iter().rev() {
         map.world.wdata[mutation.cell] = mutation.before.clone();
     }
     assert_eq!(map.world.checksum_sections(), fix_diag_land.world_before);

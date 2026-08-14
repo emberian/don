@@ -123,43 +123,56 @@ use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
 pub use crate::post_continent::{
-    execute_map_fix_diag_land, execute_map_make_first_regions_clear_all,
-    execute_map_make_first_regions_find_all, execute_map_make_post_checksum_string_close,
+    execute_map_fix_diag_land, execute_map_make_coastlines,
+    execute_map_make_first_regions_clear_all, execute_map_make_first_regions_find_all,
+    execute_map_make_post_checksum_string_close,
+    execute_map_make_post_coastline_game_log_say_checksum,
+    execute_map_make_post_coastline_string_close,
+    execute_map_make_post_coastline_string_constructor,
     execute_map_make_post_fix_diag_game_log_say_checksum,
     execute_map_make_post_fix_diag_string_constructor, execute_map_make_progress_string,
-    execute_map_make_territory_limits, GameLogCheckAcceptNativeBody, GameLogSayChecksumNativeBody,
-    MapFixDiagLandError, MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
-    MapFixDiagLandWorldMutation, MapMakeFirstRegionsClearAllNext,
+    execute_map_make_second_regions_clear_all, execute_map_make_second_regions_find_all,
+    execute_map_make_second_regions_tail, execute_map_make_territory_limits,
+    GameLogCheckAcceptNativeBody, GameLogSayChecksumNativeBody, MapFixDiagLandError,
+    MapFixDiagLandNativeBody, MapFixDiagLandNext, MapFixDiagLandReceipt,
+    MapFixDiagLandWorldMutation, MapFixLakesNativeBody, MapMakeCoastlinesError,
+    MapMakeCoastlinesNativeBody, MapMakeCoastlinesNext, MapMakeCoastlinesReceipt,
+    MapMakeCoastlinesWorldMutation, MapMakeFirstRegionsClearAllNext,
     MapMakeFirstRegionsClearAllReceipt, MapMakeFirstRegionsFindAllCallerBody,
     MapMakeFirstRegionsFindAllError, MapMakeFirstRegionsFindAllNext,
     MapMakeFirstRegionsFindAllReceipt, MapMakeFirstTerritoryPrepBody,
     MapMakePostChecksumCallerBody, MapMakePostChecksumClosedString,
     MapMakePostChecksumStringCloseAllocationReceipt, MapMakePostChecksumStringCloseCallerBody,
     MapMakePostChecksumStringCloseError, MapMakePostChecksumStringCloseNext,
-    MapMakePostChecksumStringCloseReceipt, MapMakePostFixDiagGameLogCall,
+    MapMakePostChecksumStringCloseReceipt, MapMakePostCoastlineGameLogError,
+    MapMakePostCoastlineGameLogReceipt, MapMakePostCoastlineStringCloseError,
+    MapMakePostCoastlineStringCloseReceipt, MapMakePostCoastlineStringConstructorError,
+    MapMakePostCoastlineStringConstructorReceipt, MapMakePostFixDiagGameLogCall,
     MapMakePostFixDiagGameLogError, MapMakePostFixDiagGameLogNext,
     MapMakePostFixDiagGameLogOwnerReceipt, MapMakePostFixDiagGameLogReceipt,
     MapMakePostFixDiagLocalString, MapMakePostFixDiagStringAllocationOwner,
     MapMakePostFixDiagStringAllocationReceipt, MapMakePostFixDiagStringConstructorError,
     MapMakePostFixDiagStringConstructorNext, MapMakePostFixDiagStringConstructorReceipt,
     MapMakeProgressStringError, MapMakeProgressStringNext, MapMakeProgressStringReceipt,
-    MapMakeStringAllocationState, MapMakeStringAllocatorFacts, MapMakeTerritoryLimitsError,
-    MapMakeTerritoryLimitsNativeBody, MapMakeTerritoryLimitsNext, MapMakeTerritoryLimitsReceipt,
-    MapMakeTerritoryStyleBranchReceipt, RegionsAllocationState, RegionsClearAllCoordFreeReceipt,
-    RegionsClearAllNativeBody, RegionsClearAllRegionReceipt, RegionsClearAllWorldMutation,
-    RegionsFindAllNativeBody, RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall,
-    RegionsFindAllScratchReceipt, RegionsFindAllWorldMutation, StringCloseChildNativeBody,
-    StringCloseNativeBody, StringConstructorCallerBody, StringConstructorHelperNativeBody,
-    StringConstructorNativeBody, StringCopyAssignmentNativeBody, StringCopyConstructorNativeBody,
-    StringInitConstNativeBody, StringReinitNativeBody,
-    FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA, GAME_LOG_SAY_CHECKSUM_VA,
-    MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA, MAP_FIX_DIAG_LAND_CORNER_X,
-    MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y, MAP_FIX_DIAG_LAND_CORNER_Y_VA,
-    MAP_FIX_DIAG_LAND_END_VA, MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT, MAP_FIX_DIAG_LAND_NATIVE_BODY,
-    MAP_FIX_DIAG_LAND_RET_VA, MAP_FIX_DIAG_LAND_SHA256, MAP_FIX_DIAG_LAND_SIZE,
-    MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
-    MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA, MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
-    MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
+    MapMakeSecondRegionsClearAllReceipt, MapMakeSecondRegionsFindAllReceipt,
+    MapMakeSecondRegionsTailError, MapMakeSecondRegionsTailReceipt, MapMakeStringAllocationState,
+    MapMakeStringAllocatorFacts, MapMakeTerritoryLimitsError, MapMakeTerritoryLimitsNativeBody,
+    MapMakeTerritoryLimitsNext, MapMakeTerritoryLimitsReceipt, MapMakeTerritoryStyleBranchReceipt,
+    RegionsAllocationState, RegionsClearAllCoordFreeReceipt, RegionsClearAllNativeBody,
+    RegionsClearAllRegionReceipt, RegionsClearAllWorldMutation, RegionsFindAllNativeBody,
+    RegionsFindAllRegionReceipt, RegionsFindAllScratchAllocatorCall, RegionsFindAllScratchReceipt,
+    RegionsFindAllWorldMutation, StringCloseChildNativeBody, StringCloseNativeBody,
+    StringConstructorCallerBody, StringConstructorHelperNativeBody, StringConstructorNativeBody,
+    StringCopyAssignmentNativeBody, StringCopyConstructorNativeBody, StringInitConstNativeBody,
+    StringReinitNativeBody, FREE_IMPORT_IAT_VA as REGIONS_CLEAR_ALL_FREE_IMPORT_IAT_VA,
+    GAME_LOG_SAY_CHECKSUM_VA, MALLOC_IMPORT_IAT_VA as REGIONS_FIND_ALL_MALLOC_IMPORT_IAT_VA,
+    MAP_FIX_DIAG_LAND_CORNER_X, MAP_FIX_DIAG_LAND_CORNER_X_VA, MAP_FIX_DIAG_LAND_CORNER_Y,
+    MAP_FIX_DIAG_LAND_CORNER_Y_VA, MAP_FIX_DIAG_LAND_END_VA, MAP_FIX_DIAG_LAND_INSTRUCTION_COUNT,
+    MAP_FIX_DIAG_LAND_NATIVE_BODY, MAP_FIX_DIAG_LAND_RET_VA, MAP_FIX_DIAG_LAND_SHA256,
+    MAP_FIX_DIAG_LAND_SIZE, MAP_MAKE_FIRST_FIX_DIAG_LAND_CALL_VA,
+    MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA, MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY, MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+    MAP_MAKE_FIRST_REGIONS_FIND_CALLER_END_VA,
     MAP_MAKE_FIRST_REGIONS_FIND_CALLER_INSTRUCTION_COUNT,
     MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SHA256, MAP_MAKE_FIRST_REGIONS_FIND_CALLER_SIZE,
     MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA, MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
@@ -307,8 +320,10 @@ pub enum ContinentStop {
     /// `GameLog::say_checksum` host observation, and the sole-owner
     /// `String::close` allocator transaction, then the localized progress
     /// `String` copy, subtitle replacement, splash-refresh acknowledgement,
-    /// and allocator-free const-alias cleanup. Execution is frozen at the
-    /// next canonical World mutation, `Map::make_coastlines`.
+    /// allocator-free const-alias cleanup, the complete `Map::make_coastlines`
+    /// World transaction, its checksum-log observation, and the owned local
+    /// `map.cpp` cleanup. Execution is frozen at the second canonical
+    /// `Regions::clear_all` mutation.
     AddStartingLocation {
         primitive_va: u32,
         caller_va: u32,
@@ -331,6 +346,13 @@ pub enum ContinentStop {
         game_log_say_checksum: MapMakePostFixDiagGameLogReceipt,
         post_checksum_string_close: MapMakePostChecksumStringCloseReceipt,
         progress_string: MapMakeProgressStringReceipt,
+        coastlines: MapMakeCoastlinesReceipt,
+        post_coastline_string_constructor: MapMakePostCoastlineStringConstructorReceipt,
+        post_coastline_game_log: MapMakePostCoastlineGameLogReceipt,
+        post_coastline_string_close: MapMakePostCoastlineStringCloseReceipt,
+        second_regions_clear_all: MapMakeSecondRegionsClearAllReceipt,
+        second_regions_find_all: MapMakeSecondRegionsFindAllReceipt,
+        second_regions_tail: MapMakeSecondRegionsTailReceipt,
         next_mutator_va: u32,
     },
     /// One selector exhausted both passes and returned zero. When it was a
@@ -445,6 +467,12 @@ pub enum ContinentError {
     PostFixDiagGameLog(MapMakePostFixDiagGameLogError),
     PostChecksumStringClose(MapMakePostChecksumStringCloseError),
     ProgressString(MapMakeProgressStringError),
+    MakeCoastlines(MapMakeCoastlinesError),
+    PostCoastlineStringConstructor(MapMakePostCoastlineStringConstructorError),
+    PostCoastlineGameLog(MapMakePostCoastlineGameLogError),
+    PostCoastlineStringClose(MapMakePostCoastlineStringCloseError),
+    SecondRegionsFindAll(MapMakeFirstRegionsFindAllError),
+    SecondRegionsTail(MapMakeSecondRegionsTailError),
     PlayerLand(CheckPlayerLandError),
     EastIndiesTail(EastIndiesTailError),
     TeamPartition(TeamContinentPartitionError),
@@ -1732,7 +1760,10 @@ fn east_meets_west(
                     )
                     .map_err(ContinentError::RegionsFindAll)?;
                     let MapMakeFirstRegionsFindAllNext::TerritoryLimitStore { store_va, .. } =
-                        regions_find_all.next;
+                        regions_find_all.next
+                    else {
+                        unreachable!("first Regions::find_all must resume at territory stores")
+                    };
                     debug_assert_eq!(store_va, MAP_MAKE_FIRST_TERRITORY_STORE_VA);
                     let territory_limit_source = TerritoryLimits::from_world_prefix(world);
                     let territory_limits = execute_map_make_territory_limits(
@@ -1824,7 +1855,10 @@ fn east_meets_west(
                         call_va: progress_constructor_call_va,
                         primitive_va: progress_constructor_va,
                         ..
-                    } = post_checksum_string_close.next;
+                    } = post_checksum_string_close.next
+                    else {
+                        unreachable!("post-fix-diag close must resume at the progress string")
+                    };
                     debug_assert_eq!(
                         progress_constructor_call_va,
                         crate::post_continent::MAP_MAKE_PROGRESS_STRING_CONSTRUCTOR_CALL_VA
@@ -1847,10 +1881,124 @@ fn east_meets_west(
                     )
                     .map_err(ContinentError::ProgressString)?;
                     let MapMakeProgressStringNext::MakeCoastlines {
-                        call_va: next_va,
-                        primitive_va: next_mutator_va,
+                        call_va: coastlines_call_va,
+                        primitive_va: coastlines_va,
                         ..
                     } = progress_string.next;
+                    debug_assert_eq!(
+                        coastlines_call_va,
+                        crate::post_continent::MAP_MAKE_COASTLINES_CALL_VA
+                    );
+                    debug_assert_eq!(coastlines_va, crate::post_continent::MAP_MAKE_COASTLINES_VA);
+                    let coastlines = execute_map_make_coastlines(
+                        world,
+                        regions,
+                        rng.state(),
+                        &regions_clear_all,
+                        &regions_find_all,
+                        &territory_limits,
+                        &fix_diag_land,
+                        &post_fix_diag_string_constructor,
+                        &game_log_say_checksum,
+                        &post_checksum_string_close,
+                        &progress_string,
+                    )
+                    .map_err(ContinentError::MakeCoastlines)?;
+                    let MapMakeCoastlinesNext::ChecksumStringConstructor {
+                        call_va: post_coastline_constructor_call_va,
+                        primitive_va: post_coastline_constructor_va,
+                        ..
+                    } = coastlines.next;
+                    debug_assert_eq!(
+                        post_coastline_constructor_call_va,
+                        crate::post_continent::MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA
+                    );
+                    debug_assert_eq!(
+                        post_coastline_constructor_va,
+                        crate::post_continent::STRING_CONSTRUCTOR_VA
+                    );
+                    let post_coastline_string_constructor =
+                        execute_map_make_post_coastline_string_constructor(
+                            world,
+                            regions,
+                            rng.state(),
+                            &regions_clear_all,
+                            &regions_find_all,
+                            &territory_limits,
+                            &fix_diag_land,
+                            &post_fix_diag_string_constructor,
+                            &game_log_say_checksum,
+                            &post_checksum_string_close,
+                            &progress_string,
+                            &coastlines,
+                        )
+                        .map_err(ContinentError::PostCoastlineStringConstructor)?;
+                    let post_coastline_game_log =
+                        execute_map_make_post_coastline_game_log_say_checksum(
+                            world,
+                            regions,
+                            rng.state(),
+                            &regions_clear_all,
+                            &regions_find_all,
+                            &territory_limits,
+                            &fix_diag_land,
+                            &post_fix_diag_string_constructor,
+                            &game_log_say_checksum,
+                            &post_checksum_string_close,
+                            &progress_string,
+                            &coastlines,
+                            &post_coastline_string_constructor,
+                        )
+                        .map_err(ContinentError::PostCoastlineGameLog)?;
+                    let post_coastline_string_close = execute_map_make_post_coastline_string_close(
+                        world,
+                        regions,
+                        rng.state(),
+                        &regions_clear_all,
+                        &regions_find_all,
+                        &territory_limits,
+                        &fix_diag_land,
+                        &post_fix_diag_string_constructor,
+                        &game_log_say_checksum,
+                        &post_checksum_string_close,
+                        &progress_string,
+                        &coastlines,
+                        &post_coastline_string_constructor,
+                        &post_coastline_game_log,
+                        MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY,
+                    )
+                    .map_err(ContinentError::PostCoastlineStringClose)?;
+                    let MapMakePostChecksumStringCloseNext::SecondRegionsClearAll {
+                        call_va: second_clear_call_va,
+                        primitive_va: second_clear_va,
+                    } = post_coastline_string_close.next
+                    else {
+                        unreachable!("post-coastline close must resume at Regions::clear_all")
+                    };
+                    debug_assert_eq!(
+                        second_clear_call_va,
+                        crate::post_continent::MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA
+                    );
+                    debug_assert_eq!(second_clear_va, crate::post_continent::REGIONS_CLEAR_ALL_VA);
+                    let second_regions_clear_all =
+                        execute_map_make_second_regions_clear_all(world, regions, rng.state());
+                    let second_regions_find_all = execute_map_make_second_regions_find_all(
+                        world,
+                        regions,
+                        rng.state(),
+                        &second_regions_clear_all,
+                    )
+                    .map_err(ContinentError::SecondRegionsFindAll)?;
+                    let second_regions_tail = execute_map_make_second_regions_tail(
+                        world,
+                        regions,
+                        rng.state(),
+                        &second_regions_clear_all,
+                        &second_regions_find_all,
+                    )
+                    .map_err(ContinentError::SecondRegionsTail)?;
+                    let next_va = second_regions_tail.next.call_va;
+                    let next_mutator_va = second_regions_tail.next.primitive_va;
                     let body_receipt = player_land.body_receipt.clone();
                     (
                         ContinentStop::AddStartingLocation {
@@ -1875,6 +2023,13 @@ fn east_meets_west(
                             game_log_say_checksum,
                             post_checksum_string_close,
                             progress_string,
+                            coastlines,
+                            post_coastline_string_constructor,
+                            post_coastline_game_log,
+                            post_coastline_string_close,
+                            second_regions_clear_all,
+                            second_regions_find_all,
+                            second_regions_tail,
                             next_mutator_va,
                         },
                         starts_added,

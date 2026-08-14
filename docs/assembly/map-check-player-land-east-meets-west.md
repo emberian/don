@@ -18,9 +18,13 @@ observation at `0x0068be9e -> 0x00930b30`, clears the caller cleanup guard,
 executes the sole-owner `String::close` at
 `0x0068bead -> 0x00a1cf40`, executes the progress-message copy constructor,
 subtitle replacement, splash-refresh acknowledgement, and const-alias close
-through `0x0068beed`, then freezes at the next canonical World mutation,
-`Map::make_coastlines` at `0x0068bef2 -> 0x006947a0`. None of these tranches
-before the coastline call consumes RNG or changes World.
+through `0x0068beed`, executes the complete `Map::make_coastlines` transaction
+at `0x0068bef2 -> 0x006947a0`, and owns its following `map.cpp` checksum-log
+String through the sole-owner close at `0x0068bf2a`. It freezes at the next
+canonical chain, executes the second `Regions::clear_all/find_all`, owns its
+line-`0x1ea6` checksum String and localized `Map Terrain` progress cone, and
+reaches `TerrainGroups::fill_fertile` at `0x0068bfb8 -> 0x006a6f90`. None of
+the caller tranches before fertility consumes RNG.
 
 Evidence is the shipped executable
 `ron-bin/riseofnations.exe` (SHA-256
@@ -372,6 +376,24 @@ its clock and draw effects are not replay state. The final local close takes
 freeing, while the now-stale source length, offset, module, and cached hashes
 remain in the dead local exactly as the native instructions leave them.
 
+`Map::make_coastlines` is the exact 774-byte / 225-instruction body
+`0x006947a0..0x00694aa6`, returning at `0x00694aa5`; its raw-body SHA-256 is
+`dd2f6e2005336caf7e6e33a57422d91e69d6e769a2c48d00e03bbcebe984aa4a`.
+Its sole direct child is `Map::fix_lakes` at `0x0069c470`, an exact 391-byte /
+120-instruction, call-free fixed-point WData mutation with SHA-256
+`bd51e858b7bdafd610f3b1713130987aa98f678c067e13c36e5e7b44f439da46`.
+The replay executes that child and both in-place row-major coastline scans,
+retaining every changed WData record verbatim. Validation reconstructs the
+pre-call World, reruns the complete transaction, and requires byte-exact
+WData equality; Region, Region2, and goods fields remain unchanged by every
+recorded mutation. The PDB byte formal is unread and the body has no RNG site.
+
+After return, the caller constructs a fresh sole-owned `map.cpp` String at
+`0x0068beff -> 0x00a1d660`, observes the checksum through
+`GameLog::say_checksum` at source line `0x1ea3`, and returns both logical
+allocations to the retail pools through `String::close`. These host/allocator
+receipts leave World and RNG unchanged and retain no host pointer.
+
 ## Typed residual and gates
 
 The canonical continent continuation now executes this receipt immediately
@@ -389,8 +411,10 @@ the close receipt binds all four executed direct calls, both logical allocator
 returns and the zeroed owning local image. The progress receipt then binds the
 localized table owner, all five executed direct calls, the allocator-free
 borrowed-alias lifecycle, the subtitle replacement, and the const-close dead
-local image without recording a host pointer. It exposes
-`next_va = 0x0068bef2`, `next_mutator_va = 0x006947a0`. Owner transition
+local image without recording a host pointer. The coastline receipt then binds
+the complete WData transaction, both following checksum-string ownership
+cones, and the second Region rebuild. It exposes `next_va = 0x0068bfb8`,
+`next_mutator_va = 0x006a6f90`. Owner transition
 accepts the result only when both centroid allocations, every cleanup anchor,
 both sets of 128 Region transitions, every WData region label, the typed
 scratch lifecycle, all six scalar stores, the style-19 fallthrough, and
@@ -398,7 +422,8 @@ unchanged RNG chronology match; its implementation
 digest includes the replay executor plus the sim Region and map-terrain
 bodies. The
 offline localizer consequently names the two style-19 endpoints
-`map_make_coastlines`.
+`terrain_groups_place_all` after the initial reconstruction executes the
+available exact fertility input.
 
 Validation gates:
 
@@ -495,3 +520,19 @@ Validation gates:
   reports 21/21 retail/model divergences, and names exactly two
   `map_make_coastlines` / nineteen `place_all_mountains_add_mountain`
   endpoints.
+- current Cycle 12 coastline/second-checksum gate: complete `Map::fix_lakes`
+  and `Map::make_coastlines` WData ownership plus the following `map.cpp`
+  checksum String lifecycle are exact. Focused player-land is 9/9, continent
+  4/4, remaining starts 2/2, edge canals 4/4, cargo check is green, and owner
+  transition is 2/2 including all 21 checksum-bearing recordings. The full
+  localizer opens 62 recordings, retains 21/21 coherent ledgers and
+  265,619/265,619 agreeing peer comparisons, reports 21/21 retail/model
+  divergences, and names exactly two `map_make_second_regions_clear_all` /
+  nineteen `place_all_mountains_add_mountain` endpoints.
+- current Cycle 13 second-Region/fertility gate: the second clear/find pair,
+  line-`0x1ea6` checksum String lifecycle, localized `Map Terrain` alias, and
+  `fill_fertile` handoff are exact. The full localizer opens 62 recordings,
+  retains 21/21 coherent ledgers and 265,619/265,619 agreeing peer comparisons,
+  reports 21/21 truthful retail/model divergences, owns 7,919,362 of 13,119,476
+  walked bytes, and names exactly two `terrain_groups_place_all` / nineteen
+  `place_all_mountains_add_mountain` endpoints.

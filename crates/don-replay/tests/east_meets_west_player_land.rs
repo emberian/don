@@ -233,6 +233,13 @@ fn map_make_progress_rows_are_the_exact_shipped_default_language_ordinals() {
         coastlines.declared_hash as u32,
         pc::MAP_MAKE_COASTLINES_RESOURCE_HASH
     );
+
+    let terrain = &table.records()[pc::MAP_MAKE_TERRAIN_PROGRESS_STRING_TABLE_INDEX as usize];
+    assert_eq!(terrain.text, "Map Terrain");
+    assert_eq!(
+        terrain.declared_hash as u32,
+        pc::MAP_MAKE_TERRAIN_PROGRESS_RESOURCE_HASH
+    );
 }
 
 #[test]
@@ -391,6 +398,18 @@ fn progress_string_const_alias_graph_is_frozen() {
     );
     assert_eq!(pc::MAP_MAKE_COASTLINES_CALL_BODY.entry_va, 0x0068_bef2);
     assert_eq!(pc::MAP_MAKE_COASTLINES_CALL_BODY.primitive_va, 0x0069_47a0);
+    assert_eq!(pc::MAP_MAKE_COASTLINES_NATIVE_BODY.size, 774);
+    assert_eq!(pc::MAP_MAKE_COASTLINES_NATIVE_BODY.instruction_count, 225);
+    assert_eq!(
+        pc::MAP_MAKE_COASTLINES_NATIVE_BODY.sha256,
+        "dd2f6e2005336caf7e6e33a57422d91e69d6e769a2c48d00e03bbcebe984aa4a"
+    );
+    assert_eq!(pc::MAP_FIX_LAKES_NATIVE_BODY.size, 391);
+    assert_eq!(pc::MAP_FIX_LAKES_NATIVE_BODY.instruction_count, 120);
+    assert_eq!(
+        pc::MAP_FIX_LAKES_NATIVE_BODY.sha256,
+        "bd51e858b7bdafd610f3b1713130987aa98f678c067e13c36e5e7b44f439da46"
+    );
 }
 
 #[test]
@@ -669,6 +688,13 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             game_log_say_checksum,
             post_checksum_string_close,
             progress_string,
+            coastlines,
+            post_coastline_string_constructor,
+            post_coastline_game_log,
+            post_coastline_string_close,
+            second_regions_clear_all,
+            second_regions_find_all,
+            second_regions_tail,
             next_va,
             next_mutator_va,
             ..
@@ -685,12 +711,12 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
 
         assert_eq!(
             *next_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
+            don_replay::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA,
             "{name}"
         );
         assert_eq!(
             *next_mutator_va,
-            don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
+            don_replay::post_continent::TERRAIN_GROUPS_FILL_FERTILE_VA,
             "{name}"
         );
         assert_eq!(
@@ -745,7 +771,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         );
         assert_eq!(regions_find_all.region_records_visited, 128, "{name}");
         assert!(
-            regions_find_all
+            second_regions_find_all
                 .region_records
                 .iter()
                 .all(|record| record.after
@@ -832,11 +858,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(fix_diag_land.cells_scanned, map.world.wdata.len(), "{name}");
-        assert_eq!(
-            fix_diag_land.world_after,
-            map.world.checksum_sections(),
-            "{name}"
-        );
+        assert_eq!(fix_diag_land.world_after, coastlines.world_before, "{name}");
         assert!(fix_diag_land.direct_rng_sites.is_empty(), "{name}");
         assert_eq!(
             fix_diag_land.random_state_before, fix_diag_land.random_state_after,
@@ -923,8 +945,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            post_fix_diag_string_constructor.world_after,
-            map.world.checksum_sections(),
+            post_fix_diag_string_constructor.world_after, coastlines.world_before,
             "{name}"
         );
         assert!(
@@ -981,8 +1002,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            game_log_say_checksum.world_after,
-            map.world.checksum_sections(),
+            game_log_say_checksum.world_after, coastlines.world_before,
             "{name}"
         );
         assert!(
@@ -1062,8 +1082,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            post_checksum_string_close.world_after,
-            map.world.checksum_sections(),
+            post_checksum_string_close.world_after, coastlines.world_before,
             "{name}"
         );
         assert!(post_checksum_string_close.world_sections_changed.is_empty());
@@ -1108,8 +1127,7 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             "{name}"
         );
         assert_eq!(
-            progress_string.world_after,
-            map.world.checksum_sections(),
+            progress_string.world_after, coastlines.world_before,
             "{name}"
         );
         assert!(progress_string.world_sections_changed.is_empty(), "{name}");
@@ -1120,6 +1138,69 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                 call_va: don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA,
                 primitive_va: don_replay::post_continent::MAP_MAKE_COASTLINES_VA,
             },
+            "{name}"
+        );
+        assert_eq!(
+            coastlines.body,
+            don_replay::post_continent::MAP_MAKE_COASTLINES_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            coastlines.fix_lakes,
+            don_replay::post_continent::MAP_FIX_LAKES_NATIVE_BODY,
+            "{name}"
+        );
+        assert_eq!(
+            coastlines.world_before, progress_string.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            coastlines.world_after, second_regions_clear_all.world_before,
+            "{name}"
+        );
+        assert!(coastlines.direct_rng_sites.is_empty(), "{name}");
+        assert_eq!(
+            post_coastline_string_constructor.world_before, coastlines.world_after,
+            "{name}"
+        );
+        assert_eq!(post_coastline_game_log.call.line_number, 0x1ea3, "{name}");
+        assert_eq!(
+            post_coastline_string_close.world_after, second_regions_clear_all.world_before,
+            "{name}"
+        );
+        assert_eq!(
+            post_coastline_string_close.next,
+            don_replay::post_continent::MapMakePostChecksumStringCloseNext::SecondRegionsClearAll {
+                call_va: don_replay::post_continent::MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA,
+                primitive_va: don_replay::post_continent::REGIONS_CLEAR_ALL_VA,
+            },
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_find_all.world_before, second_regions_clear_all.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_find_all.world_after,
+            map.world.checksum_sections(),
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_tail.world_before, second_regions_find_all.world_after,
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_tail.checksum_log_call.line_number, 0x1ea6,
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_tail.terrain_progress_source.table_index,
+            don_replay::post_continent::MAP_MAKE_TERRAIN_PROGRESS_STRING_TABLE_INDEX,
+            "{name}"
+        );
+        assert_eq!(
+            second_regions_tail.next.call_va,
+            don_replay::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA,
             "{name}"
         );
         assert_eq!(
@@ -1147,10 +1228,25 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
         );
         let mut bad_allocator = don_replay::continent::MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY;
         bad_allocator.debug_heap_enabled = true;
+        let mut pre_coastline_world = map.world.clone();
+        for mutation in &regions_find_all.world_mutations {
+            pre_coastline_world.wdata[mutation.cell].region = mutation.region_after;
+            pre_coastline_world.wdata[mutation.cell].region2 = mutation.region2_after;
+        }
+        for mutation in coastlines.mutations.iter().rev() {
+            pre_coastline_world.wdata[mutation.cell] = mutation.before.clone();
+        }
+        let mut first_regions = map.generation_regions.clone();
+        for record in &regions_find_all.region_records {
+            first_regions.list[usize::from(record.region)] = record.after.clone();
+        }
+        first_regions.coords = regions_find_all.scratch.after.clone();
+        first_regions.land = regions_find_all.regions_land_after;
+        first_regions.sea = regions_find_all.regions_sea_after;
         assert_eq!(
             don_replay::execute_map_make_post_checksum_string_close(
-                &map.world,
-                &map.generation_regions,
+                &pre_coastline_world,
+                &first_regions,
                 receipt.random_state_after,
                 regions_clear_all,
                 regions_find_all,
@@ -1231,7 +1327,8 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
                 let mut after_clear = mutation.after.clone();
                 after_clear.region = 0;
                 let cell = (mutation.y * map.world.xs + mutation.x) as usize;
-                let mut after_find_undone = map.world.wdata(mutation.x, mutation.y).clone();
+                let mut after_find_undone =
+                    pre_coastline_world.wdata(mutation.x, mutation.y).clone();
                 after_find_undone.region = regions_find_all.world_mutations[cell].region_before;
                 after_find_undone.region2 = regions_find_all.world_mutations[cell].region2_before;
                 mutation.before != mutation.after && after_find_undone == after_clear
@@ -1242,10 +1339,6 @@ fn both_real_style19_headers_execute_the_complete_body_without_rng_or_start_rewr
             regions_clear_all.world_before, receipt.world_after,
             "{name}"
         );
-        assert_eq!(
-            map.world.checksum_sections(),
-            fix_diag_land.world_after,
-            "{name}"
-        );
+        assert_eq!(coastlines.world_before, fix_diag_land.world_after, "{name}");
     }
 }

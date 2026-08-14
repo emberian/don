@@ -46,8 +46,8 @@ The executed wipe and generator then add receipt-bound last-writer ownership:
 | owned `place_all` prefix | 5 `WData`, 6 `TDataAndFog` | receipt-proven region/oil/mountain writes only |
 
 Across the 21 recordings the wipe contributes 7,564,500 written bytes, while the later
-transitions contribute 350,986 changed generator bytes: 4,274 in section 2 and 346,712 in
-section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,917,082
+transitions contribute 353,266 changed generator bytes: 4,274 in section 2 and 348,992 in
+section 5. Together with the 1,596 replay/static prefix bytes, exact coverage is 7,919,362
 bytes. Outside explicitly receipted writes, unchanged zeroes and unchanged neighbours remain
 unknown even when an exact routine visited them.
 
@@ -68,19 +68,20 @@ column no longer stands in for missing provenance.
 | 2 `StartArrays` | 4,484 | 4,274 | 210 |
 | 3 `OilArrays` | 168 | 0 | 168 |
 | 4 `Scalars` | 2,520 | 1,428 | 1,092 |
-| 5 `WData` | 3,530,100 | 346,712 | 3,183,388 |
+| 5 `WData` | 3,530,100 | 348,992 | 3,181,108 |
 | 6 `TDataAndFog` | 7,396,400 | 7,396,400 | 0 |
 | 7 `WCoordSeen` | 168,100 | 168,100 | 0 |
 | 8 `Danger` | 1,344,800 | 0 | 1,344,800 |
 | 9 `CollBlocks` | 672,400 | 0 | 672,400 |
 | 10–13 terrain arrays | 336 | 0 | 336 |
-| **total** | **13,119,476** | **7,917,082** | **5,202,394** |
+| **total** | **13,119,476** | **7,919,362** | **5,200,114** |
 
 The earliest lawful unknown is section 2 offset 1 in all 21 recordings. The two East Meets
 West stops now contain and own the changed bytes from all four exact start appends and the
 complete post-loop `Map::check_player_land` body. They also receipt the common first Region
 rebuild, territory stores, diagonal repair, checksum log string, exact sole-owner cleanup,
-and the allocator-free localized progress alias through its presentation-only refresh.
+the allocator-free localized progress alias through its presentation-only refresh, the
+complete lakes/coastline WData transaction, and its following checksum String lifecycle.
 Those offsets are exclusion boundaries only, not observed retail/model differences.
 
 ## Source-stage correlation
@@ -91,7 +92,7 @@ bytes from `schema/replay-validation.json`:
 | current exact stop | recordings |
 |---|---:|
 | `place_all_mountains_add_mountain` | 19 |
-| `map_make_coastlines` | 2 |
+| `terrain_groups_place_all` | 2 |
 
 Every recording crosses and receipts its executed continent prefix. The 19 recordings whose
 style virtual completes also receipt the common post-continent and fertility stages. This
@@ -117,14 +118,17 @@ snapshot or owners.
    recordings have completed `Map::check_player_land`, both centroid
    `SimpleArray<int>` frees, the complete `MapEastMeetsWest::make_continents`
    epilogue, the first common Region rebuild, territory and diagonal writes,
-   checksum-log cleanup, and the localized progress-caption ownership cone.
-   They now stop honestly at `Map::make_coastlines` `0x006947a0` (caller
-   `0x0068bef2`).
+   checksum-log cleanup, the localized progress-caption ownership cone, the
+   complete `Map::fix_lakes` / `Map::make_coastlines` WData transaction, and
+   its following checksum String cleanup, the second Region rebuild, its line
+   `0x1ea6` checksum String, the localized `Map Terrain` progress ownership
+   cone, and complete `TerrainGroups::fill_fertile`. They now stop honestly at
+   `TerrainGroups::place_all` `0x006a70d0`.
 2. **Replace the wipe baseline with later TData and visibility producers.** The baseline is
    exact, but starting objects, terrain footprints, LOS and detector passes can overwrite it
    before the turn-2 checkpoint.
 3. **Prove unchanged WData values independently.** The exact transitions own changed bytes;
-   they intentionally do not promote the 3,183,388 unchanged bytes.
+   they intentionally do not promote the 3,181,108 unchanged bytes.
 4. **Resolve the remaining StartArrays bytes only from real producers.** Zero header bytes
    which happened not to change are still unknown.
 5. **Acquire a checksum-bound retail byte image only when live work resumes.** Offline work

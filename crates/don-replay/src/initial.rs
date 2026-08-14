@@ -947,12 +947,31 @@ impl InitialItemReconstruction {
             }
             crate::continent::ContinentStop::AddStartingLocation {
                 next_mutator_va, ..
-            } => InitialItemBoundary::MapContinentPrimitiveUnavailable {
-                boundary: "map_make_coastlines",
-                map_style: receipt.map_style,
-                make_continents_va: receipt.make_continents_va,
-                primitive_va: *next_mutator_va,
-            },
+            } => {
+                debug_assert_eq!(
+                    *next_mutator_va,
+                    crate::fractal_boundary::TERRAIN_GROUPS_FILL_FERTILE_VA
+                );
+                if let Some(fertility) = &fertility {
+                    let terrain_groups = fertility.terrain_groups_input();
+                    let fill = terrain_groups
+                        .fill_fertile(&mut staged_map.world)
+                        .map_err(InitialItemReconstructionError::FillFertile)?;
+                    crate::replay_world_owner_transitions::advance_fill_fertile_world_ownership(
+                        &mut staged_map,
+                        &fill,
+                    )
+                    .map_err(InitialItemReconstructionError::WorldOwnership)?;
+                    fill_fertile = Some(fill);
+                    InitialItemBoundary::MapTerrainGroupsPlaceAllUnavailable {
+                        next_va: crate::fractal_boundary::TERRAIN_GROUPS_PLACE_ALL_VA,
+                    }
+                } else {
+                    InitialItemBoundary::MapTerrainGroupsUnavailable {
+                        next_va: crate::fractal_boundary::TERRAIN_GROUPS_FILL_FERTILE_VA,
+                    }
+                }
+            }
             crate::continent::ContinentStop::EastMeetsWestStartFallback { next_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
                     boundary: "map_team_continent_start_fallback",

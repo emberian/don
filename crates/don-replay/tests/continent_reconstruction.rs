@@ -526,7 +526,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             game_log_say_checksum,
             post_checksum_string_close,
             progress_string,
+            coastlines,
+            second_regions_clear_all,
+            second_regions_find_all,
             next_mutator_va,
+            ..
         } => {
             assert_eq!(
                 *primitive_va,
@@ -555,11 +559,11 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(selector.accepted_pass, Some(1));
             assert_eq!(
                 *next_va,
-                don_replay::post_continent::MAP_MAKE_COASTLINES_CALL_VA
+                don_replay::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA
             );
             assert_eq!(
                 *next_mutator_va,
-                don_replay::post_continent::MAP_MAKE_COASTLINES_VA
+                don_replay::post_continent::TERRAIN_GROUPS_FILL_FERTILE_VA
             );
             assert_eq!(
                 post_checksum_string_close.allocation.buffer_after,
@@ -599,8 +603,17 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 fix_diag_land.body,
                 don_replay::post_continent::MAP_FIX_DIAG_LAND_NATIVE_BODY
             );
+            assert_eq!(fix_diag_land.world_after, coastlines.world_before);
             assert_eq!(
-                fix_diag_land.world_after,
+                coastlines.world_after,
+                second_regions_clear_all.world_before
+            );
+            assert_eq!(
+                second_regions_clear_all.world_after,
+                second_regions_find_all.world_before
+            );
+            assert_eq!(
+                second_regions_find_all.world_after,
                 eastwest_world.checksum_sections()
             );
             assert_eq!(
@@ -621,7 +634,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             assert_eq!(game_log_say_checksum.cleanup_guard_after, -1);
             assert_eq!(
                 post_fix_diag_string_constructor.world_after,
-                eastwest_world.checksum_sections()
+                coastlines.world_before
             );
             assert_eq!(
                 territory_limits
@@ -694,7 +707,7 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
                 .section(WorldSection::WData)
                 .adler,
         ),
-        (0xd293_cb35, 0x7a34_6ba0, 0x4f28_bf8c, 0xaf72_4f9f)
+        (0xd293_cb35, 0xde83_7b5d, 0x4f28_bf8c, 0xcddc_5f5c)
     );
     assert_eq!(eastwest_regions.land, 0);
 }

@@ -322,6 +322,92 @@ pub const MAP_MAKE_COASTLINES_CALL_SIZE: u32 = 5;
 pub const MAP_MAKE_COASTLINES_CALL_INSTRUCTION_COUNT: u32 = 1;
 pub const MAP_MAKE_COASTLINES_CALL_SHA256: &str =
     "ec418cbf54e1f09a3f8e4b1811523000b5934f85e38ab1572407a2a494056212";
+pub const MAP_MAKE_COASTLINES_END_VA: u32 = 0x0069_4aa6;
+pub const MAP_MAKE_COASTLINES_RET_VA: u32 = 0x0069_4aa5;
+pub const MAP_MAKE_COASTLINES_SIZE: u32 = 774;
+pub const MAP_MAKE_COASTLINES_INSTRUCTION_COUNT: u32 = 225;
+pub const MAP_MAKE_COASTLINES_SHA256: &str =
+    "dd2f6e2005336caf7e6e33a57422d91e69d6e769a2c48d00e03bbcebe984aa4a";
+pub const MAP_MAKE_COASTLINES_WORLD_OWNER_PTR_VA: u32 = 0x00c0_6188;
+pub const MAP_MAKE_COASTLINES_FIX_LAKES_CALL_VA: u32 = 0x0069_47a9;
+pub const MAP_FIX_LAKES_VA: u32 = 0x0069_c470;
+pub const MAP_FIX_LAKES_END_VA: u32 = 0x0069_c5f7;
+pub const MAP_FIX_LAKES_RET_VA: u32 = 0x0069_c5f6;
+pub const MAP_FIX_LAKES_SIZE: u32 = 391;
+pub const MAP_FIX_LAKES_INSTRUCTION_COUNT: u32 = 120;
+pub const MAP_FIX_LAKES_SHA256: &str =
+    "bd51e858b7bdafd610f3b1713130987aa98f678c067e13c36e5e7b44f439da46";
+pub const MAP_MAKE_POST_COASTLINE_STRING_LITERAL_PUSH_VA: u32 = 0x0068_bef7;
+pub const MAP_MAKE_POST_COASTLINE_STRING_LOCAL_LOAD_VA: u32 = 0x0068_befc;
+pub const MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_beff;
+pub const MAP_MAKE_POST_COASTLINE_LITERAL_VA: u32 = 0x00ad_de50;
+pub const MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_END_VA: u32 = 0x0068_bf1b;
+pub const MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_SIZE: u32 = 28;
+pub const MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_INSTRUCTION_COUNT: u32 = 7;
+pub const MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_SHA256: &str =
+    "086a315b09f94d907d0f145e333b377ee80b7db66676fa92614488272e3525ef";
+pub const MAP_MAKE_POST_COASTLINE_GUARD_STORE_VA: u32 = 0x0068_bf04;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_SOURCE_LOAD_VA: u32 = 0x0068_bf0b;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_LINE_PUSH_VA: u32 = 0x0068_bf0e;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_LINE_NUMBER: u32 = 0x1ea3;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_SOURCE_PUSH_VA: u32 = 0x0068_bf13;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_MODE_PUSH_VA: u32 = 0x0068_bf14;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_THIS_LOAD_VA: u32 = 0x0068_bf16;
+pub const MAP_MAKE_POST_COASTLINE_GAME_LOG_CALL_VA: u32 = 0x0068_bf1b;
+pub const MAP_MAKE_POST_COASTLINE_GUARD_CLEAR_VA: u32 = 0x0068_bf20;
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_LOCAL_LOAD_VA: u32 = 0x0068_bf27;
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA: u32 = 0x0068_bf2a;
+pub const MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_SIZE: u32 = 15;
+pub const MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_INSTRUCTION_COUNT: u32 = 3;
+pub const MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_SHA256: &str =
+    "6ff25ababee4bb7f8af9dd2248be0acf6cbf21a2382e0853d2b28996354ef79e";
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_RESUME_VA: u32 = 0x0068_bf2f;
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_CALL_SIZE: u32 = 5;
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_CALL_INSTRUCTION_COUNT: u32 = 1;
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_CALL_SHA256: &str =
+    "3c16d7eaabea8b1b2e70a942bfd827920dc8140ce38cd9b22d67e992801ee9ef";
+pub const MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA: u32 = 0x0068_bf2f;
+pub const MAP_MAKE_SECOND_REGIONS_CLEAR_RESUME_VA: u32 = 0x0068_bf34;
+pub const MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_SHA256: &str =
+    "bb0395568da10280625ce6370d7ba21ec854abdbdf29eb157cf15bddc1294804";
+pub const MAP_MAKE_SECOND_REGIONS_FIND_ARGUMENT_PUSH_VA: u32 = 0x0068_bf34;
+pub const MAP_MAKE_SECOND_REGIONS_FIND_CALL_VA: u32 = 0x0068_bf35;
+pub const MAP_MAKE_SECOND_REGIONS_FIND_RESUME_VA: u32 = 0x0068_bf3a;
+pub const MAP_MAKE_SECOND_REGIONS_FIND_CALLER_SHA256: &str =
+    "6871d6afb29109d575745b0da7563da9e27308ba55cea294c267a1f9fbeb941b";
+pub const MAP_MAKE_POST_SECOND_REGIONS_STRING_LITERAL_PUSH_VA: u32 = 0x0068_bf3a;
+pub const MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA: u32 = 0x0068_bf42;
+pub const MAP_MAKE_POST_SECOND_REGIONS_LITERAL_VA: u32 = 0x00ad_de68;
+pub const MAP_MAKE_POST_SECOND_REGIONS_CONSTRUCTOR_END_VA: u32 = 0x0068_bf5e;
+pub const MAP_MAKE_POST_SECOND_REGIONS_CONSTRUCTOR_SHA256: &str =
+    "13f7854164d44f20bbc374fe88c0fdd0573a9501f3f97516eaf98c4dab17f522";
+pub const MAP_MAKE_POST_SECOND_REGIONS_GAME_LOG_CALL_VA: u32 = 0x0068_bf5e;
+pub const MAP_MAKE_POST_SECOND_REGIONS_GAME_LOG_LINE_NUMBER: u32 = 0x1ea6;
+pub const MAP_MAKE_POST_SECOND_REGIONS_CLOSE_CALL_VA: u32 = 0x0068_bf6d;
+pub const MAP_MAKE_POST_SECOND_REGIONS_POST_LOG_SHA256: &str =
+    "2a42359a5d3b06e1a4c3cad1782649cbecdbd5965b21cc179b274c91bb8c43f8";
+pub const MAP_MAKE_POST_SECOND_REGIONS_CLOSE_SHA256: &str =
+    "54f122387d08d2593fe0225341db89ab567cf06092725b587d656bfa2db7664d";
+pub const MAP_MAKE_TERRAIN_PROGRESS_TEST_VA: u32 = 0x0068_bf72;
+pub const MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_CALL_VA: u32 = 0x0068_bf84;
+pub const MAP_MAKE_TERRAIN_PROGRESS_ASSIGN_CALL_VA: u32 = 0x0068_bf99;
+pub const MAP_MAKE_TERRAIN_PROGRESS_REFRESH_CALL_VA: u32 = 0x0068_bf9e;
+pub const MAP_MAKE_TERRAIN_PROGRESS_CLOSE_CALL_VA: u32 = 0x0068_bfad;
+pub const MAP_MAKE_TERRAIN_PROGRESS_END_VA: u32 = 0x0068_bfb2;
+pub const MAP_MAKE_TERRAIN_PROGRESS_PREP_SHA256: &str =
+    "f914a1575ddc33c249fd11d74da9eec769869634a628a33d3573f4c446a84afb";
+pub const MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_SHA256: &str =
+    "5d65913bc8d515ac63dce71c8824e094234b3ed5eeaff70b191fd8a09b1aaae8";
+pub const MAP_MAKE_TERRAIN_PROGRESS_PRESENTATION_SHA256: &str =
+    "27280d174378eb999743d6e2f5af56e271466e540a84225a1d26c5979d156537";
+pub const MAP_MAKE_TERRAIN_PROGRESS_STRING_TABLE_INDEX: u32 = 2624;
+pub const MAP_MAKE_TERRAIN_PROGRESS_STRING_BYTE_OFFSET: u32 = 0x0000_cd00;
+pub const MAP_MAKE_TERRAIN_PROGRESS_RESOURCE_HASH: u32 = 20_475_887;
+pub const MAP_MAKE_FILL_FERTILE_THIS_LOAD_VA: u32 = 0x0068_bfb2;
+pub const MAP_MAKE_FILL_FERTILE_CALL_VA: u32 = 0x0068_bfb8;
+pub const MAP_MAKE_FILL_FERTILE_RESUME_VA: u32 = 0x0068_bfbd;
+pub const MAP_MAKE_FILL_FERTILE_CALLER_SHA256: &str =
+    "cf7d9852cad8a4b1176edea796929b09b6303f690ab2eb5fb549bf5c58f02e43";
 pub const LOCALIZED_STRING_TABLE_ENTRY_SIZE: u32 = 20;
 pub const MAP_MAKE_PREVIOUS_PROGRESS_STRING_TABLE_INDEX: u32 = 2620;
 pub const MAP_MAKE_PREVIOUS_PROGRESS_STRING_BYTE_OFFSET: u32 = 0x0000_ccb0;
@@ -559,6 +645,29 @@ pub fn execute_map_make_first_regions_clear_all(
     regions: &mut Regions,
     random_state: i32,
 ) -> MapMakeFirstRegionsClearAllReceipt {
+    execute_map_make_regions_clear_all_at(
+        world,
+        regions,
+        random_state,
+        MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
+        MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+        MapMakeFirstRegionsClearAllNext::FindAll {
+            argument_push_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+            call_va: MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
+            primitive_va: REGIONS_FIND_ALL_VA,
+            stack_argument_is_unread: true,
+        },
+    )
+}
+
+fn execute_map_make_regions_clear_all_at(
+    world: &mut World,
+    regions: &mut Regions,
+    random_state: i32,
+    caller_call_va: u32,
+    caller_resume_va: u32,
+    next: MapMakeFirstRegionsClearAllNext,
+) -> MapMakeFirstRegionsClearAllReceipt {
     let world_before = world.checksum_sections();
     let region2_before = world
         .wdata
@@ -622,10 +731,10 @@ pub fn execute_map_make_first_regions_clear_all(
         .collect();
 
     MapMakeFirstRegionsClearAllReceipt {
-        caller_call_va: MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
+        caller_call_va,
         body: REGIONS_CLEAR_ALL_NATIVE_BODY,
         executed_ret_va: REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA,
-        caller_resume_va: MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+        caller_resume_va,
         region_records_visited: REGION_COUNT,
         region_records,
         coordinate_frees,
@@ -649,13 +758,30 @@ pub fn execute_map_make_first_regions_clear_all(
         random_state_before: random_state,
         random_state_after: random_state,
         direct_rng_sites: Vec::new(),
-        next: MapMakeFirstRegionsClearAllNext::FindAll {
-            argument_push_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
-            call_va: MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
+        next,
+    }
+}
+
+pub type MapMakeSecondRegionsClearAllReceipt = MapMakeFirstRegionsClearAllReceipt;
+
+pub fn execute_map_make_second_regions_clear_all(
+    world: &mut World,
+    regions: &mut Regions,
+    random_state: i32,
+) -> MapMakeSecondRegionsClearAllReceipt {
+    execute_map_make_regions_clear_all_at(
+        world,
+        regions,
+        random_state,
+        MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA,
+        MAP_MAKE_SECOND_REGIONS_CLEAR_RESUME_VA,
+        MapMakeFirstRegionsClearAllNext::FindAll {
+            argument_push_va: MAP_MAKE_SECOND_REGIONS_FIND_ARGUMENT_PUSH_VA,
+            call_va: MAP_MAKE_SECOND_REGIONS_FIND_CALL_VA,
             primitive_va: REGIONS_FIND_ALL_VA,
             stack_argument_is_unread: true,
         },
-    }
+    )
 }
 
 pub(crate) fn validate_map_make_first_regions_clear_all_receipt(
@@ -663,10 +789,33 @@ pub(crate) fn validate_map_make_first_regions_clear_all_receipt(
     regions: &Regions,
     receipt: &MapMakeFirstRegionsClearAllReceipt,
 ) -> bool {
-    if receipt.caller_call_va != MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA
+    validate_map_make_regions_clear_all_receipt_at(
+        world,
+        regions,
+        receipt,
+        MAP_MAKE_FIRST_REGIONS_CLEAR_CALL_VA,
+        MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA,
+        MapMakeFirstRegionsClearAllNext::FindAll {
+            argument_push_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
+            call_va: MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
+            primitive_va: REGIONS_FIND_ALL_VA,
+            stack_argument_is_unread: true,
+        },
+    )
+}
+
+fn validate_map_make_regions_clear_all_receipt_at(
+    world: &World,
+    regions: &Regions,
+    receipt: &MapMakeFirstRegionsClearAllReceipt,
+    caller_call_va: u32,
+    caller_resume_va: u32,
+    next: MapMakeFirstRegionsClearAllNext,
+) -> bool {
+    if receipt.caller_call_va != caller_call_va
         || receipt.body != REGIONS_CLEAR_ALL_NATIVE_BODY
         || receipt.executed_ret_va != REGIONS_CLEAR_ALL_RET_NONEMPTY_WORLD_VA
-        || receipt.caller_resume_va != MAP_MAKE_FIRST_REGIONS_CLEAR_RESUME_VA
+        || receipt.caller_resume_va != caller_resume_va
         || receipt.region_records_visited != REGION_COUNT
         || receipt.region_records.len() != REGION_COUNT
         || receipt.regions_coords_before != receipt.regions_coords_after
@@ -685,13 +834,7 @@ pub(crate) fn validate_map_make_first_regions_clear_all_receipt(
                 .differing_sections(&receipt.world_after)
         || receipt.random_state_before != receipt.random_state_after
         || !receipt.direct_rng_sites.is_empty()
-        || receipt.next
-            != (MapMakeFirstRegionsClearAllNext::FindAll {
-                argument_push_va: MAP_MAKE_FIRST_REGIONS_FIND_ARGUMENT_PUSH_VA,
-                call_va: MAP_MAKE_FIRST_REGIONS_FIND_CALL_VA,
-                primitive_va: REGIONS_FIND_ALL_VA,
-                stack_argument_is_unread: true,
-            })
+        || receipt.next != next
     {
         return false;
     }
@@ -761,6 +904,26 @@ pub(crate) fn validate_map_make_first_regions_clear_all_receipt(
         })
 }
 
+pub(crate) fn validate_map_make_second_regions_clear_all_receipt(
+    world: &World,
+    regions: &Regions,
+    receipt: &MapMakeSecondRegionsClearAllReceipt,
+) -> bool {
+    validate_map_make_regions_clear_all_receipt_at(
+        world,
+        regions,
+        receipt,
+        MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA,
+        MAP_MAKE_SECOND_REGIONS_CLEAR_RESUME_VA,
+        MapMakeFirstRegionsClearAllNext::FindAll {
+            argument_push_va: MAP_MAKE_SECOND_REGIONS_FIND_ARGUMENT_PUSH_VA,
+            call_va: MAP_MAKE_SECOND_REGIONS_FIND_CALL_VA,
+            primitive_va: REGIONS_FIND_ALL_VA,
+            stack_argument_is_unread: true,
+        },
+    )
+}
+
 /// One imported allocator call over the logical shared `Regions::coords`
 /// scratch queue. No native pointer value is retained or compared.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -810,6 +973,11 @@ pub enum MapMakeFirstRegionsFindAllNext {
         map_field_offset: u32,
         world_field_offset: u32,
     },
+    PostRegionsChecksumStringConstructor {
+        literal_push_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -855,9 +1023,41 @@ pub fn execute_map_make_first_regions_find_all(
     random_state: i32,
     prior_clear: &MapMakeFirstRegionsClearAllReceipt,
 ) -> Result<MapMakeFirstRegionsFindAllReceipt, MapMakeFirstRegionsFindAllError> {
-    if !validate_map_make_first_regions_clear_all_receipt(world, regions, prior_clear)
-        || prior_clear.random_state_after != random_state
-    {
+    execute_map_make_regions_find_all_at(
+        world,
+        regions,
+        random_state,
+        prior_clear,
+        MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
+        MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+        MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
+            prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
+            world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+            map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
+            store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
+            world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
+        },
+        false,
+    )
+}
+
+fn execute_map_make_regions_find_all_at(
+    world: &mut World,
+    regions: &mut Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    caller: MapMakeFirstRegionsFindAllCallerBody,
+    caller_resume_va: u32,
+    next: MapMakeFirstRegionsFindAllNext,
+    second_clear: bool,
+) -> Result<MapMakeFirstRegionsFindAllReceipt, MapMakeFirstRegionsFindAllError> {
+    let prior_valid = if second_clear {
+        validate_map_make_second_regions_clear_all_receipt(world, regions, prior_clear)
+    } else {
+        validate_map_make_first_regions_clear_all_receipt(world, regions, prior_clear)
+    };
+    if !prior_valid || prior_clear.random_state_after != random_state {
         return Err(MapMakeFirstRegionsFindAllError::PriorClearReceiptMismatch);
     }
 
@@ -954,11 +1154,11 @@ pub fn execute_map_make_first_regions_find_all(
         .collect();
 
     Ok(MapMakeFirstRegionsFindAllReceipt {
-        caller: MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
+        caller,
         body: REGIONS_FIND_ALL_NATIVE_BODY,
         executed_ret_va: REGIONS_FIND_ALL_RET_VA,
         callee_stack_argument_bytes_popped: 4,
-        caller_resume_va: MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+        caller_resume_va,
         stack_argument_is_unread: true,
         successful_find_calls: build.land_components_found + build.sea_components_found,
         diagnostic_calls_executed: Vec::new(),
@@ -978,15 +1178,42 @@ pub fn execute_map_make_first_regions_find_all(
         random_state_before: random_state,
         random_state_after: random_state,
         direct_rng_sites: Vec::new(),
-        next: MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
-            prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
-            world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
-            map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
-            store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
-            map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
-            world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
-        },
+        next,
     })
+}
+
+pub type MapMakeSecondRegionsFindAllReceipt = MapMakeFirstRegionsFindAllReceipt;
+
+pub const MAP_MAKE_SECOND_REGIONS_FIND_ALL_CALLER_BODY: MapMakeFirstRegionsFindAllCallerBody =
+    MapMakeFirstRegionsFindAllCallerBody {
+        entry_va: MAP_MAKE_SECOND_REGIONS_FIND_ARGUMENT_PUSH_VA,
+        end_va_exclusive: MAP_MAKE_SECOND_REGIONS_FIND_RESUME_VA,
+        size: 6,
+        instruction_count: 2,
+        sha256: MAP_MAKE_SECOND_REGIONS_FIND_CALLER_SHA256,
+        direct_calls: &[(MAP_MAKE_SECOND_REGIONS_FIND_CALL_VA, REGIONS_FIND_ALL_VA)],
+    };
+
+pub fn execute_map_make_second_regions_find_all(
+    world: &mut World,
+    regions: &mut Regions,
+    random_state: i32,
+    prior_clear: &MapMakeSecondRegionsClearAllReceipt,
+) -> Result<MapMakeSecondRegionsFindAllReceipt, MapMakeFirstRegionsFindAllError> {
+    execute_map_make_regions_find_all_at(
+        world,
+        regions,
+        random_state,
+        prior_clear,
+        MAP_MAKE_SECOND_REGIONS_FIND_ALL_CALLER_BODY,
+        MAP_MAKE_SECOND_REGIONS_FIND_RESUME_VA,
+        MapMakeFirstRegionsFindAllNext::PostRegionsChecksumStringConstructor {
+            literal_push_va: MAP_MAKE_POST_SECOND_REGIONS_STRING_LITERAL_PUSH_VA,
+            call_va: MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA,
+            primitive_va: STRING_CONSTRUCTOR_VA,
+        },
+        true,
+    )
 }
 
 pub(crate) fn validate_map_make_first_regions_find_all_receipt(
@@ -994,6 +1221,35 @@ pub(crate) fn validate_map_make_first_regions_find_all_receipt(
     regions: &Regions,
     prior_clear: &MapMakeFirstRegionsClearAllReceipt,
     receipt: &MapMakeFirstRegionsFindAllReceipt,
+) -> bool {
+    validate_map_make_regions_find_all_receipt_at(
+        world,
+        regions,
+        prior_clear,
+        receipt,
+        MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY,
+        MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA,
+        MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
+            prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
+            world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
+            map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
+            store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
+            map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
+            world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
+        },
+        false,
+    )
+}
+
+fn validate_map_make_regions_find_all_receipt_at(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    receipt: &MapMakeFirstRegionsFindAllReceipt,
+    caller: MapMakeFirstRegionsFindAllCallerBody,
+    caller_resume_va: u32,
+    expected_next: MapMakeFirstRegionsFindAllNext,
+    second_clear: bool,
 ) -> bool {
     if prior_clear.region_records.len() != REGION_COUNT
         || receipt.world_mutations.len() != world.wdata.len()
@@ -1018,24 +1274,24 @@ pub(crate) fn validate_map_make_first_regions_find_all_receipt(
     clear_regions.coords = prior_clear.regions_coords_after.clone();
     clear_regions.land = prior_clear.regions_land_after;
     clear_regions.sea = prior_clear.regions_sea_after;
-    if !validate_map_make_first_regions_clear_all_receipt(&clear_world, &clear_regions, prior_clear)
-    {
+    let prior_valid = if second_clear {
+        validate_map_make_second_regions_clear_all_receipt(
+            &clear_world,
+            &clear_regions,
+            prior_clear,
+        )
+    } else {
+        validate_map_make_first_regions_clear_all_receipt(&clear_world, &clear_regions, prior_clear)
+    };
+    if !prior_valid {
         return false;
     }
 
-    let expected_next = MapMakeFirstRegionsFindAllNext::TerritoryLimitStore {
-        prep: MAP_MAKE_FIRST_TERRITORY_PREP_BODY,
-        world_owner_load_va: MAP_MAKE_FIRST_TERRITORY_WORLD_LOAD_VA,
-        map_value_load_va: MAP_MAKE_FIRST_TERRITORY_MAP_LOAD_VA,
-        store_va: MAP_MAKE_FIRST_TERRITORY_STORE_VA,
-        map_field_offset: MAP_PLAYER_TERRITORY_LIMIT_OFFSET,
-        world_field_offset: WORLD_PLAYER_TERRITORY_LIMIT_OFFSET,
-    };
-    if receipt.caller != MAP_MAKE_FIRST_REGIONS_FIND_ALL_CALLER_BODY
+    if receipt.caller != caller
         || receipt.body != REGIONS_FIND_ALL_NATIVE_BODY
         || receipt.executed_ret_va != REGIONS_FIND_ALL_RET_VA
         || receipt.callee_stack_argument_bytes_popped != 4
-        || receipt.caller_resume_va != MAP_MAKE_FIRST_REGIONS_FIND_RESUME_VA
+        || receipt.caller_resume_va != caller_resume_va
         || !receipt.stack_argument_is_unread
         || receipt.successful_find_calls
             != receipt.build.land_components_found + receipt.build.sea_components_found
@@ -1145,6 +1401,28 @@ pub(crate) fn validate_map_make_first_regions_find_all_receipt(
         }
     }
     true
+}
+
+pub(crate) fn validate_map_make_second_regions_find_all_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeSecondRegionsClearAllReceipt,
+    receipt: &MapMakeSecondRegionsFindAllReceipt,
+) -> bool {
+    validate_map_make_regions_find_all_receipt_at(
+        world,
+        regions,
+        prior_clear,
+        receipt,
+        MAP_MAKE_SECOND_REGIONS_FIND_ALL_CALLER_BODY,
+        MAP_MAKE_SECOND_REGIONS_FIND_RESUME_VA,
+        MapMakeFirstRegionsFindAllNext::PostRegionsChecksumStringConstructor {
+            literal_push_va: MAP_MAKE_POST_SECOND_REGIONS_STRING_LITERAL_PUSH_VA,
+            call_va: MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA,
+            primitive_va: STRING_CONSTRUCTOR_VA,
+        },
+        true,
+    )
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1889,12 +2167,12 @@ pub enum MapMakePostFixDiagStringConstructorError {
     PriorFixDiagLandReceiptMismatch,
 }
 
-fn map_make_post_fix_diag_local_string() -> MapMakePostFixDiagLocalString {
+fn map_make_owned_map_cpp_local(source_va: u32) -> MapMakePostFixDiagLocalString {
     let utf16 = MAP_MAKE_POST_FIX_DIAG_LITERAL
         .encode_utf16()
         .collect::<Vec<_>>();
     MapMakePostFixDiagLocalString {
-        source_va: MAP_MAKE_POST_FIX_DIAG_LITERAL_VA,
+        source_va,
         source: MAP_MAKE_POST_FIX_DIAG_LITERAL,
         source_bytes_with_nul: MAP_MAKE_POST_FIX_DIAG_LITERAL_BYTES_WITH_NUL,
         source_sha256: MAP_MAKE_POST_FIX_DIAG_LITERAL_SHA256,
@@ -1909,6 +2187,10 @@ fn map_make_post_fix_diag_local_string() -> MapMakePostFixDiagLocalString {
         owns_typed_string_guts: true,
         utf16,
     }
+}
+
+fn map_make_post_fix_diag_local_string() -> MapMakePostFixDiagLocalString {
+    map_make_owned_map_cpp_local(MAP_MAKE_POST_FIX_DIAG_LITERAL_VA)
 }
 
 /// Execute the exact post-diagonal `String::String(char const*)` constructor,
@@ -2508,6 +2790,10 @@ pub enum MapMakePostChecksumStringCloseNext {
         string_byte_offset: u32,
         local_load_va: u32,
         source_push_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+    },
+    SecondRegionsClearAll {
         call_va: u32,
         primitive_va: u32,
     },
@@ -3247,6 +3533,1029 @@ pub(crate) fn validate_map_make_progress_string_receipt(
         && receipt.random_state_before == receipt.random_state_after
         && receipt.direct_rng_sites.is_empty()
         && receipt.next == map_make_progress_next()
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapFixLakesNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const MAP_FIX_LAKES_NATIVE_BODY: MapFixLakesNativeBody = MapFixLakesNativeBody {
+    entry_va: MAP_FIX_LAKES_VA,
+    end_va_exclusive: MAP_FIX_LAKES_END_VA,
+    ret_va: MAP_FIX_LAKES_RET_VA,
+    size: MAP_FIX_LAKES_SIZE,
+    instruction_count: MAP_FIX_LAKES_INSTRUCTION_COUNT,
+    sha256: MAP_FIX_LAKES_SHA256,
+    direct_calls: &[],
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeCoastlinesNativeBody {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub ret_va: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+    pub world_owner_ptr_va: u32,
+    pub formal_argument_is_unread: bool,
+    pub direct_calls: &'static [(u32, u32)],
+}
+
+pub const MAP_MAKE_COASTLINES_NATIVE_BODY: MapMakeCoastlinesNativeBody =
+    MapMakeCoastlinesNativeBody {
+        entry_va: MAP_MAKE_COASTLINES_VA,
+        end_va_exclusive: MAP_MAKE_COASTLINES_END_VA,
+        ret_va: MAP_MAKE_COASTLINES_RET_VA,
+        size: MAP_MAKE_COASTLINES_SIZE,
+        instruction_count: MAP_MAKE_COASTLINES_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_COASTLINES_SHA256,
+        world_owner_ptr_va: MAP_MAKE_COASTLINES_WORLD_OWNER_PTR_VA,
+        formal_argument_is_unread: true,
+        direct_calls: &[(MAP_MAKE_COASTLINES_FIX_LAKES_CALL_VA, MAP_FIX_LAKES_VA)],
+    };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeCoastlinesWorldMutation {
+    pub x: i32,
+    pub y: i32,
+    pub cell: usize,
+    pub before: WData,
+    pub after: WData,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeCoastlinesNext {
+    ChecksumStringConstructor {
+        caller_resume_va: u32,
+        string_literal_push_va: u32,
+        string_literal_va: u32,
+        string_local_load_va: u32,
+        call_va: u32,
+        primitive_va: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeCoastlinesReceipt {
+    pub caller: MapMakeCoastlinesCallBody,
+    pub body: MapMakeCoastlinesNativeBody,
+    pub fix_lakes: MapFixLakesNativeBody,
+    pub cells_scanned_per_coastline_pass: usize,
+    pub mutations: Vec<MapMakeCoastlinesWorldMutation>,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakeCoastlinesNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeCoastlinesError {
+    PriorProgressStringReceiptMismatch,
+}
+
+fn map_make_coastlines_next() -> MapMakeCoastlinesNext {
+    MapMakeCoastlinesNext::ChecksumStringConstructor {
+        caller_resume_va: MAP_MAKE_COASTLINES_CALL_RESUME_VA,
+        string_literal_push_va: MAP_MAKE_POST_COASTLINE_STRING_LITERAL_PUSH_VA,
+        string_literal_va: MAP_MAKE_POST_COASTLINE_LITERAL_VA,
+        string_local_load_va: MAP_MAKE_POST_COASTLINE_STRING_LOCAL_LOAD_VA,
+        call_va: MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA,
+        primitive_va: STRING_CONSTRUCTOR_VA,
+    }
+}
+
+/// Execute the complete `Map::make_coastlines` World transaction. The body
+/// first reaches the fixed-point `Map::fix_lakes` child and then performs its
+/// two in-place row-major coastline scans. Every changed WData record is
+/// retained verbatim; the formal PDB byte argument is not read by the body.
+pub fn execute_map_make_coastlines(
+    world: &mut World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+) -> Result<MapMakeCoastlinesReceipt, MapMakeCoastlinesError> {
+    if !validate_map_make_progress_string_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+    ) || prior_progress.random_state_after != random_state
+    {
+        return Err(MapMakeCoastlinesError::PriorProgressStringReceiptMismatch);
+    }
+
+    let before_world = world.clone();
+    let world_before = before_world.checksum_sections();
+    world.make_coastlines();
+    let world_after = world.checksum_sections();
+    let mut mutations = Vec::new();
+    for y in 0..world.ys {
+        for x in 0..world.xs {
+            let cell = world.w_index(x, y);
+            if before_world.wdata[cell] != world.wdata[cell] {
+                mutations.push(MapMakeCoastlinesWorldMutation {
+                    x,
+                    y,
+                    cell,
+                    before: before_world.wdata[cell].clone(),
+                    after: world.wdata[cell].clone(),
+                });
+            }
+        }
+    }
+
+    Ok(MapMakeCoastlinesReceipt {
+        caller: MAP_MAKE_COASTLINES_CALL_BODY,
+        body: MAP_MAKE_COASTLINES_NATIVE_BODY,
+        fix_lakes: MAP_FIX_LAKES_NATIVE_BODY,
+        cells_scanned_per_coastline_pass: world.wdata.len(),
+        mutations,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: map_make_coastlines_next(),
+    })
+}
+
+pub(crate) fn validate_map_make_coastlines_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    receipt: &MapMakeCoastlinesReceipt,
+) -> bool {
+    let mut before_world = world.clone();
+    let mut previous = None;
+    for mutation in &receipt.mutations {
+        if mutation.x < 0
+            || mutation.x >= world.xs
+            || mutation.y < 0
+            || mutation.y >= world.ys
+            || mutation.cell != world.w_index(mutation.x, mutation.y)
+            || previous.is_some_and(|(y, x)| (mutation.y, mutation.x) <= (y, x))
+            || world.wdata[mutation.cell] != mutation.after
+            || mutation.before.region != mutation.after.region
+            || mutation.before.region2 != mutation.after.region2
+            || mutation.before.goods != mutation.after.goods
+        {
+            return false;
+        }
+        before_world.wdata[mutation.cell] = mutation.before.clone();
+        previous = Some((mutation.y, mutation.x));
+    }
+    if !validate_map_make_progress_string_receipt(
+        &before_world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+    ) {
+        return false;
+    }
+    let mut replayed = before_world.clone();
+    replayed.make_coastlines();
+    let replayed_mutations = before_world
+        .wdata
+        .iter()
+        .zip(&replayed.wdata)
+        .filter(|(before, after)| before != after)
+        .count();
+
+    receipt.caller == MAP_MAKE_COASTLINES_CALL_BODY
+        && receipt.body == MAP_MAKE_COASTLINES_NATIVE_BODY
+        && receipt.fix_lakes == MAP_FIX_LAKES_NATIVE_BODY
+        && receipt.cells_scanned_per_coastline_pass == world.wdata.len()
+        && receipt.mutations.len() == replayed_mutations
+        && replayed.wdata == world.wdata
+        && receipt.world_before == prior_progress.world_after
+        && receipt.world_before == before_world.checksum_sections()
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_after == replayed.checksum_sections()
+        && receipt.world_sections_changed
+            == receipt
+                .world_before
+                .differing_sections(&receipt.world_after)
+        && receipt
+            .world_sections_changed
+            .iter()
+            .all(|section| *section == WorldSection::WData)
+        && receipt.random_state_before == prior_progress.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next == map_make_coastlines_next()
+}
+
+pub const MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_BODY: StringConstructorCallerBody =
+    StringConstructorCallerBody {
+        entry_va: MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA,
+        end_va_exclusive: MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_END_VA,
+        size: MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_SIZE,
+        instruction_count: MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_SHA256,
+        direct_calls: &[(
+            MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA,
+            STRING_CONSTRUCTOR_VA,
+        )],
+    };
+
+pub const MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_BODY: MapMakePostChecksumCallerBody =
+    MapMakePostChecksumCallerBody {
+        entry_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_CALL_VA,
+        end_va_exclusive: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA,
+        size: MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_SIZE,
+        instruction_count: MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_SHA256,
+    };
+
+pub const MAP_MAKE_POST_COASTLINE_CLOSE_CALLER_BODY: MapMakePostChecksumStringCloseCallerBody =
+    MapMakePostChecksumStringCloseCallerBody {
+        entry_va: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA,
+        end_va_exclusive: MAP_MAKE_POST_COASTLINE_CLOSE_RESUME_VA,
+        size: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_SIZE,
+        instruction_count: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_INSTRUCTION_COUNT,
+        sha256: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_SHA256,
+    };
+
+pub type MapMakePostCoastlineStringConstructorReceipt = MapMakePostFixDiagStringConstructorReceipt;
+pub type MapMakePostCoastlineGameLogReceipt = MapMakePostFixDiagGameLogReceipt;
+pub type MapMakePostCoastlineStringCloseReceipt = MapMakePostChecksumStringCloseReceipt;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostCoastlineStringConstructorError {
+    PriorCoastlinesReceiptMismatch,
+}
+
+fn map_make_post_coastline_game_log_call() -> MapMakePostFixDiagGameLogCall {
+    MapMakePostFixDiagGameLogCall {
+        source_load_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_SOURCE_LOAD_VA,
+        line_push_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_LINE_PUSH_VA,
+        line_number: MAP_MAKE_POST_COASTLINE_GAME_LOG_LINE_NUMBER,
+        source_push_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_SOURCE_PUSH_VA,
+        mode_push_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_MODE_PUSH_VA,
+        mode: MAP_MAKE_POST_FIX_DIAG_GAME_LOG_MODE,
+        this_load_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_THIS_LOAD_VA,
+        game_log_va: GAME_LOG_GLOBAL_VA,
+        call_va: MAP_MAKE_POST_COASTLINE_GAME_LOG_CALL_VA,
+        primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
+    }
+}
+
+pub fn execute_map_make_post_coastline_string_constructor(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+) -> Result<MapMakePostCoastlineStringConstructorReceipt, MapMakePostCoastlineStringConstructorError>
+{
+    if !validate_map_make_coastlines_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+    ) || prior_coastlines.random_state_after != random_state
+    {
+        return Err(MapMakePostCoastlineStringConstructorError::PriorCoastlinesReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let local = map_make_owned_map_cpp_local(MAP_MAKE_POST_COASTLINE_LITERAL_VA);
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostFixDiagStringConstructorReceipt {
+        caller: MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_BODY,
+        constructor: STRING_CONSTRUCTOR_NATIVE_BODY,
+        init_const: STRING_INIT_CONST_NATIVE_BODY,
+        reinit: STRING_REINIT_NATIVE_BODY,
+        get_string_guts: STRING_GET_STRING_GUTS_NATIVE_BODY,
+        string_guts_operator_new: STRING_GUTS_OPERATOR_NEW_NATIVE_BODY,
+        string_guts_mem_get: STRING_GUTS_MEM_GET_NATIVE_BODY,
+        char_to_wchar: STRING_CHAR_TO_WCHAR_NATIVE_BODY,
+        multi_byte_to_wide_char_iat_va: MULTI_BYTE_TO_WIDE_CHAR_IAT_VA,
+        executed_direct_calls: vec![
+            (
+                MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA,
+                STRING_CONSTRUCTOR_VA,
+            ),
+            (0x00a1_d673, STRING_INIT_CONST_VA),
+            (0x00a1_702f, STRING_REINIT_VA),
+            (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+            (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+            (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+            (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+        ],
+        executed_indirect_import_calls: vec![(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)],
+        allocation: MapMakePostFixDiagStringAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            string_guts_length: local.length,
+            string_guts_capacity: local.capacity,
+            utf16_units_allocated_with_nul: local.utf16.len() + 1,
+            host_pointer_recorded: false,
+        },
+        local,
+        cleanup_guard_store_va: MAP_MAKE_POST_COASTLINE_GUARD_STORE_VA,
+        cleanup_guard_after: 6,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(
+            map_make_post_coastline_game_log_call(),
+        ),
+    })
+}
+
+pub(crate) fn validate_map_make_post_coastline_string_constructor_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+    receipt: &MapMakePostCoastlineStringConstructorReceipt,
+) -> bool {
+    let local = map_make_owned_map_cpp_local(MAP_MAKE_POST_COASTLINE_LITERAL_VA);
+    validate_map_make_coastlines_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+    ) && receipt.caller == MAP_MAKE_POST_COASTLINE_CONSTRUCTOR_CALLER_BODY
+        && receipt.constructor == STRING_CONSTRUCTOR_NATIVE_BODY
+        && receipt.init_const == STRING_INIT_CONST_NATIVE_BODY
+        && receipt.reinit == STRING_REINIT_NATIVE_BODY
+        && receipt.get_string_guts == STRING_GET_STRING_GUTS_NATIVE_BODY
+        && receipt.string_guts_operator_new == STRING_GUTS_OPERATOR_NEW_NATIVE_BODY
+        && receipt.string_guts_mem_get == STRING_GUTS_MEM_GET_NATIVE_BODY
+        && receipt.char_to_wchar == STRING_CHAR_TO_WCHAR_NATIVE_BODY
+        && receipt.multi_byte_to_wide_char_iat_va == MULTI_BYTE_TO_WIDE_CHAR_IAT_VA
+        && receipt.executed_direct_calls
+            == [
+                (
+                    MAP_MAKE_POST_COASTLINE_STRING_CONSTRUCTOR_CALL_VA,
+                    STRING_CONSTRUCTOR_VA,
+                ),
+                (0x00a1_d673, STRING_INIT_CONST_VA),
+                (0x00a1_702f, STRING_REINIT_VA),
+                (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+                (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+                (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+                (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+            ]
+        && receipt.executed_indirect_import_calls == [(0x00a1_7c60, MULTI_BYTE_TO_WIDE_CHAR_IAT_VA)]
+        && receipt.local == local
+        && receipt.allocation
+            == (MapMakePostFixDiagStringAllocationReceipt {
+                owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                string_guts_length: 7,
+                string_guts_capacity: 7,
+                utf16_units_allocated_with_nul: 8,
+                host_pointer_recorded: false,
+            })
+        && receipt.cleanup_guard_store_va == MAP_MAKE_POST_COASTLINE_GUARD_STORE_VA
+        && receipt.cleanup_guard_after == 6
+        && receipt.world_before == prior_coastlines.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_coastlines.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == MapMakePostFixDiagStringConstructorNext::GameLogSayChecksum(
+                map_make_post_coastline_game_log_call(),
+            )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostCoastlineGameLogError {
+    PriorStringConstructorReceiptMismatch,
+}
+
+pub fn execute_map_make_post_coastline_game_log_say_checksum(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+    prior_coastline_string: &MapMakePostCoastlineStringConstructorReceipt,
+) -> Result<MapMakePostCoastlineGameLogReceipt, MapMakePostCoastlineGameLogError> {
+    if !validate_map_make_post_coastline_string_constructor_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+        prior_coastline_string,
+    ) || prior_coastline_string.random_state_after != random_state
+    {
+        return Err(MapMakePostCoastlineGameLogError::PriorStringConstructorReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let source_before = prior_coastline_string.local.clone();
+    let source_after = source_before.clone();
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostFixDiagGameLogReceipt {
+        caller: MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_BODY,
+        body: GAME_LOG_SAY_CHECKSUM_NATIVE_BODY,
+        check_accept: GAME_LOG_CHECK_ACCEPT_NATIVE_BODY,
+        call: map_make_post_coastline_game_log_call(),
+        owner: map_make_post_fix_diag_game_log_owner(),
+        source_before,
+        source_after,
+        cleanup_guard_store_va: MAP_MAKE_POST_COASTLINE_GUARD_CLEAR_VA,
+        cleanup_guard_after: -1,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakePostFixDiagGameLogNext::StringClose {
+            local_load_va: MAP_MAKE_POST_COASTLINE_CLOSE_LOCAL_LOAD_VA,
+            call_va: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA,
+            primitive_va: STRING_CLOSE_VA,
+            allocation_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            may_release_owned_string_guts: true,
+        },
+    })
+}
+
+pub(crate) fn validate_map_make_post_coastline_game_log_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+    prior_coastline_string: &MapMakePostCoastlineStringConstructorReceipt,
+    receipt: &MapMakePostCoastlineGameLogReceipt,
+) -> bool {
+    validate_map_make_post_coastline_string_constructor_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+        prior_coastline_string,
+    ) && receipt.caller == MAP_MAKE_POST_COASTLINE_POST_LOG_CALLER_BODY
+        && receipt.body == GAME_LOG_SAY_CHECKSUM_NATIVE_BODY
+        && receipt.check_accept == GAME_LOG_CHECK_ACCEPT_NATIVE_BODY
+        && receipt.call == map_make_post_coastline_game_log_call()
+        && receipt.owner == map_make_post_fix_diag_game_log_owner()
+        && receipt.source_before == prior_coastline_string.local
+        && receipt.source_before == receipt.source_after
+        && receipt.source_after.owns_typed_string_guts
+        && receipt.cleanup_guard_store_va == MAP_MAKE_POST_COASTLINE_GUARD_CLEAR_VA
+        && receipt.cleanup_guard_after == -1
+        && receipt.world_before == prior_coastline_string.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_coastline_string.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == (MapMakePostFixDiagGameLogNext::StringClose {
+                local_load_va: MAP_MAKE_POST_COASTLINE_CLOSE_LOCAL_LOAD_VA,
+                call_va: MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA,
+                primitive_va: STRING_CLOSE_VA,
+                allocation_owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                may_release_owned_string_guts: true,
+            })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakePostCoastlineStringCloseError {
+    PriorGameLogReceiptMismatch,
+    AllocatorFactsUnavailable,
+}
+
+pub fn execute_map_make_post_coastline_string_close(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+    prior_coastline_string: &MapMakePostCoastlineStringConstructorReceipt,
+    prior_coastline_log: &MapMakePostCoastlineGameLogReceipt,
+    allocator_facts: MapMakeStringAllocatorFacts,
+) -> Result<MapMakePostCoastlineStringCloseReceipt, MapMakePostCoastlineStringCloseError> {
+    if !validate_map_make_post_coastline_game_log_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+        prior_coastline_string,
+        prior_coastline_log,
+    ) || prior_coastline_log.random_state_after != random_state
+    {
+        return Err(MapMakePostCoastlineStringCloseError::PriorGameLogReceiptMismatch);
+    }
+    if allocator_facts != MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY {
+        return Err(MapMakePostCoastlineStringCloseError::AllocatorFactsUnavailable);
+    }
+    let world_before = world.checksum_sections();
+    let source_before = prior_coastline_log.source_after.clone();
+    let world_after = world.checksum_sections();
+    Ok(MapMakePostChecksumStringCloseReceipt {
+        caller: MAP_MAKE_POST_COASTLINE_CLOSE_CALLER_BODY,
+        body: MAP_MAKE_STRING_CLOSE_NATIVE_BODY,
+        scalar_deleting_destructor: STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY,
+        mem_free: STRING_GUTS_MEM_FREE_BODY,
+        operator_delete: STRING_GUTS_OPERATOR_DELETE_BODY,
+        allocator_facts,
+        executed_direct_calls: vec![
+            (MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA, STRING_CLOSE_VA),
+            (
+                STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA,
+                STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+            ),
+            (STRING_GUTS_MEM_FREE_CALL_VA, STRING_GUTS_MEM_FREE_VA),
+            (
+                STRING_GUTS_OPERATOR_DELETE_CALL_VA,
+                STRING_GUTS_OPERATOR_DELETE_VA,
+            ),
+        ],
+        executed_indirect_import_calls: Vec::new(),
+        allocation: MapMakePostChecksumStringCloseAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            source_utf16: source_before.utf16.clone(),
+            buffer_units_with_nul: source_before.utf16.len() + 1,
+            buffer_pool_class: STRING_GUTS_BUFFER_POOL_CLASS,
+            string_guts_logical_size: STRING_GUTS_LOGICAL_SIZE,
+            buffer_before: MapMakeStringAllocationState::Live,
+            buffer_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            string_guts_before: MapMakeStringAllocationState::Live,
+            string_guts_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            buffer_pool_growth_is_allocator_state_dependent: true,
+            string_guts_pool_growth_is_allocator_state_dependent: true,
+            host_pointer_recorded: false,
+        },
+        source_before,
+        local_after: map_make_post_checksum_closed_string(),
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: MapMakePostChecksumStringCloseNext::SecondRegionsClearAll {
+            call_va: MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA,
+            primitive_va: REGIONS_CLEAR_ALL_VA,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_map_make_post_coastline_string_close_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeFirstRegionsClearAllReceipt,
+    prior_find_all: &MapMakeFirstRegionsFindAllReceipt,
+    prior_limits: &MapMakeTerritoryLimitsReceipt,
+    prior_fix_diag: &MapFixDiagLandReceipt,
+    prior_string: &MapMakePostFixDiagStringConstructorReceipt,
+    prior_log: &MapMakePostFixDiagGameLogReceipt,
+    prior_close: &MapMakePostChecksumStringCloseReceipt,
+    prior_progress: &MapMakeProgressStringReceipt,
+    prior_coastlines: &MapMakeCoastlinesReceipt,
+    prior_coastline_string: &MapMakePostCoastlineStringConstructorReceipt,
+    prior_coastline_log: &MapMakePostCoastlineGameLogReceipt,
+    receipt: &MapMakePostCoastlineStringCloseReceipt,
+) -> bool {
+    validate_map_make_post_coastline_game_log_receipt(
+        world,
+        regions,
+        prior_clear,
+        prior_find_all,
+        prior_limits,
+        prior_fix_diag,
+        prior_string,
+        prior_log,
+        prior_close,
+        prior_progress,
+        prior_coastlines,
+        prior_coastline_string,
+        prior_coastline_log,
+    ) && receipt.caller == MAP_MAKE_POST_COASTLINE_CLOSE_CALLER_BODY
+        && receipt.body == MAP_MAKE_STRING_CLOSE_NATIVE_BODY
+        && receipt.scalar_deleting_destructor == STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_BODY
+        && receipt.mem_free == STRING_GUTS_MEM_FREE_BODY
+        && receipt.operator_delete == STRING_GUTS_OPERATOR_DELETE_BODY
+        && receipt.allocator_facts == MapMakeStringAllocatorFacts::RETAIL_GAMEPLAY
+        && receipt.executed_direct_calls
+            == [
+                (MAP_MAKE_POST_COASTLINE_CLOSE_CALL_VA, STRING_CLOSE_VA),
+                (
+                    STRING_CLOSE_GUTS_DESTRUCTOR_CALL_VA,
+                    STRING_GUTS_SCALAR_DELETING_DESTRUCTOR_VA,
+                ),
+                (STRING_GUTS_MEM_FREE_CALL_VA, STRING_GUTS_MEM_FREE_VA),
+                (
+                    STRING_GUTS_OPERATOR_DELETE_CALL_VA,
+                    STRING_GUTS_OPERATOR_DELETE_VA,
+                ),
+            ]
+        && receipt.executed_indirect_import_calls.is_empty()
+        && receipt.source_before == prior_coastline_log.source_after
+        && receipt.source_before.owns_typed_string_guts
+        && receipt.local_after == map_make_post_checksum_closed_string()
+        && receipt.allocation
+            == (MapMakePostChecksumStringCloseAllocationReceipt {
+                owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+                source_utf16: prior_coastline_log.source_after.utf16.clone(),
+                buffer_units_with_nul: prior_coastline_log.source_after.utf16.len() + 1,
+                buffer_pool_class: STRING_GUTS_BUFFER_POOL_CLASS,
+                string_guts_logical_size: STRING_GUTS_LOGICAL_SIZE,
+                buffer_before: MapMakeStringAllocationState::Live,
+                buffer_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+                string_guts_before: MapMakeStringAllocationState::Live,
+                string_guts_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+                buffer_pool_growth_is_allocator_state_dependent: true,
+                string_guts_pool_growth_is_allocator_state_dependent: true,
+                host_pointer_recorded: false,
+            })
+        && receipt.world_before == prior_coastline_log.world_after
+        && receipt.world_before == receipt.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == prior_coastline_log.random_state_after
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
+        && receipt.next
+            == (MapMakePostChecksumStringCloseNext::SecondRegionsClearAll {
+                call_va: MAP_MAKE_SECOND_REGIONS_CLEAR_CALL_VA,
+                primitive_va: REGIONS_CLEAR_ALL_VA,
+            })
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeCallerSlice {
+    pub entry_va: u32,
+    pub end_va_exclusive: u32,
+    pub size: u32,
+    pub instruction_count: u32,
+    pub sha256: &'static str,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeFillFertileNext {
+    pub caller: MapMakeCallerSlice,
+    pub this_offset: u32,
+    pub call_va: u32,
+    pub primitive_va: u32,
+}
+
+/// Exact non-World ownership cone between the second Region rebuild and
+/// `TerrainGroups::fill_fertile`: checksum String construction/log/close and
+/// the localized `Map Terrain` progress alias through its presentation close.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapMakeSecondRegionsTailReceipt {
+    pub checksum_constructor_caller: StringConstructorCallerBody,
+    pub checksum_constructor: StringConstructorNativeBody,
+    pub checksum_constructor_direct_calls: Vec<(u32, u32)>,
+    pub checksum_local: MapMakePostFixDiagLocalString,
+    pub checksum_allocation: MapMakePostFixDiagStringAllocationReceipt,
+    pub checksum_cleanup_guard_after_constructor: i32,
+    pub checksum_log_caller: MapMakePostChecksumCallerBody,
+    pub checksum_log: GameLogSayChecksumNativeBody,
+    pub checksum_check_accept: GameLogCheckAcceptNativeBody,
+    pub checksum_log_call: MapMakePostFixDiagGameLogCall,
+    pub checksum_log_owner: MapMakePostFixDiagGameLogOwnerReceipt,
+    pub checksum_cleanup_guard_after_log: i32,
+    pub checksum_close_caller: MapMakePostChecksumStringCloseCallerBody,
+    pub checksum_close: StringCloseNativeBody,
+    pub checksum_close_allocation: MapMakePostChecksumStringCloseAllocationReceipt,
+    pub checksum_local_after_close: MapMakePostChecksumClosedString,
+    pub terrain_progress_prep: MapMakeCallerSlice,
+    pub terrain_progress_constructor_call: MapMakeCallerSlice,
+    pub terrain_progress_presentation: MapMakeCallerSlice,
+    pub terrain_progress_source: MapMakeLocalizedStringTableRow,
+    pub previous_subtitle: MapMakeLocalizedStringTableRow,
+    pub terrain_progress_ownership: MapMakeProgressStringOwnershipReceipt,
+    pub terrain_progress_local_after_close: MapMakeProgressClosedConstString,
+    pub terrain_progress_executed_direct_calls: Vec<(u32, u32)>,
+    pub presentation_host_clock_and_draw_effects_unmodeled: bool,
+    pub world_before: WorldChecksum,
+    pub world_after: WorldChecksum,
+    pub world_sections_changed: Vec<WorldSection>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub direct_rng_sites: Vec<u32>,
+    pub next: MapMakeFillFertileNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapMakeSecondRegionsTailError {
+    PriorFindAllReceiptMismatch,
+}
+
+fn map_make_terrain_progress_row() -> MapMakeLocalizedStringTableRow {
+    MapMakeLocalizedStringTableRow {
+        table_ptr_va: MAP_MAKE_PROGRESS_STRING_TABLE_PTR_VA,
+        entry_size: LOCALIZED_STRING_TABLE_ENTRY_SIZE,
+        table_index: MAP_MAKE_TERRAIN_PROGRESS_STRING_TABLE_INDEX,
+        byte_offset: MAP_MAKE_TERRAIN_PROGRESS_STRING_BYTE_OFFSET,
+        resource_hash: MAP_MAKE_TERRAIN_PROGRESS_RESOURCE_HASH,
+        nonempty_in_supported_locales: true,
+        const_backed: true,
+        content_is_locale_dependent: true,
+        buffer_owner: MapMakeLocalizedStringBufferOwner::LocalizedStringTable,
+        host_pointer_recorded: false,
+    }
+}
+
+fn map_make_second_regions_checksum_log_call() -> MapMakePostFixDiagGameLogCall {
+    MapMakePostFixDiagGameLogCall {
+        source_load_va: 0x0068_bf4e,
+        line_push_va: 0x0068_bf51,
+        line_number: MAP_MAKE_POST_SECOND_REGIONS_GAME_LOG_LINE_NUMBER,
+        source_push_va: 0x0068_bf56,
+        mode_push_va: 0x0068_bf57,
+        mode: 1,
+        this_load_va: 0x0068_bf59,
+        game_log_va: GAME_LOG_GLOBAL_VA,
+        call_va: MAP_MAKE_POST_SECOND_REGIONS_GAME_LOG_CALL_VA,
+        primitive_va: GAME_LOG_SAY_CHECKSUM_VA,
+    }
+}
+
+fn map_make_fill_fertile_next() -> MapMakeFillFertileNext {
+    MapMakeFillFertileNext {
+        caller: MapMakeCallerSlice {
+            entry_va: MAP_MAKE_FILL_FERTILE_THIS_LOAD_VA,
+            end_va_exclusive: MAP_MAKE_FILL_FERTILE_RESUME_VA,
+            size: 11,
+            instruction_count: 2,
+            sha256: MAP_MAKE_FILL_FERTILE_CALLER_SHA256,
+        },
+        this_offset: 0x140,
+        call_va: MAP_MAKE_FILL_FERTILE_CALL_VA,
+        primitive_va: TERRAIN_GROUPS_FILL_FERTILE_VA,
+    }
+}
+
+pub fn execute_map_make_second_regions_tail(
+    world: &World,
+    regions: &Regions,
+    random_state: i32,
+    prior_clear: &MapMakeSecondRegionsClearAllReceipt,
+    prior_find: &MapMakeSecondRegionsFindAllReceipt,
+) -> Result<MapMakeSecondRegionsTailReceipt, MapMakeSecondRegionsTailError> {
+    if !validate_map_make_second_regions_find_all_receipt(world, regions, prior_clear, prior_find)
+        || prior_find.random_state_after != random_state
+    {
+        return Err(MapMakeSecondRegionsTailError::PriorFindAllReceiptMismatch);
+    }
+    let world_before = world.checksum_sections();
+    let checksum_local = map_make_owned_map_cpp_local(MAP_MAKE_POST_SECOND_REGIONS_LITERAL_VA);
+    let world_after = world.checksum_sections();
+    Ok(MapMakeSecondRegionsTailReceipt {
+        checksum_constructor_caller: StringConstructorCallerBody {
+            entry_va: MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA,
+            end_va_exclusive: MAP_MAKE_POST_SECOND_REGIONS_CONSTRUCTOR_END_VA,
+            size: 28,
+            instruction_count: 7,
+            sha256: MAP_MAKE_POST_SECOND_REGIONS_CONSTRUCTOR_SHA256,
+            direct_calls: &[(
+                MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA,
+                STRING_CONSTRUCTOR_VA,
+            )],
+        },
+        checksum_constructor: STRING_CONSTRUCTOR_NATIVE_BODY,
+        checksum_constructor_direct_calls: vec![
+            (
+                MAP_MAKE_POST_SECOND_REGIONS_STRING_CONSTRUCTOR_CALL_VA,
+                STRING_CONSTRUCTOR_VA,
+            ),
+            (0x00a1_d673, STRING_INIT_CONST_VA),
+            (0x00a1_702f, STRING_REINIT_VA),
+            (0x00a1_6254, STRING_GET_STRING_GUTS_VA),
+            (0x00a1_7bb7, STRING_GUTS_OPERATOR_NEW_VA),
+            (0x00a1_7be3, STRING_GUTS_MEM_GET_VA),
+            (0x00a1_703c, STRING_CHAR_TO_WCHAR_VA),
+        ],
+        checksum_allocation: MapMakePostFixDiagStringAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            string_guts_length: checksum_local.length,
+            string_guts_capacity: checksum_local.capacity,
+            utf16_units_allocated_with_nul: checksum_local.utf16.len() + 1,
+            host_pointer_recorded: false,
+        },
+        checksum_local: checksum_local.clone(),
+        checksum_cleanup_guard_after_constructor: 7,
+        checksum_log_caller: MapMakePostChecksumCallerBody {
+            entry_va: MAP_MAKE_POST_SECOND_REGIONS_GAME_LOG_CALL_VA,
+            end_va_exclusive: MAP_MAKE_POST_SECOND_REGIONS_CLOSE_CALL_VA,
+            size: 15,
+            instruction_count: 3,
+            sha256: MAP_MAKE_POST_SECOND_REGIONS_POST_LOG_SHA256,
+        },
+        checksum_log: GAME_LOG_SAY_CHECKSUM_NATIVE_BODY,
+        checksum_check_accept: GAME_LOG_CHECK_ACCEPT_NATIVE_BODY,
+        checksum_log_call: map_make_second_regions_checksum_log_call(),
+        checksum_log_owner: map_make_post_fix_diag_game_log_owner(),
+        checksum_cleanup_guard_after_log: -1,
+        checksum_close_caller: MapMakePostChecksumStringCloseCallerBody {
+            entry_va: MAP_MAKE_POST_SECOND_REGIONS_CLOSE_CALL_VA,
+            end_va_exclusive: MAP_MAKE_TERRAIN_PROGRESS_TEST_VA,
+            size: 5,
+            instruction_count: 1,
+            sha256: MAP_MAKE_POST_SECOND_REGIONS_CLOSE_SHA256,
+        },
+        checksum_close: MAP_MAKE_STRING_CLOSE_NATIVE_BODY,
+        checksum_close_allocation: MapMakePostChecksumStringCloseAllocationReceipt {
+            owner: MapMakePostFixDiagStringAllocationOwner::CallerLocalMapCpp,
+            source_utf16: checksum_local.utf16.clone(),
+            buffer_units_with_nul: checksum_local.utf16.len() + 1,
+            buffer_pool_class: STRING_GUTS_BUFFER_POOL_CLASS,
+            string_guts_logical_size: STRING_GUTS_LOGICAL_SIZE,
+            buffer_before: MapMakeStringAllocationState::Live,
+            buffer_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            string_guts_before: MapMakeStringAllocationState::Live,
+            string_guts_after: MapMakeStringAllocationState::ReturnedToRetailPool,
+            buffer_pool_growth_is_allocator_state_dependent: true,
+            string_guts_pool_growth_is_allocator_state_dependent: true,
+            host_pointer_recorded: false,
+        },
+        checksum_local_after_close: map_make_post_checksum_closed_string(),
+        terrain_progress_prep: MapMakeCallerSlice {
+            entry_va: MAP_MAKE_TERRAIN_PROGRESS_TEST_VA,
+            end_va_exclusive: MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_CALL_VA,
+            size: 18,
+            instruction_count: 6,
+            sha256: MAP_MAKE_TERRAIN_PROGRESS_PREP_SHA256,
+        },
+        terrain_progress_constructor_call: MapMakeCallerSlice {
+            entry_va: MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_CALL_VA,
+            end_va_exclusive: 0x0068_bf89,
+            size: 5,
+            instruction_count: 1,
+            sha256: MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_SHA256,
+        },
+        terrain_progress_presentation: MapMakeCallerSlice {
+            entry_va: MAP_MAKE_TERRAIN_PROGRESS_ASSIGN_CALL_VA,
+            end_va_exclusive: MAP_MAKE_TERRAIN_PROGRESS_END_VA,
+            size: 25,
+            instruction_count: 5,
+            sha256: MAP_MAKE_TERRAIN_PROGRESS_PRESENTATION_SHA256,
+        },
+        terrain_progress_source: map_make_terrain_progress_row(),
+        previous_subtitle: map_make_coastlines_progress_row(),
+        terrain_progress_ownership: map_make_progress_ownership(),
+        terrain_progress_local_after_close: map_make_progress_closed_local(),
+        terrain_progress_executed_direct_calls: vec![
+            (
+                MAP_MAKE_TERRAIN_PROGRESS_CONSTRUCTOR_CALL_VA,
+                STRING_COPY_CONSTRUCTOR_VA,
+            ),
+            (
+                MAP_MAKE_TERRAIN_PROGRESS_ASSIGN_CALL_VA,
+                STRING_COPY_ASSIGN_VA,
+            ),
+            (STRING_COPY_ASSIGN_DEST_CLOSE_CALL_VA, STRING_CLOSE_VA),
+            (
+                MAP_MAKE_TERRAIN_PROGRESS_REFRESH_CALL_VA,
+                SPLASH_SCREEN_REFRESH_VA,
+            ),
+            (MAP_MAKE_TERRAIN_PROGRESS_CLOSE_CALL_VA, STRING_CLOSE_VA),
+        ],
+        presentation_host_clock_and_draw_effects_unmodeled: true,
+        world_sections_changed: world_before.differing_sections(&world_after),
+        world_before,
+        world_after,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        direct_rng_sites: Vec::new(),
+        next: map_make_fill_fertile_next(),
+    })
+}
+
+pub(crate) fn validate_map_make_second_regions_tail_receipt(
+    world: &World,
+    regions: &Regions,
+    prior_clear: &MapMakeSecondRegionsClearAllReceipt,
+    prior_find: &MapMakeSecondRegionsFindAllReceipt,
+    receipt: &MapMakeSecondRegionsTailReceipt,
+) -> bool {
+    let Ok(expected) = execute_map_make_second_regions_tail(
+        world,
+        regions,
+        receipt.random_state_before,
+        prior_clear,
+        prior_find,
+    ) else {
+        return false;
+    };
+    receipt == &expected
+        && receipt.world_before == prior_find.world_after
+        && receipt.world_after == world.checksum_sections()
+        && receipt.world_sections_changed.is_empty()
+        && receipt.random_state_before == receipt.random_state_after
+        && receipt.direct_rng_sites.is_empty()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

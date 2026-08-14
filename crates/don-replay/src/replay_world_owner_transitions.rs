@@ -16,7 +16,9 @@ use crate::post_continent::{
 use crate::world_owner_frontier::{
     sha256, ExactPortTransitionProof, TransitionReceipt, WorldOwnerError, WorldSectionMask,
 };
+use don_sim::systems::map_terrain::World;
 use don_sim::systems::map_terrain::{land, wflag, WorldSection};
+use don_sim::systems::regions::Regions;
 use don_sim::systems::terrain_groups::FillFertileReceipt;
 
 pub const PROOF_DOCUMENT: &str = "docs/assembly/replay-world-offline-localization.md";
@@ -106,6 +108,43 @@ fn mismatch(stage: ReplayWorldOwnerStage, field: &'static str) -> ReplayWorldOwn
     ReplayWorldOwnerTransitionError::ReceiptMismatch { stage, field }
 }
 
+fn second_regions_clear_all_world_before(
+    world: &World,
+    clear: &crate::post_continent::MapMakeSecondRegionsClearAllReceipt,
+    find: &crate::post_continent::MapMakeSecondRegionsFindAllReceipt,
+) -> World {
+    let mut before = world.clone();
+    for mutation in &find.world_mutations {
+        before.wdata[mutation.cell].region = mutation.region_before;
+        before.wdata[mutation.cell].region2 = mutation.region2_before;
+    }
+    for mutation in &clear.world_region_mutations {
+        before.wdata[mutation.cell].region = mutation.region_before;
+    }
+    before
+}
+
+fn second_regions_clear_all_regions_before(
+    regions: &Regions,
+    clear: &crate::post_continent::MapMakeSecondRegionsClearAllReceipt,
+    find: &crate::post_continent::MapMakeSecondRegionsFindAllReceipt,
+) -> Regions {
+    let mut before = regions.clone();
+    for record in &find.region_records {
+        before.list[usize::from(record.region)] = record.before.clone();
+    }
+    before.coords = find.scratch.before.clone();
+    before.land = find.regions_land_before;
+    before.sea = find.regions_sea_before;
+    for record in &clear.region_records {
+        before.list[usize::from(record.region)] = record.before.clone();
+    }
+    before.coords = clear.regions_coords_before.clone();
+    before.land = clear.regions_land_before;
+    before.sea = clear.regions_sea_before;
+    before
+}
+
 fn advance(
     map: &mut InitialWorld,
     stage: ReplayWorldOwnerStage,
@@ -163,10 +202,17 @@ pub fn advance_continent_world_ownership(
             game_log_say_checksum,
             post_checksum_string_close,
             progress_string,
+            coastlines,
+            post_coastline_string_constructor,
+            post_coastline_game_log,
+            post_coastline_string_close,
+            second_regions_clear_all,
+            second_regions_find_all,
+            second_regions_tail,
             next_mutator_va,
             ..
-        } if *next_va != crate::post_continent::MAP_MAKE_COASTLINES_CALL_VA
-            || *next_mutator_va != crate::post_continent::MAP_MAKE_COASTLINES_VA
+        } if *next_va != crate::post_continent::MAP_MAKE_FILL_FERTILE_CALL_VA
+            || *next_mutator_va != crate::post_continent::TERRAIN_GROUPS_FILL_FERTILE_VA
             || post_player_land_cleanup.body
                 != crate::continent::EAST_MEETS_WEST_POST_PLAYER_LAND_CLEANUP_BODY
             || post_player_land_cleanup.string_close.body
@@ -316,39 +362,29 @@ pub fn advance_continent_world_ownership(
                 != game_log_say_checksum.random_state_after
             || progress_string.world_before != post_checksum_string_close.world_after
             || progress_string.random_state_before != post_checksum_string_close.random_state_after
-            || !crate::post_continent::validate_map_make_post_fix_diag_string_constructor_receipt(
-                &map.world,
-                &map.generation_regions,
-                regions_clear_all,
-                regions_find_all,
-                territory_limits,
-                fix_diag_land,
-                post_fix_diag_string_constructor,
-            )
-            || !crate::post_continent::validate_map_make_post_fix_diag_game_log_receipt(
-                &map.world,
-                &map.generation_regions,
-                regions_clear_all,
-                regions_find_all,
-                territory_limits,
-                fix_diag_land,
-                post_fix_diag_string_constructor,
-                game_log_say_checksum,
-            )
-            || !crate::post_continent::validate_map_make_post_checksum_string_close_receipt(
-                &map.world,
-                &map.generation_regions,
-                regions_clear_all,
-                regions_find_all,
-                territory_limits,
-                fix_diag_land,
-                post_fix_diag_string_constructor,
-                game_log_say_checksum,
-                post_checksum_string_close,
-            )
-            || !crate::post_continent::validate_map_make_progress_string_receipt(
-                &map.world,
-                &map.generation_regions,
+            || coastlines.world_before != progress_string.world_after
+            || coastlines.random_state_before != progress_string.random_state_after
+            || post_coastline_string_constructor.world_before != coastlines.world_after
+            || post_coastline_string_constructor.random_state_before
+                != coastlines.random_state_after
+            || post_coastline_game_log.world_before
+                != post_coastline_string_constructor.world_after
+            || post_coastline_game_log.random_state_before
+                != post_coastline_string_constructor.random_state_after
+            || post_coastline_string_close.world_before != post_coastline_game_log.world_after
+            || post_coastline_string_close.random_state_before
+                != post_coastline_game_log.random_state_after
+            || second_regions_clear_all.world_before != post_coastline_string_close.world_after
+            || second_regions_clear_all.random_state_before
+                != post_coastline_string_close.random_state_after
+            || second_regions_find_all.world_before != second_regions_clear_all.world_after
+            || second_regions_find_all.random_state_before
+                != second_regions_clear_all.random_state_after
+            || second_regions_tail.world_before != second_regions_find_all.world_after
+            || second_regions_tail.random_state_before != second_regions_find_all.random_state_after
+            || !crate::post_continent::validate_map_make_post_coastline_string_close_receipt(
+                &second_regions_clear_all_world_before(&map.world, second_regions_clear_all, second_regions_find_all),
+                &second_regions_clear_all_regions_before(&map.generation_regions, second_regions_clear_all, second_regions_find_all),
                 regions_clear_all,
                 regions_find_all,
                 territory_limits,
@@ -357,6 +393,17 @@ pub fn advance_continent_world_ownership(
                 game_log_say_checksum,
                 post_checksum_string_close,
                 progress_string,
+                coastlines,
+                post_coastline_string_constructor,
+                post_coastline_game_log,
+                post_coastline_string_close,
+            )
+            || !crate::post_continent::validate_map_make_second_regions_tail_receipt(
+                &map.world,
+                &map.generation_regions,
+                second_regions_clear_all,
+                second_regions_find_all,
+                second_regions_tail,
             )
     ) {
         return Err(mismatch(stage, "stop.post_fix_diag_game_log_residual"));
