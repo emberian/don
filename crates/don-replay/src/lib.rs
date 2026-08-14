@@ -132,6 +132,7 @@ pub mod scenario_channel;
 pub mod script_channel;
 pub mod setup_2024_frame0_compute_score;
 pub mod setup_2024_frame0_get_team_terr;
+pub mod setup_2024_frame0_merchant_collide_here_prefix;
 pub mod setup_2024_frame0_merchant_collision_prefix;
 pub mod setup_2024_frame0_merchant_good_lookup;
 pub mod setup_2024_frame0_merchant_search;

@@ -148,11 +148,25 @@ unchanged cell also returns zero.
 For distinct UCoords, the first remaining call is
 `CollCheck::collide_here(o,who,target_ux,target_uy,new_block_radius,&hit_x,&hit_y,0)` at
 `0x00682540`. The radius comes from the replay-bound Type-62 `ObjectTypeData+0x248` row. This
-child is the first mixed footprint/CollBlock operation: its non-overlay arm reads the mutable
-World collision bitmaps and can memoize `CollBlock::flags` while testing emptiness. The typed
 request binds the complete Merchant chronology, both UCoord pairs, radius, output-pointer shape,
-the non-scratch arm, and unchanged RNG. It does not claim the current CollCheck slots or an
-empty bitmap result.
+the non-scratch arm, and unchanged RNG.
+
+`setup_2024_frame0_merchant_collide_here_prefix.rs` now owns the call's next mutation-bearing
+prefix. A zero radius returns zero before touching the slot cache. Otherwise retail
+`fill_slots` resolves its at-most-four World collision blocks in fixed low/low-Y/high-X order,
+including bounds and region gating, and clears all four scratch slots for this non-overlay call.
+It then visits live slots in ordinal order and calls the mutating `BitMask<768>::empty`. Known
+empty/nonempty flag values avoid the payload; an indeterminate flag reads `size` payload bytes
+and memoizes `CollBlock+0x08` to one or zero. The receipt records only the payload bytes actually
+read plus every before/after flag. These flag bytes are deliberately absent from the retail
+World checksum, but remain real execution state and are committed to their canonical blocks.
+
+If all four slots are absent or empty, retail returns zero after that memoization. When at least
+one block survives, the exact next boundary is `0x006825fd`, immediately before the non-overlay
+arm resolves the actor and chooses its adjacent-edge or general heterogeneous footprint walk.
+The typed child binds the applied prefix receipt, slot/dead ordering, low block coordinates,
+actor identity, output-pointer shape, and unchanged RNG. It does not guess an occupancy-bit
+answer or an actor/World join.
 
 No RNG call occurs. The legacy whole-call capture remains available for native composition and
 carries an independently captured canonical-Sim SHA-256; Don does not manufacture that snapshot
