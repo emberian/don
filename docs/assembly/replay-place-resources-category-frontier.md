@@ -129,7 +129,7 @@ allocations, and caller checkpoint token `0x1ef7` at `0x0068c72d`. No checksum v
 was fitted.
 
 The canonical Map schedule now composes completed BONUSES cleanup through FISH
-lookup/enumeration and, for a nonempty section, the exact first FISH row through
-`0x00690215`. For empty FISH it composes this owner again through FISH cleanup and
+lookup/enumeration and, for a nonempty section, the exact first FISH row plus its
+no-mutation recurrence through `0x0069021c`. For empty FISH it composes this owner again through FISH cleanup and
 GOODIES lookup/enumeration, stopping at `0x0068fbb3` or `0x00690225`. FISH recurrence,
 later rows, and final GOODIES cleanup remain separately bounded.

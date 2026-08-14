@@ -17,6 +17,7 @@ use don_replay::map_make_resource_schedule_integration::{
     continue_map_make_resource_schedule_first_bonus,
     continue_map_make_resource_schedule_first_fish,
     continue_map_make_resource_schedule_fish_category,
+    continue_map_make_resource_schedule_fish_recurrence,
     continue_map_make_resource_schedule_next_bonus, execute_map_make_resource_schedule,
     execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
     MapMakeResourcePlacementReceipt, MapMakeResourceScheduleError, MapMakeResourceScheduleReceipt,
@@ -1424,6 +1425,13 @@ fn xml_facts_cannot_bypass_the_pool_owner() {
 fn fish_category_inputs(
     state: &RemainingBonusRowsState,
 ) -> (CategoryAdvanceFacts, PlaceResourcesDocumentHostAuthority) {
+    fish_category_inputs_with_rows(state, 1)
+}
+
+fn fish_category_inputs_with_rows(
+    state: &RemainingBonusRowsState,
+    row_count: usize,
+) -> (CategoryAdvanceFacts, PlaceResourcesDocumentHostAuthority) {
     let capture_sha256 = [0x6d; 32];
     let selected_document_handles = HostHandles {
         head: true,
@@ -1443,15 +1451,17 @@ fn fish_category_inputs(
             tail: true,
             inline_tail_word: false,
         },
-        rows: vec![CategoryRowFact {
-            capture_ordinal: 41,
-            element_name: "BONUS".to_owned(),
-            handles: HostHandles {
-                head: false,
-                tail: true,
-                inline_tail_word: false,
-            },
-        }],
+        rows: (0..row_count)
+            .map(|index| CategoryRowFact {
+                capture_ordinal: 41 + index as u32,
+                element_name: "BONUS".to_owned(),
+                handles: HostHandles {
+                    head: index % 2 == 1,
+                    tail: true,
+                    inline_tail_word: false,
+                },
+            })
+            .collect(),
     };
     (
         CategoryAdvanceFacts {
@@ -1480,14 +1490,7 @@ fn fish_category_inputs(
 fn empty_fish_category_inputs(
     state: &RemainingBonusRowsState,
 ) -> (CategoryAdvanceFacts, PlaceResourcesDocumentHostAuthority) {
-    let (mut facts, authority) = fish_category_inputs(state);
-    facts
-        .selected_section
-        .as_mut()
-        .expect("selected FISH fixture")
-        .rows
-        .clear();
-    (facts, authority)
+    fish_category_inputs_with_rows(state, 0)
 }
 
 fn first_fish_chance_miss_facts(
@@ -1618,6 +1621,49 @@ impl RegionInitGoodHost for NoCanonicalAllocationHost {
     ) -> Option<RegionInitGoodReceipt> {
         panic!("chance-miss FISH row must not allocate a Region resource")
     }
+}
+
+fn chance_miss_first_fish_schedule(
+    fish_row_count: usize,
+) -> (
+    ResourceDivvyPoolState,
+    MapMakeResourceScheduleReceipt,
+    CanonicalPlaceResourcesState,
+) {
+    assert!(fish_row_count > 0);
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let completed =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &completed.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton BONUSES must reach category cleanup"),
+    };
+    let (category_facts, authority) =
+        fish_category_inputs_with_rows(&rows.remaining_state, fish_row_count);
+    let fish_schedule = continue_map_make_resource_schedule_fish_category(
+        &mut pool,
+        &completed,
+        &authority,
+        &category_facts,
+    )
+    .unwrap();
+    let fish = match &fish_schedule.placement {
+        MapMakeResourcePlacementReceipt::FishCategoryOpen(fish) => fish,
+        _ => panic!("FISH category must stop before row zero"),
+    };
+    let facts = first_fish_chance_miss_facts(fish);
+    let mut canonical = canonical_fish_state(fish, &pool);
+    let mut host = NoCanonicalAllocationHost;
+    let first_fish = continue_map_make_resource_schedule_first_fish(
+        &mut pool,
+        &mut canonical,
+        &fish_schedule,
+        &facts,
+        &mut host,
+    )
+    .unwrap();
+    (pool, first_fish, canonical)
 }
 
 #[test]
@@ -1771,6 +1817,75 @@ fn first_fish_row_composes_carried_mutation_and_stops_before_recurrence() {
     assert!(receipt.placement.is_none());
     assert_eq!(pool, pool_before);
     assert_eq!(canonical, first_fish.canonical_state_after);
+}
+
+#[test]
+fn singleton_fish_recurrence_falls_through_without_mutating_any_authority() {
+    let (pool, first_fish_schedule, canonical) = chance_miss_first_fish_schedule(1);
+    let first = match &first_fish_schedule.placement {
+        MapMakeResourcePlacementReceipt::FirstFishRowOpen(first) => first,
+        _ => panic!("fixture must stop after FISH row zero"),
+    };
+    assert!(first.allocation_transcript.player.is_empty());
+    assert!(first.allocation_transcript.region.is_empty());
+    let pool_before = pool.clone();
+    let canonical_before = canonical.clone();
+
+    let continued = continue_map_make_resource_schedule_fish_recurrence(
+        &pool,
+        &canonical,
+        &first_fish_schedule,
+    )
+    .unwrap();
+    let recurrence = match &continued.placement {
+        MapMakeResourcePlacementReceipt::FishRecurrenceOpen(recurrence) => recurrence,
+        _ => panic!("singleton FISH must stop at category cleanup"),
+    };
+
+    assert_eq!(recurrence.recurrence.row_count_before, 1);
+    assert_eq!(recurrence.recurrence.row_count_after, 0);
+    assert!(!recurrence.recurrence.branch_taken);
+    assert_eq!(recurrence.residual_va, CATEGORY_TAIL_VA);
+    assert_eq!(
+        recurrence.recurrence.random_state,
+        first.remaining_state.mutation.random_state
+    );
+    assert_eq!(
+        recurrence.recurrence.world_checksum,
+        first.remaining_state.mutation.world_checksum
+    );
+    assert_eq!(pool, pool_before);
+    assert_eq!(canonical, canonical_before);
+}
+
+#[test]
+fn multirow_fish_recurrence_replays_row_zero_and_stops_before_next_row() {
+    let (pool, first_fish_schedule, canonical) = chance_miss_first_fish_schedule(2);
+    let continued = continue_map_make_resource_schedule_fish_recurrence(
+        &pool,
+        &canonical,
+        &first_fish_schedule,
+    )
+    .unwrap();
+    let recurrence = match &continued.placement {
+        MapMakeResourcePlacementReceipt::FishRecurrenceOpen(recurrence) => recurrence,
+        _ => panic!("multirow FISH must stop before the next row"),
+    };
+
+    assert_eq!(recurrence.recurrence.row_count_before, 2);
+    assert_eq!(recurrence.recurrence.row_count_after, 1);
+    assert!(recurrence.recurrence.branch_taken);
+    assert_eq!(recurrence.residual_va, ROW_BODY_VA);
+
+    let mut tampered = first_fish_schedule.clone();
+    let MapMakeResourcePlacementReceipt::FirstFishRowOpen(first) = &mut tampered.placement else {
+        unreachable!()
+    };
+    first.canonical_state_after.good_state_digest ^= 1;
+    assert_eq!(
+        continue_map_make_resource_schedule_fish_recurrence(&pool, &canonical, &tampered),
+        Err(MapMakeResourceScheduleError::FishRecurrenceContinuityMismatch)
+    );
 }
 
 #[test]

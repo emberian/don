@@ -30,7 +30,8 @@ use crate::place_resources_bonus_rows_mutation_frontier::{
     ROW_COUNT_DECREMENT_VA, ROW_POINTER_STRIDE, ROW_RECURRENCE_BRANCH_VA,
 };
 use crate::place_resources_canonical_transaction::{
-    execute_canonical_carried_first_row, CanonicalPlaceResourcesError,
+    execute_canonical_carried_first_row_recorded, replay_canonical_carried_first_row,
+    CanonicalAllocationTranscript, CanonicalExactPlacementReceipt, CanonicalPlaceResourcesError,
     CanonicalPlaceResourcesState, CanonicalResourceAllocationHost, CanonicalRowFacts,
     CanonicalRowMutationReceipt, CanonicalRowReceipt,
 };
@@ -215,9 +216,42 @@ pub struct PlaceResourcesFirstFishRowBoundary {
     pub fish_category: PlaceResourcesFishCategoryBoundary,
     pub facts: CanonicalRowFacts,
     pub row_receipt: CanonicalRowReceipt,
+    pub allocation_transcript: CanonicalAllocationTranscript,
     pub remaining_state: RemainingBonusRowsState,
     pub canonical_state_after: CanonicalPlaceResourcesState,
     pub resource_pool_after: ResourceDivvyPoolState,
+    pub residual_va: u32,
+    pub pending_checkpoint_call_va: u32,
+    pub pending_source_token: u32,
+}
+
+/// Exact `0x00690215..0x0069021c` row-pointer/count recurrence after FISH row
+/// zero. It consumes no RNG and mutates no World, pool, Good, or Item state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FishRowRecurrenceReceipt {
+    pub category: ResourceCategory,
+    pub entry_va: u32,
+    pub row_pointer_stride: u32,
+    pub row_count_decrement_va: u32,
+    pub recurrence_branch_va: u32,
+    pub row_count_before: usize,
+    pub row_count_after: usize,
+    pub branch_taken: bool,
+    pub residual_va: u32,
+    pub random_state: i32,
+    pub world_checksum: WorldChecksum,
+    pub sourced_walked_bytes: u64,
+    pub resource_pool_digest: u64,
+    pub allocated_resources: i32,
+    pub requested_resources: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceResourcesFishRecurrenceBoundary {
+    pub first_fish: PlaceResourcesFirstFishRowBoundary,
+    pub recurrence: FishRowRecurrenceReceipt,
+    pub resource_pool_after: ResourceDivvyPoolState,
+    pub canonical_state_after: CanonicalPlaceResourcesState,
     pub residual_va: u32,
     pub pending_checkpoint_call_va: u32,
     pub pending_source_token: u32,
@@ -248,6 +282,7 @@ pub enum MapMakeResourcePlacementReceipt {
     BonusRowsOpen(PlaceResourcesBonusRowsBoundary),
     FishCategoryOpen(PlaceResourcesFishCategoryBoundary),
     FirstFishRowOpen(PlaceResourcesFirstFishRowBoundary),
+    FishRecurrenceOpen(PlaceResourcesFishRecurrenceBoundary),
     GoodiesCategoryOpen(PlaceResourcesGoodiesCategoryBoundary),
 }
 
@@ -283,6 +318,9 @@ pub enum MapMakeResourceScheduleError {
     FirstFishRowContinuationRequiresNonemptyFish,
     FirstFishRowContinuityMismatch,
     FirstFishRow(CanonicalPlaceResourcesError),
+    FishRecurrenceContinuationRequiresFirstFishRow,
+    FishRecurrenceContinuityMismatch,
+    FishRecurrenceReplay(CanonicalPlaceResourcesError),
     EmptyFishContinuationRequiresEmptyFish,
     EmptyFishContinuityMismatch,
     EmptyFishDocumentAuthorityMismatch,
@@ -1093,7 +1131,7 @@ pub fn continue_map_make_resource_schedule_first_fish<H: CanonicalResourceAlloca
     }
     let mut staged_canonical = canonical_state.clone();
     let mut staged_carried = carried;
-    let row_receipt = execute_canonical_carried_first_row(
+    let (row_receipt, allocation_transcript) = execute_canonical_carried_first_row_recorded(
         &mut staged_canonical,
         &fish.fish_handoff,
         ResourceCategory::Fish,
@@ -1151,11 +1189,146 @@ pub fn continue_map_make_resource_schedule_first_fish<H: CanonicalResourceAlloca
                 fish_category: fish.clone(),
                 facts: facts.clone(),
                 row_receipt,
+                allocation_transcript,
                 remaining_state: staged_carried,
                 canonical_state_after: staged_canonical,
                 resource_pool_after,
                 residual_va:
                     crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA,
+                pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
+                pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
+            },
+        ),
+    })
+}
+
+fn canonical_state_before_first_fish(
+    first: &PlaceResourcesFirstFishRowBoundary,
+) -> CanonicalPlaceResourcesState {
+    let (good_state_digest, item_state_digest) = match &first.row_receipt.exact_placement {
+        Some(CanonicalExactPlacementReceipt::Player { body, .. }) => {
+            (body.good_state_digest_before, body.item_state_digest_before)
+        }
+        Some(CanonicalExactPlacementReceipt::RegionWorld { body, .. }) => (
+            body.good_state_digest_before,
+            first.canonical_state_after.item_state_digest,
+        ),
+        None => (
+            first.canonical_state_after.good_state_digest,
+            first.canonical_state_after.item_state_digest,
+        ),
+    };
+    let fish = &first.fish_category;
+    CanonicalPlaceResourcesState {
+        mutation: carried_category_state(
+            &fish.category_state_after,
+            &fish.fish_handoff,
+            &fish.resource_pool_after,
+        )
+        .mutation,
+        good_state_digest,
+        item_state_digest,
+        selected_document_handles: fish.category_state_after.selected_document_handles,
+        default_document_handles: fish.category_state_after.default_document_handles,
+    }
+}
+
+fn replay_first_fish_boundary(
+    schedule: &MapMakeResourceScheduleReceipt,
+    first: &PlaceResourcesFirstFishRowBoundary,
+) -> Result<(), MapMakeResourceScheduleError> {
+    let fish = &first.fish_category;
+    if !replay_fish_category_boundary(schedule, fish, &fish.resource_pool_after) {
+        return Err(MapMakeResourceScheduleError::FishRecurrenceContinuityMismatch);
+    }
+    let mut state = canonical_state_before_first_fish(first);
+    let mut carried = carried_category_state(
+        &fish.category_state_after,
+        &fish.fish_handoff,
+        &fish.resource_pool_after,
+    );
+    replay_canonical_carried_first_row(
+        &mut state,
+        &fish.fish_handoff,
+        ResourceCategory::Fish,
+        &mut carried,
+        &first.facts,
+        &first.row_receipt,
+        &first.allocation_transcript,
+    )
+    .map_err(MapMakeResourceScheduleError::FishRecurrenceReplay)?;
+    if state != first.canonical_state_after
+        || carried != first.remaining_state
+        || carried.mutation.resource_pool.as_ref() != Some(&first.resource_pool_after)
+        || resource_divvy_pool_digest(&first.resource_pool_after)
+            != carried.mutation.resource_pool_digest
+        || first.residual_va
+            != crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
+        || first.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+        || first.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+    {
+        return Err(MapMakeResourceScheduleError::FishRecurrenceContinuityMismatch);
+    }
+    Ok(())
+}
+
+/// Own only the no-RNG/no-World recurrence immediately after FISH row zero.
+/// A remaining row branches to `0x0068fbb3`; a singleton category falls through
+/// to FISH cleanup at `0x00690225`. Neither child is executed here.
+pub fn continue_map_make_resource_schedule_fish_recurrence(
+    pool: &ResourceDivvyPoolState,
+    canonical_state: &CanonicalPlaceResourcesState,
+    schedule: &MapMakeResourceScheduleReceipt,
+) -> Result<MapMakeResourceScheduleReceipt, MapMakeResourceScheduleError> {
+    let MapMakeResourcePlacementReceipt::FirstFishRowOpen(first) = &schedule.placement else {
+        return Err(MapMakeResourceScheduleError::FishRecurrenceContinuationRequiresFirstFishRow);
+    };
+    replay_first_fish_boundary(schedule, first)?;
+    if pool != &first.resource_pool_after
+        || canonical_state != &first.canonical_state_after
+        || first.remaining_state.next_row_index != 1
+        || first.remaining_state.rows.is_empty()
+    {
+        return Err(MapMakeResourceScheduleError::FishRecurrenceContinuityMismatch);
+    }
+
+    let row_count_before = first.remaining_state.rows.len();
+    let row_count_after = row_count_before - 1;
+    let branch_taken = row_count_after != 0;
+    let residual_va = if branch_taken {
+        crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_BODY_VA
+    } else {
+        BONUS_CATEGORY_TAIL_VA
+    };
+    let mutation = &first.remaining_state.mutation;
+    let recurrence = FishRowRecurrenceReceipt {
+        category: ResourceCategory::Fish,
+        entry_va: LATER_BONUS_ENTRY_VA,
+        row_pointer_stride: ROW_POINTER_STRIDE,
+        row_count_decrement_va: ROW_COUNT_DECREMENT_VA,
+        recurrence_branch_va: ROW_RECURRENCE_BRANCH_VA,
+        row_count_before,
+        row_count_after,
+        branch_taken,
+        residual_va,
+        random_state: mutation.random_state,
+        world_checksum: mutation.world_checksum.clone(),
+        sourced_walked_bytes: mutation.sourced_walked_bytes,
+        resource_pool_digest: mutation.resource_pool_digest,
+        allocated_resources: mutation.allocated_resources,
+        requested_resources: mutation.requested_resources,
+    };
+
+    Ok(MapMakeResourceScheduleReceipt {
+        post_nubify_checkpoint: schedule.post_nubify_checkpoint.clone(),
+        caller_gap: schedule.caller_gap.clone(),
+        placement: MapMakeResourcePlacementReceipt::FishRecurrenceOpen(
+            PlaceResourcesFishRecurrenceBoundary {
+                first_fish: first.clone(),
+                recurrence,
+                resource_pool_after: pool.clone(),
+                canonical_state_after: canonical_state.clone(),
+                residual_va,
                 pending_checkpoint_call_va: MAP_POST_RESOURCES_CHECKPOINT_CALL_VA,
                 pending_source_token: MAP_POST_RESOURCES_SOURCE_TOKEN,
             },

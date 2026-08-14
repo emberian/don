@@ -54,6 +54,11 @@ public seam for the map-make schedule. It stages both `CanonicalPlaceResourcesSt
 commits only after the generic carried-row and exact Player/Region receipts agree. Recurrence
 at `0x00690215` remains a separate child.
 
+The schedule-facing recorded variant retains every accepted `PlayerAllocationReceipt` or
+`RegionInitGoodReceipt`. `replay_canonical_carried_first_row` reconstructs the exact row
+before-image and consumes those proposals request-for-request before a later continuation may
+trust the stored receipt. Extra, missing, or detached proposals fail without committing state.
+
 ## Authoritative state
 
 `CanonicalPlaceResourcesState` contains every projection that the composed transaction may

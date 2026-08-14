@@ -10,13 +10,14 @@ use don_sim::rng::Random;
 
 use crate::place_player_resource_body_frontier::{
     execute_player_resource_body, PlayerAllocationHost, PlayerAllocationKind,
-    PlayerBodyPlacementEvidence, PlayerResourceBodyError, PlayerResourceBodyFacts,
-    PlayerResourceBodyParameters, PlayerResourceBodyReceipt, PlayerResourceBodyState,
+    PlayerAllocationReceipt, PlayerAllocationRequest, PlayerBodyPlacementEvidence,
+    PlayerResourceBodyError, PlayerResourceBodyFacts, PlayerResourceBodyParameters,
+    PlayerResourceBodyReceipt, PlayerResourceBodyState,
 };
 use crate::place_region_resource_world_body_frontier::{
     execute_region_world_body, RegionBodyPlacementEvidence, RegionInitGoodHost,
-    RegionWorldBodyError, RegionWorldBodyFacts, RegionWorldBodyParameters, RegionWorldBodyReceipt,
-    RegionWorldBodyState,
+    RegionInitGoodReceipt, RegionInitGoodRequest, RegionWorldBodyError, RegionWorldBodyFacts,
+    RegionWorldBodyParameters, RegionWorldBodyReceipt, RegionWorldBodyState,
 };
 use crate::place_resources_bonus_mutation_frontier::{
     execute_first_bonus_mutation, AllocationKind, CalleeRandomDraw, FirstBonusMutationError,
@@ -151,11 +152,82 @@ pub enum CanonicalPlaceResourcesError {
     Prefix(PlacementPrefixError),
     PlayerBody(PlayerResourceBodyError),
     RegionBody(RegionWorldBodyError),
+    AllocationTranscriptMismatch,
 }
 
 pub trait CanonicalResourceAllocationHost: PlayerAllocationHost + RegionInitGoodHost {}
 
 impl<T> CanonicalResourceAllocationHost for T where T: PlayerAllocationHost + RegionInitGoodHost {}
+
+/// Exact two-phase host proposals accepted while executing one canonical row.
+/// A later schedule continuation replays these proposals before trusting the
+/// stored row receipt; no Good/Item digest transition is reverse-engineered.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CanonicalAllocationTranscript {
+    pub player: Vec<PlayerAllocationReceipt>,
+    pub region: Vec<RegionInitGoodReceipt>,
+}
+
+struct RecordingAllocationHost<'a, H> {
+    inner: &'a mut H,
+    transcript: CanonicalAllocationTranscript,
+}
+
+impl<H: PlayerAllocationHost> PlayerAllocationHost for RecordingAllocationHost<'_, H> {
+    fn propose_allocation(
+        &mut self,
+        request: &PlayerAllocationRequest,
+    ) -> Option<PlayerAllocationReceipt> {
+        let receipt = self.inner.propose_allocation(request)?;
+        self.transcript.player.push(receipt.clone());
+        Some(receipt)
+    }
+}
+
+impl<H: RegionInitGoodHost> RegionInitGoodHost for RecordingAllocationHost<'_, H> {
+    fn propose_init_good(
+        &mut self,
+        request: &RegionInitGoodRequest,
+    ) -> Option<RegionInitGoodReceipt> {
+        let receipt = self.inner.propose_init_good(request)?;
+        self.transcript.region.push(receipt.clone());
+        Some(receipt)
+    }
+}
+
+struct PlaybackAllocationHost<'a> {
+    transcript: &'a CanonicalAllocationTranscript,
+    player_index: usize,
+    region_index: usize,
+}
+
+impl PlayerAllocationHost for PlaybackAllocationHost<'_> {
+    fn propose_allocation(
+        &mut self,
+        request: &PlayerAllocationRequest,
+    ) -> Option<PlayerAllocationReceipt> {
+        let receipt = self.transcript.player.get(self.player_index)?;
+        if receipt.request != *request {
+            return None;
+        }
+        self.player_index += 1;
+        Some(receipt.clone())
+    }
+}
+
+impl RegionInitGoodHost for PlaybackAllocationHost<'_> {
+    fn propose_init_good(
+        &mut self,
+        request: &RegionInitGoodRequest,
+    ) -> Option<RegionInitGoodReceipt> {
+        let receipt = self.transcript.region.get(self.region_index)?;
+        if receipt.request != *request {
+            return None;
+        }
+        self.region_index += 1;
+        Some(receipt.clone())
+    }
+}
 
 fn xml_handles(handles: HostHandles) -> XmlHostHandles {
     XmlHostHandles {
@@ -892,6 +964,69 @@ pub fn execute_canonical_carried_first_row<H: CanonicalResourceAllocationHost>(
     *state = staged_state;
     *carried = staged_carried;
     Ok(receipt)
+}
+
+/// Execute the same carried row while retaining every accepted two-phase
+/// allocation proposal needed to replay an exact placed body later.
+pub fn execute_canonical_carried_first_row_recorded<H: CanonicalResourceAllocationHost>(
+    state: &mut CanonicalPlaceResourcesState,
+    entry: &PlaceResourcesBonusRowsHandoff,
+    category: ResourceCategory,
+    carried: &mut RemainingBonusRowsState,
+    facts: &CanonicalRowFacts,
+    host: &mut H,
+) -> Result<(CanonicalRowReceipt, CanonicalAllocationTranscript), CanonicalPlaceResourcesError> {
+    let mut recording = RecordingAllocationHost {
+        inner: host,
+        transcript: CanonicalAllocationTranscript::default(),
+    };
+    let receipt = execute_canonical_carried_first_row(
+        state,
+        entry,
+        category,
+        carried,
+        facts,
+        &mut recording,
+    )?;
+    Ok((receipt, recording.transcript))
+}
+
+/// Re-execute one stored carried row from its exact before-image and allocation
+/// transcript. State commits only if the complete receipt and transcript usage
+/// match; extra, missing, or request-detached proposals fail closed.
+pub fn replay_canonical_carried_first_row(
+    state: &mut CanonicalPlaceResourcesState,
+    entry: &PlaceResourcesBonusRowsHandoff,
+    category: ResourceCategory,
+    carried: &mut RemainingBonusRowsState,
+    facts: &CanonicalRowFacts,
+    expected: &CanonicalRowReceipt,
+    transcript: &CanonicalAllocationTranscript,
+) -> Result<(), CanonicalPlaceResourcesError> {
+    let mut staged_state = state.clone();
+    let mut staged_carried = carried.clone();
+    let mut playback = PlaybackAllocationHost {
+        transcript,
+        player_index: 0,
+        region_index: 0,
+    };
+    let actual = execute_canonical_carried_first_row(
+        &mut staged_state,
+        entry,
+        category,
+        &mut staged_carried,
+        facts,
+        &mut playback,
+    )?;
+    if actual != *expected
+        || playback.player_index != transcript.player.len()
+        || playback.region_index != transcript.region.len()
+    {
+        return Err(CanonicalPlaceResourcesError::AllocationTranscriptMismatch);
+    }
+    *state = staged_state;
+    *carried = staged_carried;
+    Ok(())
 }
 
 fn run_category_rows<H: CanonicalResourceAllocationHost>(

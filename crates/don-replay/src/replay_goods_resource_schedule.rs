@@ -17,6 +17,7 @@ use crate::map_make_resource_caller_gap_frontier::{
 };
 use crate::map_make_resource_schedule_integration::{
     MapMakeResourcePlacementReceipt, MapMakeResourceScheduleReceipt,
+    PlaceResourcesFirstFishRowBoundary,
 };
 use crate::place_resources_bonus_mutation_frontier::{
     AllocationKind, FirstBonusDisposition, PlacementEvidence, PlacementPath, PlacementReceipt,
@@ -109,6 +110,8 @@ pub enum ResourceScheduleGoodsBoundary {
     BeforeFishCategoryCleanup,
     /// Exactly the first FISH row is represented; recurrence remains open.
     AfterFirstFishRow,
+    /// FISH recurrence selected another row at the shared row-body entry.
+    BeforeNextFishRow,
     /// Empty FISH cleanup completed and a nonempty GOODIES section is at row zero.
     BeforeFirstGoodiesRow,
     /// Empty FISH cleanup completed into an empty GOODIES section.
@@ -132,6 +135,7 @@ impl ResourceScheduleGoodsBoundary {
             Self::AfterFirstFishRow => {
                 Some(crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA)
             }
+            Self::BeforeNextFishRow => Some(crate::place_resources_category_frontier::ROW_BODY_VA),
             Self::BeforeFirstGoodiesRow => {
                 Some(crate::place_resources_category_frontier::ROW_BODY_VA)
             }
@@ -317,6 +321,70 @@ pub fn apply_admitted_resource_placements(
     })
 }
 
+fn push_first_fish_placements<'a>(
+    first_fish: &'a PlaceResourcesFirstFishRowBoundary,
+    placements: &mut Vec<&'a PlacementReceipt>,
+) -> Result<(), ResourceScheduleGoodsError> {
+    let rows = &first_fish.fish_category.bonus_rows;
+    if first_fish.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+        || first_fish.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+        || first_fish.residual_va
+            != crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
+        || rows.remaining_state.next_row_index != rows.steps.len() + 1
+        || rows.category_tail.is_none()
+        || first_fish.remaining_state.next_row_index != 1
+        || first_fish.canonical_state_after.mutation != first_fish.remaining_state.mutation
+        || first_fish.row_receipt.category != ResourceCategory::Fish
+        || first_fish.row_receipt.row_index != 0
+        || first_fish.remaining_state.mutation.resource_pool.as_ref()
+            != Some(&first_fish.resource_pool_after)
+    {
+        return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+            reason: "first FISH row does not retain exact history/checkpoint",
+        });
+    }
+    push_first_placement(
+        &rows.first.first_bonus.disposition,
+        &rows.first.first_bonus.placement,
+        placements,
+    )?;
+    for step in &rows.steps {
+        let placed = matches!(step.receipt.disposition, LaterBonusDisposition::Placed(_));
+        if placed != step.receipt.placement.is_some() {
+            return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                reason: "later BONUS disposition/placement mismatch",
+            });
+        }
+        if let Some(placement) = &step.receipt.placement {
+            placements.push(placement);
+        }
+    }
+    let CanonicalRowMutationReceipt::CarriedFirst(receipt) = &first_fish.row_receipt.mutation
+    else {
+        return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+            reason: "first FISH row has the wrong mutation receipt",
+        });
+    };
+    if receipt.category != ResourceCategory::Fish
+        || receipt.residual_va
+            != crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
+    {
+        return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+            reason: "first FISH mutation receipt has the wrong category/residual",
+        });
+    }
+    let placed = matches!(receipt.disposition, LaterBonusDisposition::Placed(_));
+    if placed != receipt.placement.is_some() {
+        return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+            reason: "first FISH disposition/placement mismatch",
+        });
+    }
+    if let Some(placement) = &receipt.placement {
+        placements.push(placement);
+    }
+    Ok(())
+}
+
 fn placements_from_schedule(
     schedule: &MapMakeResourceScheduleReceipt,
 ) -> Result<(ResourceScheduleGoodsBoundary, Vec<&PlacementReceipt>), ResourceScheduleGoodsError> {
@@ -419,65 +487,46 @@ fn placements_from_schedule(
             }
         }
         MapMakeResourcePlacementReceipt::FirstFishRowOpen(first_fish) => {
-            let rows = &first_fish.fish_category.bonus_rows;
-            if first_fish.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
-                || first_fish.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
-                || first_fish.residual_va
-                    != crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
-                || rows.remaining_state.next_row_index != rows.steps.len() + 1
-                || rows.category_tail.is_none()
-                || first_fish.remaining_state.next_row_index != 1
-                || first_fish.canonical_state_after.mutation != first_fish.remaining_state.mutation
-                || first_fish.row_receipt.category != ResourceCategory::Fish
-                || first_fish.row_receipt.row_index != 0
-                || first_fish.remaining_state.mutation.resource_pool.as_ref()
-                    != Some(&first_fish.resource_pool_after)
+            push_first_fish_placements(first_fish, &mut placements)?;
+            ResourceScheduleGoodsBoundary::AfterFirstFishRow
+        }
+        MapMakeResourcePlacementReceipt::FishRecurrenceOpen(recurrence) => {
+            push_first_fish_placements(&recurrence.first_fish, &mut placements)?;
+            if recurrence.pending_checkpoint_call_va != MAP_POST_RESOURCES_CHECKPOINT_CALL_VA
+                || recurrence.pending_source_token != MAP_POST_RESOURCES_SOURCE_TOKEN
+                || recurrence.resource_pool_after != recurrence.first_fish.resource_pool_after
+                || recurrence.canonical_state_after != recurrence.first_fish.canonical_state_after
+                || recurrence.recurrence.entry_va
+                    != crate::place_resources_bonus_rows_mutation_frontier::LATER_BONUS_ENTRY_VA
+                || recurrence.recurrence.row_count_before
+                    != recurrence.first_fish.remaining_state.rows.len()
+                || recurrence.recurrence.row_count_after + 1
+                    != recurrence.recurrence.row_count_before
+                || recurrence.recurrence.branch_taken
+                    != (recurrence.recurrence.row_count_after != 0)
+                || recurrence.residual_va != recurrence.recurrence.residual_va
             {
                 return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
-                    reason: "first FISH row does not retain exact history/checkpoint",
+                    reason: "FISH recurrence does not retain exact row/checkpoint state",
                 });
             }
-            push_first_placement(
-                &rows.first.first_bonus.disposition,
-                &rows.first.first_bonus.placement,
-                &mut placements,
-            )?;
-            for step in &rows.steps {
-                let placed = matches!(step.receipt.disposition, LaterBonusDisposition::Placed(_));
-                if placed != step.receipt.placement.is_some() {
+            if recurrence.recurrence.branch_taken {
+                if recurrence.residual_va != crate::place_resources_category_frontier::ROW_BODY_VA {
                     return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
-                        reason: "later BONUS disposition/placement mismatch",
+                        reason: "taken FISH recurrence has the wrong residual",
                     });
                 }
-                if let Some(placement) = &step.receipt.placement {
-                    placements.push(placement);
+                ResourceScheduleGoodsBoundary::BeforeNextFishRow
+            } else {
+                if recurrence.residual_va
+                    != crate::place_resources_category_frontier::CATEGORY_TAIL_VA
+                {
+                    return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
+                        reason: "completed FISH recurrence has the wrong residual",
+                    });
                 }
+                ResourceScheduleGoodsBoundary::BeforeFishCategoryCleanup
             }
-            let CanonicalRowMutationReceipt::CarriedFirst(receipt) =
-                &first_fish.row_receipt.mutation
-            else {
-                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
-                    reason: "first FISH row has the wrong mutation receipt",
-                });
-            };
-            if receipt.category != ResourceCategory::Fish
-                || receipt.residual_va
-                    != crate::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
-            {
-                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
-                    reason: "first FISH mutation receipt has the wrong category/residual",
-                });
-            }
-            let placed = matches!(receipt.disposition, LaterBonusDisposition::Placed(_));
-            if placed != receipt.placement.is_some() {
-                return Err(ResourceScheduleGoodsError::InvalidScheduleContinuity {
-                    reason: "first FISH disposition/placement mismatch",
-                });
-            }
-            if let Some(placement) = &receipt.placement {
-                placements.push(placement);
-            }
-            ResourceScheduleGoodsBoundary::AfterFirstFishRow
         }
         MapMakeResourcePlacementReceipt::GoodiesCategoryOpen(goodies) => {
             let rows = &goodies.fish_category.bonus_rows;

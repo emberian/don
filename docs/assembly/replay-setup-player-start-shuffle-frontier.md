@@ -14,8 +14,9 @@ GUID-matched PDB, SHA-256
 
 The current resource schedule owns all nonempty `BONUSES` rows, their category-tail
 branch, BONUSES cleanup/FISH lookup, and the exact first row of a nonempty FISH section.
-That branch's first independently unowned instruction is recurrence routing at
-`0x00690215`. If FISH is empty, its cleanup and GOODIES lookup/enumeration are owned;
+Its no-RNG recurrence is also owned; the first independently unowned instruction is
+the next FISH row at `0x0068fbb3`, or FISH cleanup at `0x00690225` for a singleton.
+If FISH is empty, its cleanup and GOODIES lookup/enumeration are owned;
 the residual is GOODIES row zero at `0x0068FBB3`, or GOODIES cleanup at `0x00690225`
 when empty. FISH recurrence/later rows, GOODIES rows, document cleanup, the
 `Map::place_resources` return, the `Map::make` caller continuation at `0x0068C72D`, and
