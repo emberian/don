@@ -6,12 +6,13 @@
 //! The supported replay's owner-zero Scout is human, so this module owns the former and
 //! returns a typed residual for the latter.
 //!
-//! The human arm is small but crosses two product-owned authorities: the 2,033-byte
-//! `SpellTypeData::is_castable` predicate and the global `ObjectsData::find` traversal.
-//! This module therefore prepares a detached transaction.  Retail-derived receipts may
-//! advance the transaction, but no caller state changes until [`commit_no_cast`] accepts a
-//! complete no-cast plan.  A found target stops at an exact `Unit::add_cast_order` request;
-//! the order/path/Guy after-image is not guessed.
+//! The human arm is small.  This module now owns the complete source-exact
+//! `SpellTypeData::is_castable`, `UnitData::mana`, and `SpellTypeData::get_range` cone from
+//! replay-carried Rules plus one adjacent live call-entry image.  The first unmounted owner is
+//! the global `ObjectsData::find` spatial traversal.  A composition-bound native traversal
+//! receipt may advance the detached transaction, but no caller state changes until
+//! [`commit_no_cast`] accepts a complete no-cast plan.  A found target stops at an exact
+//! `Unit::add_cast_order` request; the order/path/Guy after-image is not guessed.
 //!
 //! Most importantly, this function never reads or writes `CasterData::active_spells`.
 //! Its successful arm allocates a Unit `CastOrder` (order index `0x0E`) in `Unit+0xCC`.
@@ -37,6 +38,9 @@ pub const CAST_RETURN_ONE_VA: u32 = 0x005F_28C3;
 
 pub const UNIT_DATA_IS_SPECIAL_VA: u32 = 0x0046_CEA0;
 pub const UNIT_DATA_IS_SUPPLY_VA: u32 = 0x0046_CE80;
+pub const OBJECT_DATA_IS_UNIT_TRUE_VA: u32 = 0x0041_E0E0;
+pub const TYPE_DATA_IS_PACK_VA: u32 = 0x0047_0540;
+pub const TYPE_DATA_IS_UNPACK_VA: u32 = 0x0047_0510;
 pub const SPELL_IS_CASTABLE_VA: u32 = 0x0067_5BC0;
 pub const UNIT_DATA_MANA_VA: u32 = 0x0060_9A50;
 pub const SPELL_GET_RANGE_VA: u32 = 0x0067_6A80;
@@ -62,6 +66,15 @@ pub const GOLDEN_SCOUT_BASE_MANA: i32 = 500;
 pub const COUNTERINTEL_SPELL: i32 = 0x277;
 pub const COUNTERINTEL_SLOT_OFFSET: u32 = 0x09DC;
 pub const GOLDEN_COUNTERINTEL_MANA_COST: i32 = 500;
+pub const GOLDEN_COUNTERINTEL_FROM_TYPE: i32 = 58;
+pub const GOLDEN_COUNTERINTEL_FROM2_TYPE: i32 = SCOUT_TYPE;
+pub const GOLDEN_COUNTERINTEL_FLAGS: u32 = 0x10B6;
+pub const GOLDEN_COUNTERINTEL_RANGE: i32 = 1_920;
+pub const GOLDEN_SPY_BRIBE_UPGRADE_RANGE: i32 = 2;
+pub const GOLDEN_TERRA_COTTA_RANGE: i32 = 0;
+pub const TERRA_COTTA_WONDER_TYPE: i32 = 0x211;
+pub const RETAIL_CASTABLE_DEFAULT_RESULT: i32 = 3;
+pub const GOLDEN_SERIALIZED_RULES_BYTES: usize = 1_024_221;
 pub const CAST_ORDER_INDEX: i32 = 0x0E;
 pub const UNIT_ORDER_LIST_OFFSET: u32 = 0xCC;
 pub const UNIT_CURRENT_ORDER_LINK_OFFSET: u32 = 0xDC;
@@ -72,11 +85,54 @@ pub const IS_SUPPLY_MASK: u32 = 0x40;
 pub const HUMAN_LEADER_MASK: u32 = 0x04;
 pub const OBJECTS_FIND_SENTINEL: i32 = 0x05F5_E0FF;
 
+/// SHA-256 of the one supported 2024 replay file.  This transaction is intentionally not a
+/// generic Scout policy: its serialized Rules provenance and live call-entry authority must
+/// join this recording.
+pub const GOLDEN_REPLAY_FILE_SHA256: [u8; 32] = [
+    0x16, 0x90, 0x43, 0x1a, 0x5e, 0xf1, 0x9b, 0x38, 0xa3, 0x42, 0x5d, 0x3d, 0xd7, 0x31, 0x1e, 0x8e,
+    0x83, 0xca, 0x0d, 0x27, 0xc5, 0x6f, 0xab, 0xe4, 0x9d, 0x77, 0x6a, 0x9f, 0x14, 0x21, 0xb2, 0x51,
+];
+
 /// SHA-256 of the supported retail executable whose PDB and code bytes define this port.
 pub const SUPPORTED_RETAIL_EXE_SHA256: [u8; 32] = [
     0x30, 0x47, 0x8a, 0x44, 0xb5, 0x77, 0xcb, 0x11, 0xeb, 0xcb, 0xbb, 0xf5, 0x3d, 0x3e, 0x93, 0xba,
     0x02, 0xfd, 0x2a, 0xac, 0xf3, 0xbd, 0xef, 0xa6, 0x55, 0x2c, 0x9b, 0x64, 0x49, 0x62, 0x50, 0x79,
 ];
+
+/// Replay byte ownership for one fixed retail-walked field family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RulesByteSpan {
+    pub offset: usize,
+    pub bytes: usize,
+}
+
+/// Exact replay-carried Rules projection used by the Counterintel cone.
+///
+/// A replay adapter must construct this from the admitted serialized Rules section.  Keeping
+/// the spans and whole-section digest here prevents copied scalar values from masquerading as
+/// authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenCounterintelRules {
+    pub replay_file_sha256: [u8; 32],
+    pub serialized_rules_sha256: [u8; 32],
+    pub serialized_rules_span: RulesByteSpan,
+    pub scout_object_span: RulesByteSpan,
+    pub scout_unit_span: RulesByteSpan,
+    pub counterintel_type_base_span: RulesByteSpan,
+    pub counterintel_spell_span: RulesByteSpan,
+    pub constants_span: RulesByteSpan,
+    pub unit_type_flags2: u32,
+    pub unit_domain: i32,
+    pub unit_type_mana: i32,
+    pub spell_type: i32,
+    pub from_type: i32,
+    pub from2_type: i32,
+    pub spell_flags: u32,
+    pub spell_range: i32,
+    pub spell_mana: i32,
+    pub spy_bribe_upgrade_range: i32,
+    pub terra_cotta_range: i32,
+}
 
 /// The two mutable words `ObjectsData::find` initializes before enumerating candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,26 +165,36 @@ pub struct Frame0ScoutBoundary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GoldenScoutInput {
     pub snapshot_revision: u64,
+    /// Digest of the complete adjacent retail call-entry composition.  This is independent of
+    /// the completed setup digest: earlier frame-zero receivers may have changed live state.
+    pub call_entry_composition_digest: [u8; 32],
     pub executable_sha256: [u8; 32],
     pub who: u8,
     pub o: i16,
     pub type_index: i32,
     /// `LeaderData::flags`, tested with bit `4` at `0x005F27B6`.
     pub leader_flags: u32,
+    /// Live `UnitData+0x68`. Bit zero selects the pack/unpack exclusion inside
+    /// `SpellTypeData::is_castable`.
+    pub unit_masks: u32,
     /// Runtime vtable slot `+0xD4`.  The ordinary Unit implementation is admitted directly.
     pub is_special_vfunc_va: u32,
     /// Runtime vtable slot `+0xCC`, used by `UnitData::mana`.
     pub is_supply_vfunc_va: u32,
-    /// `UnitTypeData+0x2B8`.
-    pub unit_type_flags2: u32,
-    /// `UnitTypeData+0x218`; Scout 69 is not domain 2.
-    pub unit_domain: i32,
-    /// `UnitTypeData+0x2EC`.  For Scout 69 the other `UnitData::mana` arms cannot alter it.
-    pub unit_type_mana: i32,
+    /// Runtime vtable slot `+0x18`, consumed by `SpellTypeData::is_castable`.
+    pub is_unit_vfunc_va: u32,
+    /// Counterintel vtable slots `+0x50/+0x54`, reached only when `unit_masks & 1 != 0`.
+    pub spell_is_pack_vfunc_va: u32,
+    pub spell_is_unpack_vfunc_va: u32,
+    /// Exact replay-carried static source.
+    pub rules: GoldenCounterintelRules,
     /// Signed `UnitData+0x96`.
     pub mana_burn: i16,
-    /// `SpellTypeData+0x1D0` for Counterintel 631.
-    pub counterintel_mana_cost: i32,
+    /// Exact result of `LeaderData::get_spy_upgrade` at this call entry.
+    pub spy_upgrade: i32,
+    /// Exact `LeaderData::has_wonder(0x211)` result.  Retail performs the call even though the
+    /// shipped Terra Cotta range constant is zero.
+    pub has_terra_cotta: bool,
     /// Encoded `ObjectData+0x10/+0x14`; retail decodes with `^ 0x63637`.
     pub encoded_x: i32,
     pub encoded_y: i32,
@@ -148,55 +214,26 @@ impl GoldenScoutInput {
 
     #[inline]
     pub const fn mana_capacity(&self) -> i32 {
-        self.unit_type_mana
+        self.rules.unit_type_mana
     }
+}
+
+fn span_is_inside(inner: RulesByteSpan, outer: RulesByteSpan) -> bool {
+    let Some(inner_end) = inner.offset.checked_add(inner.bytes) else {
+        return false;
+    };
+    let Some(outer_end) = outer.offset.checked_add(outer.bytes) else {
+        return false;
+    };
+    inner.bytes != 0 && inner.offset >= outer.offset && inner_end <= outer_end
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetailChildSource {
-    SupportedRetailExecutable,
+    /// Supported retail executed the complete `ObjectsData::find` call synchronously from
+    /// `Unit::think_spellcaster` at `0x005F2884`.
+    CompleteRetailObjectsFindAtGoldenScoutCounterintel,
     SyntheticOrUnknown,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IsCastableRequest {
-    pub callsite_va: u32,
-    pub function_va: u32,
-    pub spell_type: i32,
-    pub o: i32,
-    pub who: i32,
-    pub final_arg: i32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IsCastableReceipt {
-    pub source: RetailChildSource,
-    pub snapshot_revision: u64,
-    pub request: IsCastableRequest,
-    /// Retail tests only zero/nonzero.
-    pub result: i32,
-}
-
-/// The four stack arguments to `SpellTypeData::get_range` in their source order.  Argument one
-/// is the address of the Counterintel pointer slot, not the spell number; this function does not
-/// read that argument on the Counterintel arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpellRangeRequest {
-    pub callsite_va: u32,
-    pub function_va: u32,
-    pub spell_type: i32,
-    pub spell_slot_offset: u32,
-    pub owner: i32,
-    pub target_o: i32,
-    pub target_owner: i32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpellRangeReceipt {
-    pub source: RetailChildSource,
-    pub snapshot_revision: u64,
-    pub request: SpellRangeRequest,
-    pub range: i32,
 }
 
 /// The consumed portion of the 13-dword `ObjectsData::find` call at `0x005F2884`.
@@ -229,6 +266,11 @@ pub enum UnreadStackWords {
 pub struct ObjectsFindReceipt {
     pub source: RetailChildSource,
     pub snapshot_revision: u64,
+    pub call_entry_composition_digest: [u8; 32],
+    /// SHA-256 over the complete ordered spatial-cell candidate chain and every live field read
+    /// by SearchIndexBH(0), FilterIndex(20), and Counterintel `is_valid_target`.  Don does not
+    /// invent this chain while the canonical object index remains unmounted.
+    pub candidate_traversal_sha256: [u8; 32],
     pub request: ObjectsFindRequest,
     pub objects_revision_before: u64,
     pub objects_revision_after: u64,
@@ -283,18 +325,13 @@ pub enum ExternalRequest {
         who: i32,
         o: i32,
     },
-    IsCastable(IsCastableRequest),
-    SpellRange(SpellRangeRequest),
     ObjectsFind(ObjectsFindRequest),
     AddCastOrder(AddCastOrderRequest),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChildReceipt {
-    IsCastable(IsCastableReceipt),
-    SpellRange(SpellRangeReceipt),
-    ObjectsFind(ObjectsFindReceipt),
-}
+/// The static retail children are owned locally.  The only admissible child authority is the
+/// complete `ObjectsData::find` traversal at the exact Counterintel callsite.
+pub type ChildReceipt = ObjectsFindReceipt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoCastReason {
@@ -344,16 +381,21 @@ pub enum PrepareOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrepareError {
     UnsupportedExecutable,
+    WrongGoldenReplay,
+    MissingRulesAuthority,
+    MissingCallEntryCompositionDigest,
     MissingSnapshotRevision,
     WrongGoldenIdentity,
     WrongScoutType,
     WrongGoldenRules,
     NonEmptyGoldenCasterArray,
+    UnsupportedCastabilityShape,
     UnsupportedScoutManaShape,
-    ReceiptKindMismatch { index: usize },
     ReceiptSourceMismatch { index: usize },
     ReceiptRevisionMismatch { index: usize },
     ReceiptRequestMismatch { index: usize },
+    ReceiptCompositionMismatch { index: usize },
+    MissingCandidateTraversalDigest,
     ObjectsRevisionMismatch,
     ObjectsRevisionDidNotAdvance,
     InvalidFindResult,
@@ -425,7 +467,7 @@ fn check_receipt_header(
     revision: u64,
     index: usize,
 ) -> Result<(), PrepareError> {
-    if source != RetailChildSource::SupportedRetailExecutable {
+    if source != RetailChildSource::CompleteRetailObjectsFindAtGoldenScoutCounterintel {
         return Err(PrepareError::ReceiptSourceMismatch { index });
     }
     if revision != input.snapshot_revision {
@@ -451,6 +493,42 @@ pub fn prepare_golden_scout_spellcaster(
     if input.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
         return Err(PrepareError::UnsupportedExecutable);
     }
+    if input.rules.replay_file_sha256 != GOLDEN_REPLAY_FILE_SHA256 {
+        return Err(PrepareError::WrongGoldenReplay);
+    }
+    if input.rules.serialized_rules_sha256 == [0; 32]
+        || input.rules.serialized_rules_span.bytes != GOLDEN_SERIALIZED_RULES_BYTES
+        || input.rules.scout_object_span.bytes != 152
+        || input.rules.scout_unit_span.bytes != 792
+        || input.rules.counterintel_type_base_span.bytes != 90
+        || input.rules.counterintel_spell_span.bytes != 48
+        || input.rules.constants_span.bytes != 0x0D40
+        || !span_is_inside(
+            input.rules.scout_object_span,
+            input.rules.serialized_rules_span,
+        )
+        || !span_is_inside(
+            input.rules.scout_unit_span,
+            input.rules.serialized_rules_span,
+        )
+        || !span_is_inside(
+            input.rules.counterintel_type_base_span,
+            input.rules.serialized_rules_span,
+        )
+        || !span_is_inside(
+            input.rules.counterintel_spell_span,
+            input.rules.serialized_rules_span,
+        )
+        || !span_is_inside(
+            input.rules.constants_span,
+            input.rules.serialized_rules_span,
+        )
+    {
+        return Err(PrepareError::MissingRulesAuthority);
+    }
+    if input.call_entry_composition_digest == [0; 32] {
+        return Err(PrepareError::MissingCallEntryCompositionDigest);
+    }
     if input.snapshot_revision == 0 {
         return Err(PrepareError::MissingSnapshotRevision);
     }
@@ -460,10 +538,17 @@ pub fn prepare_golden_scout_spellcaster(
     if input.type_index != SCOUT_TYPE {
         return Err(PrepareError::WrongScoutType);
     }
-    if input.unit_type_flags2 & !IS_SPECIAL_MASK != GOLDEN_SCOUT_UNIT_FLAGS2 & !IS_SPECIAL_MASK
-        || input.unit_domain != GOLDEN_SCOUT_DOMAIN
-        || input.unit_type_mana != GOLDEN_SCOUT_BASE_MANA
-        || input.counterintel_mana_cost != GOLDEN_COUNTERINTEL_MANA_COST
+    if input.rules.unit_type_flags2 != GOLDEN_SCOUT_UNIT_FLAGS2
+        || input.rules.unit_domain != GOLDEN_SCOUT_DOMAIN
+        || input.rules.unit_type_mana != GOLDEN_SCOUT_BASE_MANA
+        || input.rules.spell_type != COUNTERINTEL_SPELL
+        || input.rules.from_type != GOLDEN_COUNTERINTEL_FROM_TYPE
+        || input.rules.from2_type != GOLDEN_COUNTERINTEL_FROM2_TYPE
+        || input.rules.spell_flags != GOLDEN_COUNTERINTEL_FLAGS
+        || input.rules.spell_range != GOLDEN_COUNTERINTEL_RANGE
+        || input.rules.spell_mana != GOLDEN_COUNTERINTEL_MANA_COST
+        || input.rules.spy_bribe_upgrade_range != GOLDEN_SPY_BRIBE_UPGRADE_RANGE
+        || input.rules.terra_cotta_range != GOLDEN_TERRA_COTTA_RANGE
     {
         return Err(PrepareError::WrongGoldenRules);
     }
@@ -500,89 +585,71 @@ pub fn prepare_golden_scout_spellcaster(
             None,
         ));
     }
-    if input.unit_type_flags2 & IS_SPECIAL_MASK == 0 {
+    if input.rules.unit_type_flags2 & IS_SPECIAL_MASK == 0 {
         reject_extra(receipts, 0)?;
         return Ok(ready(input, input.before, NoCastReason::NotSpecial, 0));
     }
 
-    let castable_request = IsCastableRequest {
-        callsite_va: SPELL_IS_CASTABLE_CALLSITE_VA,
-        function_va: SPELL_IS_CASTABLE_VA,
-        spell_type: COUNTERINTEL_SPELL,
-        o: i32::from(input.o),
-        who: i32::from(input.who),
-        final_arg: 0,
-    };
-    let Some(first) = receipts.first() else {
-        return Ok(residual(
-            input,
-            input.before,
-            ExternalRequest::IsCastable(castable_request),
-            0,
-            None,
-        ));
-    };
-    let ChildReceipt::IsCastable(castable) = *first else {
-        return Err(PrepareError::ReceiptKindMismatch { index: 0 });
-    };
-    check_receipt_header(input, castable.source, castable.snapshot_revision, 0)?;
-    if castable.request != castable_request {
-        return Err(PrepareError::ReceiptRequestMismatch { index: 0 });
+    // `SpellTypeData::is_castable(0,0,0)` first proves the live receiver is a Unit, then
+    // matches Counterintel's direct `from2=Scout(69)` relation.  Its switch default returns 3.
+    // Only `unit_masks & 1` diverts through the spell's pack/unpack predicates; type 631 is
+    // neither, so that arm returns zero.  There are no writes or RNG calls in either arm.
+    if input.is_unit_vfunc_va != OBJECT_DATA_IS_UNIT_TRUE_VA
+        || input.spell_is_pack_vfunc_va != TYPE_DATA_IS_PACK_VA
+        || input.spell_is_unpack_vfunc_va != TYPE_DATA_IS_UNPACK_VA
+    {
+        return Err(PrepareError::UnsupportedCastabilityShape);
     }
-    if castable.result == 0 {
-        reject_extra(receipts, 1)?;
+    let castable_result = if input.unit_masks & 1 == 0 {
+        RETAIL_CASTABLE_DEFAULT_RESULT
+    } else {
+        0
+    };
+    if castable_result == 0 {
+        reject_extra(receipts, 0)?;
         return Ok(ready(
             input,
             input.before,
             NoCastReason::CounterintelNotCastable,
-            1,
+            0,
         ));
     }
 
     // Scout 69's source-exact UnitData::mana result is its +0x2EC base.  Domain 2 and a
     // dynamic/supply receiver could change that result and are therefore rejected.
-    if input.unit_domain == 2
+    if input.rules.unit_domain == 2
         || input.is_supply_vfunc_va != UNIT_DATA_IS_SUPPLY_VA
-        || input.unit_type_flags2 & IS_SUPPLY_MASK != 0
+        || input.rules.unit_type_flags2 & IS_SUPPLY_MASK != 0
     {
         return Err(PrepareError::UnsupportedScoutManaShape);
     }
-    let required_mana = i32::from(input.mana_burn).wrapping_add(input.counterintel_mana_cost);
+    let required_mana = i32::from(input.mana_burn).wrapping_add(input.rules.spell_mana);
     if required_mana > input.mana_capacity() {
-        reject_extra(receipts, 1)?;
+        reject_extra(receipts, 0)?;
         return Ok(ready(
             input,
             input.before,
             NoCastReason::InsufficientMana,
-            1,
+            0,
         ));
     }
 
-    let range_request = SpellRangeRequest {
-        callsite_va: SPELL_GET_RANGE_CALLSITE_VA,
-        function_va: SPELL_GET_RANGE_VA,
-        spell_type: COUNTERINTEL_SPELL,
-        spell_slot_offset: COUNTERINTEL_SLOT_OFFSET,
-        owner: i32::from(input.who),
-        target_o: -1,
-        target_owner: -1,
-    };
-    let Some(second) = receipts.get(1) else {
-        return Ok(residual(
-            input,
-            input.before,
-            ExternalRequest::SpellRange(range_request),
-            1,
-            None,
-        ));
-    };
-    let ChildReceipt::SpellRange(range) = *second else {
-        return Err(PrepareError::ReceiptKindMismatch { index: 1 });
-    };
-    check_receipt_header(input, range.source, range.snapshot_revision, 1)?;
-    if range.request != range_request {
-        return Err(PrepareError::ReceiptRequestMismatch { index: 1 });
-    }
+    // `get_range` calls both live Leader children in this order.  The target `-1` arm has no
+    // cap.  Preserve retail's wrapping i32 arithmetic even though the golden values are small.
+    let range = input
+        .rules
+        .spell_range
+        .wrapping_add(
+            input
+                .spy_upgrade
+                .wrapping_mul(input.rules.spy_bribe_upgrade_range)
+                .wrapping_mul(192),
+        )
+        .wrapping_add(if input.has_terra_cotta {
+            input.rules.terra_cotta_range.wrapping_mul(192)
+        } else {
+            0
+        });
 
     let find_request = ObjectsFindRequest {
         callsite_va: OBJECTS_FIND_CALLSITE_VA,
@@ -591,7 +658,7 @@ pub fn prepare_golden_scout_spellcaster(
         y: input.y(),
         search_index_bh: 0,
         owner: i32::from(input.who),
-        range: range.range,
+        range,
         spell_slot_offset: COUNTERINTEL_SLOT_OFFSET,
         filter_index: FILTER_INDEX_20,
         type_index: COUNTERINTEL_SPELL,
@@ -599,21 +666,25 @@ pub fn prepare_golden_scout_spellcaster(
         unread_args_10_to_12: UnreadStackWords::ThreeCompilerAlignmentWords,
         stop_on_first: 0,
     };
-    let Some(third) = receipts.get(2) else {
+    let Some(first) = receipts.first() else {
         return Ok(residual(
             input,
             input.before,
             ExternalRequest::ObjectsFind(find_request),
-            2,
+            0,
             None,
         ));
     };
-    let ChildReceipt::ObjectsFind(find) = *third else {
-        return Err(PrepareError::ReceiptKindMismatch { index: 2 });
-    };
-    check_receipt_header(input, find.source, find.snapshot_revision, 2)?;
+    let find = *first;
+    check_receipt_header(input, find.source, find.snapshot_revision, 0)?;
+    if find.call_entry_composition_digest != input.call_entry_composition_digest {
+        return Err(PrepareError::ReceiptCompositionMismatch { index: 0 });
+    }
+    if find.candidate_traversal_sha256 == [0; 32] {
+        return Err(PrepareError::MissingCandidateTraversalDigest);
+    }
     if find.request != find_request {
-        return Err(PrepareError::ReceiptRequestMismatch { index: 2 });
+        return Err(PrepareError::ReceiptRequestMismatch { index: 0 });
     }
     if find.objects_revision_before != input.before.objects_revision {
         return Err(PrepareError::ObjectsRevisionMismatch);
@@ -639,14 +710,14 @@ pub fn prepare_golden_scout_spellcaster(
         {
             return Err(PrepareError::InvalidNoTargetScratch);
         }
-        reject_extra(receipts, 3)?;
-        return Ok(ready(input, staged, NoCastReason::NoTarget, 3));
+        reject_extra(receipts, 1)?;
+        return Ok(ready(input, staged, NoCastReason::NoTarget, 1));
     }
 
     if !(0..10).contains(&find.scratch_after.selected_owner) {
         return Err(PrepareError::InvalidFindResult);
     }
-    reject_extra(receipts, 3)?;
+    reject_extra(receipts, 1)?;
     let add_request = AddCastOrderRequest {
         callsite_va: UNIT_ADD_CAST_ORDER_CALLSITE_VA,
         function_va: UNIT_ADD_CAST_ORDER_VA,
@@ -673,7 +744,7 @@ pub fn prepare_golden_scout_spellcaster(
         input,
         staged,
         ExternalRequest::AddCastOrder(add_request),
-        3,
+        1,
         Some(1),
     ))
 }
@@ -733,63 +804,64 @@ mod tests {
     fn input() -> GoldenScoutInput {
         GoldenScoutInput {
             snapshot_revision: 9,
+            call_entry_composition_digest: [4; 32],
             executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
             who: GOLDEN_OWNER,
             o: GOLDEN_SCOUT_O,
             type_index: SCOUT_TYPE,
             leader_flags: HUMAN_LEADER_MASK,
+            unit_masks: 0,
             is_special_vfunc_va: UNIT_DATA_IS_SPECIAL_VA,
             is_supply_vfunc_va: UNIT_DATA_IS_SUPPLY_VA,
-            unit_type_flags2: GOLDEN_SCOUT_UNIT_FLAGS2,
-            unit_domain: GOLDEN_SCOUT_DOMAIN,
-            unit_type_mana: GOLDEN_SCOUT_BASE_MANA,
+            is_unit_vfunc_va: OBJECT_DATA_IS_UNIT_TRUE_VA,
+            spell_is_pack_vfunc_va: TYPE_DATA_IS_PACK_VA,
+            spell_is_unpack_vfunc_va: TYPE_DATA_IS_UNPACK_VA,
+            rules: GoldenCounterintelRules {
+                replay_file_sha256: GOLDEN_REPLAY_FILE_SHA256,
+                serialized_rules_sha256: [3; 32],
+                serialized_rules_span: RulesByteSpan {
+                    offset: 0,
+                    bytes: GOLDEN_SERIALIZED_RULES_BYTES,
+                },
+                scout_object_span: RulesByteSpan {
+                    offset: 100,
+                    bytes: 152,
+                },
+                scout_unit_span: RulesByteSpan {
+                    offset: 252,
+                    bytes: 792,
+                },
+                counterintel_type_base_span: RulesByteSpan {
+                    offset: 2_000,
+                    bytes: 90,
+                },
+                counterintel_spell_span: RulesByteSpan {
+                    offset: 2_100,
+                    bytes: 48,
+                },
+                constants_span: RulesByteSpan {
+                    offset: 500_335,
+                    bytes: 0x0D40,
+                },
+                unit_type_flags2: GOLDEN_SCOUT_UNIT_FLAGS2,
+                unit_domain: GOLDEN_SCOUT_DOMAIN,
+                unit_type_mana: GOLDEN_SCOUT_BASE_MANA,
+                spell_type: COUNTERINTEL_SPELL,
+                from_type: GOLDEN_COUNTERINTEL_FROM_TYPE,
+                from2_type: GOLDEN_COUNTERINTEL_FROM2_TYPE,
+                spell_flags: GOLDEN_COUNTERINTEL_FLAGS,
+                spell_range: GOLDEN_COUNTERINTEL_RANGE,
+                spell_mana: GOLDEN_COUNTERINTEL_MANA_COST,
+                spy_bribe_upgrade_range: GOLDEN_SPY_BRIBE_UPGRADE_RANGE,
+                terra_cotta_range: GOLDEN_TERRA_COTTA_RANGE,
+            },
             mana_burn: 0,
-            counterintel_mana_cost: GOLDEN_COUNTERINTEL_MANA_COST,
+            spy_upgrade: 0,
+            has_terra_cotta: false,
             encoded_x: 0x1234 ^ OBJECT_COORD_XOR,
             encoded_y: 0x5678 ^ OBJECT_COORD_XOR,
             before: boundary(),
         }
-    }
-
-    fn castable_request(i: &GoldenScoutInput) -> IsCastableRequest {
-        IsCastableRequest {
-            callsite_va: SPELL_IS_CASTABLE_CALLSITE_VA,
-            function_va: SPELL_IS_CASTABLE_VA,
-            spell_type: COUNTERINTEL_SPELL,
-            o: i32::from(i.o),
-            who: i32::from(i.who),
-            final_arg: 0,
-        }
-    }
-
-    fn castable(i: &GoldenScoutInput, result: i32) -> ChildReceipt {
-        ChildReceipt::IsCastable(IsCastableReceipt {
-            source: RetailChildSource::SupportedRetailExecutable,
-            snapshot_revision: i.snapshot_revision,
-            request: castable_request(i),
-            result,
-        })
-    }
-
-    fn range_request(i: &GoldenScoutInput) -> SpellRangeRequest {
-        SpellRangeRequest {
-            callsite_va: SPELL_GET_RANGE_CALLSITE_VA,
-            function_va: SPELL_GET_RANGE_VA,
-            spell_type: COUNTERINTEL_SPELL,
-            spell_slot_offset: COUNTERINTEL_SLOT_OFFSET,
-            owner: i32::from(i.who),
-            target_o: -1,
-            target_owner: -1,
-        }
-    }
-
-    fn range(i: &GoldenScoutInput, value: i32) -> ChildReceipt {
-        ChildReceipt::SpellRange(SpellRangeReceipt {
-            source: RetailChildSource::SupportedRetailExecutable,
-            snapshot_revision: i.snapshot_revision,
-            request: range_request(i),
-            range: value,
-        })
     }
 
     fn find_request(i: &GoldenScoutInput, range: i32) -> ObjectsFindRequest {
@@ -816,15 +888,17 @@ mod tests {
         result_o: i32,
         scratch_after: ObjectsFindScratch,
     ) -> ChildReceipt {
-        ChildReceipt::ObjectsFind(ObjectsFindReceipt {
-            source: RetailChildSource::SupportedRetailExecutable,
+        ObjectsFindReceipt {
+            source: RetailChildSource::CompleteRetailObjectsFindAtGoldenScoutCounterintel,
             snapshot_revision: i.snapshot_revision,
+            call_entry_composition_digest: i.call_entry_composition_digest,
+            candidate_traversal_sha256: [5; 32],
             request: find_request(i, range),
             objects_revision_before: i.before.objects_revision,
             objects_revision_after: 18,
             result_o,
             scratch_after,
-        })
+        }
     }
 
     #[test]
@@ -856,14 +930,18 @@ mod tests {
     }
 
     #[test]
-    fn golden_first_external_child_is_counterintel_is_castable_and_rng_is_untouched() {
+    fn source_owned_castability_mana_and_range_reach_objects_find_without_rng() {
         let i = input();
         let result = prepare_golden_scout_spellcaster(&i, &[]).unwrap();
         let PrepareOutcome::ExternalRequired(r) = result else {
             panic!("expected typed child residual");
         };
-        assert_eq!(r.request, ExternalRequest::IsCastable(castable_request(&i)));
+        assert_eq!(
+            r.request,
+            ExternalRequest::ObjectsFind(find_request(&i, GOLDEN_COUNTERINTEL_RANGE))
+        );
         assert_eq!(r.staged, i.before);
+        assert_eq!(r.consumed_receipts, 0);
         assert!(r.preserves_replay_critical_invariants(&i.before));
     }
 
@@ -888,60 +966,40 @@ mod tests {
     }
 
     #[test]
-    fn not_special_and_not_castable_are_complete_no_mutation_returns() {
-        let mut not_special = input();
-        not_special.unit_type_flags2 &= !IS_SPECIAL_MASK;
-        let PrepareOutcome::Ready(a) = prepare_golden_scout_spellcaster(&not_special, &[]).unwrap()
-        else {
-            panic!("expected no-cast plan");
-        };
-        assert_eq!(a.reason, NoCastReason::NotSpecial);
-        assert_eq!(a.before, a.after);
-
-        let i = input();
-        let PrepareOutcome::Ready(b) =
-            prepare_golden_scout_spellcaster(&i, &[castable(&i, 0)]).unwrap()
-        else {
+    fn packed_unit_mask_is_exact_not_castable_no_mutation_return() {
+        let mut i = input();
+        i.unit_masks = 1;
+        let PrepareOutcome::Ready(b) = prepare_golden_scout_spellcaster(&i, &[]).unwrap() else {
             panic!("expected no-cast plan");
         };
         assert_eq!(b.reason, NoCastReason::CounterintelNotCastable);
         assert_eq!(b.before, b.after);
+        assert_eq!(b.consumed_receipts, 0);
     }
 
     #[test]
     fn scout_mana_gate_is_signed_and_stops_before_get_range() {
         let mut i = input();
         i.mana_burn = 1;
-        let PrepareOutcome::Ready(p) =
-            prepare_golden_scout_spellcaster(&i, &[castable(&i, 1)]).unwrap()
-        else {
+        let PrepareOutcome::Ready(p) = prepare_golden_scout_spellcaster(&i, &[]).unwrap() else {
             panic!("expected insufficient-mana return");
         };
         assert_eq!(p.reason, NoCastReason::InsufficientMana);
-        assert_eq!(p.consumed_receipts, 1);
+        assert_eq!(p.consumed_receipts, 0);
     }
 
     #[test]
-    fn accepted_castability_yields_exact_get_range_then_find_abi() {
-        let i = input();
-        let PrepareOutcome::ExternalRequired(range_residual) =
-            prepare_golden_scout_spellcaster(&i, &[castable(&i, 1)]).unwrap()
-        else {
-            panic!("expected range residual");
-        };
-        assert_eq!(
-            range_residual.request,
-            ExternalRequest::SpellRange(range_request(&i))
-        );
-
+    fn exact_spy_upgrade_range_is_folded_before_find_abi() {
+        let mut i = input();
+        i.spy_upgrade = 1;
         let PrepareOutcome::ExternalRequired(find_residual) =
-            prepare_golden_scout_spellcaster(&i, &[castable(&i, 1), range(&i, 960)]).unwrap()
+            prepare_golden_scout_spellcaster(&i, &[]).unwrap()
         else {
             panic!("expected find residual");
         };
         assert_eq!(
             find_residual.request,
-            ExternalRequest::ObjectsFind(find_request(&i, 960))
+            ExternalRequest::ObjectsFind(find_request(&i, 2_304))
         );
         assert_eq!(find_residual.staged, i.before);
     }
@@ -953,11 +1011,7 @@ mod tests {
             best_metric: OBJECTS_FIND_SENTINEL,
             selected_owner: 0,
         };
-        let receipts = [
-            castable(&i, 1),
-            range(&i, 960),
-            find(&i, 960, -1, no_target_scratch),
-        ];
+        let receipts = [find(&i, GOLDEN_COUNTERINTEL_RANGE, -1, no_target_scratch)];
         let PrepareOutcome::Ready(p) = prepare_golden_scout_spellcaster(&i, &receipts).unwrap()
         else {
             panic!("expected complete no-target plan");
@@ -988,7 +1042,7 @@ mod tests {
             best_metric: 1234,
             selected_owner: 1,
         };
-        let receipts = [castable(&i, 1), range(&i, 960), find(&i, 960, 44, selected)];
+        let receipts = [find(&i, GOLDEN_COUNTERINTEL_RANGE, 44, selected)];
         let PrepareOutcome::ExternalRequired(r) =
             prepare_golden_scout_spellcaster(&i, &receipts).unwrap()
         else {
@@ -1028,33 +1082,40 @@ mod tests {
     #[test]
     fn stale_or_mismatched_receipts_fail_closed() {
         let i = input();
-        let mut stale = match castable(&i, 1) {
-            ChildReceipt::IsCastable(r) => r,
-            _ => unreachable!(),
+        let no_target = ObjectsFindScratch {
+            best_metric: OBJECTS_FIND_SENTINEL,
+            selected_owner: 0,
         };
+        let mut stale = find(&i, GOLDEN_COUNTERINTEL_RANGE, -1, no_target);
         stale.snapshot_revision += 1;
         assert_eq!(
-            prepare_golden_scout_spellcaster(&i, &[ChildReceipt::IsCastable(stale)]),
+            prepare_golden_scout_spellcaster(&i, &[stale]),
             Err(PrepareError::ReceiptRevisionMismatch { index: 0 })
         );
 
-        assert_eq!(
-            prepare_golden_scout_spellcaster(&i, &[range(&i, 960)]),
-            Err(PrepareError::ReceiptKindMismatch { index: 0 })
-        );
-
-        let mut untrusted = match castable(&i, 1) {
-            ChildReceipt::IsCastable(r) => r,
-            _ => unreachable!(),
-        };
+        let mut untrusted = find(&i, GOLDEN_COUNTERINTEL_RANGE, -1, no_target);
         untrusted.source = RetailChildSource::SyntheticOrUnknown;
         assert_eq!(
-            prepare_golden_scout_spellcaster(&i, &[ChildReceipt::IsCastable(untrusted)]),
+            prepare_golden_scout_spellcaster(&i, &[untrusted]),
             Err(PrepareError::ReceiptSourceMismatch { index: 0 })
         );
 
+        let mut wrong_composition = find(&i, GOLDEN_COUNTERINTEL_RANGE, -1, no_target);
+        wrong_composition.call_entry_composition_digest[0] ^= 1;
+        assert_eq!(
+            prepare_golden_scout_spellcaster(&i, &[wrong_composition]),
+            Err(PrepareError::ReceiptCompositionMismatch { index: 0 })
+        );
+
+        let mut incomplete = find(&i, GOLDEN_COUNTERINTEL_RANGE, -1, no_target);
+        incomplete.candidate_traversal_sha256 = [0; 32];
+        assert_eq!(
+            prepare_golden_scout_spellcaster(&i, &[incomplete]),
+            Err(PrepareError::MissingCandidateTraversalDigest)
+        );
+
         let mut wrong_rules = i;
-        wrong_rules.unit_type_mana += 1;
+        wrong_rules.rules.unit_type_mana += 1;
         assert_eq!(
             prepare_golden_scout_spellcaster(&wrong_rules, &[]),
             Err(PrepareError::WrongGoldenRules)
@@ -1070,10 +1131,9 @@ mod tests {
 
     #[test]
     fn commit_revalidates_full_before_image_and_invariants() {
-        let i = input();
-        let PrepareOutcome::Ready(p) =
-            prepare_golden_scout_spellcaster(&i, &[castable(&i, 0)]).unwrap()
-        else {
+        let mut i = input();
+        i.unit_masks = 1;
+        let PrepareOutcome::Ready(p) = prepare_golden_scout_spellcaster(&i, &[]).unwrap() else {
             panic!("expected ready plan");
         };
         let mut changed = i.before;

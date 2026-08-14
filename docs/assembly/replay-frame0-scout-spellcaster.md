@@ -1,8 +1,9 @@
 # Golden frame-zero Scout spellcaster frontier
 
-Status: source-exact detached transaction for the supported 2024 human Scout path; dynamic
-`SpellTypeData::is_castable`, range authority, global object enumeration, and a successful Unit
-order mutation remain typed host boundaries.
+Status: source-exact detached transaction for the supported 2024 human Scout path. Replay Rules
+plus an adjacent call-entry image now close `SpellTypeData::is_castable`, `UnitData::mana`, and
+`SpellTypeData::get_range`. The complete ordered `ObjectsData::find` spatial traversal and a
+successful Unit order mutation remain typed host boundaries.
 
 ## The branch correction
 
@@ -63,6 +64,33 @@ For Scout 69, `UnitData::mana` returns the exact `UnitTypeData+0x2EC` base. Scou
 its direct `is_supply` result has no `+0x40` flag, and the only later ground modifier is restricted
 to General type 54. The comparison is signed and includes the signed-short `mana_burn` value.
 
+## Closed static children
+
+`SpellTypeData::is_castable` is `0x00675BC0`, 2,033 bytes. Counterintel's replay Rules row has
+`from=Spy(58)` and `from2=Scout(69)`, so the live type-69 receiver takes the second direct
+`ObjectData::is` match. Its Unit vtable `+0x18` is the true `is_unit` stub at `0x0041E0E0`.
+When live `UnitData+0x68 & 1` is clear, type 631 falls through the function's default return `3`.
+When that bit is set, retail calls `TypeData::is_pack` `0x00470540` and `is_unpack`
+`0x00470510`; Counterintel is neither packed nor unpacked, so the result is zero. Neither path
+writes state or consumes RNG.
+
+The exact replay-carried Counterintel flags are `0x10B6`: the XML letters `febchm` set bits
+5, 4, 1, 2, 7, and 12. This value and the exact serialized type/spell spans are retained in the
+Rules authority; `0x30` is not a lawful substitute.
+
+`SpellTypeData::get_range` is `0x00676A80`, 435 bytes. For type 631 and target `-1`, its result is
+
+```text
+replay_range
+  + LeaderData::get_spy_upgrade() * Constants.spy_bribe_upgrade_range * 192
+  + has_wonder(TerraCotta=0x211) * Constants.terra_cotta_range * 192
+```
+
+The supported Rules provide `replay_range=1920`, Spy upgrade range `2`, and Terra Cotta range
+`0`. The live Spy upgrade and Wonder answer still come from the adjacent call entry; the Wonder
+call is retained even though its shipped contribution is zero. Arithmetic uses retail wrapping
+signed dwords.
+
 ## Global search scratch
 
 Despite its PDB `const` signature, `ObjectsData::find` initializes two global scratch words before
@@ -75,7 +103,20 @@ enumeration:
 
 A no-target return is exactly `-1` and retains those entry values. A target return is nonnegative;
 the second word supplies `add_cast_order`'s target-owner argument. The Rust transaction accepts
-this mutation only through a revision-bound retail receipt and stages it until atomic commit.
+this mutation only through a revision- and call-entry-composition-bound retail receipt. That
+receipt must also carry a nonzero SHA-256 over the complete ordered spatial-cell candidate chain
+and every live field read by SearchIndexBH(0), FilterIndex(20), and Counterintel
+`is_valid_target`; an opaque result without that traversal identity is rejected. The mutation is
+staged until atomic commit.
+
+Linear reversal of `ObjectsData::find` (`0x0065C6B0`, 964 bytes) proves the exact remaining cone:
+SearchIndexBH(0) accepts the enumerated active objects, FilterIndex(20) dispatches through
+`Search::valid_filter` table entry 19, and that entry first calls Counterintel
+`SpellTypeData::is_valid_target`. Candidate distance is retail `vector_dist`; a later candidate
+replaces an equally distant earlier candidate. The first source not yet mounted in Don is the
+complete ordered live spatial-cell candidate chain together with candidate type/owner/mask,
+infiltration, and diplomacy facts. The code freezes that precise authority rather than guessing a
+no-target after-image from setup state.
 
 ## Unit order write, not Caster active-spell write
 
@@ -112,21 +153,24 @@ That is a proof from the reached write set, not a replay-state guess.
 
 ## Implementation and gate
 
-`crates/don-sim/src/systems/frame0_scout_spellcaster.rs` binds the executable SHA, stable golden
-identity, Scout Rules shape, child-call requests, source revision, search scratch, and all
-checksum-relevant invariant revisions. `prepare_golden_scout_spellcaster` is pure. A complete
-no-cast result can be installed only by `commit_no_cast`, which revalidates the whole before-image;
-a target hit returns the final typed `AddCastOrderRequest`.
+`crates/don-replay/src/groups_pre_pair_unit_authority.rs` projects the exact Scout UnitType row,
+Counterintel SpellType row, and two Constants fields from the admitted replay Rules span.
+`crates/don-sim/src/systems/frame0_scout_spellcaster.rs` binds those spans and digests, executable
+and replay SHA, stable golden identity, independent adjacent call-entry composition, complete
+Objects request, search scratch, and all checksum-relevant invariant revisions.
+`prepare_golden_scout_spellcaster` is pure. A complete no-cast result can be installed only by
+`commit_no_cast`, which revalidates the whole before-image; a target hit returns the final typed
+`AddCastOrderRequest`.
 
-The focused standalone gate pins both top-level branches, the first external child, signed mana
-gate, complete range/find ABI, no-target scratch, exact CastOrder request, stale-receipt refusal,
-and atomic commit invariants.
+The focused gate pins both top-level branches, the owned castability result, signed mana gate,
+wrapping range formula, complete find ABI, no-target scratch, exact CastOrder request,
+Rules/call-entry/traversal provenance refusal, and atomic commit invariants.
 
 ## Remaining golden evidence
 
-This closes the source shape and prevents a false Caster/RNG dependency, but it does not invent
-the golden retail results of `SpellTypeData::is_castable`, `SpellTypeData::get_range`, or the
-spatial `ObjectsData::find` traversal. The frame-one command-entry oracle should capture those
-typed child results (and the final Unit order transaction if a target is found). Merchant frame
-zero work remains an independent reason that the full command-entry image cannot yet be derived
-from the completed setup image alone.
+This closes the static child results and prevents a false Caster/RNG dependency, but it does not
+invent the golden result of the spatial `ObjectsData::find` traversal. An adjacent retail capture
+must supply that complete traversal (and the final Unit order transaction if a target is found).
+The call-entry composition is intentionally independent of the completed-setup digest: earlier
+frame-zero receivers, including Merchant work, may change live orders, masks, coordinates,
+Leader/World state, object-search scratch, and RNG before the Scout call.

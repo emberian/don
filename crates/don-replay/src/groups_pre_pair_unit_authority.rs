@@ -24,10 +24,15 @@ use crate::rules_channel::{
     TRIBE_SIZE, TYPE_SLOTS,
 };
 use crate::world_owner_frontier::sha256;
+use don_sim::systems::frame0_scout_spellcaster::{
+    GoldenCounterintelRules, RulesByteSpan, GOLDEN_REPLAY_FILE_SHA256,
+};
 use std::fmt;
 
 pub const UNIT_TYPE_FIRST: i32 = 50;
 pub const UNIT_TYPE_LAST: i32 = 413;
+pub const SPELL_TYPE_FIRST: i32 = 629;
+pub const SPELL_TYPE_LAST: i32 = 683;
 
 pub const SETUP_BUILD_UNITS_VA: u32 = 0x005a_afc0;
 pub const LEADER_HAS_TRIBE_BONUS_VA: u32 = 0x006e_1370;
@@ -81,6 +86,9 @@ pub struct ReplayUnitTypeFacts {
     pub moves: i32,
     pub turn_speed: i32,
     pub role: i32,
+    /// `UnitTypeData +0x2ec`, used by `UnitData::mana` when the receiver is neither
+    /// a domain-2 aircraft nor a Supply unit.
+    pub mana: i32,
     /// `UnitTypeData +0x2f0`, read by `Leader::plan_strategy` before the
     /// frame-zero Citizen/City census. A zero value excludes the Unit from that pass.
     pub control_cost: i32,
@@ -89,6 +97,40 @@ pub struct ReplayUnitTypeFacts {
     pub uber_size: i32,
     pub crew_size: i32,
     pub base_form: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplaySpellTypeSpans {
+    /// `TypeData +0x04 .. +0x5e`.
+    pub type_base: ReplayByteSpan,
+    /// `SpellTypeData +0x1c8 .. +0x1f8`.
+    pub spell: ReplayByteSpan,
+}
+
+/// Exact replay-carried `SpellTypeData` fields. The two runtime grid bytes at
+/// `+0x1f8/+0x1f9` are not walked by retail and are intentionally absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplaySpellTypeFacts {
+    pub spans: ReplaySpellTypeSpans,
+    pub type_index: i32,
+    pub from_type: i32,
+    pub spell_flags: u32,
+    pub spell_range: i32,
+    pub mana: i32,
+    pub duration: i32,
+    pub duration_upgrade: i32,
+    pub from2: i32,
+    pub use_values: [i32; 6],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplaySpellRangeConstants {
+    /// The complete serialized Constants body at runtime offsets `+0x000..+0xd3f`.
+    pub constants: ReplayByteSpan,
+    /// `ConstantsData +0x1fc`.
+    pub spy_bribe_upgrade_range: i32,
+    /// `ConstantsData +0x45c`.
+    pub terra_cotta_range: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +192,7 @@ pub struct ReplayBuildTypeFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrePairUnitAuthorityError {
+    WrongGoldenReplayFile,
     RulesMetadataMismatch,
     RulesSpanOutsidePayload,
     RulesSha256Mismatch,
@@ -402,6 +445,7 @@ pub fn replay_unit_type_facts(
                     moves: read_i32(section, unit_at(0x2c0))?,
                     turn_speed: read_i32(section, unit_at(0x2c4))?,
                     role: read_i32(section, unit_at(0x2c8))?,
+                    mana: read_i32(section, unit_at(0x2ec))?,
                     control_cost: read_i32(section, unit_at(0x2f0))?,
                     military_level: read_i32(section, unit_at(0x2dc))?,
                     squad_size: read_i32(section, unit_at(0x304))?,
@@ -428,6 +472,152 @@ pub fn replay_unit_type_facts(
         need(section, cursor, 0)?;
     }
     unreachable!("validated Unit TypeIndex must be reached")
+}
+
+/// Extract one exact SpellType row from the replay-carried Rules section.
+pub fn replay_spell_type_facts(
+    payload: &[u8],
+    rules: &InitialRules,
+    type_index: i32,
+) -> Result<ReplaySpellTypeFacts, PrePairUnitAuthorityError> {
+    if !(SPELL_TYPE_FIRST..=SPELL_TYPE_LAST).contains(&type_index) {
+        return Err(PrePairUnitAuthorityError::TypeIndexOutOfRange { type_index });
+    }
+    let section = admitted_section(payload, rules)?;
+    let mut cursor = 1usize;
+    for slot in 0..=type_index as usize {
+        let type_base = cursor;
+        need(section, cursor, TYPE_BASE_WALK_BYTES)?;
+        let got = read_i32(section, cursor)?;
+        if got != slot as i32 {
+            return Err(PrePairUnitAuthorityError::WrongSerializedType {
+                expected: slot as i32,
+                got,
+            });
+        }
+        cursor += TYPE_BASE_WALK_BYTES;
+        skip_string(section, &mut cursor)?;
+
+        let kind = match slot {
+            0..=49 => 0,
+            50..=413 => 1,
+            414..=542 => 2,
+            543 => 3,
+            544..=628 => 4,
+            629..=683 => 5,
+            _ => 6,
+        };
+        if kind <= 3 {
+            need(section, cursor, OBJECT_WALK_BYTES)?;
+            cursor += OBJECT_WALK_BYTES;
+            skip_u16_array(section, &mut cursor)?;
+            skip_u16_array(section, &mut cursor)?;
+        }
+        if slot as i32 == type_index {
+            debug_assert_eq!(kind, 5);
+            let spell = cursor;
+            need(section, spell, SPELL_TAIL_BYTES)?;
+            let base = |runtime_offset: usize| type_base + (runtime_offset - 4);
+            let spell_at = |runtime_offset: usize| spell + (runtime_offset - 0x1c8);
+            let use_values = std::array::from_fn(|index| {
+                read_i32(section, spell_at(0x1e0 + index * 4))
+                    .expect("the fixed SpellTypeData span was preflighted")
+            });
+            return Ok(ReplaySpellTypeFacts {
+                spans: ReplaySpellTypeSpans {
+                    type_base: absolute_span(rules, type_base, TYPE_BASE_WALK_BYTES),
+                    spell: absolute_span(rules, spell, SPELL_TAIL_BYTES),
+                },
+                type_index: got,
+                from_type: read_i32(section, base(0x3c))?,
+                spell_flags: read_u32(section, spell_at(0x1c8))?,
+                spell_range: read_i32(section, spell_at(0x1cc))?,
+                mana: read_i32(section, spell_at(0x1d0))?,
+                duration: read_i32(section, spell_at(0x1d4))?,
+                duration_upgrade: read_i32(section, spell_at(0x1d8))?,
+                from2: read_i32(section, spell_at(0x1dc))?,
+                use_values,
+            });
+        }
+        match kind {
+            0 => cursor += GOOD_TAIL_BYTES,
+            1 => cursor += UNIT_WALK_BYTES,
+            2 => cursor += BUILD_TAIL_BYTES,
+            4 => {
+                cursor += TECH_TAIL_BYTES;
+                for _ in 0..8 {
+                    skip_string(section, &mut cursor)?;
+                }
+            }
+            5 => cursor += SPELL_TAIL_BYTES,
+            3 | 6 => {}
+            _ => unreachable!(),
+        }
+        need(section, cursor, 0)?;
+    }
+    unreachable!("validated Spell TypeIndex must be reached")
+}
+
+/// Extract the two replay-carried Constants fields consumed by the Spy/Counterintel
+/// `SpellTypeData::get_range` arm.
+pub fn replay_spell_range_constants(
+    payload: &[u8],
+    rules: &InitialRules,
+) -> Result<ReplaySpellRangeConstants, PrePairUnitAuthorityError> {
+    let section = admitted_section(payload, rules)?;
+    let constants = 1 + crate::initial::SHIPPED_TYPES_SERIALIZED_BYTES;
+    need(section, constants, RULES_BLOCK_BYTES)?;
+    Ok(ReplaySpellRangeConstants {
+        constants: absolute_span(rules, constants, RULES_BLOCK_BYTES),
+        spy_bribe_upgrade_range: read_i32(section, constants + 0x1fc)?,
+        terra_cotta_range: read_i32(section, constants + 0x45c)?,
+    })
+}
+
+/// Bind the complete replay-carried static source for the golden Scout Counterintel cone.
+///
+/// Live `UnitData`, Leader upgrade/Wonder, and Objects spatial-index facts are deliberately not
+/// projected here: they belong to an adjacent frame-zero call-entry authority, not the setup
+/// Rules image.
+pub fn replay_golden_counterintel_rules(
+    payload: &[u8],
+    rules: &InitialRules,
+    replay_file_sha256: [u8; 32],
+) -> Result<GoldenCounterintelRules, PrePairUnitAuthorityError> {
+    if replay_file_sha256 != GOLDEN_REPLAY_FILE_SHA256 {
+        return Err(PrePairUnitAuthorityError::WrongGoldenReplayFile);
+    }
+    let scout = replay_unit_type_facts(payload, rules, 69)?;
+    let counterintel = replay_spell_type_facts(payload, rules, 631)?;
+    let constants = replay_spell_range_constants(payload, rules)?;
+    let span = |value: ReplayByteSpan| RulesByteSpan {
+        offset: value.offset,
+        bytes: value.bytes,
+    };
+    Ok(GoldenCounterintelRules {
+        replay_file_sha256,
+        serialized_rules_sha256: rules.serialized_sha256,
+        serialized_rules_span: RulesByteSpan {
+            offset: rules.serialized_offset,
+            bytes: rules.serialized_bytes,
+        },
+        scout_object_span: span(scout.spans.object),
+        scout_unit_span: span(scout.spans.unit),
+        counterintel_type_base_span: span(counterintel.spans.type_base),
+        counterintel_spell_span: span(counterintel.spans.spell),
+        constants_span: span(constants.constants),
+        unit_type_flags2: scout.unit_flags2,
+        unit_domain: scout.domain,
+        unit_type_mana: scout.mana,
+        spell_type: counterintel.type_index,
+        from_type: counterintel.from_type,
+        from2_type: counterintel.from2,
+        spell_flags: counterintel.spell_flags,
+        spell_range: counterintel.spell_range,
+        spell_mana: counterintel.mana,
+        spy_bribe_upgrade_range: constants.spy_bribe_upgrade_range,
+        terra_cotta_range: constants.terra_cotta_range,
+    })
 }
 
 /// Extract one exact BuildType row from the replay-carried Rules section.

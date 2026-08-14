@@ -111,6 +111,7 @@ fn type_facts() -> ReplayUnitTypeFacts {
         moves: 25,
         turn_speed: 536_870_912,
         role: 262_912,
+        mana: 0,
         control_cost: 1,
         military_level: 0,
         squad_size: 1,

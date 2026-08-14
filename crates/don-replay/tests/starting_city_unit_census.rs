@@ -95,6 +95,7 @@ fn type_facts(type_index: i32, control_cost: i32, offset: usize) -> ReplayUnitTy
         moves: 0,
         turn_speed: 0,
         role: 0,
+        mana: 0,
         control_cost,
         military_level: 0,
         squad_size: 0,

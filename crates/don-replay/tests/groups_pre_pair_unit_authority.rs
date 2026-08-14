@@ -29,6 +29,7 @@ mod world_owner_frontier {
 #[path = "../src/groups_pre_pair_unit_authority.rs"]
 mod groups_pre_pair_unit_authority;
 use groups_pre_pair_unit_authority::{
+    replay_golden_counterintel_rules, replay_spell_range_constants, replay_spell_type_facts,
     replay_tribe_type_facts, replay_unit_type_facts, PrePairUnitAuthorityError, FORM_TYPE_CAT_VA,
     LEADER_HAS_TRIBE_BONUS_VA, SETUP_BUILD_UNITS_VA, UNIT_IS_MODERN_INFANTRY_VA,
 };
@@ -107,6 +108,15 @@ fn census_first_clear_pool_group_move_witness() {
     let merchant_tribe = replay_tribe_type_facts(&payload, &rules, tribe_index, 62).unwrap();
     let scout_tribe = replay_tribe_type_facts(&payload, &rules, tribe_index, 69).unwrap();
     let citizen = replay_unit_type_facts(&payload, &rules, 50).unwrap();
+    let scout = replay_unit_type_facts(&payload, &rules, 69).unwrap();
+    let counterintel = replay_spell_type_facts(&payload, &rules, 631).unwrap();
+    let spell_range = replay_spell_range_constants(&payload, &rules).unwrap();
+    let golden_counterintel = replay_golden_counterintel_rules(
+        &payload,
+        &rules,
+        don_sim::systems::frame0_scout_spellcaster::GOLDEN_REPLAY_FILE_SHA256,
+    )
+    .unwrap();
     eprintln!(
         "setup sources tribe-index={tribe_index} tribe-id={} bonus-scouts={bonus_scouts} citizen-graft={} merchant-graft={} scout-graft={} citizen={citizen:#?}",
         citizen_tribe.tribe_id,
@@ -142,6 +152,30 @@ fn census_first_clear_pool_group_move_witness() {
         (50, 4_227_108, 40, 0, 0, 144, 144, 144, 6_273, 2, 25, 262_912,)
     );
     assert_eq!(citizen.control_cost, 1);
+    assert_eq!(scout.mana, 500);
+    assert_eq!(
+        (
+            counterintel.type_index,
+            counterintel.from_type,
+            counterintel.from2,
+            counterintel.mana,
+            counterintel.spell_range,
+            counterintel.spell_flags,
+            spell_range.spy_bribe_upgrade_range,
+            spell_range.terra_cotta_range,
+        ),
+        (631, 58, 69, 500, 1_920, 0x10B6, 2, 0)
+    );
+    assert_eq!(golden_counterintel.unit_type_mana, scout.mana);
+    assert_eq!(golden_counterintel.spell_type, counterintel.type_index);
+    assert_eq!(
+        golden_counterintel.serialized_rules_sha256,
+        rules.serialized_sha256
+    );
+    assert_eq!(
+        replay_golden_counterintel_rules(&payload, &rules, [0; 32]),
+        Err(PrePairUnitAuthorityError::WrongGoldenReplayFile)
+    );
     assert_eq!(
         (
             citizen.squad_size,
