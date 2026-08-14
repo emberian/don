@@ -899,6 +899,79 @@ fn active_winner_empty_land_mustering_strategy_resumes_identically() {
 }
 
 #[test]
+fn active_winner_empty_bit4_defending_muster_resumes_identically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.status = ST_MUSTERING;
+        army.human_frame = 1;
+        army.navy = 0;
+        army.city = 4;
+        army.reg = 5;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        army.muster_x = 2;
+        army.muster_y = 3;
+        army.muster_angle = 0x1234_5678;
+        // The replay/network semaphore makes get_diff return this saved per-Leader value.
+        // Strategy bit 4 therefore selects defending, whose first zero-group count closes.
+        uninterrupted.vic_match.set_sem(game_sem::NET_OR_RECORDING);
+        uninterrupted.vic_leaders.slots[2].strategy[5] = 4;
+        uninterrupted.vic_leaders.slots[2].multi_diff = 2;
+        let checkpoint = save_sim(&uninterrupted).expect("bit4 muster inputs are savable");
+        let mut resumed = load_sim(&checkpoint).expect("bit4 muster inputs reload");
+        assert!(resumed.vic_match.sem(game_sem::NET_OR_RECORDING));
+        assert_eq!(resumed.vic_leaders.slots[2].strategy[5], 4);
+        assert_eq!(resumed.vic_leaders.slots[2].multi_diff, 2);
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2946, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2946, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
+        assert_eq!(
+            army_receipt.outcome,
+            ForceArmyProcessOutcome::ClosedEmptyDefendingMuster
+        );
+        assert_eq!(army_receipt.muster_strategy.unwrap().region, 5);
+        assert_eq!(army_receipt.muster_strategy.unwrap().value, 4);
+        assert_eq!(
+            army_receipt.muster_difficulty.unwrap().match_flags_820 & 4,
+            4
+        );
+        assert_eq!(army_receipt.muster_difficulty.unwrap().multi_diff, 2);
+        assert_eq!(army_receipt.after.human_frame, 0);
+        assert_eq!(army_receipt.after.valid, 0);
+        assert_eq!(army_receipt.after.status, 0);
+        assert_eq!(army_receipt.after.city, -1);
+        assert_eq!((army_receipt.after.x, army_receipt.after.y), (0x780, 0xa80));
+        assert_eq!(army_receipt.after.angle, 0x1234_5678);
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("defending result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
 fn alliance_victory_executes_vacuous_defeated_owner_cleanup_and_resumes_identically() {
     with_large_stack(|| {
         let mut uninterrupted = configured_alliance_with_defeated_opponents_sim();

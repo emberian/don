@@ -2,11 +2,15 @@
 
 use don_sim::systems::armies::{Armies, LF_ARMIES_OFF, ST_MUSTERING};
 use don_sim::systems::diplomacy_force_army_authority::{
-    commit_force_army_process, commit_force_army_process_with_strategy, prepare_force_army_process,
-    prepare_force_army_process_with_strategy, ForceArmyMusterCityFact, ForceArmyMusterStrategyFact,
-    ForceArmyProcessError, ForceArmyProcessOutcome, ForceArmyProcessRequest,
+    commit_force_army_process, commit_force_army_process_with_strategy,
+    commit_force_army_process_with_strategy_and_difficulty, prepare_force_army_process,
+    prepare_force_army_process_with_strategy,
+    prepare_force_army_process_with_strategy_and_difficulty, ForceArmyMusterCityFact,
+    ForceArmyMusterDifficultyFact, ForceArmyMusterStrategyFact, ForceArmyProcessError,
+    ForceArmyProcessOutcome, ForceArmyProcessRequest,
 };
 use don_sim::systems::tech_cities::CityPool;
+use don_sim::systems::victory_score::game_sem;
 
 const WORLD_SIZE: (i32, i32) = (8, 8);
 
@@ -730,7 +734,195 @@ fn land_muster_strategy_is_required_and_part_of_the_atomic_cas() {
 }
 
 #[test]
-fn land_muster_defending_and_transporting_dispatches_remain_fail_closed() {
+fn released_empty_bit4_muster_uses_forced_leader_difficulty_then_defends_and_closes() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 1;
+    army.navy = 0;
+    army.city = 4;
+    army.reg = 5;
+    army.role = 0x55;
+    army.num_units = 12;
+    army.num_captains = 4;
+    army.num_standard = 3;
+    army.num_decoys = 2;
+    army.muster_x = 2;
+    army.muster_y = 3;
+    army.muster_angle = 0x1234_5678;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 7;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut strategy = [[0u16; 64]; 8];
+    strategy[2][5] = 4;
+    let match_semaphore = 1u32 << game_sem::NET_OR_RECORDING;
+    let mut multi_diff = [0; 8];
+    multi_diff[2] = 2;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    let prepared = prepare_force_army_process_with_strategy_and_difficulty(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+        &[request],
+    )
+    .unwrap();
+    assert!(prepared.is_current_with_strategy_and_difficulty(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+    ));
+    let receipts = commit_force_army_process_with_strategy_and_difficulty(
+        &mut armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+        prepared,
+    )
+    .unwrap();
+
+    let receipt = &receipts[0];
+    assert!(receipt.validates());
+    assert_eq!(
+        receipt.outcome,
+        ForceArmyProcessOutcome::ClosedEmptyDefendingMuster
+    );
+    assert_eq!(
+        receipt.muster_strategy,
+        Some(ForceArmyMusterStrategyFact {
+            region: 5,
+            value: 4,
+        })
+    );
+    assert_eq!(
+        receipt.muster_difficulty,
+        Some(ForceArmyMusterDifficultyFact {
+            match_flags_820: 4,
+            multi_diff: 2,
+        })
+    );
+    assert_eq!(receipt.after.human_frame, 0);
+    assert_eq!(receipt.after.valid, 0);
+    assert_eq!(receipt.after.status, 0);
+    assert_eq!(receipt.after.city, -1);
+    assert_eq!((receipt.after.x, receipt.after.y), (0x780, 0xa80));
+    assert_eq!(receipt.after.angle, 0x1234_5678);
+}
+
+#[test]
+fn bit4_muster_difficulty_inputs_are_atomic_and_global_arm_stays_fail_closed() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.status = ST_MUSTERING;
+    army.human_frame = 0;
+    army.navy = 0;
+    army.city = 4;
+    army.reg = 5;
+    let mut cities = CityPool::new();
+    cities.slots[2][4].who = 7;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut strategy = [[0u16; 64]; 8];
+    strategy[2][5] = 4;
+    let match_semaphore = 1u32 << game_sem::NET_OR_RECORDING;
+    let mut multi_diff = [0; 8];
+    multi_diff[2] = 2;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    assert!(matches!(
+        prepare_force_army_process_with_strategy_and_difficulty(
+            &armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &strategy,
+            0,
+            &multi_diff,
+            &[request],
+        ),
+        Err(ForceArmyProcessError::RequiresUnresolvedArmyBody { .. })
+    ));
+
+    let prepared = prepare_force_army_process_with_strategy_and_difficulty(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        match_semaphore,
+        &multi_diff,
+        &[request],
+    )
+    .unwrap();
+    let before = armies.clone();
+    assert_eq!(
+        commit_force_army_process_with_strategy_and_difficulty(
+            &mut armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &strategy,
+            0,
+            &multi_diff,
+            prepared.clone(),
+        ),
+        Err(ForceArmyProcessError::StaleDifficulty { owner: 2 })
+    );
+    assert_eq!(armies.lists, before.lists);
+
+    multi_diff[2] = 3;
+    assert_eq!(
+        commit_force_army_process_with_strategy_and_difficulty(
+            &mut armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &strategy,
+            match_semaphore,
+            &multi_diff,
+            prepared,
+        ),
+        Err(ForceArmyProcessError::StaleDifficulty { owner: 2 })
+    );
+    assert_eq!(armies.lists, before.lists);
+}
+
+#[test]
+fn land_muster_without_difficulty_and_transporting_dispatches_remain_fail_closed() {
     let mut armies = live_army();
     let army = &mut armies.lists[2][3];
     army.status = ST_MUSTERING;

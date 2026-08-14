@@ -34,8 +34,9 @@ use crate::objects::Band;
 use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
 use crate::systems::diplomacy_force_army_authority::{
-    commit_force_army_process_with_strategy, prepare_force_army_process_with_strategy,
-    ForceArmyProcessReceipt, ForceArmyProcessRequest,
+    commit_force_army_process_with_strategy_and_difficulty,
+    prepare_force_army_process_with_strategy_and_difficulty, ForceArmyProcessReceipt,
+    ForceArmyProcessRequest,
 };
 use crate::systems::order_dispatch::OrderQueue;
 use crate::tick::leader_match_host::{
@@ -588,6 +589,8 @@ impl StagedForceArmyAuthority {
         leader_city_num: &[i32; NUM_LEADERS],
         world_size: (i32, i32),
         leader_strategy: &[[u16; super::army_do_mustering::MUSTER_STRATEGY_REGIONS]; NUM_LEADERS],
+        match_semaphore: u32,
+        leader_multi_diff: &[i32; NUM_LEADERS],
     ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
         self.receipts.iter().find_map(|receipt| {
             if receipt
@@ -624,6 +627,13 @@ impl StagedForceArmyAuthority {
                             .muster_strategy
                             .expect("stale strategy requires a strategy receipt")
                             .region,
+                    },
+                );
+            }
+            if !receipt.muster_difficulty_is_current(match_semaphore, leader_multi_diff) {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleDifficulty {
+                        owner: receipt.request.owner,
                     },
                 );
             }
@@ -915,6 +925,9 @@ fn stage_force_army_authority(
     sim: &Sim,
     leader_flags: &[u32; NUM_LEADERS],
     leader_flags2: &[u32; NUM_LEADERS],
+    leader_strategy: &[[u16; super::army_do_mustering::MUSTER_STRATEGY_REGIONS]; NUM_LEADERS],
+    match_semaphore: u32,
+    leader_multi_diff: &[i32; NUM_LEADERS],
     authority: &[ExternalDiplomacyAuthority],
 ) -> Result<Option<StagedForceArmyAuthority>, CanonicalDiplomacyRuntimeError> {
     if authority.is_empty() {
@@ -946,16 +959,17 @@ fn stage_force_army_authority(
         return Ok(None);
     }
     let leader_city_num = std::array::from_fn(|who| sim.step8.leaders[who].city_num);
-    let leader_strategy = std::array::from_fn(|who| sim.vic_leaders.slots[who].strategy);
     let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
-    let prepared = match prepare_force_army_process_with_strategy(
+    let prepared = match prepare_force_army_process_with_strategy_and_difficulty(
         &sim.armies,
         &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
         world_size,
-        &leader_strategy,
+        leader_strategy,
+        match_semaphore,
+        leader_multi_diff,
         &requests,
     ) {
         Ok(prepared) => prepared,
@@ -971,14 +985,16 @@ fn stage_force_army_authority(
         Err(error) => return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error)),
     };
     let mut armies = Box::new(sim.armies.clone());
-    let receipts = commit_force_army_process_with_strategy(
+    let receipts = commit_force_army_process_with_strategy_and_difficulty(
         &mut armies,
         &sim.cities,
         leader_flags,
         leader_flags2,
         &leader_city_num,
         world_size,
-        &leader_strategy,
+        leader_strategy,
+        match_semaphore,
+        leader_multi_diff,
         prepared,
     )
     .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
@@ -1176,10 +1192,30 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                         staged.leaders.slots[who].leader_flags2
                     }) as u32
             });
+            let leader_strategy = std::array::from_fn(|who| {
+                staged_victory
+                    .as_ref()
+                    .map_or(self.sim.vic_leaders.slots[who].strategy, |staged| {
+                        staged.leaders.slots[who].strategy
+                    })
+            });
+            let leader_multi_diff = std::array::from_fn(|who| {
+                staged_victory
+                    .as_ref()
+                    .map_or(self.sim.vic_leaders.slots[who].multi_diff, |staged| {
+                        staged.leaders.slots[who].multi_diff
+                    })
+            });
+            let match_semaphore = staged_victory
+                .as_ref()
+                .map_or(self.sim.vic_match.semaphore, |staged| staged.game.semaphore);
             let staged_army = match stage_force_army_authority(
                 self.sim,
                 &leader_flags,
                 &leader_flags2,
+                &leader_strategy,
+                match_semaphore,
+                &leader_multi_diff,
                 &completed_authority,
             ) {
                 Ok(staged) => staged,
@@ -1199,6 +1235,8 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
             let leader_strategy =
                 std::array::from_fn(|who| self.sim.vic_leaders.slots[who].strategy);
+            let leader_multi_diff =
+                std::array::from_fn(|who| self.sim.vic_leaders.slots[who].multi_diff);
             let world_size = (self.sim.map.world.tile_xs, self.sim.map.world.tile_ys);
             if let Some(error) = staged_army.as_ref().and_then(|staged| {
                 staged.current_error(
@@ -1207,6 +1245,8 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                     &leader_city_num,
                     world_size,
                     &leader_strategy,
+                    self.sim.vic_match.semaphore,
+                    &leader_multi_diff,
                 )
             }) {
                 return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));

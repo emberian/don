@@ -41,6 +41,8 @@ pub mod ammo;
 /// formation-of-groups layer executed at step 13 of `Game::do_frame`. The module keeps
 /// unported target-selection/RNG work in an explicit gap ledger.
 pub mod armies;
+/// Exact zero-group close prefix of retail `Army::do_defending`.
+pub mod army_do_defending;
 /// Complete 337-byte no-RNG `Army::do_mustering` state-machine body.
 pub mod army_do_mustering;
 /// Exact ordinary `Unit::find_attack_pos` positioning transactions. Unit targets delegate
@@ -225,6 +227,8 @@ pub mod leader_production_ai;
 /// no `mod` declaration anywhere in the library, so it compiled only from its own test file
 /// and no consumer could reach the one authority the diplomacy blockers name.
 pub mod leader_set_diplo;
+/// Exact canonical Leader tribe-bonus query and complete `LeaderData::get_diff`.
+pub mod leader_tribe_bonus_runtime;
 /// Atomic publication of production-owned current tech and ages into the victory and
 /// step-8 duplicate views. Production completion preflights this before mutation.
 pub mod leader_tech_sync;

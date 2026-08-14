@@ -53,7 +53,11 @@ rally using the saved World dimensions, and the zero-group fanout returns before
 expired empty naval muster and the saved-strategy-safe empty land muster both preserve retail's
 post-`do_mustering` status re-read: they enter `do_marching`, obtain zero from its first mobile
 count, and close before target selection or RNG. The released land arm receipts and stale-CAS binds
-the exact `LeaderData::strategy[ArmyData::reg]` word. The remaining general AI body stays
+the exact `LeaderData::strategy[ArmyData::reg]` word. Strategy bit 4 is additionally mounted on
+the replay/network `LeaderData::get_diff` arm: semaphore bit 2 forces the saved per-Leader
+`multi_diff`, a signed result below three enters `do_defending`, and the empty Army closes at that
+body's first `count(2, 0)` check. Receipts and stale-CAS bind the influencing semaphore bit and
+`multi_diff`; the global-difficulty arms, nonempty defending body, and remaining general AI stay
 unavailable.
 Generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
@@ -111,8 +115,9 @@ bounded `ForceArmyProcess(1)` calls. They execute the exact mixed cohort in whic
 winner's Victory call returns unchanged before its armies-off calls decrement their v17-owned
 countdowns, and the active-winner cohort in which substantive Victory precedes empty-Army
 normalization/retirement or an outstanding empty-Army human rally. An active winner whose human
-countdown expires on entry, or whose forced processing reaches any Group/AI body, still refuses the
-entire transaction, including staged Victory. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
+countdown expires on entry and enters the bounded released empty muster cones can now close through
+marching or replay-owned defending; forced processing that reaches any Group/general AI body still
+refuses the entire transaction, including staged Victory. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
 clears publish together. Generic alliance Victory is also mounted when its staged canonical
 Leader/Match transaction has an exact staged defeated-player Army/Unit cleanup: relation rows are

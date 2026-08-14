@@ -31,9 +31,14 @@ the checksum otherwise. This correction does not add Armies to `CheckSums::check
 Leader strategy/difficulty/flags, and `find_muster_spot` calls are typed fail-closed seams;
 the 337-byte body itself consumes no RNG.
 
+`Army::do_defending` `0x006F4070` now has one instruction-derived executable prefix. Retail
+begins with `count(2, 0)` and tail-calls `Army::close` when the result is below five. A
+zero-group Army proves that count is zero, so the canonical path closes before `is_engaged`,
+object search, muster search, or RNG. Nonempty Armies still stop before mutation.
+
 The following retail bodies are reached by the step-13 control flow and remain absent:
 
-- `Army::do_defending` `0x006F4070`
+- the remainder of `Army::do_defending` `0x006F4070` after its zero-group close prefix
 - `Army::do_marching` `0x006F3DF0`
 - `Army::do_forming` `0x006F43C0`
 - `Army::do_transporting` `0x006F4690`
