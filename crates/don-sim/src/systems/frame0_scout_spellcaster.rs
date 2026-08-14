@@ -14,9 +14,10 @@
 //! [`commit_no_cast`] accepts a complete no-cast plan. A found target advances through the
 //! source-owned `Unit::add_cast_order` prefix and, given an adjacent pool-14 capture, through
 //! `OrdersMemManager::get_obj(14)`'s clean-stack prefix. The zero-length branch also owns
-//! `get_new_order(14)`'s exact switch entry and stops before its 48-byte CRT malloc child; the
-//! recycled branch still stops before the CastOrder clear thunk. The allocator/order/path/Guy
-//! after-image is not guessed.
+//! `get_new_order(14)`'s exact switch entry. A composition-bound successful CRT allocation may
+//! advance through the full CastOrder constructor and return the derived UnitOrder subobject;
+//! otherwise it stops before malloc. The recycled branch still stops before the CastOrder clear
+//! thunk. Heap/pointer identity, the AddCastOrder suffix, path, and Guy after-image are not guessed.
 //!
 //! Most importantly, this function never reads or writes `CasterData::active_spells`.
 //! Its successful arm allocates a Unit `CastOrder` (order index `0x0E`) in `Unit+0xCC`.
@@ -141,8 +142,28 @@ pub const GET_NEW_ORDER_INDEX14_JUMP_ENTRY_VA: u32 = 0x0073_0A88;
 pub const GET_NEW_ORDER_INDEX14_CASE_VA: u32 = 0x0073_0837;
 pub const GET_NEW_ORDER_MALLOC_CALLSITE_VA: u32 = 0x0073_0839;
 pub const GET_NEW_ORDER_AFTER_MALLOC_VA: u32 = 0x0073_083F;
+pub const GET_NEW_ORDER_CAST_ORDER_CTOR_CALLSITE_VA: u32 = 0x0073_0857;
+pub const GET_NEW_ORDER_RETURN_ADJUST_VA: u32 = 0x0073_06F7;
+pub const GET_NEW_ORDER_SUCCESS_RETURN_VA: u32 = 0x0073_070F;
+pub const ORDERS_GET_OBJECT_FRESH_RETURN_VA: u32 = 0x0073_0BA9;
+pub const UNIT_ADD_CAST_ORDER_AFTER_GET_OBJECT_VA: u32 = 0x005E_4BAA;
 pub const CRT_MALLOC_IAT_SLOT_VA: u32 = 0x00AC_54F0;
 pub const CAST_ORDER_ALLOCATION_BYTES: u32 = 0x30;
+pub const CAST_ORDER_CONSTRUCTOR_VA: u32 = 0x0048_6390;
+pub const CAST_ORDER_CONSTRUCTOR_SIZE: u32 = 260;
+pub const CAST_ORDER_CONSTRUCTOR_SHA256: [u8; 32] = [
+    0x4f, 0xdd, 0x78, 0x26, 0x7e, 0x4e, 0xd6, 0xa1, 0xf6, 0x03, 0x88, 0x8a, 0xe4, 0x88, 0xea, 0xb0,
+    0x9f, 0xa3, 0x95, 0x0d, 0x98, 0xe0, 0x55, 0x20, 0xfe, 0xde, 0x18, 0x2e, 0x28, 0xa8, 0x17, 0x66,
+];
+pub const CAST_ORDER_VBTABLE_VA: u32 = 0x00B4_9730;
+pub const CAST_ORDER_PRIMARY_VTABLE_VA: u32 = 0x00B4_973C;
+pub const TARGET_ORDER_PRIMARY_VTABLE_VA: u32 = 0x00B4_7754;
+pub const TARGET_ORDER_UNIT_ORDER_VTABLE_VA: u32 = 0x00B4_7760;
+pub const UNIT_ORDER_PRIMARY_VTABLE_VA: u32 = 0x00B4_74F0;
+pub const CAST_ORDER_VBTABLE_UNIT_ORDER_ENTRY_VA: u32 = 0x00B4_9734;
+pub const CAST_ORDER_VBTABLE_UNIT_ORDER_DELTA: u32 = 0x24;
+pub const CAST_ORDER_UNIT_ORDER_OFFSET: u32 = 0x28;
+pub const CAST_ORDER_VBASE_DISPLACEMENT_FIELD_OFFSET: u32 = 0x24;
 
 pub const SCOUT_TYPE: i32 = 69;
 pub const GOLDEN_OWNER: u8 = 0;
@@ -592,6 +613,235 @@ impl EmptyPoolGetNewOrder14Residual {
     }
 }
 
+/// Provenance for the allocator receipt consumed after the exact CRT `malloc(0x30)` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetailMallocReceiptSource {
+    CompleteRetailCrtMallocAtGoldenScoutGetNewOrder14,
+    SyntheticOrUnknown,
+}
+
+/// One revisioned CRT heap boundary. The heap is deliberately independent of the simulation
+/// owners in [`Frame0ScoutBoundary`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetailHeapBoundary {
+    pub revision: u64,
+    pub digest: [u8; 32],
+}
+
+/// Stable identity of the exact writable block returned by CRT malloc. The base pointer is an
+/// observed retail result, never a pointer synthesized by this module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetailAllocationBlockAuthority {
+    pub base_ptr: u32,
+    pub bytes: u32,
+    pub allocation_identity_digest: [u8; 32],
+}
+
+/// Composition-bound authority for one successful `malloc(0x30)`. Both heap boundaries remain
+/// staged with the containing AddCastOrder transaction; this module exposes no heap commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetailMallocSuccessReceipt {
+    pub source: RetailMallocReceiptSource,
+    pub snapshot_revision: u64,
+    pub call_entry_composition_digest: [u8; 32],
+    pub request: RetailMallocRequest,
+    pub heap_before: RetailHeapBoundary,
+    pub heap_after: RetailHeapBoundary,
+    pub allocation: RetailAllocationBlockAuthority,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructorStoreWidth {
+    U8,
+    U16,
+    U32,
+}
+
+/// One constructor write in exact retail execution order. Bytes absent from this list, notably
+/// padding at `+0x12..+0x13` and `+0x2D..+0x2F`, are not claimed or initialized here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastOrderConstructorStore {
+    pub instruction_va: u32,
+    pub allocation_offset: u32,
+    pub width: ConstructorStoreWidth,
+    pub value: u32,
+}
+
+pub const CAST_ORDER_CONSTRUCTOR_STORES: [CastOrderConstructorStore; 21] = [
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63B8,
+        allocation_offset: 0x04,
+        width: ConstructorStoreWidth::U32,
+        value: CAST_ORDER_VBTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63BF,
+        allocation_offset: 0x28,
+        width: ConstructorStoreWidth::U32,
+        value: UNIT_ORDER_PRIMARY_VTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63C6,
+        allocation_offset: 0x2C,
+        width: ConstructorStoreWidth::U8,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63D9,
+        allocation_offset: 0x00,
+        width: ConstructorStoreWidth::U32,
+        value: TARGET_ORDER_PRIMARY_VTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63E9,
+        allocation_offset: 0x28,
+        width: ConstructorStoreWidth::U32,
+        value: TARGET_ORDER_UNIT_ORDER_VTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_63FA,
+        allocation_offset: 0x24,
+        width: ConstructorStoreWidth::U32,
+        value: 0x10,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6403,
+        allocation_offset: 0x2C,
+        width: ConstructorStoreWidth::U8,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6408,
+        allocation_offset: 0x08,
+        width: ConstructorStoreWidth::U32,
+        value: u32::MAX,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_640F,
+        allocation_offset: 0x0C,
+        width: ConstructorStoreWidth::U32,
+        value: u32::MAX,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6416,
+        allocation_offset: 0x10,
+        width: ConstructorStoreWidth::U16,
+        value: u16::MAX as u32,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6424,
+        allocation_offset: 0x00,
+        width: ConstructorStoreWidth::U32,
+        value: CAST_ORDER_PRIMARY_VTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_642D,
+        allocation_offset: 0x28,
+        width: ConstructorStoreWidth::U32,
+        value: CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_643E,
+        allocation_offset: 0x24,
+        width: ConstructorStoreWidth::U32,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6447,
+        allocation_offset: 0x2C,
+        width: ConstructorStoreWidth::U8,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_644C,
+        allocation_offset: 0x08,
+        width: ConstructorStoreWidth::U32,
+        value: u32::MAX,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6453,
+        allocation_offset: 0x0C,
+        width: ConstructorStoreWidth::U32,
+        value: u32::MAX,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_645A,
+        allocation_offset: 0x10,
+        width: ConstructorStoreWidth::U16,
+        value: u16::MAX as u32,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_645E,
+        allocation_offset: 0x20,
+        width: ConstructorStoreWidth::U32,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6465,
+        allocation_offset: 0x1C,
+        width: ConstructorStoreWidth::U32,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_646C,
+        allocation_offset: 0x18,
+        width: ConstructorStoreWidth::U32,
+        value: 0,
+    },
+    CastOrderConstructorStore {
+        instruction_va: 0x0048_6473,
+        allocation_offset: 0x14,
+        width: ConstructorStoreWidth::U32,
+        value: 0,
+    },
+];
+
+/// A host-supplied retail allocation has been initialized as a CastOrder and returned from both
+/// `get_new_order(14)` and `get_obj(14)`. The next instruction is back in AddCastOrder, before its
+/// virtual adjustment, target UID read, direct field stores, list/path/action calls, or commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FreshCastOrderConstructedResidual {
+    pub get_new_order: EmptyPoolGetNewOrder14Residual,
+    pub allocation: RetailMallocSuccessReceipt,
+    pub constructor_callsite_va: u32,
+    pub constructor_va: u32,
+    pub constructor_size: u32,
+    pub constructor_sha256: [u8; 32],
+    pub staged_constructor_stores: [CastOrderConstructorStore; 21],
+    pub allocation_base_ptr: u32,
+    pub returned_unit_order_ptr: u32,
+    pub unit_order_vbtable_entry_va: u32,
+    pub unit_order_vbtable_delta: u32,
+    pub get_new_order_return_adjust_va: u32,
+    pub get_new_order_return_va: u32,
+    pub get_obj_return_va: u32,
+    pub next_add_cast_order_va: u32,
+    pub continuation_after_get_obj: AddCastOrderRequest,
+}
+
+impl FreshCastOrderConstructedResidual {
+    /// Revalidate every simulation/pool/heap input before a product host owns the still-atomic
+    /// AddCastOrder suffix. No staged heap or constructor write is published on failure.
+    pub fn validate_add_cast_order_before(
+        &self,
+        current_scout: &Frame0ScoutBoundary,
+        current_pool: &OrdersPool14Capture,
+        current_heap: &RetailHeapBoundary,
+    ) -> Result<(), FreshCastOrderConstructionError> {
+        let exact = prepare_fresh_cast_order_construction(self.get_new_order, self.allocation)?;
+        if exact != *self {
+            return Err(FreshCastOrderConstructionError::ResidualShapeMismatch);
+        }
+        self.get_new_order
+            .validate_allocator_before(current_scout, current_pool)
+            .map_err(FreshCastOrderConstructionError::GetNewOrder)?;
+        if current_heap != &self.allocation.heap_before {
+            return Err(FreshCastOrderConstructionError::HeapBoundaryChanged);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetUidSource {
     LiveObjectWordAtOffset0x30,
@@ -785,6 +1035,29 @@ impl fmt::Display for GetNewOrder14Error {
 }
 
 impl std::error::Error for GetNewOrder14Error {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreshCastOrderConstructionError {
+    GetNewOrder(GetNewOrder14Error),
+    ResidualShapeMismatch,
+    ReceiptSourceMismatch,
+    ReceiptCompositionMismatch,
+    ReceiptRequestMismatch,
+    MissingHeapAuthority,
+    InvalidHeapTransition,
+    InvalidAllocationExtent,
+    MissingAllocationIdentity,
+    NullOrWrappingAllocation,
+    HeapBoundaryChanged,
+}
+
+impl fmt::Display for FreshCastOrderConstructionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Scout fresh CastOrder construction refused: {self:?}")
+    }
+}
+
+impl std::error::Error for FreshCastOrderConstructionError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame0ScoutCasterInvariantError {
@@ -1436,6 +1709,83 @@ pub fn prepare_empty_pool_get_new_order14(
     })
 }
 
+/// Consume only a composition-bound successful malloc authority, execute the source-exact
+/// CastOrder constructor write set, and stop as control returns to AddCastOrder. The heap
+/// transition, allocation, and constructor writes remain staged with the unopened suffix.
+pub fn prepare_fresh_cast_order_construction(
+    get_new_order: EmptyPoolGetNewOrder14Residual,
+    allocation: RetailMallocSuccessReceipt,
+) -> Result<FreshCastOrderConstructedResidual, FreshCastOrderConstructionError> {
+    let expected = prepare_empty_pool_get_new_order14(get_new_order.get_obj)
+        .map_err(FreshCastOrderConstructionError::GetNewOrder)?;
+    if expected != get_new_order {
+        return Err(FreshCastOrderConstructionError::ResidualShapeMismatch);
+    }
+    if allocation.source
+        != RetailMallocReceiptSource::CompleteRetailCrtMallocAtGoldenScoutGetNewOrder14
+    {
+        return Err(FreshCastOrderConstructionError::ReceiptSourceMismatch);
+    }
+    if allocation.snapshot_revision != get_new_order.get_obj.scout.snapshot_revision
+        || allocation.call_entry_composition_digest
+            != get_new_order.get_obj.scout.call_entry_composition_digest
+    {
+        return Err(FreshCastOrderConstructionError::ReceiptCompositionMismatch);
+    }
+    if allocation.request != get_new_order.allocator {
+        return Err(FreshCastOrderConstructionError::ReceiptRequestMismatch);
+    }
+    if allocation.heap_before.revision == 0
+        || allocation.heap_before.digest == [0; 32]
+        || allocation.heap_after.revision == 0
+        || allocation.heap_after.digest == [0; 32]
+    {
+        return Err(FreshCastOrderConstructionError::MissingHeapAuthority);
+    }
+    if allocation.heap_after.revision == allocation.heap_before.revision
+        || allocation.heap_after.digest == allocation.heap_before.digest
+    {
+        return Err(FreshCastOrderConstructionError::InvalidHeapTransition);
+    }
+    if allocation.allocation.bytes != CAST_ORDER_ALLOCATION_BYTES {
+        return Err(FreshCastOrderConstructionError::InvalidAllocationExtent);
+    }
+    if allocation.allocation.allocation_identity_digest == [0; 32] {
+        return Err(FreshCastOrderConstructionError::MissingAllocationIdentity);
+    }
+    let allocation_base_ptr = allocation.allocation.base_ptr;
+    if allocation_base_ptr == 0
+        || allocation_base_ptr
+            .checked_add(CAST_ORDER_ALLOCATION_BYTES - 1)
+            .is_none()
+    {
+        return Err(FreshCastOrderConstructionError::NullOrWrappingAllocation);
+    }
+    let returned_unit_order_ptr = allocation_base_ptr
+        .checked_add(CAST_ORDER_VBTABLE_UNIT_ORDER_DELTA)
+        .and_then(|ptr| ptr.checked_add(4))
+        .ok_or(FreshCastOrderConstructionError::NullOrWrappingAllocation)?;
+
+    Ok(FreshCastOrderConstructedResidual {
+        get_new_order,
+        allocation,
+        constructor_callsite_va: GET_NEW_ORDER_CAST_ORDER_CTOR_CALLSITE_VA,
+        constructor_va: CAST_ORDER_CONSTRUCTOR_VA,
+        constructor_size: CAST_ORDER_CONSTRUCTOR_SIZE,
+        constructor_sha256: CAST_ORDER_CONSTRUCTOR_SHA256,
+        staged_constructor_stores: CAST_ORDER_CONSTRUCTOR_STORES,
+        allocation_base_ptr,
+        returned_unit_order_ptr,
+        unit_order_vbtable_entry_va: CAST_ORDER_VBTABLE_UNIT_ORDER_ENTRY_VA,
+        unit_order_vbtable_delta: CAST_ORDER_VBTABLE_UNIT_ORDER_DELTA,
+        get_new_order_return_adjust_va: GET_NEW_ORDER_RETURN_ADJUST_VA,
+        get_new_order_return_va: GET_NEW_ORDER_SUCCESS_RETURN_VA,
+        get_obj_return_va: ORDERS_GET_OBJECT_FRESH_RETURN_VA,
+        next_add_cast_order_va: UNIT_ADD_CAST_ORDER_AFTER_GET_OBJECT_VA,
+        continuation_after_get_obj: get_new_order.get_obj.continuation_after_get_obj,
+    })
+}
+
 /// Execute the pure frame-zero planner and publish its narrow Caster-owner invariant.
 ///
 /// Intermediate dynamic-child requests are not enough: the bounded transaction must either
@@ -1858,6 +2208,11 @@ mod tests {
                 GET_NEW_ORDER_INDEX14_CASE_VA,
                 GET_NEW_ORDER_MALLOC_CALLSITE_VA,
                 GET_NEW_ORDER_AFTER_MALLOC_VA,
+                GET_NEW_ORDER_CAST_ORDER_CTOR_CALLSITE_VA,
+                GET_NEW_ORDER_RETURN_ADJUST_VA,
+                GET_NEW_ORDER_SUCCESS_RETURN_VA,
+                ORDERS_GET_OBJECT_FRESH_RETURN_VA,
+                UNIT_ADD_CAST_ORDER_AFTER_GET_OBJECT_VA,
                 CRT_MALLOC_IAT_SLOT_VA,
                 CAST_ORDER_ALLOCATION_BYTES,
             ),
@@ -1867,8 +2222,41 @@ mod tests {
                 0x0073_0837,
                 0x0073_0839,
                 0x0073_083F,
+                0x0073_0857,
+                0x0073_06F7,
+                0x0073_070F,
+                0x0073_0BA9,
+                0x005E_4BAA,
                 0x00AC_54F0,
                 0x30,
+            )
+        );
+        assert_eq!(
+            (
+                CAST_ORDER_CONSTRUCTOR_VA,
+                CAST_ORDER_CONSTRUCTOR_SIZE,
+                CAST_ORDER_VBTABLE_VA,
+                CAST_ORDER_PRIMARY_VTABLE_VA,
+                TARGET_ORDER_PRIMARY_VTABLE_VA,
+                TARGET_ORDER_UNIT_ORDER_VTABLE_VA,
+                UNIT_ORDER_PRIMARY_VTABLE_VA,
+                CAST_ORDER_VBTABLE_UNIT_ORDER_ENTRY_VA,
+                CAST_ORDER_VBTABLE_UNIT_ORDER_DELTA,
+                CAST_ORDER_UNIT_ORDER_OFFSET,
+                CAST_ORDER_VBASE_DISPLACEMENT_FIELD_OFFSET,
+            ),
+            (
+                0x0048_6390,
+                260,
+                0x00B4_9730,
+                0x00B4_973C,
+                0x00B4_7754,
+                0x00B4_7760,
+                0x00B4_74F0,
+                0x00B4_9734,
+                0x24,
+                0x28,
+                0x24,
             )
         );
         assert_eq!(
@@ -1893,6 +2281,14 @@ mod tests {
                 0x92, 0x13, 0x05, 0xab, 0x49, 0x13, 0x16, 0xcd, 0x0e, 0x76, 0x7b, 0xef, 0x3b, 0x88,
                 0xb1, 0x62, 0x2f, 0x42, 0xc0, 0x54, 0x70, 0x23, 0x2f, 0xea, 0x1f, 0x90, 0xec, 0xe7,
                 0x98, 0x4d, 0x4e, 0xae,
+            ]
+        );
+        assert_eq!(
+            CAST_ORDER_CONSTRUCTOR_SHA256,
+            [
+                0x4f, 0xdd, 0x78, 0x26, 0x7e, 0x4e, 0xd6, 0xa1, 0xf6, 0x03, 0x88, 0x8a, 0xe4, 0x88,
+                0xea, 0xb0, 0x9f, 0xa3, 0x95, 0x0d, 0x98, 0xe0, 0x55, 0x20, 0xfe, 0xde, 0x18, 0x2e,
+                0x28, 0xa8, 0x17, 0x66,
             ]
         );
         assert_eq!(
@@ -2228,6 +2624,31 @@ mod tests {
         }
     }
 
+    fn malloc_success(
+        residual: &EmptyPoolGetNewOrder14Residual,
+        base_ptr: u32,
+    ) -> RetailMallocSuccessReceipt {
+        RetailMallocSuccessReceipt {
+            source: RetailMallocReceiptSource::CompleteRetailCrtMallocAtGoldenScoutGetNewOrder14,
+            snapshot_revision: residual.get_obj.scout.snapshot_revision,
+            call_entry_composition_digest: residual.get_obj.scout.call_entry_composition_digest,
+            request: residual.allocator,
+            heap_before: RetailHeapBoundary {
+                revision: 30,
+                digest: [0x31; 32],
+            },
+            heap_after: RetailHeapBoundary {
+                revision: 31,
+                digest: [0x32; 32],
+            },
+            allocation: RetailAllocationBlockAuthority {
+                base_ptr,
+                bytes: CAST_ORDER_ALLOCATION_BYTES,
+                allocation_identity_digest: [0x33; 32],
+            },
+        }
+    }
+
     #[test]
     fn empty_pool_reaches_exact_get_new_order_child_without_a_pool_write() {
         let (i, scout) = found_allocator_residual();
@@ -2333,6 +2754,169 @@ mod tests {
         assert_eq!(
             prepare_empty_pool_get_new_order14(forged),
             Err(GetNewOrder14Error::ResidualShapeMismatch)
+        );
+    }
+
+    #[test]
+    fn malloc_authority_constructs_exact_cast_order_and_stops_before_add_cast_order() {
+        let (i, scout) = found_allocator_residual();
+        let pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        let get_obj = prepare_orders_get_object(scout, pool).unwrap();
+        let get_new_order = prepare_empty_pool_get_new_order14(get_obj).unwrap();
+        let allocation = malloc_success(&get_new_order, 0x1450_4000);
+        let residual = prepare_fresh_cast_order_construction(get_new_order, allocation).unwrap();
+
+        assert_eq!(residual.constructor_callsite_va, 0x0073_0857);
+        assert_eq!(residual.constructor_va, 0x0048_6390);
+        assert_eq!(residual.constructor_size, 260);
+        assert_eq!(residual.constructor_sha256, CAST_ORDER_CONSTRUCTOR_SHA256);
+        assert_eq!(
+            residual.staged_constructor_stores,
+            CAST_ORDER_CONSTRUCTOR_STORES
+        );
+        assert_eq!(residual.allocation_base_ptr, 0x1450_4000);
+        assert_eq!(residual.returned_unit_order_ptr, 0x1450_4028);
+        assert_eq!(residual.unit_order_vbtable_entry_va, 0x00B4_9734);
+        assert_eq!(residual.unit_order_vbtable_delta, 0x24);
+        assert_eq!(residual.get_new_order_return_adjust_va, 0x0073_06F7);
+        assert_eq!(residual.get_new_order_return_va, 0x0073_070F);
+        assert_eq!(residual.get_obj_return_va, 0x0073_0BA9);
+        assert_eq!(residual.next_add_cast_order_va, 0x005E_4BAA);
+        assert_eq!(
+            residual.continuation_after_get_obj.target_uid_source,
+            TargetUidSource::LiveObjectWordAtOffset0x30
+        );
+
+        let mut image = [0xA5_u8; CAST_ORDER_ALLOCATION_BYTES as usize];
+        for store in residual.staged_constructor_stores {
+            let offset = store.allocation_offset as usize;
+            match store.width {
+                ConstructorStoreWidth::U8 => image[offset] = store.value as u8,
+                ConstructorStoreWidth::U16 => {
+                    image[offset..offset + 2].copy_from_slice(&(store.value as u16).to_le_bytes());
+                }
+                ConstructorStoreWidth::U32 => {
+                    image[offset..offset + 4].copy_from_slice(&store.value.to_le_bytes());
+                }
+            }
+        }
+        assert_eq!(
+            u32::from_le_bytes(image[0..4].try_into().unwrap()),
+            0x00B4_973C
+        );
+        assert_eq!(
+            u32::from_le_bytes(image[4..8].try_into().unwrap()),
+            0x00B4_9730
+        );
+        assert_eq!(
+            u32::from_le_bytes(image[8..12].try_into().unwrap()),
+            u32::MAX
+        );
+        assert_eq!(
+            u32::from_le_bytes(image[12..16].try_into().unwrap()),
+            u32::MAX
+        );
+        assert_eq!(
+            u16::from_le_bytes(image[16..18].try_into().unwrap()),
+            u16::MAX
+        );
+        assert_eq!(&image[18..20], &[0xA5, 0xA5]);
+        assert_eq!(&image[20..40], &[0; 20]);
+        assert_eq!(
+            u32::from_le_bytes(image[40..44].try_into().unwrap()),
+            0x00B4_976C
+        );
+        assert_eq!(image[44], 0);
+        assert_eq!(&image[45..48], &[0xA5, 0xA5, 0xA5]);
+
+        residual
+            .validate_add_cast_order_before(&i.before, &pool, &allocation.heap_before)
+            .unwrap();
+        let mut stale_heap = allocation.heap_before;
+        stale_heap.digest[0] ^= 1;
+        let unchanged = stale_heap;
+        assert_eq!(
+            residual.validate_add_cast_order_before(&i.before, &pool, &stale_heap),
+            Err(FreshCastOrderConstructionError::HeapBoundaryChanged)
+        );
+        assert_eq!(stale_heap, unchanged);
+        assert_eq!(pool.free_length, 0);
+        assert_eq!(
+            i.before.orders_mem_revision,
+            scout.before.orders_mem_revision
+        );
+    }
+
+    #[test]
+    fn cast_order_construction_rejects_unbound_heap_or_pointer_identity() {
+        let (_, scout) = found_allocator_residual();
+        let pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        let get_obj = prepare_orders_get_object(scout, pool).unwrap();
+        let get_new_order = prepare_empty_pool_get_new_order14(get_obj).unwrap();
+
+        let mut receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.source = RetailMallocReceiptSource::SyntheticOrUnknown;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::ReceiptSourceMismatch)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.call_entry_composition_digest[0] ^= 1;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::ReceiptCompositionMismatch)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.request.bytes += 1;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::ReceiptRequestMismatch)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.heap_before.revision = 0;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::MissingHeapAuthority)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.heap_after = receipt.heap_before;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::InvalidHeapTransition)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.allocation.bytes -= 1;
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::InvalidAllocationExtent)
+        );
+
+        receipt = malloc_success(&get_new_order, 0x1450_4000);
+        receipt.allocation.allocation_identity_digest = [0; 32];
+        assert_eq!(
+            prepare_fresh_cast_order_construction(get_new_order, receipt),
+            Err(FreshCastOrderConstructionError::MissingAllocationIdentity)
+        );
+
+        for base_ptr in [0, u32::MAX - 0x20] {
+            receipt = malloc_success(&get_new_order, base_ptr);
+            assert_eq!(
+                prepare_fresh_cast_order_construction(get_new_order, receipt),
+                Err(FreshCastOrderConstructionError::NullOrWrappingAllocation)
+            );
+        }
+
+        let mut forged = get_new_order;
+        forged.case_entry_va += 1;
+        receipt = malloc_success(&forged, 0x1450_4000);
+        assert_eq!(
+            prepare_fresh_cast_order_construction(forged, receipt),
+            Err(FreshCastOrderConstructionError::ResidualShapeMismatch)
         );
     }
 
