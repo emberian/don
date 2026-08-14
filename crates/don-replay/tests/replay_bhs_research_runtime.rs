@@ -3,6 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use don_bhs::{ScriptTimers, VmError};
+use don_replay::builds_runtime::BuildsWalkAuthority;
+use don_replay::leader_produce_building_farm_frame_zero_tail::{
+    complete_leader_produce_building_farm_frame_zero_tail, FarmBuildInitAuthority,
+    FarmFrameZeroSourceFacts, FarmFrameZeroTailError,
+};
 use don_replay::replay::Replay;
 use don_replay::replay_bhs_live_bindings::{
     bind_production_map_style, bind_production_type_counts, ProductionBuiltinImage,
@@ -13,6 +18,7 @@ use don_replay::replay_bhs_research_runtime::run_production_research_call;
 use don_replay::replay_bhs_runtime::{
     load_replay_bhs_program, ReplayBhsBinding, LEADER_FLAG_HUMAN,
 };
+use don_replay::terrain_height_runtime::{TerrainHeightAuthority, TerrainHeightSource};
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::script_runtime::{ExternalGameSeconds, ScriptRuntime};
 use don_sim::systems::bhs_create_unit_runtime::{
@@ -30,6 +36,7 @@ use don_sim::systems::bhs_type_factory::{
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TypeBuiltinState, TypeRow, NUM_LEADERS, NUM_TRIBES, NUM_TYPES,
 };
+use don_sim::systems::canonical_gather_work::Farms;
 use don_sim::systems::gather_terrain::{
     GatherTerrainMaterialization, GatherTerrainSourceStamp, GatherTerrainWorldIdentity,
     SUPPORTED_RULES_XML_SHA256,
@@ -1255,6 +1262,13 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let call_before = call;
     let (types, upgrades) = canonical_type_owners(content_owner);
     let (mut sim, mut production, row) = production_owners(content_owner);
+    // The installed production image below owns one live Athens City. Keep the canonical
+    // construct-time view coherent with that image for the reached Farm initializer.
+    sim.step8.leaders[content_owner].city_num = 1;
+    let completion_seen_mask = (1 << content_owner) | 1;
+    sim.vic_leaders.slots[content_owner]
+        .init_diplomacy
+        .ally_mask = completion_seen_mask;
     // The replay's Athens center is an active City Build (native Object CITY bit 0x20).
     sim.builds[row].flags |= flag::CAPTURED;
     let installed_style = don_replay::map_style::MapStyleStaticData::load_from_ron_data(
@@ -1939,4 +1953,166 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     );
     assert_eq!(production.leaders[content_owner].ages_queued, 0);
     assert_eq!(production.leaders[content_owner].epochs_queued, 0);
+
+    // The builtin remains rollback-red above, but its already-reached Objects::init_build
+    // boundary now has a complete, independently executable atomic tail. Re-own the one
+    // candidate cell exactly as at the saved preflight boundary and install the missing
+    // height/block-mask/UID source owners explicitly.
+    sim.map.world.wdata_mut(2, 2).who = content_owner as i8;
+    assert_eq!(sim.map.world.wdata(2, 2).region, 64);
+    let source_digest = [0x91; 32];
+    let height_len = (sim.map.world.tile_xs as usize + 1) * (sim.map.world.tile_ys as usize + 1);
+    let terrain_height = TerrainHeightAuthority {
+        master_land_height_bits: vec![0; height_len],
+        land_height_bits: 0,
+        source: TerrainHeightSource::CompletedWorldgen,
+        source_digest,
+    };
+    let mut next_uid = [0; 8];
+    next_uid[content_owner] = 1;
+    let mut buildings_built = [0; 8];
+    buildings_built[content_owner] = 1;
+    let mut build_authority = FarmBuildInitAuthority {
+        revision: 7,
+        source_digest,
+        next_uid,
+        buildings_built,
+    };
+    let mut builds_walk = BuildsWalkAuthority::default();
+    let source = FarmFrameZeroSourceFacts::supported_flat_farm(source_digest, [1; 16]);
+
+    // Capacity refusal occurs after the Build prefix, terrain query, construct-time
+    // calculation and third RNG staging. It must still expose no mutation in any owner.
+    let saved_farms = std::mem::replace(&mut sim.farms, Farms::with_header(0, -1, 0));
+    let refusal_random = sim.world.random.state();
+    let refusal_rows = sim.builds.len();
+    let refusal_mark = sim.world.objects.slot(content_owner).mark(Band::Build);
+    let refusal_origin = sim.builds[row].image();
+    let refusal_city = sim.cities.slots[content_owner][0].clone();
+    let refusal_wdata = sim.map.world.wdata.clone();
+    let refusal_tdata = sim.map.world.tdata.clone();
+    let refusal_seen2 = sim.map.world.seen2.clone();
+    let refusal_authority = build_authority.clone();
+    let refusal_walks = builds_walk.clone();
+    let refusal_build_types = production.build_types.clone();
+    let refusal_leader_flags = sim.step8.leaders[content_owner].flags;
+    let refusal_vic_flags = sim.vic_leaders.slots[content_owner].leader_flags;
+    let refusal_num_buildings = sim.vic_leaders.slots[content_owner].num_buildings.clone();
+    let refusal_num_queued = sim.vic_leaders.slots[content_owner].num_queued.clone();
+    let refusal_error = complete_leader_produce_building_farm_frame_zero_tail(
+        &mut sim,
+        &mut production,
+        &types,
+        &terrain_height,
+        &mut build_authority,
+        &mut builds_walk,
+        7,
+        source,
+        &success,
+    )
+    .expect_err("a full Farms array refuses before the atomic publication point");
+    assert_eq!(refusal_error, FarmFrameZeroTailError::FarmCapacity);
+    assert_eq!(sim.world.random.state(), refusal_random);
+    assert_eq!(sim.builds.len(), refusal_rows);
+    assert_eq!(
+        sim.world.objects.slot(content_owner).mark(Band::Build),
+        refusal_mark
+    );
+    assert_eq!(sim.builds[row].image(), refusal_origin);
+    assert_eq!(sim.cities.slots[content_owner][0], refusal_city);
+    assert_eq!(sim.map.world.wdata, refusal_wdata);
+    assert_eq!(sim.map.world.tdata, refusal_tdata);
+    assert_eq!(sim.map.world.seen2, refusal_seen2);
+    assert_eq!(build_authority, refusal_authority);
+    assert_eq!(builds_walk, refusal_walks);
+    assert_eq!(production.build_types, refusal_build_types);
+    assert_eq!(sim.step8.leaders[content_owner].flags, refusal_leader_flags);
+    assert_eq!(
+        sim.vic_leaders.slots[content_owner].leader_flags,
+        refusal_vic_flags
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[content_owner].num_buildings,
+        refusal_num_buildings
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[content_owner].num_queued,
+        refusal_num_queued
+    );
+    sim.farms = saved_farms;
+
+    let farm = complete_leader_produce_building_farm_frame_zero_tail(
+        &mut sim,
+        &mut production,
+        &types,
+        &terrain_height,
+        &mut build_authority,
+        &mut builds_walk,
+        7,
+        source,
+        &success,
+    )
+    .expect("publish the complete frame-zero Farm tail atomically");
+    assert_eq!(farm.row, 1);
+    assert_eq!(farm.object_id, 2001);
+    assert_eq!(farm.city_slot, 0);
+    assert_eq!(farm.farm_index, 0);
+    assert_eq!(farm.footprint_corner, [8, 8]);
+    assert_eq!(farm.blocked_tiles, 16);
+    assert_eq!(farm.behind_tiles, 56);
+    assert_eq!(farm.farm_random_value, 20_107);
+    assert_eq!(farm.farm_type, 1);
+    assert_eq!(farm.random_state_before, 0x357);
+    assert_eq!(farm.random_state_after_search as u32, 0xd48d_a1a1);
+    assert_eq!(farm.random_state_after_farm as u32, 0x3ebf_4e8c);
+    assert_eq!(farm.construct_time, 15_000);
+    assert_eq!(farm.final_flags, flag::VALID | flag::STARTED | flag::ACTIVE);
+    assert_eq!(farm.final_build_mask, 0x1000);
+    assert_eq!(farm.final_seen, (1 << content_owner, completion_seen_mask));
+    assert_eq!((farm.city_filled_before, farm.city_filled_after), (0, 1));
+    assert_eq!(
+        (
+            farm.authority_revision_before,
+            farm.authority_revision_after
+        ),
+        (7, 8)
+    );
+    assert_eq!(farm.walk.bytes_walked, 167);
+    assert_eq!(sim.world.random.state() as u32, 0x3ebf_4e8c);
+    assert_eq!(
+        sim.world.objects.slot(content_owner).mark(Band::Build),
+        2002
+    );
+    assert_eq!(production.build_types[1], Some(417));
+    assert_eq!(sim.builds[row].city_down, 2001);
+    assert_eq!(sim.builds[1].city, 0);
+    assert_eq!(sim.builds[1].city_down, -1);
+    assert_eq!(sim.builds[1].dock, 0);
+    assert_eq!(sim.builds[1].uid, 1);
+    assert_eq!(sim.builds[1].myhits, 400);
+    assert_eq!(sim.builds[1].construct_hits, 1);
+    assert_eq!(sim.builds[1].queue.entries.len(), 2);
+    assert_eq!(sim.builds[1].queue.entries[0].type_index, -1);
+    assert_eq!(sim.map.world.wdata(2, 2).down, 2001);
+    assert_eq!(sim.map.world.wdata(2, 2).down_who, content_owner as i16);
+    assert_eq!(sim.map.world.wdata(2, 2).was_seen, 1 << content_owner);
+    assert_eq!(sim.cities.slots[content_owner][0].filled, 1);
+    assert_eq!(sim.farms.records()[0].who, content_owner as i32);
+    assert_eq!(sim.farms.records()[0].o, 2001);
+    assert_eq!(sim.farms.records()[0].farm_type, 1);
+    assert_eq!(build_authority.next_uid[content_owner], 2);
+    assert_eq!(build_authority.buildings_built[content_owner], 2);
+    assert_eq!(
+        sim.step8.leaders[content_owner].flags,
+        3 | 0x0200_0000 | 0x0800_0000
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[content_owner].leader_flags as u32,
+        sim.step8.leaders[content_owner].flags
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[content_owner].num_buildings[417 - 414],
+        1
+    );
+    assert!(builds_walk.get(1).is_some());
 }

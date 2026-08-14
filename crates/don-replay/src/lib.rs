@@ -72,6 +72,7 @@ pub mod image;
 pub mod initial;
 pub mod leader_initial_prefix;
 pub mod leader_prefix_ledger;
+pub mod leader_produce_building_farm_frame_zero_tail;
 pub mod leaders_deferred_history_frontier;
 pub mod leaders_dynamic_children_frontier;
 pub mod leaders_generated_fixed_frontier;
