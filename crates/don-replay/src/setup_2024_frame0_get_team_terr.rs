@@ -24,7 +24,7 @@ use crate::setup_2024_frame0_plan_strategy::{
     bind_golden_frame0_owner0_plan_strategy_entry, frame0_plan_strategy_entry_authority_digest,
     plan_golden_frame0_owner0_plan_strategy_prefix, validate_frame0_get_team_terr_request,
     Frame0GetTeamTerrInputSurface, Frame0GetTeamTerrRequest, Frame0PlanStrategyEntryAuthority,
-    Frame0PlanStrategyError, GET_TEAM_TERR_CALL_VA, GET_TEAM_TERR_VA,
+    Frame0PlanStrategyError, Frame0PlanStrategyPrefixPlan, GET_TEAM_TERR_CALL_VA, GET_TEAM_TERR_VA,
     GOLDEN_FIRST_STRATEGY_ORDINAL, GOLDEN_FIRST_STRATEGY_OWNER, GOLDEN_FRAME, GOLDEN_STEP,
 };
 use crate::setup_2024_frame379::REPLAY_FILE_SHA256;
@@ -37,6 +37,9 @@ pub const LEADER_STRIDE: u32 = 0x6eec;
 pub const LEADER_FLAGS_OFFSET: u32 = 0x0000;
 pub const LEADER_WHO_OFFSET: u32 = 0x0008;
 pub const LEADER_TERRITORY_OFFSET: u32 = 0x09d8;
+pub const LEADER_OTHER_TEAM_TERR_OFFSET: u32 = 0x09e4;
+pub const LEADER_MIN_OTHER_TEAM_TERR_OFFSET: u32 = 0x09e8;
+pub const LEADER_MY_TEAM_TERR_OFFSET: u32 = 0x09ec;
 pub const GAME_TEAM_STYLE_OFFSET: u32 = 0x0024;
 pub const GAME_PLAYER_ZERO_OFFSET: u32 = 0x0074;
 pub const GAME_PLAYER_STRIDE: u32 = 0x008c;
@@ -49,6 +52,15 @@ const TEAM_STYLE_SPECIAL: u8 = 7;
 const TEAM_OBSERVER: i8 = 8;
 const FIRST_NORMAL_TEAM: i8 = 0;
 const NORMAL_TEAM_COUNT: i8 = 4;
+const LEADER_ACTIVE: i32 = 0x0002;
+const DIPLO_ALLY: i32 = 2;
+
+const STORE_MY_TEAM_TERR_VA: u32 = 0x006b_98da;
+const STORE_OTHER_TEAM_TERR_VA: u32 = 0x006b_98e5;
+const STORE_MIN_OTHER_TEAM_TERR_VA: u32 = 0x006b_98ef;
+const FIRST_DIRECTIONAL_DIPLO_READ_VA: u32 = 0x006b_9910;
+const REVERSE_DIRECTIONAL_DIPLO_READ_VA: u32 = 0x006b_9925;
+const OPPONENT_GET_TEAM_TERR_CALL_VA: u32 = 0x006b_992e;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -88,6 +100,17 @@ pub struct Frame0GetTeamTerrLeaderRow {
     pub territory: i32,
 }
 
+/// Three native Leader scalars overwritten immediately after the first `get_team_terr`
+/// return. Don's current canonical Sim does not serialize this strategy-only trio, so the
+/// supported-retail call-entry capture retains their exact preimages explicitly instead of
+/// silently substituting zeros.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyTeamTerritoryPreimage {
+    pub other_team_terr: i32,
+    pub min_other_team_terr: i32,
+    pub my_team_terr: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame0GetTeamTerrGameProjection {
     pub revision: u64,
@@ -123,6 +146,7 @@ pub struct Frame0GetTeamTerrCallEntryCapture {
     pub step: u8,
     pub owner: u8,
     pub strategy_ordinal: u8,
+    pub team_territory_preimage: Frame0PlanStrategyTeamTerritoryPreimage,
 }
 
 /// Complete immutable input authority for native `get_team_terr` at exact frame zero.
@@ -143,6 +167,7 @@ pub struct Frame0GetTeamTerrCallEntryAuthority {
     pub step: u8,
     pub owner: u8,
     pub strategy_ordinal: u8,
+    pub team_territory_preimage: Frame0PlanStrategyTeamTerritoryPreimage,
     pub game: Frame0GetTeamTerrGameProjection,
     pub leader: Frame0GetTeamTerrLeaderProjection,
 }
@@ -208,6 +233,68 @@ pub struct Frame0GetTeamTerrReceipt {
     pub is_ally_reached: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0PlanStrategyTeamTerritoryField {
+    MyTeamTerr,
+    OtherTeamTerr,
+    MinOtherTeamTerr,
+}
+
+/// An instruction-ordered native store after the first team-territory child returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyTeamTerritoryWrite {
+    pub instruction_va: u32,
+    pub field: Frame0PlanStrategyTeamTerritoryField,
+    pub before: i32,
+    pub after: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Frame0PlanStrategyDiplomacyReadDirection {
+    CandidateTowardReceiver,
+}
+
+/// Exact first unowned input after the three post-child stores and the receiver-self loop row.
+/// Retail short-circuits after this read when the value is not `2`; the reverse direction is
+/// therefore deliberately not bundled into this request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyDiplomacyReadRequest {
+    pub request_sha256: [u8; 32],
+    pub call_entry_authority_digest: [u8; 32],
+    pub first_get_team_terr_receipt_digest: [u8; 32],
+    pub staged_writes_digest: [u8; 32],
+    pub call_entry_sim_sha256: [u8; 32],
+    pub receiver_leader_slot: u8,
+    pub receiver_who: i32,
+    pub candidate_leader_slot: u8,
+    pub candidate_who: i32,
+    pub direction: Frame0PlanStrategyDiplomacyReadDirection,
+    pub target_who_index: i32,
+    pub read_va: u32,
+    pub ally_value: i32,
+    pub reverse_read_va_if_ally: u32,
+    pub get_team_terr_call_va_if_not_ally: u32,
+}
+
+/// Detached atomic continuation. `prior_local_prefix` and `writes` are one staged journal;
+/// neither may be installed until the diplomacy child and the rest of `plan_strategy` close.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0PlanStrategyPostTeamTerrPlan {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub call_entry_authority_digest: [u8; 32],
+    pub prior_local_prefix: Frame0PlanStrategyPrefixPlan,
+    pub first_get_team_terr: Frame0GetTeamTerrReceipt,
+    pub before: Frame0PlanStrategyTeamTerritoryPreimage,
+    pub after_local: Frame0PlanStrategyTeamTerritoryPreimage,
+    pub writes: [Frame0PlanStrategyTeamTerritoryWrite; 3],
+    pub receiver_self_slot_skipped: u8,
+    pub open: Frame0PlanStrategyDiplomacyReadRequest,
+    pub owner0_strategy_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Frame0GetTeamTerrCallEntryBindError {
     Parent(Frame0PlanStrategyError),
@@ -252,6 +339,25 @@ pub enum Frame0GetTeamTerrError {
     ReceiverOutsideLeaderTable,
     ReceiverWhoMismatch,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame0PlanStrategyPostTeamTerrError {
+    InvalidParentPrefix,
+    InvalidCallEntryAuthority,
+    InvalidFirstChildReceipt,
+    NoQualifyingDiplomacyCandidate,
+}
+
+impl fmt::Display for Frame0PlanStrategyPostTeamTerrError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-zero post-team-territory prefix refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame0PlanStrategyPostTeamTerrError {}
 
 impl fmt::Display for Frame0GetTeamTerrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -320,6 +426,19 @@ pub fn frame0_get_team_terr_call_entry_authority_digest(
     image.push(u8::from(authority.local_prefix_preserved_input_projection));
     image.extend_from_slice(&authority.frame.to_le_bytes());
     image.extend_from_slice(&[authority.step, authority.owner, authority.strategy_ordinal]);
+    image.extend_from_slice(
+        &authority
+            .team_territory_preimage
+            .other_team_terr
+            .to_le_bytes(),
+    );
+    image.extend_from_slice(
+        &authority
+            .team_territory_preimage
+            .min_other_team_terr
+            .to_le_bytes(),
+    );
+    image.extend_from_slice(&authority.team_territory_preimage.my_team_terr.to_le_bytes());
     image.extend_from_slice(&authority.game.composition_digest);
     image.extend_from_slice(&authority.leader.composition_digest);
     sha256(&image)
@@ -444,6 +563,7 @@ pub fn bind_captured_frame0_get_team_terr_call_entry(
         step: capture.step,
         owner: capture.owner,
         strategy_ordinal: capture.strategy_ordinal,
+        team_territory_preimage: capture.team_territory_preimage,
         game,
         leader,
     };
@@ -733,6 +853,215 @@ pub fn resolve_captured_frame0_get_team_terr(
     Ok(receipt)
 }
 
+fn append_team_territory_preimage(
+    image: &mut Vec<u8>,
+    values: Frame0PlanStrategyTeamTerritoryPreimage,
+) {
+    image.extend_from_slice(&values.other_team_terr.to_le_bytes());
+    image.extend_from_slice(&values.min_other_team_terr.to_le_bytes());
+    image.extend_from_slice(&values.my_team_terr.to_le_bytes());
+}
+
+fn append_team_territory_write(image: &mut Vec<u8>, write: Frame0PlanStrategyTeamTerritoryWrite) {
+    image.extend_from_slice(&write.instruction_va.to_le_bytes());
+    image.push(write.field as u8);
+    image.extend_from_slice(&write.before.to_le_bytes());
+    image.extend_from_slice(&write.after.to_le_bytes());
+}
+
+fn post_team_territory_writes_digest(
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
+    prefix: &Frame0PlanStrategyPrefixPlan,
+    first_child: &Frame0GetTeamTerrReceipt,
+    before: Frame0PlanStrategyTeamTerritoryPreimage,
+    after: Frame0PlanStrategyTeamTerritoryPreimage,
+    writes: &[Frame0PlanStrategyTeamTerritoryWrite; 3],
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-post-team-terr-writes-v1".to_vec();
+    image.extend_from_slice(&authority.composition_digest);
+    image.extend_from_slice(&prefix.local_prefix_digest);
+    image.extend_from_slice(&first_child.composition_digest);
+    append_team_territory_preimage(&mut image, before);
+    append_team_territory_preimage(&mut image, after);
+    for write in writes {
+        append_team_territory_write(&mut image, *write);
+    }
+    sha256(&image)
+}
+
+fn diplomacy_read_request_digest(request: &Frame0PlanStrategyDiplomacyReadRequest) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-diplo-read-request-v1".to_vec();
+    image.extend_from_slice(&request.call_entry_authority_digest);
+    image.extend_from_slice(&request.first_get_team_terr_receipt_digest);
+    image.extend_from_slice(&request.staged_writes_digest);
+    image.extend_from_slice(&request.call_entry_sim_sha256);
+    image.extend_from_slice(&[
+        request.receiver_leader_slot,
+        request.candidate_leader_slot,
+        request.direction as u8,
+    ]);
+    image.extend_from_slice(&request.receiver_who.to_le_bytes());
+    image.extend_from_slice(&request.candidate_who.to_le_bytes());
+    image.extend_from_slice(&request.target_who_index.to_le_bytes());
+    image.extend_from_slice(&request.read_va.to_le_bytes());
+    image.extend_from_slice(&request.ally_value.to_le_bytes());
+    image.extend_from_slice(&request.reverse_read_va_if_ally.to_le_bytes());
+    image.extend_from_slice(&request.get_team_terr_call_va_if_not_ally.to_le_bytes());
+    sha256(&image)
+}
+
+pub fn validate_frame0_plan_strategy_diplomacy_read_request(
+    request: &Frame0PlanStrategyDiplomacyReadRequest,
+) -> bool {
+    request.request_sha256 != [0; 32]
+        && request.call_entry_authority_digest != [0; 32]
+        && request.first_get_team_terr_receipt_digest != [0; 32]
+        && request.staged_writes_digest != [0; 32]
+        && request.call_entry_sim_sha256 != [0; 32]
+        && request.receiver_leader_slot == GOLDEN_FIRST_STRATEGY_OWNER
+        && request.receiver_who == i32::from(GOLDEN_FIRST_STRATEGY_OWNER)
+        && usize::from(request.candidate_leader_slot) < LEADER_SLOTS
+        && request.candidate_leader_slot != request.receiver_leader_slot
+        && request.direction == Frame0PlanStrategyDiplomacyReadDirection::CandidateTowardReceiver
+        && request.target_who_index == request.receiver_who
+        && request.read_va == FIRST_DIRECTIONAL_DIPLO_READ_VA
+        && request.ally_value == DIPLO_ALLY
+        && request.reverse_read_va_if_ally == REVERSE_DIRECTIONAL_DIPLO_READ_VA
+        && request.get_team_terr_call_va_if_not_ally == OPPONENT_GET_TEAM_TERR_CALL_VA
+        && request.request_sha256 == diplomacy_read_request_digest(request)
+}
+
+pub fn frame0_plan_strategy_post_team_terr_digest(
+    plan: &Frame0PlanStrategyPostTeamTerrPlan,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-plan-strategy-post-team-terr-plan-v1".to_vec();
+    image.extend_from_slice(&plan.revision.to_le_bytes());
+    image.extend_from_slice(&plan.call_entry_authority_digest);
+    image.extend_from_slice(&plan.prior_local_prefix.local_prefix_digest);
+    image.extend_from_slice(&plan.first_get_team_terr.composition_digest);
+    append_team_territory_preimage(&mut image, plan.before);
+    append_team_territory_preimage(&mut image, plan.after_local);
+    for write in plan.writes {
+        append_team_territory_write(&mut image, write);
+    }
+    image.push(plan.receiver_self_slot_skipped);
+    image.extend_from_slice(&plan.open.request_sha256);
+    image.push(u8::from(plan.owner0_strategy_complete));
+    sha256(&image)
+}
+
+/// Continue owner zero from the exact return at `0x006B98D5` through the three Leader scalar
+/// stores and the receiver-self loop row. The next native input is the first directional
+/// diplomacy read for the first active nonself Leader. It remains typed and unexecuted.
+pub fn plan_frame0_owner0_after_get_team_terr(
+    parent: &Frame0PlanStrategyEntryAuthority,
+    authority: &Frame0GetTeamTerrCallEntryAuthority,
+    first_child: &Frame0GetTeamTerrReceipt,
+) -> Result<Frame0PlanStrategyPostTeamTerrPlan, Frame0PlanStrategyPostTeamTerrError> {
+    let prefix = plan_golden_frame0_owner0_plan_strategy_prefix(parent)
+        .map_err(|_| Frame0PlanStrategyPostTeamTerrError::InvalidParentPrefix)?;
+    if prefix.authority_digest != authority.plan_strategy_entry_authority_digest
+        || prefix.open.request_sha256 != authority.expected_request_sha256
+        || prefix.local_prefix_digest != authority.local_prefix_digest
+        || prefix.call_entry_sim_sha256 != authority.call_entry_sim_sha256
+    {
+        return Err(Frame0PlanStrategyPostTeamTerrError::InvalidCallEntryAuthority);
+    }
+    let expected = resolve_captured_frame0_get_team_terr(&prefix.open, authority)
+        .map_err(|_| Frame0PlanStrategyPostTeamTerrError::InvalidCallEntryAuthority)?;
+    if &expected != first_child
+        || first_child.composition_digest != frame0_get_team_terr_receipt_digest(first_child)
+        || first_child.return_va != GET_TEAM_TERR_CALL_VA + 5
+        || first_child.receiver_leader_slot != GOLDEN_FIRST_STRATEGY_OWNER
+    {
+        return Err(Frame0PlanStrategyPostTeamTerrError::InvalidFirstChildReceipt);
+    }
+
+    let before = authority.team_territory_preimage;
+    let after_local = Frame0PlanStrategyTeamTerritoryPreimage {
+        other_team_terr: 0,
+        min_other_team_terr: 0,
+        my_team_terr: first_child.result,
+    };
+    let writes = [
+        Frame0PlanStrategyTeamTerritoryWrite {
+            instruction_va: STORE_MY_TEAM_TERR_VA,
+            field: Frame0PlanStrategyTeamTerritoryField::MyTeamTerr,
+            before: before.my_team_terr,
+            after: after_local.my_team_terr,
+        },
+        Frame0PlanStrategyTeamTerritoryWrite {
+            instruction_va: STORE_OTHER_TEAM_TERR_VA,
+            field: Frame0PlanStrategyTeamTerritoryField::OtherTeamTerr,
+            before: before.other_team_terr,
+            after: after_local.other_team_terr,
+        },
+        Frame0PlanStrategyTeamTerritoryWrite {
+            instruction_va: STORE_MIN_OTHER_TEAM_TERR_VA,
+            field: Frame0PlanStrategyTeamTerritoryField::MinOtherTeamTerr,
+            before: before.min_other_team_terr,
+            after: after_local.min_other_team_terr,
+        },
+    ];
+    let staged_writes_digest = post_team_territory_writes_digest(
+        authority,
+        &prefix,
+        first_child,
+        before,
+        after_local,
+        &writes,
+    );
+
+    let receiver_slot = usize::from(first_child.receiver_leader_slot);
+    let receiver = authority.leader.leaders[receiver_slot];
+    let (candidate_slot, candidate) = authority
+        .leader
+        .leaders
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(slot, candidate)| {
+            *slot as i32 != receiver.who
+                && candidate.leader_flags & LEADER_ACTIVE != 0
+                && receiver.who != candidate.who
+        })
+        .ok_or(Frame0PlanStrategyPostTeamTerrError::NoQualifyingDiplomacyCandidate)?;
+    let mut open = Frame0PlanStrategyDiplomacyReadRequest {
+        request_sha256: [0; 32],
+        call_entry_authority_digest: authority.composition_digest,
+        first_get_team_terr_receipt_digest: first_child.composition_digest,
+        staged_writes_digest,
+        call_entry_sim_sha256: authority.call_entry_sim_sha256,
+        receiver_leader_slot: first_child.receiver_leader_slot,
+        receiver_who: receiver.who,
+        candidate_leader_slot: candidate_slot as u8,
+        candidate_who: candidate.who,
+        direction: Frame0PlanStrategyDiplomacyReadDirection::CandidateTowardReceiver,
+        target_who_index: receiver.who,
+        read_va: FIRST_DIRECTIONAL_DIPLO_READ_VA,
+        ally_value: DIPLO_ALLY,
+        reverse_read_va_if_ally: REVERSE_DIRECTIONAL_DIPLO_READ_VA,
+        get_team_terr_call_va_if_not_ally: OPPONENT_GET_TEAM_TERR_CALL_VA,
+    };
+    open.request_sha256 = diplomacy_read_request_digest(&open);
+
+    let mut plan = Frame0PlanStrategyPostTeamTerrPlan {
+        revision: authority.revision,
+        composition_digest: [0; 32],
+        call_entry_authority_digest: authority.composition_digest,
+        prior_local_prefix: prefix,
+        first_get_team_terr: first_child.clone(),
+        before,
+        after_local,
+        writes,
+        receiver_self_slot_skipped: first_child.receiver_leader_slot,
+        open,
+        owner0_strategy_complete: false,
+    };
+    plan.composition_digest = frame0_plan_strategy_post_team_terr_digest(&plan);
+    Ok(plan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,6 +1150,11 @@ mod tests {
             step: parent.capture.step,
             owner: parent.capture.owner,
             strategy_ordinal: parent.capture.strategy_ordinal,
+            team_territory_preimage: Frame0PlanStrategyTeamTerritoryPreimage {
+                other_team_terr: 91,
+                min_other_team_terr: 92,
+                my_team_terr: 93,
+            },
         }
     }
 
@@ -990,6 +1324,107 @@ mod tests {
         assert_eq!(
             resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
             Frame0GetTeamTerrError::InvalidLeaderProjectionDigest
+        );
+
+        let (_, mut authority, request) = bind(&sim);
+        authority.team_territory_preimage.my_team_terr ^= 1;
+        assert_eq!(
+            resolve_captured_frame0_get_team_terr(&request, &authority).unwrap_err(),
+            Frame0GetTeamTerrError::InvalidCallEntryAuthority
+        );
+    }
+
+    #[test]
+    fn post_return_stages_native_stores_then_stops_at_first_directional_diplo_read() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags |= LEADER_ACTIVE;
+        let (parent, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
+        let plan = plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap();
+
+        assert_eq!(plan.prior_local_prefix.open, request);
+        assert_eq!(plan.before, authority.team_territory_preimage);
+        assert_eq!(
+            plan.after_local,
+            Frame0PlanStrategyTeamTerritoryPreimage {
+                other_team_terr: 0,
+                min_other_team_terr: 0,
+                my_team_terr: receipt.result,
+            }
+        );
+        assert_eq!(
+            plan.writes,
+            [
+                Frame0PlanStrategyTeamTerritoryWrite {
+                    instruction_va: 0x006b_98da,
+                    field: Frame0PlanStrategyTeamTerritoryField::MyTeamTerr,
+                    before: 93,
+                    after: receipt.result,
+                },
+                Frame0PlanStrategyTeamTerritoryWrite {
+                    instruction_va: 0x006b_98e5,
+                    field: Frame0PlanStrategyTeamTerritoryField::OtherTeamTerr,
+                    before: 91,
+                    after: 0,
+                },
+                Frame0PlanStrategyTeamTerritoryWrite {
+                    instruction_va: 0x006b_98ef,
+                    field: Frame0PlanStrategyTeamTerritoryField::MinOtherTeamTerr,
+                    before: 92,
+                    after: 0,
+                },
+            ]
+        );
+        assert_eq!(plan.receiver_self_slot_skipped, 0);
+        assert_eq!(plan.open.candidate_leader_slot, 1);
+        assert_eq!(plan.open.candidate_who, 1);
+        assert_eq!(plan.open.target_who_index, 0);
+        assert!(validate_frame0_plan_strategy_diplomacy_read_request(
+            &plan.open
+        ));
+        assert!(!plan.owner0_strategy_complete);
+        assert_eq!(
+            plan.composition_digest,
+            frame0_plan_strategy_post_team_terr_digest(&plan)
+        );
+    }
+
+    #[test]
+    fn post_return_skips_locally_rejected_rows_without_reading_diplomacy() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags &= !LEADER_ACTIVE;
+        sim.vic_leaders.slots[2].leader_flags |= LEADER_ACTIVE;
+        let (parent, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
+        let plan = plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap();
+        assert_eq!(plan.open.candidate_leader_slot, 2);
+
+        let mut request = plan.open;
+        request.candidate_leader_slot = 1;
+        assert!(!validate_frame0_plan_strategy_diplomacy_read_request(
+            &request
+        ));
+    }
+
+    #[test]
+    fn post_return_refuses_stale_child_and_missing_candidate() {
+        let mut sim = call_entry();
+        sim.vic_leaders.slots[1].leader_flags |= LEADER_ACTIVE;
+        let (parent, authority, request) = bind(&sim);
+        let mut receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
+        receipt.result ^= 1;
+        receipt.composition_digest = frame0_get_team_terr_receipt_digest(&receipt);
+        assert_eq!(
+            plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap_err(),
+            Frame0PlanStrategyPostTeamTerrError::InvalidFirstChildReceipt
+        );
+
+        let sim = call_entry();
+        let (parent, authority, request) = bind(&sim);
+        let receipt = resolve_captured_frame0_get_team_terr(&request, &authority).unwrap();
+        assert_eq!(
+            plan_frame0_owner0_after_get_team_terr(&parent, &authority, &receipt).unwrap_err(),
+            Frame0PlanStrategyPostTeamTerrError::NoQualifyingDiplomacyCandidate
         );
     }
 }
