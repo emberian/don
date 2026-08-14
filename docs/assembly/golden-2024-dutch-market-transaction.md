@@ -90,7 +90,12 @@ This is the main simulation stream, not a private placement RNG. The retail call
 `0x006E2BF4` loads `ECX` from `0x00C06184`; the PDB identifies that object as
 `GameAccess::game_random`. `Random::get` at `0x00A39D70` advances the pointed-to LCG state before
 returning the scaled low-word result. `Setup::build_game` also consumes collision-retried draws for
-its eight-slot player/start shuffle after `place_all` and before `build_cities`. Consequently the
+its eight-slot player/start shuffle after procedural map construction and before `build_cities`.
+The intervening `Terrain::init` draw at `0x00850FFF` belongs to the separate
+`internal_random` object at `0x00EB697C`, not this stream. The exact shuffle and its still-open
+upstream/downstream joins are frozen in
+[`replay-setup-player-start-shuffle-frontier.md`](replay-setup-player-start-shuffle-frontier.md).
+Consequently the
 post-`place_all`, post-shuffle/pre-Market, and post-Market `Setup::build_units` RNG boundaries must
 remain independently bound. Only Market-after is equal to the BuildUnits-entry state.
 
