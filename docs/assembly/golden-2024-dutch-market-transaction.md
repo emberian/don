@@ -68,16 +68,20 @@ be absent, and `build_flags & 0x200` invokes `CityData::count_buildings(436,0,0)
 must be zero. The later land-only water count must also accept the footprint.
 `LeaderProduceBuildingMarketBlockedLocationReceipt` now executes those predicates in native
 order over the same canonical World/City/Build preimage. It admits only the reached self-owned,
-dry, City-masked 4x4 cohort and stops at the successful-site scoring boundary before
-the typed `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` child.
+dry, City-masked 4x4 cohort. The generic scoring-child prefix then advances through
+`0x006E1F5F -> BuildTypeData::find_friends 0x00639270` and stops before that function's first
+mutating Object lookup.
 
 ## Score and RNG cadence
 
-After a zero `blocked_site` result, retail calls `BuildTypeData::find_friends`. For the ordinary
-fresh Market result of zero it calls `vector_dist` between candidate and origin. The base score is
-1,000 through distance four and 333 above four. It then adds `255 - WData::val`. Market is not a
-gather enhancer and is not the Farm/Mine cohort, so it consumes **no coarse RNG draw**. Later
-equal-scoring candidates replace earlier ones because the comparison is `best <= candidate`.
+After a zero `blocked_site` result, retail calls `BuildTypeData::find_friends`. The source-owned
+prefix now reaches that function's first `ObjectsData::find_building_placed_at` child, but the
+child and the eventual return remain unresolved. If a later execution-backed authority proves the
+ordinary fresh-Market result of zero, retail next calls `vector_dist` between candidate and origin.
+The base score is 1,000 through distance four and 333 above four. It then adds
+`255 - WData::val`. Market is not a gather enhancer and is not the Farm/Mine cohort, so it consumes
+**no coarse RNG draw**. Later equal-scoring candidates replace earlier ones because the comparison
+is `best <= candidate`. Those formulas are source facts, not a current execution claim.
 
 The chosen coarse cell produces a 2x2 fine scan, again x outer / y inner. Every fine candidate
 first calls `blocked_site`. Only a zero result consumes `Random::get(0,65535)` at `0x006E2C00` and
@@ -181,8 +185,11 @@ plan_sim_leader_produce_building_market_blocked_location_request(...)
 `apply_sim_leader_produce_building_market_blocked_location_tail` then certifies the read-only
 coarse-site acceptance through self-owned territory, Town selection, the zero existing-Market
 count, and the zero water count. `GoldenStartingMarketAcceptedPlacementReceipt` hashes the full
-pre-Market Sim that supplied those reads, and the City binder refuses a lifecycle capture that is
-not rooted in that same preimage.
+pre-Market Sim that supplied those reads. It also consumes the generic exact
+`BuildTypeData::find_friends` prefix and stops at the typed
+`0x00639335 -> ObjectsData::find_building_placed_at 0x00658C80` child. The prefix has no return
+value and authorizes no score. The City binder replays both receipts against the same preimage and
+refuses a lifecycle capture that is not rooted there.
 
 This still does not execute candidate scoring, the one-through-four fine RNG draws, allocation,
 `Build::init`, activation, or City mutation. Those later effects remain supported-retail capture

@@ -15,6 +15,10 @@ use std::fmt;
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::rng::Random;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::build_type_find_friends::{
+    produce_build_type_find_friends_prefix, BuildTypeFindFriendsError, BuildTypeFindFriendsReceipt,
+    BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop,
+};
 use don_sim::systems::leader_market_build_accounting::{
     MarketLeaderAccountingError, MarketLeaderAccountingReceipt, MarketLeaderRegionAuthority,
 };
@@ -26,7 +30,7 @@ use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     LeaderProduceBuildingBlockedSitePrefixError,
     LeaderProduceBuildingBlockedSiteRawZeroFootprintError,
     LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt,
-    LeaderProduceBuildingMarketBlockedLocationError,
+    LeaderProduceBuildingFindFriendsBoundary, LeaderProduceBuildingMarketBlockedLocationError,
     LeaderProduceBuildingMarketBlockedLocationReceipt,
     LeaderProduceBuildingMarketBlockedLocationRequest,
     LeaderProduceBuildingMarketBlockedLocationRequestError,
@@ -373,6 +377,10 @@ pub fn advance_golden_starting_market_candidate(
 pub struct GoldenStartingMarketAcceptedPlacementReceipt {
     pub placement: GoldenStartingMarketPlacementReceipt,
     pub blocked_location: LeaderProduceBuildingMarketBlockedLocationReceipt,
+    /// Exact prefix of the first scoring child. The receipt stops before the mutating
+    /// `ObjectsData::find_building_placed_at` call and therefore does not authorize a
+    /// `find_friends` return value or any coarse score.
+    pub find_friends: BuildTypeFindFriendsReceipt,
     pub before_sim_sha256: [u8; 32],
     pub source_produced_city_bytes: u64,
     pub installed_in_scoreboard: bool,
@@ -384,6 +392,8 @@ pub enum GoldenStartingMarketAcceptedPlacementError {
     Snapshot(SaveError),
     Tregion(WorldTregionError),
     BlockedLocation(LeaderProduceBuildingMarketBlockedLocationError),
+    FindFriends(BuildTypeFindFriendsError),
+    UnexpectedFindFriendsStop,
 }
 
 impl fmt::Display for GoldenStartingMarketAcceptedPlacementError {
@@ -396,6 +406,19 @@ impl fmt::Display for GoldenStartingMarketAcceptedPlacementError {
 }
 
 impl std::error::Error for GoldenStartingMarketAcceptedPlacementError {}
+
+fn market_find_friends_request(
+    boundary: LeaderProduceBuildingFindFriendsBoundary,
+) -> BuildTypeFindFriendsRequest {
+    BuildTypeFindFriendsRequest {
+        call_va: boundary.call_va,
+        callee_va: boundary.callee_va,
+        type_index: boundary.type_index,
+        candidate_world_cell: boundary.candidate_world_cell,
+        city_filter: boundary.origin_city_filter,
+        owner: i32::from(boundary.owner),
+    }
+}
 
 /// Consume the generic `WorldData::get_tregion` sibling authority and execute the rest of the
 /// source-exact read-only Market placement verdict on the same pre-Market Sim.
@@ -429,11 +452,25 @@ pub fn advance_golden_starting_market_blocked_location(
         before, production, types, request, tregion,
     )
     .map_err(GoldenStartingMarketAcceptedPlacementError::BlockedLocation)?;
+    let find_friends = produce_build_type_find_friends_prefix(
+        types,
+        production,
+        &before.map.world,
+        market_find_friends_request(blocked_location.next_child),
+    )
+    .map_err(GoldenStartingMarketAcceptedPlacementError::FindFriends)?;
+    if find_friends.stop != BuildTypeFindFriendsStop::FirstObjectLookup
+        || find_friends.returned.is_some()
+        || find_friends.first_child.is_none()
+    {
+        return Err(GoldenStartingMarketAcceptedPlacementError::UnexpectedFindFriendsStop);
+    }
     let before_sim_sha256 = frame379_setup_snapshot_sha256(before)
         .map_err(GoldenStartingMarketAcceptedPlacementError::Snapshot)?;
     Ok(GoldenStartingMarketAcceptedPlacementReceipt {
         placement,
         blocked_location,
+        find_friends,
         before_sim_sha256,
         source_produced_city_bytes: 0,
         installed_in_scoreboard: false,
@@ -488,6 +525,9 @@ pub struct GoldenStartingMarketCityReceipt {
     pub placement: GoldenStartingMarketPlacementReceipt,
     /// Execution-derived read-only placement acceptance on the hashed pre-Market Sim.
     pub blocked_location: LeaderProduceBuildingMarketBlockedLocationReceipt,
+    /// Execution-derived type/World prefix of the first scoring child. Its typed
+    /// `find_building_placed_at` child remains unresolved.
+    pub find_friends: BuildTypeFindFriendsReceipt,
     pub capture_revision: u64,
     pub source: GoldenStartingMarketCaptureSource,
     pub executable_sha256: [u8; 32],
@@ -787,12 +827,15 @@ pub fn bind_golden_starting_market_city(
     replay: &Replay,
     before: &Sim,
     after: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
     accepted: GoldenStartingMarketAcceptedPlacementReceipt,
     capture: &GoldenStartingMarketCapture,
 ) -> Result<GoldenStartingMarketCityReceipt, GoldenStartingMarketBindError> {
     let GoldenStartingMarketAcceptedPlacementReceipt {
         placement,
         blocked_location,
+        find_friends,
         before_sim_sha256: accepted_before_sim_sha256,
         source_produced_city_bytes: accepted_city_bytes,
         installed_in_scoreboard: accepted_installed,
@@ -808,6 +851,11 @@ pub fn bind_golden_starting_market_city(
         || placement.installed_in_scoreboard
         || !blocked_location.validates()
         || blocked_location.input != placement.blocked_location
+        || !find_friends.validates()
+        || find_friends.request != market_find_friends_request(blocked_location.next_child)
+        || find_friends.stop != BuildTypeFindFriendsStop::FirstObjectLookup
+        || find_friends.returned.is_some()
+        || find_friends.first_child.is_none()
         || accepted_city_bytes != 0
         || accepted_installed
     {
@@ -839,6 +887,7 @@ pub fn bind_golden_starting_market_city(
         || !blocked_location
             .tregion
             .validates_against(&before.map.world)
+        || !find_friends.validates_against(types, production, &before.map.world)
     {
         return Err(GoldenStartingMarketBindError::BeforeSnapshotMismatch);
     }
@@ -993,6 +1042,7 @@ pub fn bind_golden_starting_market_city(
     Ok(GoldenStartingMarketCityReceipt {
         placement,
         blocked_location,
+        find_friends,
         capture_revision: capture.revision,
         source: capture.source,
         executable_sha256: capture.executable_sha256,
@@ -1083,6 +1133,26 @@ pub fn commit_golden_starting_market_leader_accounting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn market_find_friends_request_preserves_the_native_parent_arguments() {
+        let boundary = LeaderProduceBuildingFindFriendsBoundary {
+            call_va: 0x006e_1f5f,
+            callee_va: 0x0063_9270,
+            owner: OWNER,
+            type_index: DUTCH_STARTING_MARKET_TYPE,
+            candidate_world_cell: [23, 31],
+            origin_city_filter: STARTING_CITY_SLOT.into(),
+        };
+        let request = market_find_friends_request(boundary);
+        assert_eq!(request.call_va, boundary.call_va);
+        assert_eq!(request.callee_va, boundary.callee_va);
+        assert_eq!(request.type_index, DUTCH_STARTING_MARKET_TYPE);
+        assert_eq!(request.candidate_world_cell, [23, 31]);
+        assert_eq!(request.city_filter, 0);
+        assert_eq!(request.owner, 0);
+        assert_eq!(request.native_push_order(), [0, 0, 31, 23]);
+    }
 
     #[test]
     fn market_city_writes_are_exact_and_grade_bounded() {

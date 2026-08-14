@@ -60,9 +60,13 @@ pre/post process capture or complete generated World is currently installed.
 
 ## Residual
 
-The first unresolved child after an accepted coarse site is the typed
-`0x006E1F5F -> BuildTypeData::find_friends 0x00639270` call, followed by coarse scoring and the fine probes. Allocation, `Build::init`, activation visibility/road
-effects, and the full non-City Sim mutation surface still need one supported retail capture before
-this receipt can become the golden frame-zero publisher. The post-`place_all` RNG state is not the
-Market-before state: intervening post-placement work and Setup's collision-retried player/start
-shuffle remain separate owners. Recorded checksum words are never inputs.
+The `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` prefix is now execution-backed through
+its type and World-bounds gates. Its first unresolved child is
+`0x00639335 -> ObjectsData::find_building_placed_at 0x00658C80`, whose first instruction writes
+Objects scratch state. The prefix therefore has no `find_friends` return and cannot authorize the
+source-known coarse-score formula, fine probes, allocation, `Build::init`, activation
+visibility/road effects, or the full non-City Sim mutation surface. Those later effects still need
+an exact owner before this receipt can become the golden frame-zero publisher. The
+post-`place_all` RNG state is not the Market-before state: intervening post-placement work and
+Setup's collision-retried player/start shuffle remain separate owners. Recorded checksum words are
+never inputs.
