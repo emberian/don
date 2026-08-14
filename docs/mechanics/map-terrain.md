@@ -268,6 +268,29 @@ the rollup at another:
   `WATERHALF` *and* the tile itself is water; otherwise `region`. This is how a coastal
   cell belongs to a land region and a sea region at once.
 
+### Read-only `get_tregion` authority
+
+The supported PE's complete `WorldData::get_tregion` body is
+`[0x006b52e0,0x006b534a)` (106 bytes), SHA-256
+`018fb904a8c2cb1796c57708e99d9f9b102d585ffd71dd762109f5e6184dfaf`.
+It computes `wi = (ty >> 2) * xs + (tx >> 2)`, tests `WData[wi].flags & 0x100`, and
+only on that branch reads the low byte of `TData[ty * tile_xs + tx]`. A surface value of
+`0x20` selects signed `WData.region2`; every other path selects signed `WData.region`.
+It consumes no RNG and performs no write.
+
+`World::read_tregion` retains that exact short-circuit in a `WorldTregionReceipt`: the
+query/call identity, dimensions and indices, flags and both possible region words, optional
+TData low-byte read, result, and the complete `World::walk_data` checksum image. Local
+validation proves the callee arithmetic; `validates_against(&World)` re-hashes the live World
+and binds every retained source value to it. The producer rejects off-map queries because the
+native body performs unchecked array indexing rather than selecting `offmap_world`.
+
+For the golden Market call at `0x006375f7`, this closes the callee/result boundary but does
+not synthesize the missing generated World. A concrete result remains unavailable until the
+canonical Great Lakes `place_all` authority completes from the installed mountain XML and all
+16 displacement TGAs and is composed through starting setup to the Market call. Replay checksum
+values and SVX-derived heights are not accepted as substitutes for those source bytes.
+
 ### Rivers and combat — the one terrain→combat coupling found
 
 `Constants+0x68` is `river_modifier`, parser `scaled`, scale 256, stored value **512**

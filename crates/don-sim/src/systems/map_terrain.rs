@@ -767,6 +767,56 @@ pub fn place_start_in_region(
 // 5. The World
 // ---------------------------------------------------------------------------------------
 
+/// `WorldData::get_tregion` in the supported retail executable.
+pub const WORLD_DATA_GET_TREGION_VA: u32 = 0x006b_52e0;
+
+/// One call into [`World::get_tregion`].
+///
+/// The caller address is retained rather than interpreted here: this is a generic terrain
+/// result authority, so the owner of a particular parent branch must validate its own call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldTregionQuery {
+    pub call_va: u32,
+    pub callee_va: u32,
+    pub tcoord: [i32; 2],
+}
+
+/// Read-only, self-hashed result of `WorldData::get_tregion` `0x006b52e0`.
+///
+/// Retail always reads the owning WData flags and one signed region word. It reads the TData
+/// low byte and may select `region2` only when `WATERHALF` is set. `tdata_index` and
+/// `tdata_low_byte` therefore use `Option` to preserve that exact short-circuit rather than
+/// claiming a tile-plane read on the ordinary path. `world_checksum` binds the complete
+/// synchronized World preimage, not just the two rows projected below.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldTregionReceipt {
+    pub query: WorldTregionQuery,
+    pub world_dims: [i32; 2],
+    pub tile_dims: [i32; 2],
+    pub world_checksum: WorldChecksum,
+    pub owning_wcoord: [i32; 2],
+    pub wdata_index: usize,
+    pub wdata_flags: u16,
+    pub region: i16,
+    pub region2: i16,
+    pub tdata_index: Option<usize>,
+    pub tdata_low_byte: Option<u8>,
+    pub returned_region: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldTregionError {
+    MissingCallSite,
+    WrongCallee {
+        expected: u32,
+        actual: u32,
+    },
+    TcoordOutOfBounds {
+        tcoord: [i32; 2],
+        tile_dims: [i32; 2],
+    },
+}
+
 /// The tile world. Field names and offsets are the PDB's `WorldData` layout verbatim
 /// (`World : WorldOut : WorldData`, 372 / 368 / 364 bytes).
 ///
@@ -1615,6 +1665,59 @@ impl World {
         } else {
             w.region as i32
         }
+    }
+
+    /// Execute one exact, read-only `WorldData::get_tregion` query and bind every source row to
+    /// the complete World checksum image.
+    ///
+    /// Retail's callee directly indexes both arrays, so an off-map call has no lawful result.
+    /// This producer fails closed at that boundary instead of manufacturing an off-map row.
+    pub fn read_tregion(
+        &self,
+        query: WorldTregionQuery,
+    ) -> Result<WorldTregionReceipt, WorldTregionError> {
+        if query.call_va == 0 {
+            return Err(WorldTregionError::MissingCallSite);
+        }
+        if query.callee_va != WORLD_DATA_GET_TREGION_VA {
+            return Err(WorldTregionError::WrongCallee {
+                expected: WORLD_DATA_GET_TREGION_VA,
+                actual: query.callee_va,
+            });
+        }
+        let [tx, ty] = query.tcoord;
+        if !self.valid_t(tx, ty) {
+            return Err(WorldTregionError::TcoordOutOfBounds {
+                tcoord: query.tcoord,
+                tile_dims: [self.tile_xs, self.tile_ys],
+            });
+        }
+
+        let owning_wcoord = [tx >> 2, ty >> 2];
+        let wdata_index = self.w_index(owning_wcoord[0], owning_wcoord[1]);
+        let wdata = &self.wdata[wdata_index];
+        let (tdata_index, tdata_low_byte) = if wdata.flags & wflag::WATERHALF != 0 {
+            let index = self.t_index(tx, ty);
+            (Some(index), Some(self.tdata[index] as u8))
+        } else {
+            (None, None)
+        };
+        let receipt = WorldTregionReceipt {
+            query,
+            world_dims: [self.xs, self.ys],
+            tile_dims: [self.tile_xs, self.tile_ys],
+            world_checksum: self.checksum_sections(),
+            owning_wcoord,
+            wdata_index,
+            wdata_flags: wdata.flags,
+            region: wdata.region,
+            region2: wdata.region2,
+            tdata_index,
+            tdata_low_byte,
+            returned_region: self.get_tregion(tx, ty),
+        };
+        debug_assert!(receipt.validates_against(self));
+        Ok(receipt)
     }
     /// `WorldData::get_coll_block` `0x006b5350` — `region < 0` means "any region".
     pub fn get_coll_block(&self, wx: i32, wy: i32, region: i32) -> Option<&CollBlock> {
@@ -2468,6 +2571,112 @@ impl WorldChecksum {
     }
 }
 
+impl WorldTregionReceipt {
+    /// Validate the callee-local projection without trusting a live World object.
+    ///
+    /// This proves the exact index arithmetic, native short-circuit and returned signed region
+    /// over the retained inputs. Use [`Self::validates_against`] at a composition boundary to
+    /// prove that those inputs came from the complete World named by `world_checksum`.
+    pub fn validates(&self) -> bool {
+        let [tx, ty] = self.query.tcoord;
+        let [world_xs, world_ys] = self.world_dims;
+        let [tile_xs, tile_ys] = self.tile_dims;
+        if self.query.call_va == 0
+            || self.query.callee_va != WORLD_DATA_GET_TREGION_VA
+            || world_xs <= 0
+            || world_ys <= 0
+            || tile_xs != world_xs.checked_mul(TILES_PER_WCELL).unwrap_or(i32::MIN)
+            || tile_ys != world_ys.checked_mul(TILES_PER_WCELL).unwrap_or(i32::MIN)
+            || tx < 0
+            || ty < 0
+            || tx >= tile_xs
+            || ty >= tile_ys
+            || self.owning_wcoord != [tx >> 2, ty >> 2]
+        {
+            return false;
+        }
+
+        let Some(wdata_index) = self.owning_wcoord[1]
+            .checked_mul(world_xs)
+            .and_then(|row| row.checked_add(self.owning_wcoord[0]))
+            .and_then(|index| usize::try_from(index).ok())
+        else {
+            return false;
+        };
+        if self.wdata_index != wdata_index {
+            return false;
+        }
+
+        let waterhalf = self.wdata_flags & wflag::WATERHALF != 0;
+        let expected_tdata_index = if waterhalf {
+            let Some(index) = ty
+                .checked_mul(tile_xs)
+                .and_then(|row| row.checked_add(tx))
+                .and_then(|index| usize::try_from(index).ok())
+            else {
+                return false;
+            };
+            Some(index)
+        } else {
+            None
+        };
+        if self.tdata_index != expected_tdata_index || waterhalf != self.tdata_low_byte.is_some() {
+            return false;
+        }
+        let expected_region = if self
+            .tdata_low_byte
+            .is_some_and(|tile| tile & tflag::SURFACE_MASK as u8 == tflag::SURFACE_WATER as u8)
+        {
+            self.region2 as i32
+        } else {
+            self.region as i32
+        };
+        if self.returned_region != expected_region {
+            return false;
+        }
+
+        let sections_bytes = self
+            .world_checksum
+            .per_section
+            .iter()
+            .try_fold(0u64, |sum, section| sum.checked_add(section.bytes));
+        let expected_wdata_bytes = i64::from(world_xs)
+            .checked_mul(i64::from(world_ys))
+            .and_then(|cells| cells.checked_mul(21))
+            .and_then(|bytes| u64::try_from(bytes).ok());
+        sections_bytes == Some(self.world_checksum.bytes)
+            && Some(self.world_checksum.section(WorldSection::WData).bytes) == expected_wdata_bytes
+    }
+
+    /// Bind this result to the complete live World preimage.
+    pub fn validates_against(&self, world: &World) -> bool {
+        if !self.validates()
+            || self.world_dims != [world.xs, world.ys]
+            || self.tile_dims != [world.tile_xs, world.tile_ys]
+            || self.world_checksum != world.checksum_sections()
+            || !world.valid_t(self.query.tcoord[0], self.query.tcoord[1])
+        {
+            return false;
+        }
+
+        let wdata = &world.wdata[self.wdata_index];
+        if self.wdata_flags != wdata.flags
+            || self.region != wdata.region
+            || self.region2 != wdata.region2
+        {
+            return false;
+        }
+        match (self.tdata_index, self.tdata_low_byte) {
+            (Some(index), Some(low_byte)) => world
+                .tdata
+                .get(index)
+                .is_some_and(|&tile| tile as u8 == low_byte),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 /// `SimpleArray<T>::walk_data` on the checksum path — see [`WalkedArray`].
 fn walk_simple_array_i32<W: DataWalk>(w: &mut W, a: &WalkedArray<i32>) {
     let len = a.items.len() as i32;
@@ -2954,6 +3163,71 @@ mod tests {
         assert_eq!(w.get_tregion(4, 4), 9);
         assert_eq!(w.get_tregion(5, 4), 7);
         assert_eq!(w.num_waterhalf(1, 1), 1);
+    }
+
+    /// The receipt retains the exact conditional source reads and binds them to the complete
+    /// World checksum image. The concrete caller is the first generated-World child in the
+    /// golden Market `blocked_location` branch.
+    #[test]
+    fn tregion_receipt_is_read_only_and_world_bound() {
+        let query = WorldTregionQuery {
+            call_va: 0x0063_75f7,
+            callee_va: WORLD_DATA_GET_TREGION_VA,
+            tcoord: [4, 4],
+        };
+        let mut world = World::init_default_rules(8, 8);
+        world.wdata_mut(1, 1).region = 7;
+        world.wdata_mut(1, 1).region2 = 9;
+
+        let land = world.read_tregion(query).expect("in-bounds query");
+        assert!(land.validates());
+        assert!(land.validates_against(&world));
+        assert_eq!(land.returned_region, 7);
+        assert_eq!(land.owning_wcoord, [1, 1]);
+        assert_eq!(land.wdata_index, 9);
+        assert_eq!((land.tdata_index, land.tdata_low_byte), (None, None));
+
+        world.set_waterhalf(4, 4, true);
+        let water = world.read_tregion(query).expect("water-half query");
+        assert!(water.validates());
+        assert!(water.validates_against(&world));
+        assert_eq!(water.returned_region, 9);
+        assert_eq!(water.tdata_index, Some(4 * 32 + 4));
+        assert_eq!(water.tdata_low_byte, Some(tflag::SURFACE_WATER as u8));
+        assert!(!land.validates_against(&world));
+
+        let mut forged_result = water.clone();
+        forged_result.returned_region = 7;
+        assert!(!forged_result.validates());
+
+        let mut forged_checksum = water.clone();
+        forged_checksum.world_checksum.full ^= 1;
+        assert!(forged_checksum.validates());
+        assert!(!forged_checksum.validates_against(&world));
+    }
+
+    #[test]
+    fn tregion_receipt_refuses_missing_provenance_and_offmap_reads() {
+        let world = World::init_default_rules(8, 8);
+        assert_eq!(
+            world.read_tregion(WorldTregionQuery {
+                call_va: 0,
+                callee_va: WORLD_DATA_GET_TREGION_VA,
+                tcoord: [4, 4],
+            }),
+            Err(WorldTregionError::MissingCallSite)
+        );
+        assert_eq!(
+            world.read_tregion(WorldTregionQuery {
+                call_va: 0x0063_75f7,
+                callee_va: WORLD_DATA_GET_TREGION_VA,
+                tcoord: [32, 4],
+            }),
+            Err(WorldTregionError::TcoordOutOfBounds {
+                tcoord: [32, 4],
+                tile_dims: [32, 32],
+            })
+        );
     }
 
     /// `set_oil_at` reports the Coord the engine spawns the oil `Good` at.
