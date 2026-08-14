@@ -176,8 +176,8 @@ pub mod follow_executor;
 /// no-cast arms and the authority-bound fresh CastOrder constructor, stopping before clear/suffix.
 pub mod frame0_scout_spellcaster;
 /// Revision-bound adjacent-call authority for the golden frame-one Scout's
-/// `Caster::process_spells` child. Only a captured empty, unchanged engine array completes;
-/// nonempty queues remain typed residuals.
+/// `Caster::process_spells` child, plus source-only post-empty schedule gates through the typed
+/// `Unit::process_healing` boundary. Nonempty queues and changed owner gates remain residuals.
 pub mod frame1_caster_process;
 /// `GameDaemon::calc_danger` `0x00732D10` and `GameDaemon::do_danger` `0x00732390` — the
 /// step-12 child that rewrites the eight `World::danger` planes.

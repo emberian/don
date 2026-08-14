@@ -17,7 +17,37 @@ use crate::systems::unit_inctime::SUPPORTED_RETAIL_EXE_SHA256;
 use crate::world::Handle;
 
 pub const UNIT_PROCESS_VA: u32 = 0x0061_0bc0;
+pub const UNIT_PROCESS_BYTES: u32 = 3_272;
+/// SHA-256 of the exact 3,272-byte `Unit::process` body in the supported executable.
+pub const UNIT_PROCESS_SHA256: [u8; 32] = [
+    0x25, 0xa4, 0xde, 0x9d, 0x89, 0x7c, 0x2b, 0xdd, 0x08, 0xfd, 0x60, 0xcf, 0x2a, 0x63, 0xfb, 0x7a,
+    0xd7, 0x5e, 0xa4, 0xb0, 0xe9, 0x1e, 0x6f, 0x82, 0x03, 0x99, 0x53, 0x57, 0x51, 0x35, 0x94, 0x00,
+];
+pub const UNIT_PRE_CASTER_HEALING_TIMER_GATE_VA: u32 = 0x0061_0c22;
+pub const UNIT_PRE_CASTER_HEALING_TIMER_STORE_VA: u32 = 0x0061_0c2c;
+pub const UNIT_PRE_CASTER_AIR_FUEL_GATE_VA: u32 = 0x0061_0c30;
+pub const UNIT_PRE_CASTER_AIR_FUEL_OWNER_BLOCK_VA: u32 = 0x0061_0c3a;
 pub const CASTER_DISPATCH_VA: u32 = 0x0061_0dd7;
+pub const UNIT_POST_CASTER_SCHEDULE_VA: u32 = 0x0061_0ddc;
+pub const UNIT_POST_CASTER_SCHEDULE_END_VA: u32 = 0x0061_14cd;
+pub const UNIT_POST_CASTER_SCHEDULE_BYTES: u32 = 1_777;
+/// SHA-256 of the exact linear `0x00610DDC..0x006114CD` source span. The golden executed path
+/// skips the three interior owner blocks and stops at the final healing call boundary.
+pub const UNIT_POST_CASTER_SCHEDULE_SHA256: [u8; 32] = [
+    0x82, 0xaf, 0xf0, 0x8b, 0x8d, 0x4c, 0x3b, 0x02, 0xb6, 0x7c, 0x42, 0x14, 0x4c, 0xfe, 0xa8, 0x03,
+    0x1f, 0x07, 0xc8, 0x4d, 0x09, 0x06, 0xbc, 0x50, 0x41, 0xc0, 0x2f, 0x29, 0xec, 0x89, 0x8f, 0x7a,
+];
+pub const UNIT_POST_CASTER_PHASE32_BRANCH_VA: u32 = 0x0061_0df9;
+pub const UNIT_POST_CASTER_PHASE32_OWNER_BLOCK_VA: u32 = 0x0061_0dff;
+pub const UNIT_POST_CASTER_PHASE32_SKIP_VA: u32 = 0x0061_0ebe;
+pub const UNIT_POST_CASTER_MANA_BURN_GATE_VA: u32 = 0x0061_0ebe;
+pub const UNIT_POST_CASTER_MANA_BURN_OWNER_BLOCK_VA: u32 = 0x0061_0ecc;
+pub const UNIT_POST_CASTER_MANA_BURN_SKIP_VA: u32 = 0x0061_1158;
+pub const UNIT_POST_CASTER_SPELL_TIME_GATE_VA: u32 = 0x0061_1158;
+pub const UNIT_POST_CASTER_SPELL_TIME_OWNER_BLOCK_VA: u32 = 0x0061_1166;
+pub const UNIT_POST_CASTER_SPELL_TIME_SKIP_VA: u32 = 0x0061_14c6;
+pub const UNIT_PROCESS_HEALING_CALL_VA: u32 = 0x0061_14c8;
+pub const UNIT_PROCESS_HEALING_VA: u32 = 0x005e_0670;
 pub const CASTER_PROCESS_SPELLS_VA: u32 = 0x0073_9ad0;
 pub const CASTER_PROCESS_SPELLS_BYTES: usize = 481;
 /// SHA-256 of `Caster::process_spells`' complete 481-byte body in the supported executable.
@@ -91,6 +121,229 @@ pub const fn prove_source_empty_caster_process(
         active_spell_entries_read: 0,
         stores: 0,
         rng_draws: 0,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPreCasterHealingTimerReceipt {
+    pub gate_va: u32,
+    pub store_va: u32,
+    pub entry_healing_timer: i16,
+    pub exit_healing_timer: i16,
+    pub writes: u32,
+}
+
+/// Derive the inherited `ObjectData::healing` clock at the Caster boundary from the
+/// pre-Unit image. This is the word at object offset `+0x38`; `UnitData::spell_time` is the
+/// distinct word at object offset `+0xA0` read later at `0x00611158`.
+pub const fn derive_frame1_scout_pre_caster_healing_timer(
+    entry_healing_timer: i16,
+) -> Frame1ScoutPreCasterHealingTimerReceipt {
+    let (exit_healing_timer, writes) = if entry_healing_timer == 0 {
+        (0, 0)
+    } else {
+        (entry_healing_timer.wrapping_sub(1), 1)
+    };
+    Frame1ScoutPreCasterHealingTimerReceipt {
+        gate_va: UNIT_PRE_CASTER_HEALING_TIMER_GATE_VA,
+        store_va: UNIT_PRE_CASTER_HEALING_TIMER_STORE_VA,
+        entry_healing_timer,
+        exit_healing_timer,
+        writes,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPreCasterAirFuelSkipReceipt {
+    pub gate_va: u32,
+    pub owner_block_va: u32,
+    pub unit_masks: u32,
+    pub mana_burn_before: i16,
+    pub mana_burn_after: i16,
+    pub owner_block_executed: bool,
+    pub writes: u32,
+    pub child_calls_completed: u32,
+    pub rng_draws: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPreCasterAirFuelResidual {
+    pub unit_masks: u32,
+    pub mana_burn_before: i16,
+    pub entry_va: u32,
+}
+
+/// Prove that the earlier Unit air-fuel owner did not alter the post-Caster schedule inputs.
+pub const fn prove_frame1_scout_pre_caster_air_fuel_skip(
+    unit_masks: u32,
+    mana_burn_before: i16,
+) -> Result<Frame1ScoutPreCasterAirFuelSkipReceipt, Frame1ScoutPreCasterAirFuelResidual> {
+    if unit_masks & 1 != 0 {
+        return Err(Frame1ScoutPreCasterAirFuelResidual {
+            unit_masks,
+            mana_burn_before,
+            entry_va: UNIT_PRE_CASTER_AIR_FUEL_OWNER_BLOCK_VA,
+        });
+    }
+    Ok(Frame1ScoutPreCasterAirFuelSkipReceipt {
+        gate_va: UNIT_PRE_CASTER_AIR_FUEL_GATE_VA,
+        owner_block_va: UNIT_PRE_CASTER_AIR_FUEL_OWNER_BLOCK_VA,
+        unit_masks,
+        mana_burn_before,
+        mana_burn_after: mana_burn_before,
+        owner_block_executed: false,
+        writes: 0,
+        child_calls_completed: 0,
+        rng_draws: 0,
+    })
+}
+
+/// Exact post-empty-return values read before `Unit::process_healing`.
+///
+/// `mana_burn` and `spell_time` are the live values at `0x00610EBE` and `0x00611158`, after
+/// any earlier `Unit::process` prefix work. `healing_timer` is the source-derived value passed
+/// onward to the healing child after the opening decrement at `0x00610C22`. Chronology adapters
+/// must establish these values from their pre-Unit image rather than silently reusing a stale
+/// snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPostCasterScheduleInput {
+    pub request: CasterProcessSpellsRequest,
+    pub mana_burn: i16,
+    pub spell_time: i16,
+    pub healing_timer: i16,
+    pub random_state: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutProcessHealingRequest {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub frame: i32,
+    pub unit: Handle,
+    pub who: u8,
+    pub o: i16,
+    pub healing_timer: i16,
+    pub callsite_va: u32,
+    pub function_va: u32,
+}
+
+/// Source-only detached schedule receipt from the empty Caster return to the first later child.
+/// No enclosing Unit mutation is committed by this value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPostCasterScheduleReceipt {
+    pub executable_sha256: [u8; 32],
+    pub unit_process_va: u32,
+    pub unit_process_bytes: u32,
+    pub unit_process_sha256: [u8; 32],
+    pub source_span_va: u32,
+    pub source_span_bytes: u32,
+    pub source_span_sha256: [u8; 32],
+    pub input: Frame1ScoutPostCasterScheduleInput,
+    pub phase32_branch_va: u32,
+    pub phase32_residue: i32,
+    pub phase32_owner_block_va: u32,
+    pub phase32_owner_block_executed: bool,
+    pub phase32_skip_va: u32,
+    pub mana_burn_gate_va: u32,
+    pub mana_burn_owner_block_va: u32,
+    pub mana_burn_owner_block_executed: bool,
+    pub mana_burn_skip_va: u32,
+    pub spell_time_gate_va: u32,
+    pub spell_time_owner_block_va: u32,
+    pub spell_time_owner_block_executed: bool,
+    pub spell_time_skip_va: u32,
+    pub open: Frame1ScoutProcessHealingRequest,
+    pub local_writes: u32,
+    pub child_calls_completed: u32,
+    pub rng_draws: u32,
+    pub random_state_after: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame1ScoutPostCasterScheduleError {
+    InvalidCasterReceiptRequest,
+    Phase32OwnerBlock { residue: i32, entry_va: u32 },
+    ManaBurnOwnerBlock { mana_burn: i16, entry_va: u32 },
+    SpellTimeOwnerBlock { spell_time: i16, entry_va: u32 },
+}
+
+/// Walk the exact golden frame-one schedule gates after the empty Caster return.
+///
+/// The periodic block is skipped because `(frame 1 + Scout o 0) % 32 == 1`. Zero live
+/// `mana_burn` and `spell_time` then skip their distinct owner blocks. The first reached child
+/// is the unconditional `Unit::process_healing` call. Any changed gate value becomes a typed
+/// stop instead of being normalized into the golden path.
+pub fn plan_frame1_scout_post_caster_schedule(
+    input: Frame1ScoutPostCasterScheduleInput,
+) -> Result<Frame1ScoutPostCasterScheduleReceipt, Frame1ScoutPostCasterScheduleError> {
+    let request = input.request;
+    if request.authority_revision == 0
+        || request.authority_digest == [0; 32]
+        || request.who != SETUP_SCOUT_WHO
+        || request.caster_index < 0
+        || request.mode != PROCESS_SPELLS_NORMAL_MODE
+    {
+        return Err(Frame1ScoutPostCasterScheduleError::InvalidCasterReceiptRequest);
+    }
+    let phase32_residue = request.frame.wrapping_add(i32::from(request.o)) % 32;
+    if phase32_residue == 0 {
+        return Err(Frame1ScoutPostCasterScheduleError::Phase32OwnerBlock {
+            residue: phase32_residue,
+            entry_va: UNIT_POST_CASTER_PHASE32_OWNER_BLOCK_VA,
+        });
+    }
+    if request.frame != FRAME_ONE || request.o != SETUP_SCOUT_O {
+        return Err(Frame1ScoutPostCasterScheduleError::InvalidCasterReceiptRequest);
+    }
+    if input.mana_burn != 0 {
+        return Err(Frame1ScoutPostCasterScheduleError::ManaBurnOwnerBlock {
+            mana_burn: input.mana_burn,
+            entry_va: UNIT_POST_CASTER_MANA_BURN_OWNER_BLOCK_VA,
+        });
+    }
+    if input.spell_time != 0 {
+        return Err(Frame1ScoutPostCasterScheduleError::SpellTimeOwnerBlock {
+            spell_time: input.spell_time,
+            entry_va: UNIT_POST_CASTER_SPELL_TIME_OWNER_BLOCK_VA,
+        });
+    }
+    Ok(Frame1ScoutPostCasterScheduleReceipt {
+        executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+        unit_process_va: UNIT_PROCESS_VA,
+        unit_process_bytes: UNIT_PROCESS_BYTES,
+        unit_process_sha256: UNIT_PROCESS_SHA256,
+        source_span_va: UNIT_POST_CASTER_SCHEDULE_VA,
+        source_span_bytes: UNIT_POST_CASTER_SCHEDULE_BYTES,
+        source_span_sha256: UNIT_POST_CASTER_SCHEDULE_SHA256,
+        input,
+        phase32_branch_va: UNIT_POST_CASTER_PHASE32_BRANCH_VA,
+        phase32_residue,
+        phase32_owner_block_va: UNIT_POST_CASTER_PHASE32_OWNER_BLOCK_VA,
+        phase32_owner_block_executed: false,
+        phase32_skip_va: UNIT_POST_CASTER_PHASE32_SKIP_VA,
+        mana_burn_gate_va: UNIT_POST_CASTER_MANA_BURN_GATE_VA,
+        mana_burn_owner_block_va: UNIT_POST_CASTER_MANA_BURN_OWNER_BLOCK_VA,
+        mana_burn_owner_block_executed: false,
+        mana_burn_skip_va: UNIT_POST_CASTER_MANA_BURN_SKIP_VA,
+        spell_time_gate_va: UNIT_POST_CASTER_SPELL_TIME_GATE_VA,
+        spell_time_owner_block_va: UNIT_POST_CASTER_SPELL_TIME_OWNER_BLOCK_VA,
+        spell_time_owner_block_executed: false,
+        spell_time_skip_va: UNIT_POST_CASTER_SPELL_TIME_SKIP_VA,
+        open: Frame1ScoutProcessHealingRequest {
+            authority_revision: request.authority_revision,
+            authority_digest: request.authority_digest,
+            frame: request.frame,
+            unit: request.unit,
+            who: request.who,
+            o: request.o,
+            healing_timer: input.healing_timer,
+            callsite_va: UNIT_PROCESS_HEALING_CALL_VA,
+            function_va: UNIT_PROCESS_HEALING_VA,
+        },
+        local_writes: 0,
+        child_calls_completed: 0,
+        rng_draws: 0,
+        random_state_after: input.random_state,
     })
 }
 
@@ -539,6 +792,88 @@ mod tests {
             Err(Frame1CasterSourceNonEmptyResidual {
                 entry_length: 1,
                 body_va: CASTER_PROCESS_SPELLS_VA,
+            })
+        );
+    }
+
+    #[test]
+    fn post_caster_schedule_skips_three_owner_blocks_and_stops_at_healing() {
+        let timer = derive_frame1_scout_pre_caster_healing_timer(0);
+        assert_eq!(timer.exit_healing_timer, 0);
+        assert_eq!(timer.writes, 0);
+        assert_eq!(
+            derive_frame1_scout_pre_caster_healing_timer(2).exit_healing_timer,
+            1
+        );
+        let fuel = prove_frame1_scout_pre_caster_air_fuel_skip(0, 7).unwrap();
+        assert_eq!(fuel.mana_burn_after, 7);
+        assert_eq!(fuel.writes, 0);
+        assert_eq!(
+            prove_frame1_scout_pre_caster_air_fuel_skip(1, 7),
+            Err(Frame1ScoutPreCasterAirFuelResidual {
+                unit_masks: 1,
+                mana_burn_before: 7,
+                entry_va: UNIT_PRE_CASTER_AIR_FUEL_OWNER_BLOCK_VA,
+            })
+        );
+
+        let input = Frame1ScoutPostCasterScheduleInput {
+            request: request(),
+            mana_burn: 0,
+            spell_time: 0,
+            healing_timer: 0,
+            random_state: 0x1020_3040,
+        };
+        let receipt = plan_frame1_scout_post_caster_schedule(input).unwrap();
+        assert_eq!(receipt.unit_process_sha256, UNIT_PROCESS_SHA256);
+        assert_eq!(receipt.source_span_sha256, UNIT_POST_CASTER_SCHEDULE_SHA256);
+        assert_eq!(
+            UNIT_POST_CASTER_SCHEDULE_END_VA - UNIT_POST_CASTER_SCHEDULE_VA,
+            UNIT_POST_CASTER_SCHEDULE_BYTES
+        );
+        assert_eq!(receipt.phase32_residue, 1);
+        assert!(!receipt.phase32_owner_block_executed);
+        assert!(!receipt.mana_burn_owner_block_executed);
+        assert!(!receipt.spell_time_owner_block_executed);
+        assert_eq!(receipt.open.callsite_va, UNIT_PROCESS_HEALING_CALL_VA);
+        assert_eq!(receipt.open.function_va, UNIT_PROCESS_HEALING_VA);
+        assert_eq!(receipt.open.healing_timer, input.healing_timer);
+        assert_eq!(receipt.local_writes, 0);
+        assert_eq!(receipt.child_calls_completed, 0);
+        assert_eq!(receipt.rng_draws, 0);
+        assert_eq!(receipt.random_state_after, input.random_state);
+
+        let mut due_request = input.request;
+        due_request.frame = 32;
+        assert_eq!(
+            plan_frame1_scout_post_caster_schedule(Frame1ScoutPostCasterScheduleInput {
+                request: due_request,
+                ..input
+            }),
+            Err(Frame1ScoutPostCasterScheduleError::Phase32OwnerBlock {
+                residue: 0,
+                entry_va: UNIT_POST_CASTER_PHASE32_OWNER_BLOCK_VA,
+            })
+        );
+
+        assert_eq!(
+            plan_frame1_scout_post_caster_schedule(Frame1ScoutPostCasterScheduleInput {
+                mana_burn: 1,
+                ..input
+            }),
+            Err(Frame1ScoutPostCasterScheduleError::ManaBurnOwnerBlock {
+                mana_burn: 1,
+                entry_va: UNIT_POST_CASTER_MANA_BURN_OWNER_BLOCK_VA,
+            })
+        );
+        assert_eq!(
+            plan_frame1_scout_post_caster_schedule(Frame1ScoutPostCasterScheduleInput {
+                spell_time: 1,
+                ..input
+            }),
+            Err(Frame1ScoutPostCasterScheduleError::SpellTimeOwnerBlock {
+                spell_time: 1,
+                entry_va: UNIT_POST_CASTER_SPELL_TIME_OWNER_BLOCK_VA,
             })
         );
     }

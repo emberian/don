@@ -64,7 +64,10 @@ an independent oracle field. `Frame0ScoutCasterInvariantAuthority` publishes onl
 owner invariant after the bounded human transaction; it explicitly does not claim Unit
 order/path or Objects search-scratch invariance. `setup_2024_frame1_scout_caster` joins it to
 setup ordinal zero and the post-command image before completing the frame-one empty Caster
-child.
+child. Its next detached schedule receipt derives the post-opening healing/mana values, reads the
+distinct spell timer from the canonical image, proves the three golden owner blocks are skipped,
+and stops at `Unit::process_healing`; it does not upgrade
+the Scout Unit, Guys, or tick to source-complete.
 
 `bind_captured_frame1_post_command` admits oracle images 9 and 10. It independently mounts the recovered
 five LeaderOptions stance writes onto a save/load copy of image 9 and requires byte-for-byte

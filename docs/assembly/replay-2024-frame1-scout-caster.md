@@ -114,11 +114,42 @@ stable receiver/type join, Caster index, active-spell length, and RNG state; the
 whole-Sim nor whole-tick hashes. The receipt closes only this first Scout child. It does not
 claim the enclosing Unit body, frame-zero tick, or frame-one tick is complete.
 
+## Post-Caster schedule edge
+
+The next bounded source path is also deterministic, but only after deriving the exact values at
+the empty-call return from the post-command Unit image:
+
+```text
+0x00610C22  if (ObjectData::healing != 0) --ObjectData::healing
+0x00610C30  if (unit_masks & 1) enter the air-fuel owner block
+0x00610DDC  load Game.frame and Unit.o
+0x00610DF9  (frame + o) % 32 != 0 -> 0x00610EBE
+0x00610EBE  mana_burn == 0 -> 0x00611158
+0x00611158  spell_time == 0 -> 0x006114C6
+0x006114C8  Unit::process_healing()
+```
+
+`bind_frame1_scout_post_caster_schedule` consumes the post-command Scout image and the prior
+source-empty child receipt. It refuses `unit_masks & 1` because that earlier owner can increment
+`mana_burn` and execute nested Leader/type calls. Otherwise it applies the exact opening
+`ObjectData::healing` decrement at object offset `+0x38`, carries that derived timer into the open
+healing request, and reads the distinct `UnitData::spell_time` at object offset `+0xA0` unchanged
+from the canonical image. The source-only schedule planner then validates all three skipped blocks.
+The golden frame-one Scout has residue one, zero post-opening `mana_burn`, and zero `spell_time`,
+so the detached receipt performs no post-Caster write, child call, or RNG draw and opens a typed
+`Unit::process_healing` request.
+
+This is a schedule receipt, not a Unit receipt. Healing, later Unit masks/work, and every
+`Guy::process`/`Guy::move` remain outside it. A due periodic block or nonzero post-opening
+mana/spell gate is a typed stop rather than another capture wrapper.
+
 ## Evidence and remaining join
 
 - executable SHA-256: `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`;
 - replay SHA-256: `1690431a5ef19b38a3425d3dd7311e8e83ca0d27c56fabe49d776a9f1421b251`;
 - `Caster::process_spells`: `0x00739AD0`, 481 bytes;
+- `Unit::process`: `0x00610BC0`, 3,272 bytes, post-Caster schedule source span
+  `0x00610DDC..0x006114CD`;
 - PDB types: `Caster`, `CasterData`, `Array<ActiveSpell>`, and `ActiveSpell`;
 - Scout row: `schema/live/live-tables-unit.tsv`, type 69, `unit_flags2=18`.
 

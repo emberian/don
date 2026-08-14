@@ -21,8 +21,13 @@ use don_sim::systems::frame0_scout_spellcaster::{
     Frame0ScoutCasterInvariantBranch, NoCastReason,
 };
 use don_sim::systems::frame1_caster_process::{
-    prove_source_empty_caster_process, CasterProcessSpellsRequest,
-    Frame1CasterSourceEmptyNoopReceipt, Frame1ScoutTypeJoinAuthority, PROCESS_SPELLS_NORMAL_MODE,
+    derive_frame1_scout_pre_caster_healing_timer, plan_frame1_scout_post_caster_schedule,
+    prove_frame1_scout_pre_caster_air_fuel_skip, prove_source_empty_caster_process,
+    CasterProcessSpellsRequest, Frame1CasterSourceEmptyNoopReceipt,
+    Frame1ScoutPostCasterScheduleError, Frame1ScoutPostCasterScheduleInput,
+    Frame1ScoutPostCasterScheduleReceipt, Frame1ScoutPreCasterAirFuelResidual,
+    Frame1ScoutPreCasterAirFuelSkipReceipt, Frame1ScoutPreCasterHealingTimerReceipt,
+    Frame1ScoutProcessHealingRequest, Frame1ScoutTypeJoinAuthority, PROCESS_SPELLS_NORMAL_MODE,
     SETUP_SCOUT_BASE_TYPE, UNIT_FLAGS2_CASTER, UNIT_FLAGS2_HERO, UNIT_FLAGS2_SPECIAL,
 };
 use don_sim::systems::objects_init_unit_authority_frontier::{
@@ -164,6 +169,34 @@ pub struct Frame1ScoutCasterChildReceipt {
     pub composition_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame1ScoutPostCasterScheduleSource {
+    /// The validated post-command Scout image, the source-empty Caster receipt, and the exact
+    /// local `Unit::process` gates jointly establish the healing call boundary.
+    PostCommandScoutAndSourceGates,
+}
+
+/// Detached continuation from the proven empty Caster child to `Unit::process_healing`.
+///
+/// The healing-timer/fuel receipt inputs come from the canonical post-command image. Their exits
+/// are source-derived through the earlier Unit prefix, while the distinct spell timer is read
+/// unchanged from that image. The schedule inputs are therefore exact at the empty Caster return.
+/// This receipt owns no enclosing Unit completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame1ScoutPostCasterScheduleAuthority {
+    pub source: Frame1ScoutPostCasterScheduleSource,
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub post_command_sim_sha256: [u8; 32],
+    pub caster_child_composition_digest: [u8; 32],
+    pub unit_row: usize,
+    pub pre_caster_healing_timer: Frame1ScoutPreCasterHealingTimerReceipt,
+    pub pre_caster_air_fuel: Frame1ScoutPreCasterAirFuelSkipReceipt,
+    pub schedule: Frame1ScoutPostCasterScheduleReceipt,
+    pub open: Frame1ScoutProcessHealingRequest,
+    pub composition_digest: [u8; 32],
+}
+
 #[derive(Debug)]
 pub enum Frame1ScoutCasterChildError {
     Golden(Frame1GoldenBindError),
@@ -187,6 +220,16 @@ pub enum Frame1ScoutCasterChildError {
     ReceiptMismatch,
 }
 
+#[derive(Debug)]
+pub enum Frame1ScoutPostCasterScheduleBindError {
+    Golden(Frame1GoldenBindError),
+    InvalidCasterChildReceipt,
+    StaleScoutProjection,
+    PreCasterAirFuel(Frame1ScoutPreCasterAirFuelResidual),
+    Schedule(Frame1ScoutPostCasterScheduleError),
+    ReceiptMismatch,
+}
+
 impl fmt::Display for Frame1ScoutCasterChildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "2024 frame-1 Scout Caster child refused: {self:?}")
@@ -195,9 +238,38 @@ impl fmt::Display for Frame1ScoutCasterChildError {
 
 impl std::error::Error for Frame1ScoutCasterChildError {}
 
+impl fmt::Display for Frame1ScoutPostCasterScheduleBindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "2024 frame-1 Scout post-Caster schedule refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for Frame1ScoutPostCasterScheduleBindError {}
+
 impl From<Frame1GoldenBindError> for Frame1ScoutCasterChildError {
     fn from(value: Frame1GoldenBindError) -> Self {
         Self::Golden(value)
+    }
+}
+
+impl From<Frame1GoldenBindError> for Frame1ScoutPostCasterScheduleBindError {
+    fn from(value: Frame1GoldenBindError) -> Self {
+        Self::Golden(value)
+    }
+}
+
+impl From<Frame1ScoutPostCasterScheduleError> for Frame1ScoutPostCasterScheduleBindError {
+    fn from(value: Frame1ScoutPostCasterScheduleError) -> Self {
+        Self::Schedule(value)
+    }
+}
+
+impl From<Frame1ScoutPreCasterAirFuelResidual> for Frame1ScoutPostCasterScheduleBindError {
+    fn from(value: Frame1ScoutPreCasterAirFuelResidual) -> Self {
+        Self::PreCasterAirFuel(value)
     }
 }
 
@@ -385,6 +457,88 @@ pub fn frame1_scout_caster_child_composition_digest(
     image.extend_from_slice(&receipt.removed_spells.to_le_bytes());
     image.extend_from_slice(&receipt.rng_draws.to_le_bytes());
     image.extend_from_slice(&receipt.simulation_mutations.to_le_bytes());
+    sha256(&image)
+}
+
+fn append_post_caster_schedule(
+    image: &mut Vec<u8>,
+    schedule: Frame1ScoutPostCasterScheduleReceipt,
+) {
+    image.extend_from_slice(&schedule.executable_sha256);
+    image.extend_from_slice(&schedule.unit_process_va.to_le_bytes());
+    image.extend_from_slice(&schedule.unit_process_bytes.to_le_bytes());
+    image.extend_from_slice(&schedule.unit_process_sha256);
+    image.extend_from_slice(&schedule.source_span_va.to_le_bytes());
+    image.extend_from_slice(&schedule.source_span_bytes.to_le_bytes());
+    image.extend_from_slice(&schedule.source_span_sha256);
+    append_request(image, schedule.input.request);
+    image.extend_from_slice(&schedule.input.mana_burn.to_le_bytes());
+    image.extend_from_slice(&schedule.input.spell_time.to_le_bytes());
+    image.extend_from_slice(&schedule.input.healing_timer.to_le_bytes());
+    image.extend_from_slice(&schedule.input.random_state.to_le_bytes());
+    image.extend_from_slice(&schedule.phase32_branch_va.to_le_bytes());
+    image.extend_from_slice(&schedule.phase32_residue.to_le_bytes());
+    image.extend_from_slice(&schedule.phase32_owner_block_va.to_le_bytes());
+    image.push(u8::from(schedule.phase32_owner_block_executed));
+    image.extend_from_slice(&schedule.phase32_skip_va.to_le_bytes());
+    image.extend_from_slice(&schedule.mana_burn_gate_va.to_le_bytes());
+    image.extend_from_slice(&schedule.mana_burn_owner_block_va.to_le_bytes());
+    image.push(u8::from(schedule.mana_burn_owner_block_executed));
+    image.extend_from_slice(&schedule.mana_burn_skip_va.to_le_bytes());
+    image.extend_from_slice(&schedule.spell_time_gate_va.to_le_bytes());
+    image.extend_from_slice(&schedule.spell_time_owner_block_va.to_le_bytes());
+    image.push(u8::from(schedule.spell_time_owner_block_executed));
+    image.extend_from_slice(&schedule.spell_time_skip_va.to_le_bytes());
+    append_process_healing_request(image, schedule.open);
+    image.extend_from_slice(&schedule.local_writes.to_le_bytes());
+    image.extend_from_slice(&schedule.child_calls_completed.to_le_bytes());
+    image.extend_from_slice(&schedule.rng_draws.to_le_bytes());
+    image.extend_from_slice(&schedule.random_state_after.to_le_bytes());
+}
+
+fn append_process_healing_request(image: &mut Vec<u8>, request: Frame1ScoutProcessHealingRequest) {
+    image.extend_from_slice(&request.authority_revision.to_le_bytes());
+    image.extend_from_slice(&request.authority_digest);
+    image.extend_from_slice(&request.frame.to_le_bytes());
+    image.extend_from_slice(&request.unit.id.to_le_bytes());
+    image.extend_from_slice(&request.unit.generation.to_le_bytes());
+    image.push(request.who);
+    image.extend_from_slice(&request.o.to_le_bytes());
+    image.extend_from_slice(&request.healing_timer.to_le_bytes());
+    image.extend_from_slice(&request.callsite_va.to_le_bytes());
+    image.extend_from_slice(&request.function_va.to_le_bytes());
+}
+
+pub fn frame1_scout_post_caster_schedule_composition_digest(
+    receipt: &Frame1ScoutPostCasterScheduleAuthority,
+) -> [u8; 32] {
+    let mut image = b"don-frame1-scout-post-caster-schedule-v1".to_vec();
+    image.push(match receipt.source {
+        Frame1ScoutPostCasterScheduleSource::PostCommandScoutAndSourceGates => 1,
+    });
+    image.extend_from_slice(&receipt.authority_revision.to_le_bytes());
+    image.extend_from_slice(&receipt.authority_digest);
+    image.extend_from_slice(&receipt.post_command_sim_sha256);
+    image.extend_from_slice(&receipt.caster_child_composition_digest);
+    image.extend_from_slice(&(receipt.unit_row as u64).to_le_bytes());
+    let timer = receipt.pre_caster_healing_timer;
+    image.extend_from_slice(&timer.gate_va.to_le_bytes());
+    image.extend_from_slice(&timer.store_va.to_le_bytes());
+    image.extend_from_slice(&timer.entry_healing_timer.to_le_bytes());
+    image.extend_from_slice(&timer.exit_healing_timer.to_le_bytes());
+    image.extend_from_slice(&timer.writes.to_le_bytes());
+    let fuel = receipt.pre_caster_air_fuel;
+    image.extend_from_slice(&fuel.gate_va.to_le_bytes());
+    image.extend_from_slice(&fuel.owner_block_va.to_le_bytes());
+    image.extend_from_slice(&fuel.unit_masks.to_le_bytes());
+    image.extend_from_slice(&fuel.mana_burn_before.to_le_bytes());
+    image.extend_from_slice(&fuel.mana_burn_after.to_le_bytes());
+    image.push(u8::from(fuel.owner_block_executed));
+    image.extend_from_slice(&fuel.writes.to_le_bytes());
+    image.extend_from_slice(&fuel.child_calls_completed.to_le_bytes());
+    image.extend_from_slice(&fuel.rng_draws.to_le_bytes());
+    append_post_caster_schedule(&mut image, receipt.schedule);
+    append_process_healing_request(&mut image, receipt.open);
     sha256(&image)
 }
 
@@ -650,6 +804,117 @@ pub fn validate_frame1_scout_caster_child(
     )?;
     if expected != *receipt {
         return Err(Frame1ScoutCasterChildError::ReceiptMismatch);
+    }
+    Ok(())
+}
+
+/// Continue the proven empty Caster child through the next exact `Unit::process` schedule
+/// gates and stop at the unconditional healing child.
+///
+/// The canonical image is still the pre-Unit post-command snapshot. The earlier source-local
+/// decrement applies to inherited `ObjectData::healing`, not the distinct
+/// `UnitData::spell_time` word read by the later owner gate. The `unit_masks & 1` air-fuel owner
+/// block must also be absent, or this binder stops before guessing its nested calls and writes.
+pub fn bind_frame1_scout_post_caster_schedule(
+    setup_entry: &Frame379SetupEntryReceipt,
+    authority: &Frame1PostCommandAuthority,
+    candidate: &Sim,
+    caster: &Frame1ScoutCasterChildReceipt,
+) -> Result<Frame1ScoutPostCasterScheduleAuthority, Frame1ScoutPostCasterScheduleBindError> {
+    validate_frame1_post_command_authority(setup_entry, authority, candidate)?;
+    if caster.composition_digest == [0; 32]
+        || caster.composition_digest != frame1_scout_caster_child_composition_digest(caster)
+        || caster.authority_revision != authority.revision
+        || caster.authority_digest != authority.composition_digest
+        || caster.post_command_sim_sha256 != authority.post_command_sim_sha256
+        || caster.request.authority_revision != authority.revision
+        || caster.request.authority_digest != authority.composition_digest
+        || caster.request.frame != authority.command_frame
+        || caster.setup_member != authority.setup_members[0]
+        || caster.request.unit.id != caster.setup_member.id
+        || caster.request.unit.generation != caster.setup_member.generation
+        || i32::from(caster.request.who) != caster.setup_member.owner
+        || i32::from(caster.request.o) != caster.setup_member.o
+        || caster.call_entry_source_projection_sha256 != caster.call_exit_source_projection_sha256
+        || caster.stage_order != FRAME1_SCOUT_CASTER_STAGE_ORDER
+        || caster.removed_spells != 0
+        || caster.rng_draws != 0
+        || caster.simulation_mutations != 0
+        || prove_source_empty_caster_process(caster.child.entry_length).ok() != Some(caster.child)
+    {
+        return Err(Frame1ScoutPostCasterScheduleBindError::InvalidCasterChildReceipt);
+    }
+
+    let row = candidate
+        .world
+        .row_of(caster.request.unit)
+        .ok_or(Frame1ScoutPostCasterScheduleBindError::StaleScoutProjection)?;
+    if row != caster.unit_row
+        || candidate
+            .world
+            .unit_row_at(i32::from(caster.request.who), i32::from(caster.request.o))
+            != Some(row)
+        || candidate.world.units.get_who(row) != caster.request.who
+        || candidate.world.units.o().get(row).copied() != Some(caster.request.o)
+        || candidate.world.units.get_uid(row) != caster.uid
+        || candidate.world.units.get_flags(row) != caster.object_header_flags
+        || caster.object_header_flags & OBJ_FLAG_ACTIVE == 0
+        || candidate.world.units.get_unit_masks(row) != caster.unit_masks
+        || candidate.world.units.get_unit_masks2(row) != caster.unit_masks2
+        || candidate.world.units.special().get(row).copied() != Some(caster.request.caster_index)
+        || candidate.unit_type.get(row).copied() != Some(caster.dispatch.current_type)
+        || candidate.world.unit_type_id(row) != Some(caster.dispatch.current_type)
+    {
+        return Err(Frame1ScoutPostCasterScheduleBindError::StaleScoutProjection);
+    }
+
+    let pre_caster_healing_timer =
+        derive_frame1_scout_pre_caster_healing_timer(candidate.world.units.healing()[row]);
+    let pre_caster_air_fuel = prove_frame1_scout_pre_caster_air_fuel_skip(
+        caster.unit_masks,
+        candidate.world.units.mana_burn()[row],
+    )?;
+    let schedule = plan_frame1_scout_post_caster_schedule(Frame1ScoutPostCasterScheduleInput {
+        request: caster.request,
+        mana_burn: pre_caster_air_fuel.mana_burn_after,
+        spell_time: candidate.world.units.spell_time()[row],
+        healing_timer: pre_caster_healing_timer.exit_healing_timer,
+        random_state: authority.random_state,
+    })?;
+    let mut receipt = Frame1ScoutPostCasterScheduleAuthority {
+        source: Frame1ScoutPostCasterScheduleSource::PostCommandScoutAndSourceGates,
+        authority_revision: authority.revision,
+        authority_digest: authority.composition_digest,
+        post_command_sim_sha256: authority.post_command_sim_sha256,
+        caster_child_composition_digest: caster.composition_digest,
+        unit_row: row,
+        pre_caster_healing_timer,
+        pre_caster_air_fuel,
+        schedule,
+        open: schedule.open,
+        composition_digest: [0; 32],
+    };
+    receipt.composition_digest = frame1_scout_post_caster_schedule_composition_digest(&receipt);
+    Ok(receipt)
+}
+
+pub fn validate_frame1_scout_post_caster_schedule(
+    setup_entry: &Frame379SetupEntryReceipt,
+    authority: &Frame1PostCommandAuthority,
+    candidate: &Sim,
+    caster: &Frame1ScoutCasterChildReceipt,
+    receipt: &Frame1ScoutPostCasterScheduleAuthority,
+) -> Result<(), Frame1ScoutPostCasterScheduleBindError> {
+    if receipt.composition_digest == [0; 32]
+        || receipt.composition_digest
+            != frame1_scout_post_caster_schedule_composition_digest(receipt)
+    {
+        return Err(Frame1ScoutPostCasterScheduleBindError::ReceiptMismatch);
+    }
+    let expected =
+        bind_frame1_scout_post_caster_schedule(setup_entry, authority, candidate, caster)?;
+    if expected != *receipt {
+        return Err(Frame1ScoutPostCasterScheduleBindError::ReceiptMismatch);
     }
     Ok(())
 }
