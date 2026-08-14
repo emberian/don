@@ -82,6 +82,7 @@ pub mod leaders_setup_build_history_frontier;
 pub mod leaders_setup_build_registry_frontier;
 pub mod leaders_setup_init_scalar_frontier;
 pub mod leaders_setup_plan_scratch_frontier;
+pub mod leaders_setup_rare_history_frontier;
 pub mod leaders_setup_reg_buildings_frontier;
 pub mod leaders_setup_region_history_frontier;
 pub mod leaders_sim_owner_frontier;

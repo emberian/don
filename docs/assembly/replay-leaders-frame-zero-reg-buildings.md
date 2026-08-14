@@ -87,9 +87,10 @@ regional City/Fort/Dock registries                        384
 canonical type-owner masks                               117
 setup-surviving Leader::init scalars                       48
 pre-plan strategy scratch and regional census           2,558
-frame-zero unique canonical walked bytes               27,147
+pre-gather rare-resource fixed history                    180
+frame-zero unique canonical walked bytes               27,327
 default empty-child transcript                          28,428
-frame-zero residual                                      1,281
+frame-zero residual                                      1,101
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -138,6 +139,13 @@ written later in that same pass at `0x006bbba1..0x006bbe70`. No setup action rea
 writers between construction and the published receipt. Like every claim in this continuation,
 it expires before the first plan.
 
+Another 180 constructor-zero bytes survive until the first `Leader::calc_gather`: the
+`known_rares` dword and `rares_collected[44]` at `[0x6d4,0x788)`. `Leader::init` clears them at
+`0x006e4aba..0x006e4acb`; `calc_gather` first clears and recomputes them at
+`0x006cef42..0x006cef6c`. Setup rare discovery mutates the separate dynamic `new_rares` list,
+not this fixed history, and ordinary setup never calls `Leader::gather`. This claim therefore
+expires before the first gather pass and cannot serve as a live maintainer.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -171,3 +179,4 @@ The final byte of `tech_cat_frame[4]` is independently mutated as well, proving 
 44-byte initialized stamp block must agree before the additional 48-byte cohort is admitted.
 Independent mutations of the `attack` scratch dword and the final `reg_gather_slots` byte prove
 both the sparse-scalar and contiguous-array halves of the 2,558-byte pre-plan cohort fail closed.
+The final byte of `rares_collected[44]` independently refuses the 180-byte pre-gather join.

@@ -122,6 +122,10 @@ An exact disjoint census of constructor-zero strategy scratch and regional array
 survive that first pass. The general scoreboard therefore remains uninstalled and at zero
 survived turns.
 
+The constructor-zero `known_rares` and `rares_collected[44]` fixed history contributes another
+180 bytes per active row, narrowing the setup residual to 1,101. Its first `calc_gather`
+recomputation is outside the setup receipt, so this too remains uninstalled with zero survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

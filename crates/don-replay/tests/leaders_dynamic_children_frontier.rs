@@ -52,6 +52,16 @@ use don_replay::leaders_setup_plan_scratch_frontier::{
     PLAN_STRATEGY_REGION_RECOMPUTE_BEGIN_VA, PLAN_STRATEGY_REGION_RECOMPUTE_END_VA,
     PLAN_STRATEGY_STRATEGY_FIRST_STORE_VA, PLAN_STRATEGY_STRATEGY_LAST_STORE_VA,
 };
+use don_replay::leaders_setup_rare_history_frontier::{
+    bind_frame_zero_rare_history, derive_frame_zero_rare_history, FrameZeroRareHistoryError,
+    FRAME_ZERO_RARE_HISTORY_WALKED_BYTES, KNOWN_RARES_BEGIN,
+    LEADER_CALC_GATHER_KNOWN_RARES_CLEAR_VA, LEADER_CALC_GATHER_RARES_COLLECTED_CLEAR_BEGIN_VA,
+    LEADER_CALC_GATHER_RARES_COLLECTED_CLEAR_END_VA,
+    LEADER_CALC_GATHER_REG_KNOWN_RARES_SUM_BEGIN_VA, LEADER_CALC_GATHER_REG_KNOWN_RARES_SUM_END_VA,
+    LEADER_CALC_GATHER_VA, LEADER_GATHER_VA, LEADER_INIT_KNOWN_RARES_ZERO_VA,
+    LEADER_INIT_RARES_COLLECTED_FILL_BEGIN_VA, LEADER_INIT_RARES_COLLECTED_FILL_END_VA,
+    RARES_COLLECTED_END, RARES_COLLECTED_VALUES,
+};
 use don_replay::leaders_setup_reg_buildings_frontier::{
     bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
     FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
@@ -1144,6 +1154,7 @@ fn frame_zero_starting_build_census_body() {
     let build_registry = derive_frame_zero_build_registry_census(&setup, &replay).unwrap();
     let init_scalars = derive_frame_zero_init_scalars(&setup).unwrap();
     let plan_scratch = derive_frame_zero_plan_scratch(&setup).unwrap();
+    let rare_history = derive_frame_zero_rare_history(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1194,12 +1205,30 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(PLAN_STRATEGY_STRATEGY_FIRST_STORE_VA, 0x006b_bba1);
     assert_eq!(PLAN_STRATEGY_STRATEGY_LAST_STORE_VA, 0x006b_be70);
     assert_eq!(FRAME_ZERO_PLAN_SCRATCH_WALKED_BYTES, 2_558);
+    assert_eq!(KNOWN_RARES_BEGIN, 0x6d4);
+    assert_eq!(RARES_COLLECTED_END, 0x788);
+    assert_eq!(RARES_COLLECTED_VALUES, 44);
+    assert_eq!(LEADER_INIT_KNOWN_RARES_ZERO_VA, 0x006e_4aba);
+    assert_eq!(LEADER_INIT_RARES_COLLECTED_FILL_BEGIN_VA, 0x006e_4ac0);
+    assert_eq!(LEADER_INIT_RARES_COLLECTED_FILL_END_VA, 0x006e_4acc);
+    assert_eq!(LEADER_CALC_GATHER_VA, 0x006c_eee0);
+    assert_eq!(LEADER_CALC_GATHER_KNOWN_RARES_CLEAR_VA, 0x006c_ef42);
+    assert_eq!(LEADER_CALC_GATHER_REG_KNOWN_RARES_SUM_BEGIN_VA, 0x006c_ef4b);
+    assert_eq!(LEADER_CALC_GATHER_REG_KNOWN_RARES_SUM_END_VA, 0x006c_ef56);
+    assert_eq!(
+        LEADER_CALC_GATHER_RARES_COLLECTED_CLEAR_BEGIN_VA,
+        0x006c_ef5b
+    );
+    assert_eq!(LEADER_CALC_GATHER_RARES_COLLECTED_CLEAR_END_VA, 0x006c_ef6d);
+    assert_eq!(LEADER_GATHER_VA, 0x006c_e280);
+    assert_eq!(FRAME_ZERO_RARE_HISTORY_WALKED_BYTES, 180);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
     assert_eq!(build_registry.claims().len(), active_count);
     assert_eq!(init_scalars.claims().len(), active_count);
     assert_eq!(plan_scratch.claims().len(), active_count);
+    assert_eq!(rare_history.claims().len(), active_count);
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1290,20 +1319,21 @@ fn frame_zero_starting_build_census_body() {
         bind_frame_zero_build_registry_census(region_joined, build_registry.clone()).unwrap();
     let mask_joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
     let init_joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
-    let joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
+    let plan_joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
+    let joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
     let walk = joined.walk_frontier();
 
     assert_eq!(
         joined.newly_canonicalized_walked_bytes(),
-        active_count * 2_558
+        active_count * 180
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_147 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_327 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 1_281) as u64
+        (active_count * 1_101) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
@@ -1312,9 +1342,9 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(TYPE_MASK_HEADER_WALKED_BYTES, 8);
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
-    assert_eq!(joined.inner().inner().claims().len(), active_count);
+    assert_eq!(joined.inner().inner().inner().claims().len(), active_count);
     assert_eq!(
-        joined.inner().inner().claims()[0].tech_duplicate_payload_bytes,
+        joined.inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
         101
     );
 
@@ -1382,6 +1412,29 @@ fn frame_zero_starting_build_census_body() {
             slot,
             begin: 0x958,
             byte: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
+
+    let rare_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "rares_collected")
+        .unwrap();
+    let mut stale_rare_columns = fixture.columns.clone();
+    let mut stale_rare_bytes = vec![0; rare_field.size as usize];
+    *stale_rare_bytes.last_mut().unwrap() = 1;
+    write_field(
+        &mut stale_rare_columns,
+        active,
+        rare_field,
+        &stale_rare_bytes,
+    );
+    let stale_rare_plan = bind_plan_columns(&stale_rare_columns).unwrap();
+    assert!(matches!(
+        bind_frame_zero_rare_history(stale_rare_plan, rare_history.clone()),
+        Err(FrameZeroRareHistoryError::ConditionalDisagreement {
+            slot,
+            byte: 179,
             conditional: 1,
         }) if slot == active
     ));
