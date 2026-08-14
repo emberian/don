@@ -130,6 +130,21 @@ impl RuntimeLeadersFrameZeroInitScalarFrontier {
         Some(dynamic.previous().rows().get(slot)?.active)
     }
 
+    /// Exact visitor bytes for a named dynamic child, exposed only for an independent
+    /// canonical-owner agreement gate.
+    pub fn conditional_dynamic_field(&self, slot: usize, field: &str) -> Option<&[u8]> {
+        let dynamic = self
+            .inner
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner();
+        dynamic.rows().get(slot)?.walked_field(field)
+    }
+
     pub fn checksum(&self) -> Result<(u32, u64), LeadersWalkFrontier> {
         Err(self.walk_frontier())
     }

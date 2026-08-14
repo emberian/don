@@ -15,6 +15,16 @@ use don_replay::leaders_dynamic_children_frontier::{
     SIMPLE_ARRAY_INT_WALK_DATA_VA, STRING_WALK_DATA_VA,
 };
 use don_replay::leaders_generated_fixed_frontier::bind_generated_fixed_prefix;
+use don_replay::leaders_lifetime_mask_header_frontier::{
+    bind_lifetime_mask_headers, CONQUEST_RACIAL_POWERS_BITS_STORE_VA,
+    CONQUEST_RACIAL_POWERS_SIZE_STORE_VA, CONQUEST_WONDERS_BITS_STORE_VA,
+    CONQUEST_WONDERS_IN_GAME_BITS_STORE_VA, CONQUEST_WONDERS_IN_GAME_SIZE_STORE_VA,
+    CONQUEST_WONDERS_SIZE_STORE_VA, LEADER_CLOSE_MASK_PAYLOAD_CLEAR_BEGIN_VA,
+    LEADER_CLOSE_MASK_PAYLOAD_CLEAR_END_VA, LIFETIME_MASK_HEADERS,
+    LIFETIME_MASK_HEADER_WALKED_BYTES, RARE_BITS_STORE_VA, RARE_CONQUEST_BITS_STORE_VA,
+    RARE_CONQUEST_SIZE_STORE_VA, RARE_OWNED_BITS_STORE_VA, RARE_OWNED_SIZE_STORE_VA,
+    RARE_SIZE_STORE_VA, TECH_AT_START_BITS_STORE_VA, TECH_AT_START_SIZE_STORE_VA,
+};
 use don_replay::leaders_runtime_frontier::{
     bind_live, LeadersWalkBoundary, RuntimeCoveredRange, LEADER_DIPLOMACY_BEGIN,
     LEADER_DIPLOMACY_BYTES, LEADER_FIXED_BODY_BEGIN, LEADER_FIXED_BODY_END,
@@ -1222,6 +1232,24 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(LEADER_CALC_GATHER_RARES_COLLECTED_CLEAR_END_VA, 0x006c_ef6d);
     assert_eq!(LEADER_GATHER_VA, 0x006c_e280);
     assert_eq!(FRAME_ZERO_RARE_HISTORY_WALKED_BYTES, 180);
+    assert_eq!(TECH_AT_START_BITS_STORE_VA, 0x006d_75b5);
+    assert_eq!(TECH_AT_START_SIZE_STORE_VA, 0x006d_75bf);
+    assert_eq!(CONQUEST_WONDERS_BITS_STORE_VA, 0x006d_7608);
+    assert_eq!(CONQUEST_WONDERS_SIZE_STORE_VA, 0x006d_7615);
+    assert_eq!(CONQUEST_WONDERS_IN_GAME_BITS_STORE_VA, 0x006d_7636);
+    assert_eq!(CONQUEST_WONDERS_IN_GAME_SIZE_STORE_VA, 0x006d_7640);
+    assert_eq!(CONQUEST_RACIAL_POWERS_BITS_STORE_VA, 0x006d_7661);
+    assert_eq!(CONQUEST_RACIAL_POWERS_SIZE_STORE_VA, 0x006d_766b);
+    assert_eq!(RARE_BITS_STORE_VA, 0x006d_768c);
+    assert_eq!(RARE_SIZE_STORE_VA, 0x006d_7696);
+    assert_eq!(RARE_OWNED_BITS_STORE_VA, 0x006d_76b7);
+    assert_eq!(RARE_OWNED_SIZE_STORE_VA, 0x006d_76c1);
+    assert_eq!(RARE_CONQUEST_BITS_STORE_VA, 0x006d_76e2);
+    assert_eq!(RARE_CONQUEST_SIZE_STORE_VA, 0x006d_76ec);
+    assert_eq!(LEADER_CLOSE_MASK_PAYLOAD_CLEAR_BEGIN_VA, 0x006b_802e);
+    assert_eq!(LEADER_CLOSE_MASK_PAYLOAD_CLEAR_END_VA, 0x006b_80a9);
+    assert_eq!(LIFETIME_MASK_HEADERS, 7);
+    assert_eq!(LIFETIME_MASK_HEADER_WALKED_BYTES, 56);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1320,31 +1348,38 @@ fn frame_zero_starting_build_census_body() {
     let mask_joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
     let init_joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
     let plan_joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
-    let joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
+    let rare_joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
+    let joined = bind_lifetime_mask_headers(rare_joined).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(
-        joined.newly_canonicalized_walked_bytes(),
-        active_count * 180
-    );
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 56);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_327 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_383 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 1_101) as u64
+        (active_count * 1_045) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
+    assert!(joined.header_lifetime_stable());
+    assert_eq!(joined.claims().len(), active_count);
+    assert!(joined
+        .claims()
+        .iter()
+        .all(|claim| claim.masks == 7 && claim.newly_canonical_walked_bytes == 56));
 
     let active = fixture.active;
     assert_eq!(TYPE_MASK_HEADER_WALKED_BYTES, 8);
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
-    assert_eq!(joined.inner().inner().inner().claims().len(), active_count);
     assert_eq!(
-        joined.inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
+        joined.inner().inner().inner().inner().claims().len(),
+        active_count
+    );
+    assert_eq!(
+        joined.inner().inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
         101
     );
 

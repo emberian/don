@@ -126,6 +126,11 @@ The constructor-zero `known_rares` and `rares_collected[44]` fixed history contr
 180 bytes per active row, narrowing the setup residual to 1,101. Its first `calc_gather`
 recomputation is outside the setup receipt, so this too remains uninstalled with zero survival.
 
+Seven fixed-size BitMask visitor headers add 56 lifetime-stable bytes per active row, reducing
+the composed residual to 1,045. Their shape survives arbitrary payload mutations, but their
+current owner is not mounted independently on `Sim`; the enclosing setup receipt therefore
+still reports zero survived turns and remains uninstalled.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

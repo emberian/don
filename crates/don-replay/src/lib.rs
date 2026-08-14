@@ -76,6 +76,7 @@ pub mod leader_produce_building_farm_frame_zero_tail;
 pub mod leaders_deferred_history_frontier;
 pub mod leaders_dynamic_children_frontier;
 pub mod leaders_generated_fixed_frontier;
+pub mod leaders_lifetime_mask_header_frontier;
 pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
 pub mod leaders_setup_build_history_frontier;

@@ -88,9 +88,10 @@ canonical type-owner masks                               117
 setup-surviving Leader::init scalars                       48
 pre-plan strategy scratch and regional census           2,558
 pre-gather rare-resource fixed history                    180
-frame-zero unique canonical walked bytes               27,327
+lifetime-invariant residual BitMask headers                56
+frame-zero unique canonical walked bytes               27,383
 default empty-child transcript                          28,428
-frame-zero residual                                      1,101
+frame-zero residual                                      1,045
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -146,6 +147,14 @@ Another 180 constructor-zero bytes survive until the first `Leader::calc_gather`
 not this fixed history, and ordinary setup never calls `Leader::gather`. This claim therefore
 expires before the first gather pass and cannot serve as a live maintainer.
 
+Seven remaining fixed-size dynamic masks contribute 56 constructor-owned header bytes:
+`tech_at_start`, three conquest masks, and three rare masks. Each visitor header is exactly
+`{bits:i32,size:i32}`; the flags byte is not walked. Constructor stores at
+`0x006d75b5..0x006d76ec` bind the fixed shapes (806/101, 17/3, 24/3, or 44/6), and every
+runtime mutation touches only payload/dirty state. Even `Leader::close` clears payloads using
+the retained bit counts without changing the headers. These 56 values are lifetime-stable, but
+the composed receipt is still nested under setup-only authorities and remains uninstalled.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -180,3 +189,5 @@ The final byte of `tech_cat_frame[4]` is independently mutated as well, proving 
 Independent mutations of the `attack` scratch dword and the final `reg_gather_slots` byte prove
 both the sparse-scalar and contiguous-array halves of the 2,558-byte pre-plan cohort fail closed.
 The final byte of `rares_collected[44]` independently refuses the 180-byte pre-gather join.
+Existing malformed-mask tests change header bits/size and refuse before the lifetime header
+receipt, while the focused census verifies all seven exact constructor shapes and byte counts.
