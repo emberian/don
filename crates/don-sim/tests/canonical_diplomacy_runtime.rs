@@ -15,7 +15,7 @@ use don_sim::systems::diplomacy_ejection_authority::{
     ContainedEjectionAnswer, ContainedEjectionAuthority,
 };
 use don_sim::systems::diplomacy_force_army_authority::{
-    ForceArmyMusterCityFact, ForceArmyProcessOutcome,
+    ForceArmyMusterCityFact, ForceArmyProcessOutcome, ForceArmyRetirementCityFact,
 };
 use don_sim::systems::groups_guys::{GroupData, Groups};
 use don_sim::systems::leader_set_diplo::{Relation, SetDiploAuthority};
@@ -691,6 +691,96 @@ fn active_winner_victory_then_empty_army_retirement_resumes_identically() {
         );
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
         let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("retired Army result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn active_winner_empty_army_city_rally_resumes_from_canonical_city_owners() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.human_frame = 9;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        army.city = 17;
+        army.x = 100;
+        army.y = 200;
+        army.muster_angle = 7;
+
+        // Three live City rows make the exact saved LeaderData::city_num value 3. Slot 0 is
+        // inactive, slot 1 is the first active row, and slot 3 proves the retail scan stops
+        // before an otherwise canonical live City.
+        uninterrupted.cities.slots[2][0].city_flags = 0x20;
+        for slot in 1..=3 {
+            let city = &mut uninterrupted.cities.slots[2][slot];
+            city.city_flags = 1;
+            city.city = slot as i16;
+            city.who = 2;
+            city.x = 1000 + slot as i32 * 100;
+            city.y = 2000 + slot as i32 * 100;
+        }
+        uninterrupted.cities.city_mark[2] = 4;
+        assert_eq!(uninterrupted.cities.count(2), 3);
+
+        let checkpoint = save_sim(&uninterrupted).expect("City-backed Army input is savable");
+        let mut resumed = load_sim(&checkpoint).expect("City-backed Army input reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+        assert_eq!(resumed.cities.count(2), 3);
+        assert_eq!(resumed.cities.slots[2][0].city_flags, 0x20);
+        assert_eq!(resumed.cities.slots[2][1].x, 1100);
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2947, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2947, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.completed_authority.len(), 2);
+        assert_eq!(resumed_receipt.victory_receipts.len(), 1);
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
+        assert_eq!(army_receipt.outcome, ForceArmyProcessOutcome::RetiredEmpty);
+        assert_eq!(army_receipt.leader_city_num, Some(3));
+        assert_eq!(
+            army_receipt.retirement_cities.as_deref(),
+            Some(
+                [
+                    ForceArmyRetirementCityFact::Inactive { flags_low: 0x20 },
+                    ForceArmyRetirementCityFact::Active {
+                        flags_low: 1,
+                        x: 1100,
+                        y: 2100,
+                    },
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(army_receipt.after.city, 1);
+        assert_eq!((army_receipt.after.x, army_receipt.after.y), (1100, 2100));
+        assert_eq!(army_receipt.after.valid, 0);
+        assert_ne!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
+            0
+        );
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("City-rallied Army reloads");
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
     });
 }

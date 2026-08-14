@@ -4,9 +4,10 @@
 //! `Leader::set_diplo` calls `Army::process(1)` for every valid Army when the owner passes
 //! the ordinary Army gates. The complete general body is not mounted. The bounded arms below are
 //! authority-complete: `leader_flags & 0x40` still reaches the entry decrement of `human_frame`,
-//! then returns before normalization; an active empty non-mustering Army with zero cities
-//! normalizes its five derived fields and takes the exact retirement/`close` path without any
-//! Group, Unit, terrain, AI, or RNG access; an empty mustering Army with a still-live human-order
+//! then returns before normalization; an active empty non-mustering Army normalizes its five
+//! derived fields, lazily scans its saved City prefix, optionally rallies through `send_here` at
+//! the first active row, and takes the exact retirement/`close` path without any Group, Unit,
+//! terrain, AI, or RNG access; an empty mustering Army with a still-live human-order
 //! countdown normalizes, clamps its rally point through `send_here`, and returns before dispatch;
 //! and an empty naval muster whose canonical founding City is foreign or inactive follows the
 //! exact countdown/normalize/merge/retarget/dispatch tail, releases, enters `do_marching`, then
@@ -24,10 +25,12 @@
 //! `human_frame` at `0x006F93DA..0x006F93E5`; the forced path jumps to `0x006F94AA`, tests
 //! leader bit `0x40` at `0x006F94B7`, and returns at `0x006F983A` without a deeper call. With
 //! that bit clear the same body calls `Army::normalize` (`0x006F9B50`, 657 bytes); its empty
-//! input reads no Group, and the zero-standard retirement calls `Army::close` (`0x006F8EA0`,
-//! 118 bytes), whose zero-group input likewise reaches no external host. The human-order branch
-//! calls `Army::send_here` (`0x006F98A0`, 422 bytes); with zero groups its only external reads are
-//! the World width and height used by the retail coordinate clamp. `Army::do_mustering`
+//! input reads no Group. At `0x006F94F7..0x006F9557` the zero-standard retirement initializes
+//! `city=0`, reads only each City's low flags byte until the saved count is exhausted or the first
+//! active row is found, then additionally reads that row's coordinates and calls `send_here(1)`.
+//! It finally calls `Army::close` (`0x006F8EA0`, 118 bytes), whose zero-group input likewise
+//! reaches no external host. `Army::send_here` (`0x006F98A0`, 422 bytes) has zero-group external
+//! reads limited to World width and height for the retail coordinate clamp. `Army::do_mustering`
 //! (`0x006F4260`, 337 bytes) is recovered whole. Its naval release arm reads no strategy or
 //! difficulty state; `Army::release_mustering` returns 1 immediately when the City owner differs
 //! or, for the owning player, when the low flags byte is inactive.
@@ -58,7 +61,9 @@ pub struct ForceArmyProcessReceipt {
     pub leader_flags2: u32,
     /// Read only by the empty-retirement branch; the other bounded arms leave this `None`.
     pub leader_city_num: Option<i32>,
-    /// Read only when an empty Army obeys its outstanding human rally order.
+    /// Exact City prefix read by the positive-city empty-retirement branch.
+    pub retirement_cities: Option<Vec<ForceArmyRetirementCityFact>>,
+    /// Read by `send_here` for a human rally or first-active-City retirement rally.
     pub world_size: Option<(i32, i32)>,
     /// Exact short-circuit City fields read by `Army::release_mustering`.
     pub muster_city: Option<ForceArmyMusterCityFact>,
@@ -87,6 +92,31 @@ pub enum ForceArmyProcessOutcome {
 pub enum ForceArmyMusterCityFact {
     ForeignOwner { who: i8 },
     InactiveOwner { who: i8, flags_low: u8 },
+}
+
+/// One lazily observed row of the empty-Army retirement City scan.
+///
+/// Inactive rows read only the low flags byte. The first active row additionally reads its
+/// coordinates, then terminates the scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForceArmyRetirementCityFact {
+    Inactive { flags_low: u8 },
+    Active { flags_low: u8, x: i32, y: i32 },
+}
+
+impl ForceArmyRetirementCityFact {
+    fn active_coordinates(self) -> Option<(i32, i32)> {
+        match self {
+            Self::Inactive { .. } => None,
+            Self::Active { x, y, .. } => Some((x, y)),
+        }
+    }
+
+    fn flags_low(self) -> u8 {
+        match self {
+            Self::Inactive { flags_low } | Self::Active { flags_low, .. } => flags_low,
+        }
+    }
 }
 
 /// The persistent LeaderData word selected by `ArmyData::reg`.
@@ -189,6 +219,70 @@ fn observe_muster_city(
     }
 }
 
+fn observe_retirement_cities(
+    cities: &CityPool,
+    owner: usize,
+    city_num: i32,
+) -> Option<Vec<ForceArmyRetirementCityFact>> {
+    let limit = usize::try_from(city_num).ok()?;
+    let rows = cities.slots.get(owner)?;
+    if limit > rows.len() {
+        return None;
+    }
+    let mut facts = Vec::with_capacity(limit);
+    for city in &rows[..limit] {
+        let flags_low = city.city_flags as u8;
+        if flags_low & 1 != 0 {
+            facts.push(ForceArmyRetirementCityFact::Active {
+                flags_low,
+                x: city.x,
+                y: city.y,
+            });
+            break;
+        }
+        facts.push(ForceArmyRetirementCityFact::Inactive { flags_low });
+    }
+    Some(facts)
+}
+
+fn retirement_cities_validate_shape(
+    city_num: i32,
+    facts: Option<&[ForceArmyRetirementCityFact]>,
+) -> bool {
+    if city_num <= 0 {
+        return facts.is_none();
+    }
+    let Ok(limit) = usize::try_from(city_num) else {
+        return false;
+    };
+    let Some(facts) = facts else {
+        return false;
+    };
+    if facts.is_empty() || facts.len() > limit {
+        return false;
+    }
+    for (index, fact) in facts.iter().copied().enumerate() {
+        let active = fact.flags_low() & 1 != 0;
+        if active != fact.active_coordinates().is_some() || (active && index + 1 != facts.len()) {
+            return false;
+        }
+    }
+    facts
+        .last()
+        .is_some_and(|fact| fact.active_coordinates().is_some())
+        || facts.len() == limit
+}
+
+fn retirement_cities_are_current(cities: &CityPool, receipt: &ForceArmyProcessReceipt) -> bool {
+    let Some(expected) = receipt.retirement_cities.as_deref() else {
+        return true;
+    };
+    let Some(city_num) = receipt.leader_city_num else {
+        return false;
+    };
+    observe_retirement_cities(cities, receipt.request.owner, city_num).as_deref() == Some(expected)
+}
+
 fn muster_city_is_current(cities: &CityPool, receipt: &ForceArmyProcessReceipt) -> bool {
     let Some(expected) = receipt.muster_city else {
         return true;
@@ -225,6 +319,10 @@ fn muster_difficulty_is_current(
 }
 
 impl ForceArmyProcessReceipt {
+    pub fn retirement_cities_are_current(&self, cities: &CityPool) -> bool {
+        retirement_cities_are_current(cities, self)
+    }
+
     pub fn muster_city_is_current(&self, cities: &CityPool) -> bool {
         muster_city_is_current(cities, self)
     }
@@ -263,6 +361,7 @@ impl ForceArmyProcessReceipt {
             ForceArmyProcessOutcome::ArmiesOff => {
                 if self.leader_flags & LF_ARMIES_OFF == 0
                     || self.leader_city_num.is_some()
+                    || self.retirement_cities.is_some()
                     || self.world_size.is_some()
                     || self.muster_city.is_some()
                     || self.muster_strategy.is_some()
@@ -272,25 +371,71 @@ impl ForceArmyProcessReceipt {
                 }
             }
             ForceArmyProcessOutcome::RetiredEmpty => {
+                let Some(city_num) = self.leader_city_num else {
+                    return false;
+                };
+                let retirement_cities = self.retirement_cities.as_deref();
+                if !retirement_cities_validate_shape(city_num, retirement_cities) {
+                    return false;
+                }
+                let active_city = retirement_cities
+                    .and_then(|facts| facts.last())
+                    .and_then(|fact| fact.active_coordinates());
                 if self.leader_flags & LF_ARMIES_OFF != 0
-                    || self.leader_city_num != Some(0)
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING != 0
-                    || self.world_size.is_some()
+                    || (active_city.is_some() != self.world_size.is_some())
                     || self.muster_city.is_some()
                     || self.muster_strategy.is_some()
                     || self.muster_difficulty.is_some()
                 {
                     return false;
                 }
-                // `normalize`, the zero-city scan, then `Army::close`. `close` retains
-                // city-independent targeting/rally fields and the unused list tail.
+                // `normalize`, the lazy City scan/optional rally, then `Army::close`.
                 expected.role = 0;
                 expected.num_units = 0;
                 expected.num_captains = 0;
                 expected.num_standard = 0;
                 expected.num_decoys = 0;
                 expected.city = 0;
+                if let Some(facts) = retirement_cities {
+                    for fact in facts.iter().copied() {
+                        let Some((target_x, target_y)) = fact.active_coordinates() else {
+                            expected.city = expected.city.wrapping_add(1);
+                            continue;
+                        };
+                        let Some((width, height)) = self.world_size else {
+                            return false;
+                        };
+                        let (Some(max_x), Some(max_y)) =
+                            (width.checked_mul(3 * 256), height.checked_mul(3 * 256))
+                        else {
+                            return false;
+                        };
+                        if max_x <= 0 || max_y <= 0 {
+                            return false;
+                        }
+                        let old_x = expected.x;
+                        let old_y = expected.y;
+                        let mut x = target_x.max(0);
+                        let mut y = target_y.max(0);
+                        if x >= max_x {
+                            x = max_x - 1;
+                        }
+                        if y >= max_y {
+                            y = max_y - 1;
+                        }
+                        if x != old_x && y != old_y {
+                            expected.muster_angle =
+                                find_angle(x.wrapping_sub(old_x), y.wrapping_sub(old_y));
+                        }
+                        expected.x = x;
+                        expected.y = y;
+                        expected.muster_x = div3_shift8(x);
+                        expected.muster_y = div3_shift8(y);
+                        break;
+                    }
+                }
                 expected.valid = 0;
                 expected.status = 0;
                 expected.human_frame = 0;
@@ -308,6 +453,7 @@ impl ForceArmyProcessReceipt {
                 };
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
+                    || self.retirement_cities.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
                     || self.before.human_frame <= 1
@@ -346,6 +492,7 @@ impl ForceArmyProcessReceipt {
             ForceArmyProcessOutcome::ClosedEmptyNavalMuster => {
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
+                    || self.retirement_cities.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -404,6 +551,7 @@ impl ForceArmyProcessReceipt {
                 };
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
+                    || self.retirement_cities.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -459,6 +607,7 @@ impl ForceArmyProcessReceipt {
                 };
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
+                    || self.retirement_cities.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -637,6 +786,7 @@ impl PreparedForceArmyProcess {
                 && receipt
                     .world_size
                     .is_none_or(|expected| world_size == expected)
+                && retirement_cities_are_current(cities, receipt)
                 && muster_city_is_current(cities, receipt)
                 && receipt.muster_strategy.is_none_or(|_| {
                     leader_strategy
@@ -674,6 +824,7 @@ pub enum ForceArmyProcessError {
     StaleArmy { owner: usize, army_slot: usize },
     StaleLeader { owner: usize },
     StaleWorld,
+    StaleRetirementCity { owner: usize },
     StaleCity { owner: usize, city: i32 },
     StaleStrategy { owner: usize, region: usize },
     StaleDifficulty { owner: usize },
@@ -808,6 +959,7 @@ fn prepare_force_army_process_impl(
         let (
             outcome,
             city_num,
+            retirement_cities,
             receipt_world_size,
             muster_city,
             muster_strategy,
@@ -815,6 +967,7 @@ fn prepare_force_army_process_impl(
         ) = if flags & LF_ARMIES_OFF != 0 {
             (
                 ForceArmyProcessOutcome::ArmiesOff,
+                None,
                 None,
                 None,
                 None,
@@ -836,6 +989,7 @@ fn prepare_force_army_process_impl(
             (
                 ForceArmyProcessOutcome::MovedEmptyHumanOrder,
                 None,
+                None,
                 Some(world_size),
                 None,
                 None,
@@ -855,6 +1009,7 @@ fn prepare_force_army_process_impl(
             };
             (
                 ForceArmyProcessOutcome::ClosedEmptyNavalMuster,
+                None,
                 None,
                 None,
                 Some(muster_city),
@@ -927,17 +1082,50 @@ fn prepare_force_army_process_impl(
                 },
                 None,
                 None,
+                None,
                 Some(muster_city),
                 Some(ForceArmyMusterStrategyFact { region, value }),
                 muster_difficulty,
             )
         } else {
             let city_num = leader_city_num[request.owner];
-            if before.num_groups == 0 && before.status & ST_MUSTERING == 0 && city_num == 0 {
+            if before.num_groups == 0 && before.status & ST_MUSTERING == 0 {
+                let retirement_cities = if city_num > 0 {
+                    let Some(facts) = observe_retirement_cities(cities, request.owner, city_num)
+                    else {
+                        return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                            owner: request.owner,
+                            army_slot: request.army_slot,
+                        });
+                    };
+                    Some(facts)
+                } else {
+                    None
+                };
+                let active_city = retirement_cities
+                    .as_deref()
+                    .and_then(|facts| facts.last())
+                    .and_then(|fact| fact.active_coordinates());
+                if active_city.is_some()
+                    && (world_size
+                        .0
+                        .checked_mul(3 * 256)
+                        .is_none_or(|limit| limit <= 0)
+                        || world_size
+                            .1
+                            .checked_mul(3 * 256)
+                            .is_none_or(|limit| limit <= 0))
+                {
+                    return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                        owner: request.owner,
+                        army_slot: request.army_slot,
+                    });
+                }
                 (
                     ForceArmyProcessOutcome::RetiredEmpty,
                     Some(city_num),
-                    None,
+                    retirement_cities,
+                    active_city.map(|_| world_size),
                     None,
                     None,
                     None,
@@ -976,6 +1164,35 @@ fn prepare_force_army_process_impl(
                 army_after.num_standard = 0;
                 army_after.num_decoys = 0;
                 army_after.city = 0;
+                if let Some(facts) = retirement_cities.as_deref() {
+                    for fact in facts.iter().copied() {
+                        let Some((target_x, target_y)) = fact.active_coordinates() else {
+                            army_after.city = army_after.city.wrapping_add(1);
+                            continue;
+                        };
+                        let max_x = world_size.0 * 3 * 256;
+                        let max_y = world_size.1 * 3 * 256;
+                        let old_x = army_after.x;
+                        let old_y = army_after.y;
+                        let mut x = target_x.max(0);
+                        let mut y = target_y.max(0);
+                        if x >= max_x {
+                            x = max_x - 1;
+                        }
+                        if y >= max_y {
+                            y = max_y - 1;
+                        }
+                        if x != old_x && y != old_y {
+                            army_after.muster_angle =
+                                find_angle(x.wrapping_sub(old_x), y.wrapping_sub(old_y));
+                        }
+                        army_after.x = x;
+                        army_after.y = y;
+                        army_after.muster_x = div3_shift8(x);
+                        army_after.muster_y = div3_shift8(y);
+                        break;
+                    }
+                }
                 army_after.valid = 0;
                 army_after.status = 0;
                 army_after.human_frame = 0;
@@ -1075,6 +1292,7 @@ fn prepare_force_army_process_impl(
             leader_flags: flags,
             leader_flags2: flags2,
             leader_city_num: city_num,
+            retirement_cities,
             world_size: receipt_world_size,
             muster_city,
             muster_strategy,
@@ -1202,6 +1420,15 @@ fn commit_force_army_process_impl(
             .is_some_and(|expected| expected != world_size)
     }) {
         return Err(ForceArmyProcessError::StaleWorld);
+    }
+    if let Some(stale) = prepared
+        .receipts
+        .iter()
+        .find(|receipt| !retirement_cities_are_current(cities, receipt))
+    {
+        return Err(ForceArmyProcessError::StaleRetirementCity {
+            owner: stale.request.owner,
+        });
     }
     if let Some(stale) = prepared
         .receipts

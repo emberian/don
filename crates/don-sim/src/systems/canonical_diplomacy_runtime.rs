@@ -611,6 +611,13 @@ impl StagedForceArmyAuthority {
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleWorld,
                 );
             }
+            if !receipt.retirement_cities_are_current(cities) {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleRetirementCity {
+                        owner: receipt.request.owner,
+                    },
+                );
+            }
             if !receipt.muster_city_is_current(cities) {
                 return Some(
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleCity {
@@ -958,7 +965,10 @@ fn stage_force_army_authority(
     if requests.is_empty() {
         return Ok(None);
     }
-    let leader_city_num = std::array::from_fn(|who| sim.step8.leaders[who].city_num);
+    // `LeaderData::city_num` is the maintained live-City count. CityPool is the canonical
+    // saved owner here, so reconstruct the field from it instead of depending on step 8's
+    // transient LeaderData projection.
+    let leader_city_num = std::array::from_fn(|who| sim.cities.count(who));
     let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
     let prepared = match prepare_force_army_process_with_strategy_and_difficulty(
         &sim.armies,
@@ -1232,7 +1242,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             if project_owner(self.sim)? != before {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
-            let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
+            let leader_city_num = std::array::from_fn(|who| self.sim.cities.count(who));
             let leader_strategy =
                 std::array::from_fn(|who| self.sim.vic_leaders.slots[who].strategy);
             let leader_multi_diff =

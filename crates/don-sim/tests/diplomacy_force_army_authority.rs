@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use don_sim::systems::armies::{Armies, LF_ARMIES_OFF, ST_MUSTERING};
+use don_sim::systems::armies::{div3_shift8, Armies, LF_ARMIES_OFF, ST_MUSTERING};
 use don_sim::systems::diplomacy_force_army_authority::{
     commit_force_army_process, commit_force_army_process_with_strategy,
     commit_force_army_process_with_strategy_and_difficulty, prepare_force_army_process,
     prepare_force_army_process_with_strategy,
     prepare_force_army_process_with_strategy_and_difficulty, ForceArmyMusterCityFact,
     ForceArmyMusterDifficultyFact, ForceArmyMusterStrategyFact, ForceArmyProcessError,
-    ForceArmyProcessOutcome, ForceArmyProcessRequest,
+    ForceArmyProcessOutcome, ForceArmyProcessRequest, ForceArmyRetirementCityFact,
 };
 use don_sim::systems::tech_cities::CityPool;
 use don_sim::systems::victory_score::game_sem;
+use don_sim::trig::find_angle;
 
 const WORLD_SIZE: (i32, i32) = (8, 8);
 
@@ -143,6 +144,193 @@ fn active_empty_army_normalizes_and_retires_without_a_live_host() {
     assert_eq!(receipt.after.target_o, 77);
     assert_eq!(receipt.after.list[0], 123);
     assert_eq!(armies.lists[2][3], receipt.after);
+}
+
+#[test]
+fn empty_retirement_scans_cities_lazily_and_rallies_to_the_first_active_city() {
+    let mut armies = live_army();
+    let army = &mut armies.lists[2][3];
+    army.role = 0x55;
+    army.num_units = 12;
+    army.num_captains = 4;
+    army.num_standard = 3;
+    army.num_decoys = 2;
+    army.city = 17;
+    army.x = 100;
+    army.y = 200;
+    army.muster_x = -1;
+    army.muster_y = -2;
+    army.muster_angle = 7;
+    let mut cities = CityPool::new();
+    cities.slots[2][0].city_flags = 0x20;
+    cities.slots[2][1].city_flags = 0;
+    cities.slots[2][2].city_flags = 0x101;
+    cities.slots[2][2].x = -10;
+    cities.slots[2][2].y = 999_999;
+    // Retail stops after this active row, so this row is deliberately not receipt-bound.
+    cities.slots[2][3].city_flags = 1;
+    cities.slots[2][3].x = 777;
+    cities.slots[2][3].y = 888;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut city_num = [0; 8];
+    city_num[2] = 4;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    let prepared = prepare_force_army_process(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    assert!(prepared.is_current(&armies, &cities, &flags, &[0; 8], &city_num, WORLD_SIZE,));
+    cities.slots[2][3].x = -999; // Still current: the scan never reads beyond slot 2.
+    assert!(prepared.is_current(&armies, &cities, &flags, &[0; 8], &city_num, WORLD_SIZE,));
+    let receipts = commit_force_army_process(
+        &mut armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+        prepared,
+    )
+    .unwrap();
+    let receipt = &receipts[0];
+    assert!(receipt.validates());
+    assert_eq!(receipt.outcome, ForceArmyProcessOutcome::RetiredEmpty);
+    assert_eq!(receipt.leader_city_num, Some(4));
+    assert_eq!(
+        receipt.retirement_cities.as_deref(),
+        Some(
+            [
+                ForceArmyRetirementCityFact::Inactive { flags_low: 0x20 },
+                ForceArmyRetirementCityFact::Inactive { flags_low: 0 },
+                ForceArmyRetirementCityFact::Active {
+                    flags_low: 1,
+                    x: -10,
+                    y: 999_999,
+                },
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(receipt.world_size, Some(WORLD_SIZE));
+    assert_eq!(receipt.after.city, 2);
+    assert_eq!((receipt.after.x, receipt.after.y), (0, 6143));
+    assert_eq!(
+        (receipt.after.muster_x, receipt.after.muster_y),
+        (div3_shift8(0), div3_shift8(6143))
+    );
+    assert_eq!(receipt.after.muster_angle, find_angle(-100, 5943));
+    assert_eq!(receipt.after.valid, 0);
+    assert_eq!(armies.lists[2][3], receipt.after);
+}
+
+#[test]
+fn empty_retirement_all_inactive_cities_advance_the_saved_cursor_without_world_reads() {
+    let mut armies = live_army();
+    let mut cities = CityPool::new();
+    cities.slots[2][0].city_flags = 0x20;
+    cities.slots[2][1].city_flags = 0x100;
+    cities.slots[2][0].x = 1000; // Inactive coordinates are not read.
+    cities.slots[2][1].y = 2000;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut city_num = [0; 8];
+    city_num[2] = 2;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+    let prepared = prepare_force_army_process(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    cities.slots[2][0].x = -1000;
+    cities.slots[2][1].y = -2000;
+    let receipts = commit_force_army_process(
+        &mut armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &city_num,
+        (0, 0), // No active city means no send_here and no World read.
+        prepared,
+    )
+    .unwrap();
+    assert_eq!(receipts[0].world_size, None);
+    assert_eq!(receipts[0].after.city, 2);
+    assert_eq!(
+        receipts[0].retirement_cities.as_deref(),
+        Some(
+            [
+                ForceArmyRetirementCityFact::Inactive { flags_low: 0x20 },
+                ForceArmyRetirementCityFact::Inactive { flags_low: 0 },
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn stale_retirement_city_rejects_the_whole_army_publish() {
+    let mut armies = live_army();
+    let mut cities = CityPool::new();
+    cities.slots[2][0].city_flags = 0;
+    cities.slots[2][1].city_flags = 1;
+    cities.slots[2][1].x = 1000;
+    cities.slots[2][1].y = 2000;
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let mut city_num = [0; 8];
+    city_num[2] = 2;
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+    let prepared = prepare_force_army_process(
+        &armies,
+        &cities,
+        &flags,
+        &[0; 8],
+        &city_num,
+        WORLD_SIZE,
+        &[request],
+    )
+    .unwrap();
+    let before = armies.clone();
+    cities.slots[2][1].x += 1;
+    assert!(!prepared.is_current(&armies, &cities, &flags, &[0; 8], &city_num, WORLD_SIZE,));
+    assert_eq!(
+        commit_force_army_process(
+            &mut armies,
+            &cities,
+            &flags,
+            &[0; 8],
+            &city_num,
+            WORLD_SIZE,
+            prepared,
+        ),
+        Err(ForceArmyProcessError::StaleRetirementCity { owner: 2 })
+    );
+    assert_eq!(armies.lists, before.lists);
 }
 
 #[test]
@@ -320,13 +508,15 @@ fn stale_army_and_unresolved_general_body_never_publish() {
     assert_eq!(stale.lists[2][3], stale_before);
 
     flags[2] = 1;
+    let mut general = armies.clone();
+    general.lists[2][3].num_groups = 1;
     assert!(matches!(
         prepare_force_army_process(
-            &armies,
+            &general,
             &CityPool::new(),
             &flags,
             &[0; 8],
-            &[1; 8],
+            &[0; 8],
             WORLD_SIZE,
             &[request],
         ),

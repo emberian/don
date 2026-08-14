@@ -36,6 +36,15 @@ begins with `count(2, 0)` and tail-calls `Army::close` when the result is below 
 zero-group Army proves that count is zero, so the canonical path closes before `is_engaged`,
 object search, muster search, or RNG. Nonempty Armies still stop before mutation.
 
+The diplomacy-forced `Army::process(1)` adapter also owns the complete empty non-mustering
+retirement transaction. After exact empty normalization, retail initializes the Army's City cursor
+to zero and scans City slots through `LeaderData::city_num`. Each inactive row reads only the low
+flags byte and advances the cursor. The first active row additionally reads x/y, calls the exact
+zero-group `send_here(1)` coordinate clamp, and stops the scan; exhaustion skips World reads. The
+receipt binds precisely that lazy City prefix, the optional World dimensions, and the before/after
+Army image. City, World, Leader-count, or Army drift rejects atomically. General nonempty processing
+and every reached AI body remain fail-closed.
+
 The following retail bodies are reached by the step-13 control flow and remain absent:
 
 - the remainder of `Army::do_defending` `0x006F4070` after its zero-group close prefix
