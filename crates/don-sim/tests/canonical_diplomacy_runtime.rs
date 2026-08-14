@@ -263,7 +263,7 @@ fn retail_packet_runs_bridge_sim_current_load_and_resumed_packet_identically() {
         let checkpoint = save_sim(&uninterrupted).expect("applied declaration is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            18
+            19
         );
         let mut resumed = load_sim(&checkpoint).expect("declaration state reloads");
 
@@ -336,7 +336,7 @@ fn armies_off_force_process_executes_exact_entry_arm_and_resumes_with_v17_armies
         let checkpoint = save_sim(&uninterrupted).expect("armies-off force target is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            18
+            19
         );
         let mut resumed = load_sim(&checkpoint).expect("armies-off force target reloads");
         resumed.replace_diplomacy_authority(complete_facts());
@@ -951,7 +951,7 @@ fn alliance_victory_stops_a_standing_ground_army_and_resumes_identically() {
             save_sim(&uninterrupted).expect("standing Army is savable through the v17 owner");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            18
+            19
         );
         let mut resumed = load_sim(&checkpoint).expect("standing Army reloads");
         resumed.replace_diplomacy_authority(complete_facts());
@@ -1012,7 +1012,7 @@ fn alliance_revocation_projects_the_full_contained_ejection_cone_after_current_s
         let checkpoint = save_sim(&uninterrupted).expect("contained Unit roster is savable");
         assert_eq!(
             u32::from_le_bytes(checkpoint[24..28].try_into().unwrap()),
-            18
+            19
         );
         let mut resumed = load_sim(&checkpoint).expect("contained Unit roster reloads");
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
