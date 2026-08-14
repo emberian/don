@@ -113,6 +113,7 @@ pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
 pub mod setup_cities_builds;
+pub mod setup_group_move_authority;
 pub mod setup_place_unit_deep_re;
 pub mod setup_unit_member_authority;
 pub mod setup_unit_visibility_deep_re;

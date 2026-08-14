@@ -34,12 +34,23 @@ Rules `moves` into `UnitData::speed`: the landed Sim producer still requires the
 terrain/Leader/hero/Constants join. The Groups lane can therefore consume formation/type identity
 immediately while speed remains an explicit, fail-closed next authority.
 
+`setup_group_move_authority` closes that downstream join once the speed product exists. It
+requires one coherent setup provenance and a current receipt for every active Unit row in the
+same immutable Sim snapshot, cross-checks the overlapping static type fields, re-evaluates the
+generation-bound land-speed product against that Sim, and only then produces the canonical
+Group-Move authority. Partial cohorts, stale Unit images or speeds, duplicate rows, and mixed
+revisions fail closed. This adapter creates no Units and supplies no fallback values.
+
 ## Evidence boundary
 
 The focused fixture uses the real replay file and serialized Rules, but deliberately supplies a
 synthetic complete setup receipt and canonical Sim snapshot so mutation gates can exercise the
 join. It is not an attestation that retail's 2024 setup ran in don-sim. The four real Citizen
 `Objects::init_unit` receipts and the canonical chronology through frame 379 remain absent.
+
+The Group-Move adapter's focused fixture is likewise synthetic. It proves that complete canonical
+setup members and exact live land speeds compose without an additional detached Unit pool; it
+does not assert that those two products have been materialized for the 2024 replay.
 
 The immediately preceding 2018 setup lane now carries ordinal one through placement, allocation,
 one-Guy RNG, location, collision/common tail, visibility, and the complete outer initializer. It
@@ -52,4 +63,5 @@ Focused gate:
 
 ```sh
 cargo test -p don-replay --test setup_unit_member_authority -- --nocapture
+cargo test -p don-replay --test setup_group_move_authority -- --nocapture
 ```
