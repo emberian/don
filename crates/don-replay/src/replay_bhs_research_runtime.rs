@@ -1,16 +1,23 @@
-//! Exclusive builtin-357/386/436/455 bridge over canonical BHS, Sim, and production owners.
+//! Exclusive builtin-357/386/436/455/520 bridge over canonical BHS, Sim, and production owners.
 //!
 //! The generic production-prefix host intentionally leaves stateful research red. This
 //! adapter adds the measured single-Library path, builtin 332's immediate stock continuation,
 //! builtin 386's City/Build census, builtin 436's Build-queue census, and builtin 455's live
-//! idle-Unit census. Every other builtin is delegated to that strict prefix host.
+//! idle-Unit census. It also composes builtin 520's exact frame-zero Farm placement through one
+//! outer rollback boundary. Every other builtin is delegated to that strict prefix host.
 
+use crate::builds_runtime::BuildsWalkAuthority;
+use crate::leader_produce_building_farm_frame_zero_tail::{
+    complete_leader_produce_building_farm_frame_zero_tail, FarmBuildInitAuthority,
+    FarmFrameZeroSourceFacts, FarmFrameZeroTailReceipt,
+};
 use crate::replay_bhs_live_bindings::{
     ProductionBuiltinCall, ProductionBuiltinImage, ProductionBuiltinValue, ProductionDisposition,
     ProductionRunError, ProductionRunFailure, ProductionRunReceipt, ReplayProductionBuiltinHost,
     ReplayProductionCall,
 };
 use crate::replay_bhs_runtime::ReplayBhsBinding;
+use crate::terrain_height_runtime::TerrainHeightAuthority;
 use don_bhs::{BuiltinDecl, Host, HostError, HostResult, Value};
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::script_runtime::{
@@ -34,10 +41,17 @@ use don_sim::systems::bhs_type_queue_runtime::{
     NUM_TYPE_QUEUED_BUILTIN,
 };
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::gather_terrain::GatherTerrainMaterialization;
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_build_type_blocked_tcoord_land_prefix,
-    apply_sim_leader_produce_building_blocked_site_prefix, BuildTypeBlockedTcoordPrefixReceipt,
+    apply_sim_leader_produce_building_blocked_site_farm_owned_tail,
+    apply_sim_leader_produce_building_blocked_site_land_footprint,
+    apply_sim_leader_produce_building_blocked_site_prefix,
+    apply_sim_leader_produce_building_farm_success_preflight, BuildTypeBlockedTcoordPrefixReceipt,
+    LeaderProduceBuildingBlockedSiteFarmOwnedReceipt,
+    LeaderProduceBuildingBlockedSiteFootprintReceipt,
     LeaderProduceBuildingBlockedSitePrefixReceipt,
+    LeaderProduceBuildingFarmSuccessPreflightReceipt,
 };
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     apply_sim_leader_produce_building_candidate_prefix, LeaderProduceBuildingCandidatePrefixReceipt,
@@ -59,6 +73,38 @@ use don_sim::tick::Sim;
 pub const RESEARCH_TECH_WITH_COST_BUILTIN: u32 = 357;
 pub const AT_LEAST_TYPE_BUILTIN: u32 = 332;
 pub const RESEARCH_FIND_COUNTER: usize = 30;
+pub const LEADER_PRODUCE_BUILDING_FRAME_PAYMENT_GATE_VA: u32 = 0x006e_2c66;
+pub const LEADER_PRODUCE_BUILDING_PAY_COST_CALL_VA: u32 = 0x006e_2c89;
+pub const TYPE_PAY_COST_VA: u32 = 0x0066_81f0;
+
+/// Source owners required to cross builtin 520's exact frame-zero Farm success arm.
+///
+/// The dynamic-cost authority stays the runner's canonical argument. Repeating its revision
+/// and digest here prevents accidental composition against a different installed cost image.
+pub struct FarmBuiltin520Authority<'a> {
+    pub expected_cost_revision: u64,
+    pub expected_cost_composition_digest: [u8; 32],
+    pub gather_terrain: &'a GatherTerrainMaterialization,
+    pub terrain_height: &'a TerrainHeightAuthority,
+    pub source: FarmFrameZeroSourceFacts,
+    pub build_authority: &'a mut FarmBuildInitAuthority,
+    pub builds_walk: &'a mut BuildsWalkAuthority,
+    pub expected_build_authority_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FarmBuiltin520CostReceipt {
+    pub owner: u8,
+    pub authority_revision: u64,
+    pub composition_digest: [u8; 32],
+    pub possible_goods: [bool; 6],
+    pub resolved_costs: [i32; 6],
+    pub resources_before: [i32; 6],
+    pub resources_after: [i32; 6],
+    /// The sole `Type::pay_cost` call is guarded by `Game::frame != 0`. The reached
+    /// production witness is frame zero, so retail intentionally leaves stock unchanged.
+    pub payment_skipped_at_frame_zero: bool,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductionResearchRunReceipt {
@@ -73,14 +119,20 @@ pub struct ProductionResearchRunReceipt {
     pub produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
     pub produce_building_blocked_site_prefixes: Vec<LeaderProduceBuildingBlockedSitePrefixReceipt>,
     pub produce_building_blocked_tcoord_prefixes: Vec<BuildTypeBlockedTcoordPrefixReceipt>,
+    pub produce_building_land_footprints: Vec<LeaderProduceBuildingBlockedSiteFootprintReceipt>,
+    pub produce_building_owned_sites: Vec<LeaderProduceBuildingBlockedSiteFarmOwnedReceipt>,
+    pub produce_building_success_preflights: Vec<LeaderProduceBuildingFarmSuccessPreflightReceipt>,
+    pub farm_builtin_520_costs: Vec<FarmBuiltin520CostReceipt>,
+    pub farm_frame_zero_tails: Vec<FarmFrameZeroTailReceipt>,
 }
 
-struct ResearchHost<'a> {
+struct ResearchHost<'a, 'farm> {
     prefix: ReplayProductionBuiltinHost<'a>,
     image: &'a ProductionBuiltinImage,
     types: &'a TypeBuiltinState,
     upgrades: &'a BhsCreateUnitRuntime,
     place_building_costs: &'a PlaceBuildingCostAuthority,
+    farm_520: Option<FarmBuiltin520Authority<'farm>>,
     sim: &'a mut Sim,
     production: &'a mut LiveProductionRuntime,
     trace: Vec<ProductionBuiltinCall>,
@@ -94,14 +146,20 @@ struct ResearchHost<'a> {
     produce_building_candidate_prefixes: Vec<LeaderProduceBuildingCandidatePrefixReceipt>,
     produce_building_blocked_site_prefixes: Vec<LeaderProduceBuildingBlockedSitePrefixReceipt>,
     produce_building_blocked_tcoord_prefixes: Vec<BuildTypeBlockedTcoordPrefixReceipt>,
+    produce_building_land_footprints: Vec<LeaderProduceBuildingBlockedSiteFootprintReceipt>,
+    produce_building_owned_sites: Vec<LeaderProduceBuildingBlockedSiteFarmOwnedReceipt>,
+    produce_building_success_preflights: Vec<LeaderProduceBuildingFarmSuccessPreflightReceipt>,
+    farm_builtin_520_costs: Vec<FarmBuiltin520CostReceipt>,
+    farm_frame_zero_tails: Vec<FarmFrameZeroTailReceipt>,
 }
 
-impl<'a> ResearchHost<'a> {
+impl<'a, 'farm> ResearchHost<'a, 'farm> {
     fn new(
         image: &'a ProductionBuiltinImage,
         types: &'a TypeBuiltinState,
         upgrades: &'a BhsCreateUnitRuntime,
         place_building_costs: &'a PlaceBuildingCostAuthority,
+        farm_520: Option<FarmBuiltin520Authority<'farm>>,
         sim: &'a mut Sim,
         production: &'a mut LiveProductionRuntime,
     ) -> Self {
@@ -111,6 +169,7 @@ impl<'a> ResearchHost<'a> {
             types,
             upgrades,
             place_building_costs,
+            farm_520,
             sim,
             production,
             trace: Vec::new(),
@@ -124,6 +183,11 @@ impl<'a> ResearchHost<'a> {
             produce_building_candidate_prefixes: Vec::new(),
             produce_building_blocked_site_prefixes: Vec::new(),
             produce_building_blocked_tcoord_prefixes: Vec::new(),
+            produce_building_land_footprints: Vec::new(),
+            produce_building_owned_sites: Vec::new(),
+            produce_building_success_preflights: Vec::new(),
+            farm_builtin_520_costs: Vec::new(),
+            farm_frame_zero_tails: Vec::new(),
         }
     }
 
@@ -422,6 +486,10 @@ impl<'a> ResearchHost<'a> {
         .map_err(|_| HostError::Unimplemented)?;
         let returned = receipt.returned;
         let continuation = receipt.continuation;
+        let cost_revision = receipt.authority_revision;
+        let possible_goods = receipt.possible_goods;
+        let resolved_costs = receipt.resolved_costs;
+        let resources_before = receipt.resources;
         self.place_buildings.push(receipt);
         if let Some(returned) = returned {
             return Ok(Value::Int(returned));
@@ -468,7 +536,8 @@ impl<'a> ResearchHost<'a> {
         .map_err(|_| HostError::Unimplemented)?;
         let returned = candidate.scenario_returned;
         let blocked_site_boundary = candidate.continuation;
-        self.produce_building_candidate_prefixes.push(candidate);
+        self.produce_building_candidate_prefixes
+            .push(candidate.clone());
         if let Some(returned) = returned {
             return Ok(Value::Int(returned));
         }
@@ -482,7 +551,7 @@ impl<'a> ResearchHost<'a> {
         let returned = blocked_site.native_returned;
         let blocked_tcoord_boundary = blocked_site.continuation;
         self.produce_building_blocked_site_prefixes
-            .push(blocked_site);
+            .push(blocked_site.clone());
         if let Some(returned) = returned {
             return Ok(Value::Int(returned));
         }
@@ -495,9 +564,88 @@ impl<'a> ResearchHost<'a> {
         .map_err(|_| HostError::Unimplemented)?;
         self.produce_building_blocked_tcoord_prefixes
             .push(blocked_tcoord);
-        // A child verdict still belongs to `blocked_site`'s footprint aggregation; the shipped
-        // Farm reaches `LandData::get_amount`. Neither is scalar placement success.
-        Err(HostError::Unimplemented)
+
+        let farm = self.farm_520.as_mut().ok_or(HostError::Unimplemented)?;
+        if farm.expected_cost_revision != self.place_building_costs.revision
+            || farm.expected_cost_composition_digest != self.place_building_costs.composition_digest
+            || cost_revision != Some(farm.expected_cost_revision)
+        {
+            return Err(HostError::Unimplemented);
+        }
+        let possible_goods = possible_goods.ok_or(HostError::Unimplemented)?;
+        let resolved_costs = resolved_costs.ok_or(HostError::Unimplemented)?;
+        let resources_before = resources_before.ok_or(HostError::Unimplemented)?;
+
+        let footprint = apply_sim_leader_produce_building_blocked_site_land_footprint(
+            self.sim,
+            self.production,
+            self.types,
+            farm.gather_terrain,
+            blocked_site,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        self.produce_building_land_footprints
+            .push(footprint.clone());
+        let owned_site = apply_sim_leader_produce_building_blocked_site_farm_owned_tail(
+            self.sim,
+            self.production,
+            self.types,
+            footprint,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        self.produce_building_owned_sites.push(owned_site.clone());
+        let success = apply_sim_leader_produce_building_farm_success_preflight(
+            self.sim,
+            self.production,
+            self.types,
+            farm.gather_terrain,
+            candidate,
+            owned_site,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+        self.produce_building_success_preflights
+            .push(success.clone());
+
+        let tail = complete_leader_produce_building_farm_frame_zero_tail(
+            self.sim,
+            self.production,
+            self.types,
+            farm.terrain_height,
+            farm.build_authority,
+            farm.builds_walk,
+            farm.expected_build_authority_revision,
+            farm.source,
+            &success,
+        )
+        .map_err(|_| HostError::Unimplemented)?;
+
+        // `Leader::produce_building`'s sole Type::pay_cost virtual is at 0x006E2C89 and
+        // guarded by `Game::frame != 0` at 0x006E2C66. Search setup already proves this exact
+        // witness is frame zero. Reconcile every live stock owner again after construction so
+        // the no-payment branch cannot conceal a partial resource publication.
+        let owner = tail.owner as usize;
+        let resources_after = self.production.leaders[owner].resources;
+        if resources_after != resources_before
+            || resources_after != self.sim.leaders[owner].econ.stockpile
+            || resources_after != self.sim.step8.leaders[owner].econ.stockpile
+            || resources_after != self.sim.vic_leaders.slots[owner].economy.bucket
+        {
+            return Err(HostError::Unimplemented);
+        }
+        self.farm_builtin_520_costs.push(FarmBuiltin520CostReceipt {
+            owner: tail.owner,
+            authority_revision: farm.expected_cost_revision,
+            composition_digest: farm.expected_cost_composition_digest,
+            possible_goods,
+            resolved_costs,
+            resources_before,
+            resources_after,
+            payment_skipped_at_frame_zero: true,
+        });
+        self.farm_frame_zero_tails.push(tail);
+
+        // Native produce_building returns zero on success; builtin 521 normalizes that to one.
+        Ok(Value::Int(1))
     }
 
     fn record(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
@@ -510,7 +658,7 @@ impl<'a> ResearchHost<'a> {
     }
 }
 
-impl Host for ResearchHost<'_> {
+impl Host for ResearchHost<'_, '_> {
     fn call(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         let returned = match decl.index {
             RESEARCH_TECH_WITH_COST_BUILTIN => self.research_tech_with_cost(args),
@@ -534,7 +682,7 @@ impl Host for ResearchHost<'_> {
     }
 }
 
-impl ExternalTimerHost for ResearchHost<'_> {
+impl ExternalTimerHost for ResearchHost<'_, '_> {
     fn timer_builtin_returned(&mut self, decl: &BuiltinDecl, args: &[Value], returned: &Value) {
         self.record(decl, args, returned);
     }
@@ -549,6 +697,7 @@ pub fn run_production_research_call(
     types: &TypeBuiltinState,
     upgrades: &BhsCreateUnitRuntime,
     place_building_costs: &PlaceBuildingCostAuthority,
+    farm_520: Option<FarmBuiltin520Authority<'_>>,
     sim: &mut Sim,
     production: &mut LiveProductionRuntime,
     game_seconds: ExternalGameSeconds,
@@ -589,13 +738,24 @@ pub fn run_production_research_call(
 
     let scenario_before = sim.scenario_data.clone();
     let groups_before = sim.groups.clone();
+    let world_before = sim.world.clone();
+    let map_world_before = sim.map.world.clone();
     let builds_before = sim.builds.clone();
+    let farms_before = sim.farms.clone();
+    let cities_before = sim.cities.clone();
     let production_before = production.clone();
     let leader_resources_before =
         std::array::from_fn::<_, 8, _>(|who| sim.leaders[who].econ.stockpile);
     let step8_resources_before =
         std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].econ.stockpile);
+    let step8_flags_before = std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].flags);
     let victory_before = sim.vic_leaders.clone();
+    let farm_build_authority_before = farm_520
+        .as_ref()
+        .map(|authority| authority.build_authority.clone());
+    let builds_walk_before = farm_520
+        .as_ref()
+        .map(|authority| authority.builds_walk.clone());
 
     let (
         result,
@@ -610,12 +770,19 @@ pub fn run_production_research_call(
         produce_building_candidate_prefixes,
         produce_building_blocked_site_prefixes,
         produce_building_blocked_tcoord_prefixes,
+        produce_building_land_footprints,
+        produce_building_owned_sites,
+        produce_building_success_preflights,
+        farm_builtin_520_costs,
+        farm_frame_zero_tails,
+        mut farm_520,
     ) = {
         let mut host = ResearchHost::new(
             image,
             types,
             upgrades,
             place_building_costs,
+            farm_520,
             sim,
             production,
         );
@@ -651,6 +818,12 @@ pub fn run_production_research_call(
             host.produce_building_candidate_prefixes,
             host.produce_building_blocked_site_prefixes,
             host.produce_building_blocked_tcoord_prefixes,
+            host.produce_building_land_footprints,
+            host.produce_building_owned_sites,
+            host.produce_building_success_preflights,
+            host.farm_builtin_520_costs,
+            host.farm_frame_zero_tails,
+            host.farm_520,
         )
     };
 
@@ -659,13 +832,26 @@ pub fn run_production_research_call(
         Err(error) => {
             sim.scenario_data = scenario_before;
             sim.groups = groups_before;
+            sim.world = world_before;
+            sim.map.world = map_world_before;
             sim.builds = builds_before;
+            sim.farms = farms_before;
+            sim.cities = cities_before;
             *production = production_before;
             for who in 0..8 {
                 sim.leaders[who].econ.stockpile = leader_resources_before[who];
                 sim.step8.leaders[who].econ.stockpile = step8_resources_before[who];
+                sim.step8.leaders[who].flags = step8_flags_before[who];
             }
             sim.vic_leaders = victory_before;
+            if let (Some(authority), Some(before)) =
+                (farm_520.as_mut(), farm_build_authority_before)
+            {
+                *authority.build_authority = before;
+            }
+            if let (Some(authority), Some(before)) = (farm_520.as_mut(), builds_walk_before) {
+                *authority.builds_walk = before;
+            }
             let failure = match error.failure {
                 ExternalScriptFailure::Vm(failure) => ProductionRunFailure::Vm(failure),
                 ExternalScriptFailure::Rejected(failure) => failure,
@@ -699,5 +885,10 @@ pub fn run_production_research_call(
         produce_building_candidate_prefixes,
         produce_building_blocked_site_prefixes,
         produce_building_blocked_tcoord_prefixes,
+        produce_building_land_footprints,
+        produce_building_owned_sites,
+        produce_building_success_preflights,
+        farm_builtin_520_costs,
+        farm_frame_zero_tails,
     })
 }
