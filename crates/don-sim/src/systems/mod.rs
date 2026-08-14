@@ -266,6 +266,8 @@ pub mod leader_market_build_accounting;
 pub mod leader_process_taunt;
 /// Exact type-owned `BuildTypeData::find_friends` early return and generic first-object child.
 pub mod build_type_find_friends;
+/// Exact `ObjectsData::find_building_placed_at` transaction over canonical spatial owners.
+pub mod objects_find_building_placed_at;
 /// Exact negative-City-constraint `BuildTypeData::blocked_site` entry prefix.
 pub mod leader_produce_building_blocked_site_prefix;
 /// Exact candidate rejection loop through the first `BuildTypeData::blocked_site` call.
