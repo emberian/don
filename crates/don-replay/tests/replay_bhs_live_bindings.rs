@@ -655,6 +655,7 @@ fn setup_gates_preserve_replay_options_and_live_leader_branches() {
         setup: Some(ProductionSetupImage {
             game_info_flags: 0b100,
             game_rules: 8,
+            difficulty: 0,
             rush_rules: 14,
             victory: don_bhs::scenario::victory::ECONOMIC,
             starting_town: 2,
@@ -816,6 +817,7 @@ fn strict_economic_prefix_reaches_research_tech_and_rolls_back() {
         setup: Some(ProductionSetupImage {
             game_info_flags: 0,
             game_rules: 0,
+            difficulty: 0,
             rush_rules: 0,
             victory: 0,
             starting_town: 2,
@@ -948,6 +950,7 @@ fn checksum_corpus_supplies_only_who_and_never_fabricates_retained_arguments() {
             .expect("checksum replay carries the complete Game semaphore");
         assert_eq!(setup.game_rules, replay.initial.info.settings.game_rules);
         assert_eq!(setup.game_info_flags, replay.initial.info.flags);
+        assert_eq!(setup.difficulty, replay.initial.info.settings.difficulty);
         assert_eq!(setup.rush_rules, replay.initial.info.settings.rush_rules);
         assert_eq!(setup.victory, replay.initial.info.settings.victory);
         assert_eq!(

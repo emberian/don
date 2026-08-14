@@ -73,7 +73,9 @@ const UNIT_GUYS_FORMAT_VERSION: u32 = 19;
 const PATH_STACK_METADATA_FORMAT_VERSION: u32 = 20;
 const MUSTER_STRATEGY_FORMAT_VERSION: u32 =
     leader_match::LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION;
-const FORMAT_VERSION: u32 = MUSTER_STRATEGY_FORMAT_VERSION;
+const GAME_INFO_DIFFICULTY_FORMAT_VERSION: u32 =
+    leader_match::LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION;
+const FORMAT_VERSION: u32 = GAME_INFO_DIFFICULTY_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -199,6 +201,7 @@ const REQUIRED: [u16; 17] = [
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
+        GAME_INFO_DIFFICULTY_FORMAT_VERSION => &REQUIRED,
         MUSTER_STRATEGY_FORMAT_VERSION => &REQUIRED,
         PATH_STACK_METADATA_FORMAT_VERSION => &REQUIRED,
         UNIT_GUYS_FORMAT_VERSION => &REQUIRED,
@@ -3282,9 +3285,12 @@ fn canonical_player_setup_snapshot(sim: &Sim) -> Result<Option<PlayerSetupSaveSt
 
     // `Player::resign` may change MatchOptions::team_style after setup.  The setup
     // recipe must retain the input that produced its immutable receipt; LEADER_MATCH
-    // separately owns the current runtime option byte.
+    // separately owns the current runtime option byte. Difficulty is not an input to
+    // player setup at all, so keep its recipe byte neutral rather than serializing a
+    // second copy of the mutable GameInfo owner.
     let mut setup_options = sim.vic_match.options;
     setup_options.team_style = applied.request.team_style;
+    setup_options.difficulty = 0;
     let snapshot = PlayerSetupSaveState {
         request: applied.request,
         options: setup_options,
@@ -3318,10 +3324,20 @@ fn canonical_player_setup_snapshot(sim: &Sim) -> Result<Option<PlayerSetupSaveSt
     Ok(Some(snapshot))
 }
 
-fn write_match_options(w: &mut Writer, options: MatchOptions) {
+fn write_match_options(
+    w: &mut Writer,
+    options: MatchOptions,
+    format_version: u32,
+) -> Result<(), SaveError> {
+    for byte in [options.team_style, options.game_rules] {
+        w.u8(byte);
+    }
+    if format_version >= GAME_INFO_DIFFICULTY_FORMAT_VERSION {
+        w.u8(options.difficulty);
+    } else if options.difficulty != 0 {
+        return Err(SaveError::Unsupported("GameInfo difficulty"));
+    }
     for byte in [
-        options.team_style,
-        options.game_rules,
         options.starting_resources,
         options.reveal_map,
         options.rush_rules,
@@ -3339,12 +3355,18 @@ fn write_match_options(w: &mut Writer, options: MatchOptions) {
     ] {
         w.u8(byte);
     }
+    Ok(())
 }
 
-fn read_match_options(r: &mut Reader<'_>) -> Result<MatchOptions, SaveError> {
+fn read_match_options(r: &mut Reader<'_>, format_version: u32) -> Result<MatchOptions, SaveError> {
     Ok(MatchOptions {
         team_style: r.u8()?,
         game_rules: r.u8()?,
+        difficulty: if format_version >= GAME_INFO_DIFFICULTY_FORMAT_VERSION {
+            r.u8()?
+        } else {
+            0
+        },
         starting_resources: r.u8()?,
         reveal_map: r.u8()?,
         rush_rules: r.u8()?,
@@ -3362,7 +3384,7 @@ fn read_match_options(r: &mut Reader<'_>) -> Result<MatchOptions, SaveError> {
     })
 }
 
-fn write_player_setup(sim: &Sim) -> Result<Vec<u8>, SaveError> {
+fn write_player_setup(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {
     let mut w = Writer::default();
     let Some(snapshot) = canonical_player_setup_snapshot(sim)? else {
         w.bool(false);
@@ -3378,12 +3400,15 @@ fn write_player_setup(sim: &Sim) -> Result<Vec<u8>, SaveError> {
         .map_err(|_| SaveError::Invalid("player setup local slot"))?);
     w.bool(snapshot.request.ranked);
     w.u8(snapshot.request.shared_vision_preq_mask);
-    write_match_options(&mut w, snapshot.options);
+    write_match_options(&mut w, snapshot.options, format_version)?;
     w.u32(snapshot.semaphore);
     Ok(w.0)
 }
 
-fn read_player_setup(data: &[u8]) -> Result<Option<PlayerSetupSaveState>, SaveError> {
+fn read_player_setup(
+    data: &[u8],
+    format_version: u32,
+) -> Result<Option<PlayerSetupSaveState>, SaveError> {
     let mut r = Reader::new(data);
     if !r.bool()? {
         r.finish()?;
@@ -3402,7 +3427,7 @@ fn read_player_setup(data: &[u8]) -> Result<Option<PlayerSetupSaveState>, SaveEr
         ranked: r.bool()?,
         shared_vision_preq_mask: r.u8()?,
     };
-    let options = read_match_options(&mut r)?;
+    let options = read_match_options(&mut r, format_version)?;
     let semaphore = r.u32()?;
     r.finish()?;
     Ok(Some(PlayerSetupSaveState {
@@ -3652,7 +3677,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(PATHS, write_paths(sim, FORMAT_VERSION)?),
             Chunk::leaf(ITEMS, items),
             Chunk::leaf(BUILDS, builds),
-            Chunk::leaf(PLAYER_SETUP, write_player_setup(sim)?),
+            Chunk::leaf(PLAYER_SETUP, write_player_setup(sim, FORMAT_VERSION)?),
             Chunk::leaf(GROUPS, groups::write(&sim.groups)?),
             Chunk::leaf(LEADER_MATCH, leader_match::write(sim)?),
             Chunk::leaf(
@@ -3759,7 +3784,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     let (unit_type, paths, path_unit) = read_paths(paths, &expected_types, core.format_version)?;
     let item_runtime = read_items(items, &map.world)?;
     let player_setup = match sections[7] {
-        Some(data) => read_player_setup(data)?,
+        Some(data) => read_player_setup(data, core.format_version)?,
         None => None,
     };
     // A stream older than `GROUPS` carried the section's whole reachable state in its
@@ -4168,6 +4193,30 @@ mod tests {
     }
 
     #[test]
+    fn game_info_difficulty_v22_roundtrips_and_v21_refuses_a_lossy_downgrade() {
+        let mut original = supported_sim();
+        original.vic_match.options.difficulty = 5;
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.vic_match.options.difficulty, 5);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+        assert_eq!(
+            leader_match::write_for_version(&original, MUSTER_STRATEGY_FORMAT_VERSION),
+            Err(SaveError::Unsupported("GameInfo difficulty"))
+        );
+
+        let pristine = supported_sim();
+        let v21 = prior_format_stream(&pristine, MUSTER_STRATEGY_FORMAT_VERSION);
+        let upgraded = load_sim(&v21).unwrap();
+        assert_eq!(upgraded.vic_match.options.difficulty, 0);
+        assert_eq!(
+            prior_format_stream(&upgraded, MUSTER_STRATEGY_FORMAT_VERSION),
+            v21
+        );
+    }
+
+    #[test]
     fn unit_guys_v19_shape_topology_and_identity_corruption_fail_closed() {
         let mut original = supported_sim();
         let row = 0;
@@ -4258,6 +4307,8 @@ mod tests {
                     data = write_world_state_for_version(&state, format_version).unwrap();
                 } else if child.header.id == PATHS {
                     data = write_paths(sim, format_version).unwrap();
+                } else if child.header.id == PLAYER_SETUP {
+                    data = write_player_setup(sim, format_version).unwrap();
                 } else if child.header.id == LEADER_MATCH {
                     data = leader_match::write_for_version(sim, format_version).unwrap();
                 }

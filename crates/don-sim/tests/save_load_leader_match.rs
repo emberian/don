@@ -93,7 +93,7 @@ fn a_commanded_match_round_trips_after_frame_zero_and_resaves_identically() {
     let before_players = original.players.clone();
     let before_setup = original.vic_leaders.setup_owner.applied().cloned();
     let bytes = save_sim(&original).expect("current format owns the configured mid-match pair");
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 21);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 22);
     assert!(!section_range(&bytes, LEADER_MATCH).is_empty());
 
     let loaded = load_sim(&bytes).expect("current leader/match state loads");
@@ -108,7 +108,7 @@ fn a_commanded_match_round_trips_after_frame_zero_and_resaves_identically() {
 }
 
 #[test]
-fn v21_round_trips_the_checksum_owned_army_muster_strategy_array() {
+fn current_format_preserves_the_v21_checksum_owned_army_muster_strategy_array() {
     let mut original = configured_sim();
     for (region, value) in original.vic_leaders.slots[1]
         .strategy
@@ -118,10 +118,10 @@ fn v21_round_trips_the_checksum_owned_army_muster_strategy_array() {
         *value = (region as u16).wrapping_mul(0x101).wrapping_add(7);
     }
     let before_digest = original.channel_digest();
-    let bytes = save_sim(&original).expect("v21 owns LeaderData::strategy");
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 21);
+    let bytes = save_sim(&original).expect("current format owns LeaderData::strategy");
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 22);
 
-    let mut loaded = load_sim(&bytes).expect("v21 strategy array reloads");
+    let mut loaded = load_sim(&bytes).expect("current strategy array reloads");
     assert_eq!(
         loaded.vic_leaders.slots[1].strategy,
         original.vic_leaders.slots[1].strategy

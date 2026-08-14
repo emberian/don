@@ -97,6 +97,14 @@ streams restore the retail constructor-zero array. The array remains in the cano
 participates in the Leader checksum walk at its real `+0xA68` order, and is not duplicated in the
 Armies or diplomacy sections.
 
+## DoNSave v22 GameInfo difficulty owner
+
+The existing `LEADER_MATCH` row now carries mutable `GameInfo::difficulty` at the v22 edge.
+Older streams restore the retail zero default, and a requested v21 encoding refuses a nonzero
+value rather than losing it. `PLAYER_SETUP` writes a neutral difficulty recipe byte because the
+setup transaction never consumes that field; the live value therefore has one persisted owner.
+Current v22 streams load and immediately re-encode byte-for-byte.
+
 ## Mounted and remaining boundary
 
 - exported `canonical_diplomacy_host`, `diplomacy_accept_host`, and the two callback bodies;

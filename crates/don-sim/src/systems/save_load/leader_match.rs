@@ -33,6 +33,8 @@ const CITY_POOL_FORMAT_VERSION: u32 = 12;
 /// First DoNSave version that carries `LeaderData::strategy[64]`, now consumed by the exact
 /// released-land `Army::do_mustering` transaction.
 pub(crate) const LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION: u32 = 21;
+/// First DoNSave version that carries mutable `GameInfo::difficulty`.
+pub(crate) const LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION: u32 = 22;
 
 pub(super) struct LeaderMatchState {
     game: Match,
@@ -426,8 +428,8 @@ fn read_type_table(r: &mut Reader<'_>) -> Result<TypeTable, SaveError> {
     Ok(TypeTable { rows, constants })
 }
 
-fn write_match(w: &mut Writer, game: &Match) -> Result<(), SaveError> {
-    super::write_match_options(w, game.options);
+fn write_match(w: &mut Writer, game: &Match, format_version: u32) -> Result<(), SaveError> {
+    super::write_match_options(w, game.options, format_version)?;
     write_score_constants(w, game.constants);
     write_victory_options(w, &game.victory_options)?;
     w.i32(game.frame);
@@ -448,9 +450,9 @@ fn write_match(w: &mut Writer, game: &Match) -> Result<(), SaveError> {
     Ok(())
 }
 
-fn read_match(r: &mut Reader<'_>) -> Result<Match, SaveError> {
+fn read_match(r: &mut Reader<'_>, format_version: u32) -> Result<Match, SaveError> {
     Ok(Match {
-        options: super::read_match_options(r)?,
+        options: super::read_match_options(r, format_version)?,
         constants: read_score_constants(r)?,
         victory_options: read_victory_options(r)?,
         frame: r.i32()?,
@@ -864,7 +866,7 @@ fn read_players(r: &mut Reader<'_>) -> Result<Option<PlayerTable>, SaveError> {
 }
 
 pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
-    write_for_version(sim, LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION)
+    write_for_version(sim, LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION)
 }
 
 pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {
@@ -878,7 +880,7 @@ pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8
         return Err(SaveError::Unsupported("pending terminal leader cleanup"));
     }
     let mut w = Writer::default();
-    write_match(&mut w, &sim.vic_match)?;
+    write_match(&mut w, &sim.vic_match, format_version)?;
     write_type_table(&mut w, &sim.vic_leaders.types)?;
     for (slot, leader) in sim.vic_leaders.slots.iter().enumerate() {
         if leader.who != slot as i32 {
@@ -907,7 +909,7 @@ pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8
 
 pub(super) fn read(data: &[u8], format_version: u32) -> Result<LeaderMatchState, SaveError> {
     let mut r = Reader::new(data);
-    let game = read_match(&mut r)?;
+    let game = read_match(&mut r, format_version)?;
     let types = read_type_table(&mut r)?;
     let mut leaders = Leaders::new(types);
     for leader in &mut leaders.slots {

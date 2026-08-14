@@ -547,6 +547,8 @@ pub struct MatchOptions {
     pub team_style: u8,
     /// `GameInfo+0x1E` (`Game+0x2A`).
     pub game_rules: u8,
+    /// `GameInfo+0x1F` (`Game+0x2B`). Stored zero-based; scenario builtins expose 1..=6.
+    pub difficulty: u8,
     /// `GameInfo+0x21` (`Game+0x2D`). Indexes `<CATEGORIES id="startingresources">`.
     pub starting_resources: u8,
     /// `GameInfo+0x24` (`Game+0x30`). `Leader::init` uses 3 for the treaty base and

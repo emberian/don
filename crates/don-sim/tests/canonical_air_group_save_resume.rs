@@ -562,7 +562,7 @@ fn retail_build_launch_single_best_current_reload_resumes_real_air_tick() {
 
     let bytes = save_sim(&control).unwrap();
     // Magic, root ChunkHeader, CORE ChunkHeader, then CoreState::format_version.
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 21);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 22);
     let mut resumed = load_sim(&bytes).unwrap();
     assert_eq!(save_sim(&resumed).unwrap(), bytes);
     let actor = actor_identity(&control, winner);

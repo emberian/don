@@ -1129,6 +1129,7 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
         setup: Some(ProductionSetupImage {
             game_info_flags: 0b100,
             game_rules: 0,
+            difficulty: 0,
             rush_rules: 14,
             victory: don_bhs::scenario::victory::ECONOMIC,
             starting_town: 2,
@@ -1150,6 +1151,18 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
     };
     let (types, upgrades) = canonical_type_owners(OWNER);
     let (mut sim, mut production, row) = production_owners(OWNER);
+    sim.step8.leaders[OWNER].flags = 0;
+    sim.vic_leaders.slots[OWNER].leader_flags = 0;
+    let mut setup = ManualPlayerSetup {
+        active_mask: 1 << OWNER,
+        local_player_setup_slot: OWNER,
+        ..ManualPlayerSetup::default()
+    };
+    setup.teams[OWNER] = 0;
+    sim.start_manual_player_setup(setup)
+        .expect("install the canonical active Leader setup owner");
+    sim.vic_leaders.slots[OWNER].init_diplomacy.ally_mask = 1;
+    sim.builds[row].flags |= flag::CAPTURED;
     sim.spawn_unit(OWNER, 50, 100, 200, 4)
         .expect("install one live idle Citizen captain");
 
@@ -1175,7 +1188,10 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105]
+        [
+            78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 108,
+            109,
+        ]
     );
     assert_eq!(
         receipt.production.trace[5..]
@@ -1195,6 +1211,9 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
             ProductionBuiltinValue::Int(0),
             ProductionBuiltinValue::Int(0),
             ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(6),
         ]
     );
     assert_eq!(receipt.research.len(), 1);
@@ -1203,8 +1222,8 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
         SingleLibraryResearchStatus::Applied
     );
     assert_eq!(receipt.idle_units[0].returned, 1);
-    assert_eq!(call.step, BUILD_BAND_BASE as i32 + 17);
-    assert_eq!(receipt.production.returned, BUILD_BAND_BASE as i32 + 23);
+    assert_eq!(call.step, BUILD_BAND_BASE as i32 + 25);
+    assert_eq!(receipt.production.returned, BUILD_BAND_BASE as i32 + 31);
     assert!(script_runtime.script_timers().is_empty());
     assert_eq!(sim.scenario_data.find_counters[30], BUILD_BAND_BASE as i32);
     assert_eq!(sim.builds[row].queue.queued, 1);
@@ -1231,6 +1250,73 @@ fn owned_game_info_gates_commit_the_complete_research_transaction() {
     assert_eq!(
         sim.vic_leaders.slots[OWNER].num_queued[WRITTEN_WORD as usize],
         1
+    );
+    assert_eq!(sim.vic_match.options.difficulty, 5);
+    assert_eq!(sim.vic_leaders.slots[OWNER].multi_diff, 6);
+    let saved = save_sim(&sim).expect("save committed difficulty after-image");
+    let resumed = load_sim(&saved).expect("resume committed difficulty after-image");
+    assert_eq!(save_sim(&resumed).unwrap(), saved);
+    assert_eq!(resumed.vic_match.options.difficulty, 5);
+    assert_eq!(resumed.vic_leaders.slots[OWNER].multi_diff, 6);
+}
+
+#[test]
+fn difficulty_refusal_branches_return_minus_one_without_binding_or_mutating_owners() {
+    let fixture = repo_root().join("crates/don-replay/tests/fixtures/bhs_research_rollback.bhs");
+    let inc = don_bhs_cc::load::install_include_path(repo_root());
+    let loaded = don_bhs_cc::load::load_script_file(&inc, &fixture).unwrap();
+    let mut script_runtime = ScriptRuntime::new(loaded.program, None, None).unwrap();
+    let binding = ReplayBhsBinding {
+        file: 0,
+        name: "difficulty_refusals".into(),
+    };
+    let mut call = ReplayProductionCall {
+        who: 1,
+        step: 99,
+        boom_vs_rush: 1,
+        num_loops: 5,
+    };
+    let image = ProductionBuiltinImage::default();
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, _) = production_owners(OWNER);
+    sim.vic_match.options.difficulty = 4;
+    sim.vic_leaders.slots[OWNER].multi_diff = 3;
+    let match_before = sim.vic_match.options;
+    let leader_difficulty_before = sim.vic_leaders.slots[OWNER].multi_diff;
+
+    let receipt = run_production_research_call(
+        &mut script_runtime,
+        &binding,
+        &mut call,
+        &image,
+        &types,
+        &upgrades,
+        &PlaceBuildingCostAuthority::default(),
+        None,
+        &mut sim,
+        &mut production,
+        game_seconds(0),
+    )
+    .expect("all retail refusal arms complete before authority binding");
+
+    assert_eq!(call.step, -5);
+    assert_eq!(receipt.production.returned, -5);
+    assert_eq!(
+        receipt
+            .production
+            .trace
+            .iter()
+            .map(|call| (call.index, call.returned.clone()))
+            .collect::<Vec<_>>(),
+        [106, 106, 108, 108, 109]
+            .into_iter()
+            .map(|index| (index, ProductionBuiltinValue::Int(-1)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(sim.vic_match.options, match_before);
+    assert_eq!(
+        sim.vic_leaders.slots[OWNER].multi_diff,
+        leader_difficulty_before
     );
 }
 
@@ -1260,6 +1346,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         setup: Some(ProductionSetupImage {
             game_info_flags: 0b100,
             game_rules: 0,
+            difficulty: 0,
             rush_rules: 14,
             victory: don_bhs::scenario::victory::ECONOMIC,
             starting_town: 2,
@@ -1294,6 +1381,8 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     let groups_before = sim.groups.clone();
     let queue_before = sim.builds[row].queue.clone();
     let resources_before = production.leaders[OWNER].resources;
+    let difficulty_before = sim.vic_match.options.difficulty;
+    let leader_difficulty_before = sim.vic_leaders.slots[OWNER].multi_diff;
 
     let error = run_production_research_call(
         &mut script_runtime,
@@ -1314,8 +1403,8 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         matches!(
             &error.failure,
             ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-                index: 106,
-                name: "set_difficulty"
+                index: 107,
+                name: "get_difficulty"
             })
         ),
         "unexpected failure: {:?}",
@@ -1327,7 +1416,10 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105]
+        [
+            78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 108,
+            109,
+        ]
     );
     assert_eq!(call, call_before);
     assert_eq!(
@@ -1337,7 +1429,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     assert_eq!(script_runtime.script_timers(), &pristine_timers);
     assert_eq!(
         error.trace.last().map(|call| (&call.index, &call.returned)),
-        Some((&105, &ProductionBuiltinValue::Int(0)))
+        Some((&109, &ProductionBuiltinValue::Int(6)))
     );
     assert_eq!(
         error.trace[5..]
@@ -1357,6 +1449,9 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             ProductionBuiltinValue::Int(0),
             ProductionBuiltinValue::Int(0),
             ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(6),
         ]
     );
     assert_eq!(sim.scenario_data, scenario_before);
@@ -1391,6 +1486,11 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     assert_eq!(
         sim.vic_leaders.slots[OWNER].num_queued[WRITTEN_WORD as usize],
         0
+    );
+    assert_eq!(sim.vic_match.options.difficulty, difficulty_before);
+    assert_eq!(
+        sim.vic_leaders.slots[OWNER].multi_diff,
+        leader_difficulty_before
     );
 }
 
@@ -1459,6 +1559,7 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
         setup: Some(ProductionSetupImage {
             game_info_flags: 0,
             game_rules: 0,
+            difficulty: 0,
             rush_rules: 0,
             victory: 0,
             starting_town: 2,

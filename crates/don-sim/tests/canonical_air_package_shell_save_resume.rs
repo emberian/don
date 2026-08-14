@@ -2508,7 +2508,7 @@ fn exact_retail_triple_cached_package_is_atomic_and_current_save_resumable() {
     }
 
     let bytes = save_sim(&control).unwrap();
-    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 21);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 22);
     let mut resumed = load_sim(&bytes).unwrap();
     assert_eq!(save_sim(&resumed).unwrap(), bytes);
     install_batch_package_authority(&mut resumed, &carriers, &planes);
@@ -2591,7 +2591,7 @@ fn exact_cached_force_all_shell_current_reload_resumes_four_build_home_aircraft(
     let pre_package = save_sim(&control).unwrap();
     assert_eq!(
         u32::from_le_bytes(pre_package[24..28].try_into().unwrap()),
-        21
+        22
     );
     let mut control = load_sim(&pre_package).unwrap();
     assert_eq!(save_sim(&control).unwrap(), pre_package);
@@ -2658,7 +2658,7 @@ fn exact_cached_force_all_shell_current_reload_resumes_four_build_home_aircraft(
     }
 
     let applied = save_sim(&control).unwrap();
-    assert_eq!(u32::from_le_bytes(applied[24..28].try_into().unwrap()), 21);
+    assert_eq!(u32::from_le_bytes(applied[24..28].try_into().unwrap()), 22);
     let mut resumed = load_sim(&applied).unwrap();
     assert_eq!(save_sim(&resumed).unwrap(), applied);
     install_runtime_authority(&mut control, &planes, target);

@@ -151,6 +151,10 @@ struct ResearchHost<'a, 'farm> {
     produce_building_success_preflights: Vec<LeaderProduceBuildingFarmSuccessPreflightReceipt>,
     farm_builtin_520_costs: Vec<FarmBuiltin520CostReceipt>,
     farm_frame_zero_tails: Vec<FarmFrameZeroTailReceipt>,
+    /// The replay setup byte is compared with the canonical mutable owner on
+    /// the first global-difficulty access. Later accesses in the same atomic
+    /// script call observe earlier admitted setter writes.
+    difficulty_bound: bool,
 }
 
 impl<'a, 'farm> ResearchHost<'a, 'farm> {
@@ -188,6 +192,7 @@ impl<'a, 'farm> ResearchHost<'a, 'farm> {
             produce_building_success_preflights: Vec::new(),
             farm_builtin_520_costs: Vec::new(),
             farm_frame_zero_tails: Vec::new(),
+            difficulty_bound: false,
         }
     }
 
@@ -241,6 +246,64 @@ impl<'a, 'farm> ResearchHost<'a, 'farm> {
             return Err(HostError::Unimplemented);
         }
         Ok(type_flags & 3 == 3)
+    }
+
+    fn bind_global_difficulty(&mut self) -> Result<(), HostError> {
+        if !self.difficulty_bound {
+            let replay = self
+                .image
+                .setup
+                .as_ref()
+                .ok_or(HostError::Unimplemented)?
+                .difficulty;
+            if self.sim.vic_match.options.difficulty != replay {
+                return Err(HostError::Unimplemented);
+            }
+            self.difficulty_bound = true;
+        }
+        Ok(())
+    }
+
+    /// `set_difficulty`, `0x009e52f0`: accept script ordinals 1..=6,
+    /// publish the zero-based byte at `Game+0x2B`, and return one. Refusals
+    /// return -1 without reading or writing the canonical owner.
+    fn set_difficulty(&mut self, args: &[Value]) -> HostResult {
+        let difficulty = Self::int_arg(args, 0)?;
+        if !(1..=6).contains(&difficulty) {
+            return Ok(Value::Int(-1));
+        }
+        self.bind_global_difficulty()?;
+        self.sim.vic_match.options.difficulty = (difficulty - 1) as u8;
+        Ok(Value::Int(1))
+    }
+
+    /// `set_leader_difficulty`, `0x009e5350`: unlike the global setter,
+    /// retail stores the validated script value itself in `LeaderData+0x50`.
+    fn set_leader_difficulty(&mut self, args: &[Value]) -> HostResult {
+        let difficulty = Self::int_arg(args, 1)?;
+        if !(1..=6).contains(&difficulty) {
+            return Ok(Value::Int(-1));
+        }
+        let Some(who0) = Self::who0(args, 0)? else {
+            return Ok(Value::Int(-1));
+        };
+        if !self.reconciled_active_owner(who0)? {
+            return Ok(Value::Int(-1));
+        }
+        self.sim.vic_leaders.slots[who0].multi_diff = difficulty;
+        Ok(Value::Int(1))
+    }
+
+    /// `get_leader_difficulty`, `0x009e53b0`: the same one-based Leader and
+    /// both-low-flags guards, followed by the raw `LeaderData+0x50` dword.
+    fn get_leader_difficulty(&self, args: &[Value]) -> HostResult {
+        let Some(who0) = Self::who0(args, 0)? else {
+            return Ok(Value::Int(-1));
+        };
+        if !self.reconciled_active_owner(who0)? {
+            return Ok(Value::Int(-1));
+        }
+        Ok(Value::Int(self.sim.vic_leaders.slots[who0].multi_diff))
     }
 
     fn population(&self, builtin: u32, args: &[Value]) -> HostResult {
@@ -667,6 +730,9 @@ impl Host for ResearchHost<'_, '_> {
             NUM_TYPE_QUEUED_BUILTIN => self.num_type_queued(args),
             PLACE_BUILDING_WITH_COST_BUILTIN => self.place_building_with_cost(args),
             AT_LEAST_TYPE_BUILTIN => self.at_least_type(args),
+            106 => self.set_difficulty(args),
+            108 => self.set_leader_difficulty(args),
+            109 => self.get_leader_difficulty(args),
             245 | 246 => self.population(decl.index, args),
             _ => {
                 let before = self.prefix.trace().len();
@@ -750,6 +816,7 @@ pub fn run_production_research_call(
         std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].econ.stockpile);
     let step8_flags_before = std::array::from_fn::<_, 8, _>(|who| sim.step8.leaders[who].flags);
     let victory_before = sim.vic_leaders.clone();
+    let match_options_before = sim.vic_match.options;
     let farm_build_authority_before = farm_520
         .as_ref()
         .map(|authority| authority.build_authority.clone());
@@ -844,6 +911,7 @@ pub fn run_production_research_call(
                 sim.step8.leaders[who].flags = step8_flags_before[who];
             }
             sim.vic_leaders = victory_before;
+            sim.vic_match.options = match_options_before;
             if let (Some(authority), Some(before)) =
                 (farm_520.as_mut(), farm_build_authority_before)
             {

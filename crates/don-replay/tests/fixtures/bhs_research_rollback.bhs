@@ -17,7 +17,10 @@ int scenario research_then_fail(int who, ref int step, int boom_vs_rush, int num
     step += is_victory_territory();
     step += is_victory_time_limit();
     step += is_victory_wonder();
-    set_difficulty(0);
+    step += set_difficulty(6);
+    step += set_leader_difficulty(who, 6);
+    step += get_leader_difficulty(who);
+    step += get_difficulty();
     return step + boom_vs_rush + num_loops;
 }
 
@@ -40,12 +43,25 @@ int scenario research_then_commit(int who, ref int step, int boom_vs_rush, int n
     step += is_victory_territory();
     step += is_victory_time_limit();
     step += is_victory_wonder();
+    step += set_difficulty(6);
+    step += set_leader_difficulty(who, 6);
+    step += get_leader_difficulty(who);
     return step + boom_vs_rush + num_loops;
 }
 
 int scenario research_only(int who, ref int step, int boom_vs_rush, int num_loops)
 {
     step = research_tech_with_cost(who, "Written Word");
+    return step;
+}
+
+int scenario difficulty_refusals(int who, ref int step, int boom_vs_rush, int num_loops)
+{
+    step = set_difficulty(0);
+    step += set_difficulty(7);
+    step += set_leader_difficulty(who, 0);
+    step += set_leader_difficulty(0, 6);
+    step += get_leader_difficulty(0);
     return step;
 }
 

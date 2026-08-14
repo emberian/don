@@ -779,9 +779,10 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-775 scenario registrations are still hard failures; notably `get_difficulty` lacks an
-authoritative game/scenario difficulty owner and `num_cities` lacks the live
-`LeaderData::city_num` field. They are not synthesized from nearby state.
+scenario registrations are still hard failures; notably `get_difficulty` cannot yet select
+between the now-canonical global difficulty byte and retail's live campaign-object override,
+and `num_cities` lacks the live `LeaderData::city_num` field. They are not synthesized from
+nearby state.
 
 ---
 

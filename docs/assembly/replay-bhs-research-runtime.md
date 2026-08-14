@@ -82,18 +82,30 @@ owners changed by builtin 357: ScenarioData scalars, Groups, Build queues,
 `LiveProductionRuntime`, Sim and step-8 stockpiles, and victory Leader resources/counters.
 Any VM or validation failure restores every one of those owners before returning the error.
 
-The production host now binds the replay-carried `GameInfo::flags`, `rush_rules`, and
-`victory` fields into one immutable setup receipt. That exact owner executes builtin 94,
-builtin 95, and the ten equality gates 96--105 without a fallback value. The successful
-transaction test removes timer `"1"`, queues Written Word, executes all twelve gates, and
-commits the ref step, timer removal, cursor, Group, Build queue, six-good payment, and every
-Leader resource/counter mirror together.
+The production host now binds the replay-carried `GameInfo::flags`, `rush_rules`, `victory`,
+and initial zero-based `difficulty` fields into one immutable setup receipt. That exact owner
+executes builtin 94, builtin 95, and the ten equality gates 96--105 without a fallback value.
+The same atomic host owns the reached exact difficulty mutations: builtin 106 accepts only
+script values 1--6 and writes `value - 1` to canonical `MatchOptions::difficulty`; builtin
+108 validates the one-based player and both low Leader flags before writing the raw script
+value to canonical `LeaderState::multi_diff`; builtin 109 applies the same Leader guards and
+reads that raw value. Every invalid argument arm returns -1 before authority binding or
+mutation.
 
-The rollback twin performs the same work and then deliberately reaches still-unowned
-mutation builtin 106 `set_difficulty`. It proves that Program statics, the ref step, timer
-plus cursor, ScenarioData cursor, Group pool, Build queue, resources, `num_queued`,
-`ages_queued`, and `epochs_queued` all return to their entry images even after the complete
-read-only GameInfo cohort has executed.
+The successful transaction test removes timer `"1"`, queues Written Word, executes the
+read-only cohort plus builtins 106/108/109, and commits the ref step, timer removal, cursor,
+Group, Build queue, six-good payment, every Leader resource/counter mirror, global difficulty
+5, and Leader difficulty 6 together. DoNSave v22 persists the mutable global difficulty only
+through `LEADER_MATCH`; player-setup reconstruction keeps its semantically unused difficulty
+recipe byte neutral. The complete after-image loads and immediately re-encodes byte-for-byte.
+
+The rollback twin performs the same work and then deliberately reaches builtin 107
+`get_difficulty`. Its ordinary fallback reads `Game+0x2B`, but a live campaign object at
+`[0x00C0617C]+0x1328` can override that result; replay setup does not yet prove this process
+authority absent. The refusal proves that Program statics, the ref step, timer plus cursor,
+ScenarioData cursor, Group pool, Build queue, resources, `num_queued`, `ages_queued`,
+`epochs_queued`, and both difficulty owners all return to their entry images after the three
+owned difficulty calls have executed.
 
 ## Deliberately red boundaries
 
@@ -109,6 +121,8 @@ read-only GameInfo cohort has executed.
   installed trace and fails closed before mutation at that boundary.
 - Generic type `Object::is` composition is not claimed. The admitted installed path requires
   the live Build's exact registered producer type to be the resolved current Library.
+- Builtin 107 remains fail-closed until replay has an authoritative campaign-object projection;
+  reading the canonical global byte alone would silently choose the wrong retail arm.
 - No retail process memory is written and no scalar placeholder is used as production state.
 
 ## Gates

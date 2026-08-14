@@ -375,6 +375,8 @@ pub fn bind_production_type_counts(
 pub struct ProductionSetupImage {
     pub game_info_flags: u32,
     pub game_rules: u8,
+    /// Zero-based `GameInfo::difficulty` stored at `Game+0x2B`.
+    pub difficulty: u8,
     pub rush_rules: u8,
     pub victory: u8,
     pub starting_town: u8,
@@ -401,6 +403,7 @@ impl ProductionSetupImage {
         Ok(Self {
             game_info_flags: initial.info.flags,
             game_rules: settings.game_rules,
+            difficulty: settings.difficulty,
             rush_rules: settings.rush_rules,
             victory: settings.victory,
             starting_town: settings.starting_town,
