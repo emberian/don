@@ -59,6 +59,11 @@ const RETAIL_BUILD_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageI
     package_serial: 54_617,
     play: 0,
 };
+const RETAIL_PATROL_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 65_215,
+    package_serial: 10_870,
+    play: 2,
+};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -129,6 +134,20 @@ fn retail_build_flight_commands() -> Vec<Vec<u8>> {
     [
         "000000",
         "1c21080000030000000000000000000000000000000a000000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_patrol_flight_commands() -> Vec<Vec<u8>> {
+    [
+        "000005",
+        "0acc0c01004534000001",
+        "000005",
+        "1c2c080000010000000000000000000000000000000a000000",
+        "391e8b520b61cba8e901000000a457ee4a2db56e168965b7cce3503e37273aecb6cb22493301000000c5e3f22ab4d137630431ba12cf1dbf9601000400fd7a2b7c",
+        "4a48001000000000000000",
+        "4804cb0901009d280000",
     ]
     .map(hex)
     .to_vec()
@@ -213,6 +232,7 @@ fn install_package_authority(sim: &mut Sim, planes: &[Handle], builds: &[i16]) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                fresh_flight_target: None,
                 is_nuclear_missile: false,
             })
             .collect(),
@@ -368,6 +388,7 @@ fn install_batch_package_authority(sim: &mut Sim, carriers: &[Handle], planes: &
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                fresh_flight_target: None,
                 is_nuclear_missile: false,
             })
             .collect(),
@@ -529,6 +550,7 @@ fn flight_then_launch_fixture() -> (Sim, Vec<Handle>, Vec<i16>, Handle) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                fresh_flight_target: None,
                 is_nuclear_missile: false,
             })
             .collect(),
@@ -612,6 +634,100 @@ fn unit_flight_fixture() -> (Sim, Vec<Handle>) {
     }
     install_package_authority(&mut sim, &selected, &[]);
     (sim, selected.to_vec())
+}
+
+fn patrol_flight_fixture() -> (Sim, Vec<Handle>) {
+    let mut sim = Sim::new(0x1c_10870, 256);
+    let mut players = PlayerTable::new();
+    players.seat(2, 1, 5, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_PATROL_FLIGHT_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_PATROL_FLIGHT_IDENTITY.game_frame;
+
+    let planes: Vec<_> = (0..2)
+        .map(|index| {
+            sim.spawn_unit(5, PLANE_TYPE, 40_000 + index * 100, 30_000, 4)
+                .unwrap()
+        })
+        .collect();
+    for row in 0..=92usize {
+        let o = 2_000 + row as i16;
+        assert_eq!(
+            sim.spawn_build(
+                1,
+                build_record(
+                    1,
+                    o,
+                    0x7300 + row as u16,
+                    (55_000 + row as i32, 41_000),
+                    None,
+                ),
+            ),
+            row,
+        );
+    }
+    for plane in &planes {
+        let row = sim.world.row_of(*plane).unwrap();
+        sim.world.units.group_mut()[row] = -1;
+        sim.world.units.o_down_mut()[row] = -1;
+        let payload = StrafeOrder {
+            target_o: 2_000,
+            target_who: 1,
+            target_uid: sim.builds[0].uid,
+            air: don_sim::systems::air::AirOrderWalk {
+                oxx: -1,
+                whose: -1,
+                cruising_alt: 0x640,
+                ..Default::default()
+            },
+            xx: sim.builds[0].position().0,
+            yy: sim.builds[0].position().1,
+            ..Default::default()
+        };
+        sim.world
+            .orders_mut(row)
+            .replace(Order::strafe(payload, false).unwrap());
+    }
+    let mut cache: [Vec<CachedSelection>; 8] = std::array::from_fn(|_| Vec::new());
+    cache[2] = planes
+        .iter()
+        .map(|plane| {
+            let row = sim.world.row_of(*plane).unwrap();
+            CachedSelection {
+                o: sim.world.units.o()[row],
+                uid: sim.world.units.get_uid(row),
+            }
+        })
+        .collect();
+    sim.command_package_state = CommandPackageState::from_saved_selections(cache).unwrap();
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x10870,
+        composition_digest: [0x70; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: planes.iter().copied().map(move_member).collect(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x65215,
+        composition_digest: [0x15; 32],
+        units: planes
+            .iter()
+            .copied()
+            .map(|handle| AirGroupUnitAuthority {
+                handle,
+                object_masks: 0,
+                mana_cap: 1_000,
+                is_biplane: true,
+                is_bomber: false,
+                is_helicopter: false,
+                fresh_flight_target: Some((1, 2_092)),
+                is_nuclear_missile: false,
+            })
+            .collect(),
+        builds: Vec::new(),
+        busy_spells: Vec::new(),
+    });
+    (sim, planes)
 }
 
 fn build_flight_fixture() -> Sim {
@@ -771,6 +887,7 @@ fn changed_no_action_build_target_rolls_back_cached_airbase_selection() {
         &sim.air_group_authority,
         &sim.scenario_ignore_orders,
         &players,
+        (sim.map.world.xs, sim.map.world.ys),
         RETAIL_BUILD_FLIGHT_IDENTITY,
         &commands,
     )
@@ -790,6 +907,7 @@ fn changed_no_action_build_target_rolls_back_cached_airbase_selection() {
             &sim.air_group_authority,
             &sim.scenario_ignore_orders,
             &players,
+            (sim.map.world.xs, sim.map.world.ys),
             &commands,
             prepared,
         ),
@@ -892,6 +1010,124 @@ fn current_strafe_fuel_exhaustion_retargets_only_the_native_target_fields() {
 }
 
 #[test]
+fn exact_cached_patrol_then_flight_replaces_strafe_atomically_and_resumes() {
+    let (mut sim, planes) = patrol_flight_fixture();
+    let before_rng = sim.world.random.state();
+    let receipt = sim
+        .process_air_replay_batch(
+            RETAIL_PATROL_FLIGHT_IDENTITY,
+            &retail_patrol_flight_commands(),
+        )
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.patrol.len(), 1);
+    assert_eq!(receipt.flight_fresh_strafe.len(), 1);
+    assert!(receipt.air.is_empty());
+    assert!(receipt.flight_no_action.is_empty());
+    assert!(receipt.flight_strafe.is_empty());
+    let patrol = &receipt.patrol[0];
+    assert_eq!(patrol.destination, (68_812, 13_381));
+    assert!(patrol
+        .actors
+        .iter()
+        .all(|actor| actor.after.kind == OrderIndex::AirPatrol));
+    let flight = &receipt.flight_fresh_strafe[0];
+    assert_eq!(flight.target.address(), (1, 2_092));
+    assert_eq!(flight.target_uid, sim.builds[92].uid);
+    assert_eq!(flight.target_position, sim.builds[92].position());
+    assert_eq!(sim.world.random.state(), before_rng);
+    for plane in &planes {
+        let row = sim.world.row_of(*plane).unwrap();
+        let order = sim.world.orders(row).current().unwrap();
+        let strafe = order.strafe.as_ref().unwrap();
+        assert_eq!(order.kind, OrderIndex::Strafe);
+        assert_eq!(order.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!((strafe.target_who, strafe.target_o), (1, 2_092));
+        assert_eq!(strafe.target_uid, sim.builds[92].uid);
+        assert_eq!(strafe.mandatory, 1);
+        assert_eq!((strafe.air.oxx, strafe.air.whose), (-1, -1));
+        assert_eq!(strafe.air.cruising_alt, 0x640);
+        assert_eq!((strafe.xx, strafe.yy), sim.builds[92].position());
+        let group = usize::try_from(sim.world.units.group()[row]).unwrap();
+        assert_eq!(sim.groups.list[group].form, -1);
+        assert_eq!(sim.groups.list[group].disband, 0);
+    }
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(save_sim(&loaded).unwrap(), saved);
+}
+
+#[test]
+fn patrol_flight_map_staleness_rolls_back_before_any_order_publication() {
+    let (mut sim, planes) = patrol_flight_fixture();
+    let commands = retail_patrol_flight_commands();
+    let players = std::array::from_fn(|play| (play == 2).then_some(5));
+    let map_tiles = (sim.map.world.xs, sim.map.world.ys);
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        map_tiles,
+        RETAIL_PATROL_FLIGHT_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_orders = planes
+        .iter()
+        .map(|plane| sim.world.orders(sim.world.row_of(*plane).unwrap()).clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            (map_tiles.0 - 1, map_tiles.1),
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    for (plane, before) in planes.iter().zip(before_orders) {
+        assert_eq!(sim.world.orders(sim.world.row_of(*plane).unwrap()), &before);
+    }
+}
+
+#[test]
+fn standalone_patrol_and_unproven_fresh_flight_stay_red() {
+    let (mut sim, _) = patrol_flight_fixture();
+    let mut commands = retail_patrol_flight_commands();
+    commands.truncate(2);
+    assert!(matches!(
+        sim.process_air_replay_batch(RETAIL_PATROL_FLIGHT_IDENTITY, &commands),
+        Err(CanonicalAirPackageShellError::UnexpectedAirCommand { opcode: 10, .. })
+    ));
+
+    let (mut sim, _) = patrol_flight_fixture();
+    for unit in &mut sim.air_group_authority.units {
+        unit.fresh_flight_target = None;
+    }
+    assert!(matches!(
+        sim.process_air_replay_batch(
+            RETAIL_PATROL_FLIGHT_IDENTITY,
+            &retail_patrol_flight_commands(),
+        ),
+        Err(CanonicalAirPackageShellError::PatrolFlight(_))
+    ));
+}
+
+#[test]
 fn current_strafe_missile_mask_skips_that_actor_and_retargets_its_peers() {
     let (mut sim, planes) = unit_flight_fixture();
     let masked = planes[0];
@@ -985,6 +1221,7 @@ fn stale_flight_build_target_rejects_without_publishing_any_actor_retarget() {
         &sim.air_group_authority,
         &sim.scenario_ignore_orders,
         &players,
+        (sim.map.world.xs, sim.map.world.ys),
         RETAIL_UNIT_FLIGHT_IDENTITY,
         &commands,
     )
@@ -1006,6 +1243,7 @@ fn stale_flight_build_target_rejects_without_publishing_any_actor_retarget() {
             &sim.air_group_authority,
             &sim.scenario_ignore_orders,
             &players,
+            (sim.map.world.xs, sim.map.world.ys),
             &commands,
             prepared,
         ),
@@ -1142,6 +1380,7 @@ fn stale_following_launch_rolls_back_the_preceding_flight_selection() {
         &sim.air_group_authority,
         &sim.scenario_ignore_orders,
         &players,
+        (sim.map.world.xs, sim.map.world.ys),
         RETAIL_FLIGHT_AIR_IDENTITY,
         &commands,
     )
@@ -1166,6 +1405,7 @@ fn stale_following_launch_rolls_back_the_preceding_flight_selection() {
             &sim.air_group_authority,
             &sim.scenario_ignore_orders,
             &players,
+            (sim.map.world.xs, sim.map.world.ys),
             &commands,
             prepared,
         ),
@@ -1277,6 +1517,7 @@ fn third_pair_staleness_rolls_back_the_first_two_pairs() {
         &sim.air_group_authority,
         &sim.scenario_ignore_orders,
         &players,
+        (sim.map.world.xs, sim.map.world.ys),
         RETAIL_TRIPLE_IDENTITY,
         &commands,
     )
@@ -1302,6 +1543,7 @@ fn third_pair_staleness_rolls_back_the_first_two_pairs() {
             &sim.air_group_authority,
             &sim.scenario_ignore_orders,
             &players,
+            (sim.map.world.xs, sim.map.world.ys),
             &commands,
             prepared,
         ),

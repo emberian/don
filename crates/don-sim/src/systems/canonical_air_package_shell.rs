@@ -26,6 +26,11 @@ use crate::systems::canonical_group_move_host::{
     BuildSelectionIdentity, CommandPackageState, GroupMoveAuthority, PackageError,
     PreparedGroupSelection, PreparedSelectionObject, NETWORK_PLAYERS,
 };
+use crate::systems::canonical_patrol_flight_host::{
+    commit_canonical_fresh_flight, commit_canonical_patrol, prepare_canonical_fresh_flight,
+    prepare_canonical_patrol, CanonicalFreshFlightReceipt, CanonicalPatrolFlightError,
+    CanonicalPatrolReceipt, PATROL_OPCODE,
+};
 use crate::systems::groups_guys::Groups;
 use crate::systems::movement::PathStack;
 use crate::systems::production::BuildData;
@@ -100,6 +105,7 @@ pub enum CanonicalAirPackageShellError {
     Air(CanonicalAirPackageError),
     Flight(CanonicalFlightNoActionError),
     FlightStrafe(CanonicalFlightStrafeError),
+    PatrolFlight(CanonicalPatrolFlightError),
     StaleCommandImage,
     NoAirPairs,
     AirTransactionNotApplied {
@@ -123,6 +129,12 @@ impl From<CanonicalFlightNoActionError> for CanonicalAirPackageShellError {
 impl From<CanonicalFlightStrafeError> for CanonicalAirPackageShellError {
     fn from(error: CanonicalFlightStrafeError) -> Self {
         Self::FlightStrafe(error)
+    }
+}
+
+impl From<CanonicalPatrolFlightError> for CanonicalAirPackageShellError {
+    fn from(error: CanonicalPatrolFlightError) -> Self {
+        Self::PatrolFlight(error)
     }
 }
 
@@ -197,6 +209,7 @@ struct PreparedCanonicalFlightNoAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplayPairPosition {
     Air(CommandPackagePosition),
+    Patrol(CommandPackagePosition),
     Flight(CommandPackagePosition),
 }
 
@@ -204,6 +217,7 @@ enum ReplayPairPosition {
 enum PreparedFlightReceipt {
     NoAction(CanonicalFlightNoActionReceipt),
     Strafe(CanonicalFlightStrafeReceipt),
+    Fresh(CanonicalFreshFlightReceipt),
 }
 
 #[derive(Clone, Debug)]
@@ -249,8 +263,13 @@ pub struct PreparedCanonicalAirReplayBatch {
     shell: Vec<AirReplayShellCommand>,
     positions: Vec<ReplayPairPosition>,
     expected_air: Vec<AirGroupActionReceipt>,
+    expected_patrol: Vec<CanonicalPatrolReceipt>,
     expected_flights: Vec<PreparedFlightReceipt>,
     world_digest_before: u64,
+    groups_before: Groups,
+    paths_before: Vec<PathStack>,
+    command_state_before: CommandPackageState,
+    map_tiles_before: (i32, i32),
     selection_authority_before: GroupMoveAuthority,
     authority_before: AirGroupRuntimeAuthority,
     scenario_before: ScenarioIgnoreOrdersAuthority,
@@ -262,8 +281,10 @@ pub struct CanonicalAirReplayBatchReceipt {
     pub command_image: Vec<Vec<u8>>,
     pub shell: Vec<AirReplayShellCommand>,
     pub air: Vec<AirGroupActionReceipt>,
+    pub patrol: Vec<CanonicalPatrolReceipt>,
     pub flight_no_action: Vec<CanonicalFlightNoActionReceipt>,
     pub flight_strafe: Vec<CanonicalFlightStrafeReceipt>,
+    pub flight_fresh_strafe: Vec<CanonicalFreshFlightReceipt>,
 }
 
 fn require_size(
@@ -289,7 +310,10 @@ fn parse_shell(
     let Some(&opcode) = command.first() else {
         return Err(CanonicalAirPackageShellError::EmptyCommand { index });
     };
-    if matches!(opcode, 0 | LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE) {
+    if matches!(
+        opcode,
+        0 | PATROL_OPCODE | LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE
+    ) {
         return Err(CanonicalAirPackageShellError::UnexpectedAirCommand { index, opcode });
     }
     match opcode {
@@ -694,7 +718,7 @@ fn decode_batch_shell(
             };
             if !matches!(
                 action_opcode,
-                LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE | FLIGHT_OPCODE
+                PATROL_OPCODE | LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE | FLIGHT_OPCODE
             ) {
                 return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
                     index: u16::try_from(index).expect("command count checked"),
@@ -704,17 +728,31 @@ fn decode_batch_shell(
             let position = identity.position(
                 u16::try_from(index).expect("paired group cannot occupy the final u16 index"),
             );
-            positions.push(if action_opcode == FLIGHT_OPCODE {
-                ReplayPairPosition::Flight(position)
-            } else {
-                ReplayPairPosition::Air(position)
+            positions.push(match action_opcode {
+                PATROL_OPCODE => {
+                    let follows_with_flight = commands
+                        .get(index + 2)
+                        .is_some_and(|command| command.first() == Some(&0))
+                        && commands
+                            .get(index + 3)
+                            .is_some_and(|command| command.first() == Some(&FLIGHT_OPCODE));
+                    if !follows_with_flight {
+                        return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
+                            index: u16::try_from(index + 1).expect("command count checked"),
+                            opcode: action_opcode,
+                        });
+                    }
+                    ReplayPairPosition::Patrol(position)
+                }
+                FLIGHT_OPCODE => ReplayPairPosition::Flight(position),
+                _ => ReplayPairPosition::Air(position),
             });
             index += 2;
             continue;
         }
         if matches!(
             opcode,
-            LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE | FLIGHT_OPCODE
+            PATROL_OPCODE | LAUNCH_PATROL_OPCODE | SCRAMBLE_OPCODE | FLIGHT_OPCODE
         ) {
             return Err(CanonicalAirPackageShellError::UnexpectedAirCommand {
                 index: u16::try_from(index).expect("command count checked"),
@@ -837,6 +875,7 @@ pub fn prepare_canonical_air_replay_batch(
     authority: &AirGroupRuntimeAuthority,
     scenario: &ScenarioIgnoreOrdersAuthority,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
+    map_tiles: (i32, i32),
     identity: AirReplayPackageIdentity,
     commands: &[Vec<u8>],
 ) -> Result<PreparedCanonicalAirReplayBatch, CanonicalAirPackageShellError> {
@@ -846,11 +885,14 @@ pub fn prepare_canonical_air_replay_batch(
     let mut shadow_paths = paths.to_vec();
     let mut shadow_command_state = command_state.clone();
     let mut expected_air = Vec::with_capacity(positions.len());
+    let mut expected_patrol = Vec::new();
     let mut expected_flights = Vec::new();
 
     for pair in &positions {
         let position = match pair {
-            ReplayPairPosition::Air(position) | ReplayPairPosition::Flight(position) => *position,
+            ReplayPairPosition::Air(position)
+            | ReplayPairPosition::Patrol(position)
+            | ReplayPairPosition::Flight(position) => *position,
         };
         let group = &commands[usize::from(position.group_command_index)];
         let action = &commands[usize::from(position.action_command_index)];
@@ -888,6 +930,34 @@ pub fn prepare_canonical_air_replay_batch(
                 }
                 expected_air.push(receipt);
             }
+            ReplayPairPosition::Patrol(_) => {
+                let prepared = prepare_canonical_patrol(
+                    &shadow_world,
+                    builds,
+                    &shadow_groups,
+                    &shadow_paths,
+                    &shadow_command_state,
+                    selection_authority,
+                    authority,
+                    scenario.ignore_orders,
+                    player_who,
+                    map_tiles,
+                    position,
+                    group,
+                    action,
+                )?;
+                let receipt = commit_canonical_patrol(
+                    &mut shadow_world,
+                    builds,
+                    &mut shadow_groups,
+                    &mut shadow_paths,
+                    &mut shadow_command_state,
+                    selection_authority,
+                    authority,
+                    prepared,
+                )?;
+                expected_patrol.push(receipt);
+            }
             ReplayPairPosition::Flight(_) => {
                 match prepare_flight_no_action(
                     &shadow_world,
@@ -921,7 +991,7 @@ pub fn prepare_canonical_air_replay_batch(
                         CanonicalFlightNoActionError::NonBuildingSelection
                         | CanonicalFlightNoActionError::InvalidTarget { .. },
                     ) => {
-                        let prepared = prepare_canonical_flight_strafe(
+                        match prepare_canonical_flight_strafe(
                             &shadow_world,
                             builds,
                             &shadow_groups,
@@ -934,19 +1004,54 @@ pub fn prepare_canonical_air_replay_batch(
                             position,
                             group,
                             action,
-                        )?;
-                        let receipt = commit_canonical_flight_strafe(
-                            &mut shadow_world,
-                            builds,
-                            &mut shadow_groups,
-                            &mut shadow_paths,
-                            &mut shadow_command_state,
-                            selection_authority,
-                            authority,
-                            scenario,
-                            prepared,
-                        )?;
-                        expected_flights.push(PreparedFlightReceipt::Strafe(receipt));
+                        ) {
+                            Ok(prepared) => {
+                                let receipt = commit_canonical_flight_strafe(
+                                    &mut shadow_world,
+                                    builds,
+                                    &mut shadow_groups,
+                                    &mut shadow_paths,
+                                    &mut shadow_command_state,
+                                    selection_authority,
+                                    authority,
+                                    scenario,
+                                    prepared,
+                                )?;
+                                expected_flights.push(PreparedFlightReceipt::Strafe(receipt));
+                            }
+                            Err(error @ CanonicalFlightStrafeError::CurrentOrderNotStrafe(_)) => {
+                                let Some(patrol) = expected_patrol.last() else {
+                                    return Err(error.into());
+                                };
+                                let prepared = prepare_canonical_fresh_flight(
+                                    &shadow_world,
+                                    builds,
+                                    &shadow_groups,
+                                    &shadow_paths,
+                                    &shadow_command_state,
+                                    selection_authority,
+                                    authority,
+                                    scenario.ignore_orders,
+                                    player_who,
+                                    position,
+                                    group,
+                                    action,
+                                    patrol,
+                                )?;
+                                let receipt = commit_canonical_fresh_flight(
+                                    &mut shadow_world,
+                                    builds,
+                                    &mut shadow_groups,
+                                    &mut shadow_paths,
+                                    &mut shadow_command_state,
+                                    selection_authority,
+                                    authority,
+                                    prepared,
+                                )?;
+                                expected_flights.push(PreparedFlightReceipt::Fresh(receipt));
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
                     }
                     Err(error) => return Err(error.into()),
                 }
@@ -960,8 +1065,13 @@ pub fn prepare_canonical_air_replay_batch(
         shell,
         positions,
         expected_air,
+        expected_patrol,
         expected_flights,
         world_digest_before: world.digest(),
+        groups_before: groups.clone(),
+        paths_before: paths.to_vec(),
+        command_state_before: command_state.clone(),
+        map_tiles_before: map_tiles,
         selection_authority_before: selection_authority.clone(),
         authority_before: authority.clone(),
         scenario_before: scenario.clone(),
@@ -982,6 +1092,7 @@ pub fn commit_canonical_air_replay_batch(
     authority: &AirGroupRuntimeAuthority,
     scenario: &ScenarioIgnoreOrdersAuthority,
     player_who: &[Option<u8>; NETWORK_PLAYERS],
+    map_tiles: (i32, i32),
     commands: &[Vec<u8>],
     prepared: PreparedCanonicalAirReplayBatch,
 ) -> Result<CanonicalAirReplayBatchReceipt, CanonicalAirPackageShellError> {
@@ -992,6 +1103,10 @@ pub fn commit_canonical_air_replay_batch(
         || selection_authority != &prepared.selection_authority_before
         || authority != &prepared.authority_before
         || scenario != &prepared.scenario_before
+        || !groups_equal(groups, &prepared.groups_before)
+        || paths != prepared.paths_before.as_slice()
+        || command_state != &prepared.command_state_before
+        || map_tiles != prepared.map_tiles_before
     {
         return Err(CanonicalAirPackageShellError::StaleCanonicalState);
     }
@@ -1003,13 +1118,18 @@ pub fn commit_canonical_air_replay_batch(
         command_state.clone(),
     );
     let mut air = Vec::with_capacity(prepared.expected_air.len());
+    let mut patrol = Vec::with_capacity(prepared.expected_patrol.len());
     let mut flight_no_action = Vec::new();
     let mut flight_strafe = Vec::new();
+    let mut flight_fresh_strafe = Vec::new();
     let mut expected_air = prepared.expected_air.iter();
+    let mut expected_patrol = prepared.expected_patrol.iter();
     let mut expected_flight = prepared.expected_flights.iter();
     for pair in &prepared.positions {
         let position = match pair {
-            ReplayPairPosition::Air(position) | ReplayPairPosition::Flight(position) => *position,
+            ReplayPairPosition::Air(position)
+            | ReplayPairPosition::Patrol(position)
+            | ReplayPairPosition::Flight(position) => *position,
         };
         let group = &commands[usize::from(position.group_command_index)];
         let action = &commands[usize::from(position.action_command_index)];
@@ -1052,6 +1172,47 @@ pub fn commit_canonical_air_replay_batch(
                     Ok(())
                 })
                 .and_then(|result| result)
+            }
+            ReplayPairPosition::Patrol(_) => {
+                let expected = expected_patrol
+                    .next()
+                    .expect("prepared Patrol receipt cardinality");
+                prepare_canonical_patrol(
+                    world,
+                    builds,
+                    groups,
+                    paths,
+                    command_state,
+                    selection_authority,
+                    authority,
+                    scenario.ignore_orders,
+                    player_who,
+                    map_tiles,
+                    position,
+                    group,
+                    action,
+                )
+                .map_err(CanonicalAirPackageShellError::PatrolFlight)
+                .and_then(|prepared_patrol| {
+                    commit_canonical_patrol(
+                        world,
+                        builds,
+                        groups,
+                        paths,
+                        command_state,
+                        selection_authority,
+                        authority,
+                        prepared_patrol,
+                    )
+                    .map_err(CanonicalAirPackageShellError::PatrolFlight)
+                })
+                .and_then(|receipt| {
+                    if &receipt != expected {
+                        return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+                    }
+                    patrol.push(receipt);
+                    Ok(())
+                })
             }
             ReplayPairPosition::Flight(_) => {
                 let expected = expected_flight
@@ -1130,6 +1291,52 @@ pub fn commit_canonical_air_replay_batch(
                         flight_strafe.push(receipt);
                         Ok(())
                     }),
+                    PreparedFlightReceipt::Fresh(expected) => {
+                        let preceding_patrol =
+                            patrol
+                                .last()
+                                .ok_or(CanonicalAirPackageShellError::PatrolFlight(
+                                    CanonicalPatrolFlightError::FlightNotAdjacent,
+                                ));
+                        preceding_patrol.and_then(|preceding_patrol| {
+                            prepare_canonical_fresh_flight(
+                                world,
+                                builds,
+                                groups,
+                                paths,
+                                command_state,
+                                selection_authority,
+                                authority,
+                                scenario.ignore_orders,
+                                player_who,
+                                position,
+                                group,
+                                action,
+                                preceding_patrol,
+                            )
+                            .map_err(CanonicalAirPackageShellError::PatrolFlight)
+                            .and_then(|fresh| {
+                                commit_canonical_fresh_flight(
+                                    world,
+                                    builds,
+                                    groups,
+                                    paths,
+                                    command_state,
+                                    selection_authority,
+                                    authority,
+                                    fresh,
+                                )
+                                .map_err(CanonicalAirPackageShellError::PatrolFlight)
+                            })
+                            .and_then(|receipt| {
+                                if &receipt != expected {
+                                    return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+                                }
+                                flight_fresh_strafe.push(receipt);
+                                Ok(())
+                            })
+                        })
+                    }
                 }
             }
         };
@@ -1147,8 +1354,10 @@ pub fn commit_canonical_air_replay_batch(
         command_image: prepared.commands_before,
         shell: prepared.shell,
         air,
+        patrol,
         flight_no_action,
         flight_strafe,
+        flight_fresh_strafe,
     })
 }
 
@@ -1161,8 +1370,10 @@ impl CanonicalAirReplayBatchReceipt {
             return false;
         }
         let mut air = self.air.iter();
+        let mut patrol = self.patrol.iter();
         let mut seen_no_action = 0usize;
         let mut seen_strafe = 0usize;
+        let mut seen_fresh = 0usize;
         for pair in positions {
             let (position, valid) = match pair {
                 ReplayPairPosition::Air(position) => {
@@ -1179,6 +1390,20 @@ impl CanonicalAirReplayBatchReceipt {
                                 == self.command_image[usize::from(position.action_command_index)],
                     )
                 }
+                ReplayPairPosition::Patrol(position) => {
+                    let Some(receipt) = patrol.next() else {
+                        return false;
+                    };
+                    (
+                        position,
+                        receipt.validates()
+                            && receipt.position == position
+                            && receipt.group_packet
+                                == self.command_image[usize::from(position.group_command_index)]
+                            && receipt.patrol_packet
+                                == self.command_image[usize::from(position.action_command_index)],
+                    )
+                }
                 ReplayPairPosition::Flight(position) => {
                     let no_action = self
                         .flight_no_action
@@ -1188,8 +1413,12 @@ impl CanonicalAirReplayBatchReceipt {
                         .flight_strafe
                         .iter()
                         .find(|receipt| receipt.position == position);
-                    let valid = match (no_action, strafe) {
-                        (Some(receipt), None) => {
+                    let fresh = self
+                        .flight_fresh_strafe
+                        .iter()
+                        .find(|receipt| receipt.position == position);
+                    let valid = match (no_action, strafe, fresh) {
+                        (Some(receipt), None, None) => {
                             seen_no_action += 1;
                             receipt.validates()
                                 && receipt.group_packet
@@ -1198,8 +1427,17 @@ impl CanonicalAirReplayBatchReceipt {
                                     == self.command_image
                                         [usize::from(position.action_command_index)]
                         }
-                        (None, Some(receipt)) => {
+                        (None, Some(receipt), None) => {
                             seen_strafe += 1;
+                            receipt.validates()
+                                && receipt.group_packet
+                                    == self.command_image[usize::from(position.group_command_index)]
+                                && receipt.flight_packet
+                                    == self.command_image
+                                        [usize::from(position.action_command_index)]
+                        }
+                        (None, None, Some(receipt)) => {
+                            seen_fresh += 1;
                             receipt.validates()
                                 && receipt.group_packet
                                     == self.command_image[usize::from(position.group_command_index)]
@@ -1218,7 +1456,9 @@ impl CanonicalAirReplayBatchReceipt {
             }
         }
         air.next().is_none()
+            && patrol.next().is_none()
             && seen_no_action == self.flight_no_action.len()
             && seen_strafe == self.flight_strafe.len()
+            && seen_fresh == self.flight_fresh_strafe.len()
     }
 }

@@ -40,13 +40,17 @@ use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 pub struct AirGroupUnitAuthority {
     pub handle: Handle,
     pub object_masks: u32,
-    /// Exact `UnitData::mana()` result consumed by `mana_left()` in the direct STRAFE
-    /// retarget arm of `Group::action_flight`. This is already leader/technology adjusted;
-    /// the live `UnitData::mana_burn` column supplies the other operand.
+    /// Exact `UnitData::mana()` result consumed by `mana_left()` in the bounded Flight and
+    /// air-Patrol arms. This is already leader/technology adjusted; the live
+    /// `UnitData::mana_burn` column supplies the other operand.
     pub mana_cap: i32,
     pub is_biplane: bool,
     pub is_bomber: bool,
     pub is_helicopter: bool,
+    /// Exact target address for which retail's fresh-Flight range branch has been
+    /// reinstalled for this actor. `None` keeps every fresh STRAFE installation red.
+    /// The target itself is still generation/UID checked by the canonical object host.
+    pub fresh_flight_target: Option<(i32, i32)>,
     /// Exact non-strict `Unit::is(NUCLEARMISSILE = 0x13B, 0)` answer read at
     /// `Group::action_launch_flight` `0x006FC2D2`.
     pub is_nuclear_missile: bool,

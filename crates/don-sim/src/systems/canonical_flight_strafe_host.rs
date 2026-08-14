@@ -306,7 +306,7 @@ fn rewrite_current_strafe(
     Ok(())
 }
 
-fn current_strafe_is_coherent(order: &Order) -> bool {
+pub(crate) fn current_strafe_is_coherent(order: &Order) -> bool {
     let Some(payload) = order.strafe.as_ref() else {
         return false;
     };

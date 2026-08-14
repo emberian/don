@@ -115,6 +115,7 @@ fn install_authorities(sim: &mut Sim, planes: &[Handle], selected: &[i16]) {
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,
+                fresh_flight_target: None,
                 is_nuclear_missile: false,
             })
             .collect(),

@@ -83,6 +83,8 @@ pub mod canonical_air_group_host;
 pub mod canonical_air_package_shell;
 /// Narrow canonical host for the current-STRAFE retarget arm of opcode-28 Flight.
 pub mod canonical_flight_strafe_host;
+/// Exact combined cached Patrol then fresh Flight aircraft transaction.
+pub mod canonical_patrol_flight_host;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
 /// Canonical bounded opcode-9 receiver and resumed ground-order hold frame.

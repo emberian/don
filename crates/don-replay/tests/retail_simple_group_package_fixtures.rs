@@ -165,6 +165,47 @@ fn retail_replay_binds_the_unique_cached_force_all_launch_and_its_explicit_cache
 }
 
 #[test]
+fn retail_replay_binds_the_unique_cached_patrol_then_flight_unit_to_build_package() {
+    let path = root().join(AIR_FORCE_ALL_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        AIR_FORCE_ALL_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[10_869];
+    let player = turn.players.iter().find(|player| player.play == 2).unwrap();
+    assert_eq!((turn.turn, player.stamp), (10_870, 65_215));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 10, 0, 28, 57, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "000005",
+            "0acc0c01004534000001",
+            "000005",
+            "1c2c080000010000000000000000000000000000000a000000",
+            "391e8b520b61cba8e901000000a457ee4a2db56e168965b7cce3503e37273aecb6cb22493301000000c5e3f22ab4d137630431ba12cf1dbf9601000400fd7a2b7c",
+            "4a48001000000000000000",
+            "4804cb0901009d280000",
+        ],
+    );
+}
+
+#[test]
 fn retail_replay_binds_three_cached_launch_patrol_pairs_in_one_package() {
     let path = root().join(AIR_TRIPLE_REPLAY_RELATIVE_PATH);
     if !path.exists() {
@@ -892,11 +933,19 @@ fn census_flight_unit_to_build_current_strafe_wire_shell() {
                     while package_index < player.commands.len() {
                         let opcode = player.commands[package_index].opcode;
                         if opcode == 0 {
-                            if !player
-                                .commands
-                                .get(package_index + 1)
-                                .is_some_and(|action| matches!(action.opcode, 11 | 28 | 36))
-                            {
+                            let action = player.commands.get(package_index + 1);
+                            let ordinary_air =
+                                action.is_some_and(|action| matches!(action.opcode, 11 | 28 | 36));
+                            let bounded_patrol = action.is_some_and(|action| action.opcode == 10)
+                                && player
+                                    .commands
+                                    .get(package_index + 2)
+                                    .is_some_and(|group| group.opcode == 0)
+                                && player
+                                    .commands
+                                    .get(package_index + 3)
+                                    .is_some_and(|flight| flight.opcode == 28);
+                            if !ordinary_air && !bounded_patrol {
                                 supported_shell = false;
                                 break;
                             }
@@ -927,7 +976,7 @@ fn census_flight_unit_to_build_current_strafe_wire_shell() {
     assert_eq!(count, 942);
     assert_eq!(
         (explicit, cached, shell_admissible, air_bearing, files.len()),
-        (603, 339, 941, 0, 28)
+        (603, 339, 942, 0, 28)
     );
     assert_eq!(sizes.values().sum::<usize>(), 942);
     assert_eq!(

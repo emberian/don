@@ -208,3 +208,32 @@ group-walk and stable-identity binding, both planner variants, every typed capab
 receipt recomputation, stale revalidation, partial-write rollback, malformed-evidence rollback,
 and the answered empty-containment no-effect branch.  It does not stand in for the production
 path, tick or save/resume proof above.
+
+## Cycle 17: bounded Patrol + fresh Flight
+
+The one Unit-to-Build Flight package excluded by the Cycle 16 shell census is now an exact
+combined transaction, not a claim that ordinary Patrol or fresh Flight is complete. In
+`Playback___2019.03.24_11_56_19__Sun_.rcx` (SHA-256
+`dab1c282556642300a5bc153f1f432f417fa039b265b4d72cb5876dd643ec055`), turn index 10,869,
+turn 10,870, play 2, frame 65,215 has opcodes `[0,10,0,28,57,74,72]`. The two action packets
+are `0acc0c01004534000001` (Patrol to 68,812 / 13,381, QueueLast) and
+`1c2c080000010000000000000000000000000000000a000000` (ATTACK Flight to owner 1 Build
+2092, no modifiers).
+
+The admitted Patrol cone follows `Group::action_patrol` `0x007030C0` into
+`Group::action_air_patrol` `0x007029D0`: a cached nonempty all-Unit group, active movable
+true planes in domain 2, no helicopter/busy/missile/fuel boundary, and a coherent current
+STRAFE on every actor. It clamps the destination, clears Group form, replaces every queue
+with the exact group AIR_PATROL payload while preserving the STRAFE AirOrder home pair, and
+clears each partial path. The immediately adjacent Flight follows the fresh-install call at
+`0x006FBE8D..0x006FBEB3` and replaces those exact AIR_PATROL after-images with mandatory,
+group STRAFE payloads targeting the live generational Build. Its range decision is an
+explicit Handle-bound, target-address authority fact; absence stays red.
+
+Preparation runs both pairs against detached World/Groups/path/cache owners. Commit checks
+the command image, map dimensions, all owner snapshots and authorities, then recomputes and
+publishes both pairs or restores the full checkpoint. The real seven-command packet fixture,
+save/load byte identity, changed-map stale rollback, standalone Patrol rejection, and absent
+fresh-range authority rejection are executable gates. The Unit-to-Build wire/shell census is
+therefore 942/942 shell-admissible. Standalone Patrol, ground/mixed Patrol, QueueNew, and
+general AIR_PATROL-to-Flight remain deliberately fail-closed.

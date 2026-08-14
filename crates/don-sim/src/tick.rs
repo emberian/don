@@ -2056,6 +2056,7 @@ impl Sim {
             &self.air_group_authority,
             &self.scenario_ignore_orders,
             &player_who,
+            (self.map.world.xs, self.map.world.ys),
             identity,
             commands,
         )?;
@@ -2069,6 +2070,7 @@ impl Sim {
             &self.air_group_authority,
             &self.scenario_ignore_orders,
             &player_who,
+            (self.map.world.xs, self.map.world.ys),
             commands,
             prepared,
         )
