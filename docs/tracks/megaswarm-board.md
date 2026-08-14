@@ -1921,11 +1921,15 @@ the ledger counts as complete, so they should be visible here:
 
 1. **The wildlife spawn draws `game_random` and we skip it.** `0x0065DFAD` and `0x0065DFD9` are
    both `mov ecx, [0xC06184]` + `call Random::get(0, 0xFFFF)` — the **main sim stream**. Every
-   32 frames, `min(10, (map_x*map_y)/100) - (live owner-9 objects of type 0x192)` iterations,
-   two draws each (one per axis, skipped if that map dimension `<= 1`), then
-   `Objects::init_unit(9, 0x192, …)` `0x0065E0C0` and `Unit::add_air_patrol_order` `0x005E4350`.
-   `tick.rs` counts these frames as `Gap::ObjectsWildlifeSpawn` / `rng_draws_missing` and draws
-   nothing. Honest, and still a per-32-frame RNG-stream divergence living inside a "complete" row.
+   32 frames, `max(min(10, (map_x*map_y)/100) - (active owner-9 animal Units of type 0x192), 0)`
+   iterations, two draws each on an ordinary map (one per axis, skipped if that dimension
+   `<= 1`), then a WData flag-`0x20` test. A set bit reaches `Objects::init_unit(9, 0x192, …)`
+   `0x0065E0C0` and, on allocation success, `Unit::add_air_patrol_order` `0x005E4350`.
+   A detached exact frame-32 transaction now receipts the whole zero-spawn prefix and commits only
+   its cloned RNG after authoritative map/Object/RNG capture validation; viable cells return a
+   typed spawn boundary without publishing draws. `tick.rs` remains deliberately unwired, counts
+   these frames as `Gap::ObjectsWildlifeSpawn` / `rng_draws_missing`, and draws nothing. Honest,
+   and still a per-32-frame RNG-stream divergence living inside a "complete" row.
 2. **The `frame & 0x3F` herd scheduler is ported exactly** — `(frame/64) % max(herd_count, 5)`,
    bounded by `count`, then `herd->[0x1A] & 1`, then `Herd::process` `0x00741760`.
    `casters_animals::scheduled_herd_index` matches instruction for instruction, including the

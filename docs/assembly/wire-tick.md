@@ -61,7 +61,7 @@ cannon-time window, or resolved-victory latch supplies work.
 | 11 | `Leaders::strategy_all` `0x006ED430` | complete 93-byte dispatcher; exact `(flags&3)==3` slot gate and call order; full `check_explore` phase/recount body; `victory_score::compute_score`; semaphore-gated `check_victory`, including the zero-active-leader tail | `plan_strategy`, `diplomacy` AI bodies |
 | 12 | `GameDaemon::process_all` `0x00732700` | `victory_score::process_victory`; `map_terrain::World::clear_seen` + `borders_fog::update_seen` per object; `economy::calc_markets` (**on the sim RNG stream**); `borders_fog::check_borders`; `groups_guys::Groups::process` | `calc_danger`, `process_coll_blocks` |
 | 13 | `Armies::process_all` `0x006F3B00` | complete eight-owner/16-slot dispatcher; exact three-part leader gate and hurry consumption; 128/256-frame phasing; normalize, retirement, human-order, merge, retarget and status-dispatch prefix | valid armies need the complete Group/Unit/City/type host; muster/defend/march/form/transport and specialist AI bodies remain named |
-| 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; the side-effecting `detect_unit_collision`→`resolve_unit_collision` transaction for completely installed live sources; generated collision identity/counters and order destination/detour/wait/retry persistence; atomic WData-anchor/Guy-stamp relocation; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | automatic live collision-source population; formation-producing multi-Guy relocation; boat collision; per-unit repath-host parking; `Guy::process`, `suffer_attrition`, `process_supply`, `needs_transport`, wildlife spawn, anti-air dud roll |
+| 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; the side-effecting `detect_unit_collision`→`resolve_unit_collision` transaction for completely installed live sources; generated collision identity/counters and order destination/detour/wait/retry persistence; atomic WData-anchor/Guy-stamp relocation; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64`; detached exact frame-32 wildlife quota/census/conditional-draw/WData-reject transaction | automatic live collision-source population; formation-producing multi-Guy relocation; boat collision; per-unit repath-host parking; `Guy::process`, `suffer_attrition`, `process_supply`, `needs_transport`; wildlife remains unwired without a coherent retail capture and stops at viable-cell `Objects::init_unit`; anti-air dud roll |
 | 15 | `Objects::inc_time` `0x0065DB70` | `ammo::ammo_inc_time` over the pool in slot order, `hit_target`/`check_hit`, `ammo_do_damage_single` | `Unit::inc_time` (the other half) |
 | 17 | `Leaders::end_process_all` `0x006ED070` | complete eight-slot dispatcher; matching Player warning-bit cleanup; exact 450-frame feedback limiter and stamp-before-cap compare | localized message/audio are emitted as inspectable presentation events |
 | 19 | `Leader::process_event_frame` `0x006EC180` | receipt-bearing eight-slot executor over the canonical Leader event block; exact 50-frame unsigned-rate smoothing; direct `leaders[who]` reciprocal diplomacy ownership; sequential hostile-score combat-mood selection; lopsided-battle threshold, cooldown and sentinel writes; one ordered product outbox owns every reached JukeBox/achievement call | wall-clock audio playback stays outside the deterministic core |
@@ -131,9 +131,12 @@ filed in the ring** — the end-to-end path `do_attack` → `fire_ammo` → `Amm
 
 **Counted RNG divergence points**, because they are the reason none of this is
 stream-faithful yet: over 900 frames the driver skipped **458 anti-air dud rolls**
-(`Ammo::init` draws 1–2 each) and **29 wildlife spawns** (`frame % 32`, unknown draw count).
-Each is a point where our stream leaves retail's. Drawing the wrong number would be worse
-than drawing none, so the driver draws none and reports the count.
+(`Ammo::init` draws 1–2 each) and **29 wildlife cadence hits** (`frame % 32`). The wildlife
+shell is now exact: `max(min(10, area/100)-existing_birds, 0)` attempts and zero, one, or two
+draws per attempt depending on map dimensions, followed by a WData `0x20` probe. The tick still
+draws none because it lacks the required coherent retail state and a viable probe reaches the
+unowned `Objects::init_unit` child. Each counted hit is therefore one known chronology gap, not a
+claim that exactly one draw was skipped.
 
 Tests: 9 in `tick::tests`, all green.
 

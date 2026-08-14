@@ -430,6 +430,8 @@ pub mod walls;
 /// timers, close/trim behavior, and the mandatory object/type/game-store bridge that
 /// supplies `victory_score` with live Wonder value/net inputs.
 pub mod wonders;
+/// Detached exact zero-spawn prefix of the per-32-frame wildlife block.
+pub mod wildlife_spawn_frontier;
 /// Exact `World::set_oil_at` plus retail Goods-slot allocation/retirement owner.
 pub mod world_oil_goods;
 /// Full `UnitData::speed` authority over exact type, terrain, leader, hero, and Constants owners.

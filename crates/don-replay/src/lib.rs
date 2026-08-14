@@ -153,6 +153,7 @@ pub mod unit_init_collision_tail_deep_re;
 pub mod unit_init_location_deep_re;
 pub mod units_runtime;
 pub mod walk;
+pub mod wildlife_frame32;
 pub mod wire;
 pub mod world_owner_frontier;
 pub mod world_tdata_frontier;

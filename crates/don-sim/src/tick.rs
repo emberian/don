@@ -173,7 +173,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 14 Unit::detect_unit_collision 0x00617060 - detector/resolver/driver execute when every live unit supplies authoritative type/Guy/order/spatial facts; missing sources and repath suspension fail closed",
     "step 14 Ammo::init anti-air dud roll - unported; it draws game_random 1-2 times per launch, so every launch shifts the stream",
     "step 14 UnitData::needs_transport 0x00609920 - unported; the UnitWorld view answers 0",
-    "step 14 Objects::process_all wildlife spawn (frame%32) - draws game_random an unknown number of times; drawing wrongly is worse than not drawing",
+    "step 14 Objects::process_all wildlife spawn (frame%32) - detached frame-32 zero-spawn transaction owns exact quota, owner-9 census, conditional axis draws and WData rejects; tick lacks its required retail capture and the viable-cell Objects::init_unit child",
     "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - the exact 0x00610B43 gate executes over live inside_up/TypeIndex; the guy clocks it owes stay absent because Guy::inc_time 0x005D9E10 runs Guy::set_anim 0x005DA300, whose head resolves the animation and draws game_random 0-1 times per activation with unbounded recursion",
     "step 22 Roads::scan_and_kill_stray_roads - exact scanner executes; live road tiles without their renderer-owned RoadElementCandidate fail closed",
     "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
@@ -4066,8 +4066,10 @@ impl Sim {
         }
         self.traversal_buf = order;
 
-        // frame % 32: the wildlife spawn draws game_random an unknown number of times.
-        // Drawing the wrong count is worse than drawing none; the frames are counted.
+        // frame % 32: the detached frame-32 frontier proves the exact quota/census and 0--2
+        // draws per attempt, but this tick has no coherent map/Object/RNG capture and cannot
+        // own the viable-cell Objects::init_unit child. Keep the general scheduler red and
+        // count one missing RNG chronology point rather than guessing or partially publishing.
         if frame % WILDLIFE_PERIOD == 0 {
             self.cover.gaps[Gap::ObjectsWildlifeSpawn.index()] += 1;
             self.cover.rng_draws_missing += 1;
