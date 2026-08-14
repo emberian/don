@@ -184,6 +184,9 @@ pub mod frame1_caster_process;
 pub mod game_daemon_calc_danger;
 /// Exact step-12 GameDaemon scheduler state and child-call transaction.
 pub mod game_daemon_step12;
+/// Detached post-`Wall::process` planner for the golden frames 2..=31 Village/Market
+/// Build order, exact common-prefix children, and first type-specific continuation.
+pub mod golden_build_post_wall;
 /// Detached exact owner-0 early-return attrition transactions at golden frames 26..=32.
 pub mod golden_phase32_attrition;
 /// `do_job` arm 26: the snapshot-bound atomic host boundary and queue integration that turns
