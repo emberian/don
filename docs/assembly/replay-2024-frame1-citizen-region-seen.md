@@ -34,6 +34,13 @@ on the resolved `was_seen` journal entry, and then evaluates the normal `seen2 &
 fallback. It may return locally, reach `Unit::get_goody_box`, or stop at a different typed region
 request; it never publishes the detached transaction.
 
+`complete_frame1_citizen_find_goody_scan` admits only the first two truthful terminals. It rejects
+a second owner/region request as `AdditionalRegionalProducer` rather than presenting a partial
+scan as complete. The completion projects every reached `Frame1CitizenItemRead` and canonical
+Unit/Build/Wall object-link identity from the already digest-bound journal. A local false receipt
+must prove zero RNG draws and identical before/after RNG state; the `get_goody_box` terminal
+remains the existing typed request before scratch Group or canonical Groups mutation.
+
 Before any scan, the complete post-SetAnim Sim is serialized. Save validation distinguishes an
 absent item producer from an initialized-empty registry: absence is accepted only when the whole
 WData plane has neither `WFLAG_ITEM` nor an item-chain sentinel. Consequently, reaching

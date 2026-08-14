@@ -30,7 +30,9 @@ use crate::setup_2024_frame1_citizen_find_goody::{
     frame1_citizen_region_seen_request_digest,
     plan_frame1_citizen_find_goody_with_regional_authority,
     validate_frame1_citizen_find_goody_plan, Frame1CitizenFindGoodyError,
-    Frame1CitizenFindGoodyOpenRequest, Frame1CitizenFindGoodyPlan,
+    Frame1CitizenFindGoodyFalseReceipt, Frame1CitizenFindGoodyOpenRequest,
+    Frame1CitizenFindGoodyPlan, Frame1CitizenGetGoodyBoxRequest, Frame1CitizenItemRead,
+    Frame1CitizenItemRegistryAuthority, Frame1CitizenObjectLinkRead,
     Frame1CitizenRegionSeenAuthority, Frame1CitizenRegionSeenRequest, WORLD_WAS_SEEN_VA,
 };
 use crate::setup_2024_frame379::Frame379SetupEntryReceipt;
@@ -53,6 +55,33 @@ pub struct Frame1CitizenRegionSeenContinuation {
     pub restore_mask2_bit8000: bool,
 }
 
+/// Exact terminal of the resumed read-only `Unit::find_goody_box` body.  A second regional
+/// producer request is rejected rather than being mislabeled as a completed scan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame1CitizenFindGoodyTerminal {
+    ReturnedFalse(Frame1CitizenFindGoodyFalseReceipt),
+    GetGoodyBox(Frame1CitizenGetGoodyBoxRequest),
+}
+
+/// Whole detached scan after the golden regional-registry seam has been consumed.
+///
+/// `item_reads` and `object_links` are projections of the digest-bound resumed journal. They
+/// make every reached item slot and heterogeneous object identity explicit for downstream
+/// `get_goody_box` work without granting publication authority over Groups.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame1CitizenFindGoodyScanCompletion {
+    pub composition_digest: [u8; 32],
+    pub regional: Frame1CitizenRegionSeenContinuation,
+    pub item_registry: Frame1CitizenItemRegistryAuthority,
+    pub item_reads: Vec<Frame1CitizenItemRead>,
+    pub object_links: Vec<Frame1CitizenObjectLinkRead>,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub rng_draws: u32,
+    pub terminal: Frame1CitizenFindGoodyTerminal,
+    pub restore_mask2_bit8000: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame1CitizenRegionSeenError {
     Parent(Frame1CitizenFindGoodyError),
@@ -69,8 +98,11 @@ pub enum Frame1CitizenRegionSeenError {
     BuildIdentityMismatch { object: i32 },
     RestoreNotArmed,
     RequestNotConsumed,
+    AdditionalRegionalProducer { territory_owner: u8, region: i16 },
+    RandomStateMismatch,
     StaleAuthority,
     StaleContinuation,
+    StaleCompletion,
 }
 
 impl fmt::Display for Frame1CitizenRegionSeenError {
@@ -128,6 +160,29 @@ fn continuation_digest(continuation: &Frame1CitizenRegionSeenContinuation) -> [u
     image.extend_from_slice(&continuation.authority.authority_sha256);
     image.extend_from_slice(&continuation.resumed.composition_digest);
     image.push(u8::from(continuation.restore_mask2_bit8000));
+    sha256(&image)
+}
+
+fn completion_digest(completion: &Frame1CitizenFindGoodyScanCompletion) -> [u8; 32] {
+    let mut image = b"don-frame1-citizen-find-goody-scan-completion-v1".to_vec();
+    image.extend_from_slice(&completion.regional.composition_digest);
+    image.extend_from_slice(&completion.regional.resumed.composition_digest);
+    image.extend_from_slice(&(completion.item_reads.len() as u64).to_le_bytes());
+    image.extend_from_slice(&(completion.object_links.len() as u64).to_le_bytes());
+    image.extend_from_slice(&completion.random_state_before.to_le_bytes());
+    image.extend_from_slice(&completion.random_state_after.to_le_bytes());
+    image.extend_from_slice(&completion.rng_draws.to_le_bytes());
+    match &completion.terminal {
+        Frame1CitizenFindGoodyTerminal::ReturnedFalse(receipt) => {
+            image.push(0);
+            image.extend_from_slice(&receipt.receipt_sha256);
+        }
+        Frame1CitizenFindGoodyTerminal::GetGoodyBox(request) => {
+            image.push(1);
+            image.extend_from_slice(&request.request_sha256);
+        }
+    }
+    image.push(u8::from(completion.restore_mask2_bit8000));
     sha256(&image)
 }
 
@@ -414,6 +469,115 @@ pub fn validate_frame1_citizen_region_seen_continuation(
             != frame1_citizen_region_seen_authority_digest(&continuation.authority)
     {
         return Err(Frame1CitizenRegionSeenError::StaleContinuation);
+    }
+    Ok(())
+}
+
+/// Seal the resumed golden scan only after it has reached a truthful terminal.
+///
+/// The function performs no further simulation writes: all item and object reads already live
+/// in the exact resumed journal. It rejects a second regional producer request so callers cannot
+/// confuse a partially resumed scan with either retail's zero return or the Groups child.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_frame1_citizen_find_goody_scan(
+    replay: &Replay,
+    starting_setup: &StartingSetupState,
+    setup_entry: &Frame379SetupEntryReceipt,
+    post_authority: &Frame1PostCommandAuthority,
+    post_command: &Sim,
+    set_anim_return: &Sim,
+    entry_authority: &GoldenFrame1EntryAuthority,
+    regional: &Frame1CitizenRegionSeenContinuation,
+) -> Result<Frame1CitizenFindGoodyScanCompletion, Frame1CitizenRegionSeenError> {
+    validate_frame1_citizen_region_seen_continuation(
+        replay,
+        starting_setup,
+        setup_entry,
+        post_authority,
+        post_command,
+        set_anim_return,
+        entry_authority,
+        regional,
+    )?;
+    let terminal = match &regional.resumed.open {
+        Frame1CitizenFindGoodyOpenRequest::ReturnedFalse(receipt) => {
+            Frame1CitizenFindGoodyTerminal::ReturnedFalse(receipt.clone())
+        }
+        Frame1CitizenFindGoodyOpenRequest::GetGoodyBox(request) => {
+            Frame1CitizenFindGoodyTerminal::GetGoodyBox(request.clone())
+        }
+        Frame1CitizenFindGoodyOpenRequest::RegionSeen(request) => {
+            return Err(Frame1CitizenRegionSeenError::AdditionalRegionalProducer {
+                territory_owner: request.territory_owner,
+                region: request.region,
+            });
+        }
+    };
+    let mut item_reads = Vec::new();
+    let mut object_links = Vec::new();
+    for cell in &regional.resumed.journal {
+        let Some(lookup) = &cell.item_lookup else {
+            continue;
+        };
+        object_links.extend(lookup.object_links.iter().copied());
+        if let Some(item) = lookup.item {
+            item_reads.push(item);
+        }
+    }
+    let random_state = set_anim_return.world.random.state();
+    if let Frame1CitizenFindGoodyTerminal::ReturnedFalse(receipt) = &terminal {
+        if receipt.random_state_before != random_state
+            || receipt.random_state_after != random_state
+            || receipt.rng_draws != 0
+        {
+            return Err(Frame1CitizenRegionSeenError::RandomStateMismatch);
+        }
+    }
+    if !regional.restore_mask2_bit8000
+        || !regional.resumed.restore_mask2_bit8000
+        || regional.resumed.after_local.unit_masks2 & 0x8000 != 0
+    {
+        return Err(Frame1CitizenRegionSeenError::RestoreNotArmed);
+    }
+    let mut completion = Frame1CitizenFindGoodyScanCompletion {
+        composition_digest: [0; 32],
+        regional: regional.clone(),
+        item_registry: regional.resumed.item_registry,
+        item_reads,
+        object_links,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        rng_draws: 0,
+        terminal,
+        restore_mask2_bit8000: true,
+    };
+    completion.composition_digest = completion_digest(&completion);
+    Ok(completion)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn validate_frame1_citizen_find_goody_scan_completion(
+    replay: &Replay,
+    starting_setup: &StartingSetupState,
+    setup_entry: &Frame379SetupEntryReceipt,
+    post_authority: &Frame1PostCommandAuthority,
+    post_command: &Sim,
+    set_anim_return: &Sim,
+    entry_authority: &GoldenFrame1EntryAuthority,
+    completion: &Frame1CitizenFindGoodyScanCompletion,
+) -> Result<(), Frame1CitizenRegionSeenError> {
+    let expected = complete_frame1_citizen_find_goody_scan(
+        replay,
+        starting_setup,
+        setup_entry,
+        post_authority,
+        post_command,
+        set_anim_return,
+        entry_authority,
+        &completion.regional,
+    )?;
+    if expected != *completion || completion.composition_digest != completion_digest(completion) {
+        return Err(Frame1CitizenRegionSeenError::StaleCompletion);
     }
     Ok(())
 }
