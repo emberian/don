@@ -61,18 +61,18 @@ Build which the setup receipts do not enumerate.
 Per active row:
 
 ```text
-previous unique canonical walked bytes                 6,494
+previous unique canonical walked bytes                 6,498
 frame-zero reg_buildings plane                         16,512
 frame-zero last_building_finished history                 516
 pre-plan regional strategy histories                      256
-frame-zero unique canonical walked bytes               23,778
+frame-zero unique canonical walked bytes               23,782
 default empty-child transcript                          28,428
-frame-zero residual                                      4,650
+frame-zero residual                                      4,646
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
 the denominator and residual. After the setup boundary expires, this producer expires too and
-the general same-frame lower bound returns to 6,494 bytes with a 21,934-byte default residual.
+the general same-frame lower bound returns to 6,498 bytes with a 21,930-byte default residual.
 Promotion beyond frame zero requires the canonical Sim to execute every increment/decrement,
 capture/type-change and destruction path which maintains both aggregate and regional Building
 counts. The adjacent 516-byte `last_building_finished[129]` setup receipt is narrower: retail

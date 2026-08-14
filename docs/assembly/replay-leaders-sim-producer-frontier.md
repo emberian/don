@@ -44,9 +44,9 @@ For each active checksum Leader slot, `bind_sim_owner_frontier` observes these c
 
 Composed with the established victory/step-8 frontier (4,852 bytes per active row) and the
 same-frame production-tech join (24 additional bytes), the conservative current-owner lower
-bound is 6,494 visited bytes per default active row. It deliberately does not count a byte
+bound is 6,498 visited bytes per default active row. It deliberately does not count a byte
 twice merely because retail revisits the same object field in a child call. Against the
-28,428-byte empty-child transcript, at least 21,934 visited bytes per active row remain
+28,428-byte empty-child transcript, at least 21,930 visited bytes per active row remain
 unsourced. Dynamic container contents can make the residual larger.
 
 ## `last_unit_finished` port correction
@@ -102,7 +102,7 @@ Builds. The adjacent setup chronology also owns the 516-byte `last_building_fini
 initializer history because `Build::activate(0, 0, 0)` bypasses its only completion-id store.
 The pre-strategy receipt also owns 256 zero bytes across the four regional strategy histories,
 whose first writers are in `Leader::plan_strategy`. Together they lower the empty-child residual
-to 4,650 bytes per active row only while the
+to 4,646 bytes per active row only while the
 ordinary starting-town-one setup receipt is live. It does not change this module's general
 same-frame residual: the Sim does not yet maintain the regional matrix through all later Build
 lifecycle transitions. See

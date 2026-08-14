@@ -848,7 +848,7 @@ fn same_frame_owner_cohort_is_large_bounded_and_stays_red() {
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        fixture.active_count * 6_494 + (NUM_LEADERS - fixture.active_count) * 8
+        fixture.active_count * 6_498 + (NUM_LEADERS - fixture.active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
@@ -1172,11 +1172,11 @@ fn frame_zero_starting_build_census_body() {
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 23_778 + (NUM_LEADERS - active_count) * 8
+        active_count * 23_782 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 4_650) as u64
+        (active_count * 4_646) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());

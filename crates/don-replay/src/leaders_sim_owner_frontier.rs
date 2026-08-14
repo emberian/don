@@ -113,8 +113,8 @@ impl RuntimeLeadersSimOwnerFrontier {
     /// Unique current bytes tied to a same-frame owner across the base runtime, production
     /// tech, and this cohort. Duplicate observations are deliberately counted once.
     pub fn unique_canonical_walked_bytes(&self) -> usize {
-        let base = self.inner.inner().previous().previous().previous().base();
-        base.runtime_claimed_walked_bytes()
+        let tribe = self.inner.inner().previous().previous().previous();
+        tribe.runtime_claimed_walked_bytes()
             + self.inner.newly_canonicalized_walked_bytes()
             + self.cohort_newly_canonicalized_walked_bytes()
     }
