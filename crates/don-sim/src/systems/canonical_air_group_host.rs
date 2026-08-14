@@ -40,6 +40,10 @@ use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
 pub struct AirGroupUnitAuthority {
     pub handle: Handle,
     pub object_masks: u32,
+    /// Exact `UnitData::mana()` result consumed by `mana_left()` in the direct STRAFE
+    /// retarget arm of `Group::action_flight`. This is already leader/technology adjusted;
+    /// the live `UnitData::mana_burn` column supplies the other operand.
+    pub mana_cap: i32,
     pub is_biplane: bool,
     pub is_bomber: bool,
     pub is_helicopter: bool,

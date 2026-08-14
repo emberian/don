@@ -109,6 +109,7 @@ fn install_package_authorities(sim: &mut Sim, plane: Handle, carrier: Handle) {
         units: vec![AirGroupUnitAuthority {
             handle: plane,
             object_masks: 0,
+            mana_cap: 1_000,
             is_biplane: true,
             is_bomber: false,
             is_helicopter: false,
@@ -283,6 +284,7 @@ fn retail_build_launch_fixture() -> (Sim, Vec<Handle>, Handle) {
             .map(|handle| AirGroupUnitAuthority {
                 handle,
                 object_masks: 0,
+                mana_cap: 1_000,
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,

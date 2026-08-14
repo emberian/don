@@ -208,6 +208,42 @@ fn retail_replay_binds_three_cached_launch_patrol_pairs_in_one_package() {
 }
 
 #[test]
+fn finished_replay_binds_unit_group_current_strafe_flight_fixture() {
+    let path = root().join(REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        REPLAY_FILE_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[44_294];
+    let player = turn.players.iter().find(|player| player.play == 0).unwrap();
+    assert_eq!((turn.turn, player.stamp), (44_295, 43_963));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 28],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "0016000e001500400061009700bd0055007800840088009100a900b600bf0090008300ca00cb00cd00ce00cf00d000",
+            "1c20080000000000000000000000000000000000000a000000",
+        ],
+    );
+}
+
+#[test]
 fn finished_replay_binds_five_group_unitmask_packets_and_one_strict_fixture() {
     let path = root().join(REPLAY_RELATIVE_PATH);
     if !path.exists() {

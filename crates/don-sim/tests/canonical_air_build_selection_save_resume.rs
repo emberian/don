@@ -111,6 +111,7 @@ fn install_authorities(sim: &mut Sim, planes: &[Handle], selected: &[i16]) {
             .map(|handle| AirGroupUnitAuthority {
                 handle,
                 object_masks: 0,
+                mana_cap: 1_000,
                 is_biplane: true,
                 is_bomber: false,
                 is_helicopter: false,

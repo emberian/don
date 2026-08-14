@@ -77,6 +77,8 @@ pub mod building_gather;
 pub mod canonical_air_group_host;
 /// Exact decoded retail package shell surrounding one canonical Group/AIR action pair.
 pub mod canonical_air_package_shell;
+/// Narrow canonical host for the current-STRAFE retarget arm of opcode-28 Flight.
+pub mod canonical_flight_strafe_host;
 /// Canonical ordinary-aircraft AIR_PATROL activation and STRAFE insertion.
 pub mod canonical_air_patrol_runtime;
 /// Canonical bounded opcode-9 receiver and resumed ground-order hold frame.

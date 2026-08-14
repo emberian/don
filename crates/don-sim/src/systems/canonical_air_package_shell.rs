@@ -16,6 +16,10 @@ use crate::systems::canonical_air_group_host::{
     commit_canonical_air_package, prepare_canonical_air_packet_pair, AirGroupRuntimeAuthority,
     CanonicalAirPackageError, PreparedCanonicalAirPackage,
 };
+use crate::systems::canonical_flight_strafe_host::{
+    commit_canonical_flight_strafe, prepare_canonical_flight_strafe, CanonicalFlightStrafeError,
+    CanonicalFlightStrafeReceipt,
+};
 use crate::systems::canonical_group_move_host::{
     build_still_current, groups_equal, prepare_air_group_selection, unit_still_current,
     BuildSelectionIdentity, CommandPackageState, GroupMoveAuthority, PackageError,
@@ -94,6 +98,7 @@ pub enum CanonicalAirPackageShellError {
     },
     Air(CanonicalAirPackageError),
     Flight(CanonicalFlightNoActionError),
+    FlightStrafe(CanonicalFlightStrafeError),
     StaleCommandImage,
     NoAirPairs,
     AirTransactionNotApplied {
@@ -111,6 +116,12 @@ impl From<CanonicalAirPackageError> for CanonicalAirPackageShellError {
 impl From<CanonicalFlightNoActionError> for CanonicalAirPackageShellError {
     fn from(error: CanonicalFlightNoActionError) -> Self {
         Self::Flight(error)
+    }
+}
+
+impl From<CanonicalFlightStrafeError> for CanonicalAirPackageShellError {
+    fn from(error: CanonicalFlightStrafeError) -> Self {
+        Self::FlightStrafe(error)
     }
 }
 
@@ -182,7 +193,13 @@ struct PreparedCanonicalFlightNoAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplayPairPosition {
     Air(CommandPackagePosition),
-    FlightNoAction(CommandPackagePosition),
+    Flight(CommandPackagePosition),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PreparedFlightReceipt {
+    NoAction(CanonicalFlightNoActionReceipt),
+    Strafe(CanonicalFlightStrafeReceipt),
 }
 
 #[derive(Clone, Debug)]
@@ -228,7 +245,7 @@ pub struct PreparedCanonicalAirReplayBatch {
     shell: Vec<AirReplayShellCommand>,
     positions: Vec<ReplayPairPosition>,
     expected_air: Vec<AirGroupActionReceipt>,
-    expected_flight_no_action: Vec<CanonicalFlightNoActionReceipt>,
+    expected_flights: Vec<PreparedFlightReceipt>,
     world_digest_before: u64,
     selection_authority_before: GroupMoveAuthority,
     authority_before: AirGroupRuntimeAuthority,
@@ -242,6 +259,7 @@ pub struct CanonicalAirReplayBatchReceipt {
     pub shell: Vec<AirReplayShellCommand>,
     pub air: Vec<AirGroupActionReceipt>,
     pub flight_no_action: Vec<CanonicalFlightNoActionReceipt>,
+    pub flight_strafe: Vec<CanonicalFlightStrafeReceipt>,
 }
 
 fn require_size(
@@ -692,7 +710,7 @@ fn decode_batch_shell(
                 u16::try_from(index).expect("paired group cannot occupy the final u16 index"),
             );
             positions.push(if action_opcode == FLIGHT_OPCODE {
-                ReplayPairPosition::FlightNoAction(position)
+                ReplayPairPosition::Flight(position)
             } else {
                 ReplayPairPosition::Air(position)
             });
@@ -833,13 +851,11 @@ pub fn prepare_canonical_air_replay_batch(
     let mut shadow_paths = paths.to_vec();
     let mut shadow_command_state = command_state.clone();
     let mut expected_air = Vec::with_capacity(positions.len());
-    let mut expected_flight_no_action = Vec::new();
+    let mut expected_flights = Vec::new();
 
     for pair in &positions {
         let position = match pair {
-            ReplayPairPosition::Air(position) | ReplayPairPosition::FlightNoAction(position) => {
-                *position
-            }
+            ReplayPairPosition::Air(position) | ReplayPairPosition::Flight(position) => *position,
         };
         let group = &commands[usize::from(position.group_command_index)];
         let action = &commands[usize::from(position.action_command_index)];
@@ -877,8 +893,8 @@ pub fn prepare_canonical_air_replay_batch(
                 }
                 expected_air.push(receipt);
             }
-            ReplayPairPosition::FlightNoAction(_) => {
-                let prepared = prepare_flight_no_action(
+            ReplayPairPosition::Flight(_) => {
+                match prepare_flight_no_action(
                     &shadow_world,
                     builds,
                     &shadow_groups,
@@ -891,19 +907,54 @@ pub fn prepare_canonical_air_replay_batch(
                     position,
                     group,
                     action,
-                )?;
-                let receipt = commit_flight_no_action(
-                    &mut shadow_world,
-                    builds,
-                    &mut shadow_groups,
-                    &mut shadow_paths,
-                    &mut shadow_command_state,
-                    selection_authority,
-                    authority,
-                    scenario,
-                    prepared,
-                )?;
-                expected_flight_no_action.push(receipt);
+                ) {
+                    Ok(prepared) => {
+                        let receipt = commit_flight_no_action(
+                            &mut shadow_world,
+                            builds,
+                            &mut shadow_groups,
+                            &mut shadow_paths,
+                            &mut shadow_command_state,
+                            selection_authority,
+                            authority,
+                            scenario,
+                            prepared,
+                        )?;
+                        expected_flights.push(PreparedFlightReceipt::NoAction(receipt));
+                    }
+                    Err(
+                        CanonicalFlightNoActionError::NonBuildingSelection
+                        | CanonicalFlightNoActionError::InvalidTarget { .. },
+                    ) => {
+                        let prepared = prepare_canonical_flight_strafe(
+                            &shadow_world,
+                            builds,
+                            &shadow_groups,
+                            &shadow_paths,
+                            &shadow_command_state,
+                            selection_authority,
+                            authority,
+                            scenario,
+                            player_who,
+                            position,
+                            group,
+                            action,
+                        )?;
+                        let receipt = commit_canonical_flight_strafe(
+                            &mut shadow_world,
+                            builds,
+                            &mut shadow_groups,
+                            &mut shadow_paths,
+                            &mut shadow_command_state,
+                            selection_authority,
+                            authority,
+                            scenario,
+                            prepared,
+                        )?;
+                        expected_flights.push(PreparedFlightReceipt::Strafe(receipt));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
     }
@@ -914,7 +965,7 @@ pub fn prepare_canonical_air_replay_batch(
         shell,
         positions,
         expected_air,
-        expected_flight_no_action,
+        expected_flights,
         world_digest_before: world.digest(),
         selection_authority_before: selection_authority.clone(),
         authority_before: authority.clone(),
@@ -957,14 +1008,13 @@ pub fn commit_canonical_air_replay_batch(
         command_state.clone(),
     );
     let mut air = Vec::with_capacity(prepared.expected_air.len());
-    let mut flight_no_action = Vec::with_capacity(prepared.expected_flight_no_action.len());
+    let mut flight_no_action = Vec::new();
+    let mut flight_strafe = Vec::new();
     let mut expected_air = prepared.expected_air.iter();
-    let mut expected_flight = prepared.expected_flight_no_action.iter();
+    let mut expected_flight = prepared.expected_flights.iter();
     for pair in &prepared.positions {
         let position = match pair {
-            ReplayPairPosition::Air(position) | ReplayPairPosition::FlightNoAction(position) => {
-                *position
-            }
+            ReplayPairPosition::Air(position) | ReplayPairPosition::Flight(position) => *position,
         };
         let group = &commands[usize::from(position.group_command_index)];
         let action = &commands[usize::from(position.action_command_index)];
@@ -1008,27 +1058,12 @@ pub fn commit_canonical_air_replay_batch(
                 })
                 .and_then(|result| result)
             }
-            ReplayPairPosition::FlightNoAction(_) => {
+            ReplayPairPosition::Flight(_) => {
                 let expected = expected_flight
                     .next()
                     .expect("prepared Flight receipt cardinality");
-                prepare_flight_no_action(
-                    world,
-                    builds,
-                    groups,
-                    paths,
-                    command_state,
-                    selection_authority,
-                    authority,
-                    scenario,
-                    player_who,
-                    position,
-                    group,
-                    action,
-                )
-                .map_err(CanonicalAirPackageShellError::Flight)
-                .and_then(|flight| {
-                    commit_flight_no_action(
+                match expected {
+                    PreparedFlightReceipt::NoAction(expected) => prepare_flight_no_action(
                         world,
                         builds,
                         groups,
@@ -1037,17 +1072,70 @@ pub fn commit_canonical_air_replay_batch(
                         selection_authority,
                         authority,
                         scenario,
-                        flight,
+                        player_who,
+                        position,
+                        group,
+                        action,
                     )
                     .map_err(CanonicalAirPackageShellError::Flight)
-                })
-                .and_then(|receipt| {
-                    if &receipt != expected {
-                        return Err(CanonicalAirPackageShellError::StaleCanonicalState);
-                    }
-                    flight_no_action.push(receipt);
-                    Ok(())
-                })
+                    .and_then(|flight| {
+                        commit_flight_no_action(
+                            world,
+                            builds,
+                            groups,
+                            paths,
+                            command_state,
+                            selection_authority,
+                            authority,
+                            scenario,
+                            flight,
+                        )
+                        .map_err(CanonicalAirPackageShellError::Flight)
+                    })
+                    .and_then(|receipt| {
+                        if &receipt != expected {
+                            return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+                        }
+                        flight_no_action.push(receipt);
+                        Ok(())
+                    }),
+                    PreparedFlightReceipt::Strafe(expected) => prepare_canonical_flight_strafe(
+                        world,
+                        builds,
+                        groups,
+                        paths,
+                        command_state,
+                        selection_authority,
+                        authority,
+                        scenario,
+                        player_who,
+                        position,
+                        group,
+                        action,
+                    )
+                    .map_err(CanonicalAirPackageShellError::FlightStrafe)
+                    .and_then(|flight| {
+                        commit_canonical_flight_strafe(
+                            world,
+                            builds,
+                            groups,
+                            paths,
+                            command_state,
+                            selection_authority,
+                            authority,
+                            scenario,
+                            flight,
+                        )
+                        .map_err(CanonicalAirPackageShellError::FlightStrafe)
+                    })
+                    .and_then(|receipt| {
+                        if &receipt != expected {
+                            return Err(CanonicalAirPackageShellError::StaleCanonicalState);
+                        }
+                        flight_strafe.push(receipt);
+                        Ok(())
+                    }),
+                }
             }
         };
         if let Err(error) = result {
@@ -1065,6 +1153,7 @@ pub fn commit_canonical_air_replay_batch(
         shell: prepared.shell,
         air,
         flight_no_action,
+        flight_strafe,
     })
 }
 
@@ -1077,7 +1166,8 @@ impl CanonicalAirReplayBatchReceipt {
             return false;
         }
         let mut air = self.air.iter();
-        let mut flights = self.flight_no_action.iter();
+        let mut seen_no_action = 0usize;
+        let mut seen_strafe = 0usize;
         for pair in positions {
             let (position, valid) = match pair {
                 ReplayPairPosition::Air(position) => {
@@ -1094,19 +1184,37 @@ impl CanonicalAirReplayBatchReceipt {
                                 == self.command_image[usize::from(position.action_command_index)],
                     )
                 }
-                ReplayPairPosition::FlightNoAction(position) => {
-                    let Some(receipt) = flights.next() else {
-                        return false;
+                ReplayPairPosition::Flight(position) => {
+                    let no_action = self
+                        .flight_no_action
+                        .iter()
+                        .find(|receipt| receipt.position == position);
+                    let strafe = self
+                        .flight_strafe
+                        .iter()
+                        .find(|receipt| receipt.position == position);
+                    let valid = match (no_action, strafe) {
+                        (Some(receipt), None) => {
+                            seen_no_action += 1;
+                            receipt.validates()
+                                && receipt.group_packet
+                                    == self.command_image[usize::from(position.group_command_index)]
+                                && receipt.flight_packet
+                                    == self.command_image
+                                        [usize::from(position.action_command_index)]
+                        }
+                        (None, Some(receipt)) => {
+                            seen_strafe += 1;
+                            receipt.validates()
+                                && receipt.group_packet
+                                    == self.command_image[usize::from(position.group_command_index)]
+                                && receipt.flight_packet
+                                    == self.command_image
+                                        [usize::from(position.action_command_index)]
+                        }
+                        _ => false,
                     };
-                    (
-                        position,
-                        receipt.validates()
-                            && receipt.position == position
-                            && receipt.group_packet
-                                == self.command_image[usize::from(position.group_command_index)]
-                            && receipt.flight_packet
-                                == self.command_image[usize::from(position.action_command_index)],
-                    )
+                    (position, valid)
                 }
             };
             let _ = position;
@@ -1114,6 +1222,8 @@ impl CanonicalAirReplayBatchReceipt {
                 return false;
             }
         }
-        air.next().is_none() && flights.next().is_none()
+        air.next().is_none()
+            && seen_no_action == self.flight_no_action.len()
+            && seen_strafe == self.flight_strafe.len()
     }
 }

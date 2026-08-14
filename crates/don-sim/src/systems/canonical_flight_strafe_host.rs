@@ -1,0 +1,510 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Exact current-STRAFE retarget cone of `Group::action_flight`.
+//!
+//! This is deliberately not a general Flight implementation. It accepts only ATTACK with no
+//! modifiers, an all-Unit selection, and actors whose current order is already STRAFE. Retail's
+//! direct arm rewrites that existing payload; every other Flight branch remains a typed boundary.
+
+use crate::command::air_launch_receivers::MISSILE_OBJECT_MASK;
+use crate::order::{Order, OrderIndex, ORDER_GROUP};
+use crate::systems::air_group_action_transaction::{
+    decode_group_selection_packet, CanonicalObjectBand, CanonicalObjectGeneration,
+    CanonicalObjectIdentity, CommandPackagePosition, GroupSelectionWireError,
+};
+use crate::systems::air_runtime_authority::ScenarioIgnoreOrdersAuthority;
+use crate::systems::canonical_air_group_host::{AirGroupRuntimeAuthority, AirGroupUnitAuthority};
+use crate::systems::canonical_group_move_host::{
+    groups_equal, prepare_air_group_selection, unit_still_current, CommandPackageState,
+    GroupMoveAuthority, PackageError, PreparedGroupSelection, PreparedSelectionObject,
+    UnitIdentity, NETWORK_PLAYERS,
+};
+use crate::systems::groups_guys::Groups;
+use crate::systems::movement::PathStack;
+use crate::systems::production::BuildData;
+use crate::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
+use crate::systems::strafe_runtime_authority::validate_strafe_order;
+use crate::world::{Handle, World, WorldObjectIdentity, OBJ_FLAG_ACTIVE};
+
+pub const FLIGHT_OPCODE: u8 = 28;
+pub const ATTACK_ORDER_INDEX: i32 = 10;
+pub const FLIGHT_WIRE_SIZE: usize = 25;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlightStrafeRequest {
+    pub target_o: i32,
+    pub target_who: i32,
+    pub shift: i32,
+    pub ctrl: i32,
+    pub alt: i32,
+    pub orders: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanonicalFlightStrafeError {
+    WrongWireSize { expected: usize, actual: usize },
+    WrongOpcode(u8),
+    UnsupportedRequest(FlightStrafeRequest),
+    GroupWire(GroupSelectionWireError),
+    PositionFrameMismatch { world: i32, packet: i32 },
+    PositionPlayOutOfRange(i32),
+    MissingPlayerMap(usize),
+    PlayerOwnerMismatch { expected: u8, got: u8 },
+    ScenarioIgnoreOrdersArmed,
+    Selection(PackageError),
+    EmptySelection,
+    NonUnitSelection,
+    BuildingGroup,
+    InvalidTarget { who: i32, o: i32 },
+    MissingAirAuthority(Handle),
+    MissileActor(UnitIdentity),
+    NuclearMissileGroup(UnitIdentity),
+    FuelExhausted(UnitIdentity),
+    CurrentOrderNotStrafe(UnitIdentity),
+    MalformedStrafe(UnitIdentity),
+    StaleCanonicalState,
+}
+
+impl From<PackageError> for CanonicalFlightStrafeError {
+    fn from(error: PackageError) -> Self {
+        Self::Selection(error)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlightStrafeActorReceipt {
+    pub identity: UnitIdentity,
+    pub before: Order,
+    pub after: Order,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalFlightStrafeReceipt {
+    pub position: CommandPackagePosition,
+    pub group_packet: Vec<u8>,
+    pub flight_packet: Vec<u8>,
+    pub request: FlightStrafeRequest,
+    pub target: CanonicalObjectIdentity,
+    pub target_position: (i32, i32),
+    pub actors: Vec<FlightStrafeActorReceipt>,
+    pub command_state_revision_before: u64,
+    pub command_state_revision_after: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedCanonicalFlightStrafe {
+    selection: PreparedGroupSelection,
+    target: TargetSnapshot,
+    authority_before: AirGroupRuntimeAuthority,
+    scenario_before: ScenarioIgnoreOrdersAuthority,
+    receipt: CanonicalFlightStrafeReceipt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TargetSnapshot {
+    identity: CanonicalObjectIdentity,
+    uid: u16,
+    position: (i32, i32),
+    backing: TargetBacking,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetBacking {
+    Unit { handle: Handle, row: usize },
+    Build { row: u32 },
+}
+
+fn read_i32(packet: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(
+        packet[offset..offset + 4]
+            .try_into()
+            .expect("fixed Flight field"),
+    )
+}
+
+pub fn decode_flight_strafe_request(
+    packet: &[u8],
+) -> Result<FlightStrafeRequest, CanonicalFlightStrafeError> {
+    if packet.len() != FLIGHT_WIRE_SIZE {
+        return Err(CanonicalFlightStrafeError::WrongWireSize {
+            expected: FLIGHT_WIRE_SIZE,
+            actual: packet.len(),
+        });
+    }
+    if packet[0] != FLIGHT_OPCODE {
+        return Err(CanonicalFlightStrafeError::WrongOpcode(packet[0]));
+    }
+    let request = FlightStrafeRequest {
+        target_o: read_i32(packet, 1),
+        target_who: read_i32(packet, 5),
+        shift: read_i32(packet, 9),
+        ctrl: read_i32(packet, 13),
+        alt: read_i32(packet, 17),
+        orders: read_i32(packet, 21),
+    };
+    if request.orders != ATTACK_ORDER_INDEX
+        || request.shift != 0
+        || request.ctrl != 0
+        || request.alt != 0
+    {
+        return Err(CanonicalFlightStrafeError::UnsupportedRequest(request));
+    }
+    Ok(request)
+}
+
+fn target_snapshot(
+    world: &World,
+    builds: &[BuildData],
+    request: FlightStrafeRequest,
+) -> Result<TargetSnapshot, CanonicalFlightStrafeError> {
+    let who = u8::try_from(request.target_who).map_err(|_| {
+        CanonicalFlightStrafeError::InvalidTarget {
+            who: request.target_who,
+            o: request.target_o,
+        }
+    })?;
+    i16::try_from(request.target_o).map_err(|_| CanonicalFlightStrafeError::InvalidTarget {
+        who: request.target_who,
+        o: request.target_o,
+    })?;
+    if RetailBand::Unit.contains(request.target_o) {
+        let row = world
+            .unit_row_at(request.target_who, request.target_o)
+            .ok_or(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            })?;
+        if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            return Err(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            });
+        }
+        let handle = world
+            .handle_at_row(row)
+            .ok_or(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            })?;
+        return Ok(TargetSnapshot {
+            identity: CanonicalObjectIdentity {
+                owner: who,
+                band: CanonicalObjectBand::Unit,
+                o: request.target_o,
+                generation: CanonicalObjectGeneration::Unit {
+                    id: handle.id,
+                    generation: handle.generation,
+                },
+            },
+            uid: world.units.get_uid(row),
+            position: (world.units.x_internal()[row], world.units.y_internal()[row]),
+            backing: TargetBacking::Unit { handle, row },
+        });
+    }
+    if RetailBand::Build.contains(request.target_o) {
+        let address = RetailObjectAddress::new(who, RetailBand::Build, request.target_o);
+        let WorldObjectIdentity::BuildRow(row) = world
+            .object_bands()
+            .live_identity(address)
+            .ok_or(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            })?
+        else {
+            return Err(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            });
+        };
+        let build = builds
+            .get(row as usize)
+            .filter(|build| {
+                build.who == who
+                    && i32::from(build.object_id()) == request.target_o
+                    && build.is_valid()
+            })
+            .ok_or(CanonicalFlightStrafeError::InvalidTarget {
+                who: request.target_who,
+                o: request.target_o,
+            })?;
+        return Ok(TargetSnapshot {
+            identity: CanonicalObjectIdentity {
+                owner: who,
+                band: CanonicalObjectBand::Build,
+                o: request.target_o,
+                generation: CanonicalObjectGeneration::BuildRow(row),
+            },
+            uid: build.uid,
+            position: build.position(),
+            backing: TargetBacking::Build { row },
+        });
+    }
+    Err(CanonicalFlightStrafeError::InvalidTarget {
+        who: request.target_who,
+        o: request.target_o,
+    })
+}
+
+fn air_authority(
+    authority: &AirGroupRuntimeAuthority,
+    handle: Handle,
+) -> Result<AirGroupUnitAuthority, CanonicalFlightStrafeError> {
+    authority
+        .units
+        .iter()
+        .copied()
+        .find(|entry| entry.handle == handle)
+        .ok_or(CanonicalFlightStrafeError::MissingAirAuthority(handle))
+}
+
+fn retarget_current_strafe(order: &mut Order, target: TargetSnapshot) -> Result<(), ()> {
+    if order.kind != OrderIndex::Strafe {
+        return Err(());
+    }
+    let payload = order.strafe.as_mut().ok_or(())?;
+    if i32::from(order.target_o) != payload.target_o
+        || i32::from(order.target_who) != payload.target_who
+        || order.target_uid != payload.target_uid
+        || validate_strafe_order(payload).is_err()
+    {
+        return Err(());
+    }
+    payload.target_o = target.identity.o;
+    payload.target_who = i32::from(target.identity.owner);
+    payload.target_uid = target.uid;
+    payload.xx = target.position.0;
+    payload.yy = target.position.1;
+    payload.mandatory = 1;
+    payload.air.returning = 0;
+    order.flags |= ORDER_GROUP;
+    order.target_who = target.identity.owner as i8;
+    order.target_o = target.identity.o as i16;
+    Ok(())
+}
+
+fn target_still_current(world: &World, builds: &[BuildData], target: TargetSnapshot) -> bool {
+    match target.backing {
+        TargetBacking::Unit { handle, row } => {
+            world.row_of(handle) == Some(row)
+                && world.handle_at_row(row) == Some(handle)
+                && world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0
+                && world.units.get_who(row) == target.identity.owner
+                && i32::from(world.units.o()[row]) == target.identity.o
+                && world.units.get_uid(row) == target.uid
+                && (world.units.x_internal()[row], world.units.y_internal()[row]) == target.position
+        }
+        TargetBacking::Build { row } => builds.get(row as usize).is_some_and(|build| {
+            build.who == target.identity.owner
+                && i32::from(build.object_id()) == target.identity.o
+                && build.uid == target.uid
+                && build.is_valid()
+                && build.position() == target.position
+                && world.object_bands().live_identity(RetailObjectAddress::new(
+                    target.identity.owner,
+                    RetailBand::Build,
+                    target.identity.o,
+                )) == Some(WorldObjectIdentity::BuildRow(row))
+        }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_canonical_flight_strafe(
+    world: &World,
+    builds: &[BuildData],
+    groups: &Groups,
+    paths: &[PathStack],
+    command_state: &CommandPackageState,
+    selection_authority: &GroupMoveAuthority,
+    authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    player_who: &[Option<u8>; NETWORK_PLAYERS],
+    position: CommandPackagePosition,
+    group_packet: &[u8],
+    flight_packet: &[u8],
+) -> Result<PreparedCanonicalFlightStrafe, CanonicalFlightStrafeError> {
+    if position.game_frame != world.frame {
+        return Err(CanonicalFlightStrafeError::PositionFrameMismatch {
+            world: world.frame,
+            packet: position.game_frame,
+        });
+    }
+    let play = usize::try_from(position.play)
+        .map_err(|_| CanonicalFlightStrafeError::PositionPlayOutOfRange(position.play))?;
+    if play >= NETWORK_PLAYERS {
+        return Err(CanonicalFlightStrafeError::PositionPlayOutOfRange(
+            position.play,
+        ));
+    }
+    let group = decode_group_selection_packet(group_packet)
+        .map_err(CanonicalFlightStrafeError::GroupWire)?;
+    let expected = player_who[play].ok_or(CanonicalFlightStrafeError::MissingPlayerMap(play))?;
+    if expected != group.owner {
+        return Err(CanonicalFlightStrafeError::PlayerOwnerMismatch {
+            expected,
+            got: group.owner,
+        });
+    }
+    if scenario.ignore_orders {
+        return Err(CanonicalFlightStrafeError::ScenarioIgnoreOrdersArmed);
+    }
+    let request = decode_flight_strafe_request(flight_packet)?;
+    let target = target_snapshot(world, builds, request)?;
+    let mut selection = prepare_air_group_selection(
+        world,
+        builds,
+        groups,
+        paths,
+        command_state,
+        selection_authority,
+        &authority.builds,
+        position.game_frame,
+        play,
+        group.owner,
+        &group.requested,
+    )?;
+    if selection.selected_objects.is_empty() {
+        return Err(CanonicalFlightStrafeError::EmptySelection);
+    }
+    let selected_group = &selection.groups_after.list[selection.group_slot];
+    if selected_group.buildings != 0 || selected_group.disband != 0 {
+        return Err(CanonicalFlightStrafeError::BuildingGroup);
+    }
+
+    let mut actors = Vec::with_capacity(selection.selected_objects.len());
+    for selected in &selection.selected_objects {
+        let PreparedSelectionObject::Unit(member) = selected else {
+            return Err(CanonicalFlightStrafeError::NonUnitSelection);
+        };
+        let air = air_authority(authority, member.identity.handle)?;
+        if air.object_masks & MISSILE_OBJECT_MASK != 0 {
+            return Err(CanonicalFlightStrafeError::MissileActor(
+                member.identity.clone(),
+            ));
+        }
+        if air.is_nuclear_missile {
+            return Err(CanonicalFlightStrafeError::NuclearMissileGroup(
+                member.identity.clone(),
+            ));
+        }
+        if crate::systems::air::mana_left(air.mana_cap, world.units.mana_burn()[member.row]) == 0 {
+            return Err(CanonicalFlightStrafeError::FuelExhausted(
+                member.identity.clone(),
+            ));
+        }
+        let mutation = selection
+            .units
+            .iter_mut()
+            .find(|mutation| mutation.before.identity.handle == member.identity.handle)
+            .expect("Unit selection always stages its group backlink");
+        let current = mutation.after.orders.current_mut().ok_or_else(|| {
+            CanonicalFlightStrafeError::CurrentOrderNotStrafe(member.identity.clone())
+        })?;
+        let before = current.clone();
+        retarget_current_strafe(current, target).map_err(|_| {
+            if before.kind == OrderIndex::Strafe {
+                CanonicalFlightStrafeError::MalformedStrafe(member.identity.clone())
+            } else {
+                CanonicalFlightStrafeError::CurrentOrderNotStrafe(member.identity.clone())
+            }
+        })?;
+        current.target_uid = target.uid;
+        actors.push(FlightStrafeActorReceipt {
+            identity: member.identity.clone(),
+            before,
+            after: current.clone(),
+        });
+    }
+
+    let receipt = CanonicalFlightStrafeReceipt {
+        position,
+        group_packet: group_packet.to_vec(),
+        flight_packet: flight_packet.to_vec(),
+        request,
+        target: target.identity,
+        target_position: target.position,
+        actors,
+        command_state_revision_before: selection.command_state_before.revision(),
+        command_state_revision_after: selection.command_state_after.revision(),
+    };
+    Ok(PreparedCanonicalFlightStrafe {
+        selection,
+        target,
+        authority_before: authority.clone(),
+        scenario_before: scenario.clone(),
+        receipt,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn commit_canonical_flight_strafe(
+    world: &mut World,
+    builds: &[BuildData],
+    groups: &mut Groups,
+    paths: &mut [PathStack],
+    command_state: &mut CommandPackageState,
+    selection_authority: &GroupMoveAuthority,
+    authority: &AirGroupRuntimeAuthority,
+    scenario: &ScenarioIgnoreOrdersAuthority,
+    prepared: PreparedCanonicalFlightStrafe,
+) -> Result<CanonicalFlightStrafeReceipt, CanonicalFlightStrafeError> {
+    let selection = &prepared.selection;
+    if command_state != &selection.command_state_before
+        || !groups_equal(groups, &selection.groups_before)
+        || selection_authority.revision != selection.authority_revision
+        || selection_authority.composition_digest != selection.authority_digest
+        || selection_authority.members != selection.authority_members
+        || authority != &prepared.authority_before
+        || scenario != &prepared.scenario_before
+        || !target_still_current(world, builds, prepared.target)
+        || selection
+            .units
+            .iter()
+            .any(|mutation| !unit_still_current(world, paths, &mutation.before))
+    {
+        return Err(CanonicalFlightStrafeError::StaleCanonicalState);
+    }
+    *groups = selection.groups_after.clone();
+    *command_state = selection.command_state_after.clone();
+    for mutation in &selection.units {
+        let row = world
+            .row_of(mutation.before.identity.handle)
+            .expect("all Flight identities were revalidated");
+        world.units.group_mut()[row] = mutation.after.group;
+        *world.orders_mut(row) = mutation.after.orders.clone();
+    }
+    Ok(prepared.receipt)
+}
+
+impl CanonicalFlightStrafeReceipt {
+    pub fn validates(&self) -> bool {
+        let Ok(group) = decode_group_selection_packet(&self.group_packet) else {
+            return false;
+        };
+        let Ok(request) = decode_flight_strafe_request(&self.flight_packet) else {
+            return false;
+        };
+        self.position.action_command_index == self.position.group_command_index + 1
+            && request == self.request
+            && self.target.is_well_formed()
+            && self.target.address()
+                == (self.request.target_who as u8, self.request.target_o as i16)
+            && !self.actors.is_empty()
+            && self.actors.iter().all(|actor| {
+                actor.identity.who == group.owner
+                    && actor.before.kind == OrderIndex::Strafe
+                    && actor.after.kind == OrderIndex::Strafe
+                    && actor.after.flags & ORDER_GROUP != 0
+                    && actor.after.target_who == self.request.target_who as i8
+                    && actor.after.target_o == self.request.target_o as i16
+                    && actor.after.strafe.as_ref().is_some_and(|payload| {
+                        payload.target_o == self.request.target_o
+                            && payload.target_who == self.request.target_who
+                            && (payload.xx, payload.yy) == self.target_position
+                            && payload.mandatory == 1
+                            && payload.air.returning == 0
+                    })
+            })
+            && self.command_state_revision_after
+                == self.command_state_revision_before.wrapping_add(1)
+    }
+}

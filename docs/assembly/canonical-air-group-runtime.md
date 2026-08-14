@@ -83,6 +83,33 @@ owner-3 selection `000003`; its latest explicit origin is package index 21,985, 
 wire chronology and cache origin. The all-AIRBASE and no-Nuclear-Missile facts remain mandatory
 host authority, not facts inferred from the recording.
 
+Cycle 14 adds one second, separately bounded Flight arm. The full corpus contains 2,205 opcode-28
+pairs, all immediately preceded by opcode 0; 2,164 are ATTACK with no modifiers, versus 18 order-1
+requests and 23 shift-ATTACK requests. Among those 2,164 ATTACK pairs, selection/target bands are
+942 Unit→Build, 263 Unit→Unit, 658 Build→Build, and 301 Build→Unit. The highest-leverage exact
+Unit-selected cone is therefore the already-STRAFE retarget arm, not a speculative fresh-order
+installer.
+
+At `Group::action_flight` `0x006FB6DB`, retail reads the actor's current order type. When it is
+STRAFE (16), `0x006FB700..0x006FB87B` obtains the existing concrete payload and, for ATTACK,
+writes the new target object/owner/UID, target position, `mandatory = 1`, `returning = 0`, and
+the common group-order flag. The canonical host reproduces only that arm. Every selected member
+must be an active Unit with Handle-bound air authority, clear missile mask, non-Nuclear-Missile
+type answer, positive exact `mana_left`, and a coherent current typed STRAFE payload. The target
+may be an active Unit or sparse-registry-bound active Build; its identity, UID, and position are
+revalidated at commit. Fresh STRAFE insertion, non-STRAFE current orders, shift/control/alt,
+order 1, scenario-ignore pruning, and every later Flight branch remain typed refusals.
+
+The exact fixture is finished replay SHA-256
+`558e0cd53dbed4f820e8757c0327a58384d433e5beb8e9eeef5d64df4d67bd54`, turn index 44,294 /
+serial 44,295 / turn 44,295 / frame 43,963 / play 0. Its package is exactly `[0,28]`:
+Group selects the 22 Unit objects
+`[14,21,64,97,151,189,85,120,132,136,145,169,182,191,144,131,202,203,205,206,207,208]`,
+and Flight `1c20080000000000000000000000000000000000000a000000` targets owner 0 / Build 2,080
+with ATTACK and no modifiers. The test mounts the pre-existing STRAFE image explicitly; the
+recording proves command bytes and chronology, while current-order/type/fuel facts remain
+authoritative host inputs.
+
 ## Retail comparison and the closure boundary
 
 The executable bodies are still the authority for the contained-object walk and the two
@@ -196,5 +223,11 @@ integration decision after the patch lands with its save-version coordination.
   tick identically; and
 - a changed contained aircraft after whole-package prepare rejects before either the Flight
   selection or the following LaunchPatrol can publish.
+
+It also proves the exact 22-Unit Flight witness: all current STRAFE payloads retarget to Build
+2,080, preserve their other walked state, consume zero package RNG, and round-trip through the
+current save format byte-for-byte. A changed Build UID after prepare publishes none of the 22
+retargets, while a fresh-install actor or shifted Flight packet is rejected without selection
+publication.
 
 No closure flag is changed by this tranche.
