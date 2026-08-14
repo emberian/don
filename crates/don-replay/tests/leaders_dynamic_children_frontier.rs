@@ -45,6 +45,11 @@ use don_replay::leaders_setup_build_registry_frontier::{
     FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
     LEADER_GET_BUILDINGS_VA,
 };
+use don_replay::leaders_setup_city_stat_frontier::{
+    bind_frame_zero_city_stats, derive_frame_zero_city_stats, FrameZeroCityStatsError,
+    CITIES_BUILT_HISTORY_BEGIN, CITIES_BUILT_HISTORY_END, FRAME_ZERO_CITY_STATS_WALKED_BYTES,
+    VILLAGE_CITY_MINE_HISTORY_BEGIN, VILLAGE_CITY_MINE_HISTORY_END,
+};
 use don_replay::leaders_setup_diplomacy_stamp_frontier::{
     bind_frame_zero_action_stamps, derive_frame_zero_action_stamps, FrameZeroActionStampsError,
     ACTION_STAMPS_BEGIN, ACTION_STAMPS_END, FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES,
@@ -1185,6 +1190,7 @@ fn frame_zero_starting_build_census_body() {
     let rare_history = derive_frame_zero_rare_history(&setup).unwrap();
     let stat_history = derive_frame_zero_stat_history(&setup).unwrap();
     let action_stamps = derive_frame_zero_action_stamps(&setup).unwrap();
+    let city_stats = derive_frame_zero_city_stats(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1298,6 +1304,11 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(ACTION_STAMPS_BEGIN, 0x1f4);
     assert_eq!(ACTION_STAMPS_END, 0x20c);
     assert_eq!(FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES, 24);
+    assert_eq!(VILLAGE_CITY_MINE_HISTORY_BEGIN, 0x3fc);
+    assert_eq!(VILLAGE_CITY_MINE_HISTORY_END, 0x408);
+    assert_eq!(CITIES_BUILT_HISTORY_BEGIN, 0x820);
+    assert_eq!(CITIES_BUILT_HISTORY_END, 0x824);
+    assert_eq!(FRAME_ZERO_CITY_STATS_WALKED_BYTES, 16);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1307,6 +1318,14 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(rare_history.claims().len(), active_count);
     assert_eq!(stat_history.claims().len(), active_count);
     assert_eq!(action_stamps.claims().len(), active_count);
+    assert_eq!(city_stats.claims().len(), active_count);
+    for claim in city_stats.claims() {
+        assert_eq!(claim.villages, 1);
+        assert_eq!(
+            city_stats.values(usize::from(claim.slot)),
+            Some([0, 1, 0, 1])
+        );
+    }
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1379,6 +1398,15 @@ fn frame_zero_starting_build_census_body() {
                 .unwrap();
             write_field(&mut fixture.columns, slot, field, &(-1i32).to_le_bytes());
         }
+        if city_stats.values(slot).is_some() {
+            for field_name in ["city_mine", "cities_built"] {
+                let field = leader::FIELDS
+                    .iter()
+                    .find(|field| field.name == field_name)
+                    .unwrap();
+                write_field(&mut fixture.columns, slot, field, &1i32.to_le_bytes());
+            }
+        }
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1408,23 +1436,25 @@ fn frame_zero_starting_build_census_body() {
     let rare_joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
     let headers_joined = bind_lifetime_mask_headers(rare_joined).unwrap();
     let stat_joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
-    let joined = bind_frame_zero_action_stamps(stat_joined, action_stamps.clone()).unwrap();
+    let stamps_joined = bind_frame_zero_action_stamps(stat_joined, action_stamps.clone()).unwrap();
+    let joined = bind_frame_zero_city_stats(stamps_joined, city_stats.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 24);
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 16);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_511 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_527 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 917) as u64
+        (active_count * 901) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    assert!(joined.inner().inner().header_lifetime_stable());
-    assert_eq!(joined.inner().inner().claims().len(), active_count);
+    assert!(joined.inner().inner().inner().header_lifetime_stable());
+    assert_eq!(joined.inner().inner().inner().claims().len(), active_count);
     assert!(joined
+        .inner()
         .inner()
         .inner()
         .claims()
@@ -1443,12 +1473,14 @@ fn frame_zero_starting_build_census_body() {
             .inner()
             .inner()
             .inner()
+            .inner()
             .claims()
             .len(),
         active_count
     );
     assert_eq!(
         joined
+            .inner()
             .inner()
             .inner()
             .inner()
@@ -1493,6 +1525,54 @@ fn frame_zero_starting_build_census_body() {
         let stat = bind_stat_columns(columns).unwrap();
         bind_frame_zero_action_stamps(stat, action_stamps.clone())
     };
+    let bind_city_columns = |columns: &LeaderCols| {
+        let stamps = bind_stamp_columns(columns).unwrap();
+        bind_frame_zero_city_stats(stamps, city_stats.clone())
+    };
+
+    let mut stale_city_mine_columns = fixture.columns.clone();
+    let city_mine_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "city_mine")
+        .unwrap();
+    write_field(
+        &mut stale_city_mine_columns,
+        active,
+        city_mine_field,
+        &0i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_city_columns(&stale_city_mine_columns),
+        Err(FrameZeroCityStatsError::ConditionalDisagreement {
+            slot,
+            begin: 0x3fc,
+            byte: 4,
+            expected: 1,
+            conditional: 0,
+        }) if slot == active
+    ));
+
+    let mut stale_cities_built_columns = fixture.columns.clone();
+    let cities_built_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "cities_built")
+        .unwrap();
+    write_field(
+        &mut stale_cities_built_columns,
+        active,
+        cities_built_field,
+        &0i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_city_columns(&stale_cities_built_columns),
+        Err(FrameZeroCityStatsError::ConditionalDisagreement {
+            slot,
+            begin: 0x820,
+            byte: 0,
+            expected: 1,
+            conditional: 0,
+        }) if slot == active
+    ));
 
     let repair_stamp_field = leader::FIELDS
         .iter()

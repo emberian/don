@@ -142,6 +142,11 @@ another 24 constructor-zero bytes per active row, reducing the residual to 917. 
 reaches none of those actions; the receipt expires before the first later writer and remains
 uninstalled with zero survival.
 
+The complete fresh-Village chronology supplies 16 more bytes per active row: exact one-valued
+`city_mine` and `cities_built` counters plus adjacent constructor-zero Village counters. This
+reduces the residual to 901, but later City lifecycle changes are not maintained here, so the
+receipt remains uninstalled with zero survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical
