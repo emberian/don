@@ -5,8 +5,18 @@ use don_replay::build_init_prefix::{
     SourceBackedBuildInitPrefixError, SUBOBJECT_COORD_XOR,
 };
 use don_replay::terrain_height_runtime::{
-    TerrainHeightAuthority, TerrainHeightError, TerrainHeightSource, TERRAIN_FIND_TCOORD_Z_BYTES,
-    TERRAIN_FIND_TCOORD_Z_SHA256, TERRAIN_FIND_TCOORD_Z_VA,
+    TerrainHeightAuthority, TerrainHeightError, TerrainHeightPreMountainPlane, TerrainHeightSource,
+    TerrainHeightWorldgenInputs, TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES,
+    TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256, TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
+    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256,
+    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA, TERRAIN_FILL_MOUNTAIN_DATA_BYTES,
+    TERRAIN_FILL_MOUNTAIN_DATA_SHA256, TERRAIN_FILL_MOUNTAIN_DATA_VA,
+    TERRAIN_FIND_CLOSEST_COORDINFO_BYTES, TERRAIN_FIND_CLOSEST_COORDINFO_SHA256,
+    TERRAIN_FIND_CLOSEST_COORDINFO_VA, TERRAIN_FIND_TCOORD_Z_BYTES, TERRAIN_FIND_TCOORD_Z_SHA256,
+    TERRAIN_FIND_TCOORD_Z_VA, TERRAIN_GENERATE_LAND_BYTES, TERRAIN_GENERATE_LAND_SHA256,
+    TERRAIN_GENERATE_LAND_VA, TERRAIN_GET_VERT_CODES_BYTES, TERRAIN_GET_VERT_CODES_SHA256,
+    TERRAIN_GET_VERT_CODES_VA, TERRAIN_SMOOTH_TCOORD_BYTES, TERRAIN_SMOOTH_TCOORD_SHA256,
+    TERRAIN_SMOOTH_TCOORD_VA,
 };
 use don_replay::world_owner_frontier::sha256;
 use don_sim::systems::map_terrain::{tflag, World};
@@ -39,6 +49,19 @@ fn set_pair(
     terrain.master_land_height_bits[a] = first.to_bits();
     terrain.master_land_height_bits[b] = second.to_bits();
     (a, b)
+}
+
+fn worldgen_inputs(world: &World) -> TerrainHeightWorldgenInputs {
+    let vertices = ((world.tile_xs + 1) * (world.tile_ys + 1)) as usize;
+    TerrainHeightWorldgenInputs {
+        height_fractal_samples: vec![0; vertices],
+        height_fractal_detail_samples: vec![0; vertices],
+        coord_info_flags: vec![0; world.size as usize],
+        land_height_bits: 30.0f32.to_bits(),
+        mountain_height_bits: (-303.0f32).to_bits(),
+        height_scale_bits: 1.0f32.to_bits(),
+        completed_worldgen_digest: digest(0xa5),
+    }
 }
 
 fn request(x: i32, y: i32) -> BuildInitPrefixTerrainRequest {
@@ -199,6 +222,139 @@ fn build_prefix_consumes_the_height_plane_without_a_raw_z_input() {
     assert_eq!(bad_build.image(), before);
 }
 
+#[test]
+fn completed_worldgen_samples_derive_the_pre_mountain_plane() {
+    let world = World::init_default_rules(2, 2);
+    let width = world.tile_xs as usize + 1;
+    let mut inputs = worldgen_inputs(&world);
+    let first = 5 * width + 3;
+    let second = 4 * width + 4;
+    inputs.height_fractal_samples[first] = 20;
+    inputs.height_fractal_samples[second] = 40;
+
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &inputs).unwrap();
+    assert_eq!(receipt.vertices, width * (world.tile_ys as usize + 1));
+    assert_eq!(receipt.fractal_vertices, receipt.vertices);
+    assert_eq!(receipt.smoothing_vertices, 0);
+    assert_eq!(terrain.master_land_height_bits[first], 180.0f32.to_bits());
+    assert_eq!(terrain.master_land_height_bits[second], 330.0f32.to_bits());
+    assert!(!receipt.final_query_authority);
+    assert_eq!(
+        (
+            receipt.remaining_adjust_for_mountains_va,
+            receipt.remaining_fill_mountain_data_va,
+        ),
+        (
+            TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
+            TERRAIN_FILL_MOUNTAIN_DATA_VA,
+        )
+    );
+
+    let mut changed_inputs = inputs;
+    changed_inputs.height_fractal_samples[first] += 1;
+    let (changed, changed_receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &changed_inputs).unwrap();
+    assert_ne!(
+        changed.master_land_height_bits,
+        terrain.master_land_height_bits
+    );
+    assert_ne!(
+        changed_receipt.derived_plane_digest,
+        receipt.derived_plane_digest
+    );
+}
+
+#[test]
+fn world_and_coordinfo_codes_drive_native_height_branches() {
+    let mut world = World::init_default_rules(2, 2);
+    let width = world.tile_xs as usize + 1;
+
+    let mut mountain = worldgen_inputs(&world);
+    mountain.coord_info_flags[0] = 0x1000;
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &mountain).unwrap();
+    assert_eq!(
+        terrain.master_land_height_bits[2 * width + 2],
+        (-273.0f32).to_bits()
+    );
+    assert!(receipt.mountain_vertices > 0);
+
+    let mut fixed = worldgen_inputs(&world);
+    fixed.coord_info_flags[0] = 0x2;
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &fixed).unwrap();
+    assert_eq!(
+        terrain.master_land_height_bits[2 * width + 2],
+        100.0f32.to_bits()
+    );
+    assert!(receipt.fixed_height_vertices > 0);
+
+    let mut zero = worldgen_inputs(&world);
+    zero.coord_info_flags[0] = 0x4;
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &zero).unwrap();
+    assert_eq!(terrain.master_land_height_bits[2 * width + 2], 0);
+    assert!(receipt.coordinfo_zero_vertices > 0);
+
+    world.tdata[(3 * world.tile_xs + 2) as usize] |= tflag::RIVER;
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &worldgen_inputs(&world))
+            .unwrap();
+    assert_eq!(terrain.master_land_height_bits[3 * width + 2], 0);
+    assert_eq!(terrain.master_land_height_bits[4 * width + 3], 0);
+    assert!(receipt.locked_zero_vertices >= 4);
+}
+
+#[test]
+fn coast_distance_smoothing_and_worldgen_shape_are_fail_closed() {
+    let world = World::init_default_rules(2, 2);
+    let mut inputs = worldgen_inputs(&world);
+    inputs.height_fractal_samples.fill(20);
+    inputs.coord_info_flags[0] = 0x20;
+    let (terrain, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &inputs).unwrap();
+    assert!(receipt.smoothing_vertices > 0);
+    assert!(receipt.smoothing_passes >= receipt.smoothing_vertices);
+    assert!(terrain
+        .master_land_height_bits
+        .iter()
+        .any(|&bits| bits != 180.0f32.to_bits()));
+
+    let mut short_samples = inputs.clone();
+    short_samples.height_fractal_samples.pop();
+    assert!(matches!(
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &short_samples),
+        Err(TerrainHeightError::WorldgenSampleLengthMismatch { .. })
+    ));
+    let mut short_flags = inputs.clone();
+    short_flags.coord_info_flags.pop();
+    assert!(matches!(
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &short_flags),
+        Err(TerrainHeightError::CoordInfoFlagsLengthMismatch { .. })
+    ));
+    let mut anonymous = inputs;
+    anonymous.completed_worldgen_digest = [0; 32];
+    assert_eq!(
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &anonymous),
+        Err(TerrainHeightError::MissingSourceIdentity)
+    );
+}
+
+#[test]
+fn smoothing_admission_preserves_the_retail_x_extent_for_both_axes() {
+    // `determine_land_height_color` compares both x and y with `4 * world_xs` before
+    // appending to `temp_smooth`, even on a rectangular map. Keep that binary quirk locked.
+    let world = World::init_default_rules(2, 3);
+    let mut inputs = worldgen_inputs(&world);
+    inputs.coord_info_flags.fill(0x20);
+
+    let (_, receipt) =
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &inputs).unwrap();
+    assert_eq!(receipt.smoothing_vertices, 8 * 8);
+    assert_eq!(receipt.smoothing_passes, 8 * 8 + (8 * 8 - 4 * 4));
+}
+
 fn pe_span(image: &[u8], va: u32, size: usize) -> &[u8] {
     let pe = u32::from_le_bytes(image[0x3c..0x40].try_into().unwrap()) as usize;
     assert_eq!(&image[pe..pe + 4], b"PE\0\0");
@@ -228,17 +384,55 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn supported_pe_freezes_the_complete_height_body() {
+fn supported_pe_freezes_the_height_query_and_producer_bodies() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let exe = root.join("ron-bin/riseofnations.exe");
     if !exe.exists() {
         return;
     }
     let image = std::fs::read(exe).unwrap();
-    let body = pe_span(
-        &image,
-        TERRAIN_FIND_TCOORD_Z_VA,
-        TERRAIN_FIND_TCOORD_Z_BYTES as usize,
-    );
-    assert_eq!(hex(&sha256(body)), TERRAIN_FIND_TCOORD_Z_SHA256);
+    for (va, bytes, expected) in [
+        (
+            TERRAIN_FIND_TCOORD_Z_VA,
+            TERRAIN_FIND_TCOORD_Z_BYTES,
+            TERRAIN_FIND_TCOORD_Z_SHA256,
+        ),
+        (
+            TERRAIN_GENERATE_LAND_VA,
+            TERRAIN_GENERATE_LAND_BYTES,
+            TERRAIN_GENERATE_LAND_SHA256,
+        ),
+        (
+            TERRAIN_GET_VERT_CODES_VA,
+            TERRAIN_GET_VERT_CODES_BYTES,
+            TERRAIN_GET_VERT_CODES_SHA256,
+        ),
+        (
+            TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA,
+            TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES,
+            TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256,
+        ),
+        (
+            TERRAIN_FIND_CLOSEST_COORDINFO_VA,
+            TERRAIN_FIND_CLOSEST_COORDINFO_BYTES,
+            TERRAIN_FIND_CLOSEST_COORDINFO_SHA256,
+        ),
+        (
+            TERRAIN_SMOOTH_TCOORD_VA,
+            TERRAIN_SMOOTH_TCOORD_BYTES,
+            TERRAIN_SMOOTH_TCOORD_SHA256,
+        ),
+        (
+            TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
+            TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES,
+            TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256,
+        ),
+        (
+            TERRAIN_FILL_MOUNTAIN_DATA_VA,
+            TERRAIN_FILL_MOUNTAIN_DATA_BYTES,
+            TERRAIN_FILL_MOUNTAIN_DATA_SHA256,
+        ),
+    ] {
+        assert_eq!(hex(&sha256(pe_span(&image, va, bytes as usize))), expected);
+    }
 }
