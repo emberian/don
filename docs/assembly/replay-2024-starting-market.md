@@ -65,9 +65,13 @@ The `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` prefix is execution-b
 type and World-bounds gates. The first `0x00639335 -> ObjectsData::find_building_placed_at
 0x00658C80` child is now executed transactionally from a separately installed `ObjectsData+0x200`
 authority. A complete native miss/hit commits its exact scratch after-image and resumes at
-`0x0063933A`; a Wall-band identity mismatch remains uncommitted and typed. The remaining
-`find_friends` ring/type tail is still unresolved, so the adapter has no `find_friends` return and
-cannot authorize the source-known coarse-score formula, fine probes, allocation, `Build::init`,
+`0x0063933A`; a Wall-band identity mismatch remains uncommitted and typed. From that resume, the
+ring adapter executes each later in-bounds lookup in clockwise offset order and chains the exact
+scratch revisions. Misses and canonical `Build.city != effective_city_filter` results advance with
+the accumulator still zero. A same-City Build stops before the first found-type virtual at vtable
+slot `+0x90`. The all-miss/City-mismatch cohort alone owns a complete `find_friends` return of zero;
+the adapter never extrapolates a nonzero count. The found-type tail therefore remains unresolved
+and cannot authorize the source-known coarse-score formula, fine probes, allocation, `Build::init`,
 activation visibility/road effects, or the full non-City Sim mutation surface. Those later effects
 still need an exact owner before this receipt can become the golden frame-zero publisher. The
 post-`place_all` RNG state is not the Market-before state: intervening post-placement work and

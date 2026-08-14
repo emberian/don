@@ -232,8 +232,20 @@ therefore consumes a separately revisioned Objects scratch authority and journal
 before-to-minus-one-to-final transition transactionally; the pre-Market Sim hash never authorizes
 or defaults the missing prior word.
 
-This still does not execute the remainder of `find_friends`, candidate scoring, the
-one-through-four fine RNG draws, allocation, `Build::init`, activation, or City mutation. Those
-later effects remain supported-retail capture evidence. Their main-RNG boundary is also
+The bounded ring continuation now consumes that first committed after-image and preserves the
+retail clockwise offsets `1..=8`. Out-of-bounds offsets do not call the Object child or revise
+scratch. Each in-bounds offset executes the same generic lookup and chains its revision from the
+previous returned call. A `-1` miss advances immediately. A nonnegative Build result first reads
+the canonical live `Build.city`; an exact mismatch with the effective City filter also advances
+without changing the accumulator. A same-City Build stops before vtable slot `+0x90`
+(`BuildTypeData::is_gather_type`) and retains the returned lookup plus its published scratch state
+as a typed boundary. A Wall-band identity stop remains non-returning and does not publish that
+lookup's scratch write. Consequently only the cohort in which every reached lookup misses or
+fails the City equality gate emits a native `find_friends` return, and that return is exactly zero.
+No type predicate or count is inferred from a captured result.
+
+The same-City found-type tail, nonzero `find_friends` counts, candidate scoring, the one-through-four
+fine RNG draws, allocation, `Build::init`, activation, and City mutation still are not executed.
+Those later effects remain supported-retail capture evidence. Their main-RNG boundary is also
 deliberately not joined directly to post-`place_all`: post-placement map work and the
 collision-retried Setup player/start shuffle consume intervening draws before the Market.

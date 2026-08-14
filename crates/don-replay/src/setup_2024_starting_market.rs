@@ -3,8 +3,9 @@
 //! `Setup::build_cities` calls `Setup::build_civ_specific` after the owner-0 Village and
 //! before `Setup::build_units`. The golden replay selects Dutch bonus 22, so retail issues
 //! exactly one `Leader::produce_building(436, 2000, 0)` call. This module derives that call
-//! from replay/Rules bytes, joins the exact Market `blocked_site` footprint owner, executes the
-//! first `find_friends` Object lookup under explicit scratch authority, and binds a
+//! from replay/Rules bytes, joins the exact Market `blocked_site` footprint owner, executes exact
+//! `find_friends` Object lookups under explicit scratch authority until the first found-type
+//! boundary, and binds a
 //! supported-retail pre/post capture to every City checksum byte written by the success suffix.
 //! It never uses a recorded checksum and does not manufacture the missing generated World needed
 //! to select the site.
@@ -15,10 +16,13 @@ use std::fmt;
 
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::rng::Random;
+use don_sim::systems::air_patrol_building_search_frontier::WORLD_CELL_SEARCH_OFFSETS;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
 use don_sim::systems::build_type_find_friends::{
     produce_build_type_find_friends_prefix, BuildTypeFindFriendsError, BuildTypeFindFriendsReceipt,
-    BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop, BUILD_TYPE_FIND_FRIENDS_VA,
+    BuildTypeFindFriendsRequest, BuildTypeFindFriendsStop, ObjectsFindBuildingPlacedAtBoundary,
+    BUILD_TYPE_FIND_FRIENDS_FIRST_OBJECT_CALL_VA, BUILD_TYPE_FIND_FRIENDS_VA,
+    OBJECTS_FIND_BUILDING_PLACED_AT_VA, OBJECTS_SELECTED_OWNER_OFFSET,
 };
 use don_sim::systems::leader_market_build_accounting::{
     MarketLeaderAccountingError, MarketLeaderAccountingReceipt, MarketLeaderRegionAuthority,
@@ -53,7 +57,7 @@ use don_sim::systems::objects_find_building_placed_at::{
     execute_objects_find_building_placed_at, ObjectsFindBuildingPlacedAtExecuteError,
     ObjectsFindBuildingPlacedAtReceipt, ObjectsFindBuildingPlacedAtStop,
     ObjectsFindBuildingPlacedAtWallBoundary, ObjectsSelectedOwnerAuthority,
-    ObjectsSelectedOwnerCommitError,
+    ObjectsSelectedOwnerCommitError, ObjectsSpatialBand,
 };
 use don_sim::systems::production::{flag, runtime::LiveProductionRuntime, Footprint};
 use don_sim::systems::save_load::SaveError;
@@ -96,6 +100,8 @@ pub const MARKET_DOMAIN: i32 = 0;
 /// First instruction after the initial `ObjectsData::find_building_placed_at` call returns to
 /// `BuildTypeData::find_friends`.
 pub const MARKET_FIND_FRIENDS_AFTER_FIRST_LOOKUP_VA: u32 = 0x0063_933a;
+/// `BuildTypeData::is_gather_type` vtable slot reached after a found Build passes the City gate.
+pub const MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT: u32 = 0x90;
 /// Independent schema for the two-image pre/post Market lifecycle contract.
 pub const GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION: u64 = 1;
 pub const MARKET_FOOTPRINT: Footprint = Footprint {
@@ -756,6 +762,404 @@ pub fn advance_golden_starting_market_first_object_lookup(
     debug_assert!(receipt.validates());
     Ok(GoldenStartingMarketFirstObjectLookupAdvance::Complete(
         receipt,
+    ))
+}
+
+/// Exact Build scalar reached after a nonnegative placed-Build lookup and before retail's first
+/// found-type virtual. A City mismatch skips every type predicate and resumes the ring unchanged;
+/// a match is the fail-closed boundary owned by this tranche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsFoundBuildRead {
+    pub owner: i32,
+    pub object: i32,
+    pub build_row: usize,
+    pub type_index: i32,
+    pub city: i16,
+    pub effective_city_filter: i32,
+}
+
+/// One exact continuation step after the first lookup. Out-of-bounds offsets have no child and
+/// do not touch Objects scratch. Complete lookup steps are either misses or City mismatches; a
+/// City match is retained separately as a typed boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsRingStep {
+    pub circle_offset: i32,
+    pub world_cell: [i32; 2],
+    pub child: Option<ObjectsFindBuildingPlacedAtBoundary>,
+    pub object_lookup: Option<ObjectsFindBuildingPlacedAtReceipt>,
+    pub city_mismatch: Option<GoldenStartingMarketFindFriendsFoundBuildRead>,
+    pub accumulator_before: i32,
+    pub accumulator_after: i32,
+}
+
+/// Exact all-miss/City-mismatch native return. No found-type predicate was guessed and therefore
+/// the retail accumulator is provably still zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsReturnedZeroReceipt {
+    pub first_lookup: GoldenStartingMarketFirstObjectLookupReceipt,
+    pub remaining_steps: Vec<GoldenStartingMarketFindFriendsRingStep>,
+    pub scratch_entry: ObjectsSelectedOwnerAuthority,
+    pub scratch_after: ObjectsSelectedOwnerAuthority,
+    pub returned: i32,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+/// Typed stop after a lookup returned a Build in the effective City. The first unowned operation
+/// is the found BuildType's `is_gather_type` virtual; no relation, flag, Wonder, or accumulator
+/// result is claimed here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsTypeBoundaryReceipt {
+    pub first_lookup: GoldenStartingMarketFirstObjectLookupReceipt,
+    pub completed_steps: Vec<GoldenStartingMarketFindFriendsRingStep>,
+    pub scratch_entry: ObjectsSelectedOwnerAuthority,
+    pub scratch_at_boundary: ObjectsSelectedOwnerAuthority,
+    pub object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub found: GoldenStartingMarketFindFriendsFoundBuildRead,
+    pub accumulator_before: i32,
+    pub first_unowned_virtual_slot: u32,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+/// Typed stop when a later generic lookup reaches its impossible-retail Wall-band identity seam.
+/// The boundary lookup does not publish scratch; earlier complete lookups remain exact and are
+/// retained in program order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketFindFriendsWallBoundaryReceipt {
+    pub first_lookup: GoldenStartingMarketFirstObjectLookupReceipt,
+    pub completed_steps: Vec<GoldenStartingMarketFindFriendsRingStep>,
+    pub scratch_entry: ObjectsSelectedOwnerAuthority,
+    pub scratch_at_boundary: ObjectsSelectedOwnerAuthority,
+    pub object_lookup: ObjectsFindBuildingPlacedAtReceipt,
+    pub wall_boundary: ObjectsFindBuildingPlacedAtWallBoundary,
+    pub accumulator_before: i32,
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFindFriendsRingAdvance {
+    ReturnedZero(GoldenStartingMarketFindFriendsReturnedZeroReceipt),
+    FoundBuildTypeBoundary(GoldenStartingMarketFindFriendsTypeBoundaryReceipt),
+    WallBandIdentityBoundary(GoldenStartingMarketFindFriendsWallBoundaryReceipt),
+}
+
+impl GoldenStartingMarketFindFriendsRingAdvance {
+    /// Re-run the bounded adapter from its retained first-lookup/scratch entry and require the
+    /// complete result and published scratch state to be identical.
+    pub fn validates_against(
+        &self,
+        before: &Sim,
+        production: &LiveProductionRuntime,
+        types: &TypeBuiltinState,
+    ) -> bool {
+        let (first_lookup, scratch_entry, expected_scratch) = match self {
+            Self::ReturnedZero(receipt) => (
+                &receipt.first_lookup,
+                receipt.scratch_entry,
+                receipt.scratch_after,
+            ),
+            Self::FoundBuildTypeBoundary(receipt) => (
+                &receipt.first_lookup,
+                receipt.scratch_entry,
+                receipt.scratch_at_boundary,
+            ),
+            Self::WallBandIdentityBoundary(receipt) => (
+                &receipt.first_lookup,
+                receipt.scratch_entry,
+                receipt.scratch_at_boundary,
+            ),
+        };
+        let mut scratch = scratch_entry;
+        advance_golden_starting_market_find_friends_ring(
+            before,
+            production,
+            types,
+            &mut scratch,
+            first_lookup.clone(),
+        )
+        .is_ok_and(|expected| expected == *self && scratch == expected_scratch)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketFindFriendsRingError {
+    InvalidFirstLookupReceipt,
+    ScratchDoesNotExtendFirstLookup,
+    InvalidLookupReceipt,
+    InvalidFoundBuild,
+    Lookup(ObjectsFindBuildingPlacedAtExecuteError),
+    Rollback(ObjectsSelectedOwnerCommitError),
+}
+
+impl fmt::Display for GoldenStartingMarketFindFriendsRingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "golden starting Market find_friends ring refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketFindFriendsRingError {}
+
+fn market_find_friends_object_child(
+    request: BuildTypeFindFriendsRequest,
+    circle_offset: i32,
+    world_cell: [i32; 2],
+) -> ObjectsFindBuildingPlacedAtBoundary {
+    let tile = [
+        world_cell[0].wrapping_mul(4).wrapping_add(2),
+        world_cell[1].wrapping_mul(4).wrapping_add(2),
+    ];
+    ObjectsFindBuildingPlacedAtBoundary {
+        call_va: BUILD_TYPE_FIND_FRIENDS_FIRST_OBJECT_CALL_VA,
+        callee_va: OBJECTS_FIND_BUILDING_PLACED_AT_VA,
+        native_push_order: [-1, -1, request.owner, tile[1], tile[0]],
+        circle_offset,
+        world_cell,
+        tile,
+        owner_filter: request.owner,
+        excluded_object: -1,
+        excluded_owner: -1,
+        selected_owner_offset: OBJECTS_SELECTED_OWNER_OFFSET,
+        selected_owner_first_write: -1,
+    }
+}
+
+fn market_find_friends_found_build(
+    sim: &Sim,
+    effective_city_filter: i32,
+    lookup: &ObjectsFindBuildingPlacedAtReceipt,
+) -> Option<GoldenStartingMarketFindFriendsFoundBuildRead> {
+    let object = lookup.returned.filter(|&value| value >= 0)?;
+    let owner = lookup.returned_owner?;
+    let object_i16 = i16::try_from(object).ok()?;
+    let owner_i16 = i16::try_from(owner).ok()?;
+    let read = lookup.objects.iter().rev().find(|read| {
+        read.band == ObjectsSpatialBand::Build
+            && read.key.who == owner_i16
+            && read.key.o == object_i16
+            && read.valid_build == Some(true)
+            && read.contains_query_tile == Some(true)
+    })?;
+    let build = sim.builds.get(read.row)?;
+    if u8::try_from(owner).ok() != Some(build.who) || build.object_id() != object_i16 {
+        return None;
+    }
+    Some(GoldenStartingMarketFindFriendsFoundBuildRead {
+        owner,
+        object,
+        build_row: read.row,
+        type_index: read.type_index?,
+        city: build.city,
+        effective_city_filter,
+    })
+}
+
+fn rollback_market_find_friends_steps(
+    steps: &[GoldenStartingMarketFindFriendsRingStep],
+    scratch: &mut ObjectsSelectedOwnerAuthority,
+) -> Result<(), ObjectsSelectedOwnerCommitError> {
+    for step in steps.iter().rev() {
+        if let Some(lookup) = &step.object_lookup {
+            lookup.scratch.rollback(scratch)?;
+        }
+    }
+    Ok(())
+}
+
+/// Continue the golden Market's ring after the exact first lookup.
+///
+/// Retail offsets remain clockwise `1..=8`. Each in-bounds child commits the separately owned
+/// `ObjectsData+0x200` journal before the parent inspects its result. Misses and exact City
+/// mismatches leave the accumulator at zero and may advance. A same-City Build stops before the
+/// first type virtual. Thus only the all-miss/City-mismatch cohort can return zero; this function
+/// never executes found-type predicates, coarse scoring, fine RNG, allocation, or City writes.
+pub fn advance_golden_starting_market_find_friends_ring(
+    before: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    scratch: &mut ObjectsSelectedOwnerAuthority,
+    first_lookup: GoldenStartingMarketFirstObjectLookupReceipt,
+) -> Result<GoldenStartingMarketFindFriendsRingAdvance, GoldenStartingMarketFindFriendsRingError> {
+    if !first_lookup.validates_against(before, production, types) {
+        return Err(GoldenStartingMarketFindFriendsRingError::InvalidFirstLookupReceipt);
+    }
+    if *scratch != first_lookup.scratch_after {
+        return Err(GoldenStartingMarketFindFriendsRingError::ScratchDoesNotExtendFirstLookup);
+    }
+    let scratch_entry = *scratch;
+    let request = first_lookup.next.request;
+    let effective_city_filter = first_lookup.next.effective_city_filter;
+    let first_circle_offset = first_lookup.next.circle_offset;
+    if !(1..=8).contains(&first_circle_offset) {
+        return Err(GoldenStartingMarketFindFriendsRingError::InvalidFirstLookupReceipt);
+    }
+
+    if first_lookup.next.returned >= 0 {
+        let found = market_find_friends_found_build(
+            before,
+            effective_city_filter,
+            &first_lookup.object_lookup,
+        )
+        .ok_or(GoldenStartingMarketFindFriendsRingError::InvalidFoundBuild)?;
+        if i32::from(found.city) == effective_city_filter {
+            return Ok(
+                GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(
+                    GoldenStartingMarketFindFriendsTypeBoundaryReceipt {
+                        first_lookup: first_lookup.clone(),
+                        completed_steps: Vec::new(),
+                        scratch_entry,
+                        scratch_at_boundary: *scratch,
+                        object_lookup: first_lookup.object_lookup.clone(),
+                        found,
+                        accumulator_before: 0,
+                        first_unowned_virtual_slot:
+                            MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT,
+                        source_produced_city_bytes: 0,
+                        installed_in_scoreboard: false,
+                    },
+                ),
+            );
+        }
+    }
+
+    let mut completed_steps = Vec::new();
+    for circle_offset in first_circle_offset + 1..=8 {
+        let (dx, dy) = WORLD_CELL_SEARCH_OFFSETS[circle_offset as usize];
+        let world_cell = [
+            request.candidate_world_cell[0].wrapping_add(dx),
+            request.candidate_world_cell[1].wrapping_add(dy),
+        ];
+        if !before.map.world.valid_w(world_cell[0], world_cell[1]) {
+            completed_steps.push(GoldenStartingMarketFindFriendsRingStep {
+                circle_offset,
+                world_cell,
+                child: None,
+                object_lookup: None,
+                city_mismatch: None,
+                accumulator_before: 0,
+                accumulator_after: 0,
+            });
+            continue;
+        }
+
+        let child = market_find_friends_object_child(request, circle_offset, world_cell);
+        let scratch_before = *scratch;
+        let lookup =
+            match execute_objects_find_building_placed_at(before, production, scratch, child) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    rollback_market_find_friends_steps(&completed_steps, scratch)
+                        .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+                    return Err(GoldenStartingMarketFindFriendsRingError::Lookup(error));
+                }
+            };
+        if lookup.request != child
+            || lookup.scratch.before != scratch_before
+            || !lookup.validates_against(before, production)
+        {
+            if lookup.returned.is_some() {
+                lookup
+                    .scratch
+                    .rollback(scratch)
+                    .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+            }
+            rollback_market_find_friends_steps(&completed_steps, scratch)
+                .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+            return Err(GoldenStartingMarketFindFriendsRingError::InvalidLookupReceipt);
+        }
+        if lookup.stop == ObjectsFindBuildingPlacedAtStop::WallBandIdentityBoundary {
+            if *scratch != scratch_before || lookup.returned.is_some() {
+                rollback_market_find_friends_steps(&completed_steps, scratch)
+                    .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+                return Err(GoldenStartingMarketFindFriendsRingError::InvalidLookupReceipt);
+            }
+            let wall_boundary = lookup
+                .wall_boundary
+                .expect("validated Wall-band identity boundary");
+            return Ok(
+                GoldenStartingMarketFindFriendsRingAdvance::WallBandIdentityBoundary(
+                    GoldenStartingMarketFindFriendsWallBoundaryReceipt {
+                        first_lookup,
+                        completed_steps,
+                        scratch_entry,
+                        scratch_at_boundary: *scratch,
+                        object_lookup: lookup,
+                        wall_boundary,
+                        accumulator_before: 0,
+                        source_produced_city_bytes: 0,
+                        installed_in_scoreboard: false,
+                    },
+                ),
+            );
+        }
+
+        let returned = lookup.returned.expect("validated complete Object lookup");
+        if returned == -1 {
+            completed_steps.push(GoldenStartingMarketFindFriendsRingStep {
+                circle_offset,
+                world_cell,
+                child: Some(child),
+                object_lookup: Some(lookup),
+                city_mismatch: None,
+                accumulator_before: 0,
+                accumulator_after: 0,
+            });
+            continue;
+        }
+        let Some(found) = market_find_friends_found_build(before, effective_city_filter, &lookup)
+        else {
+            lookup
+                .scratch
+                .rollback(scratch)
+                .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+            rollback_market_find_friends_steps(&completed_steps, scratch)
+                .map_err(GoldenStartingMarketFindFriendsRingError::Rollback)?;
+            return Err(GoldenStartingMarketFindFriendsRingError::InvalidFoundBuild);
+        };
+        if i32::from(found.city) == effective_city_filter {
+            return Ok(
+                GoldenStartingMarketFindFriendsRingAdvance::FoundBuildTypeBoundary(
+                    GoldenStartingMarketFindFriendsTypeBoundaryReceipt {
+                        first_lookup,
+                        completed_steps,
+                        scratch_entry,
+                        scratch_at_boundary: *scratch,
+                        object_lookup: lookup,
+                        found,
+                        accumulator_before: 0,
+                        first_unowned_virtual_slot:
+                            MARKET_FIND_FRIENDS_FIRST_FOUND_TYPE_VIRTUAL_SLOT,
+                        source_produced_city_bytes: 0,
+                        installed_in_scoreboard: false,
+                    },
+                ),
+            );
+        }
+        completed_steps.push(GoldenStartingMarketFindFriendsRingStep {
+            circle_offset,
+            world_cell,
+            child: Some(child),
+            object_lookup: Some(lookup),
+            city_mismatch: Some(found),
+            accumulator_before: 0,
+            accumulator_after: 0,
+        });
+    }
+
+    Ok(GoldenStartingMarketFindFriendsRingAdvance::ReturnedZero(
+        GoldenStartingMarketFindFriendsReturnedZeroReceipt {
+            first_lookup,
+            remaining_steps: completed_steps,
+            scratch_entry,
+            scratch_after: *scratch,
+            returned: 0,
+            source_produced_city_bytes: 0,
+            installed_in_scoreboard: false,
+        },
     ))
 }
 
@@ -1462,6 +1866,53 @@ mod tests {
         assert_eq!(request.city_filter, 0);
         assert_eq!(request.owner, 0);
         assert_eq!(request.native_push_order(), [0, 0, 31, 23]);
+    }
+
+    #[test]
+    fn market_find_friends_ring_children_preserve_clockwise_offsets_and_pushes() {
+        let request = BuildTypeFindFriendsRequest {
+            call_va: 0x006e_1f5f,
+            callee_va: BUILD_TYPE_FIND_FRIENDS_VA,
+            type_index: DUTCH_STARTING_MARKET_TYPE,
+            candidate_world_cell: [23, 31],
+            city_filter: 0,
+            owner: 0,
+        };
+        let children = (1..=8)
+            .map(|circle_offset| {
+                let (dx, dy) = WORLD_CELL_SEARCH_OFFSETS[circle_offset as usize];
+                let world_cell = [
+                    request.candidate_world_cell[0] + dx,
+                    request.candidate_world_cell[1] + dy,
+                ];
+                market_find_friends_object_child(request, circle_offset, world_cell)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children
+                .iter()
+                .map(|child| child.world_cell)
+                .collect::<Vec<_>>(),
+            [
+                [22, 30],
+                [23, 30],
+                [24, 30],
+                [24, 31],
+                [24, 32],
+                [23, 32],
+                [22, 32],
+                [22, 31],
+            ]
+        );
+        assert_eq!(children[1].tile, [94, 122]);
+        assert_eq!(children[1].native_push_order, [-1, -1, 0, 122, 94]);
+        assert!(children.iter().enumerate().all(|(index, child)| {
+            child.circle_offset == index as i32 + 1
+                && child.call_va == BUILD_TYPE_FIND_FRIENDS_FIRST_OBJECT_CALL_VA
+                && child.callee_va == OBJECTS_FIND_BUILDING_PLACED_AT_VA
+                && child.selected_owner_offset == OBJECTS_SELECTED_OWNER_OFFSET
+                && child.selected_owner_first_write == -1
+        }));
     }
 
     #[test]
