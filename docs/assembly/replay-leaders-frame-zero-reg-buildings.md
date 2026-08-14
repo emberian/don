@@ -64,9 +64,10 @@ Per active row:
 previous unique canonical walked bytes                 6,494
 frame-zero reg_buildings plane                         16,512
 frame-zero last_building_finished history                 516
-frame-zero unique canonical walked bytes               23,522
+pre-plan regional strategy histories                      256
+frame-zero unique canonical walked bytes               23,778
 default empty-child transcript                          28,428
-frame-zero residual                                      4,906
+frame-zero residual                                      4,650
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -78,6 +79,11 @@ counts. The adjacent 516-byte `last_building_finished[129]` setup receipt is nar
 initializes all entries to `-1`, and ordinary setup's `Build::activate(0, 0, 0)` bypasses the
 only activation-time completion-id store. Later completed Buildings still require a live owner,
 so that history promotion expires at the same boundary.
+
+The same temporal proof owns another 256 bytes. `Leader::init` clears the four 64-byte
+`reg_attacked`, `reg_wars`, `reg_neutrals`, and `reg_allies` arrays; their first writers are
+the later `Leader::plan_strategy` pass. The constructor receipt's explicit pre-first-checkpoint
+state therefore promotes all four zeroed arrays and expires before that pass.
 
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
@@ -102,5 +108,6 @@ the independent conditional Village cell refuses at the first differing byte. Mu
 canonical Build type while leaving its setup receipt stale refuses during census derivation, as
 does appending an unreceipted Build row. Mutating the independent final byte of
 `last_building_finished` refuses the history join. Dense and sparse object-registry views are
-rechecked by the producer before these mutation gates. The same test verifies the complete
-Leaders walk remains red and the global scoreboard remains uninstalled and non-substantive.
+rechecked by the producer before these mutation gates. Mutating the independent tail of
+`reg_allies` likewise refuses the pre-strategy join. The same test verifies the complete Leaders
+walk remains red and the global scoreboard remains uninstalled and non-substantive.

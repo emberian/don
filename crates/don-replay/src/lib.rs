@@ -79,6 +79,7 @@ pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
 pub mod leaders_setup_build_history_frontier;
 pub mod leaders_setup_reg_buildings_frontier;
+pub mod leaders_setup_region_history_frontier;
 pub mod leaders_sim_owner_frontier;
 pub mod leaders_sim_tech_frontier;
 pub mod map_make_resource_caller_gap_frontier;

@@ -33,6 +33,13 @@ use don_replay::leaders_setup_reg_buildings_frontier::{
     WALL_INCREMENT_STATS_REGION_STORE_VA, WALL_INCREMENT_STATS_TOTAL_STORE_VA,
     WALL_INCREMENT_STATS_VA,
 };
+use don_replay::leaders_setup_region_history_frontier::{
+    bind_frame_zero_region_strategy_history, derive_frame_zero_region_strategy_history,
+    FrameZeroRegionHistoryError, FRAME_ZERO_REG_STRATEGY_HISTORY_WALKED_BYTES,
+    LEADER_INIT_REGION_HISTORY_BEGIN_VA, LEADER_INIT_REGION_HISTORY_LOOP_END_VA,
+    PLAN_STRATEGY_REG_ATTACKED_FIRST_STORE_VA, PLAN_STRATEGY_RELATION_HISTORY_CLEAR_VA,
+    PLAN_STRATEGY_RELATION_HISTORY_LAST_STORE_VA,
+};
 use don_replay::leaders_sim_owner_frontier::{
     bind_sim_owner_frontier, SimOwnerFrontierError, POP_OFFSET, SIM_OWNER_DUPLICATE_BYTES,
     SIM_OWNER_NEWLY_CANONICAL_BYTES, SIM_OWNER_SOURCE_BYTES,
@@ -1081,6 +1088,7 @@ fn frame_zero_starting_build_census_body() {
     };
     let census = derive_frame_zero_regional_building_census(&setup).unwrap();
     let history = derive_frame_zero_last_building_history(&setup).unwrap();
+    let region_history = derive_frame_zero_region_strategy_history(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1094,8 +1102,24 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(BUILD_ACTIVATE_LAST_BUILDING_GUARD_VA, 0x0062_3f2d);
     assert_eq!(BUILD_ACTIVATE_LAST_BUILDING_STORE_VA, 0x0062_3f47);
     assert_eq!(FRAME_ZERO_LAST_BUILDING_HISTORY_WALKED_BYTES, 516);
+    assert_eq!(LEADER_INIT_REGION_HISTORY_BEGIN_VA, 0x006e_4b18);
+    assert_eq!(LEADER_INIT_REGION_HISTORY_LOOP_END_VA, 0x006e_4ba2);
+    assert_eq!(PLAN_STRATEGY_REG_ATTACKED_FIRST_STORE_VA, 0x006b_9bf8);
+    assert_eq!(PLAN_STRATEGY_RELATION_HISTORY_CLEAR_VA, 0x006b_bb82);
+    assert_eq!(PLAN_STRATEGY_RELATION_HISTORY_LAST_STORE_VA, 0x006b_bcc2);
+    assert_eq!(FRAME_ZERO_REG_STRATEGY_HISTORY_WALKED_BYTES, 256);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
+    assert_eq!(region_history.claims().len(), active_count);
+    for claim in region_history.claims() {
+        assert_eq!(claim.regions_per_history, 64);
+        assert_eq!(claim.histories, 4);
+        assert_eq!(claim.newly_canonical_walked_bytes, 256);
+        assert_eq!(
+            region_history.row(usize::from(claim.slot)).unwrap(),
+            &[0; 256]
+        );
+    }
     for claim in history.claims() {
         assert_eq!(claim.entries, 129);
         assert_eq!(claim.newly_canonical_walked_bytes, 516);
@@ -1137,25 +1161,61 @@ fn frame_zero_starting_build_census_body() {
     let tech = bind_sim_tech_frontier(previous, &fixture.authority, &setup.sim).unwrap();
     let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
     let regional = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
-    let joined = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
+    let build_history = bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
+    let joined =
+        bind_frame_zero_region_strategy_history(build_history, region_history.clone()).unwrap();
     let walk = joined.walk_frontier();
 
     assert_eq!(
         joined.newly_canonicalized_walked_bytes(),
-        active_count * 516
+        active_count * 256
     );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 23_522 + (NUM_LEADERS - active_count) * 8
+        active_count * 23_778 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 4_906) as u64
+        (active_count * 4_650) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
 
     let active = fixture.active;
+    let region_history_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "reg_allies")
+        .unwrap();
+    let mut stale_region_columns = fixture.columns.clone();
+    let mut stale_region_bytes = vec![0; region_history_field.size as usize];
+    stale_region_bytes[region_history_field.size as usize - 1] = 1;
+    write_field(
+        &mut stale_region_columns,
+        active,
+        region_history_field,
+        &stale_region_bytes,
+    );
+    let stale_region_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &stale_region_columns,
+        &fixed,
+    );
+    let stale_region_tech =
+        bind_sim_tech_frontier(stale_region_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_region_owners =
+        bind_sim_owner_frontier(&fixture.prefix, stale_region_tech, &setup.sim).unwrap();
+    let stale_region_regional =
+        bind_frame_zero_regional_buildings(stale_region_owners, census.clone()).unwrap();
+    let stale_region_build_history =
+        bind_frame_zero_last_building_history(stale_region_regional, history.clone()).unwrap();
+    assert!(matches!(
+        bind_frame_zero_region_strategy_history(stale_region_build_history, region_history),
+        Err(FrameZeroRegionHistoryError::ConditionalDisagreement { slot, .. })
+            if slot == active
+    ));
     let history_field = leader::FIELDS
         .iter()
         .find(|field| field.name == "last_building_finished")
