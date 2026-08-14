@@ -102,16 +102,17 @@ among same-tribe Leaders and choose the requested accepted LFSR value beyond the
 reserved first-name prefix. `plan_city_name` ports that state transition and explicitly
 reports `main_rng_draws = 0`; XML string resolution stays with the shipped-content owner.
 
-## Starting-town 2 follow-on
+## Post-center follow-on
 
 After the center returns, starting-town 2 calls `Setup::small_city_buildings`
-`0x005aae10` and then `Setup::build_civ_specific` `0x005ab760`. The base call order is:
+`0x005aae10`. `Setup::build_civ_specific` `0x005ab760` then runs for every starting-town
+mode, not only mode 2. The mode-2 base call order is:
 
 1. Woodcutter (`418`);
 2. three Farms (`417`) unless the relevant tribe-bonus branch changes/suppresses the count;
 3. Library (`435`).
 
-The civ-specific continuation may then append Market (`436`), University (`420`), Temple
+The unconditional civ-specific continuation may append Market (`436`), University (`420`), Temple
 (`437`), first/second Smelter rows (`423`/`424`), and Capitol (`438`) in that exact order.
 Both exposed planners produce the `Leader::free_build(type, center_object_id, 0)` schedule.
 Those extra Build initializers and their `BuildData::city_down` joins can change City flags

@@ -139,6 +139,7 @@ pub mod setup_place_unit_deep_re;
 pub mod setup_unit_member_authority;
 pub mod setup_unit_visibility_deep_re;
 pub mod setup_units_producer;
+pub mod starting_city_civ_specific;
 pub mod starting_city_census_clear;
 pub mod starting_city_in_port;
 pub mod starting_city_territory;
