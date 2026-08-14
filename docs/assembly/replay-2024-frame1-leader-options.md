@@ -57,9 +57,20 @@ the synchronized plan.
 
 `plan_frame1_setup_leader_options` returns those five writes plus the before/after ten-row state.
 It does not mutate a caller Sim, advance frame zero to frame one, or manufacture a frame-379
-chronology authority. The next exact product step is to bind the writes to the canonical frame-1
-Sim produced from the real Great Lakes setup, then execute/prove frames 2 through 379 before the
-existing Group+Move and frame-384 Groups mounts can enter the scoreboard.
+chronology authority. `bind_captured_frame1_command_entry` admits the one-tick retail capture only
+when both whole-DoNSave hashes match, the executable/replay identities are exact, the first image
+is the completed seven-call setup receipt, and all seven generation-bound Units survive into live
+frame 1. It produces the command-entry authority; it does not derive that tick from replay bytes.
+
+`mount_frame1_setup_leader_options` consumes that authority, rebinds all four Citizens by
+generation and the Village through both object registries, validates every zero-stance
+before-image, and commits the five writes atomically. It cannot relabel the setup receipt's
+frame-zero snapshot.
+
+After the serial-1 commands execute at live frame 1, the next exact boundary is the
+**post-command frame-1 tick**, followed by entry ticks 2 through 378 to reach the frame-379
+command boundary. Calling that interval merely “frames 2..379” would omit the first tick and
+confuse the frame-379 command entry with its later frame-384 Groups pass.
 
 Focused tests pin the real source, both row after-images and all five writes, and bite mutations
 in either command wire, the classified simulation inventory, and every reached
