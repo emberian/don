@@ -16,7 +16,7 @@
 
 use std::fmt;
 
-use don_sim::systems::map_terrain::{tflag, World};
+use don_sim::systems::map_terrain::{tflag, wflag, World};
 use don_sim::systems::mountain_add_runtime::MountainAddRuntime;
 use don_sim::systems::mountain_template_producer::{
     MountainTemplateCatalog, MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_VA,
@@ -58,6 +58,18 @@ pub const TERRAIN_HEIGHT_FRACTAL_INIT_CALL_VA: u32 = 0x0087_0275;
 pub const TERRAIN_HEIGHT_DETAIL_FRACTAL_INIT_CALL_VA: u32 = 0x0087_02a8;
 pub const FRACTAL_INIT_VA: u32 = 0x006a_a2d0;
 pub const FRACTAL_INIT_BYTES: u32 = 1_428;
+/// `TerrainOut::generate_land_lists`, the owner of the WCoord `CoordInfo` graph.
+pub const TERRAIN_GENERATE_LAND_LISTS_VA: u32 = 0x0085_f6a0;
+pub const TERRAIN_GENERATE_LAND_LISTS_BYTES: u32 = 550;
+/// `TerrainList::add_new_coord_info`, which initializes `CoordInfo::flags`.
+pub const TERRAIN_ADD_NEW_COORD_INFO_VA: u32 = 0x0084_ba10;
+pub const TERRAIN_ADD_NEW_COORD_INFO_BYTES: u32 = 956;
+/// `TerrainOut::fill_coord_info_mapper`, which publishes the row-major pointer plane.
+pub const TERRAIN_FILL_COORD_INFO_MAPPER_VA: u32 = 0x0086_beb0;
+pub const TERRAIN_FILL_COORD_INFO_MAPPER_BYTES: u32 = 178;
+/// `CoordInfo::CoordInfo`, proving that the flags word starts at zero.
+pub const TERRAIN_COORD_INFO_CTOR_VA: u32 = 0x0084_d490;
+pub const TERRAIN_COORD_INFO_CTOR_BYTES: u32 = 164;
 
 /// Exact supported-PE body identity for `0x008544a0..0x00854564`.
 pub const TERRAIN_FIND_TCOORD_Z_SHA256: &str =
@@ -82,6 +94,21 @@ pub const TERRAIN_REFRESH_DATA_SHA256: &str =
     "6b97b38457dfc025efe5f050cc37b4123be39fd4fe25d9ccf56a6bceb02d7ec5";
 pub const FRACTAL_INIT_SHA256: &str =
     "44e3a9c196de3c8be8291398dd6608976285fdffb3937180bf697b16ba380546";
+pub const TERRAIN_GENERATE_LAND_LISTS_SHA256: &str =
+    "ee12fedf562dff5c1f76424883b3ecb02495c3ab101a066519c70bd8d25cee60";
+pub const TERRAIN_ADD_NEW_COORD_INFO_SHA256: &str =
+    "be78a6cf99430a312db6c87383cf174df1f6e1dbbe7bf99aac0e5ba920c7bbb2";
+pub const TERRAIN_FILL_COORD_INFO_MAPPER_SHA256: &str =
+    "f0e859ce0718c7768ac267545c80d2d68a4b946ff98903851c8acdd32b489b86";
+pub const TERRAIN_COORD_INFO_CTOR_SHA256: &str =
+    "7f245e88623b7d50a0b2b5b096041c9dc42b123afd0cab2c418078c45e5f3804";
+
+/// `0x00adcaf4`, consumed as 24 signed dword X offsets by `add_new_coord_info`.
+pub const TERRAIN_COORD_INFO_NEIGHBOR_X_SHA256: &str =
+    "e62c4912f7f7ecd8429aff8e54ba126652c04a9415eae8483f877b4b813dd36c";
+/// `0x00adc404`, consumed as 24 signed dword Y offsets by `add_new_coord_info`.
+pub const TERRAIN_COORD_INFO_NEIGHBOR_Y_SHA256: &str =
+    "253d6dedba6291c57f618feaaec4b772b4f28d412911712b22fe0d2f9352bd45";
 
 /// Retail normal terrain is four render vertices per WCoord.  The height query hardcodes
 /// that same factor at `0x0085450e`/`0x00854517`.
@@ -106,12 +133,50 @@ pub struct TerrainFractalAuthority {
     pub initialized_source_digest: [u8; 32],
 }
 
+/// Source-derived WCoord `CoordInfo::flags` plane published by `generate_land_lists`.
+///
+/// The fields are private so the canonical `from_refresh_data` path cannot accept a caller-
+/// supplied flags plane. Retail's list allocation and presentation children are deliberately
+/// not materialized: `fill_coord_info_mapper` projects exactly one initialized CoordInfo per
+/// WCoord into this row-major plane, and neither list topology nor those child pointers affect
+/// the flags consumed by terrain height generation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainCoordInfoFlagsAuthority {
+    flags: Vec<u16>,
+    source_digest: [u8; 32],
+    authority_digest: [u8; 32],
+}
+
+/// Evidence and branch census for exact `CoordInfo::flags` reconstruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainCoordInfoFlagsReceipt {
+    pub generate_land_lists_va: u32,
+    pub add_new_coord_info_va: u32,
+    pub fill_coord_info_mapper_va: u32,
+    pub coord_info_ctor_va: u32,
+    pub xs: i32,
+    pub ys: i32,
+    pub cells: u32,
+    /// Current cells whose COAST land-class bit (or raw land value 3) sets `0x8004`.
+    pub current_coast_cells: u32,
+    /// Cells whose ORIG_COAST bit contributes height-zero flag `0x0004`.
+    pub original_coast_cells: u32,
+    /// Deep-water (`land == 2`) cells carrying `0x1000`.
+    pub deep_water_cells: u32,
+    /// Deep-water cells with effective coast in the native 24-neighbor radius-two scan.
+    pub deep_water_near_coast_cells: u32,
+    /// Fertile (`land == 0`) cells with effective coast in the first eight offsets.
+    pub fertile_near_coast_cells: u32,
+    pub source_digest: [u8; 32],
+    pub authority_digest: [u8; 32],
+}
+
 /// Exact completed-worldgen inputs consumed by the height-only `generate_land` slice.
 ///
 /// Both initialized Fractals are sampled by the shipped body. `coord_info_flags` is the
-/// WCoord-resolution `CoordInfo::flags` grid created by `generate_land_lists`. Reconstructing
-/// the Fractal states and those flags from map seed and canonical World is the explicit
-/// upstream residual; this boundary never admits sampled grids, SVX Z, or height-plane words.
+/// WCoord-resolution `CoordInfo::flags` grid created by `generate_land_lists`. The canonical
+/// constructor derives all three from replay seed and World; this lower boundary remains public
+/// for focused body tests, but never admits sampled grids, SVX Z, or height-plane words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerrainHeightWorldgenInputs {
     pub height_fractal: TerrainFractalAuthority,
@@ -127,15 +192,14 @@ pub struct TerrainHeightWorldgenInputs {
     pub coord_info_source_digest: [u8; 32],
 }
 
-/// Non-Fractal completed-worldgen sources retained while `CoordInfo` and installed
-/// height scalars remain separate exact producers.
+/// Non-Fractal completed-worldgen sources retained while installed height scalars remain
+/// separate exact producers. The CoordInfo authority is sealed and source-derived from World.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerrainHeightNonFractalInputs {
-    pub coord_info_flags: Vec<u16>,
+    coord_info: TerrainCoordInfoFlagsAuthority,
     pub land_height_bits: u32,
     pub mountain_height_bits: u32,
     pub height_scale_bits: u32,
-    pub coord_info_source_digest: [u8; 32],
 }
 
 /// Evidence for the two `Fractal::init` calls in `TerrainOut::refresh_data`.
@@ -262,6 +326,52 @@ impl TerrainFractalAuthority {
     pub fn get_height(&self, x: i32, y: i32) -> Result<u8, TerrainHeightError> {
         validate_fractal_authority(self)?;
         fractal_get_height(self, x, y)
+    }
+}
+
+impl TerrainCoordInfoFlagsAuthority {
+    /// Execute the flags-producing portion of `generate_land_lists` from final canonical World.
+    ///
+    /// Retail's mapper allocates `xs * xs`, loops X by `xs` for both axes, and the preceding
+    /// two diagonal list traversals are memory-safe only on the shipped square-map domain.
+    /// Rectangular input is therefore rejected instead of being silently generalized.
+    pub fn from_world(
+        world: &World,
+    ) -> Result<(Self, TerrainCoordInfoFlagsReceipt), TerrainHeightError> {
+        derive_coord_info_flags(world)
+    }
+
+    pub fn flags(&self) -> &[u16] {
+        &self.flags
+    }
+
+    pub fn source_digest(&self) -> [u8; 32] {
+        self.source_digest
+    }
+
+    pub fn authority_digest(&self) -> [u8; 32] {
+        self.authority_digest
+    }
+}
+
+impl TerrainHeightNonFractalInputs {
+    /// Join final World-derived CoordInfo with the three still-explicit installed scalar words.
+    pub fn from_world(
+        world: &World,
+        land_height_bits: u32,
+        mountain_height_bits: u32,
+        height_scale_bits: u32,
+    ) -> Result<(Self, TerrainCoordInfoFlagsReceipt), TerrainHeightError> {
+        let (coord_info, receipt) = TerrainCoordInfoFlagsAuthority::from_world(world)?;
+        Ok((
+            Self {
+                coord_info,
+                land_height_bits,
+                mountain_height_bits,
+                height_scale_bits,
+            },
+            receipt,
+        ))
     }
 }
 
@@ -785,6 +895,15 @@ pub enum TerrainHeightError {
         expected: usize,
         actual: usize,
     },
+    CoordInfoWDataShapeMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    CoordInfoNativeTraversalRequiresSquare {
+        xs: i32,
+        ys: i32,
+    },
+    CoordInfoAuthorityMismatch,
     MountainCatalogShapeMismatch {
         sources: usize,
         displacement_tgas: usize,
@@ -825,6 +944,195 @@ impl fmt::Display for TerrainHeightError {
 
 impl std::error::Error for TerrainHeightError {}
 
+// `TerrainList::add_new_coord_info` reads these two 24-dword tables in lockstep. The first
+// eight are the radius-one ring used by fertile land; deep water continues through all 24
+// offsets, adding the radius-two ring. Order matters for the native early return even though
+// this flags-only projection has the same final word for every hit.
+const COORD_INFO_NEIGHBOR_X: [i32; 24] = [
+    -1, 0, 1, 1, 1, 0, -1, -1, -1, 0, 1, 2, 2, 2, 1, 0, -1, -2, -2, -2, -2, 2, 2, -2,
+];
+const COORD_INFO_NEIGHBOR_Y: [i32; 24] = [
+    -1, -1, -1, 0, 1, 1, 1, 0, -2, -2, -2, -1, 0, 1, 2, 2, 2, 1, 0, -1, -2, -2, 2, 2,
+];
+
+fn derive_coord_info_flags(
+    world: &World,
+) -> Result<(TerrainCoordInfoFlagsAuthority, TerrainCoordInfoFlagsReceipt), TerrainHeightError> {
+    validate_coord_info_world_shape(world)?;
+
+    let mut flags = Vec::with_capacity(world.size as usize);
+    let mut current_coast_cells = 0u32;
+    let mut original_coast_cells = 0u32;
+    let mut deep_water_cells = 0u32;
+    let mut deep_water_near_coast_cells = 0u32;
+    let mut fertile_near_coast_cells = 0u32;
+
+    for wy in 0..world.ys {
+        for wx in 0..world.xs {
+            let cell = world.wdata(wx, wy);
+            let effective_land = if coord_info_effective_coast(cell.flags, cell.land) {
+                3
+            } else {
+                i32::from(cell.land)
+            };
+            let mut coord_flags = 0u16;
+
+            // 0x0084bb94..0x0084bc39. A current effective coast receives the otherwise
+            // presentation-facing 0x8000 bit and enters the common height-zero 0x0004 path.
+            // Non-current cells enter that path only when World retains ORIG_COAST.
+            if effective_land == 3 {
+                coord_flags |= 0x8004;
+                current_coast_cells += 1;
+            } else if cell.flags & wflag::ORIG_COAST != 0 {
+                coord_flags |= 0x0004;
+            }
+            if cell.flags & wflag::ORIG_COAST != 0 {
+                original_coast_cells += 1;
+            }
+
+            if effective_land == 2 {
+                // 0x0084bc39..0x0084bd42. OCEAN always supplies the negative-depth selector;
+                // 0x0080 additionally records effective coast anywhere in the 24-cell scan.
+                coord_flags |= 0x1000;
+                deep_water_cells += 1;
+                if coord_info_has_coast_neighbor(world, wx, wy, 24) {
+                    coord_flags |= 0x0080;
+                    deep_water_near_coast_cells += 1;
+                }
+            } else if effective_land == 0 && coord_info_has_coast_neighbor(world, wx, wy, 8) {
+                // 0x0084bd42..0x0084bdb9. This is the bit consumed by the coast-distance
+                // blend; only the first radius-one ring is searched for fertile land.
+                coord_flags |= 0x0020;
+                fertile_near_coast_cells += 1;
+            }
+
+            flags.push(coord_flags);
+        }
+    }
+
+    let source_digest = coord_info_world_source_digest(world);
+    let authority_digest = coord_info_flags_authority_digest(source_digest, &flags);
+    let authority = TerrainCoordInfoFlagsAuthority {
+        flags,
+        source_digest,
+        authority_digest,
+    };
+    let receipt = TerrainCoordInfoFlagsReceipt {
+        generate_land_lists_va: TERRAIN_GENERATE_LAND_LISTS_VA,
+        add_new_coord_info_va: TERRAIN_ADD_NEW_COORD_INFO_VA,
+        fill_coord_info_mapper_va: TERRAIN_FILL_COORD_INFO_MAPPER_VA,
+        coord_info_ctor_va: TERRAIN_COORD_INFO_CTOR_VA,
+        xs: world.xs,
+        ys: world.ys,
+        cells: world.size as u32,
+        current_coast_cells,
+        original_coast_cells,
+        deep_water_cells,
+        deep_water_near_coast_cells,
+        fertile_near_coast_cells,
+        source_digest,
+        authority_digest,
+    };
+    Ok((authority, receipt))
+}
+
+fn coord_info_effective_coast(flags: u16, land: i8) -> bool {
+    flags & wflag::COAST != 0 || land == 3
+}
+
+fn coord_info_has_coast_neighbor(world: &World, wx: i32, wy: i32, count: usize) -> bool {
+    COORD_INFO_NEIGHBOR_X[..count]
+        .iter()
+        .zip(&COORD_INFO_NEIGHBOR_Y[..count])
+        .any(|(&dx, &dy)| {
+            let nx = wx + dx;
+            let ny = wy + dy;
+            nx >= 0 && ny >= 0 && nx < world.xs && ny < world.ys && {
+                let neighbor = world.wdata(nx, ny);
+                coord_info_effective_coast(neighbor.flags, neighbor.land)
+            }
+        })
+}
+
+fn validate_coord_info_world_shape(world: &World) -> Result<(), TerrainHeightError> {
+    validate_world_shape(world)?;
+    let expected = world
+        .xs
+        .checked_mul(world.ys)
+        .ok_or(TerrainHeightError::ShapeOverflow)?;
+    if world.size != expected || world.wdata.len() != expected as usize {
+        return Err(TerrainHeightError::CoordInfoWDataShapeMismatch {
+            expected: expected as usize,
+            actual: world.wdata.len(),
+        });
+    }
+    if world.xs != world.ys {
+        return Err(TerrainHeightError::CoordInfoNativeTraversalRequiresSquare {
+            xs: world.xs,
+            ys: world.ys,
+        });
+    }
+    Ok(())
+}
+
+fn coord_info_world_source_digest(world: &World) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(256 + world.wdata.len() * 4);
+    bytes.extend_from_slice(b"don-terrain-coord-info-world-source-v1\0");
+    for body in [
+        TERRAIN_GENERATE_LAND_LISTS_SHA256,
+        TERRAIN_ADD_NEW_COORD_INFO_SHA256,
+        TERRAIN_FILL_COORD_INFO_MAPPER_SHA256,
+        TERRAIN_COORD_INFO_CTOR_SHA256,
+        TERRAIN_COORD_INFO_NEIGHBOR_X_SHA256,
+        TERRAIN_COORD_INFO_NEIGHBOR_Y_SHA256,
+    ] {
+        bytes.extend_from_slice(body.as_bytes());
+    }
+    for value in [world.xs, world.ys, world.size] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    // These are the only World bytes read by the bounded generate/add projection: flags and
+    // land drive CoordInfo flags, while land_sub participates in the retained list selection.
+    for cell in &world.wdata {
+        bytes.extend_from_slice(&cell.flags.to_le_bytes());
+        bytes.push(cell.land as u8);
+        bytes.push(cell.land_sub);
+    }
+    sha256(&bytes)
+}
+
+fn coord_info_flags_authority_digest(source_digest: [u8; 32], flags: &[u16]) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(64 + flags.len() * 2);
+    bytes.extend_from_slice(b"don-terrain-coord-info-flags-v1\0");
+    bytes.extend_from_slice(&source_digest);
+    for &value in flags {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    sha256(&bytes)
+}
+
+fn validate_coord_info_authority(
+    world: &World,
+    authority: &TerrainCoordInfoFlagsAuthority,
+) -> Result<[u8; 32], TerrainHeightError> {
+    validate_coord_info_world_shape(world)?;
+    if authority.flags.len() != world.size as usize {
+        return Err(TerrainHeightError::CoordInfoFlagsLengthMismatch {
+            expected: world.size as usize,
+            actual: authority.flags.len(),
+        });
+    }
+    let expected_source = coord_info_world_source_digest(world);
+    let expected_authority = coord_info_flags_authority_digest(expected_source, &authority.flags);
+    if authority.source_digest == [0; 32]
+        || authority.source_digest != expected_source
+        || authority.authority_digest != expected_authority
+    {
+        return Err(TerrainHeightError::CoordInfoAuthorityMismatch);
+    }
+    Ok(expected_authority)
+}
+
 fn derive_refresh_worldgen_inputs(
     world: &World,
     replay_payload_sha256: [u8; 32],
@@ -837,6 +1145,7 @@ fn derive_refresh_worldgen_inputs(
     ),
     TerrainHeightError,
 > {
+    let coord_info_authority_digest = validate_coord_info_authority(world, &remaining.coord_info)?;
     let xs = world
         .tile_xs
         .checked_add(1)
@@ -904,11 +1213,11 @@ fn derive_refresh_worldgen_inputs(
         TerrainHeightWorldgenInputs {
             height_fractal,
             height_fractal_detail,
-            coord_info_flags: remaining.coord_info_flags,
+            coord_info_flags: remaining.coord_info.flags,
             land_height_bits: remaining.land_height_bits,
             mountain_height_bits: remaining.mountain_height_bits,
             height_scale_bits: remaining.height_scale_bits,
-            coord_info_source_digest: remaining.coord_info_source_digest,
+            coord_info_source_digest: coord_info_authority_digest,
         },
         receipt,
     ))
@@ -1377,13 +1686,67 @@ mod refresh_fractal_tests {
     use super::*;
 
     fn remaining(world: &World) -> TerrainHeightNonFractalInputs {
-        TerrainHeightNonFractalInputs {
-            coord_info_flags: vec![0; world.size as usize],
-            land_height_bits: 30.0f32.to_bits(),
-            mountain_height_bits: (-303.0f32).to_bits(),
-            height_scale_bits: 1.0f32.to_bits(),
-            coord_info_source_digest: [0xa5; 32],
-        }
+        TerrainHeightNonFractalInputs::from_world(
+            world,
+            30.0f32.to_bits(),
+            (-303.0f32).to_bits(),
+            1.0f32.to_bits(),
+        )
+        .unwrap()
+        .0
+    }
+
+    #[test]
+    fn coord_info_flags_follow_current_original_and_neighbor_land_branches() {
+        let mut world = World::init_default_rules(7, 7);
+        world.wdata_mut(3, 3).flags = wflag::COAST | wflag::ORIG_COAST;
+        world.wdata_mut(2, 3).land = 0;
+        world.wdata_mut(1, 3).land = 0;
+        world.wdata_mut(4, 3).flags = wflag::ORIG_COAST;
+        world.wdata_mut(4, 3).land = 1;
+        world.wdata_mut(5, 3).land = 3;
+
+        let (authority, receipt) = TerrainCoordInfoFlagsAuthority::from_world(&world).unwrap();
+        let at = |x: i32, y: i32| authority.flags()[(y * world.xs + x) as usize];
+
+        assert_eq!(at(3, 3), 0x8004);
+        assert_eq!(at(4, 3), 0x0004);
+        assert_eq!(at(5, 3), 0x8004);
+        assert_eq!(at(2, 3), 0x0020);
+        assert_eq!(at(1, 3), 0x0000); // radius two is not searched for fertile land
+        assert_eq!(at(3, 1), 0x1080); // radius-two coast is searched for deep water
+        assert_eq!(at(0, 0), 0x1000);
+        assert_eq!(receipt.cells, 49);
+        assert_eq!(receipt.current_coast_cells, 2);
+        assert_eq!(receipt.original_coast_cells, 2);
+        assert_eq!(receipt.deep_water_cells, 44);
+        assert_eq!(receipt.fertile_near_coast_cells, 1);
+        assert_ne!(receipt.deep_water_near_coast_cells, 0);
+        assert_eq!(authority.source_digest(), receipt.source_digest);
+        assert_eq!(authority.authority_digest(), receipt.authority_digest);
+    }
+
+    #[test]
+    fn coord_info_authority_is_bound_to_world_source_and_square_native_domain() {
+        let world = World::init_default_rules(4, 4);
+        let (authority, _) = TerrainCoordInfoFlagsAuthority::from_world(&world).unwrap();
+        assert_eq!(
+            validate_coord_info_authority(&world, &authority).unwrap(),
+            authority.authority_digest()
+        );
+
+        let mut changed = world.clone();
+        changed.wdata_mut(0, 0).land_sub = 1;
+        assert_eq!(
+            validate_coord_info_authority(&changed, &authority),
+            Err(TerrainHeightError::CoordInfoAuthorityMismatch)
+        );
+
+        let rectangular = World::init_default_rules(4, 3);
+        assert!(matches!(
+            TerrainCoordInfoFlagsAuthority::from_world(&rectangular),
+            Err(TerrainHeightError::CoordInfoNativeTraversalRequiresSquare { xs: 4, ys: 3 })
+        ));
     }
 
     #[test]

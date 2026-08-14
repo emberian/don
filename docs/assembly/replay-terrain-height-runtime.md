@@ -18,10 +18,10 @@ admitted by this producer.
 
 The producer boundary is intentionally upstream of render-resolution samples. The canonical
 constructor now derives both initialized `Fractal` byte planes from the parsed replay initial
-state and canonical World. The remaining downstream inputs are the WCoord-resolution
-`CoordInfo::flags` grid built by `generate_land_lists` and three installed scalar words
-(`land_height`, mountain height, and height scale). Keeping those explicit means a
-tileset/configuration change cannot silently reuse a plane.
+state and canonical World. A sealed producer now derives the WCoord-resolution
+`CoordInfo::flags` grid from the same final World. The remaining non-map inputs are three
+installed scalar words (`land_height`, mountain height, and height scale). Keeping those
+explicit means a tileset/configuration change cannot silently reuse a plane.
 
 ## Exact pre-mountain producer
 
@@ -33,6 +33,10 @@ supported-PE bodies:
 | `TerrainOut::refresh_data()` | `0x00870050` | 867 | `6b97b38457dfc025efe5f050cc37b4123be39fd4fe25d9ccf56a6bceb02d7ec5` |
 | `Fractal::init(...)` | `0x006aa2d0` | 1,428 | `44e3a9c196de3c8be8291398dd6608976285fdffb3937180bf697b16ba380546` |
 | `Fractal::get_height(int,int)` | `0x006aa870` | 360 | `93057be843aa676b22710c7b79d22861e052c889fbcc2647aaea061dde4dbe02` |
+| `TerrainOut::generate_land_lists()` | `0x0085f6a0` | 550 | `ee12fedf562dff5c1f76424883b3ecb02495c3ab101a066519c70bd8d25cee60` |
+| `TerrainList::add_new_coord_info(...)` | `0x0084ba10` | 956 | `be78a6cf99430a312db6c87383cf174df1f6e1dbbe7bf99aac0e5ba920c7bbb2` |
+| `CoordInfo::CoordInfo(...)` | `0x0084d490` | 164 | `7f245e88623b7d50a0b2b5b096041c9dc42b123afd0cab2c418078c45e5f3804` |
+| `TerrainOut::fill_coord_info_mapper()` | `0x0086beb0` | 178 | `f0e859ce0718c7768ac267545c80d2d68a4b946ff98903851c8acdd32b489b86` |
 | `TerrainOut::generate_land(int,int)` | `0x0085f8d0` | 2,789 | `5cc1f8e243fcf7556492ca1215df4785a5bd810c3550c7a5a0cb27b79e38445a` |
 | `TerrainOut::get_vert_codes` | `0x0086bf70` | 609 | `8eee1044d69671f26222f6801813dbd9e72547a6f9dca4a7b9c4cfbfedaf6695` |
 | `TerrainOut::determine_land_height_color` | `0x0086c1e0` | 434 | `720e687b621b9fb72acb922e6097956462adb0fe31b59d4afd589cae57a1eb68` |
@@ -59,6 +63,27 @@ to zero (making the detail request -2, which `Fractal::init` clamps to zero). Ea
 is independently reseeded; no map RNG handoff is consumed. The receipt binds the replay
 payload, exact call sites, requested smooths, seeds, full guarded planes, draw counts, final
 private RNG states, flags, increments, and authority digests.
+
+`TerrainCoordInfoFlagsAuthority::from_world` executes the flags-producing projection of
+`generate_land_lists` directly from final `WData`. `CoordInfo` construction zeros its flags
+word. `add_new_coord_info` then applies these exact branches:
+
+- A current COAST cell (or raw land value 3) receives `0x8004`; ORIG_COAST on any other cell
+  contributes `0x0004`.
+- Deep water (`land == 2`) always receives `0x1000`. It additionally receives `0x0080` when
+  any effective coast appears in the shipped 24-offset radius-two scan.
+- Fertile land (`land == 0`) receives `0x0020` only when effective coast appears in the first
+  eight radius-one offsets.
+
+The source digest binds dimensions plus every read `WData` flags/land/land-sub tuple, all four
+function bodies, and both 96-byte signed-offset tables (`0x00adcaf4` X SHA-256
+`e62c4912f7f7ecd8429aff8e54ba126652c04a9415eae8483f877b4b813dd36c`, `0x00adc404` Y
+SHA-256 `253d6dedba6291c57f618feaaec4b772b4f28d412911712b22fe0d2f9352bd45`).
+The authority digest separately binds every output word. List allocation and presentation
+children are omitted because `fill_coord_info_mapper` projects exactly one node per WCoord and
+does not mutate flags. The native diagonal traversals and mapper are square-only—the mapper
+allocates `xs*xs` and loops `xs` on both axes—so rectangular Worlds are rejected at this
+producer instead of claiming a generalized retail domain.
 
 1. `get_vert_codes(...,1)` ORs `TData::RIVER` across the four tiles touching a vertex. Any
    hit locks the vertex and returns height zero.
@@ -126,8 +151,8 @@ source-vertex, matched, and unmatched counts.
 This closes the deterministic height operation once upstream state exists. Exact mode-5
 mountain placement is now available in `MountainAddRuntime`; reaching this seam for Great
 Lakes still requires the 16 installed displacement TGAs. The other explicit residuals are
-the exact CoordInfo/scalar producers feeding the pre-mountain plane and the remaining
-map-generation path into those retained placements.
+the three installed scalar producers feeding the pre-mountain plane and the remaining
+map-generation path into a final World and those retained placements.
 
 ## Exact shipped body
 
