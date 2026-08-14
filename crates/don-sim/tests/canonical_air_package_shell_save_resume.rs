@@ -79,6 +79,11 @@ const RETAIL_PATROL_UNIT_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPa
     package_serial: 6_090,
     play: 0,
 };
+const RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 107_059,
+    package_serial: 17_887,
+    play: 1,
+};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -200,6 +205,21 @@ fn retail_patrol_unit_flight_commands() -> Vec<Vec<u8>> {
         "3a06e30e93d2",
         "4a48001000000000000000",
         "48043459000029d70000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_shift_airbase_flight_commands() -> Vec<Vec<u8>> {
+    [
+        "00020043083c08",
+        "1cfb070000010000000100000000000000000000000a000000",
+        "4f0008010000010000",
+        "000000",
+        "1cfb070000010000000100000000000000000000000a000000",
+        "39a02747dfb9fb6d7901000000c74931791cbec031840db3d7c82d9b844e918b93cec7ca859603722f895396350edc7fd30431ba1280259ff701000400574931bc",
+        "4a48000e00000000000000",
+        "48040001010050650000",
     ]
     .map(hex)
     .to_vec()
@@ -868,6 +888,75 @@ fn build_unit_flight_fixture() -> (Sim, Handle) {
     (sim, target.unwrap())
 }
 
+fn shift_airbase_flight_fixture() -> (Sim, [usize; 2], usize) {
+    let mut sim = Sim::new(0x1c_17887, 16);
+    let mut players = PlayerTable::new();
+    players.seat(1, 1, 0, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY.game_frame;
+
+    for local in 0..=115u16 {
+        assert_eq!(
+            sim.spawn_build(
+                0,
+                build_record(
+                    0,
+                    2_000 + local as i16,
+                    0x8800 + local,
+                    (36_000 + i32::from(local), 37_000),
+                    None,
+                ),
+            ),
+            usize::from(local),
+        );
+    }
+    for local in 0..=43u16 {
+        assert_eq!(
+            sim.spawn_build(
+                1,
+                build_record(
+                    1,
+                    2_000 + local as i16,
+                    0x9100 + local,
+                    (46_000 + i32::from(local), 47_000),
+                    None,
+                ),
+            ),
+            116 + usize::from(local),
+        );
+    }
+    const SELECTED_ROWS: [usize; 2] = [115, 108];
+    const TARGET_ROW: usize = 159;
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x17887,
+        composition_digest: [0x87; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: Vec::new(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x107059,
+        composition_digest: [0x59; 32],
+        units: Vec::new(),
+        builds: SELECTED_ROWS
+            .iter()
+            .map(|&row| BuildSelectionAuthority {
+                identity: BuildSelectionIdentity {
+                    row: row as u32,
+                    who: 0,
+                    o: 2_000 + row as i16,
+                    uid: sim.builds[row].uid,
+                },
+                role: 0x200,
+                is_airbase: true,
+            })
+            .collect(),
+        busy_spells: Vec::new(),
+    });
+    (sim, SELECTED_ROWS, TARGET_ROW)
+}
+
 fn install_unit_target_strafe(sim: &mut Sim, actor: Handle, target: Handle) {
     let actor_row = sim.world.row_of(actor).unwrap();
     let target_row = sim.world.row_of(target).unwrap();
@@ -1028,6 +1117,140 @@ fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
             right.world.units.angle()[right_row]
         );
     }
+}
+
+#[test]
+fn exact_retail_explicit_then_cached_shift_airbase_flights_are_no_action_and_resumable() {
+    let (mut sim, selected_rows, target_row) = shift_airbase_flight_fixture();
+    let commands = retail_shift_airbase_flight_commands();
+    let before_rng = sim.world.random.state();
+    let before_builds = sim.builds.iter().map(BuildData::image).collect::<Vec<_>>();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.command_image, commands);
+    assert_eq!(receipt.flight_no_action.len(), 2);
+    assert!(receipt.flight_strafe.is_empty());
+    assert!(receipt.flight_fresh_strafe.is_empty());
+    assert!(receipt.air.is_empty());
+    for (flight, group_index) in receipt.flight_no_action.iter().zip([0, 3]) {
+        assert_eq!(flight.position.group_command_index, group_index);
+        assert_eq!(flight.request.shift, 1);
+        assert_eq!(flight.target.address(), (1, 2_043));
+        assert!(matches!(
+            flight.target.generation,
+            don_sim::systems::air_group_action_transaction::CanonicalObjectGeneration::BuildRow(
+                159
+            )
+        ));
+        assert_eq!(flight.target_uid, sim.builds[target_row].uid);
+        assert_eq!(flight.target_position, sim.builds[target_row].position());
+        assert_eq!(flight.selected_airbases.len(), 2);
+        assert_eq!(
+            flight
+                .selected_airbases
+                .iter()
+                .map(|identity| (identity.who, identity.o, identity.row))
+                .collect::<Vec<_>>(),
+            selected_rows
+                .iter()
+                .map(|&row| (0, 2_000 + row as i16, row as u32))
+                .collect::<Vec<_>>(),
+        );
+        assert!(flight.contained_non_missiles.is_empty());
+    }
+    assert_eq!(sim.world.random.state(), before_rng);
+    assert_eq!(
+        sim.builds.iter().map(BuildData::image).collect::<Vec<_>>(),
+        before_builds,
+    );
+
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(save_sim(&loaded).unwrap(), saved);
+}
+
+#[test]
+fn changed_shift_flight_target_rolls_back_both_airbase_selections() {
+    let (mut sim, _, target_row) = shift_airbase_flight_fixture();
+    let commands = retail_shift_airbase_flight_commands();
+    let players = std::array::from_fn(|play| (play == 1).then_some(0));
+    let map_tiles = (sim.map.world.xs, sim.map.world.ys);
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        map_tiles,
+        RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_groups = sim.groups.clone();
+    let before_cache = sim.command_package_state.clone();
+    sim.builds[target_row].uid ^= 1;
+
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            map_tiles,
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.groups.last_group, before_groups.last_group);
+    assert_eq!(sim.groups.proc_group, before_groups.proc_group);
+    assert_eq!(sim.command_package_state, before_cache);
+}
+
+#[test]
+fn shifted_airbase_with_containment_remains_outside_the_no_action_cone() {
+    let (mut sim, selected_rows, _) = shift_airbase_flight_fixture();
+    let child = sim.spawn_unit(0, PLANE_TYPE, 38_000, 39_000, 4).unwrap();
+    let child_row = sim.world.row_of(child).unwrap();
+    let child_o = sim.world.units.o()[child_row];
+    sim.world.units.inside_up_mut()[child_row] = 2_000 + selected_rows[0] as i16;
+    sim.world.units.inside_up_who_mut()[child_row] = 0;
+    sim.world.units.inside_down_mut()[child_row] = -1;
+    sim.world.units.inside_down_who_mut()[child_row] = -1;
+    sim.builds[selected_rows[0]].other[0x28..0x2a].copy_from_slice(&child_o.to_le_bytes());
+    sim.builds[selected_rows[0]].other[0x3e] = 0;
+    let selected = sim.air_group_authority.builds[0].identity;
+    let before_groups = sim.groups.clone();
+    let before_cache = sim.command_package_state.clone();
+    let before_rng = sim.world.random.state();
+
+    assert!(matches!(
+        sim.process_air_replay_batch(
+            RETAIL_SHIFT_AIRBASE_FLIGHT_IDENTITY,
+            &retail_shift_airbase_flight_commands(),
+        ),
+        Err(CanonicalAirPackageShellError::Flight(
+            don_sim::systems::canonical_air_package_shell::CanonicalFlightNoActionError::ShiftRequiresEmptyAirbase(identity)
+        )) if identity == selected,
+    ));
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.groups.last_group, before_groups.last_group);
+    assert_eq!(sim.groups.proc_group, before_groups.proc_group);
+    assert_eq!(sim.command_package_state, before_cache);
+    assert_eq!(sim.world.random.state(), before_rng);
 }
 
 #[test]

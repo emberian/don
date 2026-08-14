@@ -293,5 +293,36 @@ The full corpus has 263 Unit-to-Unit ATTACK/no-modifier Flight pairs across 25 f
 explicit selections and 108 cached selections, with effective group sizes from 1 through 128.
 All 263 packages fit the bounded shell and exactly one is the QueueNew Patrol package above.
 This closes the measured Unit-to-Unit execution cone under authoritative current-order facts;
-standalone Patrol, QueueFirst, unbound fresh Flight, non-STRAFE actors, modifiers, and general
-Flight remain typed refusals.
+standalone Patrol, QueueFirst, unbound fresh Flight, non-STRAFE actors, and general Flight remain
+typed refusals.
+
+## Cycle 20: empty-Airbase Shift Flight no-action
+
+After the four no-modifier ATTACK cohorts, 41 opcode-28 pairs remain in the full corpus. Their
+exact wire shapes are 18 order-1 requests and 23 Shift+ATTACK requests; control and alt are zero
+throughout. The largest remaining selection/target shape is 22 Shift+ATTACK Build-to-Build pairs
+across three files. Two are explicit and 20 reuse the cache, with effective selection sizes
+`{1:1, 2:10, 4:11}`; all 22 packages use only the bounded AIR shell grammar. The other residuals
+remain red: 13 Unit-to-Build order-1, five Build-to-Build order-1, and one Unit-to-Build
+Shift+ATTACK pair.
+
+The executable bounds an exact no-action subcone. `Group::action_flight` passes all three
+modifiers to `Group::action_launch_flight` for a Building group at
+`0x006FB361..0x006FB375`. In the delegated body the Shift argument is first consulted at
+`0x006FC374`, inside the selected Airbase's contained-object loop. A selected Airbase with empty
+containment never reaches that modifier-dependent child logic and installs no Flight order. The
+canonical host therefore admits Shift exactly when every authoritative selected Airbase is empty;
+any contained child is a typed refusal. Target identity, Build images, selection authority,
+Groups, cache, command bytes, and package shell remain compare-and-swap inputs.
+
+The exact two-pair witness is
+`Playback___2018.11.17_13_21_42__Sat_.rcx` (SHA-256
+`c006ecb860273605d2b48bf69f5dcb048596de5fc748aa664fa0a04452df2da0`), turn index 17,886,
+turn 17,887, play 1, frame 107,059, opcodes `[0,28,79,0,28,57,74,72]`. Group
+`00020043083c08` explicitly selects owner-0 Builds 2,115 and 2,108; cached Group `000000`
+reuses them. Both Flight packets are
+`1cfb070000010000000100000000000000000000000a000000`: Shift+ATTACK against owner 1 Build
+2,043. The exact package publishes only its two Group/cache selections with unchanged Builds and
+RNG, round-trips through save/load byte-identically, and a changed target UID after whole-package
+prepare rolls back both selections. Shift on Unit selections, populated Airbases, order 1,
+control/alt, and general Flight remain red.

@@ -139,8 +139,8 @@ impl From<CanonicalPatrolFlightError> for CanonicalAirPackageShellError {
 }
 
 /// An exact retail Flight no-action subdomain: selected Airbases, ATTACK to a live
-/// generational Unit or Build, no modifier, and a complete containment walk with no Nuclear
-/// Missile.
+/// generational Unit or Build, no modifier or Shift with empty containment, and a complete
+/// containment walk with no Nuclear Missile.
 /// Retail filters every child at the type-315 test before reading busy/mana/range/order state, so
 /// this arm mutates only the opcode-0 Group/cache selection and has no Flight order tail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +168,7 @@ pub enum CanonicalFlightNoActionError {
     EmptySelection,
     NonBuildingSelection,
     NonAirbaseSelection(BuildSelectionIdentity),
+    ShiftRequiresEmptyAirbase(BuildSelectionIdentity),
     InvalidTarget { who: i32, o: i32 },
     InvalidContainment { who: i8, o: i16 },
     ContainmentCycle { who: u8, o: i16 },
@@ -390,7 +391,7 @@ fn decode_flight_attack_no_action(
         orders: read_i32(command, 21),
     };
     if request.orders != ATTACK_ORDER_INDEX
-        || request.shift != 0
+        || !matches!(request.shift, 0 | 1)
         || request.ctrl != 0
         || request.alt != 0
     {
@@ -499,6 +500,9 @@ fn prepare_flight_no_action(
     }
     let selected_group = &selection.groups_after.list[selection.group_slot];
     if selected_group.buildings == 0 || selected_group.disband != 0 {
+        if request.shift != 0 {
+            return Err(CanonicalFlightNoActionError::UnsupportedRequest(request));
+        }
         return Err(CanonicalFlightNoActionError::NonBuildingSelection);
     }
 
@@ -511,6 +515,11 @@ fn prepare_flight_no_action(
         };
         if !member.authority.is_airbase {
             return Err(CanonicalFlightNoActionError::NonAirbaseSelection(
+                member.authority.identity,
+            ));
+        }
+        if request.shift == 1 && member.image.inside_down >= 0 {
+            return Err(CanonicalFlightNoActionError::ShiftRequiresEmptyAirbase(
                 member.authority.identity,
             ));
         }
@@ -630,6 +639,7 @@ impl CanonicalFlightNoActionReceipt {
         self.position.action_command_index == self.position.group_command_index + 1
             && request == self.request
             && !self.selected_airbases.is_empty()
+            && (request.shift == 0 || self.contained_non_missiles.is_empty())
             && group.owner == self.selected_airbases[0].who
             && self.target.is_well_formed()
             && i32::from(self.target.owner) == self.request.target_who

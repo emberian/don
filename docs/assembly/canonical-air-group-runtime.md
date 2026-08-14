@@ -116,8 +116,9 @@ the common group-order flag. The canonical host reproduces only that arm. Every 
 must be an active Unit with Handle-bound air authority, clear missile mask, non-Nuclear-Missile
 type answer, positive exact `mana_left`, and a coherent current typed STRAFE payload. The target
 may be an active Unit or sparse-registry-bound active Build; its identity, UID, and position are
-revalidated at commit. Fresh STRAFE insertion, non-STRAFE current orders, shift/control/alt,
-order 1, scenario-ignore pruning, and every later Flight branch remain typed refusals.
+revalidated at commit. Fresh STRAFE insertion, non-STRAFE current orders, Shift outside the
+separately bounded empty-Airbase no-action cone, control/alt, order 1, scenario-ignore pruning,
+and every later Flight branch remain typed refusals.
 
 Cycle 16 keeps that fresh-install boundary red while completing the exact skip/tail behavior
 inside the existing-STRAFE arm. The 942 Unit→Build ATTACK packets span 28 replay files; 603 use

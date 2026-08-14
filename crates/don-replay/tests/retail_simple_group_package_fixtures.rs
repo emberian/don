@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 const REPLAY_RELATIVE_PATH: &str = "ron-data/replays/Playback - 2026.08.11 11'44'38 (Tue).rcx";
 const REPLAY_FILE_SHA256: &str = "558e0cd53dbed4f820e8757c0327a58384d433e5beb8e9eeef5d64df4d67bd54";
+const SHIFT_FLIGHT_REPLAY_RELATIVE_PATH: &str =
+    "ron-data/replays/multi/Playback___2018.11.17_13_21_42__Sat_.rcx";
+const SHIFT_FLIGHT_REPLAY_SHA256: &str =
+    "c006ecb860273605d2b48bf69f5dcb048596de5fc748aa664fa0a04452df2da0";
 const STOP_SPELL_REPLAY_RELATIVE_PATH: &str =
     "ron-data/replays/multi/Playback___2017.07.20_20_46_23__Thu_.rcx";
 const STOP_SPELL_REPLAY_SHA256: &str =
@@ -60,6 +64,48 @@ struct Fixture {
     opcodes: Vec<u8>,
     group_hex: String,
     action_hex: String,
+}
+
+#[test]
+fn retail_replay_binds_explicit_then_cached_shift_flight_airbase_packet() {
+    let path = root().join(SHIFT_FLIGHT_REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        SHIFT_FLIGHT_REPLAY_SHA256,
+    );
+    let replay = Replay::open(&path).unwrap();
+    let turn = &replay.turns[17_886];
+    let player = turn.players.iter().find(|player| player.play == 1).unwrap();
+    assert_eq!((turn.turn, player.stamp), (17_887, 107_059));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 28, 79, 0, 28, 57, 74, 72],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "00020043083c08",
+            "1cfb070000010000000100000000000000000000000a000000",
+            "4f0008010000010000",
+            "000000",
+            "1cfb070000010000000100000000000000000000000a000000",
+            "39a02747dfb9fb6d7901000000c74931791cbec031840db3d7c82d9b844e918b93cec7ca859603722f895396350edc7fd30431ba1280259ff701000400574931bc",
+            "4a48000e00000000000000",
+            "48040001010050650000",
+        ],
+    );
 }
 
 #[test]
@@ -1346,6 +1392,134 @@ fn census_strict_group_unitmask_packets() {
     for fixture in found.iter().take(24) {
         eprintln!("fixture={fixture:?}");
     }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_residual_flight_shapes_and_shift_airbase_shell() {
+    let mut residual = BTreeMap::<(i32, i32, i32, i32, &'static str, &'static str), usize>::new();
+    let mut shift_airbase = 0usize;
+    let mut explicit = 0usize;
+    let mut cached = 0usize;
+    let mut shell_admissible = 0usize;
+    let mut sizes = BTreeMap::new();
+    let mut files = BTreeSet::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        let mut selections = HashMap::<i32, Vec<i16>>::new();
+        for turn in &replay.turns {
+            for player in &turn.players {
+                let selection = selections.entry(player.play).or_default();
+                for (index, group) in player.commands.iter().enumerate() {
+                    if group.opcode != 0 || group.bytes.len() < 3 {
+                        continue;
+                    }
+                    let members = usize::from(group.bytes[1]);
+                    if group.bytes.len() != 3 + members * 2 {
+                        continue;
+                    }
+                    let is_explicit = members != 0;
+                    if is_explicit {
+                        *selection = group.bytes[3..]
+                            .chunks_exact(2)
+                            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                            .collect();
+                    }
+                    let Some(flight) = player.commands.get(index + 1) else {
+                        continue;
+                    };
+                    if flight.opcode != 28 || flight.bytes.len() != 25 {
+                        continue;
+                    }
+                    let field = |offset| {
+                        i32::from_le_bytes(flight.bytes[offset..offset + 4].try_into().unwrap())
+                    };
+                    let (shift, ctrl, alt, orders) = (field(9), field(13), field(17), field(21));
+                    if orders == 10 && shift == 0 && ctrl == 0 && alt == 0 {
+                        continue;
+                    }
+                    let selection_band = if selection.is_empty() {
+                        "Empty"
+                    } else if selection
+                        .iter()
+                        .all(|&o| (0..2_000).contains(&i32::from(o)))
+                    {
+                        "Unit"
+                    } else if selection
+                        .iter()
+                        .all(|&o| (2_000..3_000).contains(&i32::from(o)))
+                    {
+                        "Build"
+                    } else {
+                        "Mixed"
+                    };
+                    let target_o = field(1);
+                    let target_band = if (0..2_000).contains(&target_o) {
+                        "Unit"
+                    } else if (2_000..3_000).contains(&target_o) {
+                        "Build"
+                    } else {
+                        "Other"
+                    };
+                    *residual
+                        .entry((orders, shift, ctrl, alt, selection_band, target_band))
+                        .or_default() += 1;
+                    if (orders, shift, ctrl, alt, selection_band, target_band)
+                        != (10, 1, 0, 0, "Build", "Build")
+                    {
+                        continue;
+                    }
+                    let mut package_index = 0usize;
+                    let mut supported_shell = true;
+                    while package_index < player.commands.len() {
+                        let opcode = player.commands[package_index].opcode;
+                        if opcode == 0 {
+                            let action = player.commands.get(package_index + 1);
+                            if !action.is_some_and(|action| matches!(action.opcode, 11 | 28 | 36)) {
+                                supported_shell = false;
+                                break;
+                            }
+                            package_index += 2;
+                        } else if matches!(opcode, 57 | 58 | 72 | 74 | 79) {
+                            package_index += 1;
+                        } else {
+                            supported_shell = false;
+                            break;
+                        }
+                    }
+                    shift_airbase += 1;
+                    explicit += usize::from(is_explicit);
+                    cached += usize::from(!is_explicit);
+                    shell_admissible += usize::from(supported_shell);
+                    *sizes.entry(selection.len()).or_insert(0usize) += 1;
+                    files.insert(path.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(residual.values().sum::<usize>(), 41);
+    assert_eq!(
+        residual,
+        BTreeMap::from([
+            ((1, 0, 0, 0, "Build", "Build"), 5),
+            ((1, 0, 0, 0, "Unit", "Build"), 13),
+            ((10, 1, 0, 0, "Build", "Build"), 22),
+            ((10, 1, 0, 0, "Unit", "Build"), 1),
+        ]),
+    );
+    assert_eq!(
+        (
+            shift_airbase,
+            explicit,
+            cached,
+            shell_admissible,
+            files.len()
+        ),
+        (22, 2, 20, 22, 3),
+    );
+    assert_eq!(sizes, BTreeMap::from([(1, 1), (2, 10), (4, 11)]));
 }
 
 #[test]
