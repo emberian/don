@@ -9,7 +9,10 @@
 //! `BuildTypeData::blocked_tcoord` path through the exact `get_good` switch and TCoord land
 //! classification. The source-backed continuation executes the complete read-only
 //! `LandData::get_amount` and repeats the admitted ordinary-land path over the full footprint.
-//! The installed Farm continuations then own both the reached dry/unowned-territory exit and
+//! A second footprint adapter owns the instruction-complete cohort whose tile predicate returns
+//! raw zero before that resource call (including the installed Market), and stops at the typed
+//! `blocked_location` request. The installed Farm continuations then own both the reached
+//! dry/unowned-territory exit and
 //! the dry/self-owned Town/Farm-capacity success from `BuildTypeData::blocked_location`, plus
 //! the final non-immediate `blocked_site` return filter.
 //! Nothing in this module mutates Sim.
@@ -60,12 +63,16 @@ pub const BUILD_TYPE_BLOCKED_LOCATION_NON_FRIENDLY_CALL_VA: u32 = 0x0063_768b;
 pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA: u32 = 0x0063_6d18;
 pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING: u32 =
     BUILD_TYPE_BLOCKED_SITE_END_VA - BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA;
+pub const BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA: u32 = 0x0063_75f7;
+pub const WORLD_DATA_GET_TREGION_VA: u32 = 0x006b_52e0;
 pub const CITY_TYPE: usize = 414;
 pub const OIL_WELL_TYPE: usize = 421;
 pub const OIL_PLATFORM_TYPE: usize = 422;
 pub const DOCK_TYPE: usize = 432;
 pub const FORT_TYPE: usize = 443;
 pub const FARM_TYPE: usize = 417;
+pub const MARKET_TYPE: usize = 436;
+pub const MARKET_BUILD_FLAGS: u32 = 0x8000_1201;
 pub const GAME_SEMAPHORE_IMMEDIATE_BIT: u32 = 11;
 pub const LAKOTA_TRIBE: i32 = 19;
 pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA: u32 = 0x006e_1e82;
@@ -217,6 +224,116 @@ pub struct LeaderProduceBuildingBlockedSiteFootprintReceipt {
     pub blocked_detail: i32,
     pub locally_seen_tiles: i32,
     pub continuation: BuildTypeBlockedLocationBoundary,
+}
+
+/// Complete footprint walk for ordinary land Types whose `blocked_tcoord` child returns zero
+/// before the resource-specific `LandData::get_amount` arm.
+///
+/// This is the reached installed-Market shape. Retail visits x outer / y inner, retains no
+/// nonzero child precedence value, skips the locally-seen counter because the City constraint is
+/// `-1`, and next calls `BuildTypeData::blocked_location`. The request is deliberately typed:
+/// Town lookup, max-one-per-City policy and all later placement semantics remain with that child.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt {
+    pub entry: LeaderProduceBuildingBlockedSitePrefixReceipt,
+    /// Retail order is x outer / y inner. Every child has returned raw zero.
+    pub tiles: Vec<BuildTypeBlockedTcoordPrefixReceipt>,
+    pub blocked_detail: i32,
+    pub locally_seen_tiles: i32,
+    pub continuation: BuildTypeBlockedLocationBoundary,
+}
+
+impl LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt {
+    pub fn validates(&self) -> bool {
+        if !self.entry.validates()
+            || self.entry.native_returned.is_some()
+            || self.blocked_detail != 0
+            || self.locally_seen_tiles != 0
+            || self.continuation.va != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+            || self.continuation.callee_va != BUILD_TYPE_BLOCKED_LOCATION_VA
+            || self.continuation.blocked_site_bytes_remaining
+                != BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING
+            || self.continuation.owner != self.entry.input.owner
+            || self.continuation.type_index != self.entry.input.type_index
+            || self.continuation.placement_coord != self.entry.input.placement_coord
+            || self.continuation.footprint_corner != self.entry.footprint_corner
+            || self.continuation.city_constraint != self.entry.input.city_constraint
+            || self.continuation.blocked_detail != 0
+        {
+            return false;
+        }
+        let [corner_x, corner_y] = self.entry.footprint_corner;
+        let Some(end_x) = corner_x.checked_add(self.entry.target_footprint.x_size) else {
+            return false;
+        };
+        let Some(end_y) = corner_y.checked_add(self.entry.target_footprint.y_size) else {
+            return false;
+        };
+        let Some(area) = self
+            .entry
+            .target_footprint
+            .x_size
+            .checked_mul(self.entry.target_footprint.y_size)
+            .and_then(|area| usize::try_from(area).ok())
+        else {
+            return false;
+        };
+        let expected = (corner_x..end_x).flat_map(|tx| (corner_y..end_y).map(move |ty| [tx, ty]));
+        self.tiles.len() == area
+            && self.tiles.iter().zip(expected).all(|(tile, expected)| {
+                let mut expected_input = self.entry.continuation;
+                expected_input.tile = expected;
+                tile.validates()
+                    && tile.input == expected_input
+                    && tile.status == BuildTypeBlockedTcoordPrefixStatus::ReturnedToBlockedSite
+                    && tile.raw_returned_to_blocked_site == Some(0)
+                    && tile.continuation.is_none()
+            })
+    }
+}
+
+/// Exact installed-Market request at the `blocked_location` boundary.
+///
+/// The first child in `blocked_location` is `WorldData::get_tregion` for the placement TCoord.
+/// Its result depends on the generated World region plane, so this request is the honest static
+/// / dynamic split: no region, territory verdict, accepted site or RNG cadence is guessed here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingMarketBlockedLocationRequest {
+    pub input: LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt,
+    pub call_va: u32,
+    pub callee_va: u32,
+    pub owner: u8,
+    pub type_index: i32,
+    pub placement_coord: [i32; 2],
+    pub placement_tcoord: [i32; 2],
+    pub footprint_corner: [i32; 2],
+    pub city_constraint: i32,
+    pub blocked_detail: i32,
+    pub first_world_child_call_va: u32,
+    pub first_world_child_callee_va: u32,
+}
+
+impl LeaderProduceBuildingMarketBlockedLocationRequest {
+    pub fn validates(&self) -> bool {
+        self.input.validates()
+            && self.call_va == BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA
+            && self.callee_va == BUILD_TYPE_BLOCKED_LOCATION_VA
+            && self.owner == self.input.continuation.owner
+            && self.type_index == MARKET_TYPE as i32
+            && self.type_index == self.input.continuation.type_index
+            && self.placement_coord == self.input.continuation.placement_coord
+            && self.placement_tcoord
+                == [
+                    TCoord::from_coord(Coord(self.placement_coord[0])).0,
+                    TCoord::from_coord(Coord(self.placement_coord[1])).0,
+                ]
+            && self.footprint_corner == self.input.continuation.footprint_corner
+            && self.city_constraint == -1
+            && self.city_constraint == self.input.continuation.city_constraint
+            && self.blocked_detail == 0
+            && self.first_world_child_call_va == BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA
+            && self.first_world_child_callee_va == WORLD_DATA_GET_TREGION_VA
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -580,6 +697,23 @@ pub enum LeaderProduceBuildingBlockedSiteFootprintError {
     Land(GatherTerrainMaterializationError),
     UnsupportedChildWithoutLandContinuation { tile: [i32; 2], raw: i32 },
     UnsupportedNonZeroChild { tile: [i32; 2], raw: i32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingBlockedSiteRawZeroFootprintError {
+    InvalidEntryReceipt,
+    Prefix(BuildTypeBlockedTcoordPrefixError),
+    ChildDidNotReturnRawZero {
+        tile: [i32; 2],
+        raw: Option<i32>,
+        has_continuation: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingMarketBlockedLocationRequestError {
+    InvalidFootprintReceipt,
+    InvalidMarketProfile,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1202,6 +1336,151 @@ pub fn apply_sim_leader_produce_building_blocked_site_land_footprint(
         locally_seen_tiles: 0,
         continuation,
     })
+}
+
+/// Execute the complete `blocked_site` footprint walk when every reached
+/// `BuildTypeData::blocked_tcoord` call returns raw zero before the resource arm.
+///
+/// The installed Market (`436`, build flags `0x80001201`) reaches this shape on ordinary dry
+/// City terrain: its gather/resource flags do not satisfy the later `LandData::get_amount`
+/// condition. Any different child shape is an explicit boundary error; the adapter never turns
+/// an unsupported rejection or resource continuation into a successful footprint.
+pub fn apply_sim_leader_produce_building_blocked_site_raw_zero_footprint(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    entry: LeaderProduceBuildingBlockedSitePrefixReceipt,
+) -> Result<
+    LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt,
+    LeaderProduceBuildingBlockedSiteRawZeroFootprintError,
+> {
+    if !entry.validates() || entry.native_returned.is_some() {
+        return Err(LeaderProduceBuildingBlockedSiteRawZeroFootprintError::InvalidEntryReceipt);
+    }
+    let [corner_x, corner_y] = entry.footprint_corner;
+    let end_x = corner_x
+        .checked_add(entry.target_footprint.x_size)
+        .ok_or(LeaderProduceBuildingBlockedSiteRawZeroFootprintError::InvalidEntryReceipt)?;
+    let end_y = corner_y
+        .checked_add(entry.target_footprint.y_size)
+        .ok_or(LeaderProduceBuildingBlockedSiteRawZeroFootprintError::InvalidEntryReceipt)?;
+    let capacity = usize::try_from(
+        entry
+            .target_footprint
+            .x_size
+            .checked_mul(entry.target_footprint.y_size)
+            .ok_or(LeaderProduceBuildingBlockedSiteRawZeroFootprintError::InvalidEntryReceipt)?,
+    )
+    .map_err(|_| LeaderProduceBuildingBlockedSiteRawZeroFootprintError::InvalidEntryReceipt)?;
+    let mut tiles = Vec::with_capacity(capacity);
+    for tx in corner_x..end_x {
+        for ty in corner_y..end_y {
+            let mut boundary = entry.continuation;
+            boundary.tile = [tx, ty];
+            let prefix =
+                apply_sim_build_type_blocked_tcoord_land_prefix(sim, production, types, boundary)
+                    .map_err(LeaderProduceBuildingBlockedSiteRawZeroFootprintError::Prefix)?;
+            if prefix.raw_returned_to_blocked_site != Some(0) || prefix.continuation.is_some() {
+                return Err(
+                    LeaderProduceBuildingBlockedSiteRawZeroFootprintError::ChildDidNotReturnRawZero {
+                        tile: [tx, ty],
+                        raw: prefix.raw_returned_to_blocked_site,
+                        has_continuation: prefix.continuation.is_some(),
+                    },
+                );
+            }
+            tiles.push(prefix);
+        }
+    }
+    let continuation = BuildTypeBlockedLocationBoundary {
+        va: BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA,
+        callee_va: BUILD_TYPE_BLOCKED_LOCATION_VA,
+        blocked_site_bytes_remaining: BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+        owner: entry.input.owner,
+        type_index: entry.input.type_index,
+        placement_coord: entry.input.placement_coord,
+        footprint_corner: entry.footprint_corner,
+        city_constraint: entry.input.city_constraint,
+        blocked_detail: 0,
+    };
+    let receipt = LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt {
+        entry,
+        tiles,
+        blocked_detail: 0,
+        // The reached caller supplies City constraint -1, so retail skips this counter.
+        locally_seen_tiles: 0,
+        continuation,
+    };
+    debug_assert!(receipt.validates());
+    Ok(receipt)
+}
+
+/// Freeze the exact installed-Market placement request and stop at the first generated-World
+/// child in `BuildTypeData::blocked_location`.
+pub fn plan_sim_leader_produce_building_market_blocked_location_request(
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    input: LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt,
+) -> Result<
+    LeaderProduceBuildingMarketBlockedLocationRequest,
+    LeaderProduceBuildingMarketBlockedLocationRequestError,
+> {
+    if !input.validates() {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationRequestError::InvalidFootprintReceipt,
+        );
+    }
+    let Some(target) = production.types.get(MARKET_TYPE).and_then(Option::as_ref) else {
+        return Err(LeaderProduceBuildingMarketBlockedLocationRequestError::InvalidMarketProfile);
+    };
+    let Some(target_row) = types.types.rows().get(MARKET_TYPE) else {
+        return Err(LeaderProduceBuildingMarketBlockedLocationRequestError::InvalidMarketProfile);
+    };
+    let type_is = |query: usize| {
+        target_row
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == query)
+    };
+    if input.continuation.type_index != MARKET_TYPE as i32
+        || target.type_index != MARKET_TYPE as i32
+        || target.class != LiveTypeClass::Building
+        || target_row.index != MARKET_TYPE as i32
+        || target_row.domain() != TypeDomain::Build
+        || target.build_flags != MARKET_BUILD_FLAGS
+        || target.build_visibility.and_then(|facts| facts.domain) != Some(0)
+        || target.build_visibility.and_then(|facts| facts.footprint)
+            != Some(Footprint {
+                x_size: 4,
+                y_size: 4,
+            })
+        || !type_is(MARKET_TYPE)
+        || type_is(CITY_TYPE)
+        || type_is(FORT_TYPE)
+        || type_is(DOCK_TYPE)
+    {
+        return Err(LeaderProduceBuildingMarketBlockedLocationRequestError::InvalidMarketProfile);
+    }
+    let placement_coord = input.continuation.placement_coord;
+    let request = LeaderProduceBuildingMarketBlockedLocationRequest {
+        call_va: input.continuation.va,
+        callee_va: input.continuation.callee_va,
+        owner: input.continuation.owner,
+        type_index: input.continuation.type_index,
+        placement_coord,
+        placement_tcoord: [
+            TCoord::from_coord(Coord(placement_coord[0])).0,
+            TCoord::from_coord(Coord(placement_coord[1])).0,
+        ],
+        footprint_corner: input.continuation.footprint_corner,
+        city_constraint: input.continuation.city_constraint,
+        blocked_detail: input.continuation.blocked_detail,
+        first_world_child_call_va: BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA,
+        first_world_child_callee_va: WORLD_DATA_GET_TREGION_VA,
+        input,
+    };
+    debug_assert!(request.validates());
+    Ok(request)
 }
 
 /// Execute the complete reached installed-Farm `blocked_location` verdict and its parent
@@ -2131,6 +2410,91 @@ pub fn apply_sim_leader_produce_building_farm_success_preflight(
 mod tests {
     use super::*;
 
+    fn market_raw_zero_footprint_receipt() -> LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt
+    {
+        let footprint = Footprint {
+            x_size: 4,
+            y_size: 4,
+        };
+        // Structural fixture only: this is not the unresolved golden-World Market site.
+        let placement_coord = [8_064, 8_064];
+        let footprint_corner = [40, 40];
+        let blocked_site_input = LeaderProduceBuildingBlockedSiteBoundary {
+            va: LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA,
+            callee_va: BUILD_TYPE_BLOCKED_SITE_VA,
+            bytes_remaining: LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING,
+            owner: 0,
+            type_index: MARKET_TYPE as i32,
+            origin_build_object: 2000,
+            mode: 0,
+            circle_offset: 1,
+            candidate_world_cell: [10, 10],
+            space_grade: 4,
+            target_domain: 0,
+            target_footprint: footprint,
+            placement_coord,
+            city_constraint: -1,
+            blocked_detail_initial: 0,
+        };
+        let tile_boundary = BuildTypeBlockedTcoordBoundary {
+            va: BUILD_TYPE_BLOCKED_SITE_BLOCKED_TCOORD_CALL_VA,
+            callee_va: BUILD_TYPE_BLOCKED_TCOORD_VA,
+            blocked_site_bytes_remaining: BUILD_TYPE_BLOCKED_SITE_BYTES_REMAINING,
+            owner: 0,
+            type_index: MARKET_TYPE as i32,
+            candidate_world_cell: [10, 10],
+            placement_coord,
+            footprint_corner,
+            tile: footprint_corner,
+            city_constraint: -1,
+            blocked_detail_initial: 0,
+        };
+        let entry = LeaderProduceBuildingBlockedSitePrefixReceipt {
+            input: blocked_site_input,
+            target_footprint: footprint,
+            target_is_city: false,
+            placement_tcoord: [42, 42],
+            footprint_corner,
+            native_returned: None,
+            continuation: tile_boundary,
+        };
+        let tiles = (footprint_corner[0]..footprint_corner[0] + footprint.x_size)
+            .flat_map(|tx| {
+                (footprint_corner[1]..footprint_corner[1] + footprint.y_size).map(move |ty| {
+                    let mut input = tile_boundary;
+                    input.tile = [tx, ty];
+                    BuildTypeBlockedTcoordPrefixReceipt {
+                        input,
+                        status: BuildTypeBlockedTcoordPrefixStatus::ReturnedToBlockedSite,
+                        was_seen: Some(true),
+                        world_region: Some(0),
+                        terrain_mask: Some(tflag::CITY),
+                        raw_returned_to_blocked_site: Some(0),
+                        continuation: None,
+                    }
+                })
+            })
+            .collect();
+        LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt {
+            entry,
+            tiles,
+            blocked_detail: 0,
+            locally_seen_tiles: 0,
+            continuation: BuildTypeBlockedLocationBoundary {
+                va: BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA,
+                callee_va: BUILD_TYPE_BLOCKED_LOCATION_VA,
+                blocked_site_bytes_remaining:
+                    BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING,
+                owner: 0,
+                type_index: MARKET_TYPE as i32,
+                placement_coord,
+                footprint_corner,
+                city_constraint: -1,
+                blocked_detail: 0,
+            },
+        }
+    }
+
     #[test]
     fn get_good_matches_the_retail_six_entry_jump_table() {
         assert_eq!(build_type_good(417), 0);
@@ -2165,5 +2529,37 @@ mod tests {
         assert_eq!(land_at_tcoord_mode_one(wflag::OIL | wflag::ROCKS, 8, 0), 7);
         assert_eq!(land_at_tcoord_mode_one(wflag::ROCKS, 8, 0), 6);
         assert_eq!(land_at_tcoord_mode_one(0, -1, 0), -1);
+    }
+
+    #[test]
+    fn market_raw_zero_footprint_pins_retail_tile_order() {
+        let mut receipt = market_raw_zero_footprint_receipt();
+        assert!(receipt.validates());
+        receipt.tiles.swap(1, 4);
+        assert!(!receipt.validates());
+    }
+
+    #[test]
+    fn market_request_names_the_first_generated_world_child() {
+        let input = market_raw_zero_footprint_receipt();
+        let placement_coord = input.continuation.placement_coord;
+        let request = LeaderProduceBuildingMarketBlockedLocationRequest {
+            call_va: input.continuation.va,
+            callee_va: input.continuation.callee_va,
+            owner: input.continuation.owner,
+            type_index: input.continuation.type_index,
+            placement_coord,
+            placement_tcoord: [
+                TCoord::from_coord(Coord(placement_coord[0])).0,
+                TCoord::from_coord(Coord(placement_coord[1])).0,
+            ],
+            footprint_corner: input.continuation.footprint_corner,
+            city_constraint: input.continuation.city_constraint,
+            blocked_detail: input.continuation.blocked_detail,
+            first_world_child_call_va: BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA,
+            first_world_child_callee_va: WORLD_DATA_GET_TREGION_VA,
+            input,
+        };
+        assert!(request.validates());
     }
 }
