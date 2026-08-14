@@ -235,6 +235,8 @@ pub mod items;
 pub mod leader_init_diplomacy;
 /// Complete source-only `Leader::init` diplomacy/shared-vision eight-target loop.
 pub mod leader_init_diplomacy_loop;
+/// Complete read-only `LeaderData::get_target` leaf over Game start order.
+pub mod leader_get_target_runtime;
 /// Added by `tick11-production-ai`. `Leader::plan_strategy` `0x006B9620`'s entry and
 /// dispatch skeleton plus the whole 628-byte `Leader::production_ai` `0x006C1960` step
 /// machine — the only door into retail's compiled production pipeline, which nothing but

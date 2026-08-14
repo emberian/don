@@ -15,12 +15,14 @@
 //! The leaf itself is already source-complete in
 //! [`leader_tribe_bonus_runtime`](crate::systems::leader_tribe_bonus_runtime); joining its
 //! live Leader/Tribe inputs at this call site remains separate composition work.
-//! Because the Village precedes the Market, the unowned Village remainder beginning at
-//! `0x0061FB53` is the earliest global Build-band blocker on every Wall-returning frame.
-//! Its first possible external call is `LeaderData::get_target()` at
-//! `0x0061FB9B -> 0x006DA000`, conditional on linked-City flag `0x10`, `Game + 0x24 == 2`,
-//! and the active-Leader traversal.  None of those owners is accepted as a guessed boolean.
-//! The Market continuation is actor-local chronology, not a claim that execution reached it.
+//! Because the Village precedes the Market, its suffix beginning at `0x0061FB53` is the
+//! earliest global Build-band continuation on every Wall-returning frame. The detached
+//! [`plan_village_target_gate`] transaction now binds its linked `CityData::city_flags`,
+//! `GameInfo::team_style`, fixed active-Leader traversal, and complete
+//! `LeaderData::get_target()` leaf at `0x0061FB9B -> 0x006DA000`. It stops before retail's
+//! first effectful child, `Wall::update_local_seen` at `0x0063ED50`, and reports the
+//! preceding `WallData::ever_seen` write without applying it. The Market continuation is
+//! actor-local chronology, not a claim that execution reached it.
 //!
 //! The caller must prove that the immediately preceding `Wall::process` call returned.
 //! [`golden_build_schedule`] reports the remaining post-`check_ever_seen` Wall territory
@@ -30,6 +32,9 @@
 
 #![forbid(unsafe_code)]
 
+use crate::systems::leader_get_target_runtime::{
+    self, LeaderTargetContext, LeaderTargetError, LeaderTargetReceipt,
+};
 use crate::systems::production::{self, BuildData};
 use crate::systems::tech_cities;
 
@@ -57,6 +62,10 @@ pub const BUILD_CITY_MAINTENANCE_GATE_VA: u32 = 0x0061_faca;
 pub const BUILD_CITY_MAINTENANCE_END_VA: u32 = 0x0061_fb53;
 pub const VILLAGE_GET_TARGET_CALL_VA: u32 = 0x0061_fb9b;
 pub const LEADER_GET_TARGET_VA: u32 = 0x006d_a000;
+pub const VILLAGE_EVER_SEEN_WRITE_VA: u32 = 0x0061_fbcd;
+pub const VILLAGE_UPDATE_LOCAL_SEEN_CALL_VA: u32 = 0x0061_fbd2;
+pub const WALL_UPDATE_LOCAL_SEEN_VA: u32 = 0x0063_ed50;
+pub const VILLAGE_TARGET_GATE_JOIN_VA: u32 = 0x0061_fbd8;
 
 pub const GOLDEN_FIRST_FRAME: i32 = 2;
 pub const GOLDEN_LAST_FRAME: i32 = 31;
@@ -70,7 +79,7 @@ pub const GOLDEN_BUILD_STEP: u8 = 14;
 pub const VILLAGE_SKIPPED_TYPE_CONES: [i32; 4] = [538, 438, 436, 529];
 pub const CITY_MAINTENANCE_PERIOD: i32 = 200;
 pub const CITY_CAPITAL_FLAG: u16 = 0x0010;
-pub const GET_TARGET_GAME_STATE: i32 = 2;
+pub const ASSASSIN_TEAM_STYLE: u8 = 2;
 
 const BUILD_LAUNCH_MASK: u16 = 0x0008;
 const BUILD_GATHER_TYPE_MASK: u32 = 0x0040;
@@ -270,15 +279,96 @@ pub struct GoldenVillageNoOpMaintenance {
     pub first_possible_external: GoldenVillageConditionalExternal,
 }
 
-/// First possible external after the owned Village maintenance window.  The three guard
-/// owners deliberately remain inputs for a future composition transaction.
+/// Static descriptor for the first possible call after the owned Village maintenance
+/// window. [`plan_village_target_gate`] binds these guards and executes the complete leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GoldenVillageConditionalExternal {
     pub call_va: u32,
     pub callee_va: u32,
     pub required_city_flag: u16,
-    pub required_game_state: i32,
+    pub required_team_style: u8,
     pub requires_active_leader_traversal: bool,
+}
+
+/// One source-complete `LeaderData::get_target` call made by the caller's active-Leader
+/// loop. Array position is the actual global Leader slot, not the row's mutable `who`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenVillageTargetCall {
+    pub leader_slot: u8,
+    pub call_va: u32,
+    pub target: i32,
+    pub receipt: LeaderTargetReceipt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenVillageTargetGateExit {
+    NonCapitalCity,
+    NonAssassinTeamStyle,
+    ActiveLeaderScanComplete,
+    UpdateLocalSeenBoundary,
+}
+
+/// The retail write immediately before the effectful virtual child. Planning never applies
+/// it because `Wall::update_local_seen` is not part of this atomic transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenVillageEverSeenWrite {
+    pub instruction_va: u32,
+    pub leader_slot: u8,
+    pub before: u8,
+    pub after: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenVillageTargetGateContinuation {
+    NextBuildCone {
+        next_va: u32,
+    },
+    UpdateLocalSeen {
+        call_va: u32,
+        callee_va: u32,
+        planned_write: GoldenVillageEverSeenWrite,
+    },
+}
+
+/// Exact detached receipt for `Build::process 0x0061FB53..0x0061FBD8`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenVillageTargetGateReceipt {
+    pub frame: i32,
+    pub actor: GoldenBuildActor,
+    pub build_ordinal: u8,
+    pub object_id: i16,
+    pub owner: u8,
+    pub city_slot: i16,
+    pub city_flags: u16,
+    pub team_style: u8,
+    /// Active slots reached before either scan completion or the first update boundary.
+    pub reached_active_leader_mask: u8,
+    pub target_calls: [Option<GoldenVillageTargetCall>; leader_get_target_runtime::LEADER_COUNT],
+    pub ever_seen_before: u8,
+    pub exit: GoldenVillageTargetGateExit,
+    pub continuation: GoldenVillageTargetGateContinuation,
+    /// The owned gate and leaf consume no RNG; the returned child is not executed.
+    pub rng_draws: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldenVillageTargetGateError {
+    PriorContinuationDidNotReachGate,
+    BuildSnapshotMismatch,
+    InvalidCitySlot(i16),
+    WrongCitySlot {
+        expected: i16,
+        actual: i16,
+    },
+    WrongCityOwner {
+        expected: i8,
+        actual: i8,
+    },
+    MissingLeaderTargetContext,
+    LeaderTarget {
+        leader_slot: u8,
+        error: LeaderTargetError,
+    },
 }
 
 /// Pure receipt for the common prefix and its exact first continuation.
@@ -385,10 +475,177 @@ fn village_noop_maintenance(build: &BuildData, frame: i32) -> GoldenVillageNoOpM
             call_va: VILLAGE_GET_TARGET_CALL_VA,
             callee_va: LEADER_GET_TARGET_VA,
             required_city_flag: CITY_CAPITAL_FLAG,
-            required_game_state: GET_TARGET_GAME_STATE,
+            required_team_style: ASSASSIN_TEAM_STYLE,
             requires_active_leader_traversal: true,
         },
     }
+}
+
+/// Plan the complete immediate Village gate after a prior common-prefix receipt reached
+/// `0x0061FB53`.
+///
+/// The linked City record is admitted only when its slot and current owner match the same
+/// Build snapshot. `leader_target` may be `None` when either retail short-circuit gate is
+/// false; once a capital in team style 2 reaches the active-Leader loop, the complete Game
+/// arrays and Leader rows are mandatory. The first missing `ever_seen` bit is reported as a
+/// planned write plus `Wall::update_local_seen` boundary. Neither is published.
+pub fn plan_village_target_gate(
+    prior: &BuildPostWallReceipt,
+    build: &BuildData,
+    city: &tech_cities::CityRecord,
+    team_style: u8,
+    leader_target: Option<&LeaderTargetContext>,
+) -> Result<GoldenVillageTargetGateReceipt, GoldenVillageTargetGateError> {
+    let schedule_matches = golden_build_schedule(prior.frame)
+        .map(|rows| rows[GoldenBuildActor::Village.build_ordinal() as usize])
+        .is_some_and(|row| {
+            row.wall_continuation == GoldenWallContinuation::Returned
+                && row.actor == GoldenBuildActor::Village
+                && row.step == prior.step
+                && row.owner == prior.owner
+                && row.object_id == prior.object_id
+                && row.type_index == prior.type_index
+                && row.build_ordinal == prior.build_ordinal
+        });
+    let reached_gate = matches!(
+        prior.continuation,
+        BuildPostWallContinuation::GoldenTypeTail(GoldenBuildTypeTail::VillageNoOpMaintenance(
+            GoldenVillageNoOpMaintenance {
+                next_boundary_va: BUILD_CITY_MAINTENANCE_END_VA,
+                ..
+            }
+        ))
+    );
+    if !schedule_matches
+        || !reached_gate
+        || prior.actor != GoldenBuildActor::Village
+        || prior.build_ordinal != GoldenBuildActor::Village.build_ordinal()
+        || prior.owner != GOLDEN_OWNER
+        || prior.object_id != GOLDEN_VILLAGE_O
+        || prior.type_index != GOLDEN_VILLAGE_TYPE
+    {
+        return Err(GoldenVillageTargetGateError::PriorContinuationDidNotReachGate);
+    }
+    if prior.uid != build.uid
+        || build.who != prior.owner
+        || build.object_id() != prior.object_id
+        || !build.is_active()
+    {
+        return Err(GoldenVillageTargetGateError::BuildSnapshotMismatch);
+    }
+    if build.city < 0 {
+        return Err(GoldenVillageTargetGateError::InvalidCitySlot(build.city));
+    }
+    if city.city != build.city {
+        return Err(GoldenVillageTargetGateError::WrongCitySlot {
+            expected: build.city,
+            actual: city.city,
+        });
+    }
+    let expected_city_owner = prior.owner as i8;
+    if city.who != expected_city_owner {
+        return Err(GoldenVillageTargetGateError::WrongCityOwner {
+            expected: expected_city_owner,
+            actual: city.who,
+        });
+    }
+
+    let base_receipt = |exit, continuation, reached_active_leader_mask, target_calls| {
+        GoldenVillageTargetGateReceipt {
+            frame: prior.frame,
+            actor: prior.actor,
+            build_ordinal: prior.build_ordinal,
+            object_id: prior.object_id,
+            owner: prior.owner,
+            city_slot: build.city,
+            city_flags: city.city_flags,
+            team_style,
+            reached_active_leader_mask,
+            target_calls,
+            ever_seen_before: build.ever_seen,
+            exit,
+            continuation,
+            rng_draws: 0,
+        }
+    };
+
+    let empty_calls = [None; leader_get_target_runtime::LEADER_COUNT];
+    if city.city_flags & CITY_CAPITAL_FLAG == 0 {
+        return Ok(base_receipt(
+            GoldenVillageTargetGateExit::NonCapitalCity,
+            GoldenVillageTargetGateContinuation::NextBuildCone {
+                next_va: VILLAGE_TARGET_GATE_JOIN_VA,
+            },
+            0,
+            empty_calls,
+        ));
+    }
+    if team_style != ASSASSIN_TEAM_STYLE {
+        return Ok(base_receipt(
+            GoldenVillageTargetGateExit::NonAssassinTeamStyle,
+            GoldenVillageTargetGateContinuation::NextBuildCone {
+                next_va: VILLAGE_TARGET_GATE_JOIN_VA,
+            },
+            0,
+            empty_calls,
+        ));
+    }
+
+    let context = leader_target.ok_or(GoldenVillageTargetGateError::MissingLeaderTargetContext)?;
+    let mut reached_active_leader_mask = 0u8;
+    let mut target_calls = empty_calls;
+    for leader_slot in 0..leader_get_target_runtime::LEADER_COUNT {
+        let leader_flags = context.leaders[leader_slot].leader_flags;
+        if leader_flags & leader_get_target_runtime::ACTIVE_LEADER_MASK
+            != leader_get_target_runtime::ACTIVE_LEADER_MASK
+        {
+            continue;
+        }
+        let leader_bit = 1u8 << leader_slot;
+        reached_active_leader_mask |= leader_bit;
+        let target_receipt =
+            leader_get_target_runtime::get_target(context, leader_slot).map_err(|error| {
+                GoldenVillageTargetGateError::LeaderTarget {
+                    leader_slot: leader_slot as u8,
+                    error,
+                }
+            })?;
+        target_calls[leader_slot] = Some(GoldenVillageTargetCall {
+            leader_slot: leader_slot as u8,
+            call_va: VILLAGE_GET_TARGET_CALL_VA,
+            target: target_receipt.target,
+            receipt: target_receipt,
+        });
+        if target_receipt.target != i32::from(build.who) || build.ever_seen & leader_bit != 0 {
+            continue;
+        }
+
+        let planned_write = GoldenVillageEverSeenWrite {
+            instruction_va: VILLAGE_EVER_SEEN_WRITE_VA,
+            leader_slot: leader_slot as u8,
+            before: build.ever_seen,
+            after: build.ever_seen | leader_bit,
+        };
+        return Ok(base_receipt(
+            GoldenVillageTargetGateExit::UpdateLocalSeenBoundary,
+            GoldenVillageTargetGateContinuation::UpdateLocalSeen {
+                call_va: VILLAGE_UPDATE_LOCAL_SEEN_CALL_VA,
+                callee_va: WALL_UPDATE_LOCAL_SEEN_VA,
+                planned_write,
+            },
+            reached_active_leader_mask,
+            target_calls,
+        ));
+    }
+
+    Ok(base_receipt(
+        GoldenVillageTargetGateExit::ActiveLeaderScanComplete,
+        GoldenVillageTargetGateContinuation::NextBuildCone {
+            next_va: VILLAGE_TARGET_GATE_JOIN_VA,
+        },
+        reached_active_leader_mask,
+        target_calls,
+    ))
 }
 
 /// Plan the source-complete active-Build prefix after `Wall::process` returned.
@@ -569,6 +826,32 @@ mod tests {
         }
     }
 
+    fn city(flags: u16) -> tech_cities::CityRecord {
+        tech_cities::CityRecord {
+            city_flags: flags,
+            city: 0,
+            who: GOLDEN_OWNER as i8,
+            ..tech_cities::CityRecord::default()
+        }
+    }
+
+    fn target_context() -> LeaderTargetContext {
+        LeaderTargetContext {
+            leaders: std::array::from_fn(|slot| leader_get_target_runtime::LeaderTargetRow {
+                leader_flags: if slot == 0 {
+                    leader_get_target_runtime::ACTIVE_LEADER_MASK
+                } else {
+                    0
+                },
+                who: slot as i32,
+            }),
+            game: leader_get_target_runtime::LeaderTargetGame {
+                start_list: [0, 1, 2, 3, 4, 5, 6, 7],
+                start_index: [7; leader_get_target_runtime::LEADER_COUNT],
+            },
+        }
+    }
+
     #[test]
     fn fixed_order_and_post_periodic_wall_boundaries_cover_every_frame() {
         for frame in GOLDEN_FIRST_FRAME..=GOLDEN_LAST_FRAME {
@@ -634,8 +917,121 @@ mod tests {
                 call_va: 0x0061_fb9b,
                 callee_va: 0x006d_a000,
                 required_city_flag: 0x10,
-                required_game_state: 2,
+                required_team_style: 2,
                 requires_active_leader_traversal: true,
+            }
+        );
+    }
+
+    #[test]
+    fn village_target_gate_short_circuits_without_unreached_leader_inputs() {
+        let build = build(GoldenBuildActor::Village);
+        let prior = plan_after_wall_return(
+            GoldenBuildActor::Village,
+            GOLDEN_FIRST_FRAME,
+            &build,
+            facts(GoldenBuildActor::Village),
+        )
+        .unwrap();
+
+        let noncapital =
+            plan_village_target_gate(&prior, &build, &city(1), ASSASSIN_TEAM_STYLE, None).unwrap();
+        assert_eq!(noncapital.exit, GoldenVillageTargetGateExit::NonCapitalCity);
+        assert_eq!(noncapital.reached_active_leader_mask, 0);
+        assert_eq!(
+            noncapital.continuation,
+            GoldenVillageTargetGateContinuation::NextBuildCone {
+                next_va: 0x0061_fbd8
+            }
+        );
+
+        let ordinary_teams =
+            plan_village_target_gate(&prior, &build, &city(1 | CITY_CAPITAL_FLAG), 0, None)
+                .unwrap();
+        assert_eq!(
+            ordinary_teams.exit,
+            GoldenVillageTargetGateExit::NonAssassinTeamStyle
+        );
+        assert!(ordinary_teams.target_calls.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn first_unseen_targeter_plans_write_then_stops_before_update_local_seen() {
+        let build = build(GoldenBuildActor::Village);
+        let image_before = build.image();
+        let prior = plan_after_wall_return(
+            GoldenBuildActor::Village,
+            GOLDEN_FIRST_FRAME,
+            &build,
+            facts(GoldenBuildActor::Village),
+        )
+        .unwrap();
+        let receipt = plan_village_target_gate(
+            &prior,
+            &build,
+            &city(1 | CITY_CAPITAL_FLAG),
+            ASSASSIN_TEAM_STYLE,
+            Some(&target_context()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            build.image(),
+            image_before,
+            "planner may not publish the bit"
+        );
+        assert_eq!(
+            (receipt.actor, receipt.build_ordinal),
+            (GoldenBuildActor::Village, 0)
+        );
+        assert_eq!(receipt.reached_active_leader_mask, 1);
+        let target_call = receipt.target_calls[0].unwrap();
+        assert_eq!((target_call.leader_slot, target_call.target), (0, 0));
+        assert_eq!(target_call.receipt.function_va, 0x006d_a000);
+        assert_eq!(target_call.receipt.rng_draws, 0);
+        assert_eq!(
+            receipt.continuation,
+            GoldenVillageTargetGateContinuation::UpdateLocalSeen {
+                call_va: 0x0061_fbd2,
+                callee_va: 0x0063_ed50,
+                planned_write: GoldenVillageEverSeenWrite {
+                    instruction_va: 0x0061_fbcd,
+                    leader_slot: 0,
+                    before: 0,
+                    after: 1,
+                },
+            }
+        );
+        assert_eq!(receipt.rng_draws, 0);
+    }
+
+    #[test]
+    fn already_seen_targeter_finishes_active_leader_scan_locally() {
+        let mut build = build(GoldenBuildActor::Village);
+        build.ever_seen = 1;
+        let prior = plan_after_wall_return(
+            GoldenBuildActor::Village,
+            GOLDEN_FIRST_FRAME,
+            &build,
+            facts(GoldenBuildActor::Village),
+        )
+        .unwrap();
+        let receipt = plan_village_target_gate(
+            &prior,
+            &build,
+            &city(1 | CITY_CAPITAL_FLAG),
+            ASSASSIN_TEAM_STYLE,
+            Some(&target_context()),
+        )
+        .unwrap();
+        assert_eq!(
+            receipt.exit,
+            GoldenVillageTargetGateExit::ActiveLeaderScanComplete
+        );
+        assert_eq!(
+            receipt.continuation,
+            GoldenVillageTargetGateContinuation::NextBuildCone {
+                next_va: 0x0061_fbd8
             }
         );
     }
