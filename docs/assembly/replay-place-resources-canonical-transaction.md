@@ -48,6 +48,12 @@ initial API would redraw or reset state at the wrong chronology. Pretending row 
 recurrence row would claim a decrement and previous-row host reference that retail did not
 execute.
 
+`execute_canonical_carried_first_row` exposes that exact row-zero composition as an atomic
+public seam for the map-make schedule. It stages both `CanonicalPlaceResourcesState` and
+`RemainingBonusRowsState`, rejects BONUSES/nonzero/empty or detached document handoffs, and
+commits only after the generic carried-row and exact Player/Region receipts agree. Recurrence
+at `0x00690215` remains a separate child.
+
 ## Authoritative state
 
 `CanonicalPlaceResourcesState` contains every projection that the composed transaction may

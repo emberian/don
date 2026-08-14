@@ -18,7 +18,8 @@ post_nubify_transitions checkpoint 0x0068c12a / token 0x1ebe
   -> repeated typed later BONUS rows with replayed carry
   -> final no-RNG recurrence fallthrough at category tail 0x00690225
   -> typed BONUSES cleanup and FISH lookup/enumeration
-  -> first FISH row 0x0068fbb3, or next category tail 0x00690225 when empty
+  -> exact first FISH row through recurrence seam 0x00690215
+     or, when FISH is empty, typed FISH cleanup and GOODIES lookup/enumeration
 ```
 
 `execute_map_make_resource_schedule` constructs the caller-gap prior receipt
@@ -60,6 +61,14 @@ Three outcomes are explicit:
   increments the ordinal, and performs the selected/default FISH lookup and ordered row
   enumeration. It stops before FISH row zero at `0x0068fbb3`, or at the next
   `0x00690225` cleanup when the selected/fallback FISH section is empty.
+- `FirstFishRowOpen` replays the complete category boundary, reconstructs the inherited
+  chance locals, composes row zero with the canonical exact Player/Region body, and commits
+  canonical state plus the concrete pool atomically. It stops at `0x00690215` before the
+  independently owned recurrence/next-category child.
+- `GoodiesCategoryOpen` is the source-complete empty-FISH branch. It authenticates the
+  unchanged document authority, performs FISH cleanup and GOODIES lookup/enumeration with
+  no RNG/World/pool change, then stops at GOODIES row zero (`0x0068fbb3`) or GOODIES cleanup
+  (`0x00690225`) when that section is empty.
 
 Later continuations also revalidate the state-carrying caller, pool-prefix, and XML
 RNG/World/pool chronology against each other. Descriptive capture provenance retained
@@ -87,11 +96,11 @@ Each selector subreceipt includes its exact before/after six-field pool, selecte
 good/index, retry draws, and exhaustion clear. A selector row may therefore advance the
 public pool without leaving it at the prefix state while publishing a newer digest.
 
-All rows in a nonempty current `BONUSES` array and the following BONUSES cleanup/FISH
-dispatch can now execute in the compiled schedule. The new exact residual is
-`0x0068fbb3` for a nonempty FISH section and `0x00690225` for an empty one. The zero-row
-BONUSES XML-to-category-tail bridge remains open. Retail then executes FISH rows and
-proceeds through GOODIES before returning to
+All rows in a nonempty current `BONUSES` array, BONUSES cleanup/FISH dispatch, and the first
+nonempty FISH row can now execute in the compiled schedule. That branch's exact residual is
+`0x00690215`. The empty-FISH branch advances to `0x0068fbb3` for nonempty GOODIES or
+`0x00690225` for empty GOODIES. The zero-row BONUSES XML-to-category-tail bridge remains
+open. Retail then executes FISH recurrence/later rows or GOODIES rows before returning to
 `0x0068c70c`, and eventually reaches caller checkpoint `0x0068c72d` / token `0x1ef7`.
 The boundary records that checkpoint as pending, never as completed.
 
@@ -107,8 +116,9 @@ stage-ending checkpoint.
 The `place_resources` schedule row now states the executable ownership split:
 zero RNG through the pool and XML bootstrap, typed direct/callee RNG and concrete pool
 continuity for every row of a nonempty current BONUS array, the exact category-tail
-fallthrough, and BONUSES cleanup/FISH dispatch. The zero-row BONUSES bridge, FISH/GOODIES
-row bodies, later category cleanup, and document cleanup remain open.
+fallthrough, BONUSES cleanup/FISH dispatch, and exact first FISH row. Empty FISH cleanup
+and GOODIES enumeration are also owned. The zero-row BONUSES bridge, FISH recurrence/later
+rows, GOODIES row bodies, and final document cleanup remain open.
 
 ## Focused proof
 
@@ -135,6 +145,9 @@ row bodies, later category cleanup, and document cleanup remain open.
 - exact BONUSES host cleanup and selected FISH dispatch with unchanged RNG, World, pool,
   counters, and chance carry; capture-bound document-host continuity; and an explicit stop
   before the first FISH row;
+- exact carried first-FISH chance/placement composition with atomic canonical/pool commit and
+  an explicit `0x00690215` recurrence residual;
+- empty-FISH cleanup and GOODIES lookup/enumeration with unchanged RNG, World, and pool;
 - a later selector row whose direct chance draw, callee pool draw, concrete bitmask
   mutation, and published digest form one chronology, plus schedule-level rollback for
   a corrupted selector subreceipt;

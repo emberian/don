@@ -855,6 +855,45 @@ fn run_continued_row<H: CanonicalResourceAllocationHost>(
     })
 }
 
+/// Execute exactly row zero of a carried FISH or GOODIES category. The caller
+/// supplies the category handoff and chance carry produced by the preceding
+/// exact category cleanup. Both canonical state projections are staged and
+/// commit together only after the generic row receipt agrees with the exact
+/// Player/Region body receipt.
+pub fn execute_canonical_carried_first_row<H: CanonicalResourceAllocationHost>(
+    state: &mut CanonicalPlaceResourcesState,
+    entry: &PlaceResourcesBonusRowsHandoff,
+    category: ResourceCategory,
+    carried: &mut RemainingBonusRowsState,
+    facts: &CanonicalRowFacts,
+    host: &mut H,
+) -> Result<CanonicalRowReceipt, CanonicalPlaceResourcesError> {
+    if category == ResourceCategory::Bonuses
+        || carried.next_row_index != 0
+        || entry.rows.is_empty()
+        || carried.rows != entry.rows
+        || state.mutation != carried.mutation
+        || state.selected_document_handles.valid() != entry.selected_document_live
+        || state.default_document_handles.valid() != entry.default_document_live
+    {
+        return Err(CanonicalPlaceResourcesError::WrongHandoff);
+    }
+    let mut staged_state = state.clone();
+    let mut staged_carried = carried.clone();
+    let receipt = run_continued_row(
+        &mut staged_state,
+        entry,
+        category,
+        0,
+        &mut staged_carried,
+        facts,
+        host,
+    )?;
+    *state = staged_state;
+    *carried = staged_carried;
+    Ok(receipt)
+}
+
 fn run_category_rows<H: CanonicalResourceAllocationHost>(
     state: &mut CanonicalPlaceResourcesState,
     entry: &PlaceResourcesBonusRowsHandoff,

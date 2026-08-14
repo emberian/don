@@ -13,11 +13,13 @@ GUID-matched PDB, SHA-256
 ## Exact upstream boundary
 
 The current resource schedule owns all nonempty `BONUSES` rows, their category-tail
-branch, and BONUSES cleanup/FISH lookup. Its first independently unowned instruction is
-the FISH row body at `0x0068FBB3` for a nonempty section, or the next category cleanup
-at `0x00690225` for an empty section. FISH row execution, `GOODIES`, document cleanup,
-the `Map::place_resources` return, the `Map::make` caller continuation at `0x0068C72D`,
-and source token `0x1EF7` remain open. Therefore
+branch, BONUSES cleanup/FISH lookup, and the exact first row of a nonempty FISH section.
+That branch's first independently unowned instruction is recurrence routing at
+`0x00690215`. If FISH is empty, its cleanup and GOODIES lookup/enumeration are owned;
+the residual is GOODIES row zero at `0x0068FBB3`, or GOODIES cleanup at `0x00690225`
+when empty. FISH recurrence/later rows, GOODIES rows, document cleanup, the
+`Map::place_resources` return, the `Map::make` caller continuation at `0x0068C72D`, and
+source token `0x1EF7` remain open. Therefore
 neither the RNG at `Map::make` return nor the later shuffle-entry RNG may be
 derived from the current post-`place_all` receipt.
 

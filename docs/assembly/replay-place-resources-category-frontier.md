@@ -128,7 +128,8 @@ continuation in these exact prefix owners, both large candidate-filter bodies,
 allocations, and caller checkpoint token `0x1ef7` at `0x0068c72d`. No checksum value
 was fitted.
 
-The canonical Map schedule now composes the first bounded slice of this owner:
-completed BONUSES cleanup through FISH lookup/enumeration. That receipt stops before
-the first FISH row at `0x0068fbb3` (or at the next `0x00690225` cleanup for an empty
-section); later FISH/GOODIES execution remains separately bounded.
+The canonical Map schedule now composes completed BONUSES cleanup through FISH
+lookup/enumeration and, for a nonempty section, the exact first FISH row through
+`0x00690215`. For empty FISH it composes this owner again through FISH cleanup and
+GOODIES lookup/enumeration, stopping at `0x0068fbb3` or `0x00690225`. FISH recurrence,
+later rows, and final GOODIES cleanup remain separately bounded.

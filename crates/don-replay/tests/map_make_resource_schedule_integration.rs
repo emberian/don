@@ -13,7 +13,9 @@ use don_replay::map_make_resource_caller_gap_frontier::{
 };
 use don_replay::map_make_resource_schedule_integration::{
     continue_map_make_resource_schedule_bonus_category_tail,
+    continue_map_make_resource_schedule_empty_fish,
     continue_map_make_resource_schedule_first_bonus,
+    continue_map_make_resource_schedule_first_fish,
     continue_map_make_resource_schedule_fish_category,
     continue_map_make_resource_schedule_next_bonus, execute_map_make_resource_schedule,
     execute_map_make_resource_schedule_with_xml, MapMakeResourceOwnerProvenance,
@@ -22,6 +24,12 @@ use don_replay::map_make_resource_schedule_integration::{
 };
 use don_replay::map_style::MAP_MAKE_SCHEDULE;
 use don_replay::nubify_forest_frontier::MAP_NUBIFY_FOREST_CALLER_RESUME_VA;
+use don_replay::place_player_resource_body_frontier::{
+    PlayerAllocationHost, PlayerAllocationReceipt, PlayerAllocationRequest,
+};
+use don_replay::place_region_resource_world_body_frontier::{
+    RegionInitGoodHost, RegionInitGoodReceipt, RegionInitGoodRequest,
+};
 use don_replay::place_resources_bonus_mutation_frontier::{
     BonusMutationEvidence, CalleeRandomDraw, FirstBonusDisposition, FirstBonusMutationError,
     FirstBonusMutationFacts, PlaceResourcesBonusMutationState, PlacementEvidence, PlacementHost,
@@ -35,14 +43,19 @@ use don_replay::place_resources_bonus_mutation_frontier::{
 };
 use don_replay::place_resources_bonus_rows_mutation_frontier::{
     later_bonus_facts_digest, LaterBonusMutationEvidence, LaterBonusMutationFacts,
-    RemainingBonusRowsError, RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA, LATER_BONUS_ENTRY_VA,
-    LATER_ROW_MUTATION_ENTRY_VA,
+    RemainingBonusRowsError, RemainingBonusRowsState, BONUS_CATEGORY_TAIL_VA,
+    CARRIED_CATEGORY_FIRST_ENTRY_VA, LATER_BONUS_ENTRY_VA, LATER_ROW_MUTATION_ENTRY_VA,
+};
+use don_replay::place_resources_canonical_transaction::{
+    CanonicalPlaceResourcesState, CanonicalRowFacts, CanonicalRowMutationFacts,
+    CanonicalRowMutationReceipt,
 };
 use don_replay::place_resources_category_frontier::{
     CategoryAdvanceDisposition, CategoryAdvanceFacts, CategoryRowFact, CategorySectionFact,
     HostHandles, HostRefKind, ResourceCategory, ResourceFrontierEvidence, SectionSource,
-    CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, ROW_BODY_VA,
-    SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256, SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
+    CATEGORY_RELEASE_CALL_VAS, CATEGORY_TAIL_VA, ROW_BODY_VA, ROW_COUNT_TEST_VA,
+    ROW_ENUMERATE_CALL_VA, SHIPPED_EXE_SHA256 as CATEGORY_EXE_SHA256,
+    SHIPPED_PDB_SHA256 as CATEGORY_PDB_SHA256,
 };
 use don_replay::place_resources_pool_frontier::{
     resource_divvy_pool_digest, PlaceResourcesFactEvidence, PlaceResourcesLiveFacts,
@@ -1464,6 +1477,149 @@ fn fish_category_inputs(
     )
 }
 
+fn empty_fish_category_inputs(
+    state: &RemainingBonusRowsState,
+) -> (CategoryAdvanceFacts, PlaceResourcesDocumentHostAuthority) {
+    let (mut facts, authority) = fish_category_inputs(state);
+    facts
+        .selected_section
+        .as_mut()
+        .expect("selected FISH fixture")
+        .rows
+        .clear();
+    (facts, authority)
+}
+
+fn first_fish_chance_miss_facts(
+    fish: &don_replay::map_make_resource_schedule_integration::PlaceResourcesFishCategoryBoundary,
+) -> CanonicalRowFacts {
+    let state = &fish.category_state_after.deterministic;
+    let capture_ordinal = fish.fish_handoff.rows[0].capture_ordinal;
+    let mut facts = LaterBonusMutationFacts {
+        capture_ordinal,
+        type_name: "WHALES".to_owned(),
+        type_resolution: ResourceTypeResolution::CatalogGood { good_id: 6 },
+        chance: 0,
+        chance_group: state.last_chance_group,
+        pattern_name: "PLAYER".to_owned(),
+        pattern: PlacementPattern::Player,
+        saturate: 0,
+        spacing: 0,
+        scaled: Vec::new(),
+        evidence: LaterBonusMutationEvidence::CarriedRetailCapture {
+            executable_sha256: BONUS_EXE_SHA256.to_owned(),
+            pdb_sha256: BONUS_PDB_SHA256.to_owned(),
+            capture_sha256: [0x7e; 32],
+            category: ResourceCategory::Fish,
+            entry_va: CARRIED_CATEGORY_FIRST_ENTRY_VA,
+            row_enumerate_call_va: ROW_ENUMERATE_CALL_VA,
+            row_count_test_va: ROW_COUNT_TEST_VA,
+            mutation_entry_va: LATER_ROW_MUTATION_ENTRY_VA,
+            row_index: 0,
+            capture_ordinal,
+            random_state: state.random_state,
+            world_checksum: state.world_checksum.clone(),
+            sourced_walked_bytes: state.sourced_walked_bytes,
+            resource_pool_digest: state.resource_pool_digest,
+            last_chance_group: state.last_chance_group,
+            signed_chance_budget: state.signed_chance_budget,
+            winner_seen: state.winner_seen,
+            facts_digest: 0,
+        },
+    };
+    let digest = later_bonus_facts_digest(&facts);
+    if let LaterBonusMutationEvidence::CarriedRetailCapture { facts_digest, .. } =
+        &mut facts.evidence
+    {
+        *facts_digest = digest;
+    }
+    CanonicalRowFacts {
+        mutation: CanonicalRowMutationFacts::CarriedOrLater(facts),
+        placement: None,
+    }
+}
+
+fn canonical_fish_state(
+    fish: &don_replay::map_make_resource_schedule_integration::PlaceResourcesFishCategoryBoundary,
+    pool: &ResourceDivvyPoolState,
+) -> CanonicalPlaceResourcesState {
+    let state = &fish.category_state_after;
+    CanonicalPlaceResourcesState {
+        mutation: PlaceResourcesBonusMutationState {
+            random_state: state.deterministic.random_state,
+            world_checksum: state.deterministic.world_checksum.clone(),
+            sourced_walked_bytes: state.deterministic.sourced_walked_bytes,
+            resource_pool_digest: state.deterministic.resource_pool_digest,
+            resource_pool: Some(pool.clone()),
+            allocated_resources: state.deterministic.allocated_resources,
+            requested_resources: state.deterministic.requested_resources,
+        },
+        good_state_digest: 0x1122_3344_5566_7788,
+        item_state_digest: 0x8877_6655_4433_2211,
+        selected_document_handles: state.selected_document_handles,
+        default_document_handles: state.default_document_handles,
+    }
+}
+
+fn goodies_category_facts(
+    fish: &don_replay::map_make_resource_schedule_integration::PlaceResourcesFishCategoryBoundary,
+) -> CategoryAdvanceFacts {
+    let state = &fish.category_state_after.deterministic;
+    CategoryAdvanceFacts {
+        selected_style_name_nonempty: true,
+        selected_section: Some(CategorySectionFact {
+            lookup_token: "GOODIES".to_owned(),
+            returned_element_name: "GOODIES".to_owned(),
+            handles: HostHandles {
+                head: true,
+                tail: true,
+                inline_tail_word: false,
+            },
+            rows: vec![CategoryRowFact {
+                capture_ordinal: 51,
+                element_name: "BONUS".to_owned(),
+                handles: HostHandles {
+                    head: true,
+                    tail: false,
+                    inline_tail_word: true,
+                },
+            }],
+        }),
+        default_section: None,
+        evidence: ResourceFrontierEvidence::RetailCapture {
+            executable_sha256: CATEGORY_EXE_SHA256.to_owned(),
+            pdb_sha256: CATEGORY_PDB_SHA256.to_owned(),
+            capture_sha256: fish.document_host_authority.capture_sha256,
+            entry_va: CATEGORY_TAIL_VA,
+            random_state: state.random_state,
+            world_checksum: state.world_checksum.clone(),
+            sourced_walked_bytes: state.sourced_walked_bytes,
+            resource_pool_digest: state.resource_pool_digest,
+        },
+    }
+}
+
+#[derive(Default)]
+struct NoCanonicalAllocationHost;
+
+impl PlayerAllocationHost for NoCanonicalAllocationHost {
+    fn propose_allocation(
+        &mut self,
+        _request: &PlayerAllocationRequest,
+    ) -> Option<PlayerAllocationReceipt> {
+        panic!("chance-miss FISH row must not allocate a Player resource")
+    }
+}
+
+impl RegionInitGoodHost for NoCanonicalAllocationHost {
+    fn propose_init_good(
+        &mut self,
+        _request: &RegionInitGoodRequest,
+    ) -> Option<RegionInitGoodReceipt> {
+        panic!("chance-miss FISH row must not allocate a Region resource")
+    }
+}
+
 #[test]
 fn completed_bonus_schedule_owns_cleanup_and_stops_before_first_fish_row() {
     let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
@@ -1546,6 +1702,143 @@ fn completed_bonus_schedule_owns_cleanup_and_stops_before_first_fish_row() {
             HostRefKind::AcquireCategoryTail,
         ]
     );
+}
+
+#[test]
+fn first_fish_row_composes_carried_mutation_and_stops_before_recurrence() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let completed =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &completed.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton BONUSES must reach category cleanup"),
+    };
+    let (category_facts, authority) = fish_category_inputs(&rows.remaining_state);
+    let fish_schedule = continue_map_make_resource_schedule_fish_category(
+        &mut pool,
+        &completed,
+        &authority,
+        &category_facts,
+    )
+    .unwrap();
+    let fish = match &fish_schedule.placement {
+        MapMakeResourcePlacementReceipt::FishCategoryOpen(fish) => fish,
+        _ => panic!("FISH category must stop before row zero"),
+    };
+    let random_before = fish.category_state_after.deterministic.random_state;
+    let pool_before = pool.clone();
+    let facts = first_fish_chance_miss_facts(fish);
+    let mut canonical = canonical_fish_state(fish, &pool);
+    let mut host = NoCanonicalAllocationHost;
+
+    let continued = continue_map_make_resource_schedule_first_fish(
+        &mut pool,
+        &mut canonical,
+        &fish_schedule,
+        &facts,
+        &mut host,
+    )
+    .unwrap();
+    let first_fish = match &continued.placement {
+        MapMakeResourcePlacementReceipt::FirstFishRowOpen(first_fish) => first_fish,
+        _ => panic!("first FISH row must stop before recurrence"),
+    };
+    let CanonicalRowMutationReceipt::CarriedFirst(receipt) = &first_fish.row_receipt.mutation
+    else {
+        panic!("row zero must use the carried-category owner")
+    };
+
+    assert_eq!(
+        first_fish.residual_va,
+        don_replay::place_resources_bonus_mutation_frontier::FIRST_BONUS_ROW_RESIDUAL_VA
+    );
+    assert_eq!(first_fish.remaining_state.next_row_index, 1);
+    assert_eq!(receipt.entry_va, CARRIED_CATEGORY_FIRST_ENTRY_VA);
+    assert_eq!(receipt.category, ResourceCategory::Fish);
+    assert_eq!(receipt.random_state_before, random_before);
+    let draw = receipt
+        .chance_draw
+        .as_ref()
+        .expect("chance group zero redraws at every row entry");
+    let mut expected_random = Random::new(random_before);
+    let expected_raw = expected_random.get(0, 0xffff);
+    assert_eq!(draw.state_before, random_before);
+    assert_eq!(draw.raw, expected_raw);
+    assert_eq!(draw.modulo_100, expected_raw % 100);
+    assert_eq!(draw.state_after, expected_random.state());
+    assert_eq!(receipt.random_state_after, expected_random.state());
+    assert!(receipt.placement.is_none());
+    assert_eq!(pool, pool_before);
+    assert_eq!(canonical, first_fish.canonical_state_after);
+}
+
+#[test]
+fn empty_fish_cleanup_reaches_first_goodies_row_without_rng_or_world_change() {
+    let (mut pool, first_schedule) = chance_miss_first_bonus_schedule(1);
+    let completed =
+        continue_map_make_resource_schedule_bonus_category_tail(&mut pool, &first_schedule)
+            .unwrap();
+    let rows = match &completed.placement {
+        MapMakeResourcePlacementReceipt::BonusRowsOpen(rows) => rows,
+        _ => panic!("singleton BONUSES must reach category cleanup"),
+    };
+    let (fish_facts, authority) = empty_fish_category_inputs(&rows.remaining_state);
+    let fish_schedule = continue_map_make_resource_schedule_fish_category(
+        &mut pool,
+        &completed,
+        &authority,
+        &fish_facts,
+    )
+    .unwrap();
+    let fish = match &fish_schedule.placement {
+        MapMakeResourcePlacementReceipt::FishCategoryOpen(fish) => fish,
+        _ => panic!("empty FISH must stop at category cleanup"),
+    };
+    assert!(fish.fish_handoff.rows.is_empty());
+    assert_eq!(fish.residual_va, CATEGORY_TAIL_VA);
+    let random_before = fish.category_state_after.deterministic.random_state;
+    let world_before = fish
+        .category_state_after
+        .deterministic
+        .world_checksum
+        .clone();
+    let pool_before = pool.clone();
+    let goodies_facts = goodies_category_facts(fish);
+
+    let continued = continue_map_make_resource_schedule_empty_fish(
+        &mut pool,
+        &fish_schedule,
+        &authority,
+        &goodies_facts,
+    )
+    .unwrap();
+    let goodies = match &continued.placement {
+        MapMakeResourcePlacementReceipt::GoodiesCategoryOpen(goodies) => goodies,
+        _ => panic!("empty FISH cleanup must produce the GOODIES handoff"),
+    };
+
+    assert_eq!(goodies.category_receipt.entry_va, CATEGORY_TAIL_VA);
+    assert_eq!(
+        goodies.category_receipt.completed_category,
+        ResourceCategory::Fish
+    );
+    assert_eq!(
+        goodies.category_state_after.category,
+        ResourceCategory::Goodies
+    );
+    assert_eq!(goodies.goodies_handoff.rows.len(), 1);
+    assert_eq!(goodies.goodies_handoff.rows[0].capture_ordinal, 51);
+    assert_eq!(goodies.residual_va, ROW_BODY_VA);
+    assert_eq!(
+        goodies.category_state_after.deterministic.random_state,
+        random_before
+    );
+    assert_eq!(
+        goodies.category_state_after.deterministic.world_checksum,
+        world_before
+    );
+    assert_eq!(pool, pool_before);
 }
 
 #[test]

@@ -66,10 +66,11 @@ order.
 
 No replay checkpoint becomes owned in this tranche. The caller checkpoint at
 `0x0068c72d`, source token `0x1ef7`, remains pending. The current public schedule
-can cross BONUSES cleanup and reach the first FISH row at `0x0068fbb3` (or the
-next `0x00690225` cleanup for an empty FISH section); FISH row execution,
-`GOODIES`, document cleanup, the `Map::place_resources` return, and the caller
-continuation remain red.
+can cross BONUSES cleanup and execute the exact first FISH row through `0x00690215`.
+When FISH is empty it instead owns FISH cleanup and reaches the first GOODIES row
+at `0x0068fbb3` (or GOODIES cleanup at `0x00690225` when empty). FISH recurrence,
+later FISH/GOODIES rows, document cleanup, the `Map::place_resources` return, and
+the caller continuation remain red.
 
 There are therefore two honest residuals:
 
@@ -77,9 +78,10 @@ There are therefore two honest residuals:
    opaque `Map::place_region_resource` (`0x00690480`) or
    `Map::place_player_resource` (`0x00691f70`) body selected by the first winning
    BONUS row;
-2. after all admitted BONUS placement receipts are spliced and BONUSES cleanup is
-   accepted, the first remaining schedule boundary is FISH row zero at
-   `0x0068fbb3`, or the FISH category tail at `0x00690225` when empty.
+2. after an admitted first-FISH receipt, its exact Good allocations are spliced in
+   native order after BONUS allocations and the first remaining schedule boundary is
+   recurrence at `0x00690215`; when FISH is empty, the boundary is GOODIES row zero
+   at `0x0068fbb3` or GOODIES cleanup at `0x00690225`.
 
 The corpus status is unchanged by design: 21 checksum-bearing recordings have
 nonempty first Goods checkpoints, while the installed replay producer still
