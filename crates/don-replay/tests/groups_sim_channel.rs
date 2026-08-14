@@ -248,27 +248,49 @@ fn package_checksum_provenance_is_not_inferred_from_its_recording() {
         Err(GroupSimChannelError::ChecksumDoesNotFollowPair)
     );
 
-    let suffix_opcode = *source
-        .unowned_sim_suffix
-        .first()
-        .expect("the pinned corpus witness has an unowned Sim suffix");
     let mut intervening = replay.clone();
     let commands = &mut intervening.turns[source.turn_index].players[source.player_index].commands;
-    let suffix_index = commands
-        .iter()
-        .enumerate()
-        .skip(source.checksum_command_index + 1)
-        .find_map(|(index, command)| (command.opcode == suffix_opcode).then_some(index))
-        .expect("the retained suffix opcode comes from this exact package");
-    let injected = commands.remove(suffix_index);
-    commands.insert(source.pair_command_index + 2, injected);
+    commands.insert(
+        source.pair_command_index + 2,
+        don_replay::replay::OwnedCommand {
+            opcode: 32,
+            bytes: vec![32, 0, 0, 0, 0, 0, 0, 0, 0],
+        },
+    );
     assert_eq!(
         ReplayGroupMoveSource::from_replay(&intervening, source.turn_index, source.player_index,),
         Err(GroupSimChannelError::UnownedSimBeforeChecksum {
             index: source.pair_command_index + 2,
-            opcode: suffix_opcode,
+            opcode: 32,
         })
     );
+}
+
+#[test]
+fn first_2024_groups_change_has_no_unowned_checksum_channel_shell() {
+    let path = repo_root().join("ron-data/replays/multi/Playback___2024.02.23_20_49_35__Fri_.rcx");
+    let Ok(replay) = Replay::open(&path) else {
+        eprintln!("SKIPPED -- NOT A PASS: missing {}", path.display());
+        return;
+    };
+    let source = sources(&replay)
+        .into_iter()
+        .find(|source| source.lockstep_serial == 64 && source.package_frame == 379)
+        .expect("pinned frame-379 Group+Move source");
+
+    assert_eq!((source.play, source.pair_command_index), (0, 1));
+    assert_eq!(source.inert_opcodes, [0x4f, 0x39, 0x4a, 0x48]);
+    assert!(source.unowned_sim_prefix.is_empty());
+    assert!(source.unowned_sim_suffix.is_empty());
+
+    let turn65 = replay.turns.iter().find(|turn| turn.turn == 65).unwrap();
+    let turn66 = replay.turns.iter().find(|turn| turn.turn == 66).unwrap();
+    assert!(turn65
+        .any_checksums()
+        .is_some_and(|(_, sums)| sums.get(Channel::Groups) == CORPUS_INITIAL_GROUPS_CHANNEL));
+    assert!(turn66
+        .any_checksums()
+        .is_some_and(|(_, sums)| sums.get(Channel::Groups) != CORPUS_INITIAL_GROUPS_CHANNEL));
 }
 
 #[test]

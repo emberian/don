@@ -99,7 +99,7 @@ pub enum CommandClass {
     Sim,
     /// Lockstep bookkeeping: `check_sums`, `check_random`, turn control.
     Lockstep,
-    /// Local presentation only: camera, selection, chat, taunts.
+    /// Outside all fifteen checksum channels: local presentation or synchronized telemetry.
     Presentation,
 }
 
@@ -114,9 +114,16 @@ pub fn classify(op: u8) -> CommandClass {
         // ---- lockstep bookkeeping ----
         0x39 => CommandClass::Lockstep, // CheckSumsCommand   / process_check_sums
         0x3a => CommandClass::Lockstep, // NextCheckSumCommand / process_next_check_sum
-        // ---- local view / UI, no walked state ----
+        // ---- no state reached by any of the fifteen checksum walkers ----
         0x44 => CommandClass::Presentation, // ChatCommand
         0x48 => CommandClass::Presentation, // CameraCommand (zoom/x_loc/y_loc)
+        // TurnData writes TurnControl telemetry and may toggle reveal/accum_cheated. PlayerSpeed
+        // writes the eight Player::synced_* counters. Instruction/xref audits prove none of
+        // those owners is reached by units/builds/walls/ammo/deaths/groups/guys/leaders/cities/
+        // items/goods/world/rules/scenario/script. They remain synchronized/save-visible data,
+        // but they are not simulation commands for this checksum harness.
+        0x4a => CommandClass::Presentation, // TurnDataCommand
+        0x4f => CommandClass::Presentation, // PlayerSpeedCommand
         // Everything else, including every opcode whose handler we have not
         // read, counts as simulation. Over-reporting the worklist is the safe
         // direction: a missed sim command is a silent divergence, an extra one
@@ -267,6 +274,8 @@ mod tests {
     fn classification_puts_checksums_outside_the_sim_set() {
         assert_eq!(classify(0x39), CommandClass::Lockstep);
         assert_eq!(classify(0x48), CommandClass::Presentation);
+        assert_eq!(classify(0x4a), CommandClass::Presentation);
+        assert_eq!(classify(0x4f), CommandClass::Presentation);
         assert_eq!(classify(0x07), CommandClass::Sim);
     }
 }

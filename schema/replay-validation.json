@@ -8,7 +8,7 @@
     "checksum_packets": 488557, "checksum_total_consistent": 488557, "checksum_adler_shaped": 488557,
     "crossplay_by_group": { "comparisons": 265619, "identical": 265619 },
     "crossplay_by_stamp": { "comparisons": 265931, "identical": 265910, "disagreements_comparing_different_turns": 21 },
-    "commands": { "sim": 2477342, "lockstep": 1285514, "presentation": 1361208 },
+    "commands": { "sim": 172934, "lockstep": 1285514, "presentation": 3665616 },
     "sparse_leaders_prefix": { "what": "exact setup-owned checksum spans only; never installed as a complete Leaders channel producer; the player-row projection is not ownership because duplicate Player::who rows collapse", "derived_files": 32, "refused_files": 30, "all_exact_owned_checksum_bytes": 123456, "checksum_bearing_files": 21, "checksum_bearing_exact_owned_checksum_bytes": 61416, "checksum_bearing_active_leader_rows": 87, "checksum_bearing_present_player_rows": 89, "checksum_bearing_player_row_projection_bytes": 62824, "checksum_bearing_duplicate_who_collapsed_rows": 2, "checksum_bearing_player_row_projection_overcount_bytes": 1408, "checksum_bearing_human_only_candidates": 7, "checksum_bearing_expired_by_nonhuman": 14, "prefix_contributed_substantive_leaders_compares": 0, "prefix_contributed_substantive_leaders_matches": 0 },
     "per_channel": {
       "units": { "compares": 222938, "matches": 0, "trivial": 0, "unmodelled": 0, "nontrivial_compares": 0, "substantive_compares": 0, "substantive_matches": 0, "retail_empty_compares": 0, "best_survived_turns": 0, "crossplay_disagreements": 0, "mutable": true },
@@ -107,10 +107,10 @@
       "0x47": { "struct": "QuitCommand", "class": "Sim", "count": 22 },
       "0x48": { "struct": "CameraCommand", "class": "Presentation", "count": 1355946 },
       "0x49": { "struct": "LeaderOptionsCommand", "class": "Sim", "count": 159 },
-      "0x4a": { "struct": "TurnDataCommand", "class": "Sim", "count": 1285782 },
+      "0x4a": { "struct": "TurnDataCommand", "class": "Presentation", "count": 1285782 },
       "0x4b": { "struct": "RenameCityCommand", "class": "Sim", "count": 12 },
       "0x4c": { "struct": "PauseCommand", "class": "Sim", "count": 119 },
-      "0x4f": { "struct": "PlayerSpeedCommand", "class": "Sim", "count": 1018626 }
+      "0x4f": { "struct": "PlayerSpeedCommand", "class": "Presentation", "count": 1018626 }
     }
   },
   "files": [

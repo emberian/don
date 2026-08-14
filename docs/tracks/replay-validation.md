@@ -551,33 +551,38 @@ harness that assumes one frame per turn is wrong by a factor of 2 to 6. This is
 why `frames_per_turn` is measured and passed to `Simulation::step_turn` rather
 than hard-coded.
 
-**The command worklist, ranked by real frequency** across 5,055,253 commands
+**The command worklist, ranked by real frequency** across 5,124,064 commands
 (`schema/replay-validation.json` → `totals.opcode_counts`):
 
 | opcode | struct | class | count |
 |---|---|---|---:|
-| `0x48` | `CameraCommand` | Presentation | 1,296,016 |
-| `0x4a` | `TurnDataCommand` | Sim | 1,285,782 |
-| `0x4f` | `PlayerSpeedCommand` | Sim | 1,011,134 |
+| `0x48` | `CameraCommand` | Presentation | 1,355,946 |
+| `0x4a` | `TurnDataCommand` | Presentation | 1,285,782 |
+| `0x4f` | `PlayerSpeedCommand` | Presentation | 1,018,626 |
 | `0x3a` | `NextCheckSumCommand` | Lockstep | 796,957 |
 | `0x39` | `CheckSumsCommand` | Lockstep | 488,557 |
-| `0x00` | `GroupCommand` | Sim | 78,197 |
-| `0x18` | `QueueUpCommand` | Sim | 28,993 |
-| `0x19` | `BuildCommand` | Sim | 14,042 |
-| `0x15` | `DisbandCommand` | Sim | 10,916 |
-| `0x07` | `MoveToCommand` | Sim | 9,178 |
-| `0x04` | `AttackCommand` | Sim | 5,715 |
-| `0x2e` / `0x2f` | `BuyCommand` / `SellCommand` | Sim | 4,427 / 2,592 |
+| `0x00` | `GroupCommand` | Sim | 78,872 |
+| `0x18` | `QueueUpCommand` | Sim | 29,304 |
+| `0x19` | `BuildCommand` | Sim | 14,133 |
+| `0x15` | `DisbandCommand` | Sim | 10,920 |
+| `0x07` | `MoveToCommand` | Sim | 9,231 |
+| `0x04` | `AttackCommand` | Sim | 5,771 |
+| `0x2e` / `0x2f` | `BuyCommand` / `SellCommand` | Sim | 4,451 / 2,592 |
 
-Totals: 2,468,461 Sim, 1,285,514 Lockstep, 1,301,278 Presentation. The three
+Totals: 172,934 Sim, 1,285,514 Lockstep, 3,665,616 Presentation. The three
 per-turn bookkeeping opcodes (`0x4a`, `0x4f`, `0x48`) are 71 % of all traffic;
 **the entire player-order stream is under 160,000 commands corpus-wide.** For an
 order-application layer, `QueueUpCommand`, `BuildCommand`, `MoveToCommand` and
 `AttackCommand` are the whole game.
 
-`0x4a` and `0x4f` are classified `Sim` **conservatively** — their handlers are
-unread here, and over-reporting the worklist is the safe direction. Settling
-them is cheap and would move a million commands out of the sim set.
+The `0x4a`/`0x4f` classification is instruction-derived, not inferred from the
+recorded checksums. `process_turn_data` writes TurnControl telemetry and its
+conditional reveal/cheat bookkeeping; `process_player_speed` performs exactly
+eight additions into the Player synchronized counters. The complete checksum
+inventory (units, builds, walls, ammo, deaths, groups, guys, leaders, cities,
+items, goods, world, rules, scenario data, and script runtime) traverses none of
+Player telemetry, TurnControl, or reveal bookkeeping. These commands are
+synchronized and save-visible, but neither mutates a checksum channel.
 
 **Two channel walkers have no *generated* traversal.** `ScenarioData::walk_data`
 (`0x00997ad0`) is `static __cdecl`, so `schema/state-schema.json`'s `this`-taint
