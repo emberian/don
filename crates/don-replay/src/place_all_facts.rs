@@ -828,14 +828,19 @@ fn missing_helping() -> UnavailablePlaceAllFact {
 fn missing_reporting_scores() -> UnavailablePlaceAllFact {
     UnavailablePlaceAllFact {
         kind: PlaceAllFactKind::ReportingScores,
-        // CORRECTION (place_all boundary lane): this is a port gap, not a
-        // capture requirement. player_scores[8][5] is zeroed by place_all and
-        // then accumulated inside the same call by place_region_group
-        // 0x006a2f60, which adds each successful tile's octagonal distance to
-        // every participating player. The reporting tail at 0x006a8f12 reads
-        // the result. Nothing outside place_all supplies it.
-        required_source: "produced inside place_all by place_region_group 0x006a2f60; the port does not yet accumulate it",
-        addresses: vec![NUM_PLAYERS_VA, PLAYER_SCORES_VA, TERRAIN_GROUPS_REPORTING_VA],
+        // CORRECTION (place_all boundary lane): this is not a capture
+        // requirement. player_scores[8][5] is zeroed by place_all and
+        // accumulated inside the same call by the recovered
+        // place_region_group 0x006a2f60 helping-score update. The owned survey
+        // forwards that final table to the reporting tail. The legacy live-fact
+        // adapter retains this typed row only for compatibility.
+        required_source:
+            "derived inside place_all by the recovered place_region_group 0x006a2f60 score update",
+        addresses: vec![
+            NUM_PLAYERS_VA,
+            PLAYER_SCORES_VA,
+            TERRAIN_GROUPS_REPORTING_VA,
+        ],
     }
 }
 

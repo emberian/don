@@ -364,7 +364,7 @@ fn great_lakes_player_mode_five_consumes_the_installed_runtime() {
         assert_eq!(execution.execution.rng_draws, 0);
     }
     assert!(advance.completed_groups.contains(&2));
-    assert_eq!(advance.stop, PlaceAllStop::PostPlacementReporting);
+    assert_eq!(advance.stop, PlaceAllStop::Completed { return_value: 1 });
     let authority = advance
         .post_placement_authority
         .as_ref()
@@ -385,6 +385,24 @@ fn great_lakes_player_mode_five_consumes_the_installed_runtime() {
         .mountain_types
         .items
         .is_empty());
+    let completed = advance
+        .completed_place_all
+        .as_ref()
+        .expect("derived reporting scores must close the native return");
+    assert_eq!(completed.return_value, 1);
+    assert_eq!(completed.random_state_before, continent.rng_final);
+    assert_eq!(completed.random_state_after, authority.random_state_after);
+    assert_eq!(completed.checksum_after, authority.world_checksum);
+    assert_eq!(completed.tdata_cells, authority.world.tdata.len());
+    assert!(completed.host_events.iter().any(|event| {
+        matches!(
+            event,
+            don_sim::systems::terrain_groups::PlaceAllHostEvent::PlacementReportPlayerScore {
+                score,
+                ..
+            } if *score != 0
+        )
+    }));
     assert!(
         !matches!(
             advance.stop,

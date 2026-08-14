@@ -164,7 +164,7 @@ tied to the running executable. Eight of the nine do not.
 | `PlayerCountAndPlacePlayers` | derived | `place_players` is the literal `push 1` at `0x0068c007` |
 | `DooberTilesetRules` | **shipped data** | PDB `TileSetGroupData` is sixteen `int`s at offsets 0..60; the selected `TILESET/TERRAINGROUP` in `Data/tilesets.xml` declares exactly sixteen `<NAME value="N"/>` children matching those field names *in offset order*, and field 0 (`clump_factor` ↔ `CLUMP_FACTOR`) was already independently confirmed by the fertility path |
 | `TDataPlane` | replay-owned | the reconstruction's own `World` |
-| `ReportingScores` | **a port gap, not a capture** | `player_scores[8][5]` is zeroed by `place_all` and then accumulated inside the same call by `place_region_group` `0x006a2f60`; the reporting tail at `0x006a8f12` reads the result. Nothing outside `place_all` supplies it |
+| `ReportingScores` | **derived inside the owned transaction** | `player_scores[8][5]` is zeroed by `place_all` and accumulated by the recovered `place_region_group` `0x006a2f60` helping-score update. The owned adapter forwards that final table to the reporting tail; nothing outside `place_all` supplies it |
 | `MountainRangeListsAndCursors` | **shipped data** — `ron-data/effects_graphics.xml`, lengths `1 / 8 / 7`, two RNG draws | §1 |
 | `HostGroupResolutions` | **still unavailable** | §4 |
 
@@ -222,11 +222,11 @@ group 2's missing installed mountain catalog.
 
 When every selected group, both doober passes, and the map-style treeification gate complete,
 `PlaceAllPreviewReceipt::post_placement_authority` retains the final staged World/checksum, RNG
-word, mountain-range cursors, TerrainGroup state, and exact mounted owner state. The only
-remaining body is localized reporting. Its recovered transaction reads scores/strings and clears
-`console_info`; it cannot mutate World, RNG, Mountains, or the subsystem owners. The authority is
-therefore a lawful input to post-mountain height/CoordInfo generation without claiming that
-`place_all` returned.
+word, mountain-range cursors, TerrainGroup state, and exact mounted owner state. The remaining
+localized reporting transaction reads the internally accumulated score table, emits strings, and
+clears `console_info`; it cannot mutate World, RNG, Mountains, or the subsystem owners. The owned
+survey now supplies that derived table, reaches native `return 1`, and emits both the final
+authority and a `ReplayPlaceAllReceipt` in the exact shape consumed by setup entry.
 
 ## 5. Where each dominant style stops, and what is beyond it
 
@@ -243,7 +243,7 @@ hypothesis. The arm order is the data-driven terrain-group order from
   `0x006b2a10`. The exact cold-process Good owner now crosses those calls. Groups 0 and 1
   complete at the dispatcher edge `0x006a8ee5`; group 2, `type="mountains"`, is the first cold
   stop at `Mountains::add_mountain`. A synthetic explicit installed catalog exercises the
-  mode-5 owner and reaches the reporting-only post-placement authority.
+  mode-5 owner, derives the reporting table, and reaches native `return 1` with final authority.
 
 So after the range lists, the common cold blocker is
 `Mountains::add_mountain` `0x0089c2e0`. `add_mountain` needs the mountain

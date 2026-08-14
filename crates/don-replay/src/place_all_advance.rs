@@ -39,7 +39,7 @@
 use crate::continent::{ContinentReceipt, ContinentStop};
 use crate::fractal_boundary::TERRAIN_GROUPS_PLACE_ALL_VA;
 use crate::initial::{InitialItemBoundary, InitialItemReconstruction, InitialWorld};
-use crate::place_all_boundary::TERRAIN_GROUPS_PLACE_ALL_RETURN_VA;
+use crate::place_all_boundary::{ReplayPlaceAllReceipt, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA};
 use crate::post_continent::REGIONS_CLEAR_ALL_VA;
 use don_sim::rng::Random;
 use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
@@ -538,6 +538,11 @@ pub struct PlaceAllAdvanceReceipt {
     /// mutation and draw. Reporting is still a typed boundary, but it cannot
     /// alter any authority retained here.
     pub post_placement_authority: Option<PlaceAllPostPlacementAuthority>,
+    /// Present only when the read-only owned survey reached the native return
+    /// through its internally produced reporting score table. This is the same
+    /// receipt shape consumed by the setup-entry binder; the caller's World
+    /// remains unmodified.
+    pub completed_place_all: Option<ReplayPlaceAllReceipt>,
     /// Ordered `World::set_oil_at` calls crossed under
     /// [`OilGoodPolicy::ContinueRecordingGoodEffects`]; always empty otherwise.
     pub crossed_oil_good_effects: Vec<DropTileExternalRequest>,
@@ -647,6 +652,7 @@ pub fn advance_place_all_boundary_owned(
         completed_groups: Vec::new(),
         owner_receipts: Vec::new(),
         post_placement_authority: None,
+        completed_place_all: None,
         crossed_oil_good_effects: Vec::new(),
         oil_good_policy: facts.oil_good_policy,
         stop: PlaceAllStop::MountainRangeLists,
@@ -686,7 +692,8 @@ pub fn advance_place_all_boundary_owned(
         // the call, at 0x0068c007--0x0068c010. The wrapper is chosen by which
         // late-stage facts exist, so an absent one becomes its own stop rather
         // than a substituted default.
-        let host = |_: PlaceAllHostEvent| {};
+        let mut host_events = Vec::new();
+        let host = |event: PlaceAllHostEvent| host_events.push(event);
         let result = groups.place_all_with_group_owned_inputs(
             &mut world,
             &map.generation_regions,
@@ -705,6 +712,45 @@ pub fn advance_place_all_boundary_owned(
         let (preview, boundary) = match result {
             Ok(return_value) => {
                 receipt.stop = PlaceAllStop::Completed { return_value };
+                let checksum_after = world.checksum_sections();
+                let mut reporting_scores = [[0; 5]; 8];
+                for event in &host_events {
+                    if let PlaceAllHostEvent::PlacementReportPlayerScore {
+                        player_index,
+                        type_slot,
+                        score,
+                        ..
+                    } = *event
+                    {
+                        reporting_scores[player_index as usize][type_slot as usize] = score;
+                    }
+                }
+                receipt.post_placement_authority = Some(PlaceAllPostPlacementAuthority {
+                    reporting_inputs: PlacementReportingInputs {
+                        num_players: world.start_x.items.len() as i32,
+                        player_scores: reporting_scores,
+                    },
+                    world,
+                    world_checksum: checksum_after.clone(),
+                    random_state_after: random.state(),
+                    mountains,
+                    terrain_groups_after: groups.groups,
+                    owners: Some(owners),
+                });
+                receipt.completed_place_all = Some(ReplayPlaceAllReceipt {
+                    entry_va: TERRAIN_GROUPS_PLACE_ALL_VA,
+                    return_va: TERRAIN_GROUPS_PLACE_ALL_RETURN_VA,
+                    return_value,
+                    map_style: plan.inputs.map_style,
+                    generated_starts: continent.starts_added,
+                    tdata_cells: map.world.tdata.len(),
+                    random_state_before: continent.rng_final,
+                    random_state_after: random.state(),
+                    host_events,
+                    checksum_before: map.checksum.clone(),
+                    checksum_after,
+                    sourced_walked_bytes: map.sourced_walked_bytes,
+                });
                 return Ok(receipt);
             }
             Err(PlaceAllError::GameplayPlacementUnavailable { preview, boundary }) => {

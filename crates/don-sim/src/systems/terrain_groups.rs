@@ -212,6 +212,9 @@ pub struct PlaceAllPostPlacementAuthority {
     pub random_state_after: i32,
     pub mountains: Mountains,
     pub terrain_groups_after: Vec<TerrainGroup>,
+    /// The exact score table produced inside `place_all` and consumed by the
+    /// reporting-only tail. No live capture supplies this table.
+    pub reporting_inputs: PlacementReportingInputs,
     /// `Some` only for the exact owned entry point. It retains the final
     /// MountainAddRuntime/Good state rather than reconstructing it from leaf
     /// receipts or from changed-only World bytes.
@@ -1391,7 +1394,13 @@ impl TerrainGroups {
             }
         }
         if next == TerrainPlacementBoundary::PostPlacementReporting {
-            if let Some(reporting) = reporting {
+            let derived_reporting = preview_owners.as_ref().map(|_| PlacementReportingInputs {
+                num_players: preview_world.start_x.items.len() as i32,
+                player_scores: current_helping
+                    .as_ref()
+                    .map_or([[0; 5]; 8], |helping| helping.scores),
+            });
+            if let Some(reporting) = reporting.or(derived_reporting) {
                 let receipt =
                     Self::plan_placement_reporting(self.console_info, reporting, &mut *host)
                         .map_err(PlaceAllError::InvalidPlacementReporting)?;
@@ -1411,6 +1420,12 @@ impl TerrainGroups {
             .then(|| {
                 let world_checksum = preview_world.checksum_sections();
                 PlaceAllPostPlacementAuthority {
+                    reporting_inputs: PlacementReportingInputs {
+                        num_players: preview_world.start_x.items.len() as i32,
+                        player_scores: current_helping
+                            .as_ref()
+                            .map_or([[0; 5]; 8], |helping| helping.scores),
+                    },
                     world: preview_world,
                     world_checksum,
                     random_state_after: preview_random.state(),
