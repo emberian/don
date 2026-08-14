@@ -30,7 +30,9 @@ use super::leader_produce_building_candidate_prefix::{
     LEADER_PRODUCE_BUILDING_BLOCKED_SITE_BYTES_REMAINING,
     LEADER_PRODUCE_BUILDING_BLOCKED_SITE_CALL_VA,
 };
-use super::map_terrain::{tflag, wflag, Coord, TCoord};
+use super::map_terrain::{
+    tflag, wflag, Coord, TCoord, WorldTregionReceipt, WORLD_DATA_GET_TREGION_VA,
+};
 use super::production::{
     flag,
     runtime::{LiveProductionRuntime, LiveTypeClass},
@@ -64,8 +66,8 @@ pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA: u32 = 0x0063_6d18;
 pub const BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_BYTES_REMAINING: u32 =
     BUILD_TYPE_BLOCKED_SITE_END_VA - BUILD_TYPE_BLOCKED_SITE_BLOCKED_LOCATION_CALL_VA;
 pub const BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA: u32 = 0x0063_75f7;
-pub const WORLD_DATA_GET_TREGION_VA: u32 = 0x006b_52e0;
 pub const CITY_TYPE: usize = 414;
+pub const TOWN_TYPE: usize = 415;
 pub const OIL_WELL_TYPE: usize = 421;
 pub const OIL_PLATFORM_TYPE: usize = 422;
 pub const DOCK_TYPE: usize = 432;
@@ -77,6 +79,8 @@ pub const GAME_SEMAPHORE_IMMEDIATE_BIT: u32 = 11;
 pub const LAKOTA_TRIBE: i32 = 19;
 pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA: u32 = 0x006e_1e82;
 pub const LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING: u32 = 0x126c;
+pub const LEADER_PRODUCE_BUILDING_FIND_FRIENDS_CALL_VA: u32 = 0x006e_1f5f;
+pub const BUILD_TYPE_FIND_FRIENDS_VA: u32 = 0x0063_9270;
 pub const LEADER_PRODUCE_BUILDING_FARM_SCORE_RANDOM_CALL_VA: u32 = 0x006e_2094;
 pub const LEADER_PRODUCE_BUILDING_FINE_BLOCKED_SITE_CALL_VA: u32 = 0x006e_2beb;
 pub const LEADER_PRODUCE_BUILDING_FINE_RANDOM_CALL_VA: u32 = 0x006e_2c00;
@@ -336,6 +340,163 @@ impl LeaderProduceBuildingMarketBlockedLocationRequest {
     }
 }
 
+/// Exact `BuildTypeData::get_town` result reached by the installed Market.
+///
+/// Market's `0x800` flag selects `ObjectsData::find_town_at`, so the chosen City center must
+/// additionally satisfy the non-strict Town relation. The fresh center queue is read before the
+/// one-per-City Market check and must not contain either forbidden setup child type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeMarketTownRead {
+    pub city_slot: usize,
+    pub city_object: i16,
+    pub center_build_row: usize,
+    pub center_type: i32,
+    pub center_is_town: bool,
+    pub distance: i32,
+    pub radius: i32,
+    pub center_queue_len: usize,
+}
+
+/// One canonical `CityData::o` / `BuildData::city_down` row read by
+/// `CityData::count_buildings(436, 0, 0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeMarketCityBuildingRead {
+    pub object_index: i16,
+    pub row: usize,
+    pub current_type: i32,
+    pub valid: bool,
+    pub active: bool,
+    pub market_relation: bool,
+    pub counted: bool,
+    pub next_object: i16,
+}
+
+/// One tile read by the later domain-zero `BuildTypeData::count_water` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildTypeMarketWaterRead {
+    pub tile: [i32; 2],
+    pub terrain_mask: u16,
+    pub water: bool,
+}
+
+/// Complete read-only installed-Market verdict after the typed `get_tregion` child.
+///
+/// This receipt binds the sibling World query to the same canonical Sim, executes the exact
+/// self-owned dry-territory branch, selects the fresh Town, walks its Build chain for the
+/// max-one-Market policy, and repeats the footprint for the domain-zero water count. It stops at
+/// the successful-site scoring boundary; `find_friends`, candidate scoring, RNG, allocation and
+/// every later mutation remain separate owners.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingMarketBlockedLocationReceipt {
+    pub input: LeaderProduceBuildingMarketBlockedLocationRequest,
+    pub tregion: WorldTregionReceipt,
+    pub immediate: bool,
+    pub territory_reads: Vec<BuildTypeNonFriendlyTerritoryRead>,
+    pub non_friendly_territory: i32,
+    pub town: BuildTypeMarketTownRead,
+    pub city_buildings: Vec<BuildTypeMarketCityBuildingRead>,
+    pub counted_markets: i32,
+    pub water_reads: Vec<BuildTypeMarketWaterRead>,
+    pub water_tiles: i32,
+    pub blocked_location_returned: i32,
+    pub native_returned: i32,
+    pub continuation: LeaderProduceBuildingSuccessfulSiteBoundary,
+    /// First unresolved child after the source-owned accepted-site scalar prefix.
+    pub next_child: LeaderProduceBuildingFindFriendsBoundary,
+}
+
+impl LeaderProduceBuildingMarketBlockedLocationReceipt {
+    pub fn validates(&self) -> bool {
+        let [corner_x, corner_y] = self.input.footprint_corner;
+        let expected_tiles = (corner_x..corner_x + 4)
+            .flat_map(|tx| (corner_y..corner_y + 4).map(move |ty| [tx, ty]));
+        let territory_matches =
+            self.territory_reads.len() == 16
+                && self.territory_reads.iter().zip(expected_tiles.clone()).all(
+                    |(read, expected)| {
+                        read.tile == expected
+                            && read.terrain_mask & tflag::SURFACE_MASK != tflag::SURFACE_WATER
+                            && read.terrain_mask & tflag::CITY != 0
+                            && read.territory_owner == self.input.owner as i8
+                    },
+                );
+        let water_matches = self.water_reads.len() == 16
+            && self
+                .water_reads
+                .iter()
+                .zip(expected_tiles)
+                .all(|(read, expected)| {
+                    read.tile == expected
+                        && read.water
+                            == (read.terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER)
+                        && !read.water
+                });
+        let counted = self
+            .city_buildings
+            .iter()
+            .filter(|read| read.counted)
+            .count() as i32;
+        let chain_matches = self.city_buildings.first().is_some_and(|first| {
+            first.object_index == self.town.city_object && first.row == self.town.center_build_row
+        }) && self
+            .city_buildings
+            .windows(2)
+            .all(|pair| pair[0].next_object == pair[1].object_index)
+            && self
+                .city_buildings
+                .last()
+                .is_some_and(|last| last.next_object == -1);
+        let repeated_masks_match =
+            self.territory_reads
+                .iter()
+                .zip(&self.water_reads)
+                .all(|(territory, water)| {
+                    territory.tile == water.tile && territory.terrain_mask == water.terrain_mask
+                });
+        self.input.validates()
+            && self.tregion.validates()
+            && self.tregion.query.call_va == self.input.first_world_child_call_va
+            && self.tregion.query.callee_va == self.input.first_world_child_callee_va
+            && self.tregion.query.tcoord == self.input.placement_tcoord
+            && !self.immediate
+            && territory_matches
+            && self.non_friendly_territory == 0
+            && self.town.center_is_town
+            && self.town.center_queue_len == 0
+            && self.town.distance <= self.town.radius
+            && self.city_buildings.iter().all(|read| {
+                // Native argument three is zero, so this count includes unfinished valid rows.
+                read.counted == (read.valid && read.market_relation)
+            })
+            && chain_matches
+            && counted == self.counted_markets
+            && self.counted_markets == 0
+            && water_matches
+            && repeated_masks_match
+            && self.water_tiles == 0
+            && self.blocked_location_returned == 0
+            && self.native_returned == 0
+            && self.continuation.va == LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA
+            && self.continuation.bytes_remaining
+                == LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING
+            && self.continuation.owner == self.input.owner
+            && self.continuation.type_index == self.input.type_index
+            && self.continuation.origin_build_object
+                == self.input.input.entry.input.origin_build_object
+            && self.continuation.circle_offset == self.input.input.entry.input.circle_offset
+            && self.continuation.candidate_world_cell
+                == self.input.input.entry.input.candidate_world_cell
+            && self.continuation.placement_coord == self.input.placement_coord
+            && self.next_child.call_va == LEADER_PRODUCE_BUILDING_FIND_FRIENDS_CALL_VA
+            && self.next_child.callee_va == BUILD_TYPE_FIND_FRIENDS_VA
+            && self.next_child.owner == self.input.owner
+            && self.next_child.type_index == self.input.type_index
+            && self.next_child.candidate_world_cell
+                == self.input.input.entry.input.candidate_world_cell
+            && self.next_child.origin_city_filter == self.town.city_slot as i32
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildTypeNonFriendlyTerritoryRead {
     pub tile: [i32; 2],
@@ -405,6 +566,17 @@ pub struct LeaderProduceBuildingSuccessfulSiteBoundary {
     pub circle_offset: i32,
     pub candidate_world_cell: [i32; 2],
     pub placement_coord: [i32; 2],
+}
+
+/// Exact first child reached by candidate scoring after a zero Market `blocked_site` result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderProduceBuildingFindFriendsBoundary {
+    pub call_va: u32,
+    pub callee_va: u32,
+    pub owner: u8,
+    pub type_index: i32,
+    pub candidate_world_cell: [i32; 2],
+    pub origin_city_filter: i32,
 }
 
 /// Complete reached Farm verdict in self-owned, dry City territory.
@@ -714,6 +886,58 @@ pub enum LeaderProduceBuildingBlockedSiteRawZeroFootprintError {
 pub enum LeaderProduceBuildingMarketBlockedLocationRequestError {
     InvalidFootprintReceipt,
     InvalidMarketProfile,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderProduceBuildingMarketBlockedLocationError {
+    InvalidRequest,
+    TregionMismatch,
+    InvalidOwner {
+        owner: usize,
+    },
+    InvalidMarketProfile,
+    ImmediateSemaphore,
+    InvalidTile {
+        tile: [i32; 2],
+    },
+    UnsupportedWaterTile {
+        tile: [i32; 2],
+        terrain_mask: u16,
+    },
+    MissingCityMask {
+        tile: [i32; 2],
+        terrain_mask: u16,
+    },
+    UnsupportedTerritoryOwner {
+        tile: [i32; 2],
+        territory_owner: i8,
+    },
+    InvalidCityMark {
+        owner: usize,
+        mark: i32,
+        slots: usize,
+    },
+    MissingTown,
+    InvalidCityCenter {
+        city_slot: usize,
+        object_index: i16,
+    },
+    InvalidOriginBuild {
+        object_index: i16,
+    },
+    ForbiddenCenterQueue,
+    NonemptyCenterQueue {
+        queued: usize,
+    },
+    InvalidCityChain {
+        object_index: i16,
+    },
+    ExistingMarket {
+        counted: i32,
+    },
+    UnsupportedWaterCount {
+        counted: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1481,6 +1705,411 @@ pub fn plan_sim_leader_produce_building_market_blocked_location_request(
     };
     debug_assert!(request.validates());
     Ok(request)
+}
+
+fn market_build_row(
+    sim: &Sim,
+    owner: usize,
+    object_index: i16,
+) -> Result<usize, LeaderProduceBuildingMarketBlockedLocationError> {
+    let slot = i32::from(object_index)
+        .checked_sub(BUILD_BAND_BASE as i32)
+        .and_then(|slot| usize::try_from(slot).ok())
+        .ok_or(
+            LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index },
+        )?;
+    let row = sim
+        .world
+        .objects
+        .slot(owner)
+        .band(Band::Build)
+        .get(slot)
+        .copied()
+        .ok_or(LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index })?
+        as usize;
+    let build = sim.builds.get(row).ok_or(
+        LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index },
+    )?;
+    if build.who as usize != owner || build.object_id() != object_index {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index },
+        );
+    }
+    Ok(row)
+}
+
+/// Execute the exact read-only installed-Market continuation after its independently owned
+/// `WorldData::get_tregion` result.
+pub fn apply_sim_leader_produce_building_market_blocked_location_tail(
+    sim: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    input: LeaderProduceBuildingMarketBlockedLocationRequest,
+    tregion: WorldTregionReceipt,
+) -> Result<
+    LeaderProduceBuildingMarketBlockedLocationReceipt,
+    LeaderProduceBuildingMarketBlockedLocationError,
+> {
+    if !input.validates() {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidRequest);
+    }
+    if !tregion.validates()
+        || !tregion.validates_against(&sim.map.world)
+        || tregion.query.call_va != input.first_world_child_call_va
+        || tregion.query.callee_va != input.first_world_child_callee_va
+        || tregion.query.tcoord != input.placement_tcoord
+    {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::TregionMismatch);
+    }
+
+    let owner = input.owner as usize;
+    if owner >= NUM_LEADERS {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidOwner { owner });
+    }
+    let Some(target) = production.types.get(MARKET_TYPE).and_then(Option::as_ref) else {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidMarketProfile);
+    };
+    let Some(target_row) = types.types.rows().get(MARKET_TYPE) else {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidMarketProfile);
+    };
+    let visibility = target.build_visibility;
+    let type_is = |query: usize| {
+        target_row
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == query)
+    };
+    if input.type_index != MARKET_TYPE as i32
+        || target.type_index != MARKET_TYPE as i32
+        || target.class != LiveTypeClass::Building
+        || target_row.index != MARKET_TYPE as i32
+        || target_row.domain() != TypeDomain::Build
+        || types.leaders[owner].leader_flags & 1 == 0
+        || target.build_flags != MARKET_BUILD_FLAGS
+        || visibility.and_then(|facts| facts.domain) != Some(0)
+        || visibility.and_then(|facts| facts.footprint)
+            != Some(Footprint {
+                x_size: 4,
+                y_size: 4,
+            })
+        || !type_is(MARKET_TYPE)
+        || type_is(CITY_TYPE)
+        || type_is(FORT_TYPE)
+        || type_is(DOCK_TYPE)
+        || type_is(OIL_WELL_TYPE)
+        || type_is(OIL_PLATFORM_TYPE)
+        || target.build_flags & 0x20 != 0
+        || target.build_flags & 0x10 != 0
+        || target.build_flags & 0x200 == 0
+        || target.build_flags & 0x40 != 0
+    {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidMarketProfile);
+    }
+
+    let immediate = sim.vic_match.semaphore & (1 << GAME_SEMAPHORE_IMMEDIATE_BIT) != 0;
+    if immediate {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::ImmediateSemaphore);
+    }
+
+    let [corner_x, corner_y] = input.footprint_corner;
+    let expected_tiles =
+        (corner_x..corner_x + 4).flat_map(|tx| (corner_y..corner_y + 4).map(move |ty| [tx, ty]));
+    let mut territory_reads = Vec::with_capacity(16);
+    for (ordinal, expected) in expected_tiles.enumerate() {
+        let Some(prefix) = input.input.tiles.get(ordinal) else {
+            return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidRequest);
+        };
+        if prefix.input.tile != expected || !sim.map.world.valid_t(expected[0], expected[1]) {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidTile { tile: expected },
+            );
+        }
+        let terrain_mask = sim.map.world.tmask(expected[0], expected[1]);
+        let world_cell = sim.map.world.wdata(expected[0] >> 2, expected[1] >> 2);
+        if prefix.terrain_mask != Some(terrain_mask)
+            || prefix.world_region != Some(world_cell.region)
+            // The admitted raw-zero footprint was self-owned. Retail's allied-owner City-region
+            // shortcut therefore made every reached `was_seen` result true before this tail.
+            || prefix.was_seen != Some(true)
+        {
+            return Err(LeaderProduceBuildingMarketBlockedLocationError::InvalidRequest);
+        }
+        if terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::UnsupportedWaterTile {
+                    tile: expected,
+                    terrain_mask,
+                },
+            );
+        }
+        let territory_owner = sim.map.world.wdata(expected[0] >> 2, expected[1] >> 2).who;
+        if territory_owner != owner as i8 {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::UnsupportedTerritoryOwner {
+                    tile: expected,
+                    territory_owner,
+                },
+            );
+        }
+        territory_reads.push(BuildTypeNonFriendlyTerritoryRead {
+            tile: expected,
+            terrain_mask,
+            territory_owner,
+        });
+    }
+
+    // `BuildTypeData::get_town` repeats the footprint in the same order and rejects the first
+    // tile outside a City mask before calling `ObjectsData::find_town_at`.
+    for read in &territory_reads {
+        if read.terrain_mask & tflag::CITY == 0 {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::MissingCityMask {
+                    tile: read.tile,
+                    terrain_mask: read.terrain_mask,
+                },
+            );
+        }
+    }
+
+    let mark = sim.cities.city_mark[owner];
+    let mark = usize::try_from(mark).map_err(|_| {
+        LeaderProduceBuildingMarketBlockedLocationError::InvalidCityMark {
+            owner,
+            mark,
+            slots: sim.cities.slots[owner].len(),
+        }
+    })?;
+    if mark > sim.cities.slots[owner].len() {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::InvalidCityMark {
+                owner,
+                mark: mark as i32,
+                slots: sim.cities.slots[owner].len(),
+            },
+        );
+    }
+    let site_tx = input.placement_tcoord[0];
+    let site_ty = input.placement_tcoord[1];
+    let indian_radius_bonus = types.leaders[owner].tribe == 0x15;
+    let mut selected: Option<BuildTypeMarketTownRead> = None;
+    for (city_slot, city) in sim.cities.slots[owner][..mark].iter().enumerate() {
+        if !city.active() || city.who != owner as i8 {
+            continue;
+        }
+        let center_row = market_build_row(sim, owner, city.o).map_err(|_| {
+            LeaderProduceBuildingMarketBlockedLocationError::InvalidCityCenter {
+                city_slot,
+                object_index: city.o,
+            }
+        })?;
+        let center = &sim.builds[center_row];
+        if center.flags & flag::VALID == 0 || center.city != city_slot as i16 {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidCityCenter {
+                    city_slot,
+                    object_index: city.o,
+                },
+            );
+        }
+        let center_type = production
+            .build_types
+            .get(center_row)
+            .copied()
+            .flatten()
+            .ok_or(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidCityCenter {
+                    city_slot,
+                    object_index: city.o,
+                },
+            )?;
+        let center_type_row = usize::try_from(center_type)
+            .ok()
+            .and_then(|index| types.types.rows().get(index))
+            .ok_or(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidCityCenter {
+                    city_slot,
+                    object_index: city.o,
+                },
+            )?;
+        let center_is_town = center_type_row
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == TOWN_TYPE);
+        if !center_is_town {
+            continue;
+        }
+        let distance = vector_dist(
+            TCoord::from_coord(Coord(city.x)).0.wrapping_sub(site_tx),
+            TCoord::from_coord(Coord(city.y)).0.wrapping_sub(site_ty),
+        ) as i32;
+        let radius = city_radius(&CityRules::RETAIL, center_type, indian_radius_bonus);
+        if distance > radius
+            || selected
+                .as_ref()
+                .is_some_and(|prior| distance > prior.distance)
+        {
+            continue;
+        }
+        selected = Some(BuildTypeMarketTownRead {
+            city_slot,
+            city_object: city.o,
+            center_build_row: center_row,
+            center_type,
+            center_is_town,
+            distance,
+            radius,
+            center_queue_len: center.queue.queued as usize,
+        });
+    }
+    let town = selected.ok_or(LeaderProduceBuildingMarketBlockedLocationError::MissingTown)?;
+    let center = &sim.builds[town.center_build_row];
+    if (0..center.queue.queued as usize)
+        .map(|slot| center.queue.type_at(slot))
+        .any(|type_index| matches!(type_index, 0x29a | 0x29b))
+    {
+        return Err(LeaderProduceBuildingMarketBlockedLocationError::ForbiddenCenterQueue);
+    }
+    if center.queue.queued != 0 {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::NonemptyCenterQueue {
+                queued: center.queue.queued as usize,
+            },
+        );
+    }
+
+    let mut object_index = town.city_object;
+    let mut visited = Vec::new();
+    let mut city_buildings = Vec::new();
+    let mut counted_markets = 0;
+    while object_index >= 0 {
+        if visited.contains(&object_index) {
+            return Err(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index },
+            );
+        }
+        visited.push(object_index);
+        let row = market_build_row(sim, owner, object_index)?;
+        let build = &sim.builds[row];
+        let current_type = production
+            .build_types
+            .get(row)
+            .copied()
+            .flatten()
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|&index| index < types.types.rows().len())
+            .ok_or(
+                LeaderProduceBuildingMarketBlockedLocationError::InvalidCityChain { object_index },
+            )?;
+        let valid = build.flags & flag::VALID != 0;
+        let active = build.flags & flag::ACTIVE != 0;
+        let market_relation = types
+            .types
+            .row(current_type)
+            .is_list
+            .iter()
+            .any(|&related| usize::from(related) == MARKET_TYPE);
+        // `count_buildings(436, 0, 0)` does not require ACTIVE; its third argument is zero.
+        let counted = valid && market_relation;
+        if counted {
+            counted_markets += 1;
+        }
+        city_buildings.push(BuildTypeMarketCityBuildingRead {
+            object_index,
+            row,
+            current_type: current_type as i32,
+            valid,
+            active,
+            market_relation,
+            counted,
+            next_object: build.city_down,
+        });
+        object_index = build.city_down;
+    }
+    if counted_markets != 0 {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::ExistingMarket {
+                counted: counted_markets,
+            },
+        );
+    }
+
+    let expected_tiles =
+        (corner_x..corner_x + 4).flat_map(|tx| (corner_y..corner_y + 4).map(move |ty| [tx, ty]));
+    let mut water_reads = Vec::with_capacity(16);
+    let mut water_tiles = 0;
+    for tile in expected_tiles {
+        let terrain_mask = sim.map.world.tmask(tile[0], tile[1]);
+        let water = terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER;
+        water_tiles += i32::from(water);
+        water_reads.push(BuildTypeMarketWaterRead {
+            tile,
+            terrain_mask,
+            water,
+        });
+    }
+    if water_tiles != 0 {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::UnsupportedWaterCount {
+                counted: water_tiles,
+            },
+        );
+    }
+
+    let origin_build_object = input.input.entry.input.origin_build_object;
+    let origin_build_row = market_build_row(sim, owner, origin_build_object).map_err(|_| {
+        LeaderProduceBuildingMarketBlockedLocationError::InvalidOriginBuild {
+            object_index: origin_build_object,
+        }
+    })?;
+    let origin_build = &sim.builds[origin_build_row];
+    if origin_build.flags & (flag::VALID | flag::ACTIVE | 0x20)
+        != (flag::VALID | flag::ACTIVE | 0x20)
+        || origin_build.city < 0
+        || origin_build.city as usize != town.city_slot
+    {
+        return Err(
+            LeaderProduceBuildingMarketBlockedLocationError::InvalidOriginBuild {
+                object_index: origin_build_object,
+            },
+        );
+    }
+
+    let continuation = LeaderProduceBuildingSuccessfulSiteBoundary {
+        va: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA,
+        bytes_remaining: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING,
+        owner: input.owner,
+        type_index: input.type_index,
+        origin_build_object: input.input.entry.input.origin_build_object,
+        circle_offset: input.input.entry.input.circle_offset,
+        candidate_world_cell: input.input.entry.input.candidate_world_cell,
+        placement_coord: input.placement_coord,
+    };
+    let next_child = LeaderProduceBuildingFindFriendsBoundary {
+        call_va: LEADER_PRODUCE_BUILDING_FIND_FRIENDS_CALL_VA,
+        callee_va: BUILD_TYPE_FIND_FRIENDS_VA,
+        owner: input.owner,
+        type_index: input.type_index,
+        candidate_world_cell: input.input.entry.input.candidate_world_cell,
+        origin_city_filter: i32::from(origin_build.city),
+    };
+    let receipt = LeaderProduceBuildingMarketBlockedLocationReceipt {
+        input,
+        tregion,
+        immediate,
+        territory_reads,
+        non_friendly_territory: 0,
+        town,
+        city_buildings,
+        counted_markets,
+        water_reads,
+        water_tiles,
+        blocked_location_returned: 0,
+        native_returned: 0,
+        continuation,
+        next_child,
+    };
+    debug_assert!(receipt.validates());
+    Ok(receipt)
 }
 
 /// Execute the complete reached installed-Farm `blocked_location` verdict and its parent
@@ -2495,6 +3124,110 @@ mod tests {
         }
     }
 
+    fn market_blocked_location_request() -> LeaderProduceBuildingMarketBlockedLocationRequest {
+        let input = market_raw_zero_footprint_receipt();
+        let placement_coord = input.continuation.placement_coord;
+        LeaderProduceBuildingMarketBlockedLocationRequest {
+            call_va: input.continuation.va,
+            callee_va: input.continuation.callee_va,
+            owner: input.continuation.owner,
+            type_index: input.continuation.type_index,
+            placement_coord,
+            placement_tcoord: [
+                TCoord::from_coord(Coord(placement_coord[0])).0,
+                TCoord::from_coord(Coord(placement_coord[1])).0,
+            ],
+            footprint_corner: input.continuation.footprint_corner,
+            city_constraint: input.continuation.city_constraint,
+            blocked_detail: input.continuation.blocked_detail,
+            first_world_child_call_va: BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA,
+            first_world_child_callee_va: WORLD_DATA_GET_TREGION_VA,
+            input,
+        }
+    }
+
+    fn market_blocked_location_receipt() -> LeaderProduceBuildingMarketBlockedLocationReceipt {
+        use crate::systems::map_terrain::{World, WorldTregionQuery};
+
+        let input = market_blocked_location_request();
+        let world = World::init(16, 16, 44, 4, 4);
+        let tregion = world
+            .read_tregion(WorldTregionQuery {
+                call_va: input.first_world_child_call_va,
+                callee_va: input.first_world_child_callee_va,
+                tcoord: input.placement_tcoord,
+            })
+            .unwrap();
+        let territory_reads = input
+            .input
+            .tiles
+            .iter()
+            .map(|tile| BuildTypeNonFriendlyTerritoryRead {
+                tile: tile.input.tile,
+                terrain_mask: tflag::CITY,
+                territory_owner: 0,
+            })
+            .collect::<Vec<_>>();
+        let water_reads = territory_reads
+            .iter()
+            .map(|read| BuildTypeMarketWaterRead {
+                tile: read.tile,
+                terrain_mask: read.terrain_mask,
+                water: false,
+            })
+            .collect();
+        LeaderProduceBuildingMarketBlockedLocationReceipt {
+            continuation: LeaderProduceBuildingSuccessfulSiteBoundary {
+                va: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_VA,
+                bytes_remaining: LEADER_PRODUCE_BUILDING_SUCCESSFUL_SITE_BYTES_REMAINING,
+                owner: input.owner,
+                type_index: input.type_index,
+                origin_build_object: input.input.entry.input.origin_build_object,
+                circle_offset: input.input.entry.input.circle_offset,
+                candidate_world_cell: input.input.entry.input.candidate_world_cell,
+                placement_coord: input.placement_coord,
+            },
+            next_child: LeaderProduceBuildingFindFriendsBoundary {
+                call_va: LEADER_PRODUCE_BUILDING_FIND_FRIENDS_CALL_VA,
+                callee_va: BUILD_TYPE_FIND_FRIENDS_VA,
+                owner: input.owner,
+                type_index: input.type_index,
+                candidate_world_cell: input.input.entry.input.candidate_world_cell,
+                origin_city_filter: 0,
+            },
+            input,
+            tregion,
+            immediate: false,
+            territory_reads,
+            non_friendly_territory: 0,
+            town: BuildTypeMarketTownRead {
+                city_slot: 0,
+                city_object: 2000,
+                center_build_row: 0,
+                center_type: CITY_TYPE as i32,
+                center_is_town: true,
+                distance: 1,
+                radius: 20,
+                center_queue_len: 0,
+            },
+            city_buildings: vec![BuildTypeMarketCityBuildingRead {
+                object_index: 2000,
+                row: 0,
+                current_type: CITY_TYPE as i32,
+                valid: true,
+                active: true,
+                market_relation: false,
+                counted: false,
+                next_object: -1,
+            }],
+            counted_markets: 0,
+            water_reads,
+            water_tiles: 0,
+            blocked_location_returned: 0,
+            native_returned: 0,
+        }
+    }
+
     #[test]
     fn get_good_matches_the_retail_six_entry_jump_table() {
         assert_eq!(build_type_good(417), 0);
@@ -2541,25 +3274,33 @@ mod tests {
 
     #[test]
     fn market_request_names_the_first_generated_world_child() {
-        let input = market_raw_zero_footprint_receipt();
-        let placement_coord = input.continuation.placement_coord;
-        let request = LeaderProduceBuildingMarketBlockedLocationRequest {
-            call_va: input.continuation.va,
-            callee_va: input.continuation.callee_va,
-            owner: input.continuation.owner,
-            type_index: input.continuation.type_index,
-            placement_coord,
-            placement_tcoord: [
-                TCoord::from_coord(Coord(placement_coord[0])).0,
-                TCoord::from_coord(Coord(placement_coord[1])).0,
-            ],
-            footprint_corner: input.continuation.footprint_corner,
-            city_constraint: input.continuation.city_constraint,
-            blocked_detail: input.continuation.blocked_detail,
-            first_world_child_call_va: BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA,
-            first_world_child_callee_va: WORLD_DATA_GET_TREGION_VA,
-            input,
-        };
+        let request = market_blocked_location_request();
         assert!(request.validates());
+    }
+
+    #[test]
+    fn market_blocked_location_receipt_refuses_wrong_world_call_and_city_verdicts() {
+        let receipt = market_blocked_location_receipt();
+        assert!(receipt.validates());
+
+        let mut wrong_call = receipt.clone();
+        wrong_call.tregion.query.call_va += 1;
+        assert!(!wrong_call.validates());
+
+        let mut foreign = receipt.clone();
+        foreign.territory_reads[0].territory_owner = -1;
+        assert!(!foreign.validates());
+
+        let mut existing_market = receipt.clone();
+        existing_market.city_buildings[0].market_relation = true;
+        existing_market.city_buildings[0].counted = true;
+        existing_market.counted_markets = 1;
+        assert!(!existing_market.validates());
+
+        let mut water = receipt;
+        water.water_reads[0].terrain_mask = tflag::SURFACE_WATER | tflag::CITY;
+        water.water_reads[0].water = true;
+        water.water_tiles = 1;
+        assert!(!water.validates());
     }
 }

@@ -37,7 +37,8 @@ on `<=`, so a later equal score wins. The count is one through four on a success
 ## City checksum after-image
 
 `GoldenStartingMarketCityReceipt` requires the source-derived plan, exact 16-tile placement
-receipt, supported executable identity, adjacent pre/post Sim hashes, and the complete fine
+receipt, execution-backed `get_tregion`/territory/Town/City-count/water acceptance on the hashed
+pre-Market Sim, supported executable identity, adjacent pre/post Sim hashes, and the complete fine
 RNG trace. It then validates dense Build allocation as owner-0 o2001/type436 and the City
 chain `center(2000).city_down=2001`, `market.city=0`, `market.city_down=-1`. The Market is
 VALID|STARTED|ACTIVE, has Object flag `0x20` clear, and owns the training queue's 20 slots.
@@ -59,8 +60,9 @@ pre/post process capture or complete generated World is currently installed.
 
 ## Residual
 
-The first unresolved placement child is `BuildTypeData::blocked_location` (`0x006375B0`).
-Later coarse candidates and the fine probes require the final generated World, City territory,
-and live type relations. Allocation, `Build::init`, activation visibility/road effects, and
-the full non-City Sim mutation surface still need one supported retail capture before this
-receipt can become the golden frame-zero publisher. Recorded checksum words are never inputs.
+The first unresolved child after an accepted coarse site is the typed
+`0x006E1F5F -> BuildTypeData::find_friends 0x00639270` call, followed by coarse scoring and the fine probes. Allocation, `Build::init`, activation visibility/road
+effects, and the full non-City Sim mutation surface still need one supported retail capture before
+this receipt can become the golden frame-zero publisher. The post-`place_all` RNG state is not the
+Market-before state: intervening post-placement work and Setup's collision-retried player/start
+shuffle remain separate owners. Recorded checksum words are never inputs.

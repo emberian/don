@@ -21,13 +21,17 @@ use don_sim::systems::leader_market_build_accounting::{
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_leader_produce_building_blocked_site_prefix,
     apply_sim_leader_produce_building_blocked_site_raw_zero_footprint,
+    apply_sim_leader_produce_building_market_blocked_location_tail,
     plan_sim_leader_produce_building_market_blocked_location_request,
     LeaderProduceBuildingBlockedSitePrefixError,
     LeaderProduceBuildingBlockedSiteRawZeroFootprintError,
     LeaderProduceBuildingBlockedSiteRawZeroFootprintReceipt,
+    LeaderProduceBuildingMarketBlockedLocationError,
+    LeaderProduceBuildingMarketBlockedLocationReceipt,
     LeaderProduceBuildingMarketBlockedLocationRequest,
     LeaderProduceBuildingMarketBlockedLocationRequestError,
-    LEADER_PRODUCE_BUILDING_FINE_RANDOM_CALL_VA, MARKET_BUILD_FLAGS, RANDOM_GET_VA,
+    BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA, LEADER_PRODUCE_BUILDING_FINE_RANDOM_CALL_VA,
+    MARKET_BUILD_FLAGS, RANDOM_GET_VA,
 };
 use don_sim::systems::leader_produce_building_candidate_prefix::{
     LeaderProduceBuildingCandidatePrefixReceipt, LeaderProduceBuildingCandidatePrefixStatus,
@@ -39,7 +43,7 @@ use don_sim::systems::leader_tribe_bonus_runtime::{
     has_tribe_bonus, CanonicalConquestRacialPowers, TribeBonusInputError, TribeBonusInputs,
     TribeBonusReceipt,
 };
-use don_sim::systems::map_terrain::{Coord, WCoord};
+use don_sim::systems::map_terrain::{Coord, WCoord, WorldTregionError, WorldTregionQuery};
 use don_sim::systems::production::{flag, runtime::LiveProductionRuntime, Footprint};
 use don_sim::systems::save_load::SaveError;
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
@@ -359,6 +363,83 @@ pub fn advance_golden_starting_market_candidate(
     })
 }
 
+/// Execution-backed accepted coarse Market site over one canonical pre-Market Sim.
+///
+/// The World query and every later read-only `blocked_location` predicate are replayed from the
+/// retained preimage. The full Sim hash prevents this authority from being transplanted onto a
+/// different City/Build image. Candidate scoring, fine RNG and all construction mutations remain
+/// outside this receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketAcceptedPlacementReceipt {
+    pub placement: GoldenStartingMarketPlacementReceipt,
+    pub blocked_location: LeaderProduceBuildingMarketBlockedLocationReceipt,
+    pub before_sim_sha256: [u8; 32],
+    pub source_produced_city_bytes: u64,
+    pub installed_in_scoreboard: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketAcceptedPlacementError {
+    InvalidPlacementReceipt,
+    Snapshot(SaveError),
+    Tregion(WorldTregionError),
+    BlockedLocation(LeaderProduceBuildingMarketBlockedLocationError),
+}
+
+impl fmt::Display for GoldenStartingMarketAcceptedPlacementError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "golden starting Market accepted placement refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketAcceptedPlacementError {}
+
+/// Consume the generic `WorldData::get_tregion` sibling authority and execute the rest of the
+/// source-exact read-only Market placement verdict on the same pre-Market Sim.
+pub fn advance_golden_starting_market_blocked_location(
+    before: &Sim,
+    production: &LiveProductionRuntime,
+    types: &TypeBuiltinState,
+    placement: GoldenStartingMarketPlacementReceipt,
+) -> Result<GoldenStartingMarketAcceptedPlacementReceipt, GoldenStartingMarketAcceptedPlacementError>
+{
+    if !placement.footprint.validates()
+        || placement.candidate.continuation != Some(placement.footprint.entry.input)
+        || !placement.blocked_location.validates()
+        || placement.blocked_location.input != placement.footprint
+        || placement.source_produced_city_bytes != 0
+        || placement.installed_in_scoreboard
+    {
+        return Err(GoldenStartingMarketAcceptedPlacementError::InvalidPlacementReceipt);
+    }
+    let request = placement.blocked_location.clone();
+    let tregion = before
+        .map
+        .world
+        .read_tregion(WorldTregionQuery {
+            call_va: BUILD_TYPE_BLOCKED_LOCATION_GET_TREGION_CALL_VA,
+            callee_va: request.first_world_child_callee_va,
+            tcoord: request.placement_tcoord,
+        })
+        .map_err(GoldenStartingMarketAcceptedPlacementError::Tregion)?;
+    let blocked_location = apply_sim_leader_produce_building_market_blocked_location_tail(
+        before, production, types, request, tregion,
+    )
+    .map_err(GoldenStartingMarketAcceptedPlacementError::BlockedLocation)?;
+    let before_sim_sha256 = frame379_setup_snapshot_sha256(before)
+        .map_err(GoldenStartingMarketAcceptedPlacementError::Snapshot)?;
+    Ok(GoldenStartingMarketAcceptedPlacementReceipt {
+        placement,
+        blocked_location,
+        before_sim_sha256,
+        source_produced_city_bytes: 0,
+        installed_in_scoreboard: false,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoldenStartingMarketCaptureSource {
     /// A supported retail process was captured at `Leader::produce_building` entry/return,
@@ -405,6 +486,8 @@ pub struct GoldenMarketCityChecksumByteWrite {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldenStartingMarketCityReceipt {
     pub placement: GoldenStartingMarketPlacementReceipt,
+    /// Execution-derived read-only placement acceptance on the hashed pre-Market Sim.
+    pub blocked_location: LeaderProduceBuildingMarketBlockedLocationReceipt,
     pub capture_revision: u64,
     pub source: GoldenStartingMarketCaptureSource,
     pub executable_sha256: [u8; 32],
@@ -704,9 +787,16 @@ pub fn bind_golden_starting_market_city(
     replay: &Replay,
     before: &Sim,
     after: &Sim,
-    placement: GoldenStartingMarketPlacementReceipt,
+    accepted: GoldenStartingMarketAcceptedPlacementReceipt,
     capture: &GoldenStartingMarketCapture,
 ) -> Result<GoldenStartingMarketCityReceipt, GoldenStartingMarketBindError> {
+    let GoldenStartingMarketAcceptedPlacementReceipt {
+        placement,
+        blocked_location,
+        before_sim_sha256: accepted_before_sim_sha256,
+        source_produced_city_bytes: accepted_city_bytes,
+        installed_in_scoreboard: accepted_installed,
+    } = accepted;
     let plan =
         derive_golden_starting_market_plan(replay).map_err(GoldenStartingMarketBindError::Plan)?;
     if placement.plan != plan
@@ -716,6 +806,10 @@ pub fn bind_golden_starting_market_city(
         || placement.blocked_location.input != placement.footprint
         || placement.source_produced_city_bytes != 0
         || placement.installed_in_scoreboard
+        || !blocked_location.validates()
+        || blocked_location.input != placement.blocked_location
+        || accepted_city_bytes != 0
+        || accepted_installed
     {
         return Err(GoldenStartingMarketBindError::InvalidPlacementReceipt);
     }
@@ -740,7 +834,12 @@ pub fn bind_golden_starting_market_city(
         frame379_setup_snapshot_sha256(before).map_err(GoldenStartingMarketBindError::Snapshot)?;
     let after_sim_sha256 =
         frame379_setup_snapshot_sha256(after).map_err(GoldenStartingMarketBindError::Snapshot)?;
-    if capture.before_sim_sha256 != before_sim_sha256 {
+    if capture.before_sim_sha256 != before_sim_sha256
+        || accepted_before_sim_sha256 != before_sim_sha256
+        || !blocked_location
+            .tregion
+            .validates_against(&before.map.world)
+    {
         return Err(GoldenStartingMarketBindError::BeforeSnapshotMismatch);
     }
     if capture.after_sim_sha256 != after_sim_sha256 {
@@ -893,6 +992,7 @@ pub fn bind_golden_starting_market_city(
     let city_checksum_writes = city_checksum_writes(before_city, after_city, site.space_grade);
     Ok(GoldenStartingMarketCityReceipt {
         placement,
+        blocked_location,
         capture_revision: capture.revision,
         source: capture.source,
         executable_sha256: capture.executable_sha256,

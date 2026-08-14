@@ -14,7 +14,7 @@ but omits the Dutch Market created before those Units and it does not execute fr
 1. Complete Great Lakes style-14 `place_all`, final height plane, World and RNG.
 2. Center Village, owner 0 / object 2000 / type 414, with its City and terrain links.
 3. Dutch `Leader::produce_building(436, 2000, 0)` Market. Successful allocation is expected at
-   object 2001, but identity, fine-site probes, 0..4 RNG draws, `init_build`, City linkage and
+   object 2001, but identity, fine-site probes, 1..4 RNG draws, `init_build`, City linkage and
    activation must come from the Market transaction/capture.
 4. Seven setup Units, in order: Scout69 o0, Merchant62 o1/o2, Citizen50 o3..o6. Every row is
    generation-bound and retains complete Unit/Guy/World/RNG receiver state.

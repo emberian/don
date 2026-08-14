@@ -55,18 +55,21 @@ The first child inside `blocked_location` is:
 0x006375F7 -> WorldData::get_tregion(TCoord x, TCoord y) at 0x006B52E0
 ```
 
-Its return reads the generated World region plane. This is the first independently unowned
-boundary. The concrete accepted coarse cell, placement Coord, selected City/region verdict and
-fine-probe validity mask must come from that World owner. No static adapter may infer them from
-the center coordinate or from a later checksum.
+Its return reads the generated World region plane. The generic `WorldTregionReceipt` owns that
+child and binds its projection to the complete generated-World checksum. The Market continuation
+accepts only a receipt for this exact call site and placement TCoord on the hashed pre-Market Sim;
+no static adapter infers the region from the center coordinate or a later checksum.
 
 After that boundary, the statically selected Market branch is known even though its concrete
 answers are not. Market is neither City, Fort nor Dock, lacks `build_flags & 0x20`, and calls
 `BuildTypeData::non_friendly_territory` at `0x0063768B`. A surviving site calls
 `BuildTypeData::get_town`; the fresh City must be found, forbidden center types `0x29A/0x29B` must
 be absent, and `build_flags & 0x200` invokes `CityData::count_buildings(436,0,0)`. The fresh count
-must be zero. The later land-only water count must also accept the footprint. These results remain
-World/City-owned inputs to the eventual continuation.
+must be zero. The later land-only water count must also accept the footprint.
+`LeaderProduceBuildingMarketBlockedLocationReceipt` now executes those predicates in native
+order over the same canonical World/City/Build preimage. It admits only the reached self-owned,
+dry, City-masked 4x4 cohort and stops at the successful-site scoring boundary before
+the typed `0x006E1F5F -> BuildTypeData::find_friends 0x00639270` child.
 
 ## Score and RNG cadence
 
@@ -174,7 +177,15 @@ plan_sim_leader_produce_building_market_blocked_location_request(...)
   -> first World child 0x006375F7 / get_tregion 0x006B52E0
 ```
 
-Both APIs are read-only. They do not certify placement, consume RNG or mutate City/Build/World.
-The setup discovery remains fail-closed until the City/Build capture binder consumes this request,
-supplies the generated-World result and validates the full post-Market receipt before the seven
-Units.
+`World::read_tregion` supplies the separate exact terrain child.
+`apply_sim_leader_produce_building_market_blocked_location_tail` then certifies the read-only
+coarse-site acceptance through self-owned territory, Town selection, the zero existing-Market
+count, and the zero water count. `GoldenStartingMarketAcceptedPlacementReceipt` hashes the full
+pre-Market Sim that supplied those reads, and the City binder refuses a lifecycle capture that is
+not rooted in that same preimage.
+
+This still does not execute candidate scoring, the one-through-four fine RNG draws, allocation,
+`Build::init`, activation, or City mutation. Those later effects remain supported-retail capture
+evidence. Their main-RNG boundary is also deliberately not joined directly to post-`place_all`:
+post-placement map work and the collision-retried Setup player/start shuffle consume intervening
+draws before the Market.
