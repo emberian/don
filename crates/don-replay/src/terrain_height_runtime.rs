@@ -22,6 +22,8 @@ use don_sim::systems::mountain_template_producer::{
     MountainTemplateCatalog, MOUNTAIN_RANGE_INIT_SHA256, MOUNTAIN_RANGE_INIT_VA,
 };
 
+use crate::fractal_boundary::{generate_retail_fractal, RetailFractalPlane};
+use crate::initial::InitialState;
 use crate::world_owner_frontier::sha256;
 
 /// `TerrainOut::find_tcoord_z(TCoord,TCoord,int)`.
@@ -49,6 +51,13 @@ pub const TERRAIN_FILL_MOUNTAIN_DATA_VA: u32 = 0x0086_9380;
 pub const TERRAIN_FILL_MOUNTAIN_DATA_BYTES: u32 = 1_030;
 pub const FRACTAL_GET_HEIGHT_VA: u32 = 0x006a_a870;
 pub const FRACTAL_GET_HEIGHT_BYTES: u32 = 360;
+/// `TerrainOut::refresh_data`, which initializes the two height Fractals.
+pub const TERRAIN_REFRESH_DATA_VA: u32 = 0x0087_0050;
+pub const TERRAIN_REFRESH_DATA_BYTES: u32 = 867;
+pub const TERRAIN_HEIGHT_FRACTAL_INIT_CALL_VA: u32 = 0x0087_0275;
+pub const TERRAIN_HEIGHT_DETAIL_FRACTAL_INIT_CALL_VA: u32 = 0x0087_02a8;
+pub const FRACTAL_INIT_VA: u32 = 0x006a_a2d0;
+pub const FRACTAL_INIT_BYTES: u32 = 1_428;
 
 /// Exact supported-PE body identity for `0x008544a0..0x00854564`.
 pub const TERRAIN_FIND_TCOORD_Z_SHA256: &str =
@@ -69,6 +78,10 @@ pub const TERRAIN_FILL_MOUNTAIN_DATA_SHA256: &str =
     "8a85b4f8a9beeff18e562523fbfec5d626c1035e5541c225cad9972732a71cd0";
 pub const FRACTAL_GET_HEIGHT_SHA256: &str =
     "93057be843aa676b22710c7b79d22861e052c889fbcc2647aaea061dde4dbe02";
+pub const TERRAIN_REFRESH_DATA_SHA256: &str =
+    "6b97b38457dfc025efe5f050cc37b4123be39fd4fe25d9ccf56a6bceb02d7ec5";
+pub const FRACTAL_INIT_SHA256: &str =
+    "44e3a9c196de3c8be8291398dd6608976285fdffb3937180bf697b16ba380546";
 
 /// Retail normal terrain is four render vertices per WCoord.  The height query hardcodes
 /// that same factor at `0x0085450e`/`0x00854517`.
@@ -112,6 +125,42 @@ pub struct TerrainHeightWorldgenInputs {
     pub height_scale_bits: u32,
     /// Nonzero identity of the `generate_land_lists` CoordInfo production boundary.
     pub coord_info_source_digest: [u8; 32],
+}
+
+/// Non-Fractal completed-worldgen sources retained while `CoordInfo` and installed
+/// height scalars remain separate exact producers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainHeightNonFractalInputs {
+    pub coord_info_flags: Vec<u16>,
+    pub land_height_bits: u32,
+    pub mountain_height_bits: u32,
+    pub height_scale_bits: u32,
+    pub coord_info_source_digest: [u8; 32],
+}
+
+/// Evidence for the two `Fractal::init` calls in `TerrainOut::refresh_data`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerrainHeightRefreshFractalReceipt {
+    pub refresh_data_va: u32,
+    pub fractal_init_va: u32,
+    pub height_call_va: u32,
+    pub detail_call_va: u32,
+    pub replay_payload_sha256: [u8; 32],
+    pub world_seed: i32,
+    pub xs: i32,
+    pub ys: i32,
+    pub semaphore_821: u8,
+    pub check_victory_mode: bool,
+    pub height_requested_smooth: i32,
+    pub detail_requested_smooth: i32,
+    pub height_seed: u32,
+    pub detail_seed: u32,
+    pub height_random_draws: u32,
+    pub detail_random_draws: u32,
+    pub height_random_state_after: i32,
+    pub detail_random_state_after: i32,
+    pub height_authority_digest: [u8; 32],
+    pub detail_authority_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,6 +262,41 @@ impl TerrainFractalAuthority {
     pub fn get_height(&self, x: i32, y: i32) -> Result<u8, TerrainHeightError> {
         validate_fractal_authority(self)?;
         fractal_get_height(self, x, y)
+    }
+}
+
+impl TerrainHeightWorldgenInputs {
+    /// Reconstruct both initialized height Fractals from the replay-carried seed and
+    /// complete Game semaphore captured before setup.
+    ///
+    /// Retail reseeds each Fractal's private RNG from `World::seed`; this does not
+    /// consume or depend on the map-generation RNG handoff. The only call-shape branch
+    /// is Game semaphore bit 9, read from `Game+0x821 & 2`.
+    pub fn from_refresh_data(
+        world: &World,
+        initial: &InitialState,
+        remaining: TerrainHeightNonFractalInputs,
+    ) -> Result<(Self, TerrainHeightRefreshFractalReceipt), TerrainHeightError> {
+        validate_world_shape(world)?;
+        if initial.payload_sha256 == [0; 32] {
+            return Err(TerrainHeightError::MissingSourceIdentity);
+        }
+        if initial.info.seed as i32 != world.seed {
+            return Err(TerrainHeightError::ReplayWorldSeedMismatch {
+                replay_seed: initial.info.seed,
+                world_seed: world.seed,
+            });
+        }
+        let semaphore_821 =
+            *initial
+                .game
+                .semaphore
+                .get(1)
+                .ok_or(TerrainHeightError::GameSemaphoreTooShort {
+                    expected: 2,
+                    actual: initial.game.semaphore.len(),
+                })?;
+        derive_refresh_worldgen_inputs(world, initial.payload_sha256, semaphore_821, remaining)
     }
 }
 
@@ -660,6 +744,19 @@ pub struct TerrainTcoordZReceipt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerrainHeightError {
     MissingSourceIdentity,
+    ReplayWorldSeedMismatch {
+        replay_seed: u32,
+        world_seed: i32,
+    },
+    GameSemaphoreTooShort {
+        expected: usize,
+        actual: usize,
+    },
+    RefreshFractalInitRejected {
+        xs: i32,
+        ys: i32,
+        smooth: i32,
+    },
     InvalidWorldShape,
     ShapeOverflow,
     HeightPlaneLengthMismatch {
@@ -727,6 +824,138 @@ impl fmt::Display for TerrainHeightError {
 }
 
 impl std::error::Error for TerrainHeightError {}
+
+fn derive_refresh_worldgen_inputs(
+    world: &World,
+    replay_payload_sha256: [u8; 32],
+    semaphore_821: u8,
+    remaining: TerrainHeightNonFractalInputs,
+) -> Result<
+    (
+        TerrainHeightWorldgenInputs,
+        TerrainHeightRefreshFractalReceipt,
+    ),
+    TerrainHeightError,
+> {
+    let xs = world
+        .tile_xs
+        .checked_add(1)
+        .ok_or(TerrainHeightError::ShapeOverflow)?;
+    let ys = world
+        .tile_ys
+        .checked_add(1)
+        .ok_or(TerrainHeightError::ShapeOverflow)?;
+    let check_victory_mode = semaphore_821 & 2 != 0;
+    let height_requested_smooth = if check_victory_mode { 0 } else { 5 };
+    let detail_requested_smooth = height_requested_smooth - 2;
+    let height_seed = world.seed as u32;
+    let detail_seed = height_seed.wrapping_mul(2);
+    let height_plane = generate_retail_fractal(xs, ys, height_requested_smooth, height_seed)
+        .map_err(|_| TerrainHeightError::RefreshFractalInitRejected {
+            xs,
+            ys,
+            smooth: height_requested_smooth,
+        })?;
+    let detail_plane = generate_retail_fractal(xs, ys, detail_requested_smooth, detail_seed)
+        .map_err(|_| TerrainHeightError::RefreshFractalInitRejected {
+            xs,
+            ys,
+            smooth: detail_requested_smooth,
+        })?;
+    let height_fractal = refresh_fractal_authority(
+        replay_payload_sha256,
+        TERRAIN_HEIGHT_FRACTAL_INIT_CALL_VA,
+        height_requested_smooth,
+        height_seed,
+        &height_plane,
+    );
+    let height_fractal_detail = refresh_fractal_authority(
+        replay_payload_sha256,
+        TERRAIN_HEIGHT_DETAIL_FRACTAL_INIT_CALL_VA,
+        detail_requested_smooth,
+        detail_seed,
+        &detail_plane,
+    );
+    let height_authority_digest = validate_fractal_authority(&height_fractal)?;
+    let detail_authority_digest = validate_fractal_authority(&height_fractal_detail)?;
+    let receipt = TerrainHeightRefreshFractalReceipt {
+        refresh_data_va: TERRAIN_REFRESH_DATA_VA,
+        fractal_init_va: FRACTAL_INIT_VA,
+        height_call_va: TERRAIN_HEIGHT_FRACTAL_INIT_CALL_VA,
+        detail_call_va: TERRAIN_HEIGHT_DETAIL_FRACTAL_INIT_CALL_VA,
+        replay_payload_sha256,
+        world_seed: world.seed,
+        xs,
+        ys,
+        semaphore_821,
+        check_victory_mode,
+        height_requested_smooth,
+        detail_requested_smooth,
+        height_seed,
+        detail_seed,
+        height_random_draws: height_plane.random_draws,
+        detail_random_draws: detail_plane.random_draws,
+        height_random_state_after: height_plane.random_state_after,
+        detail_random_state_after: detail_plane.random_state_after,
+        height_authority_digest,
+        detail_authority_digest,
+    };
+    Ok((
+        TerrainHeightWorldgenInputs {
+            height_fractal,
+            height_fractal_detail,
+            coord_info_flags: remaining.coord_info_flags,
+            land_height_bits: remaining.land_height_bits,
+            mountain_height_bits: remaining.mountain_height_bits,
+            height_scale_bits: remaining.height_scale_bits,
+            coord_info_source_digest: remaining.coord_info_source_digest,
+        },
+        receipt,
+    ))
+}
+
+fn refresh_fractal_authority(
+    replay_payload_sha256: [u8; 32],
+    call_va: u32,
+    requested_smooth: i32,
+    seed: u32,
+    plane: &RetailFractalPlane,
+) -> TerrainFractalAuthority {
+    let frac_columns = plane
+        .columns
+        .iter()
+        .flat_map(|column| column.iter().copied())
+        .collect::<Vec<_>>();
+    let flags = 2;
+    let x_inc_bits = (plane.xs as f64 / (plane.xs + 1) as f64).to_bits();
+    let y_inc_bits = 1.0f64.to_bits();
+    let mut source = Vec::with_capacity(128 + frac_columns.len());
+    source.extend_from_slice(b"don-terrain-refresh-fractal-init-v1\0");
+    source.extend_from_slice(TERRAIN_REFRESH_DATA_SHA256.as_bytes());
+    source.extend_from_slice(FRACTAL_INIT_SHA256.as_bytes());
+    source.extend_from_slice(&replay_payload_sha256);
+    source.extend_from_slice(&call_va.to_le_bytes());
+    for value in [plane.xs, plane.ys, requested_smooth, plane.smooth, flags] {
+        source.extend_from_slice(&value.to_le_bytes());
+    }
+    source.extend_from_slice(&seed.to_le_bytes());
+    source.extend_from_slice(&plane.random_draws.to_le_bytes());
+    source.extend_from_slice(&plane.random_state_after.to_le_bytes());
+    source.extend_from_slice(&x_inc_bits.to_le_bytes());
+    source.extend_from_slice(&y_inc_bits.to_le_bytes());
+    source.extend_from_slice(&frac_columns);
+    TerrainFractalAuthority {
+        frac_columns,
+        xs: plane.xs,
+        ys: plane.ys,
+        flags,
+        partitions: [-1; 16],
+        random_seed: plane.random_state_after as u32,
+        x_inc_bits,
+        y_inc_bits,
+        initialized_source_digest: sha256(&source),
+    }
+}
 
 fn validate_world_shape(world: &World) -> Result<(), TerrainHeightError> {
     let tile_xs = world
@@ -1140,5 +1369,75 @@ fn cvttss2si(value: f32) -> i32 {
         i32::MIN
     } else {
         value.trunc() as i32
+    }
+}
+
+#[cfg(test)]
+mod refresh_fractal_tests {
+    use super::*;
+
+    fn remaining(world: &World) -> TerrainHeightNonFractalInputs {
+        TerrainHeightNonFractalInputs {
+            coord_info_flags: vec![0; world.size as usize],
+            land_height_bits: 30.0f32.to_bits(),
+            mountain_height_bits: (-303.0f32).to_bits(),
+            height_scale_bits: 1.0f32.to_bits(),
+            coord_info_source_digest: [0xa5; 32],
+        }
+    }
+
+    #[test]
+    fn refresh_calls_derive_both_guarded_fractals_from_world_seed() {
+        let mut world = World::init_default_rules(8, 8);
+        world.seed = 0x1234_5678;
+        let (inputs, receipt) =
+            derive_refresh_worldgen_inputs(&world, [0x91; 32], 0, remaining(&world)).unwrap();
+
+        assert_eq!((receipt.xs, receipt.ys), (33, 33));
+        assert_eq!(
+            (
+                receipt.height_requested_smooth,
+                receipt.detail_requested_smooth,
+                receipt.height_seed,
+                receipt.detail_seed,
+            ),
+            (5, 3, 0x1234_5678, 0x2468_acf0)
+        );
+        assert_eq!(inputs.height_fractal.flags, 2);
+        assert_eq!(inputs.height_fractal_detail.flags, 2);
+        assert_eq!(inputs.height_fractal.partitions, [-1; 16]);
+        assert_eq!(inputs.height_fractal.frac_columns.len(), 34 * 34);
+        assert_eq!(
+            inputs.height_fractal.x_inc_bits,
+            (33.0f64 / 34.0f64).to_bits()
+        );
+        assert_eq!(inputs.height_fractal.y_inc_bits, 1.0f64.to_bits());
+        assert_eq!(
+            inputs.height_fractal.random_seed,
+            receipt.height_random_state_after as u32
+        );
+        assert_ne!(receipt.height_authority_digest, [0; 32]);
+        assert_ne!(receipt.detail_authority_digest, [0; 32]);
+    }
+
+    #[test]
+    fn victory_bit_reproduces_zero_and_negative_two_requested_smooths() {
+        let mut world = World::init_default_rules(8, 8);
+        world.seed = -7;
+        let (inputs, receipt) =
+            derive_refresh_worldgen_inputs(&world, [0x92; 32], 2, remaining(&world)).unwrap();
+
+        assert!(receipt.check_victory_mode);
+        assert_eq!(receipt.semaphore_821, 2);
+        assert_eq!(receipt.height_requested_smooth, 0);
+        assert_eq!(receipt.detail_requested_smooth, -2);
+        assert_eq!(receipt.height_seed, (-7i32) as u32);
+        assert_eq!(receipt.detail_seed, ((-7i32) as u32).wrapping_mul(2));
+        assert_eq!(inputs.height_fractal.frac_columns.len(), 34 * 34);
+        assert_eq!(inputs.height_fractal_detail.frac_columns.len(), 34 * 34);
+        assert_ne!(
+            inputs.height_fractal.initialized_source_digest,
+            inputs.height_fractal_detail.initialized_source_digest
+        );
     }
 }

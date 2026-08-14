@@ -16,14 +16,12 @@ The intermediate remains deliberately typed `TerrainHeightPreMountainPlane`, not
 through this API. Load/rebuild calls pass `arg7=1`, preserve existing height, and are not
 admitted by this producer.
 
-The producer boundary is intentionally upstream of render-resolution samples but downstream
-of three still-unported deterministic owners: the two initialized `Fractal` byte planes and
-the WCoord-resolution `CoordInfo::flags` grid built by `generate_land_lists`. The shipped
-`Fractal::get_height` body now samples both planes inside the producer; callers cannot supply
-its output grids. Reconstructing the initialized Fractal states and CoordInfo flags from the
-map seed and canonical completed World is the exact remaining upstream terrain residual. The
-three installed scalar words (`land_height`, mountain height, and height scale) are also
-explicit, so a tileset/configuration change cannot silently reuse a plane.
+The producer boundary is intentionally upstream of render-resolution samples. The canonical
+constructor now derives both initialized `Fractal` byte planes from the parsed replay initial
+state and canonical World. The remaining downstream inputs are the WCoord-resolution
+`CoordInfo::flags` grid built by `generate_land_lists` and three installed scalar words
+(`land_height`, mountain height, and height scale). Keeping those explicit means a
+tileset/configuration change cannot silently reuse a plane.
 
 ## Exact pre-mountain producer
 
@@ -32,6 +30,8 @@ supported-PE bodies:
 
 | body | VA | bytes | SHA-256 |
 |---|---:|---:|---|
+| `TerrainOut::refresh_data()` | `0x00870050` | 867 | `6b97b38457dfc025efe5f050cc37b4123be39fd4fe25d9ccf56a6bceb02d7ec5` |
+| `Fractal::init(...)` | `0x006aa2d0` | 1,428 | `44e3a9c196de3c8be8291398dd6608976285fdffb3937180bf697b16ba380546` |
 | `Fractal::get_height(int,int)` | `0x006aa870` | 360 | `93057be843aa676b22710c7b79d22861e052c889fbcc2647aaea061dde4dbe02` |
 | `TerrainOut::generate_land(int,int)` | `0x0085f8d0` | 2,789 | `5cc1f8e243fcf7556492ca1215df4785a5bd810c3550c7a5a0cb27b79e38445a` |
 | `TerrainOut::get_vert_codes` | `0x0086bf70` | 609 | `8eee1044d69671f26222f6801813dbd9e72547a6f9dca4a7b9c4cfbfedaf6695` |
@@ -50,6 +50,15 @@ The exact downstream bodies are frozen too:
 `Terrain::init` fixes the render tesselation at four vertices per WCoord. `generate_land`
 first appends `land_height` for `(tile_xs+1)*(tile_ys+1)` vertices, then overwrites every
 vertex in row-major order. The port executes the normal `(0,0)` initialization arm:
+
+`TerrainHeightWorldgenInputs::from_refresh_data` reconstructs both guarded initialized
+Fractals before this loop. At `0x00870275`, retail calls `Fractal::init(tile_xs+1,
+tile_ys+1, smooth, &World, 2, World::seed)`; at `0x008702a8`, it repeats with
+`smooth-2` and wrapping `seed*2`. Smooth is normally 5, but Game semaphore bit 9 changes it
+to zero (making the detail request -2, which `Fractal::init` clamps to zero). Each private RNG
+is independently reseeded; no map RNG handoff is consumed. The receipt binds the replay
+payload, exact call sites, requested smooths, seeds, full guarded planes, draw counts, final
+private RNG states, flags, increments, and authority digests.
 
 1. `get_vert_codes(...,1)` ORs `TData::RIVER` across the four tiles touching a vertex. Any
    hit locks the vertex and returns height zero.
@@ -117,7 +126,7 @@ source-vertex, matched, and unmatched counts.
 This closes the deterministic height operation once upstream state exists. Exact mode-5
 mountain placement is now available in `MountainAddRuntime`; reaching this seam for Great
 Lakes still requires the 16 installed displacement TGAs. The other explicit residuals are
-the exact Fractal/CoordInfo/scalar producers feeding the pre-mountain plane and the remaining
+the exact CoordInfo/scalar producers feeding the pre-mountain plane and the remaining
 map-generation path into those retained placements.
 
 ## Exact shipped body
