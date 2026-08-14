@@ -11,9 +11,11 @@
 //! replay-carried Rules plus one adjacent live call-entry image.  The first unmounted owner is
 //! the global `ObjectsData::find` spatial traversal.  A composition-bound native traversal
 //! receipt may advance the detached transaction, but no caller state changes until
-//! [`commit_no_cast`] accepts a complete no-cast plan.  A found target advances through the
-//! source-owned `Unit::add_cast_order` prefix and stops before its first mutating child,
-//! `OrdersMemManager::get_obj(14)`; the recycler/order/path/Guy after-image is not guessed.
+//! [`commit_no_cast`] accepts a complete no-cast plan. A found target advances through the
+//! source-owned `Unit::add_cast_order` prefix and, given an adjacent pool-14 capture, through
+//! `OrdersMemManager::get_obj(14)`'s clean-stack prefix. It then stops before either the recycled
+//! CastOrder clear thunk or `get_new_order(14)`; the allocator/order/path/Guy after-image is not
+//! guessed.
 //!
 //! Most importantly, this function never reads or writes `CasterData::active_spells`.
 //! Its successful arm allocates a Unit `CastOrder` (order index `0x0E`) in `Unit+0xCC`.
@@ -103,6 +105,24 @@ pub const ORDERS_GET_OBJECT_SHA256: [u8; 32] = [
     0x80, 0x27, 0xad, 0x9f, 0x97, 0xe5, 0x53, 0x3a, 0x0e, 0xd9, 0xbe, 0xc4, 0xba, 0x46, 0x25, 0x86,
 ];
 pub const ORDERS_NEW_OBJECT_VA: u32 = 0x0073_0550;
+pub const ORDERS_NEW_OBJECT_SIZE: u32 = 1_392;
+pub const ORDERS_NEW_OBJECT_SHA256: [u8; 32] = [
+    0x92, 0x13, 0x05, 0xab, 0x49, 0x13, 0x16, 0xcd, 0x0e, 0x76, 0x7b, 0xef, 0x3b, 0x88, 0xb1, 0x62,
+    0x2f, 0x42, 0xc0, 0x54, 0x70, 0x23, 0x2f, 0xea, 0x1f, 0x90, 0xec, 0xe7, 0x98, 0x4d, 0x4e, 0xae,
+];
+pub const CAST_ORDER_UNIT_ORDER_VTABLE_VA: u32 = 0x00B4_976C;
+pub const CAST_ORDER_CLEAR_THUNK_VA: u32 = 0x0048_6091;
+pub const CAST_ORDER_CLEAR_THUNK_SIZE: u32 = 8;
+pub const CAST_ORDER_CLEAR_THUNK_SHA256: [u8; 32] = [
+    0x7d, 0xbb, 0xa2, 0xbd, 0x7b, 0x5c, 0xeb, 0xd3, 0x60, 0x8b, 0x65, 0x9b, 0x5f, 0x1b, 0x8f, 0x63,
+    0xa5, 0x23, 0x6a, 0x30, 0x1c, 0x4d, 0xbf, 0x0b, 0x06, 0x12, 0xb3, 0xa4, 0x67, 0xe3, 0x23, 0xf1,
+];
+pub const CAST_ORDER_CLEAR_BODY_VA: u32 = 0x0048_6350;
+pub const CAST_ORDER_CLEAR_BODY_SIZE: u32 = 63;
+pub const CAST_ORDER_CLEAR_BODY_SHA256: [u8; 32] = [
+    0x23, 0x9e, 0xce, 0xae, 0x02, 0xed, 0x1b, 0x1b, 0x81, 0x1d, 0xe4, 0x1e, 0x7a, 0xf9, 0xa0, 0xe1,
+    0x7d, 0x89, 0x2c, 0xa6, 0xf1, 0xf5, 0xa9, 0x96, 0x30, 0x44, 0x7a, 0xbf, 0xe0, 0x10, 0xf7, 0x0a,
+];
 pub const UNIT_CLEAR_PARTIAL_PATH_VA: u32 = 0x005E_3920;
 pub const UNIT_UPDATE_ACTION_VA: u32 = 0x0060_A870;
 pub const ORDER_LIST_ADD_VA: u32 = 0x0046_D5A0;
@@ -113,6 +133,8 @@ pub const SPELL_GET_RANGE_CALLSITE_VA: u32 = 0x005F_2875;
 pub const OBJECTS_FIND_CALLSITE_VA: u32 = 0x005F_2884;
 pub const UNIT_ADD_CAST_ORDER_CALLSITE_VA: u32 = 0x005F_28BE;
 pub const ORDERS_GET_OBJECT_CALLSITE_VA: u32 = 0x005E_4BA5;
+pub const ORDERS_GET_OBJECT_CLEAR_CALLSITE_VA: u32 = 0x0073_0B10;
+pub const ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA: u32 = 0x0073_0B29;
 
 pub const SCOUT_TYPE: i32 = 69;
 pub const GOLDEN_OWNER: u8 = 0;
@@ -139,6 +161,8 @@ pub const ORDERS_MEM_POOL_STRIDE: u32 = 0x20;
 pub const ORDERS_MEM_FREE_ARRAY_OFFSET: u32 = 0;
 pub const ORDERS_MEM_FREE_LENGTH_OFFSET: u32 = 8;
 pub const RECYCLED_ORDER_RESET_VTABLE_OFFSET: u32 = 4;
+pub const ORDERS_MEM_POOL14_VA: u32 =
+    ORDERS_MEM_POOLS_VA + (CAST_ORDER_INDEX as u32) * ORDERS_MEM_POOL_STRIDE;
 pub const UNIT_ORDER_LIST_OFFSET: u32 = 0xCC;
 pub const UNIT_CURRENT_ORDER_LINK_OFFSET: u32 = 0xDC;
 pub const FILTER_INDEX_20: i32 = 20;
@@ -399,6 +423,126 @@ pub struct OrdersGetObjectRequest {
     pub continuation: AddCastOrderRequest,
 }
 
+/// Provenance for the exact pool-14 words read by `OrdersMemManager::get_obj`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrdersPool14CaptureSource {
+    CompleteRetailPool14AtGoldenScoutAddCastOrder,
+    SyntheticOrUnknown,
+}
+
+/// Stable identity of a non-null UnitOrder pointer popped from the pool-14 clean stack.
+///
+/// The pointer is the retail 32-bit UnitOrder subobject address, not a reconstructed Rust
+/// allocation. Pool index 14 and the secondary vtable prove that it is a recycled CastOrder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecycledCastOrderCapture {
+    pub unit_order_ptr: u32,
+    pub node_revision: u64,
+    pub node_digest: [u8; 32],
+    pub unit_order_vtable_va: u32,
+    pub clear_dispatch_va: u32,
+}
+
+/// Result of the one clean-stack slot read. `NotRead` is exact only when the retail length is
+/// zero; a nonzero length always decrements first and reads the resulting index, even when the
+/// stored pointer is null.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrdersPool14SlotCapture {
+    NotRead,
+    Null {
+        slot_index: u32,
+    },
+    RecycledCastOrder {
+        slot_index: u32,
+        node: RecycledCastOrderCapture,
+    },
+}
+
+/// Adjacent live capture of the exact pool/list/node state consumed by get_obj(14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrdersPool14Capture {
+    pub source: OrdersPool14CaptureSource,
+    pub snapshot_revision: u64,
+    pub call_entry_composition_digest: [u8; 32],
+    pub pool_va: u32,
+    pub pool_revision: u64,
+    pub pool_digest: [u8; 32],
+    pub free_array_ptr: u32,
+    pub free_array_revision: u64,
+    pub free_array_digest: [u8; 32],
+    pub free_length: i32,
+    pub slot: OrdersPool14SlotCapture,
+}
+
+/// Exact stores executed before the next child. These writes remain staged: this module exposes
+/// no partial pool commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrdersPool14PopMutation {
+    pub normalized_negative_length_to_one: bool,
+    pub free_length_before: i32,
+    pub free_length_after: i32,
+    /// `None` means retail did not touch the clean stack. `Some(0)` is a real null slot read.
+    pub popped_unit_order_ptr: Option<u32>,
+    pub popped_slot_index: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GetNewOrderRequest {
+    pub callsite_va: u32,
+    pub function_va: u32,
+    pub function_size: u32,
+    pub function_sha256: [u8; 32],
+    /// Retail moves the saved OrderIndex into ECX immediately before this call.
+    pub order_index_in_ecx: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClearRecycledCastOrderRequest {
+    pub callsite_va: u32,
+    pub vtable_offset: u32,
+    pub unit_order_ptr: u32,
+    pub unit_order_vtable_va: u32,
+    pub dispatch_va: u32,
+    pub dispatch_size: u32,
+    pub dispatch_sha256: [u8; 32],
+    pub clear_body_va: u32,
+    pub clear_body_size: u32,
+    pub clear_body_sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrdersGetObjectChildRequest {
+    GetNewOrder(GetNewOrderRequest),
+    ClearRecycledCastOrder(ClearRecycledCastOrderRequest),
+}
+
+/// get_obj(14) has been source-owned through its clean-stack prefix and stopped before the next
+/// child. The prior AddCastOrder continuation remains unopened, including its later live target
+/// UID read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrdersGetObjectResidual {
+    pub scout: TypedResidual,
+    pub pool_before: OrdersPool14Capture,
+    pub staged_pool_pop: OrdersPool14PopMutation,
+    pub child: OrdersGetObjectChildRequest,
+    pub continuation_after_get_obj: AddCastOrderRequest,
+}
+
+impl OrdersGetObjectResidual {
+    /// Reject any caller or pool/list/node change before a host begins the atomic child plus
+    /// AddCastOrder continuation. Validation never publishes the staged pop.
+    pub fn validate_child_before(
+        &self,
+        current_scout: &Frame0ScoutBoundary,
+        current_pool: &OrdersPool14Capture,
+    ) -> Result<(), OrdersGetObjectError> {
+        if current_scout != &self.scout.before || current_pool != &self.pool_before {
+            return Err(OrdersGetObjectError::BoundaryChanged);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetUidSource {
     LiveObjectWordAtOffset0x30,
@@ -448,6 +592,7 @@ pub struct PreparedNoCast {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TypedResidual {
     pub snapshot_revision: u64,
+    pub call_entry_composition_digest: [u8; 32],
     /// Complete caller-owned before-image used for stale validation. No external child is
     /// authorized after any field changes.
     pub before: Frame0ScoutBoundary,
@@ -556,6 +701,28 @@ pub enum PrepareError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrdersGetObjectError {
+    WrongResidual,
+    RequestShapeMismatch,
+    CaptureSourceMismatch,
+    CaptureCompositionMismatch,
+    PoolAuthorityMismatch,
+    MissingFreeArrayAuthority,
+    InvalidSlotCapture,
+    MissingRecycledNodeAuthority,
+    UnsupportedRecycledNodeShape,
+    BoundaryChanged,
+}
+
+impl fmt::Display for OrdersGetObjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Scout get_obj(14) transaction refused: {self:?}")
+    }
+}
+
+impl std::error::Error for OrdersGetObjectError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame0ScoutCasterInvariantError {
     Prepare(PrepareError),
     MissingSetupJoin,
@@ -615,6 +782,7 @@ fn residual(
 ) -> PrepareOutcome {
     PrepareOutcome::ExternalRequired(TypedResidual {
         snapshot_revision: input.snapshot_revision,
+        call_entry_composition_digest: input.call_entry_composition_digest,
         before: input.before,
         staged,
         request,
@@ -948,6 +1116,203 @@ pub fn prepare_golden_scout_spellcaster(
         1,
         None,
     ))
+}
+
+fn exact_add_cast_order_continuation(request: AddCastOrderRequest) -> bool {
+    request.callsite_va == UNIT_ADD_CAST_ORDER_CALLSITE_VA
+        && request.function_va == UNIT_ADD_CAST_ORDER_VA
+        && request.function_size == UNIT_ADD_CAST_ORDER_SIZE
+        && request.function_sha256 == UNIT_ADD_CAST_ORDER_SHA256
+        && request.actor_who == i32::from(GOLDEN_OWNER)
+        && request.actor_o == i32::from(GOLDEN_SCOUT_O)
+        && request.target_o >= 0
+        && (0..10).contains(&request.target_owner)
+        && request.spell_type == COUNTERINTEL_SPELL
+        && request.queue_pos == 0
+        && request.final_flag == 0
+        && request.allocated_order_index == CAST_ORDER_INDEX
+        && request.target_uid_source == TargetUidSource::LiveObjectWordAtOffset0x30
+        && request.order_offset_1c == 0
+        && !request.order_flag_04
+        && request.order_list_offset == UNIT_ORDER_LIST_OFFSET
+        && !request.closes_orders
+        && request.clears_partial_path
+        && request.current_order_link_offset == UNIT_CURRENT_ORDER_LINK_OFFSET
+        && request.calls_update_action
+}
+
+fn exact_orders_get_object_request(
+    residual: &TypedResidual,
+) -> Result<OrdersGetObjectRequest, OrdersGetObjectError> {
+    let ExternalRequest::OrdersGetObject(request) = residual.request else {
+        return Err(OrdersGetObjectError::WrongResidual);
+    };
+    if residual.snapshot_revision == 0
+        || residual.call_entry_composition_digest == [0; 32]
+        || residual.consumed_receipts != 1
+        || residual.retail_return_after_child.is_some()
+        || request.callsite_va != ORDERS_GET_OBJECT_CALLSITE_VA
+        || request.function_va != ORDERS_GET_OBJECT_VA
+        || request.function_size != ORDERS_GET_OBJECT_SIZE
+        || request.function_sha256 != ORDERS_GET_OBJECT_SHA256
+        || request.order_index != CAST_ORDER_INDEX
+        || request.pools_va != ORDERS_MEM_POOLS_VA
+        || request.pool_stride != ORDERS_MEM_POOL_STRIDE
+        || request.free_array_offset != ORDERS_MEM_FREE_ARRAY_OFFSET
+        || request.free_length_offset != ORDERS_MEM_FREE_LENGTH_OFFSET
+        || request.recycled_reset_vtable_offset != RECYCLED_ORDER_RESET_VTABLE_OFFSET
+        || request.new_object_function_va != ORDERS_NEW_OBJECT_VA
+        || request.pool_revision != residual.before.orders_mem_revision
+        || request.pool_digest != residual.before.orders_mem_digest
+        || request.returned_order_subobject_vtable_offset != CAST_ORDER_GET_SUBOBJECT_VTABLE_OFFSET
+        || !exact_add_cast_order_continuation(request.continuation)
+        || residual.before.caster_active_spells_len != 0
+        || residual.staged.unit_body_revision != residual.before.unit_body_revision
+        || residual.staged.unit_orders_revision != residual.before.unit_orders_revision
+        || residual.staged.unit_path_revision != residual.before.unit_path_revision
+        || residual.staged.guy_revision != residual.before.guy_revision
+        || residual.staged.leader_revision != residual.before.leader_revision
+        || residual.staged.world_revision != residual.before.world_revision
+        || residual.staged.objects_revision == 0
+        || residual.staged.objects_revision == residual.before.objects_revision
+        || residual.staged.search_scratch.selected_owner != request.continuation.target_owner
+        || residual.staged.orders_mem_revision != residual.before.orders_mem_revision
+        || residual.staged.orders_mem_digest != residual.before.orders_mem_digest
+        || residual.staged.rng_state != residual.before.rng_state
+        || residual.staged.caster_active_spells_revision
+            != residual.before.caster_active_spells_revision
+        || residual.staged.caster_active_spells_len != residual.before.caster_active_spells_len
+    {
+        return Err(OrdersGetObjectError::RequestShapeMismatch);
+    }
+    Ok(request)
+}
+
+/// Advance the exact get_obj(14) clean-stack prefix to its next child without publishing any
+/// pool mutation or opening the later AddCastOrder suffix.
+pub fn prepare_orders_get_object(
+    scout: TypedResidual,
+    pool: OrdersPool14Capture,
+) -> Result<OrdersGetObjectResidual, OrdersGetObjectError> {
+    let request = exact_orders_get_object_request(&scout)?;
+    if pool.source != OrdersPool14CaptureSource::CompleteRetailPool14AtGoldenScoutAddCastOrder {
+        return Err(OrdersGetObjectError::CaptureSourceMismatch);
+    }
+    if pool.snapshot_revision != scout.snapshot_revision
+        || pool.call_entry_composition_digest != scout.call_entry_composition_digest
+    {
+        return Err(OrdersGetObjectError::CaptureCompositionMismatch);
+    }
+    if pool.pool_va != ORDERS_MEM_POOL14_VA
+        || pool.pool_revision != request.pool_revision
+        || pool.pool_digest != request.pool_digest
+    {
+        return Err(OrdersGetObjectError::PoolAuthorityMismatch);
+    }
+    if pool.free_array_revision == 0 || pool.free_array_digest == [0; 32] {
+        return Err(OrdersGetObjectError::MissingFreeArrayAuthority);
+    }
+
+    let (staged_pool_pop, child) = if pool.free_length == 0 {
+        if pool.slot != OrdersPool14SlotCapture::NotRead {
+            return Err(OrdersGetObjectError::InvalidSlotCapture);
+        }
+        (
+            OrdersPool14PopMutation {
+                normalized_negative_length_to_one: false,
+                free_length_before: 0,
+                free_length_after: 0,
+                popped_unit_order_ptr: None,
+                popped_slot_index: None,
+            },
+            OrdersGetObjectChildRequest::GetNewOrder(GetNewOrderRequest {
+                callsite_va: ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA,
+                function_va: ORDERS_NEW_OBJECT_VA,
+                function_size: ORDERS_NEW_OBJECT_SIZE,
+                function_sha256: ORDERS_NEW_OBJECT_SHA256,
+                order_index_in_ecx: CAST_ORDER_INDEX,
+            }),
+        )
+    } else {
+        if pool.free_array_ptr == 0 {
+            return Err(OrdersGetObjectError::InvalidSlotCapture);
+        }
+        let normalized_negative = pool.free_length < 1;
+        let after = if normalized_negative {
+            0
+        } else {
+            pool.free_length - 1
+        };
+        let expected_index = after as u32;
+        let (popped_ptr, child) = match pool.slot {
+            OrdersPool14SlotCapture::NotRead => {
+                return Err(OrdersGetObjectError::InvalidSlotCapture)
+            }
+            OrdersPool14SlotCapture::Null { slot_index } => {
+                if slot_index != expected_index {
+                    return Err(OrdersGetObjectError::InvalidSlotCapture);
+                }
+                (
+                    0,
+                    OrdersGetObjectChildRequest::GetNewOrder(GetNewOrderRequest {
+                        callsite_va: ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA,
+                        function_va: ORDERS_NEW_OBJECT_VA,
+                        function_size: ORDERS_NEW_OBJECT_SIZE,
+                        function_sha256: ORDERS_NEW_OBJECT_SHA256,
+                        order_index_in_ecx: CAST_ORDER_INDEX,
+                    }),
+                )
+            }
+            OrdersPool14SlotCapture::RecycledCastOrder { slot_index, node } => {
+                if slot_index != expected_index || node.unit_order_ptr == 0 {
+                    return Err(OrdersGetObjectError::InvalidSlotCapture);
+                }
+                if node.node_revision == 0 || node.node_digest == [0; 32] {
+                    return Err(OrdersGetObjectError::MissingRecycledNodeAuthority);
+                }
+                if node.unit_order_vtable_va != CAST_ORDER_UNIT_ORDER_VTABLE_VA
+                    || node.clear_dispatch_va != CAST_ORDER_CLEAR_THUNK_VA
+                {
+                    return Err(OrdersGetObjectError::UnsupportedRecycledNodeShape);
+                }
+                (
+                    node.unit_order_ptr,
+                    OrdersGetObjectChildRequest::ClearRecycledCastOrder(
+                        ClearRecycledCastOrderRequest {
+                            callsite_va: ORDERS_GET_OBJECT_CLEAR_CALLSITE_VA,
+                            vtable_offset: RECYCLED_ORDER_RESET_VTABLE_OFFSET,
+                            unit_order_ptr: node.unit_order_ptr,
+                            unit_order_vtable_va: node.unit_order_vtable_va,
+                            dispatch_va: CAST_ORDER_CLEAR_THUNK_VA,
+                            dispatch_size: CAST_ORDER_CLEAR_THUNK_SIZE,
+                            dispatch_sha256: CAST_ORDER_CLEAR_THUNK_SHA256,
+                            clear_body_va: CAST_ORDER_CLEAR_BODY_VA,
+                            clear_body_size: CAST_ORDER_CLEAR_BODY_SIZE,
+                            clear_body_sha256: CAST_ORDER_CLEAR_BODY_SHA256,
+                        },
+                    ),
+                )
+            }
+        };
+        (
+            OrdersPool14PopMutation {
+                normalized_negative_length_to_one: normalized_negative,
+                free_length_before: pool.free_length,
+                free_length_after: after,
+                popped_unit_order_ptr: Some(popped_ptr),
+                popped_slot_index: Some(expected_index),
+            },
+            child,
+        )
+    };
+
+    Ok(OrdersGetObjectResidual {
+        scout,
+        pool_before: pool,
+        staged_pool_pop,
+        child,
+        continuation_after_get_obj: request.continuation,
+    })
 }
 
 /// Execute the pure frame-zero planner and publish its narrow Caster-owner invariant.
@@ -1334,6 +1699,30 @@ mod tests {
         );
         assert_eq!(
             (
+                ORDERS_MEM_POOL14_VA,
+                ORDERS_GET_OBJECT_CLEAR_CALLSITE_VA,
+                ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA,
+                ORDERS_NEW_OBJECT_SIZE,
+                CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+                CAST_ORDER_CLEAR_THUNK_VA,
+                CAST_ORDER_CLEAR_THUNK_SIZE,
+                CAST_ORDER_CLEAR_BODY_VA,
+                CAST_ORDER_CLEAR_BODY_SIZE,
+            ),
+            (
+                0x00EB_4550,
+                0x0073_0B10,
+                0x0073_0B29,
+                1_392,
+                0x00B4_976C,
+                0x0048_6091,
+                8,
+                0x0048_6350,
+                63,
+            )
+        );
+        assert_eq!(
+            (
                 ORDERS_MEM_FREE_ARRAY_OFFSET,
                 ORDERS_MEM_FREE_LENGTH_OFFSET,
                 RECYCLED_ORDER_RESET_VTABLE_OFFSET,
@@ -1355,6 +1744,30 @@ mod tests {
                 0x05, 0x58, 0x47, 0xed, 0xee, 0xbe, 0x03, 0x09, 0x4c, 0x7e, 0x79, 0x5b, 0xb0, 0xd1,
                 0xde, 0x36, 0x80, 0x27, 0xad, 0x9f, 0x97, 0xe5, 0x53, 0x3a, 0x0e, 0xd9, 0xbe, 0xc4,
                 0xba, 0x46, 0x25, 0x86,
+            ]
+        );
+        assert_eq!(
+            ORDERS_NEW_OBJECT_SHA256,
+            [
+                0x92, 0x13, 0x05, 0xab, 0x49, 0x13, 0x16, 0xcd, 0x0e, 0x76, 0x7b, 0xef, 0x3b, 0x88,
+                0xb1, 0x62, 0x2f, 0x42, 0xc0, 0x54, 0x70, 0x23, 0x2f, 0xea, 0x1f, 0x90, 0xec, 0xe7,
+                0x98, 0x4d, 0x4e, 0xae,
+            ]
+        );
+        assert_eq!(
+            CAST_ORDER_CLEAR_THUNK_SHA256,
+            [
+                0x7d, 0xbb, 0xa2, 0xbd, 0x7b, 0x5c, 0xeb, 0xd3, 0x60, 0x8b, 0x65, 0x9b, 0x5f, 0x1b,
+                0x8f, 0x63, 0xa5, 0x23, 0x6a, 0x30, 0x1c, 0x4d, 0xbf, 0x0b, 0x06, 0x12, 0xb3, 0xa4,
+                0x67, 0xe3, 0x23, 0xf1,
+            ]
+        );
+        assert_eq!(
+            CAST_ORDER_CLEAR_BODY_SHA256,
+            [
+                0x23, 0x9e, 0xce, 0xae, 0x02, 0xed, 0x1b, 0x1b, 0x81, 0x1d, 0xe4, 0x1e, 0x7a, 0xf9,
+                0xa0, 0xe1, 0x7d, 0x89, 0x2c, 0xa6, 0xf1, 0xf5, 0xa9, 0x96, 0x30, 0x44, 0x7a, 0xbf,
+                0xe0, 0x10, 0xf7, 0x0a,
             ]
         );
         assert_eq!(
@@ -1633,6 +2046,324 @@ mod tests {
         assert_eq!(residual.before, i.before);
         assert_eq!(residual.staged.objects_revision, 18);
         assert_eq!(i.before.objects_revision, 17);
+    }
+
+    fn found_allocator_residual() -> (GoldenScoutInput, TypedResidual) {
+        let i = input();
+        let receipt = find(
+            &i,
+            GOLDEN_COUNTERINTEL_RANGE,
+            44,
+            ObjectsFindScratch {
+                best_metric: 1234,
+                selected_owner: 1,
+            },
+        );
+        let PrepareOutcome::ExternalRequired(residual) =
+            prepare_golden_scout_spellcaster(&i, &[receipt]).unwrap()
+        else {
+            panic!("expected order allocator residual");
+        };
+        (i, residual)
+    }
+
+    fn pool_capture(
+        residual: &TypedResidual,
+        free_length: i32,
+        slot: OrdersPool14SlotCapture,
+    ) -> OrdersPool14Capture {
+        OrdersPool14Capture {
+            source: OrdersPool14CaptureSource::CompleteRetailPool14AtGoldenScoutAddCastOrder,
+            snapshot_revision: residual.snapshot_revision,
+            call_entry_composition_digest: residual.call_entry_composition_digest,
+            pool_va: ORDERS_MEM_POOL14_VA,
+            pool_revision: residual.before.orders_mem_revision,
+            pool_digest: residual.before.orders_mem_digest,
+            free_array_ptr: 0x1020_3000,
+            free_array_revision: 20,
+            free_array_digest: [7; 32],
+            free_length,
+            slot,
+        }
+    }
+
+    #[test]
+    fn empty_pool_reaches_exact_get_new_order_child_without_a_pool_write() {
+        let (i, scout) = found_allocator_residual();
+        let pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        let residual = prepare_orders_get_object(scout, pool).unwrap();
+
+        assert_eq!(
+            residual.staged_pool_pop,
+            OrdersPool14PopMutation {
+                normalized_negative_length_to_one: false,
+                free_length_before: 0,
+                free_length_after: 0,
+                popped_unit_order_ptr: None,
+                popped_slot_index: None,
+            }
+        );
+        assert_eq!(
+            residual.child,
+            OrdersGetObjectChildRequest::GetNewOrder(GetNewOrderRequest {
+                callsite_va: ORDERS_GET_OBJECT_NEW_ORDER_CALLSITE_VA,
+                function_va: ORDERS_NEW_OBJECT_VA,
+                function_size: ORDERS_NEW_OBJECT_SIZE,
+                function_sha256: ORDERS_NEW_OBJECT_SHA256,
+                order_index_in_ecx: CAST_ORDER_INDEX,
+            })
+        );
+        assert_eq!(
+            residual.continuation_after_get_obj.target_uid_source,
+            TargetUidSource::LiveObjectWordAtOffset0x30
+        );
+        residual.validate_child_before(&i.before, &pool).unwrap();
+
+        let mut stale_pool = pool;
+        stale_pool.free_array_digest[0] ^= 1;
+        let unchanged = stale_pool;
+        assert_eq!(
+            residual.validate_child_before(&i.before, &stale_pool),
+            Err(OrdersGetObjectError::BoundaryChanged)
+        );
+        assert_eq!(stale_pool, unchanged);
+    }
+
+    #[test]
+    fn recycled_pool_pop_stages_decrement_then_stops_before_exact_clear_thunk() {
+        let (i, scout) = found_allocator_residual();
+        let node = RecycledCastOrderCapture {
+            unit_order_ptr: 0x1450_2800,
+            node_revision: 21,
+            node_digest: [8; 32],
+            unit_order_vtable_va: CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+            clear_dispatch_va: CAST_ORDER_CLEAR_THUNK_VA,
+        };
+        let pool = pool_capture(
+            &scout,
+            3,
+            OrdersPool14SlotCapture::RecycledCastOrder {
+                slot_index: 2,
+                node,
+            },
+        );
+        let residual = prepare_orders_get_object(scout, pool).unwrap();
+
+        assert_eq!(
+            residual.staged_pool_pop,
+            OrdersPool14PopMutation {
+                normalized_negative_length_to_one: false,
+                free_length_before: 3,
+                free_length_after: 2,
+                popped_unit_order_ptr: Some(node.unit_order_ptr),
+                popped_slot_index: Some(2),
+            }
+        );
+        assert_eq!(
+            residual.child,
+            OrdersGetObjectChildRequest::ClearRecycledCastOrder(ClearRecycledCastOrderRequest {
+                callsite_va: ORDERS_GET_OBJECT_CLEAR_CALLSITE_VA,
+                vtable_offset: RECYCLED_ORDER_RESET_VTABLE_OFFSET,
+                unit_order_ptr: node.unit_order_ptr,
+                unit_order_vtable_va: CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+                dispatch_va: CAST_ORDER_CLEAR_THUNK_VA,
+                dispatch_size: CAST_ORDER_CLEAR_THUNK_SIZE,
+                dispatch_sha256: CAST_ORDER_CLEAR_THUNK_SHA256,
+                clear_body_va: CAST_ORDER_CLEAR_BODY_VA,
+                clear_body_size: CAST_ORDER_CLEAR_BODY_SIZE,
+                clear_body_sha256: CAST_ORDER_CLEAR_BODY_SHA256,
+            })
+        );
+        assert_eq!(residual.scout.staged.objects_revision, 18);
+        assert_eq!(residual.scout.before.orders_mem_revision, 18);
+        residual.validate_child_before(&i.before, &pool).unwrap();
+    }
+
+    #[test]
+    fn get_obj_child_rejects_every_stale_pool_list_and_node_identity() {
+        let (i, scout) = found_allocator_residual();
+        let node = RecycledCastOrderCapture {
+            unit_order_ptr: 0x1450_2800,
+            node_revision: 21,
+            node_digest: [8; 32],
+            unit_order_vtable_va: CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+            clear_dispatch_va: CAST_ORDER_CLEAR_THUNK_VA,
+        };
+        let pool = pool_capture(
+            &scout,
+            1,
+            OrdersPool14SlotCapture::RecycledCastOrder {
+                slot_index: 0,
+                node,
+            },
+        );
+        let residual = prepare_orders_get_object(scout, pool).unwrap();
+
+        let mut stale = Vec::new();
+        let mut value = pool;
+        value.source = OrdersPool14CaptureSource::SyntheticOrUnknown;
+        stale.push(value);
+        value = pool;
+        value.snapshot_revision += 1;
+        stale.push(value);
+        value = pool;
+        value.call_entry_composition_digest[0] ^= 1;
+        stale.push(value);
+        value = pool;
+        value.pool_va += 0x20;
+        stale.push(value);
+        value = pool;
+        value.pool_revision += 1;
+        stale.push(value);
+        value = pool;
+        value.pool_digest[0] ^= 1;
+        stale.push(value);
+        value = pool;
+        value.free_array_ptr += 4;
+        stale.push(value);
+        value = pool;
+        value.free_array_revision += 1;
+        stale.push(value);
+        value = pool;
+        value.free_array_digest[0] ^= 1;
+        stale.push(value);
+        value = pool;
+        value.free_length += 1;
+        stale.push(value);
+        for changed_node in [
+            RecycledCastOrderCapture {
+                unit_order_ptr: node.unit_order_ptr + 4,
+                ..node
+            },
+            RecycledCastOrderCapture {
+                node_revision: node.node_revision + 1,
+                ..node
+            },
+            RecycledCastOrderCapture {
+                node_digest: [9; 32],
+                ..node
+            },
+            RecycledCastOrderCapture {
+                unit_order_vtable_va: node.unit_order_vtable_va + 4,
+                ..node
+            },
+            RecycledCastOrderCapture {
+                clear_dispatch_va: node.clear_dispatch_va + 4,
+                ..node
+            },
+        ] {
+            value = pool;
+            value.slot = OrdersPool14SlotCapture::RecycledCastOrder {
+                slot_index: 0,
+                node: changed_node,
+            };
+            stale.push(value);
+        }
+        value = pool;
+        value.slot = OrdersPool14SlotCapture::RecycledCastOrder {
+            slot_index: 1,
+            node,
+        };
+        stale.push(value);
+
+        for current_pool in stale {
+            let unchanged = current_pool;
+            assert_eq!(
+                residual.validate_child_before(&i.before, &current_pool),
+                Err(OrdersGetObjectError::BoundaryChanged)
+            );
+            assert_eq!(current_pool, unchanged);
+        }
+        assert_eq!(residual.pool_before, pool);
+        assert_eq!(residual.staged_pool_pop.free_length_after, 0);
+        assert_eq!(pool.free_length, 1);
+    }
+
+    #[test]
+    fn negative_length_normalizes_to_one_and_null_slot_falls_into_fresh_child() {
+        let (_, scout) = found_allocator_residual();
+        let pool = pool_capture(&scout, -7, OrdersPool14SlotCapture::Null { slot_index: 0 });
+        let residual = prepare_orders_get_object(scout, pool).unwrap();
+        assert_eq!(
+            residual.staged_pool_pop,
+            OrdersPool14PopMutation {
+                normalized_negative_length_to_one: true,
+                free_length_before: -7,
+                free_length_after: 0,
+                popped_unit_order_ptr: Some(0),
+                popped_slot_index: Some(0),
+            }
+        );
+        assert!(matches!(
+            residual.child,
+            OrdersGetObjectChildRequest::GetNewOrder(_)
+        ));
+    }
+
+    #[test]
+    fn get_obj_capture_and_node_authority_fail_closed_before_any_pop() {
+        let (_, scout) = found_allocator_residual();
+
+        let mut forged = scout;
+        forged.staged.search_scratch.selected_owner = 2;
+        let complete_pool = pool_capture(&scout, 0, OrdersPool14SlotCapture::NotRead);
+        assert_eq!(
+            prepare_orders_get_object(forged, complete_pool),
+            Err(OrdersGetObjectError::RequestShapeMismatch)
+        );
+
+        let mut wrong_slot =
+            pool_capture(&scout, 3, OrdersPool14SlotCapture::Null { slot_index: 1 });
+        assert_eq!(
+            prepare_orders_get_object(scout, wrong_slot),
+            Err(OrdersGetObjectError::InvalidSlotCapture)
+        );
+
+        wrong_slot.slot = OrdersPool14SlotCapture::NotRead;
+        wrong_slot.free_length = 0;
+        wrong_slot.source = OrdersPool14CaptureSource::SyntheticOrUnknown;
+        assert_eq!(
+            prepare_orders_get_object(scout, wrong_slot),
+            Err(OrdersGetObjectError::CaptureSourceMismatch)
+        );
+
+        let missing_node = RecycledCastOrderCapture {
+            unit_order_ptr: 0x1450_2800,
+            node_revision: 0,
+            node_digest: [8; 32],
+            unit_order_vtable_va: CAST_ORDER_UNIT_ORDER_VTABLE_VA,
+            clear_dispatch_va: CAST_ORDER_CLEAR_THUNK_VA,
+        };
+        let missing_node_pool = pool_capture(
+            &scout,
+            1,
+            OrdersPool14SlotCapture::RecycledCastOrder {
+                slot_index: 0,
+                node: missing_node,
+            },
+        );
+        assert_eq!(
+            prepare_orders_get_object(scout, missing_node_pool),
+            Err(OrdersGetObjectError::MissingRecycledNodeAuthority)
+        );
+
+        let wrong_shape = RecycledCastOrderCapture {
+            node_revision: 21,
+            unit_order_vtable_va: CAST_ORDER_UNIT_ORDER_VTABLE_VA + 4,
+            ..missing_node
+        };
+        let wrong_shape_pool = pool_capture(
+            &scout,
+            1,
+            OrdersPool14SlotCapture::RecycledCastOrder {
+                slot_index: 0,
+                node: wrong_shape,
+            },
+        );
+        assert_eq!(
+            prepare_orders_get_object(scout, wrong_shape_pool),
+            Err(OrdersGetObjectError::UnsupportedRecycledNodeShape)
+        );
     }
 
     #[test]
