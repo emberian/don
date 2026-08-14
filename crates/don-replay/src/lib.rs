@@ -120,6 +120,7 @@ pub mod rules_channel;
 pub mod scenario_channel;
 pub mod script_channel;
 pub mod setup_2024_frame379;
+pub mod setup_2024_frame379_group_move;
 pub mod setup_cities_builds;
 pub mod setup_group_move_authority;
 pub mod setup_place_unit_deep_re;

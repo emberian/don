@@ -73,3 +73,11 @@ initializers (graphics, height, collision, visibility, Leader accounting, and RN
 Scout, both Merchants, and four Citizens. Full frame-379 replay also needs every other player's
 setup chronology and intervening frame simulation; this owner-0 receipt alone advances no corpus
 checksum.
+
+The downstream command mount is `setup_2024_frame379_group_move`. It requires an explicit
+source-backed frame-zero-to-379 chronology authority, rebinds all seven owner-0 setup members at
+the canonical frame-379 Sim, installs complete live Group authority from the exact replay Rules,
+and issues serial 64. It does not relabel frame zero. Playback checks before processing the due
+record, so the delayed frame-385 clear checksum is not evidence that the Group was absent. The
+next exact boundary is installed-Group processing at frame 384 before its first recorded
+checksum-visible value at frame 391.
