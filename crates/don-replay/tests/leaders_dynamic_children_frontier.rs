@@ -59,6 +59,15 @@ use don_replay::leaders_setup_diplomacy_stamp_frontier::{
     bind_frame_zero_action_stamps, derive_frame_zero_action_stamps, FrameZeroActionStampsError,
     ACTION_STAMPS_BEGIN, ACTION_STAMPS_END, FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES,
 };
+use don_replay::leaders_setup_fixed_tail_frontier::{
+    bind_frame_zero_fixed_tail, derive_frame_zero_fixed_tail, FrameZeroFixedTailError,
+    CONQUEST_BYTE_OFFSET, FRAME_ZERO_FIXED_TAIL_DUPLICATE_WALKED_BYTES,
+    FRAME_ZERO_FIXED_TAIL_NEWLY_CANONICAL_WALKED_BYTES, FRAME_ZERO_FIXED_TAIL_WALKED_BYTES,
+    LEADER_INIT_BONUS_CARDS_CLEAR_BEGIN_VA, LEADER_INIT_BONUS_CARDS_CLEAR_END_VA,
+    LEADER_INIT_CTW_RATES_CLEAR_END_VA, LEADER_INIT_DEFEAT_STAMP_STORE_VA,
+    LEADER_INIT_TEAM_COLOR_STORE_VA, SETUP_BUILD_GAME_ACTIVE_LEADER_INIT_VA,
+    SETUP_FIXED_TAIL_BEGIN, SETUP_FIXED_TAIL_END, TEAM_COLOR_OFFSET,
+};
 use don_replay::leaders_setup_human_personality_frontier::{
     bind_frame_zero_human_personality, derive_frame_zero_human_personality,
     FrameZeroHumanPersonalityError, HUMAN_PERSONALITY_DUPLICATE_WALKED_BYTES,
@@ -1205,6 +1214,7 @@ fn frame_zero_starting_build_census_body() {
     let city_stats = derive_frame_zero_city_stats(&setup).unwrap();
     let human_personality = derive_frame_zero_human_personality(&setup).unwrap();
     let chat_status = derive_frame_zero_chat_status(&setup).unwrap();
+    let fixed_tail = derive_frame_zero_fixed_tail(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1337,6 +1347,19 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(CHAT_STATUS_BEGIN, 0x54);
     assert_eq!(CHAT_STATUS_END, 0x74);
     assert_eq!(FRAME_ZERO_CHAT_STATUS_WALKED_BYTES, 32);
+    assert_eq!(SETUP_FIXED_TAIL_BEGIN, 0x68f6);
+    assert_eq!(CONQUEST_BYTE_OFFSET, 0x6900);
+    assert_eq!(TEAM_COLOR_OFFSET, 0x6928);
+    assert_eq!(SETUP_FIXED_TAIL_END, 0x6929);
+    assert_eq!(FRAME_ZERO_FIXED_TAIL_WALKED_BYTES, 51);
+    assert_eq!(FRAME_ZERO_FIXED_TAIL_DUPLICATE_WALKED_BYTES, 1);
+    assert_eq!(FRAME_ZERO_FIXED_TAIL_NEWLY_CANONICAL_WALKED_BYTES, 50);
+    assert_eq!(LEADER_INIT_BONUS_CARDS_CLEAR_BEGIN_VA, 0x006e_3a80);
+    assert_eq!(LEADER_INIT_BONUS_CARDS_CLEAR_END_VA, 0x006e_3a9f);
+    assert_eq!(LEADER_INIT_CTW_RATES_CLEAR_END_VA, 0x006e_3aa6);
+    assert_eq!(LEADER_INIT_TEAM_COLOR_STORE_VA, 0x006e_3b02);
+    assert_eq!(LEADER_INIT_DEFEAT_STAMP_STORE_VA, 0x006e_3e0f);
+    assert_eq!(SETUP_BUILD_GAME_ACTIVE_LEADER_INIT_VA, 0x005a_c190);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1365,6 +1388,12 @@ fn frame_zero_starting_build_census_body() {
         .claims()
         .iter()
         .all(|claim| claim.newly_canonical_walked_bytes == 32));
+    assert_eq!(fixed_tail.claims().len(), active_count);
+    assert!(fixed_tail.claims().iter().all(|claim| {
+        claim.walked_bytes == 51
+            && claim.duplicate_checked_walked_bytes == 1
+            && claim.newly_canonical_walked_bytes == 50
+    }));
     let first_active = prefix.rows.iter().position(|row| row.active).unwrap();
     setup.receipt.team_setup.chat_status[first_active][0] ^= 1;
     assert_eq!(
@@ -1461,6 +1490,13 @@ fn frame_zero_starting_build_census_body() {
             let bytes: Vec<_> = row.iter().flat_map(|value| value.to_le_bytes()).collect();
             write_field(&mut fixture.columns, slot, field, &bytes);
         }
+        if fixture.prefix.rows[slot].active {
+            let field = leader::FIELDS
+                .iter()
+                .find(|field| field.name == "team_color")
+                .unwrap();
+            write_field(&mut fixture.columns, slot, field, &[slot as u8]);
+        }
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1494,21 +1530,23 @@ fn frame_zero_starting_build_census_body() {
     let city_joined = bind_frame_zero_city_stats(stamps_joined, city_stats.clone()).unwrap();
     let personality_joined =
         bind_frame_zero_human_personality(city_joined, human_personality.clone()).unwrap();
-    let joined = bind_frame_zero_chat_status(personality_joined, chat_status.clone()).unwrap();
+    let chat_joined = bind_frame_zero_chat_status(personality_joined, chat_status.clone()).unwrap();
+    let joined = bind_frame_zero_fixed_tail(chat_joined, fixed_tail.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 32);
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 50);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_651 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_701 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 777) as u64
+        (active_count * 727) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    let personality_frontier = joined.inner();
+    let chat_frontier = joined.inner();
+    let personality_frontier = chat_frontier.inner();
     assert!(personality_frontier
         .inner()
         .inner()
@@ -1637,6 +1675,51 @@ fn frame_zero_starting_build_census_body() {
             bind_frame_zero_human_personality(cities, human_personality.clone()).unwrap();
         bind_frame_zero_chat_status(personality, chat_status.clone())
     };
+    let bind_tail_columns = |columns: &LeaderCols| {
+        let chat = bind_chat_columns(columns).unwrap();
+        bind_frame_zero_fixed_tail(chat, fixed_tail.clone())
+    };
+
+    let mut stale_team_color_columns = fixture.columns.clone();
+    let team_color_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "team_color")
+        .unwrap();
+    write_field(
+        &mut stale_team_color_columns,
+        active,
+        team_color_field,
+        &[(active as u8) ^ 1],
+    );
+    assert!(matches!(
+        bind_tail_columns(&stale_team_color_columns),
+        Err(FrameZeroFixedTailError::ConditionalDisagreement {
+            slot,
+            byte: 50,
+            expected,
+            conditional,
+        }) if slot == active && expected == active as u8 && conditional == (active as u8 ^ 1)
+    ));
+    let mut stale_defeat_columns = fixture.columns.clone();
+    let defeat_stamp_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "defeat_stamp")
+        .unwrap();
+    write_field(
+        &mut stale_defeat_columns,
+        active,
+        defeat_stamp_field,
+        &1i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_tail_columns(&stale_defeat_columns),
+        Err(FrameZeroFixedTailError::ConditionalDisagreement {
+            slot,
+            byte: 46,
+            expected: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let mut stale_chat_columns = fixture.columns.clone();
     let chat_field = leader::FIELDS

@@ -160,6 +160,12 @@ the independent conditional image. This reduces the residual to 777 bytes per ac
 Later team/diplomacy changes are not mounted here, so the channel remains uninstalled with zero
 survival.
 
+Finally, the ordinary non-scenario `Leader::init` tail supplies 50 new fixed bytes per active
+row: zero bonus-card/rate arrays, walked padding, zero `defeat_stamp`, and exact
+`team_color = who`. The already-owned conquest byte at `+0x6900` is agreement-checked and not
+counted twice. The composed residual is 727 bytes per active row; later conquest/defeat state is
+not mounted, so install and survival remain false/zero.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

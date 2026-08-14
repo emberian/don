@@ -97,6 +97,38 @@ impl RuntimeLeadersFrameZeroChatStatusFrontier {
         self.inner.walk_frontier()
     }
 
+    /// Expose the complete conditional fixed-body image only as an agreement gate for later
+    /// setup owners. Presence in that transcript never promotes a byte by itself.
+    pub fn conditional_fixed_slice(
+        &self,
+        slot: usize,
+        range: RuntimeCoveredRange,
+    ) -> Option<&[u8]> {
+        let init = self
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner();
+        init.conditional_fixed_slice(slot, range)
+    }
+
+    pub fn conditional_row_active(&self, slot: usize) -> Option<bool> {
+        let init = self
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner();
+        init.conditional_row_active(slot)
+    }
+
     pub fn checksum(&self) -> Result<(u32, u64), LeadersWalkFrontier> {
         Err(self.walk_frontier())
     }

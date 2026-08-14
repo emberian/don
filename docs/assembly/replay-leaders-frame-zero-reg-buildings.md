@@ -94,9 +94,10 @@ setup-surviving diplomacy/CTW/repair stamps                24
 starting-Village Leader counter history                    16
 human-only zero Personality child                          92
 canonical init-teams chat status                           32
-frame-zero unique canonical walked bytes               27,651
+ordinary-setup fixed-row tail                              50
+frame-zero unique canonical walked bytes               27,701
 default empty-child transcript                          28,428
-frame-zero residual                                        777
+frame-zero residual                                        727
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -194,6 +195,12 @@ row. The starting receipt retains both the complete pre-state and the exact post
 ordered receipt byte-for-byte. Active rows therefore own the exact 32-byte roster/team-style
 dependent result. Later diplomacy/team mutation expires this claim.
 
+The last 51 walked bytes of the fixed row add 50 more unique bytes. `Leader::init` clears
+`num_bonus_cards[38]` and `num_ctw_rate_bonuses[6]` at `0x006e3a80..0x006e3aa6`, retains
+zero in the walked padding and `defeat_stamp`, and stores `team_color = who` at `0x006e3b02`.
+The ordinary non-scenario setup reaches no conquest-card/rate or defeat writer. The existing
+runtime conquest byte at `+0x6900` is duplicate-checked rather than counted twice.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -238,3 +245,6 @@ Mutating the final `alliance_ai` personality dword independently refuses the 92-
 Personality join.
 Changing either the retained init-teams post-state or an independently imaged `chat_status`
 byte refuses the 32-byte chat join.
+Changing the independently imaged `team_color` or constructor-zero `defeat_stamp` refuses the
+fixed-tail join; the embedded conquest byte remains an explicit duplicate rather than a second
+claim.
