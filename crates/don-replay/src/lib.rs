@@ -142,6 +142,7 @@ pub mod setup_2024_frame1_set_anim_capture;
 pub mod setup_2024_frame1_set_anim_continuation;
 pub mod setup_2024_frame1_citizen_think;
 pub mod setup_2024_frame1_citizen_think_suffix;
+pub mod setup_2024_frame1_citizen_set_idle;
 pub mod setup_2024_frame1_village_process;
 pub mod setup_2024_frame379;
 pub mod setup_2024_frame379_group_move;
