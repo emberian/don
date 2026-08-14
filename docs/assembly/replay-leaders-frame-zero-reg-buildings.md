@@ -86,9 +86,10 @@ high_buildings history                                    258
 regional City/Fort/Dock registries                        384
 canonical type-owner masks                               117
 setup-surviving Leader::init scalars                       48
-frame-zero unique canonical walked bytes               24,589
+pre-plan strategy scratch and regional census           2,558
+frame-zero unique canonical walked bytes               27,147
 default empty-child transcript                          28,428
-frame-zero residual                                      3,839
+frame-zero residual                                      1,281
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -123,6 +124,20 @@ gather/support action, weapon use, or technology completion before publication, 
 initialized bytes survive to that boundary. This is a setup-only historical claim, not a live
 maintainer; it expires before the first world turn.
 
+The constructor also clears a disjoint 2,558-byte strategy cohort which the first
+`Leader::plan_strategy` pass immediately clears or recomputes. It contains the two 64-dword
+rare-region arrays `[0x4d4,0x6d4)`, `filled_gather_slots[6]` `[0x8bc,0x8d4)`, 28 individually
+enumerated plan-entry scratch dwords, `strategy` through `reg_attack` `[0xa68,0xe62)`, and the
+naval/transport/peasant/gather regional census `[0xee2,0x125e)`. The entry list deliberately
+excludes scalars that have another canonical owner or are not cleared there; the array ranges
+exclude the already-owned `reg_pop` and City/Fort/Dock registries, and the unported territory
+arrays. The 28 scratch and regional stores are at `0x006e49c8..0x006e4ba2`;
+`filled_gather_slots` inherits the fresh negative-init bulk zero at `0x006e398c..0x006e3995`.
+The first plan clears/recomputes are at `0x006b97cc..0x006b9c62`, with the strategy array
+written later in that same pass at `0x006bbba1..0x006bbe70`. No setup action reaches these
+writers between construction and the published receipt. Like every claim in this continuation,
+it expires before the first plan.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -154,3 +169,5 @@ the historical row nor its Rules provenance can be substituted. A tail mutation 
 canonical type owner's observation mask also refuses against the already-bound dynamic child.
 The final byte of `tech_cat_frame[4]` is independently mutated as well, proving the entire
 44-byte initialized stamp block must agree before the additional 48-byte cohort is admitted.
+Independent mutations of the `attack` scratch dword and the final `reg_gather_slots` byte prove
+both the sparse-scalar and contiguous-array halves of the 2,558-byte pre-plan cohort fail closed.

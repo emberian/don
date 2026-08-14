@@ -93,6 +93,43 @@ impl RuntimeLeadersFrameZeroInitScalarFrontier {
         self.inner.walk_frontier()
     }
 
+    /// Read one range from the complete conditional fixed-body transcript beneath this
+    /// setup-only authority. Later setup binders use this only as an independent agreement
+    /// gate; a conditional byte is never promoted merely because it is present here.
+    pub fn conditional_fixed_slice(
+        &self,
+        slot: usize,
+        range: RuntimeCoveredRange,
+    ) -> Option<&[u8]> {
+        let dynamic = self
+            .inner
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner();
+        dynamic
+            .previous()
+            .rows()
+            .get(slot)?
+            .conditionally_admitted_slice(range)
+    }
+
+    pub fn conditional_row_active(&self, slot: usize) -> Option<bool> {
+        let dynamic = self
+            .inner
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner();
+        Some(dynamic.previous().rows().get(slot)?.active)
+    }
+
     pub fn checksum(&self) -> Result<(u32, u64), LeadersWalkFrontier> {
         Err(self.walk_frontier())
     }

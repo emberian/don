@@ -116,6 +116,12 @@ add 48 more setup-surviving bytes per active row, reducing that conditional resi
 They remain uninstalled with zero survival: the receipt proves only the constructor boundary,
 not maintenance after the first replay turn.
 
+An exact disjoint census of constructor-zero strategy scratch and regional arrays adds another
+2,558 bytes per active row. Every admitted field is first cleared or recomputed by the first
+`Leader::plan_strategy`, so this narrows the constructor-bound residual to 1,281 but cannot
+survive that first pass. The general scoreboard therefore remains uninstalled and at zero
+survived turns.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

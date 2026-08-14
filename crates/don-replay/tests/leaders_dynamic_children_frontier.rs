@@ -41,6 +41,17 @@ use don_replay::leaders_setup_init_scalar_frontier::{
     LEADER_INIT_SETUP_STAMPS_BEGIN_VA, LEADER_INIT_SETUP_STAMPS_STOS_BEGIN_VA,
     LEADER_INIT_SETUP_STAMPS_STOS_END_VA,
 };
+use don_replay::leaders_setup_plan_scratch_frontier::{
+    bind_frame_zero_plan_scratch, derive_frame_zero_plan_scratch, FrameZeroPlanScratchError,
+    FRAME_ZERO_PLAN_SCRATCH_WALKED_BYTES, LEADERS_INIT_NEGATIVE_BULK_ZERO_BEGIN_VA,
+    LEADERS_INIT_NEGATIVE_BULK_ZERO_END_VA, LEADERS_INIT_NEGATIVE_CALL_VA,
+    LEADER_INIT_PLAN_REGIONS_BEGIN_VA, LEADER_INIT_PLAN_REGIONS_END_VA,
+    LEADER_INIT_PLAN_SCALARS_BEGIN_VA, LEADER_INIT_PLAN_SCALARS_END_VA,
+    PLAN_STRATEGY_ENTRY_SCALARS_BEGIN_VA, PLAN_STRATEGY_ENTRY_SCALARS_END_VA,
+    PLAN_STRATEGY_FILLED_GATHER_CLEAR_BEGIN_VA, PLAN_STRATEGY_FILLED_GATHER_CLEAR_END_VA,
+    PLAN_STRATEGY_REGION_RECOMPUTE_BEGIN_VA, PLAN_STRATEGY_REGION_RECOMPUTE_END_VA,
+    PLAN_STRATEGY_STRATEGY_FIRST_STORE_VA, PLAN_STRATEGY_STRATEGY_LAST_STORE_VA,
+};
 use don_replay::leaders_setup_reg_buildings_frontier::{
     bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
     FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
@@ -1132,6 +1143,7 @@ fn frame_zero_starting_build_census_body() {
     let region_history = derive_frame_zero_region_strategy_history(&setup).unwrap();
     let build_registry = derive_frame_zero_build_registry_census(&setup, &replay).unwrap();
     let init_scalars = derive_frame_zero_init_scalars(&setup).unwrap();
+    let plan_scratch = derive_frame_zero_plan_scratch(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1166,11 +1178,28 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(LEADER_INIT_SETUP_STAMPS_STOS_BEGIN_VA, 0x006e_3bee);
     assert_eq!(LEADER_INIT_SETUP_STAMPS_STOS_END_VA, 0x006e_3bf9);
     assert_eq!(FRAME_ZERO_INIT_SCALAR_WALKED_BYTES, 48);
+    assert_eq!(LEADER_INIT_PLAN_REGIONS_BEGIN_VA, 0x006e_4ae7);
+    assert_eq!(LEADER_INIT_PLAN_REGIONS_END_VA, 0x006e_4ba2);
+    assert_eq!(LEADER_INIT_PLAN_SCALARS_BEGIN_VA, 0x006e_49c8);
+    assert_eq!(LEADER_INIT_PLAN_SCALARS_END_VA, 0x006e_4aaf);
+    assert_eq!(LEADERS_INIT_NEGATIVE_BULK_ZERO_BEGIN_VA, 0x006e_398c);
+    assert_eq!(LEADERS_INIT_NEGATIVE_BULK_ZERO_END_VA, 0x006e_3996);
+    assert_eq!(LEADERS_INIT_NEGATIVE_CALL_VA, 0x006e_d8cb);
+    assert_eq!(PLAN_STRATEGY_ENTRY_SCALARS_BEGIN_VA, 0x006b_97cc);
+    assert_eq!(PLAN_STRATEGY_ENTRY_SCALARS_END_VA, 0x006b_99b0);
+    assert_eq!(PLAN_STRATEGY_FILLED_GATHER_CLEAR_BEGIN_VA, 0x006b_997d);
+    assert_eq!(PLAN_STRATEGY_FILLED_GATHER_CLEAR_END_VA, 0x006b_99b0);
+    assert_eq!(PLAN_STRATEGY_REGION_RECOMPUTE_BEGIN_VA, 0x006b_9bb0);
+    assert_eq!(PLAN_STRATEGY_REGION_RECOMPUTE_END_VA, 0x006b_9c63);
+    assert_eq!(PLAN_STRATEGY_STRATEGY_FIRST_STORE_VA, 0x006b_bba1);
+    assert_eq!(PLAN_STRATEGY_STRATEGY_LAST_STORE_VA, 0x006b_be70);
+    assert_eq!(FRAME_ZERO_PLAN_SCRATCH_WALKED_BYTES, 2_558);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
     assert_eq!(build_registry.claims().len(), active_count);
     assert_eq!(init_scalars.claims().len(), active_count);
+    assert_eq!(plan_scratch.claims().len(), active_count);
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1260,17 +1289,21 @@ fn frame_zero_starting_build_census_body() {
     let registry_joined =
         bind_frame_zero_build_registry_census(region_joined, build_registry.clone()).unwrap();
     let mask_joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
-    let joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
+    let init_joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
+    let joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 48);
+    assert_eq!(
+        joined.newly_canonicalized_walked_bytes(),
+        active_count * 2_558
+    );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 24_589 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_147 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 3_839) as u64
+        (active_count * 1_281) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
@@ -1279,8 +1312,79 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(TYPE_MASK_HEADER_WALKED_BYTES, 8);
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
-    assert_eq!(joined.inner().claims().len(), active_count);
-    assert_eq!(joined.inner().claims()[0].tech_duplicate_payload_bytes, 101);
+    assert_eq!(joined.inner().inner().claims().len(), active_count);
+    assert_eq!(
+        joined.inner().inner().claims()[0].tech_duplicate_payload_bytes,
+        101
+    );
+
+    let bind_plan_columns = |columns: &LeaderCols| {
+        let previous = deferred_frontier_with_authority(
+            &fixture.prefix,
+            &fixture.victory,
+            &fixture.step8,
+            &fixture.types,
+            columns,
+            &fixed,
+        );
+        let tech = bind_sim_tech_frontier(previous, &fixture.authority, &setup.sim).unwrap();
+        let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
+        let regional = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
+        let history_joined =
+            bind_frame_zero_last_building_history(regional, history.clone()).unwrap();
+        let regions =
+            bind_frame_zero_region_strategy_history(history_joined, region_history.clone())
+                .unwrap();
+        let registry =
+            bind_frame_zero_build_registry_census(regions, build_registry.clone()).unwrap();
+        let masks = bind_type_mask_owner(registry, &mask_types).unwrap();
+        let init = bind_frame_zero_init_scalars(masks, init_scalars.clone()).unwrap();
+        bind_frame_zero_plan_scratch(init, plan_scratch.clone())
+    };
+
+    let plan_tail_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "reg_gather_slots")
+        .unwrap();
+    let mut stale_plan_columns = fixture.columns.clone();
+    let mut stale_plan_bytes = vec![0; plan_tail_field.size as usize];
+    *stale_plan_bytes.last_mut().unwrap() = 1;
+    write_field(
+        &mut stale_plan_columns,
+        active,
+        plan_tail_field,
+        &stale_plan_bytes,
+    );
+    assert!(matches!(
+        bind_plan_columns(&stale_plan_columns),
+        Err(FrameZeroPlanScratchError::ConditionalDisagreement {
+            slot,
+            begin: 0xee2,
+            byte: 891,
+            conditional: 1,
+        }) if slot == active
+    ));
+
+    let attack_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "attack")
+        .unwrap();
+    let mut stale_plan_scalar_columns = fixture.columns.clone();
+    write_field(
+        &mut stale_plan_scalar_columns,
+        active,
+        attack_field,
+        &1i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_plan_columns(&stale_plan_scalar_columns),
+        Err(FrameZeroPlanScratchError::ConditionalDisagreement {
+            slot,
+            begin: 0x958,
+            byte: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let mut stale_masks = mask_types.clone();
     stale_masks.leaders[active].obs_flags.bytes[100] ^= 1;
