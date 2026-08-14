@@ -8,7 +8,8 @@
 //! empty Army rosters and on-map ground Unit bands. It also owns the exact forced-Army arm where
 //! the entry countdown decrements and the leader's armies-off bit returns before normalization.
 //! The exact instruction-ordered no-op Victory plus armies-off cohort publishes atomically too;
-//! every broader external authority remains unavailable before publication.
+//! an active zero-city winner's empty non-mustering Army also normalizes and retires atomically.
+//! Every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
     commit_diplomacy_transaction, prepare_diplomacy_transaction, CanonicalLeaderDiplomacyFields,
@@ -347,7 +348,8 @@ fn set_plan_has_victory(plan: &super::leader_set_diplo::SetDiploPlan) -> bool {
 
 /// The staged Leader/Match body must observe the relation image at the retail call site. The
 /// supported generic-victory cohort has one Victory and no later relation write. It may then run
-/// only that winner's exact armies-off calls, matching `Leader::set_diplo`'s instruction order.
+/// only that winner's exact bounded forced-Army calls, matching `Leader::set_diplo`'s instruction
+/// order.
 /// More complex ordering remains fail-closed.
 fn victory_order_isolated(prepared: &PreparedDiplomacyTransaction) -> bool {
     let mut winner = None;
@@ -576,8 +578,19 @@ impl StagedForceArmyAuthority {
     fn current_error(
         &self,
         armies: &super::armies::Armies,
+        leader_city_num: &[i32; NUM_LEADERS],
     ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
         self.receipts.iter().find_map(|receipt| {
+            if receipt
+                .leader_city_num
+                .is_some_and(|city_num| leader_city_num[receipt.request.owner] != city_num)
+            {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleLeader {
+                        owner: receipt.request.owner,
+                    },
+                );
+            }
             (armies
                 .lists
                 .get(receipt.request.owner)
@@ -880,13 +893,6 @@ fn stage_force_army_authority(
                 army_slot,
                 forced,
             } => {
-                // Every broader forced body is deliberately left for the generic external-
-                // authority refusal. Bit 0x40 is the exact early return after the decrement.
-                if leader_flags[owner] & super::armies::LF_ARMIES_OFF == 0 {
-                    return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
-                        authority.to_vec(),
-                    ));
-                }
                 requests.push(ForceArmyProcessRequest {
                     owner,
                     army_slot,
@@ -903,11 +909,35 @@ fn stage_force_army_authority(
     if requests.is_empty() {
         return Ok(None);
     }
-    let prepared = prepare_force_army_process(&sim.armies, leader_flags, leader_flags2, &requests)
-        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
+    let leader_city_num = std::array::from_fn(|who| sim.step8.leaders[who].city_num);
+    let prepared = match prepare_force_army_process(
+        &sim.armies,
+        leader_flags,
+        leader_flags2,
+        &leader_city_num,
+        &requests,
+    ) {
+        Ok(prepared) => prepared,
+        Err(
+            super::diplomacy_force_army_authority::ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                ..
+            },
+        ) => {
+            return Err(CanonicalDiplomacyRuntimeError::ExternalAuthority(
+                authority.to_vec(),
+            ));
+        }
+        Err(error) => return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error)),
+    };
     let mut armies = Box::new(sim.armies.clone());
-    let receipts = commit_force_army_process(&mut armies, leader_flags, leader_flags2, prepared)
-        .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
+    let receipts = commit_force_army_process(
+        &mut armies,
+        leader_flags,
+        leader_flags2,
+        &leader_city_num,
+        prepared,
+    )
+    .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
     Ok(Some(StagedForceArmyAuthority { armies, receipts }))
 }
 
@@ -1122,9 +1152,10 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
             if project_owner(self.sim)? != before {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
+            let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
             if let Some(error) = staged_army
                 .as_ref()
-                .and_then(|staged| staged.current_error(&self.sim.armies))
+                .and_then(|staged| staged.current_error(&self.sim.armies, &leader_city_num))
             {
                 return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));
             }
