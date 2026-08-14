@@ -132,6 +132,7 @@ pub mod scenario_channel;
 pub mod script_channel;
 pub mod setup_2024_frame0_merchant_search;
 pub mod setup_2024_frame0_merchant_unpack;
+pub mod setup_2024_frame0_plan_strategy;
 pub mod setup_2024_frame1_leader_options;
 pub mod setup_2024_frame1_set_anim_capture;
 pub mod setup_2024_frame1_set_anim_continuation;
