@@ -78,10 +78,10 @@ It clears each live City's `free` (`+0x5a`), `busy` (`+0x5b`), `gatherers` (`+0x
 Scout/Citizen rows and applies the empty-action Citizen arm. It is not yet mountable in
 `StartingSetupState`: that host does not materialize the receipt-backed Units in `Sim::world`.
 The setup owner now installs the source-exact activation-time TData `CITY` footprint (CITY is
-not a WData bit). That advances the existing terrain-census owner for `+0x62..+0x71` to its
-content-backed `World::gather_at` arm, where it fails closed because the generated ordered
-`LandData`/`GoodTypeData` facts are not yet owned. Final setup territory, including
-`WData::who/who2` and City `bordering`, remains separate. These owners and the remaining setup
-schedule must join before the frozen constructor can become a first-checkpoint-correct image.
+not a WData bit). The installed-content mode-one `World::gather_at` owner now closes the next
+terrain-census boundary for `+0x62..+0x71`; its six-City candidate still matches 0/3 admitted
+first checkpoints and remains unmounted. Final setup territory, including `WData::who/who2`
+and City `bordering`, remains separate. These owners and the remaining setup schedule must
+join before the frozen constructor can become a first-checkpoint-correct image.
 No recorded Cities checksum is an input. See
 [`replay-starting-city-unit-census.md`](replay-starting-city-unit-census.md).

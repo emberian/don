@@ -103,8 +103,9 @@ The focused gates reconstruct the three admitted two-human recordings (2018-11-1
 Himalayas, 2020-02-08 Old World, and 2020-02-21 Himalayas), consume both exact setup
 centers and their source-derived radius-20/radius-24 facts, and prove that each whole
 even-circle disc is in bounds. They check the post-transaction center bit and then show
-that the exact City terrain census advances into its content-backed gather arm and refuses
-atomically on the first missing coordinate fact. No recorded checksum is compared or fit.
+that the exact City terrain census advances through its installed-content mode-one gather
+owner. The resulting candidate is measured against, but never fit from, retail and remains
+0/3. No recorded checksum is an input.
 
 ## Setup order before the first census
 
@@ -168,8 +169,8 @@ remaining composition must join:
 - setup's final full territory result, including City `bordering`;
 - the earlier Unit-derived `free`, `busy`, and `peasant_dist` City fields in
   `Leader::plan_strategy`; and
-- the generated `LandData`/`GoodTypeData` inputs required by each reached
-  `World::gather_at` call; and
+- mounting the now-exact installed `LandData`/`GoodTypeData` mode-one result only after the
+  final canonical World and other City owners join; and
 - the rest of the activation owner's blocker/road/World rollups needed by other channels.
 
 Accordingly the receipt keeps `first_checksum_world_image_ready == false` and

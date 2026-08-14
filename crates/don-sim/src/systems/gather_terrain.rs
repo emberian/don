@@ -10,8 +10,11 @@
 //!   identities, including their separate search coordinates, mining TCoords and mountain
 //!   solid-cell arrays.
 //!
-//! This module retains those sources without manufacturing either from `TData` masks. The
-//! resulting [`MaterializedGatherHost`] implements
+//! This module retains those sources without manufacturing either from `TData` masks. It
+//! also exposes the narrower [`InstalledLandCatalog`]: retail `World::gather_at` mode one
+//! does not read the generated object arrays, so a City census need not make a false
+//! generation claim merely to consume installed LandData. The full
+//! [`MaterializedGatherHost`] implements
 //! [`AuthoritativeGatherTerrain`](super::gathering::AuthoritativeGatherTerrain) over the
 //! synchronized [`World`](super::map_terrain::World). Missing source records, incoherent
 //! provenance, unknown resource tokens and stale world identity all fail closed.
@@ -24,7 +27,7 @@ use super::gathering::{
     AuthoritativeGatherTerrain, GatherTile, GatherWorldCell, LandGatherData, LandGatherSlot,
     MiningObjectCandidate, MiningObjectKind,
 };
-use super::map_terrain::{Coord, World};
+use super::map_terrain::{tflag, Coord, World};
 use super::movement::vector_dist;
 
 /// SHA-256 of the supported installed `ron-data/rules.xml`.
@@ -99,6 +102,34 @@ impl GatherTerrainWorldIdentity {
 pub struct MaterializedLandData {
     pub name: String,
     pub gather: LandGatherData,
+}
+
+/// Installed `LandData[9]` without the unrelated generated Mountain/Cliff arrays.
+///
+/// `World::gather_at(..., mode=1)` (`0x006B07F0`) consumes only this ordered table,
+/// `WorldData::get_land(..., 1)`, and the center tile's `GATHERED` bit. Keeping this
+/// narrow owner separate prevents a City terrain census from claiming that the later
+/// generated mining-object arrays have been recovered too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledLandCatalog {
+    installed_rules_sha256: [u8; 32],
+    lands: Vec<MaterializedLandData>,
+}
+
+/// Exact read receipt for the mode-one arm of `World::gather_at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherAtModeOneReceipt {
+    pub wx: i32,
+    pub wy: i32,
+    pub center_tx: i32,
+    pub center_ty: i32,
+    pub land_index: i32,
+    pub center_gathered: bool,
+    pub slots_visited: u32,
+    pub flat_slots_added: u32,
+    pub depletable_slots_added: u32,
+    pub depletable_slots_skipped: u32,
+    pub output: [i32; 6],
 }
 
 /// Exact source record for one non-null `MountainsData::ranges[index]` entry.
@@ -193,6 +224,121 @@ pub enum GatherTerrainMaterializationError {
     InvalidLandIndex {
         index: i32,
     },
+    WorldCoordinateOutside {
+        wx: i32,
+        wy: i32,
+    },
+}
+
+impl InstalledLandCatalog {
+    /// Admit the exact shipped `rules.xml` LandData rows, independently of procedural
+    /// terrain-object generation. The digest is supplied by the installed-content owner;
+    /// byte length, XML structure, row count, order, names and every MAKE token are
+    /// validated again here before publication.
+    pub fn from_supported_source(
+        rules_xml: &[u8],
+        installed_rules_sha256: [u8; 32],
+    ) -> Result<Self, GatherTerrainMaterializationError> {
+        if installed_rules_sha256 != SUPPORTED_RULES_XML_SHA256 {
+            return Err(GatherTerrainMaterializationError::UnsupportedRulesXml);
+        }
+        if rules_xml.len() != SUPPORTED_RULES_XML_LEN {
+            return Err(GatherTerrainMaterializationError::WrongRulesXmlLength {
+                expected: SUPPORTED_RULES_XML_LEN,
+                actual: rules_xml.len(),
+            });
+        }
+        Self::from_admitted_source(rules_xml, installed_rules_sha256)
+    }
+
+    #[cfg(test)]
+    fn from_fixture(rules_xml: &[u8]) -> Result<Self, GatherTerrainMaterializationError> {
+        Self::from_admitted_source(rules_xml, [0; 32])
+    }
+
+    fn from_admitted_source(
+        rules_xml: &[u8],
+        installed_rules_sha256: [u8; 32],
+    ) -> Result<Self, GatherTerrainMaterializationError> {
+        let lands = parse_lands(rules_xml)?;
+        validate_land_rows(&lands)?;
+        Ok(Self {
+            installed_rules_sha256,
+            lands,
+        })
+    }
+
+    pub fn installed_rules_sha256(&self) -> [u8; 32] {
+        self.installed_rules_sha256
+    }
+
+    pub fn lands(&self) -> &[MaterializedLandData] {
+        &self.lands
+    }
+
+    /// Execute the mode-one path of `World::gather_at` at `0x006B07F0`.
+    ///
+    /// The exact `GoodTypeData::is_flat` body (`0x004780C0`) returns false for
+    /// Timber/Metal/Oil (TypeIndexes 1, 4 and 5). Retail adds twice those resources'
+    /// `num_make` while the center tile is not `GATHERED`, and skips them once it is.
+    /// The other three basic resources always add the ordinary amount. Arithmetic uses
+    /// the x86 wrapping behavior.
+    pub fn gather_at_mode_one(
+        &self,
+        world: &World,
+        wx: i32,
+        wy: i32,
+    ) -> Result<GatherAtModeOneReceipt, GatherTerrainMaterializationError> {
+        if !world.valid_w(wx, wy) {
+            return Err(GatherTerrainMaterializationError::WorldCoordinateOutside { wx, wy });
+        }
+        let land_index = world.get_land(wx, wy, 1);
+        let land = usize::try_from(land_index)
+            .ok()
+            .and_then(|index| self.lands.get(index))
+            .ok_or(GatherTerrainMaterializationError::InvalidLandIndex { index: land_index })?;
+        let center_tx = wx.wrapping_mul(4).wrapping_add(2);
+        let center_ty = wy.wrapping_mul(4).wrapping_add(2);
+        let center_gathered = world.tmask(center_tx, center_ty) & tflag::GATHERED != 0;
+        let mut output = [0i32; 6];
+        let mut flat_slots_added = 0u32;
+        let mut depletable_slots_added = 0u32;
+        let mut depletable_slots_skipped = 0u32;
+
+        for slot in land.gather.slots {
+            if slot.num_make == 0 || !(0..6).contains(&slot.make) {
+                continue;
+            }
+            let depletable = matches!(slot.make, 1 | 4 | 5);
+            let amount = if depletable {
+                if center_gathered {
+                    depletable_slots_skipped = depletable_slots_skipped.wrapping_add(1);
+                    continue;
+                }
+                depletable_slots_added = depletable_slots_added.wrapping_add(1);
+                slot.num_make.wrapping_mul(2)
+            } else {
+                flat_slots_added = flat_slots_added.wrapping_add(1);
+                slot.num_make
+            };
+            let resource = slot.make as usize;
+            output[resource] = output[resource].wrapping_add(amount);
+        }
+
+        Ok(GatherAtModeOneReceipt {
+            wx,
+            wy,
+            center_tx,
+            center_ty,
+            land_index,
+            center_gathered,
+            slots_visited: 4,
+            flat_slots_added,
+            depletable_slots_added,
+            depletable_slots_skipped,
+            output,
+        })
+    }
 }
 
 /// Installed LandData plus generated terrain-object arrays in their retail index order.
@@ -264,21 +410,7 @@ impl GatherTerrainMaterialization {
         }
 
         let lands = parse_lands(rules_xml)?;
-        if lands.len() != SUPPORTED_LAND_NAMES.len() {
-            return Err(GatherTerrainMaterializationError::WrongLandCount {
-                expected: SUPPORTED_LAND_NAMES.len(),
-                actual: lands.len(),
-            });
-        }
-        for (index, (land, expected)) in lands.iter().zip(SUPPORTED_LAND_NAMES).enumerate() {
-            if land.name != expected {
-                return Err(GatherTerrainMaterializationError::WrongLandName {
-                    index,
-                    expected,
-                    actual: land.name.clone(),
-                });
-            }
-        }
+        validate_land_rows(&lands)?;
         validate_objects(world, &mountains, &cliffs)?;
 
         Ok(Self {
@@ -353,6 +485,27 @@ impl GatherTerrainMaterialization {
 struct LandBuilder {
     name: Option<String>,
     make: Vec<LandGatherSlot>,
+}
+
+fn validate_land_rows(
+    lands: &[MaterializedLandData],
+) -> Result<(), GatherTerrainMaterializationError> {
+    if lands.len() != SUPPORTED_LAND_NAMES.len() {
+        return Err(GatherTerrainMaterializationError::WrongLandCount {
+            expected: SUPPORTED_LAND_NAMES.len(),
+            actual: lands.len(),
+        });
+    }
+    for (index, (land, expected)) in lands.iter().zip(SUPPORTED_LAND_NAMES).enumerate() {
+        if land.name != expected {
+            return Err(GatherTerrainMaterializationError::WrongLandName {
+                index,
+                expected,
+                actual: land.name.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn parse_lands(xml: &[u8]) -> Result<Vec<MaterializedLandData>, GatherTerrainMaterializationError> {
@@ -1006,8 +1159,90 @@ mod tests {
     }
 
     #[test]
+    fn mode_one_gather_uses_only_installed_lands_and_the_center_gathered_bit() {
+        let catalog = InstalledLandCatalog::from_fixture(RULES_XML_FIXTURE).unwrap();
+        let mut world = test_world();
+
+        let land = catalog.gather_at_mode_one(&world, 3, 4).unwrap();
+        assert_eq!(land.land_index, 0);
+        assert_eq!((land.center_tx, land.center_ty), (14, 18));
+        assert!(!land.center_gathered);
+        assert_eq!(land.output, [12, 0, 0, 11, 0, 0]);
+        assert_eq!((land.flat_slots_added, land.depletable_slots_added), (2, 0));
+
+        world.wdata_mut(3, 4).flags = wflag::FOREST;
+        let forest = catalog.gather_at_mode_one(&world, 3, 4).unwrap();
+        assert_eq!(forest.land_index, 4);
+        assert_eq!(forest.output, [0, 14, 0, 0, 0, 0]);
+        assert_eq!(
+            (forest.flat_slots_added, forest.depletable_slots_added),
+            (0, 1)
+        );
+
+        *world.tmask_mut(forest.center_tx, forest.center_ty) |= tflag::GATHERED;
+        let gathered_forest = catalog.gather_at_mode_one(&world, 3, 4).unwrap();
+        assert!(gathered_forest.center_gathered);
+        assert_eq!(gathered_forest.output, [0; 6]);
+        assert_eq!(gathered_forest.depletable_slots_skipped, 1);
+    }
+
+    #[test]
+    fn mode_one_land_precedence_and_invalid_indices_match_world_get_land() {
+        let catalog = InstalledLandCatalog::from_fixture(RULES_XML_FIXTURE).unwrap();
+        let mut world = test_world();
+
+        let cell = world.wdata_mut(2, 2);
+        cell.land = 99;
+        cell.flags = wflag::COAST | wflag::FOREST | wflag::MOUNTAINS | wflag::ROCKS | wflag::OIL;
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, 2, 2).unwrap().land_index,
+            3
+        );
+
+        world.wdata_mut(2, 2).flags = wflag::FOREST | wflag::MOUNTAINS | wflag::ROCKS;
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, 2, 2).unwrap().land_index,
+            4
+        );
+        world.wdata_mut(2, 2).flags = wflag::MOUNTAINS | wflag::ROCKS;
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, 2, 2).unwrap().land_index,
+            5
+        );
+        world.wdata_mut(2, 2).flags = wflag::ROCKS | wflag::OIL;
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, 2, 2).unwrap().land_index,
+            7
+        );
+
+        world.wdata_mut(2, 2).flags = 0;
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, 2, 2),
+            Err(GatherTerrainMaterializationError::InvalidLandIndex { index: 99 })
+        );
+        assert_eq!(
+            catalog.gather_at_mode_one(&world, -1, 2),
+            Err(GatherTerrainMaterializationError::WorldCoordinateOutside { wx: -1, wy: 2 })
+        );
+    }
+
+    #[test]
     fn installed_identity_and_coherent_generation_are_mandatory() {
         let world = test_world();
+        assert_eq!(
+            InstalledLandCatalog::from_supported_source(RULES_XML_FIXTURE, [0; 32]),
+            Err(GatherTerrainMaterializationError::UnsupportedRulesXml)
+        );
+        assert_eq!(
+            InstalledLandCatalog::from_supported_source(
+                RULES_XML_FIXTURE,
+                SUPPORTED_RULES_XML_SHA256
+            ),
+            Err(GatherTerrainMaterializationError::WrongRulesXmlLength {
+                expected: SUPPORTED_RULES_XML_LEN,
+                actual: RULES_XML_FIXTURE.len(),
+            })
+        );
         let mut wrong = supported_stamp(&world);
         wrong.installed_rules_sha256 = [0; 32];
         assert_eq!(

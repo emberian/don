@@ -17,7 +17,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use don_sim::checksum::adler32;
 use don_sim::systems::borders_fog::CircleTable;
+use don_sim::systems::gather_terrain::{GatherTerrainMaterializationError, InstalledLandCatalog};
 use don_sim::systems::map_terrain::{land, tflag, wflag, Coord, WCoord, World};
 use don_sim::systems::production::BuildData;
 use don_sim::systems::regions::{Region, Regions, REGION_COUNT};
@@ -50,14 +52,132 @@ pub const SHIPPED_CITY_BUILDINGS: u32 = 5;
 pub const TOWN_REQUIRED_DISTINCT_KINDS: u32 = SHIPPED_CITY_BUILDINGS + 1;
 pub const FRESH_CAPITAL_CITY_FLAGS: u16 = 0x4011;
 
-/// `World::gather_at(..., mode=1)` is content-backed: it reads the ordered `LandData`
-/// records and `GoodTypeData` predicates in addition to WData/TData.  Those native tables
-/// are not fields of [`World`], so the census consumes explicit, coordinate-keyed results
-/// only on paths which actually make the call.  An absent row refuses the whole staged
-/// City mutation rather than inventing terrain quantities from the recorded checksum.
+/// Coordinate-keyed results for content-backed `World::gather_at(..., mode=1)` calls.
+/// Product facts are materialized from [`InstalledLandCatalog`] plus the exact [`World`]
+/// state and retain both identities; explicit rows remain available for isolated fixtures.
+/// An absent, stale, or modified row refuses the whole staged City mutation rather than
+/// inventing terrain quantities from the recorded checksum.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CityTerrainGatherFacts {
     pub by_wcoord: BTreeMap<(i32, i32), [i32; tech_cities::NUM_RES]>,
+    installed_source: Option<CityTerrainGatherInstalledSource>,
+}
+
+/// State/content identity for facts materialized through retail's mode-one gather path.
+/// A later World mutation makes the fact table stale and refuses before City publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CityTerrainGatherInstalledSource {
+    pub installed_rules_sha256: [u8; 32],
+    pub world_checksum: u32,
+    pub world_xs: i32,
+    pub world_ys: i32,
+    pub world_seed: i32,
+    pub cells_materialized: u32,
+    pub land_histogram: [u32; 9],
+    pub gathered_centers: u32,
+    pub fact_table_checksum: u32,
+}
+
+impl CityTerrainGatherFacts {
+    /// Materialize every in-bounds result through retail's exact
+    /// `World::gather_at(..., mode=1)` source owner. No recorded checksum is consulted;
+    /// the World checksum is retained only as a stale-state guard for later consumption.
+    pub fn from_installed_land_catalog(
+        world: &World,
+        catalog: &InstalledLandCatalog,
+    ) -> Result<Self, GatherTerrainMaterializationError> {
+        if world.xs <= 0
+            || world.ys <= 0
+            || world.tile_xs != world.xs.wrapping_mul(4)
+            || world.tile_ys != world.ys.wrapping_mul(4)
+            || usize::try_from(world.size).ok() != Some(world.wdata.len())
+            || usize::try_from(world.tile_size).ok() != Some(world.tdata.len())
+        {
+            return Err(GatherTerrainMaterializationError::StaleWorldShape);
+        }
+        let mut by_wcoord = BTreeMap::new();
+        let mut land_histogram = [0u32; 9];
+        let mut gathered_centers = 0u32;
+        for wy in 0..world.ys {
+            for wx in 0..world.xs {
+                let receipt = catalog.gather_at_mode_one(world, wx, wy)?;
+                let land = usize::try_from(receipt.land_index)
+                    .ok()
+                    .filter(|&index| index < land_histogram.len())
+                    .ok_or(GatherTerrainMaterializationError::InvalidLandIndex {
+                        index: receipt.land_index,
+                    })?;
+                land_histogram[land] = land_histogram[land].wrapping_add(1);
+                gathered_centers =
+                    gathered_centers.wrapping_add(u32::from(receipt.center_gathered));
+                by_wcoord.insert((wx, wy), receipt.output);
+            }
+        }
+        // Exact shape validation above binds this length to positive signed `World::size`,
+        // hence it is necessarily representable in u32.
+        let cells_materialized = by_wcoord.len() as u32;
+        let fact_table_checksum = gather_fact_table_checksum(&by_wcoord);
+        Ok(Self {
+            by_wcoord,
+            installed_source: Some(CityTerrainGatherInstalledSource {
+                installed_rules_sha256: catalog.installed_rules_sha256(),
+                world_checksum: world.checksum_sections().full,
+                world_xs: world.xs,
+                world_ys: world.ys,
+                world_seed: world.seed,
+                cells_materialized,
+                land_histogram,
+                gathered_centers,
+                fact_table_checksum,
+            }),
+        })
+    }
+
+    pub fn installed_source(&self) -> Option<CityTerrainGatherInstalledSource> {
+        self.installed_source
+    }
+
+    fn validate_world(&self, world: &World) -> Result<(), FreshVillageTerrainCensusError> {
+        let Some(source) = self.installed_source else {
+            return Ok(());
+        };
+        let actual_fact_table_checksum = gather_fact_table_checksum(&self.by_wcoord);
+        if actual_fact_table_checksum != source.fact_table_checksum {
+            return Err(FreshVillageTerrainCensusError::TamperedGatherAtFacts {
+                expected_fact_table_checksum: source.fact_table_checksum,
+                actual_fact_table_checksum,
+            });
+        }
+        let actual_checksum = world.checksum_sections().full;
+        if (world.xs, world.ys, world.seed, actual_checksum)
+            != (
+                source.world_xs,
+                source.world_ys,
+                source.world_seed,
+                source.world_checksum,
+            )
+        {
+            return Err(FreshVillageTerrainCensusError::StaleGatherAtFacts {
+                expected_world_checksum: source.world_checksum,
+                actual_world_checksum: actual_checksum,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn gather_fact_table_checksum(
+    by_wcoord: &BTreeMap<(i32, i32), [i32; tech_cities::NUM_RES]>,
+) -> u32 {
+    let mut bytes = Vec::with_capacity(by_wcoord.len().saturating_mul(32));
+    for (&(wx, wy), output) in by_wcoord {
+        bytes.extend_from_slice(&wx.to_le_bytes());
+        bytes.extend_from_slice(&wy.to_le_bytes());
+        for value in output {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    adler32(1, &bytes)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -128,6 +248,9 @@ pub struct CityTerrainCensusReceipt {
     /// Return histogram for exact grades 0 through 4 from `check_building_wcoord`.
     pub placement_grades: [u32; 5],
     pub gather_at_calls: u32,
+    /// Installed content/world identity when gather rows came from the exact source owner;
+    /// `None` preserves the explicit fact-fixture boundary.
+    pub gather_installed_source: Option<CityTerrainGatherInstalledSource>,
     pub dock_tile_calls: u32,
     pub dock_tile_successes: u32,
     pub bytes_before: CityTerrainCensusBytes,
@@ -294,6 +417,14 @@ pub enum FreshVillageTerrainCensusError {
     MissingGatherAtFact {
         wx: i32,
         wy: i32,
+    },
+    StaleGatherAtFacts {
+        expected_world_checksum: u32,
+        actual_world_checksum: u32,
+    },
+    TamperedGatherAtFacts {
+        expected_fact_table_checksum: u32,
+        actual_fact_table_checksum: u32,
     },
 }
 
@@ -597,6 +728,7 @@ pub fn apply_fresh_starting_village_terrain_census(
             tdata_len: world.tdata.len(),
         });
     }
+    facts.gather.validate_world(world)?;
 
     let center_wcoord = (
         WCoord::from_coord(Coord(city.x)).0,
@@ -792,6 +924,7 @@ pub fn apply_fresh_starting_village_terrain_census(
         placement_calls,
         placement_grades,
         gather_at_calls,
+        gather_installed_source: facts.gather.installed_source(),
         dock_tile_calls,
         dock_tile_successes,
         bytes_before,

@@ -81,9 +81,10 @@ not set `first_checksum_city_image_ready`, install Builds, or assert a retail ma
 The bounded exact Unit-census transaction is documented in
 [`replay-starting-city-unit-census.md`](replay-starting-city-unit-census.md); it remains
 unmounted until this setup host materializes its receipt-backed canonical Units. The CITY
-disc now lets the exact terrain census enter its grade-four/content arm, where it refuses
-on the first absent `World::gather_at` fact. Generated `LandData`/`GoodTypeData` content and
-the final territory image remain separate prerequisites.
+disc now lets the exact terrain census enter its grade-four/content arm. The installed
+LandData/GoodType mode-one owner executes that arm source-exactly, but its candidate remains
+0/3 and unmounted. The final territory image and canonical starting Units remain separate
+prerequisites.
 
 ## Verification
 

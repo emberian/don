@@ -114,9 +114,12 @@ Each in-bounds WData cell then follows this exact sequence:
    `World::gather_at(..., mode=1)`.  Each of the six `ter` bytes becomes signed
    `max(current_u8, output_i32)` followed by the machine's low-byte store.  This call reads
    installed ordered `LandData`, `GoodTypeData` virtual predicates, and center TData in
-   addition to WData.  Those objects do not live in `map_terrain::World`, so the transaction
-   accepts coordinate-keyed typed results and fails atomically if a reached result is
-   missing.  It never derives a gather value from the replay checksum.
+   addition to WData. The exact mode-one owner now admits the shipped nine-row `<LANDS>`
+   table by byte length, SHA-256, XML structure, row order/names and four MAKE slots. It
+   resolves the current cell through `WorldData::get_land(..., 1)`, reads only the center
+   tile's `GATHERED` bit, and materializes coordinate-keyed facts bound to the complete
+   World checksum. Missing rows, a changed World, or a modified fact table refuse before
+   City publication. It never derives a gather value from the replay checksum.
 
 The clear/write set is exactly `ocean +0x62`, `land +0x63`, `filled +0x64`,
 `ocean_filled +0x66`, `dock_tile +0x67`, `space[3] +0x69..+0x6b`, and
@@ -130,29 +133,30 @@ flags `0x4011`; `(land-filled < 2)` contributes to `LeaderData +0x9d0`; and the 
 `land-filled` result contributes to the City region accumulator at `+0x13de`.  The City
 census itself makes zero World, Build, registry, or main-RNG writes.
 
-### Real style-6/style-9 boundary
+### Real style-6/style-9 result
 
 The source transaction was exercised over both starting centers in the three admitted
 recordings, using the exact replay-carried camera centers and the reconstructed style-6/9
 Worlds. The setup owner now installs the exact activation-time TData `CITY` disc. As a
 result, reached clear inner cells take placement grade four instead of the former grade-zero
-partial-world path, and the census reaches `World::gather_at`. The corpus gate deliberately
-supplies no invented content values: all three recordings refuse with typed
-`MissingGatherAtFact`, without publishing any of the staged City bytes.
+partial-world path, and the census reaches `World::gather_at`. The installed-content owner
+now executes all six centers with no caller-supplied row: 402 mode-one calls change 42 City
+POD bytes. Candidate Cities matches remain 0/3 recordings (`0 -> 0` versus the constructor
+image), so the result stays unmounted and `first_checksum_city_image_ready` remains false.
+The per-recording candidate/retail checksums are pinned by the focused test.
 
-This advances the exact residual from a missing activation mask to generated terrain
-content. The coordinate-keyed gather results require the installed ordered `LandData` and
-`GoodTypeData` predicates; neither a zero vector nor a value inferred from the recorded
-Cities checksum is accepted. Final territory (`WData::who/who2` plus City `bordering`) also
-remains outside this owner.
+This advances the exact residual past installed gather content. Final territory
+(`WData::who/who2` plus City `bordering`), canonical starting Units, and the complete
+pre-checkpoint schedule remain outside this owner. Neither a zero vector nor a value
+inferred from the recorded Cities checksum is accepted.
 
 Nor is this the only remaining City mutation.  Earlier in `Leader::plan_strategy`, every
 live City has `gatherers`, `busy`, and `free` cleared and `peasant_dist` set to 100; the
 intervening Unit census can rewrite `free`, `busy`, and `peasant_dist`. Those Unit/Leader
-inputs, final territory, terrain content, and the complete pre-checkpoint scheduling
-boundary are not yet owned here. Consequently both receipts keep
-`first_checksum_city_image_ready == false` even though the fourteen terrain bytes have an
-executable, source-bounded owner once all reached gather facts are supplied.
+inputs, final territory, and the complete pre-checkpoint scheduling boundary are not yet
+owned here. Consequently both receipts keep `first_checksum_city_image_ready == false`
+even though the fourteen terrain bytes now have an executable, installed-content-backed
+owner for the current canonical World state.
 
 ## Typed boundary
 
@@ -164,10 +168,11 @@ fork and belongs to the later general City transaction.
 
 `apply_fresh_starting_village_terrain_census` first consumes that suffix receipt, then
 stages the complete City mutation against the canonical World and Regions owners.  Missing
-World shape, Region identity, impossible placement grades, or reached installed-content
-gather facts refuse before the caller's City changes.  Its receipt preserves exact table
+World shape, Region identity, impossible placement grades, missing content rows, stale
+World identity, or fact-table tampering refuse before the caller's City changes. Its receipt preserves exact table
 endpoints/order, branch counts, placement histogram, nested call counts, all fourteen bytes
-before/after, the two intentionally untouched bytes, Leader deltas, and zero-effect joins.
+before/after, the installed Rules/World/fact identity when present, the two intentionally
+untouched bytes, Leader deltas, and zero-effect joins.
 
 The receipt intentionally reports `constructor_transaction_ready() == false`.  It proves
 this suffix, not `Object::add_to_world`, the remaining Wall/Build scalar body, terrain

@@ -1,6 +1,10 @@
 use don_replay::build_spawn_runtime::{spawn_canonical_build, CanonicalBuildSpawnRequest};
+use don_replay::checksum::Channel;
+use don_replay::cities_runtime::{check_sim_cities, check_sim_owned_cities};
 use don_replay::harness::WorldSim;
 use don_replay::replay::Replay;
+use don_replay::world_owner_frontier::sha256;
+use don_sim::systems::gather_terrain::{InstalledLandCatalog, SUPPORTED_RULES_XML_SHA256};
 use don_sim::systems::map_terrain::{land, tflag, wflag, World};
 use don_sim::systems::production::{self, BuildData};
 use don_sim::systems::regions::Regions;
@@ -428,13 +432,27 @@ fn waterhalf_skips_ocean_but_retains_the_inner_land_region_path() {
 }
 
 #[test]
-fn real_style_6_and_9_worlds_reach_the_missing_content_fact_boundary() {
+fn real_style_6_and_9_worlds_consume_the_installed_mode_one_gather_owner() {
     let names = [
         "Playback___2018.11.17_13_21_42__Sat_.rcx",
         "Playback___2020.02.08_10_49_15__Sat_.rcx",
         "Playback___2020.02.21_09_48_48__Fri_.rcx",
     ];
+    let rules_path = repo_root().join("ron-data/rules.xml");
+    let Ok(rules_xml) = std::fs::read(&rules_path) else {
+        eprintln!("skipping local retail input: {}", rules_path.display());
+        return;
+    };
+    let rules_sha256 = sha256(&rules_xml);
+    assert_eq!(rules_sha256, SUPPORTED_RULES_XML_SHA256);
+    let catalog = InstalledLandCatalog::from_supported_source(&rules_xml, rules_sha256)
+        .expect("supported installed LandData catalog");
     let mut fixtures = 0usize;
+    let mut cities = 0usize;
+    let mut gather_calls = 0u32;
+    let mut city_bytes_changed = 0u32;
+    let mut constructor_matches = 0usize;
+    let mut terrain_matches = 0usize;
     for name in names {
         let path = repo_root().join("ron-data/replays/multi").join(name);
         if !path.exists() {
@@ -449,12 +467,31 @@ fn real_style_6_and_9_worlds_reach_the_missing_content_fact_boundary() {
         let setup = world_sim.initial_setup.as_ref().unwrap_or_else(|| {
             panic!("{name}: setup refused: {:?}", world_sim.initial_setup_error)
         });
+        let gather = subject::CityTerrainGatherFacts::from_installed_land_catalog(
+            &setup.sim.map.world,
+            &catalog,
+        )
+        .unwrap_or_else(|error| panic!("{name}: mode-one gather materialization: {error:?}"));
+        let source = gather
+            .installed_source()
+            .expect("installed source identity");
+        assert_eq!(source.installed_rules_sha256, SUPPORTED_RULES_XML_SHA256);
+        assert_eq!(source.cells_materialized as i32, setup.sim.map.world.size);
+        assert_eq!(
+            source.land_histogram.iter().sum::<u32>(),
+            source.cells_materialized
+        );
+        let constructor_checksum = check_sim_owned_cities(&setup.sim)
+            .expect("constructor Cities")
+            .checksum;
+        let mut terrain_cities = setup.cities.clone();
         for constructor in &setup.receipt.cities {
+            cities += 1;
             let owner = usize::from(constructor.owner);
             let slot = constructor.city_slot as usize;
             let city = &setup.cities.slots[owner][slot];
             let mut staged = city.clone();
-            let error = subject::apply_fresh_starting_village_terrain_census(
+            let receipt = subject::apply_fresh_starting_village_terrain_census(
                 &setup.sim,
                 &mut staged,
                 &setup.sim.map.world,
@@ -464,23 +501,104 @@ fn real_style_6_and_9_worlds_reach_the_missing_content_fact_boundary() {
                         town_type_available: true,
                     },
                     indian_radius_bonus: constructor.constructor.world_fix.radius_tiles > 20,
-                    gather: &subject::CityTerrainGatherFacts::default(),
+                    gather: &gather,
                 },
             )
-            .expect_err("the generated LandData/Good gather facts are not yet owned");
-            assert!(matches!(
-                error,
-                subject::FreshVillageTerrainCensusError::MissingGatherAtFact { .. }
-            ));
-            assert_eq!(
-                staged, *city,
-                "{name} owner {owner}: a missing terrain-content fact must not publish City bytes"
-            );
+            .unwrap_or_else(|error| panic!("{name} owner {owner}: terrain census: {error:?}"));
+            assert!(receipt.city_terrain_census_complete);
+            assert!(!receipt.first_checksum_city_image_ready);
+            assert_eq!(receipt.gather_installed_source, Some(source));
+            assert!(receipt.gather_at_calls > 0);
+            gather_calls = gather_calls.wrapping_add(receipt.gather_at_calls);
+            city_bytes_changed = city_bytes_changed.wrapping_add(receipt.city_pod_bytes_changed);
+            terrain_cities.slots[owner][slot] = staged;
+
+            if cities == 1 {
+                let mut stale_world = setup.sim.map.world.clone();
+                stale_world.tdata[0] ^= tflag::GATHERED;
+                let mut refused = city.clone();
+                let error = subject::apply_fresh_starting_village_terrain_census(
+                    &setup.sim,
+                    &mut refused,
+                    &stale_world,
+                    &initial_world.generation_regions,
+                    subject::FreshVillageTerrainCensusFacts {
+                        upgrade: subject::FreshVillageUpgradeFacts {
+                            town_type_available: true,
+                        },
+                        indian_radius_bonus: constructor.constructor.world_fix.radius_tiles > 20,
+                        gather: &gather,
+                    },
+                )
+                .expect_err("a world mutation must stale the content fact table");
+                assert!(matches!(
+                    error,
+                    subject::FreshVillageTerrainCensusError::StaleGatherAtFacts { .. }
+                ));
+                assert_eq!(refused, *city);
+
+                let mut tampered_gather = gather.clone();
+                tampered_gather.by_wcoord.insert((0, 0), [99; 6]);
+                let mut refused = city.clone();
+                let error = subject::apply_fresh_starting_village_terrain_census(
+                    &setup.sim,
+                    &mut refused,
+                    &setup.sim.map.world,
+                    &initial_world.generation_regions,
+                    subject::FreshVillageTerrainCensusFacts {
+                        upgrade: subject::FreshVillageUpgradeFacts {
+                            town_type_available: true,
+                        },
+                        indian_radius_bonus: constructor.constructor.world_fix.radius_tiles > 20,
+                        gather: &tampered_gather,
+                    },
+                )
+                .expect_err("a content fact mutation must invalidate its source receipt");
+                assert!(matches!(
+                    error,
+                    subject::FreshVillageTerrainCensusError::TamperedGatherAtFacts { .. }
+                ));
+                assert_eq!(refused, *city);
+            }
         }
+        let terrain_checksum = check_sim_cities(&setup.sim, &terrain_cities)
+            .expect("terrain-census Cities")
+            .checksum;
+        let retail_checksum = replay
+            .turns
+            .iter()
+            .find_map(|turn| {
+                turn.any_checksums()
+                    .map(|(_, channels)| channels.get(Channel::Cities))
+            })
+            .expect("fixture has a first recorded Cities checkpoint");
+        constructor_matches += usize::from(constructor_checksum == retail_checksum);
+        terrain_matches += usize::from(terrain_checksum == retail_checksum);
+        let expected = match name {
+            "Playback___2018.11.17_13_21_42__Sat_.rcx" => (0x7102_0a46, 0x34a1_0d02, 0x5313_0d2c),
+            "Playback___2020.02.08_10_49_15__Sat_.rcx" => (0x247c_0992, 0xe80c_0c4e, 0xdd17_0c24),
+            "Playback___2020.02.21_09_48_48__Fri_.rcx" => (0xcd97_0956, 0x9136_0c12, 0x7d2d_0bd4),
+            _ => unreachable!("fixed fixture list"),
+        };
+        assert_eq!(
+            (constructor_checksum, terrain_checksum, retail_checksum),
+            expected
+        );
+        eprintln!(
+            "{name}: constructor={constructor_checksum:08x} terrain={terrain_checksum:08x} retail={retail_checksum:08x}"
+        );
     }
     // The checkout containing the canonical corpus must exercise all three source fixtures;
     // clean packaging environments may intentionally omit `ron-data/replays`.
     if repo_root().join("ron-data/replays/multi").exists() {
         assert_eq!(fixtures, 3);
+        assert_eq!(cities, 6);
+        assert_eq!(gather_calls, 402);
+        assert_eq!(city_bytes_changed, 42);
+        assert_eq!(constructor_matches, 0);
+        assert_eq!(terrain_matches, 0);
+        eprintln!(
+            "installed gather boundary: fixtures={fixtures} cities={cities} gather_calls={gather_calls} city_bytes_changed={city_bytes_changed} matches {constructor_matches}->{terrain_matches}"
+        );
     }
 }
