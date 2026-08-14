@@ -61,7 +61,15 @@ fn exact_post_step_views_roundtrip_without_a_shadow_owner() {
     let bytes = save_sim(&original).unwrap();
     let mut loaded = load_sim(&bytes).unwrap();
 
-    assert!(loaded.step8_env.leaders[0].objects.units.is_empty());
+    // The object views are derived rather than serialized owners.  Load rebuilds the exact
+    // current-registry prefix accepted by save admission, so the reconstructed adapter must
+    // equal the pre-save projection; expecting it to remain constructor-empty predates the
+    // exact-prefix restoration in `save_load::step8_views`.
+    let loaded_objects = &loaded.step8_env.leaders[0].objects;
+    let original_objects = &original.step8_env.leaders[0].objects;
+    assert_eq!(loaded_objects.units, original_objects.units);
+    assert_eq!(loaded_objects.band_2000, original_objects.band_2000);
+    assert_eq!(loaded_objects.band_3000, original_objects.band_3000);
     assert_eq!(save_sim(&loaded).unwrap(), bytes);
 
     original.do_frame();
