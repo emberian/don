@@ -76,6 +76,7 @@ fn authority(sim: &Sim, actor_row: usize, build_row: usize) -> GatherWorkAuthori
             guys_flags: 0,
             slot_zero_present: true,
             lead_animation: GATHER_ANIMATION_19,
+            move_runtime: None,
         }],
         sites: vec![GatherSiteRuntimeFacts {
             who: build.who,

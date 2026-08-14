@@ -1587,6 +1587,15 @@ impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ExactGatherMoveBinding {
+    actor: Handle,
+    actor_facts: canonical_gather_work::GatherActorRuntimeFacts,
+    move_facts: canonical_gather_work::GatherMoveRuntimeFacts,
+    farm_facts: canonical_gather_work::GatherFarmRuntimeFacts,
+    farm: canonical_gather_work::FarmStruct,
+}
+
 impl Sim {
     /// A sim over a `wcells` x `wcells` WCoord map (4 tiles per cell, 192 fine units per
     /// tile — so 64 gives the 256-tile square [`MAP_SPAN`] describes).
@@ -4037,12 +4046,409 @@ impl Sim {
     ///
     /// Retail's prelude — attrition, spells, healing, cloak, supply — is absent and
     /// counted. What runs is `Unit::work` (slot 98, +0x188) into the `do_job` table.
+    fn exact_gather_move_binding(&self, row: usize) -> Option<Result<ExactGatherMoveBinding, ()>> {
+        let actor = self.world.handle_at_row(row)?;
+        let Some((actor_facts, move_facts)) = self.gather_work_authority.move_actor(actor) else {
+            return None;
+        };
+        Some((|| {
+            if (
+                self.world.units.get_who(row),
+                self.world.units.o()[row],
+                self.world.units.get_uid(row),
+                self.unit_type.get(row).copied(),
+                self.world.units.get_unit_masks(row),
+                self.world.units.myspeed()[row],
+            ) != (
+                actor_facts.who,
+                actor_facts.o,
+                actor_facts.uid,
+                Some(actor_facts.type_index),
+                move_facts.expected_unit_masks,
+                move_facts.expected_myspeed,
+            ) {
+                return Err(());
+            }
+            let orders = self.world.orders(row);
+            if orders.len() != 2 {
+                return Err(());
+            }
+            let current = orders.current().ok_or(())?;
+            let move_state = current.move_state.ok_or(())?;
+            if current.kind != OrderIndex::MoveTo
+                || current.tolerance != 0
+                || move_state.pause != 0
+                || move_state.retry != 0
+                || move_state.attempts != 0
+                || move_state.timer != 0
+                || (move_state.dest_x, move_state.dest_y) != (current.x, current.y)
+            {
+                return Err(());
+            }
+            if let Some(path) = self.paths.get(row).and_then(movement::PathStack::peek) {
+                if (path.to_x, path.to_y, path.tolerance, path.flags)
+                    != (current.x, current.y, 0, movement::PathData::FLAG_MORE)
+                {
+                    return Err(());
+                }
+            } else if (
+                self.world.units.x_internal()[row],
+                self.world.units.y_internal()[row],
+            ) != (current.x, current.y)
+            {
+                return Err(());
+            }
+            let gather = orders.iter().nth(1).ok_or(())?;
+            if gather.kind != OrderIndex::Gather {
+                return Err(());
+            }
+            let farm_facts = self
+                .gather_work_authority
+                .farm_for_actor(
+                    actor,
+                    u8::try_from(gather.target_who).map_err(|_| ())?,
+                    gather.target_o,
+                    gather.target_uid,
+                )
+                .ok_or(())?;
+            let farm = self
+                .farms
+                .get(usize::try_from(farm_facts.farm_index).map_err(|_| ())?)
+                .copied()
+                .ok_or(())?;
+            if (farm.who, farm.o, farm.valid, farm.farm_type)
+                != (
+                    i32::from(farm_facts.farm_record_who),
+                    i32::from(farm_facts.farm_record_o),
+                    u8::from(farm_facts.farm_record_valid),
+                    farm_facts.farm_type,
+                )
+            {
+                return Err(());
+            }
+            let dest_tx = crate::systems::map_terrain::TCoord::from_coord(
+                crate::systems::map_terrain::Coord(current.x),
+            )
+            .0;
+            let dest_ty = crate::systems::map_terrain::TCoord::from_coord(
+                crate::systems::map_terrain::Coord(current.y),
+            )
+            .0;
+            let local_x = dest_tx.checked_sub(farm_facts.corner_tx).ok_or(())?;
+            let local_y = dest_ty.checked_sub(farm_facts.corner_ty).ok_or(())?;
+            if local_x < 0
+                || local_y < 0
+                || local_x >= farm_facts.x_size
+                || local_y >= farm_facts.y_size
+                || farm
+                    .status
+                    .get((local_x * farm_facts.y_size + local_y) as usize)
+                    .copied()
+                    != farm_facts.selected_cell_status
+                || farm
+                    .data_z(
+                        farm_facts.corner_tx,
+                        farm_facts.corner_ty,
+                        current.x,
+                        current.y,
+                    )
+                    .is_none()
+            {
+                return Err(());
+            }
+            let owned = self.unit_guys.get(row).and_then(Option::as_ref).ok_or(())?;
+            if (
+                owned.guys.len() as i32,
+                owned.size,
+                owned.increment as i32,
+                owned.flags,
+                owned.guy_mark,
+            ) != (
+                actor_facts.guys_length,
+                actor_facts.guys_capacity,
+                actor_facts.guys_increment,
+                actor_facts.guys_flags,
+                1,
+            ) {
+                return Err(());
+            }
+            let lead = owned.guys.first().and_then(Option::as_ref).ok_or(())?;
+            let point = (
+                self.world.units.x_internal()[row],
+                self.world.units.y_internal()[row],
+            );
+            let desired_angle = self.world.units.angle()[row];
+            if (
+                lead.ty,
+                lead.who,
+                lead.o,
+                lead.guy_num,
+                lead.gpiece,
+                lead.cur_anim,
+            ) != (
+                actor_facts.type_index,
+                actor_facts.who as i8,
+                actor_facts.o,
+                0,
+                move_facts.lead_gpiece,
+                actor_facts.lead_animation as i8,
+            ) || (lead.x, lead.y, lead.des_x, lead.des_y, lead.des_angle)
+                != (point.0, point.1, point.0, point.1, desired_angle)
+                || lead.z
+                    != farm
+                        .data_z(farm_facts.corner_tx, farm_facts.corner_ty, point.0, point.1)
+                        .ok_or(())?
+            {
+                return Err(());
+            }
+            let source = self.movement_collision.source(row).ok_or(())?;
+            let source_guy = source.guys.as_slice().first().copied().ok_or(())?;
+            if source.guys.len() != 1
+                || !source.ordinary_land()
+                || source.domain != move_facts.unit_type.domain
+                || source.unit_flags != move_facts.type_unit_flags
+                || source_guy.block_radius != move_facts.unit_type.new_block_radius
+                || (source_guy.x, source_guy.y, source_guy.angle) != (point.0, point.1, lead.angle)
+                || !source.moving
+                || source.action != OrderIndex::Gather as i32
+            {
+                return Err(());
+            }
+            Ok(ExactGatherMoveBinding {
+                actor,
+                actor_facts,
+                move_facts,
+                farm_facts,
+                farm,
+            })
+        })())
+    }
+
+    fn exact_gather_actor_binding(&self, row: usize) -> Option<ExactGatherMoveBinding> {
+        let actor = self.world.handle_at_row(row)?;
+        let (actor_facts, move_facts) = self.gather_work_authority.move_actor(actor)?;
+        if (
+            self.world.units.get_who(row),
+            self.world.units.o()[row],
+            self.world.units.get_uid(row),
+            self.unit_type.get(row).copied(),
+            self.world.units.get_unit_masks(row),
+            self.world.units.myspeed()[row],
+        ) != (
+            actor_facts.who,
+            actor_facts.o,
+            actor_facts.uid,
+            Some(actor_facts.type_index),
+            move_facts.expected_unit_masks,
+            move_facts.expected_myspeed,
+        ) {
+            return None;
+        }
+        let farm_facts = self.gather_work_authority.first_farm_for_actor(actor)?;
+        let farm = self
+            .farms
+            .get(usize::try_from(farm_facts.farm_index).ok()?)?;
+        if (farm.who, farm.o, farm.valid, farm.farm_type)
+            != (
+                i32::from(farm_facts.farm_record_who),
+                i32::from(farm_facts.farm_record_o),
+                u8::from(farm_facts.farm_record_valid),
+                farm_facts.farm_type,
+            )
+        {
+            return None;
+        }
+        let point = (
+            self.world.units.x_internal()[row],
+            self.world.units.y_internal()[row],
+        );
+        farm.data_z(farm_facts.corner_tx, farm_facts.corner_ty, point.0, point.1)?;
+        let source = self.movement_collision.source(row)?;
+        let source_guy = source.guys.as_slice().first()?;
+        let current = self.world.orders(row).order_type();
+        if source.guys.len() != 1
+            || !source.ordinary_land()
+            || source.domain != move_facts.unit_type.domain
+            || source.unit_flags != move_facts.type_unit_flags
+            || source_guy.block_radius != move_facts.unit_type.new_block_radius
+            || source.action != OrderIndex::Gather as i32
+            || source.moving != (current == OrderIndex::MoveTo)
+        {
+            return None;
+        }
+        Some(ExactGatherMoveBinding {
+            actor,
+            actor_facts,
+            move_facts,
+            farm_facts,
+            farm: *farm,
+        })
+    }
+
+    fn process_exact_gather_guy(&mut self, row: usize) -> bool {
+        let Some(binding) = self.exact_gather_actor_binding(row) else {
+            return false;
+        };
+        let point = (
+            self.world.units.x_internal()[row],
+            self.world.units.y_internal()[row],
+        );
+        let desired_angle = self.world.units.angle()[row];
+        let Some(source) = self.movement_collision.source(row) else {
+            return false;
+        };
+        if source.guys.len() != 1 || (source.guys[0].x, source.guys[0].y) != point {
+            return false;
+        }
+        let Some(guys) = self.unit_guys.get(row).and_then(Option::as_ref) else {
+            return false;
+        };
+        if guys.guys.len() != 1 || guys.guy_mark != 1 {
+            return false;
+        }
+        let Some(lead) = guys.guys.first().and_then(Option::as_ref) else {
+            return false;
+        };
+        if (lead.ty, lead.who, lead.o, lead.guy_num, lead.gpiece)
+            != (
+                binding.actor_facts.type_index,
+                binding.actor_facts.who as i8,
+                binding.actor_facts.o,
+                0,
+                binding.move_facts.lead_gpiece,
+            )
+            || !matches!(lead.cur_anim, 8 | 36)
+        {
+            return false;
+        }
+        let refreshes_block = self.world.frame.wrapping_add(i32::from(lead.o)) % 64 == 0
+            && lead.avg_speed == 0
+            && binding.move_facts.unit_type.domain != 2
+            && lead.is_squad(&binding.move_facts.unit_type)
+            && binding.move_facts.unit_type.new_block_radius != 0;
+        if refreshes_block {
+            return false;
+        }
+        let moved = (lead.x, lead.y) != point;
+        let z = if moved {
+            let Some(z) = binding.farm.data_z(
+                binding.farm_facts.corner_tx,
+                binding.farm_facts.corner_ty,
+                point.0,
+                point.1,
+            ) else {
+                return false;
+            };
+            Some(z)
+        } else {
+            None
+        };
+        let env = groups_guys::GuyEnv {
+            ut: binding.move_facts.unit_type,
+            unit_speed: i32::from(binding.move_facts.expected_myspeed),
+            order_speed_bonus: false,
+            unit_mask_turn_scale2: self.world.units.get_unit_masks(row)
+                & groups_guys::UNIT_MASK_TURN_SCALE2
+                != 0,
+            turn_scale: binding.move_facts.turn_scale,
+            turn_scale2: binding.move_facts.turn_scale2,
+            ai_speed: binding.move_facts.ai_speed,
+        };
+        let max_x = self.map.world.tile_xs * movement::TILE;
+        let max_y = self.map.world.tile_ys * movement::TILE;
+        let valid = |x: i32, y: i32| x >= 0 && y >= 0 && x < max_x && y < max_y;
+        let mut no_block_refresh = |_guy: &groups_guys::GuyData| {};
+        let mut after = *lead;
+        after.des_x = point.0;
+        after.des_y = point.1;
+        after.des_angle = desired_angle;
+        if after.angle != source.guys[0].angle {
+            after.guy_flags |= groups_guys::GUY_FLAG_NO_IDLE_TURN;
+        }
+        after.angle = source.guys[0].angle;
+        after.process(&env, self.world.frame, &valid, &mut no_block_refresh);
+        if let Some(z) = z {
+            after.z = z;
+        }
+        self.unit_guys[row]
+            .as_mut()
+            .expect("preflight retained UnitGuys")
+            .guys[0] = Some(after);
+        true
+    }
+
+    fn inc_time_exact_gather_guy(&mut self, row: usize) -> bool {
+        if self.world.orders(row).order_type() == OrderIndex::MoveTo
+            && !matches!(self.exact_gather_move_binding(row), Some(Ok(_)))
+        {
+            return false;
+        }
+        let Some(binding) = self.exact_gather_actor_binding(row) else {
+            return false;
+        };
+        let Some(guys) = self.unit_guys.get_mut(row).and_then(Option::as_mut) else {
+            return false;
+        };
+        if guys.guys.len() != 1 || guys.guy_mark != 1 {
+            return false;
+        }
+        let Some(lead) = guys.guys.first_mut().and_then(Option::as_mut) else {
+            return false;
+        };
+        let point = (
+            self.world.units.x_internal()[row],
+            self.world.units.y_internal()[row],
+        );
+        let Some(source_guy) = self
+            .movement_collision
+            .source(row)
+            .and_then(|source| (source.guys.len() == 1).then_some(source.guys[0]))
+        else {
+            return false;
+        };
+        if (lead.ty, lead.who, lead.o, lead.guy_num, lead.gpiece)
+            != (
+                binding.actor_facts.type_index,
+                binding.actor_facts.who as i8,
+                binding.actor_facts.o,
+                0,
+                binding.move_facts.lead_gpiece,
+            )
+            || !matches!((lead.cur_anim, lead.end_time), (8, 15) | (36, 85))
+            || (lead.x, lead.y, lead.angle) != (point.0, point.1, source_guy.angle)
+            || (source_guy.x, source_guy.y) != point
+        {
+            return false;
+        }
+        let increment = u32::from(self.world.units.get_unit_masks2(row) & 0x10 == 0);
+        let next = lead.cur_time.wrapping_add(increment);
+        if next >= lead.end_time {
+            if lead.cur_anim != 8 || next - lead.end_time >= lead.end_time {
+                return false;
+            }
+            // Existing gpiece-6336 animation 8 loops through `Guy::set_anim(8,0,1)`.
+            // Owner 2 takes the deterministic speed-ratio arm, retains WALK, subtracts the
+            // old 15-frame packet time, and consumes no game RNG.
+            lead.last_time = lead.cur_time as i32;
+            lead.cur_time = next - lead.end_time;
+            return true;
+        }
+        lead.last_time = lead.cur_time as i32;
+        lead.cur_time = next;
+        true
+    }
+
     fn unit_process(&mut self, row: usize) {
         self.cover.unit_process += 1;
+        let exact_move_admitted = match self.exact_gather_move_binding(row) {
+            Some(Ok(_)) => Some(true),
+            Some(Err(())) => Some(false),
+            None => None,
+        };
         self.unit_work(row);
-        // Guy::process 0x005E0230 -> Guy::move: the per-guy bodies under the unit are not
-        // populated, so the unit's own position is the only body that moves.
-        self.cover.gaps[Gap::GuyProcess.index()] += 1;
+        if exact_move_admitted == Some(false) || !self.process_exact_gather_guy(row) {
+            self.cover.gaps[Gap::GuyProcess.index()] += 1;
+        }
     }
 
     /// `Unit::work` `0x0060D180` -> `Unit::do_job` `0x00617A10`, the 28-entry jump table
@@ -4538,6 +4944,14 @@ impl Sim {
     /// own `Stack<PathData>` and the side-effecting collision transaction. Movement without a
     /// complete live collision source holds position and increments the named gap.
     fn do_move(&mut self, row: usize) {
+        let exact = match self.exact_gather_move_binding(row) {
+            None => None,
+            Some(Ok(binding)) => Some(binding),
+            Some(Err(())) => {
+                self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+                return;
+            }
+        };
         let Some(ord) = self.world.orders(row).current().cloned() else {
             return;
         };
@@ -4552,12 +4966,23 @@ impl Sim {
                 None => (ord.x, ord.y),
             }
         };
+        let current_heading = exact
+            .and_then(|_| {
+                self.unit_guys[row]
+                    .as_ref()
+                    .and_then(|guys| guys.guys.first())
+                    .and_then(Option::as_ref)
+                    .map(|lead| lead.angle)
+            })
+            .unwrap_or(self.world.units.angle()[row]);
         let mut body = movement::Body {
             x: self.world.units.x_internal()[row],
             y: self.world.units.y_internal()[row],
-            angle: self.world.units.angle()[row],
+            angle: current_heading,
             stuck_budget: 0,
         };
+        let desired_angle =
+            exact.map(|_| movement::find_angle(target.0 - body.x, target.1 - body.y));
         let rows = self.world.live_count() as usize;
         self.movement_collision.snapshot_paths(&self.paths, rows);
         self.movement_collision.begin_frame(self.world.frame);
@@ -4568,6 +4993,56 @@ impl Sim {
             .is_err()
         {
             self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+            return;
+        }
+
+        // `Unit::do_move` performs this order-destination test before `move_step`. The
+        // integrator popped the final FLAG_MORE waypoint on the preceding frame, so exact
+        // arrival retires MOVE now and exposes (but does not execute) queued GATHER.
+        if exact.is_some() && movement::vector_dist(ord.x - body.x, ord.y - body.y) <= ord.tolerance
+        {
+            let world_before = self.world.clone();
+            let runtime_before = self.movement_collision.clone();
+            let path_before = self.paths[row].clone();
+            if let Some(current) = self.world.orders_mut(row).current_mut() {
+                if let Some(state) = current.move_state.as_mut() {
+                    state.dest = 0;
+                }
+                current.flags &= !crate::order::ORDER_PATHED;
+            }
+            let popped = self.paths[row].pop();
+            let completes =
+                popped.is_none_or(|path| path.flags & movement::PathData::FLAG_MORE != 0);
+            if completes {
+                let mut masks = self.world.units.get_unit_masks(row);
+                masks &= !order_dispatch::masks::ARRIVED_FACING;
+                masks &= !order_dispatch::masks::ORDER_TRANSIENT;
+                self.world.units.set_unit_masks(row, masks);
+                self.world.orders_mut(row).kill_current();
+                self.paths[row].clear();
+                self.world.units.orders_x_mut()[row] = body.x;
+                self.world.units.orders_y_mut()[row] = body.y;
+                self.world.units.dest_angle_mut()[row] = self.world.units.angle()[row];
+                self.world.units.set_idle(row, 1);
+                let state = self
+                    .movement_collision
+                    .source_state(&self.world, exact.expect("guarded exact binding").actor);
+                let changed = state.and_then(|state| {
+                    self.movement_collision.compare_exchange_source_state(
+                        &self.world,
+                        state.actor,
+                        state.revision,
+                        false,
+                        OrderIndex::Gather,
+                    )
+                });
+                if changed.is_err() {
+                    self.world = world_before;
+                    self.movement_collision = runtime_before;
+                    self.paths[row] = path_before;
+                    self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+                }
+            }
             return;
         }
 
@@ -4590,10 +5065,52 @@ impl Sim {
             wcells_w: self.map.world.xs,
             invalid_tiles: &invalid_tiles,
         };
-        let mut profile = movement::MoveTurnProfile {
-            type_turn_speed: i32::MAX as u32,
-            ..movement::MoveTurnProfile::default()
+        let (turn_rate, mut profile) = if let Some(binding) = exact {
+            let lead = self.unit_guys[row]
+                .as_ref()
+                .and_then(|guys| guys.guys.first())
+                .and_then(Option::as_ref)
+                .expect("exact binding proved the lead Guy");
+            let env = groups_guys::GuyEnv {
+                ut: binding.move_facts.unit_type,
+                unit_speed: speed,
+                order_speed_bonus: false,
+                unit_mask_turn_scale2: self.world.units.get_unit_masks(row)
+                    & groups_guys::UNIT_MASK_TURN_SCALE2
+                    != 0,
+                turn_scale: binding.move_facts.turn_scale,
+                turn_scale2: binding.move_facts.turn_scale2,
+                ai_speed: binding.move_facts.ai_speed,
+            };
+            (
+                lead.turn_speed(&env, 0) as i32,
+                movement::MoveTurnProfile {
+                    unit_flags: binding.move_facts.type_unit_flags,
+                    type_turn_speed: binding.move_facts.unit_type.turn_speed as u32,
+                    domain: binding.move_facts.unit_type.domain,
+                    special_wide_turner: binding.move_facts.type_special_wide_turner,
+                    speed_half_latch: self.world.units.get_unit_masks(row)
+                        & order_dispatch::masks::HALF_SPEED_ON_TURN
+                        != 0,
+                },
+            )
+        } else {
+            (
+                i32::MAX,
+                movement::MoveTurnProfile {
+                    type_turn_speed: i32::MAX as u32,
+                    ..movement::MoveTurnProfile::default()
+                },
+            )
         };
+        let exact_before = exact.map(|_| {
+            (
+                self.world.clone(),
+                self.map.world.clone(),
+                self.movement_collision.clone(),
+                self.paths[row].clone(),
+            )
+        });
         let mut driver_rejected = false;
         let terrain = &mut self.map.world;
         let runtime = &mut self.movement_collision;
@@ -4613,15 +5130,13 @@ impl Sim {
                           write: movement_driver::ActorCommit| {
             movement_live::commit_actor(terrain, store, write);
         };
-        // `turn_rate` still lacks the live Guy/constant composition in this compact Sim. Keep
-        // the prior full-turn input; collision, persistence, spatial links and stamps are real.
         let outcome = movement::move_step_profile_with_collision(
             &mut move_world,
             &mut body,
             path,
             target,
             speed,
-            i32::MAX,
+            turn_rate,
             &mut profile,
             |_move_world, event| {
                 let result = session.handle(
@@ -4651,10 +5166,32 @@ impl Sim {
         runtime.check = check;
         self.cover.unit_move_step += 1;
         if driver_rejected || store_fault.is_some() || path_fault.is_some() {
+            if let Some((world_before, terrain_before, runtime_before, path_before)) = exact_before
+            {
+                self.world = world_before;
+                self.map.world = terrain_before;
+                self.movement_collision = runtime_before;
+                self.paths[row] = path_before;
+            }
             self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+            return;
+        }
+        if exact.is_some() {
+            self.world.units.angle_mut()[row] =
+                desired_angle.expect("exact movement computed the retail desired angle");
+            let mut masks = self.world.units.get_unit_masks(row);
+            if profile.speed_half_latch {
+                masks |= order_dispatch::masks::HALF_SPEED_ON_TURN;
+            } else {
+                masks &= !order_dispatch::masks::HALF_SPEED_ON_TURN;
+            }
+            self.world.units.set_unit_masks(row, masks);
         }
         self.world.units.set_idle(row, 0);
-        if matches!(outcome, movement::MoveStep::Arrived) && self.paths[row].is_empty() {
+        if exact.is_none()
+            && matches!(outcome, movement::MoveStep::Arrived)
+            && self.paths[row].is_empty()
+        {
             self.world.orders_mut(row).kill_current();
             self.world.units.set_idle(row, 1);
         }
@@ -5177,7 +5714,9 @@ impl Sim {
                     // rejects is reproduced work and a unit it accepts is a charged gap.
                     if unit_inctime::unit_inc_time_animates(inside_up, type_index) {
                         self.cover.inc_time_units += 1;
-                        self.cover.gaps[Gap::UnitIncTime.index()] += 1;
+                        if !self.inc_time_exact_gather_guy(row) {
+                            self.cover.gaps[Gap::UnitIncTime.index()] += 1;
+                        }
                     } else {
                         self.cover.inc_time_units_gated += 1;
                     }

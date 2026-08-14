@@ -1,13 +1,13 @@
 use don_sim::order::{
     MoveOrderState, Order, OrderIndex, ORDER_PATHED, RETAIL_MOVE_ORDER_NODE_BYTES,
 };
-use don_sim::systems::canonical_gather_work::{FarmStruct, Farms, FARM_PROPERTY};
+use don_sim::systems::canonical_gather_work::*;
 use don_sim::systems::economy_order_payload_authority::{
     EconomyOrderHeader, EconomyOrderNode, EconomyOrderPayload, GatherOrderPayload,
     StableTargetIdentity,
 };
 use don_sim::systems::groups_guys::{GuyData, UnitGuys, GUY_WALK_LEN};
-use don_sim::systems::{movement, production, save_load};
+use don_sim::systems::{movement, movement_live, production, save_load};
 use don_sim::tick::Sim;
 
 const FRAME: i32 = 1_199;
@@ -171,7 +171,8 @@ fn fixture() -> (Sim, usize) {
     sim.world.units.x_internal_mut()[actor_row] = 2_013;
     sim.world.units.y_internal_mut()[actor_row] = 32_688;
     sim.world.units.angle_mut()[actor_row] = 0x4d1c_0000;
-    sim.world.units.myspeed_mut()[actor_row] = 24;
+    sim.world.units.myspeed_mut()[actor_row] = 25;
+    sim.world.units.set_unit_masks(actor_row, 0x0004_0008);
     sim.world.units.group_mut()[actor_row] = -1;
     sim.world.frame = FRAME;
     sim.vic_match.frame = FRAME;
@@ -233,6 +234,126 @@ fn fixture() -> (Sim, usize) {
             .unwrap();
     }
     (sim, actor_row)
+}
+
+fn authority(sim: &Sim, actor_row: usize) -> GatherWorkAuthority {
+    let actor = sim.world.handle_at_row(actor_row).unwrap();
+    GatherWorkAuthority {
+        revision: 0x005f_7b30,
+        composition_digest: [0x9d; 32],
+        actors: vec![GatherActorRuntimeFacts {
+            actor,
+            who: WHO,
+            o: ACTOR_O,
+            uid: ACTOR_UID,
+            type_index: 50,
+            guys_length: 1,
+            guys_capacity: 1,
+            guys_increment: 1,
+            guys_flags: 0,
+            slot_zero_present: true,
+            lead_animation: 8,
+            move_runtime: Some(GatherMoveRuntimeFacts {
+                expected_unit_masks: 0x0004_0008,
+                expected_myspeed: 25,
+                type_unit_flags: 0x0000_1881, // `<FLAGS>lmah</FLAGS>`
+                type_special_wide_turner: false,
+                unit_type: don_sim::systems::groups_guys::UnitTypeStats {
+                    domain: 0,
+                    guy_spacing: 12,
+                    x_spacing: 12,
+                    y_spacing: 12,
+                    guy_radius: 1,
+                    new_block_radius: 1,
+                    turn_speed: 0x2000_0000,
+                    squad_size: 1,
+                    uber_size: 1,
+                    ..Default::default()
+                },
+                turn_scale: 256,
+                turn_scale2: 2,
+                ai_speed: 1,
+                lead_gpiece: 6_336,
+            }),
+        }],
+        sites: vec![GatherSiteRuntimeFacts {
+            who: WHO,
+            o: SITE_O,
+            uid: SITE_UID,
+            property: FARM_PROPERTY,
+            resolves_build: true,
+            valid_wall_projection: true,
+        }],
+        farms: vec![GatherFarmRuntimeFacts {
+            actor,
+            site_who: WHO,
+            site_o: SITE_O,
+            site_uid: SITE_UID,
+            farm_index: FARM_INDEX,
+            farm_record_who: WHO,
+            farm_record_o: SITE_O,
+            farm_record_valid: true,
+            farm_type: 0,
+            covers_actor_tile: true,
+            corner_tx: 8,
+            corner_ty: 168,
+            x_size: 4,
+            y_size: 4,
+            selected_cell_status: Some(2),
+            lead_cur_time: 14,
+            lead_end_time: 15,
+            lead_hold_attack: 0,
+        }],
+    }
+}
+
+fn source(sim: &Sim, row: usize) -> movement_live::LiveCollisionSource {
+    movement_live::LiveCollisionSource {
+        domain: 0,
+        block_radius: 1,
+        big_radius: 48,
+        push_size: 1,
+        push_circles: 1,
+        unit_flags: 0x0000_1881,
+        unit_flags2: 0,
+        attack_value: 4,
+        spell_id: -1,
+        unpacking: false,
+        captain: false,
+        moving: row == ACTOR_O as usize,
+        searching: false,
+        action: if row == ACTOR_O as usize {
+            OrderIndex::Gather as i32
+        } else {
+            OrderIndex::None as i32
+        },
+        invalid_tiles: Vec::new(),
+        guys: vec![movement_live::LiveCollisionGuy {
+            x: sim.world.units.x_internal()[row],
+            y: sim.world.units.y_internal()[row],
+            angle: sim.world.units.angle()[row],
+            block_radius: 1,
+        }],
+    }
+}
+
+fn arm(mut sim: Sim, actor_row: usize, rehydrate: bool) -> Sim {
+    // The reduced fixture's first nine placeholder rows do not represent the fresh save's
+    // earlier active citizens; they exist only to preserve owner-local o=9 identity.
+    for row in 0..actor_row {
+        sim.world.units.set_flags(row, 0);
+    }
+    sim.replace_gather_work_authority(authority(&sim, actor_row));
+    let actor = sim.world.handle_at_row(actor_row).unwrap();
+    let installed = source(&sim, actor_row);
+    if rehydrate {
+        sim.rehydrate_movement_collision_sources(vec![(actor, installed)])
+            .unwrap();
+    } else {
+        sim.install_movement_collision_source(actor, installed)
+            .unwrap();
+    }
+    sim
 }
 
 #[test]
@@ -322,4 +443,173 @@ fn production_resume_keeps_gather_queued_until_exact_locomotion_and_guy_tick_exi
         save_load::save_sim(&direct).unwrap(),
         save_load::save_sim(&resumed).unwrap()
     );
+}
+
+#[test]
+fn exact_owner2_o9_move_arrival_then_animation36_farm_snip_is_resumable() {
+    // The queued node's saved angle is `0x4ad30000`, but `Unit::move_step` recomputes the
+    // heading from the live `(219,72)` delta and snaps this sub-IGNORE residual exactly.
+    assert_eq!(movement::find_angle(219, 72), 0x4d0b_0000);
+    let (fixture, actor_row) = fixture();
+    let mut direct = arm(fixture, actor_row, false);
+    let saved = save_load::save_sim(&direct).unwrap();
+    let mut resumed = save_load::load_sim(&saved).unwrap();
+    resumed = arm(resumed, actor_row, true);
+
+    direct.do_frame();
+    resumed.do_frame();
+    assert_eq!(save_load::save_sim(&direct), save_load::save_sim(&resumed));
+    assert_eq!(
+        (
+            direct.world.units.x_internal()[actor_row],
+            direct.world.units.y_internal()[actor_row],
+            direct.world.units.angle()[actor_row],
+        ),
+        (2_036, 32_696, 0x4d0b_0000)
+    );
+    let first_guy = direct.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            first_guy.last_x,
+            first_guy.last_y,
+            first_guy.x,
+            first_guy.y,
+            first_guy.last_speed,
+            first_guy.avg_speed,
+            first_guy.last_time,
+            first_guy.cur_time,
+            first_guy.angle,
+            first_guy.des_angle,
+            first_guy.guy_flags & don_sim::systems::groups_guys::GUY_FLAG_NO_IDLE_TURN,
+        ),
+        (
+            2_013,
+            32_688,
+            2_036,
+            32_696,
+            24,
+            15,
+            3,
+            4,
+            0x4d0b_0000,
+            0x4d0b_0000,
+            0,
+        )
+    );
+
+    let mut frames = 1usize;
+    while direct.world.orders(actor_row).order_type() == OrderIndex::MoveTo && frames < 32 {
+        direct.do_frame();
+        resumed.do_frame();
+        frames += 1;
+        assert_eq!(save_load::save_sim(&direct), save_load::save_sim(&resumed));
+    }
+    assert!(frames < 32, "exact MOVE_TO did not arrive");
+    assert_eq!(
+        direct.world.orders(actor_row).order_type(),
+        OrderIndex::Gather
+    );
+    assert_eq!(direct.world.orders(actor_row).len(), 1);
+    assert_eq!(direct.paths[actor_row].checksum_header(), (10, 0, 10));
+    assert_eq!(
+        (
+            direct.world.units.x_internal()[actor_row],
+            direct.world.units.y_internal()[actor_row],
+        ),
+        (2_232, 32_760)
+    );
+    assert!(direct.last_gather_work_receipt.is_none());
+
+    let arrived_guy = direct.unit_guys[actor_row].as_ref().unwrap().guys[0]
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            frames,
+            arrived_guy.cur_time,
+            arrived_guy.end_time,
+            arrived_guy.last_time,
+            arrived_guy.cur_anim,
+            arrived_guy.x,
+            arrived_guy.y,
+        ),
+        (11, 14, 15, 13, 8, 2_232, 32_760)
+    );
+
+    let before = direct.farms.get(FARM_INDEX as usize).unwrap().image();
+    assert_eq!(before[172 + 3 * 4 + 2], 2);
+    direct.do_frame();
+    resumed.do_frame();
+    assert_eq!(save_load::save_sim(&direct), save_load::save_sim(&resumed));
+    let receipt = direct.last_gather_work_receipt.as_ref().unwrap_or_else(|| {
+        panic!(
+            "Gather refused after exact arrival: {:?}",
+            direct.last_gather_work_error
+        )
+    });
+    assert_eq!(receipt.branch, GatherWorkBranch::FarmStatus2Snip);
+    assert_eq!((receipt.changed_fields, receipt.guy_changed_fields), (5, 4));
+    assert_eq!(
+        (receipt.guy_animation_before, receipt.guy_animation_after),
+        (Some(8), Some(36))
+    );
+    assert_eq!(receipt.rng_draws, 0);
+    let after = direct.farms.get(FARM_INDEX as usize).unwrap().image();
+    let changed: Vec<_> = before
+        .iter()
+        .zip(after.iter())
+        .enumerate()
+        .filter_map(|(index, (before, after))| (before != after).then_some(index))
+        .collect();
+    assert_eq!(changed, vec![172 + 3 * 4 + 2]);
+    assert_eq!(after[172 + 3 * 4 + 2], 3);
+    assert_eq!(
+        direct.last_gather_work_receipt,
+        resumed.last_gather_work_receipt
+    );
+    assert_eq!(direct.unit_guys, resumed.unit_guys);
+    assert_eq!(direct.farms, resumed.farms);
+}
+
+#[test]
+fn stale_exact_move_composition_is_zero_write_across_every_canonical_owner() {
+    let (fixture, actor_row) = fixture();
+    let mut sim = arm(fixture, actor_row, false);
+    let mut stale = authority(&sim, actor_row);
+    stale.actors[0]
+        .move_runtime
+        .as_mut()
+        .unwrap()
+        .expected_myspeed = 24;
+    sim.replace_gather_work_authority(stale);
+
+    let orders_before = sim.world.orders(actor_row).clone();
+    let path_before = sim.paths[actor_row].clone();
+    let guys_before = sim.unit_guys[actor_row].clone();
+    let farms_before = sim.farms.clone();
+    let unit_before = (
+        sim.world.units.x_internal()[actor_row],
+        sim.world.units.y_internal()[actor_row],
+        sim.world.units.angle()[actor_row],
+        sim.world.units.get_unit_masks(actor_row),
+    );
+
+    sim.do_frame();
+
+    assert_eq!(sim.world.orders(actor_row), &orders_before);
+    assert_eq!(sim.paths[actor_row], path_before);
+    assert_eq!(sim.unit_guys[actor_row], guys_before);
+    assert_eq!(sim.farms, farms_before);
+    assert_eq!(
+        (
+            sim.world.units.x_internal()[actor_row],
+            sim.world.units.y_internal()[actor_row],
+            sim.world.units.angle()[actor_row],
+            sim.world.units.get_unit_masks(actor_row),
+        ),
+        unit_before
+    );
+    assert!(sim.last_gather_work_receipt.is_none());
 }

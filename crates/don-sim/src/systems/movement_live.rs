@@ -196,7 +196,7 @@ pub enum LiveCollisionFault {
 }
 
 /// Persistent movement-collision state owned by one tick simulation.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LiveCollisionRuntime {
     pub(crate) sources: Vec<Option<InstalledSource>>,
     pub order_state: Vec<CollisionOrderState>,

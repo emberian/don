@@ -8,10 +8,11 @@
 //! and the animation-`0x19` wait loop, including its exact wait-zero
 //! `Build::all_gathering`/single-RNG-draw tail.  It also executes the exact saved Farm
 //! status-one grow for stable animations and for the exact saved type-50 animation-8→35
-//! transition whose complete `UnitGuys` after-image is now canonically owned.
+//! transition whose complete `UnitGuys` after-image is now canonically owned. The queued
+//! owner-2/o-9 continuation also owns status-two `Farms::snip` and animation 8→36.
 //!
 //! Planning is read-only.  Publishing is one compare/exchange host call over the actor,
-//! order, target building, RNG state, and authority revision.  Farm cell mutation and
+//! order, target building, RNG state, and authority revision.  Unadmitted Farm cell mutation,
 //! relocation, Mine, destination selection, capacity, direct-resource, cast/special, and
 //! retirement branches fail closed before that call.  There is no geometric, resource-rate,
 //! or scalar approximation.
@@ -75,6 +76,39 @@ impl FarmStruct {
         out[188] = self.valid;
         out[189] = self.farm_type;
         out
+    }
+
+    /// `TerrainOut::find_data_z` over the 5×5 vertex image saved beside this Farm.
+    /// Farm arrays use the same x-major indexing as `status[x][y]`.
+    pub fn data_z(self, corner_tx: i32, corner_ty: i32, x: i32, y: i32) -> Option<i32> {
+        let tx = TCoord::from_coord(Coord(x)).0;
+        let ty = TCoord::from_coord(Coord(y)).0;
+        let dx = tx.checked_sub(corner_tx)?;
+        let dy = ty.checked_sub(corner_ty)?;
+        if !(0..4).contains(&dx) || !(0..4).contains(&dy) {
+            return None;
+        }
+        let vertex = |vx: i32, vy: i32| f32::from_bits(self.terrain_height[(vx * 5 + vy) as usize]);
+        let lx = x.wrapping_sub(tx.wrapping_mul(TCoord::SCALE));
+        let ly = y.wrapping_sub(ty.wrapping_mul(TCoord::SCALE));
+        if !(0..TCoord::SCALE).contains(&lx) || !(0..TCoord::SCALE).contains(&ly) {
+            return None;
+        }
+        let scale = f32::from_bits(0x3baa_aaab); // shipped `0.0052083335f`
+        let f00 = vertex(dx, dy);
+        let f10 = vertex(dx + 1, dy);
+        let f01 = vertex(dx, dy + 1);
+        let z = if TCoord::SCALE.wrapping_sub(ly) < lx {
+            let f11 = vertex(dx + 1, dy + 1);
+            let a = (f01 - f11) * scale * (TCoord::SCALE - lx) as f32;
+            let b = (f11 - f10) * scale * ly as f32;
+            f10 + b + 0.0 + a
+        } else {
+            let a = (f10 - f00) * scale * lx as f32;
+            let b = (f01 - f00) * scale * ly as f32;
+            a + f00 + 0.0 + b
+        };
+        z.is_finite().then_some(z as i32)
     }
 }
 
@@ -367,6 +401,7 @@ pub enum GatherWorkBranch {
     FarmUpdateOneAnimation23GateMiss,
     FarmStatus3Animation24,
     FarmStatus1Grow,
+    FarmStatus2Snip,
     CampAnimation19Waiting,
     CampAnimation19AllGathering,
     CampAnimation19Rescheduled,
@@ -575,7 +610,7 @@ fn plan_fresh_farm_tick_inner(
     facts: GatherFarmRuntimeFacts,
     reads: GatherFarmReadImage,
     farm: FarmStruct,
-    owns_animation_8_to_35: bool,
+    owns_animation_8_to_farm_work: bool,
 ) -> Result<GatherWorkPlan, GatherWorkPlanError> {
     if bind_fresh_gather_payload(before.actor.who, before.order)?
         != FreshGatherPayloadClass::FarmActive
@@ -679,11 +714,7 @@ fn plan_fresh_farm_tick_inner(
                 ));
             }
             Some(1) => (GatherWorkBranch::FarmStatus1Grow, FARM_ANIMATION_23),
-            Some(status @ 2) => {
-                return Err(GatherWorkPlanError::Unowned(
-                    UnownedGatherArm::FarmCellMutation(status),
-                ));
-            }
+            Some(2) => (GatherWorkBranch::FarmStatus2Snip, FARM_ANIMATION_24),
             _ => {
                 return Err(GatherWorkPlanError::Unowned(
                     UnownedGatherArm::FarmWorldAndAnimation,
@@ -698,8 +729,9 @@ fn plan_fresh_farm_tick_inner(
         .ok_or(GatherWorkPlanError::Unowned(
             UnownedGatherArm::MissingLeadGuy,
         ))?;
-    let exact_owned_animation_mutation =
-        owns_animation_8_to_35 && current == 8 && requested_animation == FARM_ANIMATION_23;
+    let exact_owned_animation_mutation = owns_animation_8_to_farm_work
+        && current == 8
+        && matches!(requested_animation, FARM_ANIMATION_23 | FARM_ANIMATION_24);
     if (current != requested_animation && !exact_owned_animation_mutation)
         || facts.lead_hold_attack != 0
         || facts.lead_cur_time >= facts.lead_end_time
@@ -723,6 +755,12 @@ fn plan_fresh_farm_tick_inner(
         if grown > 1.0 {
             farm_after.status[cell] = 2;
         }
+    } else if branch == GatherWorkBranch::FarmStatus2Snip {
+        let dx = reads.actor_tx.wrapping_sub(facts.corner_tx) as usize;
+        let dy = reads.actor_ty.wrapping_sub(facts.corner_ty) as usize;
+        let cell = dx * facts.y_size as usize + dy;
+        // `Farms::snip` `0x008D9240`: the selected byte alone changes from two to three.
+        farm_after.status[cell] = 3;
     }
 
     Ok(GatherWorkPlan {
@@ -753,6 +791,23 @@ pub struct GatherActorRuntimeFacts {
     pub guys_flags: u8,
     pub slot_zero_present: bool,
     pub lead_animation: u8,
+    /// Exact shipped type/constant projection for this actor's queued-MOVE continuation.
+    pub move_runtime: Option<GatherMoveRuntimeFacts>,
+}
+
+/// Immutable facts read by `Unit::move_step`, `Guy::turn_speed`, and the admitted one-Guy
+/// `Unit::process` tail. These are reinstalled content facts, never a second saved owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherMoveRuntimeFacts {
+    pub expected_unit_masks: u32,
+    pub expected_myspeed: i16,
+    pub type_unit_flags: u32,
+    pub type_special_wide_turner: bool,
+    pub unit_type: crate::systems::groups_guys::UnitTypeStats,
+    pub turn_scale: i32,
+    pub turn_scale2: i32,
+    pub ai_speed: i32,
+    pub lead_gpiece: i32,
 }
 
 /// Revision-bound result of the target's Build/Wall virtual projection. Canonical
@@ -800,6 +855,34 @@ impl GatherWorkAuthority {
         self.farms.iter().copied().find(|facts| {
             facts.actor == actor && (facts.site_who, facts.site_o, facts.site_uid) == (who, o, uid)
         })
+    }
+
+    pub(crate) fn move_actor(
+        &self,
+        actor: Handle,
+    ) -> Option<(GatherActorRuntimeFacts, GatherMoveRuntimeFacts)> {
+        if self.composition_digest == [0; 32] {
+            return None;
+        }
+        let actor = self.actor(actor)?;
+        Some((actor, actor.move_runtime?))
+    }
+
+    pub(crate) fn farm_for_actor(
+        &self,
+        actor: Handle,
+        who: u8,
+        o: i16,
+        uid: u16,
+    ) -> Option<GatherFarmRuntimeFacts> {
+        self.farm(actor, who, o, uid)
+    }
+
+    pub(crate) fn first_farm_for_actor(&self, actor: Handle) -> Option<GatherFarmRuntimeFacts> {
+        self.farms
+            .iter()
+            .copied()
+            .find(|facts| facts.actor == actor)
     }
 }
 
@@ -1289,10 +1372,10 @@ pub fn prepare_gather_work_activation(
                 }) {
                     return Err(GatherWorkRuntimeError::InvalidGuyArrayFacts);
                 }
-                let owns_animation_8_to_35 = actor_facts.lead_animation == 8
+                let owns_animation_8_to_farm_work = actor_facts.lead_animation == 8
                     && owned_lead.is_some_and(|lead| {
                         // Exact content/witness binding: type 50's gpiece 6336 packet maps
-                        // UnitAnim 35 to 47 frames in the shipped retail content.
+                        // UnitAnim 35/36 to 47/85 frames in the shipped retail content.
                         lead.ty == 50
                             && lead.gpiece == 6_336
                             && lead.cur_time < 15
@@ -1305,9 +1388,9 @@ pub fn prepare_gather_work_activation(
                     farm_facts,
                     reads,
                     farm,
-                    owns_animation_8_to_35,
+                    owns_animation_8_to_farm_work,
                 )?;
-                let (guys_before, guys_after) = if owns_animation_8_to_35 {
+                let (guys_before, guys_after) = if owns_animation_8_to_farm_work {
                     let before = owned_guys
                         .expect("owned animation preflight retained UnitGuys")
                         .clone();
@@ -1315,13 +1398,22 @@ pub fn prepare_gather_work_activation(
                     let lead = after.guys[0]
                         .as_mut()
                         .expect("owned animation preflight retained lead Guy");
-                    // Unit::set_anim(35,0,1) -> Guy::set_anim on the sole initialized Guy.
-                    // Old class 8 clears hold_attack (already zero); the nonzero class-35 arm
-                    // then resets this exact four-field walked surface without drawing RNG.
+                    let requested = match plan.branch {
+                        GatherWorkBranch::FarmStatus2Snip
+                        | GatherWorkBranch::FarmStatus3Animation24 => FARM_ANIMATION_24,
+                        _ => FARM_ANIMATION_23,
+                    };
+                    // Unit::set_anim(requested,0,1) -> Guy::set_anim on the sole initialized
+                    // Guy. Old class 8 clears hold_attack (already zero); the nonzero work arm
+                    // resets this exact four-field walked surface without drawing RNG.
                     lead.cur_time = 0;
-                    lead.end_time = 47;
+                    lead.end_time = if requested == FARM_ANIMATION_24 {
+                        85
+                    } else {
+                        47
+                    };
                     lead.last_time = -1;
-                    lead.cur_anim = FARM_ANIMATION_23 as i8;
+                    lead.cur_anim = requested as i8;
                     (Some(before), Some(after))
                 } else {
                     (None, None)

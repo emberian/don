@@ -1,13 +1,14 @@
-# Canonical saved Farm/Gather grow transaction
+# Canonical saved Farm/Gather work transaction
 
-Status: **production `Sim::unit_work`; four stable-animation grows plus exact owner-2/o-5
-animation 8→35 + Farm grow; complete UnitGuys owner; DoNSave v20 save/load/resume; zero RNG**.
+Status: **production `Sim::unit_work`; four stable-animation grows, exact owner-2/o-5
+animation 8→35 + Farm grow, and exact owner-2/o-9 MOVE arrival → animation 8→36 + Farm
+snip; complete UnitGuys/Path/Farm owners; DoNSave v20 save/load/resume; zero RNG**.
 
-Closure status remains **RED**. The next saved Farm continuation, owner 2 Unit `o=9`, is queued
-behind a live `MOVE_TO`. Its exact queue, Path allocation history, Guy, and target Farm now have
-canonical byte-identical save/resume ownership, but advancing that path still charges the open
-movement/collision, Move completion, and Guy clock children. Relocation, snip, periodic search,
-and retirement children also remain charged.
+Closure status remains **RED**. The owner-2/o-9 saved continuation now executes its exact
+one-Guy land movement, Guy clock, MOVE completion, queued-Gather exposure, animation mutation,
+and selected Farm snip. Collision-hit detour/repath arms, Farm relocation, periodic search,
+animation-36 wrap/events, target retirement/replacement, and the remaining charged Gather
+children still keep the row red.
 
 The fresh save contains 17 Farm `GATHER` nodes. A structural walk and exact retail
 branch audit found four bounded, checksum-changing continuations whose full mutable surface is
@@ -35,6 +36,7 @@ FarmStruct, Guy, relocation and RNG surface is available.
 | `Unit::do_gather` | VA `0x005ef2a0`, size 3,780; SHA-256 `124ef94e77ca22ffd998ed3240eb94899962b749a659030963c89aa847329644` |
 | `Farms::get_farm_type` | VA `0x008d9160`, size 47; SHA-256 `637119a1a48d315f327c6c5666fd70a360bbc865e6935bacbde3533b6469f01e` |
 | `Farms::grow` | VA `0x008d91c0`, size 120; SHA-256 `c4fef6643766432d324e31fe0704a08e6c5564a8fafbac69a9b34ea174a688f6` |
+| `Farms::snip` | VA `0x008d9240`, size 59; SHA-256 `41d07ee74b50174e2eedee6c13019ec2b1856d5fbc5d8d19a187beba172d7f6b` |
 | `Unit::set_anim` | VA `0x00616f40`, size 201; SHA-256 `798f485753eb1853dc19ce55e43115674f6e3988370210dd9d5d4272d386f6ee` |
 | `Guy::set_anim` | VA `0x005da300`, size 4,723; SHA-256 `be76d8eb8e4301d6c10888efa8b2ca1dde0ca02045f46b9c0c98b576d68f68b3` |
 | `Wall::tile_corner` | VA `0x00643440`, size 136; SHA-256 `7eeec3717c4efa6ec1d9a60d05b8b1100bd50e8daf2d7d43e6b051b185ec96ba` |
@@ -109,7 +111,7 @@ The literal call sequence at `Unit::do_gather` `0x005eff7b..0x005eff96` pushes
 type-50/gpiece-6336 animation packet makes the class-8 to class-35 arm reset exactly those
 four Guy fields; no `Random::get` call is reached.
 
-## Exact queued owner-2/o-9 frontier
+## Exact queued owner-2/o-9 continuation
 
 The fresh save's owner-2 Unit `(o,uid,type)=(9,18,50)` is the first remaining Farm witness
 whose Gather node is not current. The complete Unit record is `0x5982f..0x59a1b`, SHA-256
@@ -141,16 +143,41 @@ exact current/last/desire coordinates. Target Farm index 6 is `(who,o)=(2,2002)`
 190-byte image at `0xe3a49..0xe3b07` has SHA-256
 `fe4df1d7d1bb80e87f5ffb2239192db4f6c54737fcfd6f463a1703cdc7c89f67`.
 
+The destination selects Farm-local `(x,y)=(3,2)`, whose x-major status byte is two. The Farm's
+saved 5×5 x-major height image gives exact Guy ground Z 623 at the start and 626 at the
+destination. Shipped type 50 contributes land domain, `myspeed=25`, Unit flags `0x1881`, one
+squad Guy, radius one, and turn rule `0x20000000`; the save's Unit mask is `0x40008`.
+
 `canonical_gather_queued_move_frontier.rs` reconstructs those literal Path, both nodes,
-Guys, and Farm images, saves and reloads them, and proves a production frame does not skip or
-reorder the Gather node while the collision/Guy continuation is unavailable. That is exact
-frontier evidence, not completion credit: the current compact `Sim::do_move` still lacks the
-live type turn-rate/Guy composition and full arrival epilogue, and the research-only Unit
-`inc_time` path is deliberately not mounted.
+Guys, and Farm images and installs the exact type, constant, collision, and content projection.
+The production continuation is:
+
+```text
+frame 1: Unit (2013,32688) -> (2036,32696)
+         live delta heading find_angle(219,72) = 0x4d0b0000
+         Guy last/current=(2013,32688)/(2036,32696), speed 24, avg 13->15
+frames 2..10: exact one-Guy land movement + WALK clock, byte-identical across save/resume
+frame 11: Unit/Guy arrive (2232,32760); MOVE retires; Path header remains (10,0,10);
+          queued GATHER becomes current; Guy animation/clock remains 8 at 14/15
+frame 12: Unit::set_anim(36,0,1) changes Guy (cur,end,last,anim)=(14,15,13,8)
+          -> (0,85,-1,36); Farms::snip changes status[3*4+2] 2->3; zero RNG
+```
+
+The MOVE node's saved `0x4ad30000` angle is evidence, but it is not reused as the live heading:
+`Unit::move_step` recomputes `find_angle` from the current delta. The first residual is below
+retail's `0x02222220` ignore threshold, so the Guy snaps exactly to `0x4d0b0000` before
+translation. This distinction is asserted directly.
+
+Direct execution and save/load/rehydrate/resume are byte-identical after every frame. A stale
+type-speed composition fails before changing Unit position/angle/masks, OrderList, PathStack,
+UnitGuys, or Farms. The movement collision transaction also restores World, terrain collision,
+collision runtime, and Path on driver/store/path rejection.
 
 ## Exact transaction and ownership
 
-The host atomically revalidates actor Handle/identity/type, complete current Gather order,
+The host atomically revalidates actor Handle/identity/type, complete current Move/Gather queue,
+Path header/top record, live type/constant/mask/speed projection, one-Guy collision source,
+complete current Gather order,
 and, for the animation-changing branch, the complete canonical UnitGuys array and all 155
 walked lead-Guy bytes, Build
 target/UID/valid/active/Farm property/city/Farm index, actor tile,
@@ -193,8 +220,9 @@ nine already-stable status-three animation no-ops, four already-stable status-on
 two grow paths which require a Guy animation mutation. The four stable grows are owner/unit
 `0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
 The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9's complete saved frontier is
-owned but remains charged behind its current MOVE_TO. No fresh current Gather witness reaches
-relocation or snip. Expired animation, periodic
+now admitted through MOVE completion and the exact status-two snip. Thus one fresh queued
+Gather witness reaches snip; no fresh current Gather witness reaches relocation. Expired
+animation, periodic
 special effect, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
 
 Focused gates:
