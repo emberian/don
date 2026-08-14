@@ -172,6 +172,10 @@ pub mod fight;
 /// Exact `Unit::do_follow` planner and atomic host receipt. The live order dispatcher owns
 /// its concrete queue/effect integration.
 pub mod follow_executor;
+/// Revision-bound adjacent-call authority for the golden frame-one Scout's
+/// `Caster::process_spells` child. Only a captured empty, unchanged engine array completes;
+/// nonempty queues remain typed residuals.
+pub mod frame1_caster_process;
 /// `GameDaemon::calc_danger` `0x00732D10` and `GameDaemon::do_danger` `0x00732390` — the
 /// step-12 child that rewrites the eight `World::danger` planes.
 pub mod game_daemon_calc_danger;
@@ -330,6 +334,8 @@ pub mod roads;
 pub mod save_load;
 /// Exact retail setup-team lookup and runtime/static team predicate.
 pub mod setup_diplomacy;
+/// Typed adjacent-child requests for the exact frame-one setup Unit idle prefix.
+pub mod setup_idle_prefix;
 /// Stable retail `(owner, band, o)` object identity beside the dense simulation rows.
 /// Allocation remains on the legacy dense path until save/digest/lookup consumers migrate.
 pub mod sparse_object_bands_authority_frontier;
