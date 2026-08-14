@@ -137,6 +137,11 @@ transaction reaches none of their first mutators; all bytes remain at constructo
 the `attacked_by` and `gov_hero_frame` `-1` sentinels. The claim expires before the first
 relevant plan/process/action writer and therefore remains uninstalled with zero survival.
 
+The contiguous attrition/diplomacy, Conquer-the-World Hero, and repair stamp block contributes
+another 24 constructor-zero bytes per active row, reducing the residual to 917. Ordinary setup
+reaches none of those actions; the receipt expires before the first later writer and remains
+uninstalled with zero survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

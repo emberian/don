@@ -81,6 +81,7 @@ pub mod leaders_runtime_frontier;
 pub mod leaders_runtime_tribe_frontier;
 pub mod leaders_setup_build_history_frontier;
 pub mod leaders_setup_build_registry_frontier;
+pub mod leaders_setup_diplomacy_stamp_frontier;
 pub mod leaders_setup_init_scalar_frontier;
 pub mod leaders_setup_plan_scratch_frontier;
 pub mod leaders_setup_rare_history_frontier;

@@ -45,6 +45,10 @@ use don_replay::leaders_setup_build_registry_frontier::{
     FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
     LEADER_GET_BUILDINGS_VA,
 };
+use don_replay::leaders_setup_diplomacy_stamp_frontier::{
+    bind_frame_zero_action_stamps, derive_frame_zero_action_stamps, FrameZeroActionStampsError,
+    ACTION_STAMPS_BEGIN, ACTION_STAMPS_END, FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES,
+};
 use don_replay::leaders_setup_init_scalar_frontier::{
     bind_frame_zero_init_scalars, derive_frame_zero_init_scalars, FrameZeroInitScalarError,
     FRAME_ZERO_INIT_SCALAR_WALKED_BYTES, LEADER_INIT_GOV_STORE_VA,
@@ -1180,6 +1184,7 @@ fn frame_zero_starting_build_census_body() {
     let plan_scratch = derive_frame_zero_plan_scratch(&setup).unwrap();
     let rare_history = derive_frame_zero_rare_history(&setup).unwrap();
     let stat_history = derive_frame_zero_stat_history(&setup).unwrap();
+    let action_stamps = derive_frame_zero_action_stamps(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1290,6 +1295,9 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(LEADER_INIT_ATTACK_STATS_END_VA, 0x006e_4aaf);
     assert_eq!(LEADER_INIT_GOV_HERO_FRAME_VA, 0x006e_3b6e);
     assert_eq!(FRAME_ZERO_STAT_HISTORY_WALKED_BYTES, 104);
+    assert_eq!(ACTION_STAMPS_BEGIN, 0x1f4);
+    assert_eq!(ACTION_STAMPS_END, 0x20c);
+    assert_eq!(FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES, 24);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1298,6 +1306,7 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(plan_scratch.claims().len(), active_count);
     assert_eq!(rare_history.claims().len(), active_count);
     assert_eq!(stat_history.claims().len(), active_count);
+    assert_eq!(action_stamps.claims().len(), active_count);
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1398,26 +1407,25 @@ fn frame_zero_starting_build_census_body() {
     let plan_joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
     let rare_joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
     let headers_joined = bind_lifetime_mask_headers(rare_joined).unwrap();
-    let joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
+    let stat_joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
+    let joined = bind_frame_zero_action_stamps(stat_joined, action_stamps.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(
-        joined.newly_canonicalized_walked_bytes(),
-        active_count * 104
-    );
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 24);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_487 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_511 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 941) as u64
+        (active_count * 917) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    assert!(joined.inner().header_lifetime_stable());
-    assert_eq!(joined.inner().claims().len(), active_count);
+    assert!(joined.inner().inner().header_lifetime_stable());
+    assert_eq!(joined.inner().inner().claims().len(), active_count);
     assert!(joined
+        .inner()
         .inner()
         .claims()
         .iter()
@@ -1434,12 +1442,21 @@ fn frame_zero_starting_build_census_body() {
             .inner()
             .inner()
             .inner()
+            .inner()
             .claims()
             .len(),
         active_count
     );
     assert_eq!(
-        joined.inner().inner().inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
+        joined
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .claims()[0]
+            .tech_duplicate_payload_bytes,
         101
     );
 
@@ -1472,6 +1489,30 @@ fn frame_zero_starting_build_census_body() {
         let headers = bind_lifetime_mask_headers(rare).unwrap();
         bind_frame_zero_stat_history(headers, stat_history.clone())
     };
+    let bind_stamp_columns = |columns: &LeaderCols| {
+        let stat = bind_stat_columns(columns).unwrap();
+        bind_frame_zero_action_stamps(stat, action_stamps.clone())
+    };
+
+    let repair_stamp_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "repair_stamp")
+        .unwrap();
+    let mut stale_action_stamp_columns = fixture.columns.clone();
+    write_field(
+        &mut stale_action_stamp_columns,
+        active,
+        repair_stamp_field,
+        &1i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_stamp_columns(&stale_action_stamp_columns),
+        Err(FrameZeroActionStampsError::ConditionalDisagreement {
+            slot,
+            byte: 20,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let mut stale_gov_hero_columns = fixture.columns.clone();
     let gov_hero_field = leader::FIELDS
