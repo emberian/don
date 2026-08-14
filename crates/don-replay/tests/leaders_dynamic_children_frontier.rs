@@ -4,7 +4,7 @@ use don_replay::checksum::Channel;
 use don_replay::leader_initial_prefix::{derive, InitialLeaderPrefix};
 use don_replay::leaders_deferred_history_frontier::{
     bind_deferred_history_frontier, DeferredLeadersFixedAuthority,
-    RuntimeLeadersDeferredHistoryFrontier,
+    RuntimeLeadersDeferredHistoryFrontier, REG_BUILDING_TYPE_SLOTS,
 };
 use don_replay::leaders_dynamic_children_frontier::{
     bind_dynamic_children_frontier, DynamicChildRepresentation, DynamicChildrenFrontierError,
@@ -20,6 +20,12 @@ use don_replay::leaders_runtime_frontier::{
     LEADER_DIPLOMACY_BYTES, LEADER_FIXED_BODY_BEGIN, LEADER_FIXED_BODY_END,
 };
 use don_replay::leaders_runtime_tribe_frontier::{bind_live_tribes, LEADER_TRIBE_OFFSET};
+use don_replay::leaders_setup_reg_buildings_frontier::{
+    bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
+    FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
+    WALL_INCREMENT_STATS_REGION_STORE_VA, WALL_INCREMENT_STATS_TOTAL_STORE_VA,
+    WALL_INCREMENT_STATS_VA,
+};
 use don_replay::leaders_sim_owner_frontier::{
     bind_sim_owner_frontier, SimOwnerFrontierError, POP_OFFSET, SIM_OWNER_DUPLICATE_BYTES,
     SIM_OWNER_NEWLY_CANONICAL_BYTES, SIM_OWNER_SOURCE_BYTES,
@@ -29,6 +35,7 @@ use don_replay::leaders_sim_tech_frontier::{
     SIM_TECH_EXISTING_DUPLICATE_BYTES, SIM_TECH_NEWLY_CANONICAL_BYTES, SIM_TECH_SOURCE_BYTES,
 };
 use don_replay::replay::{corpus, Replay};
+use don_replay::{harness::WorldSim, setup_cities_builds::StartingSetupState};
 use don_sim::generated::state::{leader, FieldDesc, LeaderCols, Pool};
 use don_sim::systems::bhs_type_table::{
     LeaderTypeMasks, TribeRoster, TypeBackup, TypeBuiltinState, TypeRow, TypeTable, BUILD_BEGIN,
@@ -207,22 +214,47 @@ fn deferred_frontier(
     types: &TypeBuiltinState,
     columns: &LeaderCols,
 ) -> RuntimeLeadersDeferredHistoryFrontier {
-    let base = bind_live(prefix, victory, step8).expect("runtime owners agree");
-    let tribes = bind_live_tribes(prefix, base, types).expect("tribe owner agrees");
-    let generated = bind_generated_fixed_prefix(tribes, columns).expect("columns agree");
-    bind_deferred_history_frontier(
-        generated,
+    deferred_frontier_with_authority(
+        prefix,
+        victory,
+        step8,
+        types,
         columns,
         &DeferredLeadersFixedAuthority::default(),
     )
-    .expect("deferred history agrees")
+}
+
+fn deferred_frontier_with_authority(
+    prefix: &InitialLeaderPrefix,
+    victory: &victory_score::Leaders,
+    step8: &leaders::Leaders,
+    types: &TypeBuiltinState,
+    columns: &LeaderCols,
+    authority: &DeferredLeadersFixedAuthority,
+) -> RuntimeLeadersDeferredHistoryFrontier {
+    let base = bind_live(prefix, victory, step8).expect("runtime owners agree");
+    let tribes = bind_live_tribes(prefix, base, types).expect("tribe owner agrees");
+    let generated = bind_generated_fixed_prefix(tribes, columns).expect("columns agree");
+    bind_deferred_history_frontier(generated, columns, authority).expect("deferred history agrees")
 }
 
 fn fixture() -> Option<Fixture> {
     let prefix = first_prefix()?;
-    let active = prefix.rows.iter().position(|row| row.active)?;
-    let active_count = prefix.rows.iter().filter(|row| row.active).count();
     let (victory, step8) = current_states(&prefix);
+    Some(fixture_with_states(prefix, victory, step8))
+}
+
+fn fixture_with_states(
+    prefix: InitialLeaderPrefix,
+    victory: victory_score::Leaders,
+    step8: leaders::Leaders,
+) -> Fixture {
+    let active = prefix
+        .rows
+        .iter()
+        .position(|row| row.active)
+        .expect("fixture needs one active Leader");
+    let active_count = prefix.rows.iter().filter(|row| row.active).count();
     let types = type_state(&prefix);
 
     let base = bind_live(&prefix, &victory, &step8).unwrap();
@@ -277,7 +309,7 @@ fn fixture() -> Option<Fixture> {
         }
     }
 
-    Some(Fixture {
+    Fixture {
         prefix,
         victory,
         step8,
@@ -287,7 +319,7 @@ fn fixture() -> Option<Fixture> {
         authority,
         active,
         active_count,
-    })
+    }
 }
 
 #[test]
@@ -977,4 +1009,156 @@ fn same_frame_owner_duplicate_and_shape_disagreements_refuse() {
             value: -1,
         })
     );
+}
+
+fn first_frame_zero_setup() -> Option<(InitialLeaderPrefix, StartingSetupState)> {
+    for path in corpus(&repo_root()) {
+        let replay = match Replay::open(&path) {
+            Ok(replay) => replay,
+            Err(_) => continue,
+        };
+        let prefix = match derive(&replay.initial) {
+            Ok(prefix) => prefix,
+            Err(_) => continue,
+        };
+        let mut world = WorldSim::from_replay(&replay);
+        if let Some(setup) = world.initial_setup.take() {
+            return Some((prefix, setup));
+        }
+    }
+    None
+}
+
+fn synchronize_setup_only_owner_columns(columns: &mut LeaderCols, sim: &Sim, slot: usize) {
+    let mut write_named = |name: &str, bytes: &[u8]| {
+        let field = leader::FIELDS
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap_or_else(|| panic!("generated LeaderData has no {name}"));
+        write_field(columns, slot, field, bytes);
+    };
+
+    write_named("city_mark", &sim.cities.city_mark[slot].to_le_bytes());
+    let mut age_stamp = Vec::with_capacity(7 * 4);
+    for value in sim.production_runtime.leaders[slot].age_stamp {
+        age_stamp.extend_from_slice(&value.to_le_bytes());
+    }
+    write_named("age_stamp", &age_stamp);
+    let mut last_finished = Vec::with_capacity((REGULAR_UNIT_END - REGULAR_UNIT_BEGIN) * 4);
+    for value in &sim.production_runtime.leaders[slot].last_unit_finished {
+        last_finished.extend_from_slice(&value.to_le_bytes());
+    }
+    write_named("last_unit_finished", &last_finished);
+}
+
+#[test]
+fn frame_zero_starting_build_census_promotes_the_dominant_residual_and_stays_red() {
+    let Some((prefix, mut setup)) = first_frame_zero_setup() else {
+        skip("no replay admits the canonical all-land starting-town-one setup");
+        return;
+    };
+    let census = derive_frame_zero_regional_building_census(&setup).unwrap();
+    let active_count = prefix.rows.iter().filter(|row| row.active).count();
+
+    assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
+    assert_eq!(WALL_INCREMENT_STATS_TOTAL_STORE_VA, 0x0064_32e2);
+    assert_eq!(WALL_INCREMENT_STATS_REGION_STORE_VA, 0x0064_3307);
+    assert_eq!(FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES, 16_512);
+    assert_eq!(census.claims().len(), active_count);
+    for claim in census.claims() {
+        assert_eq!(claim.builds_censused, 1);
+        assert_eq!(claim.newly_canonical_walked_bytes, 16_512);
+        let row = census.row(usize::from(claim.slot)).unwrap();
+        assert_eq!(row.len(), 64 * 129);
+        let village = 1 * REG_BUILDING_TYPE_SLOTS;
+        assert_eq!(row[village], 1);
+        assert_eq!(
+            row.iter().map(|value| usize::from(*value)).sum::<usize>(),
+            1
+        );
+    }
+
+    let victory = setup.sim.vic_leaders.clone();
+    let step8 = setup.sim.step8.clone();
+    let mut fixture = fixture_with_states(prefix, victory, step8);
+    for slot in 0..NUM_LEADERS {
+        synchronize_setup_only_owner_columns(&mut fixture.columns, &setup.sim, slot);
+    }
+    let mut fixed = DeferredLeadersFixedAuthority::default();
+    for slot in 0..NUM_LEADERS {
+        fixed.rows[slot]
+            .reg_buildings_by_region_then_type
+            .copy_from_slice(census.row(slot).unwrap());
+    }
+    let previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &fixture.columns,
+        &fixed,
+    );
+    let tech = bind_sim_tech_frontier(previous, &fixture.authority, &setup.sim).unwrap();
+    let owners = bind_sim_owner_frontier(&fixture.prefix, tech, &setup.sim).unwrap();
+    let joined = bind_frame_zero_regional_buildings(owners, census.clone()).unwrap();
+    let walk = joined.walk_frontier();
+
+    assert_eq!(
+        joined.newly_canonicalized_walked_bytes(),
+        active_count * 16_512
+    );
+    assert_eq!(
+        joined.unique_canonical_walked_bytes(),
+        active_count * 23_006 + (NUM_LEADERS - active_count) * 8
+    );
+    assert_eq!(
+        joined.remaining_unsourced_walked_bytes(),
+        (active_count * 5_422) as u64
+    );
+    assert_eq!(joined.checksum(), Err(walk));
+    assert!(!joined.installed_in_scoreboard());
+
+    let mut stale_fixed = fixed;
+    let active = fixture.active;
+    stale_fixed.rows[active].reg_buildings_by_region_then_type[REG_BUILDING_TYPE_SLOTS] = 0;
+    let stale_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &fixture.columns,
+        &stale_fixed,
+    );
+    let stale_tech =
+        bind_sim_tech_frontier(stale_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_owners = bind_sim_owner_frontier(&fixture.prefix, stale_tech, &setup.sim).unwrap();
+    assert!(matches!(
+        bind_frame_zero_regional_buildings(stale_owners, census),
+        Err(FrameZeroRegBuildingsError::ConditionalDisagreement { slot, .. })
+            if slot == active
+    ));
+
+    setup.sim.builds.push(Default::default());
+    assert_eq!(
+        derive_frame_zero_regional_building_census(&setup),
+        Err(FrameZeroRegBuildingsError::SetupCountDisagreement {
+            receipt_active: active_count,
+            city_receipts: active_count,
+            sim_builds: active_count + 1,
+        })
+    );
+    setup.sim.builds.pop();
+
+    let row = setup.receipt.cities[0].build.row;
+    setup.sim.builds[row].orig_type += 1;
+    assert_eq!(
+        derive_frame_zero_regional_building_census(&setup),
+        Err(FrameZeroRegBuildingsError::BuildIdentityDisagreement { receipt: 0 })
+    );
+
+    let checked = don_replay::check_all::CheckAll::of_state(&don_replay::state::SimState::new());
+    let leaders = &checked.per[Channel::Leaders as usize];
+    assert!(!leaders.installed);
+    assert!(!leaders.exact_producer);
+    assert!(!leaders.substantive());
 }

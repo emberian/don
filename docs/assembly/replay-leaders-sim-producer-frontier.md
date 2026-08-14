@@ -96,6 +96,14 @@ fields, most `Personality`, bitmask headers/payloads, `tech_at_start` history, l
 contents and representation metadata, the production script, and the decoded economy fields
 which still lack a same-frame owner.
 
+The frame-zero setup continuation now conditionally promotes the 16,512-byte
+`reg_buildings[64][129]` plane from a complete canonical census of starting City-center
+Builds. That lowers the empty-child residual to 5,422 bytes per active row only while the
+ordinary starting-town-one setup receipt is live. It does not change this module's general
+same-frame residual: the Sim does not yet maintain the regional matrix through all later Build
+lifecycle transitions. See
+[`replay-leaders-frame-zero-reg-buildings.md`](replay-leaders-frame-zero-reg-buildings.md).
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical
