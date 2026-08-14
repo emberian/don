@@ -8,6 +8,7 @@ use subject::{
     AddMountainCall, GridOffset, MountainAddRuntime, MountainAddRuntimeError,
     MountainLocationVertex, MountainRejection, MountainSpacingKind, MountainTemplateRuntime,
     MountainWorld, MountainWorldCell, EXCLUDING_VERIFY_MODE, LIBERR_GENERAL, LIBERR_OK,
+    SLIDING_EXCLUDING_VERIFY_MODE,
 };
 
 impl MountainWorld for World {
@@ -120,7 +121,9 @@ fn mode_four_success_commits_world_tiles_behind_row_and_walked_arrays() {
 
     assert_eq!(receipt.liberr, LIBERR_OK);
     assert_eq!(receipt.rejection, None);
+    assert_eq!(receipt.resolved_call, Some(call(5, 5)));
     assert_eq!(receipt.unique_verify_cells, 1);
+    assert_eq!(receipt.sliding_attempts, 0);
     assert_eq!(receipt.mountain_wcoords_written, 1);
     assert_eq!(receipt.mountain_tiles_written, 1);
     assert_eq!(receipt.behind_tiles_set, 3);
@@ -357,7 +360,80 @@ fn walked_array_metadata_uses_the_native_four_then_doubling_growth() {
 }
 
 #[test]
-fn modes_not_reached_by_map_style_twelve_remain_explicitly_unsupported() {
+fn mode_five_tries_mount_w_anchors_in_order_and_commits_the_shifted_origin() {
+    let sliding_template = MountainTemplateRuntime {
+        mount_tiles: vec![GridOffset::new(0, 0)],
+        mount_wcoords: vec![GridOffset::new(0, 0), GridOffset::new(1, 0)],
+        solid_mount_wcoords: vec![GridOffset::new(0, 0)],
+    };
+    let mut world = flat_world();
+    // The first candidate origin is (5,5) and fails start-distance at its first
+    // center. That bit remains owned by this invocation. The second anchor
+    // shifts the origin to (4,5), accepts its new first center at strict
+    // distance equality, then skips the overlapping pre-marked (5,5) center.
+    world.start_x.items.push(5);
+    world.start_y.items.push(5);
+    let mut runtime = runtime(sliding_template);
+    let mut request = call(5, 5);
+    request.verification_mode = SLIDING_EXCLUDING_VERIFY_MODE;
+    request.start_min = 1;
+
+    let receipt = runtime.apply_add_mountain(&mut world, request).unwrap();
+
+    assert_eq!(receipt.liberr, LIBERR_OK);
+    assert_eq!(receipt.call, request);
+    assert_eq!(
+        receipt.resolved_call,
+        Some(AddMountainCall {
+            world_x: 4,
+            world_y: 5,
+            ..request
+        })
+    );
+    assert_eq!(receipt.sliding_attempts, 2);
+    // (5,5), followed by the new cell (4,5); overlapping (5,5) is skipped
+    // through the one function-wide verify-bit transaction.
+    assert_eq!(receipt.unique_verify_cells, 2);
+    assert_eq!(runtime.mountain_loc_wcoords_x.items, [4]);
+    assert_eq!(runtime.mountain_loc_wcoords_y.items, [5]);
+    assert_ne!(world.wdata(4, 5).flags & map_terrain::wflag::MOUNTAINS, 0);
+    assert_eq!(
+        world.tmask(16, 20) & map_terrain::tflag::BLOCKER_MASK,
+        map_terrain::tflag::BLOCKER_MOUNTAIN
+    );
+    assert!(runtime.verify_bits.iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn mode_five_exhaustion_reports_every_anchor_and_rolls_back_verify_bits() {
+    let sliding_template = MountainTemplateRuntime {
+        mount_tiles: vec![GridOffset::new(0, 0)],
+        mount_wcoords: vec![GridOffset::new(0, 0), GridOffset::new(1, 0)],
+        solid_mount_wcoords: vec![GridOffset::new(0, 0)],
+    };
+    let mut world = flat_world();
+    world.wdata_mut(4, 5).flags = map_terrain::wflag::FOREST;
+    world.wdata_mut(6, 5).flags = map_terrain::wflag::FOREST;
+    let mut runtime = runtime(sliding_template);
+    let before = snapshot(&world, &runtime);
+    let mut request = call(5, 5);
+    request.verification_mode = SLIDING_EXCLUDING_VERIFY_MODE;
+
+    let receipt = runtime.apply_add_mountain(&mut world, request).unwrap();
+
+    assert_eq!(receipt.liberr, LIBERR_GENERAL);
+    assert_eq!(receipt.resolved_call, None);
+    assert_eq!(receipt.sliding_attempts, 2);
+    assert_eq!(
+        receipt.rejection,
+        Some(MountainRejection::SlidingExhausted { attempts: 2 })
+    );
+    assert_eq!(receipt.unique_verify_cells, 3);
+    assert_eq!(snapshot(&world, &runtime), before);
+}
+
+#[test]
+fn modes_without_a_recovered_verifier_remain_explicitly_unsupported() {
     let mut world = flat_world();
     let mut runtime = runtime(template());
     let mut request = call(5, 5);

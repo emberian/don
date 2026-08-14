@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Map-generation runtime for the map-style-12 path through
+//! Map-generation runtime for the map-style-12 and map-style-14 paths through
 //! `Mountains::add_mountain` (`0x0089c2e0`).
 //!
 //! This module is deliberately host-shaped so it can be source-frozen without
 //! editing the shared systems registry.  [`MountainWorld`] is the exact adapter
 //! seam for `systems::map_terrain::World`; it does not permit an asserted
-//! `Liberr` result.  The supported verification mode is mode 4, the
-//! `Mountains::excluding_verify` path reached by Mediterranean/map-style 12
-//! from `TerrainGroup::drop_tile`.
+//! `Liberr` result.  The supported verification modes are mode 4, the
+//! `Mountains::excluding_verify` path reached by Mediterranean/map-style 12,
+//! and mode 5, the coordinate-adjusting `sliding_excluding_verify` path reached
+//! by Great Lakes/map-style 14 from `TerrainGroup::place_player_group`.
 //!
 //! Fidelity is Tier C (instruction-derived, not oracle-executed).  The complete
 //! instruction and PDB ledger, including the deliberately unsupported modes,
@@ -19,6 +20,9 @@ pub const MOUNTAINS_ADD_MOUNTAIN_VA: u32 = 0x0089_c2e0;
 pub const MOUNTAINS_ADD_MOUNTAIN_SIZE: u32 = 1_936;
 /// Map-style 12 reaches the `excluding_verify` switch arm.
 pub const EXCLUDING_VERIFY_MODE: i32 = 4;
+/// Pattern-zero player mountains reach the coordinate-adjusting
+/// `sliding_excluding_verify` switch arm.
+pub const SLIDING_EXCLUDING_VERIFY_MODE: i32 = 5;
 /// Retail `Liberr` values returned by this body in the supported path.
 pub const LIBERR_OK: i32 = 0;
 pub const LIBERR_GENERAL: i32 = 1;
@@ -191,7 +195,7 @@ impl<T> Default for RetailMountainArray<T> {
     }
 }
 
-/// `MountainsData` state mutated or consulted by `add_mountain` mode 4.
+/// `MountainsData` state mutated or consulted by `add_mountain` modes 4 and 5.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MountainAddRuntime {
     /// `PtrArray<MountainRange>` by exact native template index.  `None` is a
@@ -217,7 +221,8 @@ impl MountainAddRuntime {
         }
     }
 
-    /// Execute the exact map-style-12 path atomically.
+    /// Execute the exact map-style-12/mode-4 or map-style-14/mode-5 path
+    /// atomically.
     ///
     /// A retail verification rejection is `Ok` with `liberr == 1`; a missing
     /// producer or unsupported verification mode is a typed error.  Both leave
@@ -270,34 +275,66 @@ impl MountainAddRuntime {
             .clone();
         let circles = CircleTable::build();
         let mut unique_verify_cells = 0usize;
+        let (resolved_call, sliding_attempts) = match call.verification_mode {
+            EXCLUDING_VERIFY_MODE => {
+                if let Some(reason) =
+                    self.excluding_verify(world, &template, call, &mut unique_verify_cells)
+                {
+                    return Ok(MountainAddReceipt::rejected(
+                        call,
+                        reason,
+                        unique_verify_cells,
+                        0,
+                    ));
+                }
+                if let Some(reason) = quick_verify_template(world, &template, call, &circles) {
+                    return Ok(MountainAddReceipt::rejected(
+                        call,
+                        reason,
+                        unique_verify_cells,
+                        0,
+                    ));
+                }
+                (call, 0)
+            }
+            SLIDING_EXCLUDING_VERIFY_MODE => {
+                let SlidingVerifyOutcome {
+                    resolved_call,
+                    attempts,
+                } = self.sliding_excluding_verify(
+                    world,
+                    &template,
+                    call,
+                    &circles,
+                    &mut unique_verify_cells,
+                );
+                let Some(resolved_call) = resolved_call else {
+                    return Ok(MountainAddReceipt::rejected(
+                        call,
+                        MountainRejection::SlidingExhausted { attempts },
+                        unique_verify_cells,
+                        attempts,
+                    ));
+                };
+                (resolved_call, attempts)
+            }
+            _ => unreachable!("validated verification mode"),
+        };
 
-        if let Some(reason) =
-            self.excluding_verify(world, &template, call, &mut unique_verify_cells)
-        {
-            return Ok(MountainAddReceipt::rejected(
+        validate_commit_geometry(world, &template, resolved_call)?;
+        if let Some(reason) = verify_spacing(world, &template, resolved_call, &circles) {
+            return Ok(MountainAddReceipt::rejected_after_resolution(
                 call,
+                resolved_call,
                 reason,
                 unique_verify_cells,
-            ));
-        }
-        if let Some(reason) = quick_verify_template(world, &template, call, &circles) {
-            return Ok(MountainAddReceipt::rejected(
-                call,
-                reason,
-                unique_verify_cells,
-            ));
-        }
-        if let Some(reason) = verify_spacing(world, &template, call, &circles) {
-            return Ok(MountainAddReceipt::rejected(
-                call,
-                reason,
-                unique_verify_cells,
+                sliding_attempts,
             ));
         }
 
         for offset in &template.solid_mount_wcoords {
-            let wx = call.world_x.wrapping_add(offset.x);
-            let wy = call.world_y.wrapping_add(offset.y);
+            let wx = resolved_call.world_x.wrapping_add(offset.x);
+            let wy = resolved_call.world_y.wrapping_add(offset.y);
             let old = world.world_cell(wx, wy);
             let flags = (old.flags & !wflag::LAND_CLASS_MASK)
                 | (old.flags & (wflag::COAST | wflag::ORIG_COAST))
@@ -306,11 +343,11 @@ impl MountainAddRuntime {
         }
 
         for offset in &template.mount_tiles {
-            let tx = call
+            let tx = resolved_call
                 .world_x
                 .wrapping_mul(WCOORD_TO_TCOORD)
                 .wrapping_add(offset.x);
-            let ty = call
+            let ty = resolved_call
                 .world_y
                 .wrapping_mul(WCOORD_TO_TCOORD)
                 .wrapping_add(offset.y);
@@ -324,11 +361,11 @@ impl MountainAddRuntime {
         const BEHIND_DY: [i32; 3] = [-1, -1, -1];
         let mut behind_tiles_set = 0usize;
         for offset in &template.mount_tiles {
-            let base_tx = call
+            let base_tx = resolved_call
                 .world_x
                 .wrapping_mul(WCOORD_TO_TCOORD)
                 .wrapping_add(offset.x);
-            let base_ty = call
+            let base_ty = resolved_call
                 .world_y
                 .wrapping_mul(WCOORD_TO_TCOORD)
                 .wrapping_add(offset.y);
@@ -344,10 +381,12 @@ impl MountainAddRuntime {
             }
         }
 
-        self.mountain_loc_wcoords_x.push_exact(call.world_x)?;
-        self.mountain_loc_wcoords_y.push_exact(call.world_y)?;
-        let x = call.world_x.wrapping_mul(WCOORD_TO_COORD) as f32;
-        let y = call.world_y.wrapping_mul(WCOORD_TO_COORD) as f32;
+        self.mountain_loc_wcoords_x
+            .push_exact(resolved_call.world_x)?;
+        self.mountain_loc_wcoords_y
+            .push_exact(resolved_call.world_y)?;
+        let x = resolved_call.world_x.wrapping_mul(WCOORD_TO_COORD) as f32;
+        let y = resolved_call.world_y.wrapping_mul(WCOORD_TO_COORD) as f32;
         self.mountain_locs.push_exact(MountainLocationVertex {
             x_bits: x.to_bits(),
             y_bits: y.to_bits(),
@@ -357,9 +396,11 @@ impl MountainAddRuntime {
 
         Ok(MountainAddReceipt {
             call,
+            resolved_call: Some(resolved_call),
             liberr: LIBERR_OK,
             rejection: None,
             unique_verify_cells,
+            sliding_attempts,
             mountain_wcoords_written: template.solid_mount_wcoords.len(),
             mountain_tiles_written: template.mount_tiles.len(),
             behind_tiles_set,
@@ -408,6 +449,79 @@ impl MountainAddRuntime {
         clear_touched(&mut self.verify_bits, &touched);
         None
     }
+
+    /// `Mountains::sliding_excluding_verify` `0x00898170`--`0x0089856f`.
+    ///
+    /// Each `mount_w` row is tried as the anchor that must land on the
+    /// requested coordinate. The candidate origin is therefore
+    /// `requested - anchor`. Retail retains one function-static `to_clear`
+    /// array across every candidate, so a world cell's start-distance test is
+    /// performed at most once even when sliding footprints overlap.
+    fn sliding_excluding_verify<W: MountainWorld>(
+        &mut self,
+        world: &W,
+        template: &MountainTemplateRuntime,
+        call: AddMountainCall,
+        circles: &CircleTable,
+        unique_verify_cells: &mut usize,
+    ) -> SlidingVerifyOutcome {
+        let mut touched = Vec::new();
+        let mut attempts = 0usize;
+
+        'anchors: for anchor in &template.mount_wcoords {
+            attempts += 1;
+            let resolved_call = AddMountainCall {
+                world_x: call.world_x.wrapping_sub(anchor.x),
+                world_y: call.world_y.wrapping_sub(anchor.y),
+                ..call
+            };
+
+            for offset in &template.mount_wcoords {
+                let wx = resolved_call.world_x.wrapping_add(offset.x);
+                let wy = resolved_call.world_y.wrapping_add(offset.y);
+                if !valid_world(world, wx, wy) {
+                    // `quick_verify_template` owns the hard-boundary failure;
+                    // the excluding pass simply skips an off-map bit.
+                    continue;
+                }
+                let index = (wy * world.world_xs() + wx) as usize;
+                if bit_is_set(&self.verify_bits, index) {
+                    continue;
+                }
+                set_bit(&mut self.verify_bits, index);
+                touched.push(index);
+                *unique_verify_cells += 1;
+
+                for player in 0..world.start_x_count() {
+                    let (sx, sy) = world.start_at(player);
+                    let distance = vector_dist(wx.wrapping_sub(sx), wy.wrapping_sub(sy));
+                    if distance < call.start_min {
+                        continue 'anchors;
+                    }
+                }
+            }
+
+            if quick_verify_template(world, template, resolved_call, circles).is_none() {
+                clear_touched(&mut self.verify_bits, &touched);
+                return SlidingVerifyOutcome {
+                    resolved_call: Some(resolved_call),
+                    attempts,
+                };
+            }
+        }
+
+        clear_touched(&mut self.verify_bits, &touched);
+        SlidingVerifyOutcome {
+            resolved_call: None,
+            attempts,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct SlidingVerifyOutcome {
+    resolved_call: Option<AddMountainCall>,
+    attempts: usize,
 }
 
 fn walk_i32_array(array: &RetailMountainArray<i32>, out: &mut Vec<u8>) {
@@ -419,10 +533,17 @@ fn walk_i32_array(array: &RetailMountainArray<i32>, out: &mut Vec<u8>) {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MountainAddReceipt {
+    /// The nine values received at the public `add_mountain` entry.
     pub call: AddMountainCall,
+    /// The coordinate-adjusted call used by the common spacing/commit tail.
+    /// Mode 4 preserves the requested coordinates. A verifier rejection has no
+    /// resolved call; a spacing rejection does.
+    pub resolved_call: Option<AddMountainCall>,
     pub liberr: i32,
     pub rejection: Option<MountainRejection>,
     pub unique_verify_cells: usize,
+    /// Candidate anchors visited by mode 5. Mode 4 reports zero.
+    pub sliding_attempts: usize,
     pub mountain_wcoords_written: usize,
     pub mountain_tiles_written: usize,
     pub behind_tiles_set: usize,
@@ -435,12 +556,15 @@ impl MountainAddReceipt {
         call: AddMountainCall,
         rejection: MountainRejection,
         unique_verify_cells: usize,
+        sliding_attempts: usize,
     ) -> Self {
         Self {
             call,
+            resolved_call: None,
             liberr: LIBERR_GENERAL,
             rejection: Some(rejection),
             unique_verify_cells,
+            sliding_attempts,
             mountain_wcoords_written: 0,
             mountain_tiles_written: 0,
             behind_tiles_set: 0,
@@ -448,10 +572,26 @@ impl MountainAddReceipt {
             rng_draws: 0,
         }
     }
+
+    fn rejected_after_resolution(
+        call: AddMountainCall,
+        resolved_call: AddMountainCall,
+        rejection: MountainRejection,
+        unique_verify_cells: usize,
+        sliding_attempts: usize,
+    ) -> Self {
+        let mut receipt = Self::rejected(call, rejection, unique_verify_cells, sliding_attempts);
+        receipt.resolved_call = Some(resolved_call);
+        receipt
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MountainRejection {
+    /// Every `mount_w` anchor in mode 5 failed its start-distance and/or quick
+    /// template checks. Retail exposes only `Liberr 1`; the attempt count pins
+    /// the exact bounded search without inventing a winning coordinate.
+    SlidingExhausted { attempts: usize },
     StartDistance {
         mount_index: usize,
         player: usize,
@@ -532,7 +672,10 @@ fn validate_call<W: MountainWorld>(
     world: &W,
     call: AddMountainCall,
 ) -> Result<(), MountainAddRuntimeError> {
-    if call.verification_mode != EXCLUDING_VERIFY_MODE {
+    if !matches!(
+        call.verification_mode,
+        EXCLUDING_VERIFY_MODE | SLIDING_EXCLUDING_VERIFY_MODE
+    ) {
         return Err(MountainAddRuntimeError::UnsupportedVerificationMode {
             mode: call.verification_mode,
         });
@@ -585,9 +728,23 @@ fn validate_call<W: MountainWorld>(
             return Err(MountainAddRuntimeError::InvalidSpacingRadius { kind, radius });
         }
     }
+    if call.verification_mode == EXCLUDING_VERIFY_MODE {
+        validate_commit_geometry(world, template, call)?;
+    }
+    Ok(())
+}
+
+/// The shipped template producer makes these accesses total after either
+/// verifier accepts. Keep malformed/synthetic producer input as a typed stop
+/// instead of reproducing retail's unchecked access.
+fn validate_commit_geometry<W: MountainWorld>(
+    world: &W,
+    template: &MountainTemplateRuntime,
+    resolved_call: AddMountainCall,
+) -> Result<(), MountainAddRuntimeError> {
     for (template_index, offset) in template.solid_mount_wcoords.iter().enumerate() {
-        let wx = call.world_x.wrapping_add(offset.x);
-        let wy = call.world_y.wrapping_add(offset.y);
+        let wx = resolved_call.world_x.wrapping_add(offset.x);
+        let wy = resolved_call.world_y.wrapping_add(offset.y);
         if !valid_world(world, wx, wy) {
             return Err(MountainAddRuntimeError::TemplateSolidCellOutOfBounds {
                 template_index,
@@ -597,11 +754,11 @@ fn validate_call<W: MountainWorld>(
         }
     }
     for (template_index, offset) in template.mount_tiles.iter().enumerate() {
-        let tx = call
+        let tx = resolved_call
             .world_x
             .wrapping_mul(WCOORD_TO_TCOORD)
             .wrapping_add(offset.x);
-        let ty = call
+        let ty = resolved_call
             .world_y
             .wrapping_mul(WCOORD_TO_TCOORD)
             .wrapping_add(offset.y);

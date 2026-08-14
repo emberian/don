@@ -1,4 +1,4 @@
-# `Mountains::add_mountain` mode-4 runtime
+# `Mountains::add_mountain` mode-4/mode-5 runtime
 
 Lane: `world-mountain-runtime`.  Supported executable:
 `ron-bin/riseofnations.exe`, PE32/i386, image base `0x00400000`, SHA-256
@@ -10,14 +10,18 @@ The Ghidra C in `re/decomp-all/0089c2e0.c` was used only as a control-flow map.
 ## Result and honest boundary
 
 `crates/don-sim/src/systems/mountain_add_runtime.rs` executes the complete
-`verification_mode == 4` path of `Mountains::add_mountain` `0x0089c2e0`
-through its native return.  That is the path map-style 12 reaches through
-`TerrainGroup::drop_tile`: mode 4 calls `Mountains::excluding_verify`
-`0x00898570`, then the common spacing and commit tail.
+`verification_mode == 4` and `verification_mode == 5` paths of
+`Mountains::add_mountain` `0x0089c2e0` through their native return. Map-style
+12 reaches mode 4 through `TerrainGroup::drop_tile`; map-style 14 reaches mode
+5 through the pattern-zero player mountain arm. Mode 4 calls
+`Mountains::excluding_verify` `0x00898570`; mode 5 calls the coordinate-adjusting
+`Mountains::sliding_excluding_verify` `0x00898170`. Both then enter the common
+spacing and commit tail.
 
 The runtime consumes zero RNG.  It owns:
 
 - the temporary `verify_bits` set/clear transaction and player-start exclusion;
+- mode 5's ordered anchor search and successful X/Y writeback;
 - `quick_verify_template`'s flat-world and start-city reservation checks;
 - the four ordered mountain/coast/forest/rock spacing scans;
 - exact WData mountain flags, blocked mountain TData, and the northern
@@ -59,14 +63,15 @@ argument mapping rather than relying on the decompiler:
 | `0x0089c2fe`–`0x0089c327` | validate `template` against `ranges.length` and the non-null pointer row |
 | `0x0089c32d`–`0x0089c3bd` | switch modes 1–5 |
 | `0x0089c372`–`0x0089c390` | mode 4 pushes World `start_y +0x9c`, `start_x +0x80`, stack `+0x28` (`start_min`), y, x, template, then calls `excluding_verify` |
+| `0x0089c397`–`0x0089c3bd` | mode 5 pushes the World start arrays, `start_min`, X/Y references, X/Y values and template before calling `sliding_excluding_verify` |
 | `0x0089c3c2`–`0x0089c3c4` | any non-zero verifier return jumps to `Liberr 1` |
 | `0x0089c697`–`0x0089c6ac` | rejection returns `1` |
 | `0x0089c9a2`–`0x0089ca52` | committed path returns `0` |
 
-Modes 1, 2, 3, and 5 remain typed `UnsupportedVerificationMode` boundaries.
-They call `verify_template`, `quick_verify_template`, `sliding_verify`, and
-`sliding_excluding_verify` respectively; pretending mode 4 covers their
-coordinate-adjusting behavior would be a false closure.
+Modes 1, 2, and 3 remain typed `UnsupportedVerificationMode` boundaries. They
+call `verify_template`, `quick_verify_template`, and `sliding_verify`
+respectively. Mode 5 is separately implemented; it is never routed through
+mode 4.
 
 An absent/null template is a typed producer error in DoN, rather than retail's
 release-build diagnostic fallthrough.  This distinction prevents a missing
@@ -113,6 +118,40 @@ set, and no `ROCKS|IMPASSABLE_X`.  The center and radius-one ring must not be
 present in `WorldData::start_city_locs`.  The ring starts at
 `circle_radius[0]` and stops before `circle_radius[1]`, so the separately tested
 center is not tested twice.
+
+## Mode-5 sliding/excluding verification
+
+PDB bounds `Mountains::sliding_excluding_verify` at
+`0x00898170`–`0x0089856f` (1,024 bytes). The body contains 303 decoded
+instructions and has SHA-256
+`9833cf38c0d4f23cde4c92a970654bff427cd2c94e60c9e04cebdcf46e428f84`.
+It calls only the static-array guards/destructor and
+`quick_verify_template`; there is no random-stream call.
+
+The outer loop visits `mount_w` rows in their stored order. For each row used
+as the anchor, it computes candidate origin
+`(requested_x - anchor_x, requested_y - anchor_y)`. The inner loop projects
+every `mount_w` cell from that origin. In-bounds cells whose verify bit was
+clear are set, retained in the function-static `to_clear` array, and compared
+with player starts in order. A strict `vector_dist < start_min` rejects the
+current candidate immediately. Off-map cells and cells with pre-existing bits
+do not themselves reject the candidate; `quick_verify_template` owns the full
+footprint/bounds decision.
+
+The `to_clear` list is not reset between candidates. Consequently overlapping
+cells are start-distance-tested at most once across the whole mode-5 call. If
+the inner pass survives, `quick_verify_template` runs at the candidate origin.
+Its first success writes that origin through the X/Y reference arguments,
+clears every bit owned by the call, and returns zero. Exhaustion clears the same
+owned set and returns one. Instruction anchors are:
+
+- `0x00898250`–`0x00898288`: select the next anchor in template order;
+- `0x00898291`–`0x00898370`: project, test/set, and retain unique verify cells;
+- `0x00898373`–`0x0089842b`: player-order strict start-distance scan;
+- `0x00898463`–`0x00898479`: derive the shifted origin and call
+  `quick_verify_template`;
+- `0x008984f6`–`0x00898500`: write successful X/Y values by reference; and
+- `0x008984aa`–`0x00898541`: clear owned verify bits on failure or success.
 
 ## Common spacing and commit order
 
@@ -164,7 +203,7 @@ them.  A retail `Liberr 1` rejection and every typed producer/runtime error leav
 both inputs byte-for-byte unchanged.
 
 `crates/don-sim/tests/map_core_mountain_add_runtime.rs` adapts the source-frozen
-trait onto the canonical `map_terrain::World`.  Eleven tests pin:
+trait onto the canonical `map_terrain::World`. Thirteen tests pin:
 
 - successful WData/TData/behind writes, retained vertices, and zero RNG;
 - independent mountain/coast/forest/rock argument mapping;
@@ -175,7 +214,9 @@ trait onto the canonical `map_terrain::World`.  Eleven tests pin:
 - a late array-metadata failure after staged world writes (rollback);
 - malformed template input as a typed producer stop;
 - 4→8 capacity growth and walked metadata; and
-- explicit refusal of modes not reached by map-style 12.
+- ordered mode-5 anchor shifting and resolved-coordinate commit;
+- mode-5 exhaustion, cross-candidate verify-bit ownership, and rollback; and
+- explicit refusal of modes 1–3 whose verifier bodies remain unrecovered.
 
 These are mutation-sensitive transcription tests, not retail differential
 evidence. Two reversible seeded probes were also run: cross-wiring
@@ -198,14 +239,18 @@ integration owner needs all of the following, in dependency order:
 3. Retain one `MountainAddRuntime` beside the existing `Mountains` range-list
    cursor state in the composed `TerrainGroups::place_all` runtime.  Do not
    initialize its template catalog from synthetic/default geometry.
-4. At `DropTileExternalRequest::MountainsAddMountain`, convert the nine fields
-   one-for-one into `AddMountainCall`.  A receipt supplies the native `liberr`;
-   a typed error remains a named transaction stop and releases no asserted
-   external resolution.
+4. At either region or player `MountainsAddMountain` request, convert the nine
+   fields one-for-one into `AddMountainCall`. A receipt supplies both the
+   requested call and the mode-5 resolved origin. A typed error remains a named
+   transaction stop and releases no asserted external resolution.
 5. Build a lawful installed-content producer for the sixteen
    `MountainRangeData` rows.  Only after that producer is mutation-pinned against
    the shipped loader may replay schedules replace
    `place_all_mountains_add_mountain` with the next executed primitive.
 
-The third and fifth hooks are why this tranche is a real runtime advance but
-not a replay-compatibility closure claim.
+The installed-content owner and region/mode-4 adapter now exist. The player
+adapter deliberately remains red until a real installed template catalog is
+available: executing mode 5 with synthetic geometry would create plausible but
+noncanonical World bytes. The missing shipped geometry is therefore still why
+this tranche is a real runtime advance but not a replay-compatibility closure
+claim.
