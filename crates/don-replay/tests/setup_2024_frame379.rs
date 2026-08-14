@@ -11,6 +11,10 @@ use don_replay::setup_2024_frame379::{
     Frame379SetupEntrySource, Frame379SetupError, Frame379WorldgenAuthority,
     Frame379WorldgenSource, PLACE_ALL_RANDOM_STATE_BEFORE, REPLAY_FILE_SHA256,
 };
+use don_replay::setup_2024_starting_market::{
+    golden_starting_market_setup_entry_digest, GoldenStartingMarketSetupEntryAuthority,
+    GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION,
+};
 use don_replay::setup_units_producer::{
     StartingUnitBonuses, StartingUnitPhase, StartingUnitTypeFacts, TypeResolutionFacts,
     BASE_PEASANT_TYPE, BASE_SCOUT_TYPE, DUTCH_MERCHANT_TYPE,
@@ -449,8 +453,15 @@ fn captured_setup_entry(
     };
     entry.cities.city_mark[0] = 1;
     entry.world.random.reseed(0x1234_5678);
+    let post_place_all_random_state = entry.world.random.state();
+    // The captured BuildUnits entry is later than place_all. Model one of Market's one-to-four
+    // successful fine probes so this contract test cannot regress to equating the two boundaries.
+    let _ = entry.world.random.get(0, 0xffff);
 
-    let checksum = entry.map.world.checksum_sections();
+    let post_place_all_checksum = entry.map.world.checksum_sections();
+    // Village/Market setup may mutate World after place_all. Keep the later entry checksum
+    // observably independent just as the RNG state is independent below.
+    entry.map.world.wdata[0].val ^= 1;
     let place_all = ReplayPlaceAllReceipt {
         entry_va: TERRAIN_GROUPS_PLACE_ALL_VA,
         return_va: TERRAIN_GROUPS_PLACE_ALL_RETURN_VA,
@@ -459,10 +470,10 @@ fn captured_setup_entry(
         generated_starts: replay.initial.active_players().count(),
         tdata_cells: entry.map.world.tdata.len(),
         random_state_before: PLACE_ALL_RANDOM_STATE_BEFORE,
-        random_state_after: entry.world.random.state(),
+        random_state_after: post_place_all_random_state,
         host_events: Vec::new(),
-        checksum_before: checksum.clone(),
-        checksum_after: checksum.clone(),
+        checksum_before: post_place_all_checksum.clone(),
+        checksum_after: post_place_all_checksum,
         sourced_walked_bytes: 0,
     };
     let vertices = (entry.map.world.tile_xs as usize + 1) * (entry.map.world.tile_ys as usize + 1);
@@ -496,6 +507,7 @@ fn captured_setup_entry(
         entry_sim_sha256: frame379_setup_snapshot_sha256(&entry).unwrap(),
         post_place_all_world_checksum: place_all.checksum_after.clone(),
         post_place_all_random_state: place_all.random_state_after,
+        entry_random_state: entry.world.random.state(),
         terrain_source_digest: terrain.source_digest,
         mountain_height_receipt_sha256: frame379_mountain_height_receipt_sha256(&mountain_height),
     };
@@ -572,7 +584,13 @@ fn captured_setup_entry_derives_worldgen_authority_from_map_height_and_village()
         bound.worldgen.world_checksum,
         entry.map.world.checksum_sections()
     );
+    assert_ne!(
+        bound.worldgen.world_checksum,
+        bound.post_place_all_world_checksum
+    );
     assert_eq!(bound.worldgen.random_state, entry.world.random.state());
+    assert_eq!(bound.entry_random_state, entry.world.random.state());
+    assert_ne!(bound.entry_random_state, bound.post_place_all_random_state);
     assert_eq!(bound.center_build_o, 2_000);
     assert_eq!(bound.center_city_slot, 0);
     assert_eq!(bound.center_region, 1);
@@ -600,6 +618,20 @@ fn captured_setup_entry_rejects_cross_wired_map_height_and_receiver_entry() {
             &wrong,
         ),
         Err(Frame379SetupEntryBindError::PlaceAllChecksumMismatch)
+    );
+
+    let mut wrong = capture.clone();
+    wrong.entry_random_state ^= 1;
+    assert_eq!(
+        bind_captured_frame379_setup_entry(
+            &replay,
+            &entry,
+            &place_all,
+            &terrain,
+            &mountain_height,
+            &wrong,
+        ),
+        Err(Frame379SetupEntryBindError::EntryRandomStateMismatch)
     );
 
     let mut wrong = capture.clone();
@@ -687,6 +719,50 @@ fn chronology_refuses_to_substitute_an_empty_receipt_set_for_real_units() {
     assert_eq!(
         produce_frame379_setup(&replay, &[], &[], &missing, &leader()),
         Err(Frame379SetupError::MissingCompositionDigest)
+    );
+}
+
+#[test]
+fn strict_market_lifecycle_authority_is_digest_and_entry_bound() {
+    let entry = Sim::new(0x7171, 64);
+    let worldgen = Frame379WorldgenAuthority {
+        revision: 1,
+        composition_digest: [0x5a; 32],
+        source: Frame379WorldgenSource::CompletedGreatLakesWorldgenAndStartingVillage,
+        replay_file_sha256: REPLAY_FILE_SHA256,
+        world_checksum: entry.map.world.checksum_sections(),
+        random_state: entry.world.random.state(),
+    };
+    let mut authority = GoldenStartingMarketSetupEntryAuthority {
+        revision: 1,
+        composition_digest: [0; 32],
+        schema_version: GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION,
+        replay_file_sha256: REPLAY_FILE_SHA256,
+        executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+        before_sim_sha256: [0x31; 32],
+        entry_sim_sha256: frame379_setup_snapshot_sha256(&entry).unwrap(),
+        native_trace_sha256: [0x32; 32],
+        footprint_receipt_sha256: [0x33; 32],
+        center_build_row: 0,
+        market_build_row: 1,
+        market_build_o: 2_001,
+        market_city_slot: 0,
+        space_grade: 4,
+        random_state_after: entry.world.random.state(),
+        source_produced_city_bytes: 114,
+    };
+    authority.composition_digest = golden_starting_market_setup_entry_digest(&authority);
+    don_replay::setup_2024_frame379::validate_golden_starting_market_setup_entry_authority(
+        &worldgen, &entry, &authority,
+    )
+    .unwrap();
+
+    authority.entry_sim_sha256[0] ^= 1;
+    assert_eq!(
+        don_replay::setup_2024_frame379::validate_golden_starting_market_setup_entry_authority(
+            &worldgen, &entry, &authority,
+        ),
+        Err(Frame379SetupError::StartingMarketAuthorityMismatch)
     );
 }
 

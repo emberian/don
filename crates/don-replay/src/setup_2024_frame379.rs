@@ -31,6 +31,10 @@ use crate::place_all_boundary::{
     ReplayPlaceAllReceipt, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA, TERRAIN_GROUPS_PLACE_ALL_VA,
 };
 use crate::replay::{load_payload, Replay};
+use crate::setup_2024_starting_market::{
+    golden_starting_market_setup_entry_digest, GoldenStartingMarketSetupEntryAuthority,
+    GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION,
+};
 use crate::setup_cities_builds::{
     CAMERA_COMMAND_OPCODE, CITY_CENTER_TYPE, VILLAGE_CENTER_OFFSET, WORLD_TO_COORD,
 };
@@ -124,10 +128,12 @@ pub enum Frame379SetupEntrySource {
     CompleteRetailBuildUnitsEntry,
 }
 
-/// Source attestation for the missing completed-worldgen/starting-Village entry image.
+/// Source attestation for the missing post-Market `Setup::build_units` entry image.
 ///
 /// The post-`place_all` checksum is a locally walked runtime image, not a value copied from the
-/// replay. The entry snapshot is later because starting-Village construction mutates World.
+/// replay. `post_place_all_random_state` belongs to the earlier procedural-map boundary;
+/// `entry_random_state` belongs to the later captured entry Sim after Village and Market setup.
+/// They are deliberately separate because Market fine probes consume `GameAccess::game_random`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame379SetupEntryCapture {
     pub revision: u64,
@@ -137,6 +143,7 @@ pub struct Frame379SetupEntryCapture {
     pub entry_sim_sha256: [u8; 32],
     pub post_place_all_world_checksum: WorldChecksum,
     pub post_place_all_random_state: i32,
+    pub entry_random_state: i32,
     pub terrain_source_digest: [u8; 32],
     pub mountain_height_receipt_sha256: [u8; 32],
 }
@@ -150,6 +157,7 @@ pub struct Frame379SetupEntryReceipt {
     pub entry_sim_sha256: [u8; 32],
     pub post_place_all_world_checksum: WorldChecksum,
     pub post_place_all_random_state: i32,
+    pub entry_random_state: i32,
     pub terrain_source_digest: [u8; 32],
     pub mountain_height_receipt_sha256: [u8; 32],
     pub terrain_query: TerrainTcoordZReceipt,
@@ -179,6 +187,7 @@ pub enum Frame379SetupEntryBindError {
     PlaceAllDidNotComplete,
     PlaceAllChecksumMismatch,
     PlaceAllRandomStateMismatch,
+    EntryRandomStateMismatch,
     MissingTerrainSourceIdentity,
     WrongTerrainSource,
     TerrainMountainReceiptMismatch,
@@ -476,6 +485,7 @@ pub enum Frame379SetupError {
         o: i32,
     },
     RegistryNotDenseEquivalent,
+    StartingMarketAuthorityMismatch,
     SetupReceipt(BuildUnitsReceiptError),
     UnsupportedCanonicalSnapshot(SaveError),
 }
@@ -832,8 +842,9 @@ fn append_world_checksum(image: &mut Vec<u8>, checksum: &WorldChecksum) {
 ///
 /// Starting-Village construction changes World after `place_all`, so equality of those two
 /// World checksums would be false. The capture instead attests both boundaries. This binder
-/// checks the earlier value against the executable `place_all` receipt and independently joins
-/// the later snapshot to the canonical Village Build, City, intrusive World link, and terrain Z.
+/// checks the earlier values against the executable `place_all` receipt and independently joins
+/// the later snapshot and RNG state to the canonical Village/Market Builds, City, intrusive World
+/// links, and terrain Z.
 /// It never reads a checksum embedded in the recording.
 pub fn bind_captured_frame379_setup_entry(
     replay: &Replay,
@@ -909,16 +920,16 @@ pub fn bind_captured_frame379_setup_entry(
     {
         return Err(Frame379SetupEntryBindError::PlaceAllDidNotComplete);
     }
-    if capture.post_place_all_world_checksum != place_all.checksum_after
-        || place_all.checksum_after.bytes != entry.map.world.checksum_sections().bytes
-    {
+    if capture.post_place_all_world_checksum != place_all.checksum_after {
         return Err(Frame379SetupEntryBindError::PlaceAllChecksumMismatch);
     }
     if place_all.random_state_before != PLACE_ALL_RANDOM_STATE_BEFORE
         || capture.post_place_all_random_state != place_all.random_state_after
-        || entry.world.random.state() != place_all.random_state_after
     {
         return Err(Frame379SetupEntryBindError::PlaceAllRandomStateMismatch);
+    }
+    if capture.entry_random_state != entry.world.random.state() {
+        return Err(Frame379SetupEntryBindError::EntryRandomStateMismatch);
     }
 
     if terrain.source_digest == [0; 32] {
@@ -1055,7 +1066,7 @@ pub fn bind_captured_frame379_setup_entry(
     }
 
     let entry_world_checksum = entry.map.world.checksum_sections();
-    let mut image = b"don-frame379-setup-entry-v1".to_vec();
+    let mut image = b"don-frame379-setup-entry-v2".to_vec();
     image.extend_from_slice(&capture.revision.to_le_bytes());
     image.extend_from_slice(&replay_file_sha256);
     image.extend_from_slice(&capture.executable_sha256);
@@ -1064,6 +1075,7 @@ pub fn bind_captured_frame379_setup_entry(
     append_world_checksum(&mut image, &place_all.checksum_after);
     image.extend_from_slice(&place_all.random_state_before.to_le_bytes());
     image.extend_from_slice(&place_all.random_state_after.to_le_bytes());
+    image.extend_from_slice(&capture.entry_random_state.to_le_bytes());
     image.extend_from_slice(&terrain.source_digest);
     image.extend_from_slice(&mountain_height_receipt_sha256);
     image.extend_from_slice(&terrain_query.returned_z.to_le_bytes());
@@ -1075,7 +1087,7 @@ pub fn bind_captured_frame379_setup_entry(
     image.extend_from_slice(&DUTCH_STARTING_MARKET_O.to_le_bytes());
     image.extend_from_slice(&market.city.to_le_bytes());
     append_world_checksum(&mut image, &entry_world_checksum);
-    image.extend_from_slice(&entry.world.random.state().to_le_bytes());
+    image.extend_from_slice(&capture.entry_random_state.to_le_bytes());
     let composition_digest = sha256(&image);
     let worldgen = Frame379WorldgenAuthority {
         revision: capture.revision,
@@ -1083,7 +1095,7 @@ pub fn bind_captured_frame379_setup_entry(
         source: Frame379WorldgenSource::CompletedGreatLakesWorldgenAndStartingVillage,
         replay_file_sha256,
         world_checksum: entry_world_checksum,
-        random_state: entry.world.random.state(),
+        random_state: capture.entry_random_state,
     };
     Ok(Frame379SetupEntryReceipt {
         worldgen,
@@ -1092,6 +1104,7 @@ pub fn bind_captured_frame379_setup_entry(
         entry_sim_sha256,
         post_place_all_world_checksum: place_all.checksum_after.clone(),
         post_place_all_random_state: place_all.random_state_after,
+        entry_random_state: capture.entry_random_state,
         terrain_source_digest: terrain.source_digest,
         mountain_height_receipt_sha256,
         terrain_query,
@@ -1570,7 +1583,9 @@ fn canonical_composition_digest(
 
 /// Execute and validate the complete seven-call setup chronology downstream of world generation.
 ///
-/// `states[0]` is the completed-worldgen/starting-Village seam. `states[n+1]` must be the exact
+/// `states[0]` is the captured `Setup::build_units` entry seam. This base adapter starts from that
+/// oracle and does not claim the preceding Market lifecycle; callers which require that stronger
+/// claim use `produce_frame379_setup_with_starting_market`. `states[n+1]` must be the exact
 /// canonical Sim immediately after call `n` completed. Every call supplies the native detailed
 /// receipt plus a complete receiver authority; placement probes and direct RNG draws are
 /// recomputed here.
@@ -1869,6 +1884,59 @@ pub fn produce_frame379_setup(
         canonical_world_checksum: final_state.map.world.checksum_sections(),
         canonical_random_state: final_state.world.random.state(),
     })
+}
+
+/// Revalidate the digest-bound Market lifecycle join against its exact post-Market Sim.
+pub fn validate_golden_starting_market_setup_entry_authority(
+    worldgen: &Frame379WorldgenAuthority,
+    entry: &Sim,
+    starting_market: &GoldenStartingMarketSetupEntryAuthority,
+) -> Result<(), Frame379SetupError> {
+    if starting_market.revision == 0
+        || starting_market.composition_digest == [0; 32]
+        || starting_market.composition_digest
+            != golden_starting_market_setup_entry_digest(starting_market)
+        || starting_market.schema_version != GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION
+        || starting_market.replay_file_sha256 != worldgen.replay_file_sha256
+        || starting_market.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || starting_market.native_trace_sha256 == [0; 32]
+        || starting_market.before_sim_sha256 == [0; 32]
+        || starting_market.entry_sim_sha256 == [0; 32]
+        || starting_market.before_sim_sha256 == starting_market.entry_sim_sha256
+        || starting_market.footprint_receipt_sha256 == [0; 32]
+        || starting_market.market_build_o != DUTCH_STARTING_MARKET_O
+        || starting_market.market_city_slot != 0
+        || starting_market.space_grade != 4
+        || starting_market.random_state_after != worldgen.random_state
+        || starting_market.source_produced_city_bytes == 0
+    {
+        return Err(Frame379SetupError::StartingMarketAuthorityMismatch);
+    }
+    let entry_sim_sha256 = frame379_setup_snapshot_sha256(entry)?;
+    if entry_sim_sha256 != starting_market.entry_sim_sha256
+        || entry.world.random.state() != starting_market.random_state_after
+    {
+        return Err(Frame379SetupError::StartingMarketAuthorityMismatch);
+    }
+    Ok(())
+}
+
+/// Stronger setup adapter for callers which claim the source-exact Dutch Market lifecycle, not
+/// merely the independently captured post-Market setup-entry oracle.
+pub fn produce_frame379_setup_with_starting_market(
+    replay: &Replay,
+    states: &[&Sim],
+    completed_inits: &[Frame379CompletedInitAuthority],
+    worldgen: &Frame379WorldgenAuthority,
+    starting_market: &GoldenStartingMarketSetupEntryAuthority,
+    leader: &Frame379LeaderSetupAuthority,
+) -> Result<Frame379SetupReceipt, Frame379SetupError> {
+    if states.len() != SETUP_CALLS + 1 || completed_inits.len() != SETUP_CALLS {
+        return Err(Frame379SetupError::WrongReceiptCount);
+    }
+    let entry = states[0];
+    validate_golden_starting_market_setup_entry_authority(worldgen, entry, starting_market)?;
+    produce_frame379_setup(replay, states, completed_inits, worldgen, leader)
 }
 
 /// Atomic ownership-transfer boundary for the canonical post-setup Sim.

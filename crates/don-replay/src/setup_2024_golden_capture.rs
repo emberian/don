@@ -1,10 +1,10 @@
 //! Minimal retail-oracle contract for the supported 2024 golden replay.
 //!
 //! The replay file does not contain the generated setup state.  This module therefore makes
-//! the smallest complete capture bundle explicit: setup entry, seven adjacent completed Unit
-//! receivers, the post-frame-zero/pre-command image, the serial-1 after-image, and the first
-//! post-command tick at frame 2.  Later frame-379/384/391 captures are separate, optional
-//! manifests and cannot substitute for this prefix.
+//! the smallest complete oracle bundle explicit: post-Market setup entry, seven adjacent
+//! completed Unit receivers, the post-frame-zero/pre-command image, the serial-1 after-image, and
+//! the first post-command tick at frame 2. A separate two-image transaction manifest is required
+//! to prove how retail produced the Market before this oracle boundary.
 //!
 //! Every Sim hash is over canonical DoNSave bytes from the supported retail executable.  The
 //! command-entry image is intentionally independent of the frame-zero setup image: retail's
@@ -36,6 +36,11 @@ use crate::setup_2024_frame379::{
     Frame379SetupEntryReceipt, Frame379SetupEntrySource, Frame379SetupReceipt,
     DUTCH_STARTING_MARKET_O, DUTCH_STARTING_MARKET_TYPE, OWNER, REPLAY_FILE_SHA256, SETUP_CALLS,
 };
+use crate::setup_2024_starting_market::{
+    golden_starting_market_setup_entry_digest, GoldenStartingMarketCapture,
+    GoldenStartingMarketCaptureSource, GoldenStartingMarketCityReceipt,
+    GoldenStartingMarketSetupEntryAuthority, GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION,
+};
 use crate::setup_unit_member_authority::{
     bind_canonical_setup_members, CanonicalSetupMemberError, CanonicalSetupMemberSource,
     CanonicalSetupSnapshotAuthority,
@@ -43,10 +48,13 @@ use crate::setup_unit_member_authority::{
 use crate::setup_units_producer::StableUnitIdentityReceipt;
 use crate::world_owner_frontier::sha256;
 
-/// Schema 2 makes the unconditional Dutch Market after-image mandatory.  A historical
-/// center-plus-seven capture description cannot validate as the golden setup.
+/// Schema 2 makes the unconditional Dutch Market after-image mandatory. This is an oracle
+/// topology: it proves the post-Market setup state, not the Market lifecycle which produced it.
 pub const GOLDEN_CAPTURE_SCHEMA_VERSION: u64 = 2;
 pub const MINIMAL_UNIQUE_SIM_SNAPSHOTS: usize = 11;
+pub const GOLDEN_MARKET_TRANSACTION_SCHEMA_VERSION: u64 =
+    GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION;
+pub const GOLDEN_MARKET_TRANSACTION_UNIQUE_SIM_SNAPSHOTS: usize = 2;
 pub const FIRST_POST_COMMAND_TICK_FRAME: i32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,9 +89,9 @@ pub struct Frame2PostTickCapture {
     pub checkpoint_sim_sha256: [u8; 32],
 }
 
-/// Complete minimal capture manifest.  The seven receiver captures form eight adjacent
-/// frame-zero images; the remaining three images are frame-1 command entry, frame-1 command
-/// return, and frame-2 post-tick.
+/// Complete minimal oracle manifest. The seven receiver captures form eight adjacent frame-zero
+/// images; the remaining three images are frame-1 command entry, frame-1 command return, and
+/// frame-2 post-tick. This manifest intentionally begins after the Market transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldenCaptureManifest {
     pub schema_version: u64,
@@ -230,6 +238,155 @@ pub fn validate_golden_capture_manifest(
         return Err(GoldenCaptureManifestError::BrokenFrame2TickLink);
     }
     Ok(())
+}
+
+/// Separate two-image contract for callers which need to prove the Market transaction rather
+/// than begin from the independently captured post-Market oracle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketTransactionManifest {
+    pub schema_version: u64,
+    pub starting_market_o: i32,
+    pub starting_market_type: i32,
+    pub transaction: GoldenStartingMarketCapture,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketTransactionError {
+    Oracle(GoldenCaptureManifestError),
+    WrongSchemaVersion,
+    MissingStartingMarketContract,
+    MissingCaptureRevision,
+    WrongCaptureSource,
+    ReplayMismatch,
+    UnsupportedExecutable,
+    MissingSnapshotDigest,
+    MissingTraceIdentity,
+    IdenticalBeforeAfterImages,
+    BrokenOracleLink,
+    StartingMarketReceiptMismatch,
+    StartingMarketSetupEntryMismatch,
+}
+
+impl fmt::Display for GoldenStartingMarketTransactionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "2024 golden Market transaction refused: {self:?}")
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketTransactionError {}
+
+impl From<GoldenCaptureManifestError> for GoldenStartingMarketTransactionError {
+    fn from(value: GoldenCaptureManifestError) -> Self {
+        Self::Oracle(value)
+    }
+}
+
+pub fn validate_golden_starting_market_transaction_manifest(
+    transaction: &GoldenStartingMarketTransactionManifest,
+    oracle: &GoldenCaptureManifest,
+) -> Result<(), GoldenStartingMarketTransactionError> {
+    validate_golden_capture_manifest(oracle)?;
+    let capture = &transaction.transaction;
+    if transaction.schema_version != GOLDEN_MARKET_TRANSACTION_SCHEMA_VERSION {
+        return Err(GoldenStartingMarketTransactionError::WrongSchemaVersion);
+    }
+    if transaction.starting_market_o != DUTCH_STARTING_MARKET_O
+        || transaction.starting_market_type != DUTCH_STARTING_MARKET_TYPE
+    {
+        return Err(GoldenStartingMarketTransactionError::MissingStartingMarketContract);
+    }
+    if capture.revision == 0 {
+        return Err(GoldenStartingMarketTransactionError::MissingCaptureRevision);
+    }
+    if capture.source
+        != GoldenStartingMarketCaptureSource::CompleteRetailLeaderProduceBuildingReturn
+    {
+        return Err(GoldenStartingMarketTransactionError::WrongCaptureSource);
+    }
+    if capture.replay_file_sha256 != REPLAY_FILE_SHA256 {
+        return Err(GoldenStartingMarketTransactionError::ReplayMismatch);
+    }
+    if capture.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
+        return Err(GoldenStartingMarketTransactionError::UnsupportedExecutable);
+    }
+    let zero = [0; 32];
+    if capture.before_sim_sha256 == zero || capture.after_sim_sha256 == zero {
+        return Err(GoldenStartingMarketTransactionError::MissingSnapshotDigest);
+    }
+    if capture.native_trace_sha256 == zero || capture.footprint_receipt_sha256 == zero {
+        return Err(GoldenStartingMarketTransactionError::MissingTraceIdentity);
+    }
+    if capture.before_sim_sha256 == capture.after_sim_sha256 {
+        return Err(GoldenStartingMarketTransactionError::IdenticalBeforeAfterImages);
+    }
+    if capture.after_sim_sha256 != oracle.setup_entry.entry_sim_sha256 {
+        return Err(GoldenStartingMarketTransactionError::BrokenOracleLink);
+    }
+    Ok(())
+}
+
+/// Join the separate pre/post Market transaction, its exact City receipt, and schema-v2's
+/// post-Market setup-entry oracle. Merely finding Build `o=2001` in that oracle is not a
+/// substitute for this adapter when a caller claims lifecycle reconstruction.
+pub fn bind_golden_starting_market_setup_entry(
+    transaction: &GoldenStartingMarketTransactionManifest,
+    oracle: &GoldenCaptureManifest,
+    market: &GoldenStartingMarketCityReceipt,
+    setup_entry: &Frame379SetupEntryReceipt,
+) -> Result<GoldenStartingMarketSetupEntryAuthority, GoldenStartingMarketTransactionError> {
+    validate_golden_starting_market_transaction_manifest(transaction, oracle)?;
+    let capture = &transaction.transaction;
+    if market.capture_revision != capture.revision
+        || market.source != capture.source
+        || market.placement.plan.replay_file_sha256 != capture.replay_file_sha256
+        || market.executable_sha256 != capture.executable_sha256
+        || market.before_sim_sha256 != capture.before_sim_sha256
+        || market.after_sim_sha256 != capture.after_sim_sha256
+        || market.native_trace_sha256 != capture.native_trace_sha256
+        || market.footprint_receipt_sha256 != capture.footprint_receipt_sha256
+        || market.fine_random_draws != capture.fine_random_draws
+        || market.selected_placement_coord != capture.selected_placement_coord
+        || capture.coarse_random_draws != 0
+        || market.source_produced_city_bytes != market.after_cities.bytes_walked
+        || market.source_produced_city_bytes == 0
+        || market.installed_in_scoreboard
+        || market.placement.installed_in_scoreboard
+    {
+        return Err(GoldenStartingMarketTransactionError::StartingMarketReceiptMismatch);
+    }
+    if setup_entry.source != Frame379SetupEntrySource::CompleteRetailBuildUnitsEntry
+        || setup_entry.executable_sha256 != capture.executable_sha256
+        || setup_entry.worldgen.replay_file_sha256 != capture.replay_file_sha256
+        || setup_entry.entry_sim_sha256 != capture.after_sim_sha256
+        || setup_entry.center_build_row != market.center_build_row
+        || setup_entry.market_build_row != market.market_build_row
+        || setup_entry.market_build_o != market.market_build_o
+        || setup_entry.market_city_slot != market.market_city_slot
+        || setup_entry.entry_random_state != market.random_state_after
+        || setup_entry.worldgen.random_state != market.random_state_after
+    {
+        return Err(GoldenStartingMarketTransactionError::StartingMarketSetupEntryMismatch);
+    }
+    let mut authority = GoldenStartingMarketSetupEntryAuthority {
+        revision: market.capture_revision,
+        composition_digest: [0; 32],
+        schema_version: transaction.schema_version,
+        replay_file_sha256: capture.replay_file_sha256,
+        executable_sha256: capture.executable_sha256,
+        before_sim_sha256: capture.before_sim_sha256,
+        entry_sim_sha256: capture.after_sim_sha256,
+        native_trace_sha256: capture.native_trace_sha256,
+        footprint_receipt_sha256: capture.footprint_receipt_sha256,
+        center_build_row: market.center_build_row,
+        market_build_row: market.market_build_row,
+        market_build_o: market.market_build_o,
+        market_city_slot: market.market_city_slot,
+        space_grade: market.space_grade,
+        random_state_after: market.random_state_after,
+        source_produced_city_bytes: market.source_produced_city_bytes,
+    };
+    authority.composition_digest = golden_starting_market_setup_entry_digest(&authority);
+    Ok(authority)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -900,6 +1057,7 @@ mod tests {
                     bytes: 0,
                 },
                 post_place_all_random_state: 1,
+                entry_random_state: 2,
                 terrain_source_digest: hash(40),
                 mountain_height_receipt_sha256: hash(41),
             },
@@ -942,9 +1100,47 @@ mod tests {
     }
 
     #[test]
-    fn minimal_manifest_is_exactly_eleven_adjacent_sim_images() {
+    fn minimal_oracle_manifest_is_exactly_eleven_adjacent_sim_images() {
         assert_eq!(MINIMAL_UNIQUE_SIM_SNAPSHOTS, 11);
         validate_golden_capture_manifest(&manifest()).unwrap();
+    }
+
+    fn market_transaction(
+        oracle: &GoldenCaptureManifest,
+    ) -> GoldenStartingMarketTransactionManifest {
+        GoldenStartingMarketTransactionManifest {
+            schema_version: GOLDEN_MARKET_TRANSACTION_SCHEMA_VERSION,
+            starting_market_o: DUTCH_STARTING_MARKET_O,
+            starting_market_type: DUTCH_STARTING_MARKET_TYPE,
+            transaction: GoldenStartingMarketCapture {
+                revision: 1,
+                source:
+                    GoldenStartingMarketCaptureSource::CompleteRetailLeaderProduceBuildingReturn,
+                replay_file_sha256: REPLAY_FILE_SHA256,
+                executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+                before_sim_sha256: hash(12),
+                after_sim_sha256: oracle.setup_entry.entry_sim_sha256,
+                native_trace_sha256: hash(42),
+                footprint_receipt_sha256: hash(43),
+                coarse_random_draws: 0,
+                fine_random_draws: Vec::new(),
+                selected_placement_coord: [0; 2],
+            },
+        }
+    }
+
+    #[test]
+    fn market_transaction_is_separate_two_image_contract() {
+        let oracle = manifest();
+        let mut transaction = market_transaction(&oracle);
+        assert_eq!(GOLDEN_MARKET_TRANSACTION_UNIQUE_SIM_SNAPSHOTS, 2);
+        validate_golden_starting_market_transaction_manifest(&transaction, &oracle).unwrap();
+
+        transaction.transaction.after_sim_sha256 = hash(99);
+        assert_eq!(
+            validate_golden_starting_market_transaction_manifest(&transaction, &oracle),
+            Err(GoldenStartingMarketTransactionError::BrokenOracleLink)
+        );
     }
 
     #[test]

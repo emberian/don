@@ -84,6 +84,13 @@ exactly one for each valid fine probe. There are no later Market-specific RNG ca
 count and selected site are unresolved until the World placement receipt supplies the four-probe
 mask.
 
+This is the main simulation stream, not a private placement RNG. The retail call site
+`0x006E2BF4` loads `ECX` from `0x00C06184`; the PDB identifies that object as
+`GameAccess::game_random`. `Random::get` at `0x00A39D70` advances the pointed-to LCG state before
+returning the scaled low-word result. Consequently the post-Market `Setup::build_units` capture
+must carry an RNG state distinct from the earlier post-`place_all` receipt whenever at least one
+fine probe succeeds.
+
 ## Allocation, City link and activation chronology
 
 Given a World-approved fine site, the remaining source-selected call order is:

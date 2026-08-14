@@ -74,6 +74,8 @@ pub const FRESH_CITY_FLAGS: u16 = 0x4011;
 pub const MARKET_CITY_FLAGS: u16 = FRESH_CITY_FLAGS | MARKET_CITY_FLAG;
 pub const MARKET_BUILD_QUEUE_SLOTS: usize = 20;
 pub const MARKET_DOMAIN: i32 = 0;
+/// Independent schema for the two-image pre/post Market lifecycle contract.
+pub const GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION: u64 = 1;
 pub const MARKET_FOOTPRINT: Footprint = Footprint {
     x_size: 4,
     y_size: 4,
@@ -399,9 +401,11 @@ pub struct GoldenMarketCityChecksumByteWrite {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldenStartingMarketCityReceipt {
     pub placement: GoldenStartingMarketPlacementReceipt,
+    pub capture_revision: u64,
     pub source: GoldenStartingMarketCaptureSource,
     pub executable_sha256: [u8; 32],
     pub native_trace_sha256: [u8; 32],
+    pub footprint_receipt_sha256: [u8; 32],
     pub before_sim_sha256: [u8; 32],
     pub after_sim_sha256: [u8; 32],
     pub before_cities: CitiesChannelValue,
@@ -415,10 +419,58 @@ pub struct GoldenStartingMarketCityReceipt {
     pub random_state_before: i32,
     pub random_state_after: i32,
     pub fine_random_draws: Vec<GoldenMarketFineRandomDraw>,
+    pub selected_placement_coord: [i32; 2],
     /// One complete active empty-caravan City remains a 114-byte walk; this receipt owns
     /// the exact changed image, not a second traversal.
     pub source_produced_city_bytes: u64,
     pub installed_in_scoreboard: bool,
+}
+
+/// Immutable join between the separate schema-v1 Market lifecycle capture, the exact Market
+/// transaction receipt, and the schema-v2 oracle's post-Market `Setup::build_units` entry image.
+/// Setup production consumes this authority instead of accepting an object-shaped post-image as
+/// proof that the Market transaction ran.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenStartingMarketSetupEntryAuthority {
+    pub revision: u64,
+    pub composition_digest: [u8; 32],
+    pub schema_version: u64,
+    pub replay_file_sha256: [u8; 32],
+    pub executable_sha256: [u8; 32],
+    pub before_sim_sha256: [u8; 32],
+    pub entry_sim_sha256: [u8; 32],
+    pub native_trace_sha256: [u8; 32],
+    pub footprint_receipt_sha256: [u8; 32],
+    pub center_build_row: usize,
+    pub market_build_row: usize,
+    pub market_build_o: i32,
+    pub market_city_slot: i16,
+    pub space_grade: i32,
+    pub random_state_after: i32,
+    pub source_produced_city_bytes: u64,
+}
+
+/// Stable digest over every public setup-entry join claim other than the digest itself.
+pub fn golden_starting_market_setup_entry_digest(
+    authority: &GoldenStartingMarketSetupEntryAuthority,
+) -> [u8; 32] {
+    let mut image = b"don-golden-starting-market-setup-entry-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.extend_from_slice(&authority.schema_version.to_le_bytes());
+    image.extend_from_slice(&authority.replay_file_sha256);
+    image.extend_from_slice(&authority.executable_sha256);
+    image.extend_from_slice(&authority.before_sim_sha256);
+    image.extend_from_slice(&authority.entry_sim_sha256);
+    image.extend_from_slice(&authority.native_trace_sha256);
+    image.extend_from_slice(&authority.footprint_receipt_sha256);
+    image.extend_from_slice(&(authority.center_build_row as u64).to_le_bytes());
+    image.extend_from_slice(&(authority.market_build_row as u64).to_le_bytes());
+    image.extend_from_slice(&authority.market_build_o.to_le_bytes());
+    image.extend_from_slice(&authority.market_city_slot.to_le_bytes());
+    image.extend_from_slice(&authority.space_grade.to_le_bytes());
+    image.extend_from_slice(&authority.random_state_after.to_le_bytes());
+    image.extend_from_slice(&authority.source_produced_city_bytes.to_le_bytes());
+    sha256(&image)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -806,9 +858,11 @@ pub fn bind_golden_starting_market_city(
     let city_checksum_writes = city_checksum_writes(before_city, after_city, site.space_grade);
     Ok(GoldenStartingMarketCityReceipt {
         placement,
+        capture_revision: capture.revision,
         source: capture.source,
         executable_sha256: capture.executable_sha256,
         native_trace_sha256: capture.native_trace_sha256,
+        footprint_receipt_sha256: capture.footprint_receipt_sha256,
         before_sim_sha256,
         after_sim_sha256,
         before_cities,
@@ -822,6 +876,7 @@ pub fn bind_golden_starting_market_city(
         random_state_before: before.world.random.state(),
         random_state_after: after.world.random.state(),
         fine_random_draws: capture.fine_random_draws.clone(),
+        selected_placement_coord: capture.selected_placement_coord,
         source_produced_city_bytes: after_cities.bytes_walked,
         installed_in_scoreboard: false,
     })
