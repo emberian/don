@@ -30,7 +30,12 @@ The City clear-loop prelude begins at `0x006B9746`; its active-row arm writes:
 | `0x006B976F` | `gatherers +0x5C` | `0` |
 | `0x006B9789` | `busy +0x5B` | `0` |
 | `0x006B97A3` | `free +0x5A` | `0` |
-| `0x006B97BD` | `peasant_dist +0x50` | `100` |
+| `0x006B97BD` | `peasant_dist +0x50` | `City slot + 100` (low signed short) |
+
+The instruction immediately before the City-pointer loads is
+`lea esi,[edx+0x64]`; the final store copies `si`, not a loop-invariant constant. The
+current replay fixtures have only City slot zero and therefore still receive 100, while
+the generic owner preserves the slot-dependent value for later Cities.
 
 The owning Unit-loop prelude begins at `0x006B9E2C`, with the per-row body at `0x006B9E50`.
 The body admits an active, valid Unit only after the `unit_masks & 1 == 0` gate and the

@@ -28,6 +28,7 @@ use crate::setup_units_producer::{
     validate_build_units_prefix_receipt, BuildUnitsPlan, BuildUnitsPrefixReceipt,
     BuildUnitsReceiptError, PlacementOutcomeReceipt, StableUnitIdentityReceipt, StartingUnitPhase,
 };
+use crate::starting_city_census_clear::initial_peasant_dist_for_slot;
 
 pub const LEADER_PLAN_STRATEGY_VA: u32 = 0x006b_9620;
 pub const CITY_CENSUS_CLEAR_LOOP_BEGIN_VA: u32 = 0x006b_9746;
@@ -38,7 +39,6 @@ pub const VECTOR_DIST_VA: u32 = 0x0046_cff0;
 
 pub const CITIZEN_TYPE: i32 = 50;
 pub const KOREAN_CITIZEN_TYPE: i32 = 51;
-pub const INITIAL_PEASANT_DIST: i16 = 100;
 pub const COORDS_PER_WCOORD: i32 = 0x300;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -503,7 +503,7 @@ pub fn apply_starting_city_unit_census(
             if !city.active() {
                 continue;
             }
-            city.peasant_dist = INITIAL_PEASANT_DIST;
+            city.peasant_dist = initial_peasant_dist_for_slot(city.city);
             city.free = 0;
             city.busy = 0;
             city.gatherers = 0;
