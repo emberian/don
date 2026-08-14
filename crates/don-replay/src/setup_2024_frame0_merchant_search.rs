@@ -4,9 +4,10 @@
 //! (`0x00609180`).  For the supported Type-62 Merchant, the static replay row proves an
 //! upgrade level of zero, hence a gather radius of four.  The prefix below reproduces the
 //! cached-`good_obj` probe and then the retail `circle_x/circle_y` scan against the canonical
-//! terrain owner.  The first fact that owner cannot supply is the result of
-//! `ObjectsData::find_good_at(WCoord,WCoord,who,0,0)` (`0x0065bec0`): `Sim` has no canonical
-//! frame-zero base-Good object pool.  That exact call is emitted as a digest-bound child.
+//! terrain owner. Each reached
+//! `ObjectsData::find_good_at(WCoord,WCoord,who,0,0)` (`0x0065bec0`) call is emitted as a
+//! digest-bound child. The sibling Good module now resolves those children and resumes either
+//! the cached/full scan or the outer Merchant candidate loop.
 //!
 //! If no terrain row can reach `find_good_at`, `calc_gather` returns zero, so
 //! `find_merchant_spot` returns zero without entering its 49-candidate loop.  That locally
@@ -50,6 +51,21 @@ pub enum Frame0MerchantCalcGatherScan {
     OrderedCircle,
 }
 
+/// Retail call site for one fixed-shape `calc_gather` invocation.
+///
+/// The outer candidate identity is part of every child digest. Candidate zero can use the
+/// same coordinates as the head call, so coordinates alone are not a sufficient chronology
+/// key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame0MerchantCalcGatherSite {
+    FindMerchantSpotHead,
+    GoodMerchantSpot {
+        candidate_index: usize,
+        tile_x: i32,
+        tile_y: i32,
+    },
+}
+
 /// Exact first unsourced call reached by the locally evaluated `calc_gather` prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame0MerchantGoodLookupRequest {
@@ -63,6 +79,7 @@ pub struct Frame0MerchantGoodLookupRequest {
     pub actor_uid: u16,
     pub actor_type: i32,
     pub calc_gather_call_va: u32,
+    pub calc_site: Frame0MerchantCalcGatherSite,
     pub calc_coord_x: i32,
     pub calc_coord_y: i32,
     pub upgrade_level: i32,
@@ -156,6 +173,19 @@ fn append_lookup(image: &mut Vec<u8>, request: &Frame0MerchantGoodLookupRequest)
         Frame0MerchantCalcGatherScan::CachedGoodObj => 0,
         Frame0MerchantCalcGatherScan::OrderedCircle => 1,
     });
+    match request.calc_site {
+        Frame0MerchantCalcGatherSite::FindMerchantSpotHead => image.push(0),
+        Frame0MerchantCalcGatherSite::GoodMerchantSpot {
+            candidate_index,
+            tile_x,
+            tile_y,
+        } => {
+            image.push(1);
+            image.extend_from_slice(&(candidate_index as u64).to_le_bytes());
+            image.extend_from_slice(&tile_x.to_le_bytes());
+            image.extend_from_slice(&tile_y.to_le_bytes());
+        }
+    }
 }
 
 pub fn frame0_merchant_good_lookup_digest(request: &Frame0MerchantGoodLookupRequest) -> [u8; 32] {
@@ -209,6 +239,9 @@ fn eligible_good_lookup(
     request: &Frame0MerchantSpotRequest,
     setup_authority_revision: u64,
     cached_good_obj: i16,
+    calc_site: Frame0MerchantCalcGatherSite,
+    calc_coord_x: i32,
+    calc_coord_y: i32,
     scan: Frame0MerchantCalcGatherScan,
     circle_index: usize,
     tile_x: i32,
@@ -234,8 +267,9 @@ fn eligible_good_lookup(
         actor_uid: request.actor.uid,
         actor_type: request.actor.type_index,
         calc_gather_call_va: UNIT_CALC_GATHER_VA,
-        calc_coord_x: request.actor.x,
-        calc_coord_y: request.actor.y,
+        calc_site,
+        calc_coord_x,
+        calc_coord_y,
         upgrade_level: GOLDEN_MERCHANT_UPGRADE_LEVEL,
         gather_radius: GOLDEN_MERCHANT_GATHER_RADIUS,
         cached_good_obj,
@@ -255,18 +289,27 @@ fn eligible_good_lookup(
     Some(child)
 }
 
-fn first_head_good_lookup(
+/// Return the first `find_good_at` call after `after`, or the first call when `after` is
+/// absent, in one retail `calc_gather` invocation.
+///
+/// A failed cached probe resumes at ordered index zero. A failed ordered probe resumes at the
+/// following index. This is the exact fallthrough at `0x006095ac` in `calc_gather`.
+pub(crate) fn next_calc_gather_good_lookup(
     world: &World,
     request: &Frame0MerchantSpotRequest,
     setup_authority_revision: u64,
     cached_good_obj: i16,
+    calc_site: Frame0MerchantCalcGatherSite,
+    calc_coord_x: i32,
+    calc_coord_y: i32,
+    after: Option<&Frame0MerchantGoodLookupRequest>,
 ) -> Option<Frame0MerchantGoodLookupRequest> {
     let table = circle_table();
     let endpoint = table.ring_end[GOLDEN_MERCHANT_GATHER_RADIUS as usize] as usize;
-    let origin_x = TCoord::from_coord(Coord(request.actor.x)).0;
-    let origin_y = TCoord::from_coord(Coord(request.actor.y)).0;
+    let origin_x = TCoord::from_coord(Coord(calc_coord_x)).0;
+    let origin_y = TCoord::from_coord(Coord(calc_coord_y)).0;
 
-    if cached_good_obj >= 0 {
+    if after.is_none() && cached_good_obj >= 0 {
         let index = cached_good_obj as usize;
         if index < endpoint {
             let tile_x = origin_x.wrapping_add(i32::from(table.x[index]));
@@ -276,6 +319,9 @@ fn first_head_good_lookup(
                 request,
                 setup_authority_revision,
                 cached_good_obj,
+                calc_site,
+                calc_coord_x,
+                calc_coord_y,
                 Frame0MerchantCalcGatherScan::CachedGoodObj,
                 index,
                 tile_x,
@@ -286,7 +332,13 @@ fn first_head_good_lookup(
         }
     }
 
-    for index in 0..endpoint {
+    let ordered_start = match after.map(|child| child.scan) {
+        None | Some(Frame0MerchantCalcGatherScan::CachedGoodObj) => 0,
+        Some(Frame0MerchantCalcGatherScan::OrderedCircle) => after
+            .map(|child| child.circle_index.saturating_add(1))
+            .unwrap_or(0),
+    };
+    for index in ordered_start..endpoint {
         let tile_x = origin_x.wrapping_add(i32::from(table.x[index]));
         let tile_y = origin_y.wrapping_add(i32::from(table.y[index]));
         if let Some(child) = eligible_good_lookup(
@@ -294,6 +346,9 @@ fn first_head_good_lookup(
             request,
             setup_authority_revision,
             cached_good_obj,
+            calc_site,
+            calc_coord_x,
+            calc_coord_y,
             Frame0MerchantCalcGatherScan::OrderedCircle,
             index,
             tile_x,
@@ -303,6 +358,24 @@ fn first_head_good_lookup(
         }
     }
     None
+}
+
+fn first_head_good_lookup(
+    world: &World,
+    request: &Frame0MerchantSpotRequest,
+    setup_authority_revision: u64,
+    cached_good_obj: i16,
+) -> Option<Frame0MerchantGoodLookupRequest> {
+    next_calc_gather_good_lookup(
+        world,
+        request,
+        setup_authority_revision,
+        cached_good_obj,
+        Frame0MerchantCalcGatherSite::FindMerchantSpotHead,
+        request.actor.x,
+        request.actor.y,
+        None,
+    )
 }
 
 fn local_zero_proof(
@@ -475,6 +548,74 @@ mod tests {
         let child = first_head_good_lookup(&sim.map.world, &request, 7, 8).unwrap();
         assert_eq!(child.scan, Frame0MerchantCalcGatherScan::CachedGoodObj);
         assert_eq!(child.circle_index, 8);
+    }
+
+    #[test]
+    fn failed_cached_probe_resumes_at_ordered_zero_then_advances() {
+        let (mut sim, _, request) = setup();
+        let table = circle_table();
+        let origin_x = TCoord::from_coord(Coord(request.actor.x)).0;
+        let origin_y = TCoord::from_coord(Coord(request.actor.y)).0;
+        for index in [0usize, 8, 9] {
+            let tx = origin_x + i32::from(table.x[index]);
+            let ty = origin_y + i32::from(table.y[index]);
+            *sim.map.world.tmask_mut(tx, ty) = tflag::RESOURCE;
+        }
+        let cached = first_head_good_lookup(&sim.map.world, &request, 7, 8).unwrap();
+        assert_eq!(cached.scan, Frame0MerchantCalcGatherScan::CachedGoodObj);
+        let ordered_zero = next_calc_gather_good_lookup(
+            &sim.map.world,
+            &request,
+            7,
+            8,
+            Frame0MerchantCalcGatherSite::FindMerchantSpotHead,
+            request.actor.x,
+            request.actor.y,
+            Some(&cached),
+        )
+        .unwrap();
+        assert_eq!(
+            ordered_zero.scan,
+            Frame0MerchantCalcGatherScan::OrderedCircle
+        );
+        assert_eq!(ordered_zero.circle_index, 0);
+        let ordered_eight = next_calc_gather_good_lookup(
+            &sim.map.world,
+            &request,
+            7,
+            8,
+            Frame0MerchantCalcGatherSite::FindMerchantSpotHead,
+            request.actor.x,
+            request.actor.y,
+            Some(&ordered_zero),
+        )
+        .unwrap();
+        assert_eq!(ordered_eight.circle_index, 8);
+    }
+
+    #[test]
+    fn outer_site_identity_changes_the_lookup_digest() {
+        let (mut sim, _, request) = setup();
+        let tx = TCoord::from_coord(Coord(request.actor.x)).0;
+        let ty = TCoord::from_coord(Coord(request.actor.y)).0;
+        *sim.map.world.tmask_mut(tx, ty) = tflag::RESOURCE;
+        let head = first_head_good_lookup(&sim.map.world, &request, 7, -1).unwrap();
+        let outer = next_calc_gather_good_lookup(
+            &sim.map.world,
+            &request,
+            7,
+            -1,
+            Frame0MerchantCalcGatherSite::GoodMerchantSpot {
+                candidate_index: 0,
+                tile_x: tx,
+                tile_y: ty,
+            },
+            request.actor.x,
+            request.actor.y,
+            None,
+        )
+        .unwrap();
+        assert_ne!(head.request_sha256, outer.request_sha256);
     }
 
     #[test]

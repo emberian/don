@@ -2,9 +2,10 @@
 //!
 //! Retail reaches `Unit::think_merchant` at `0x005f4740` from the type-62 arm of
 //! `Unit::think`.  With `unit_masks & 0x0008_0000 != 0`, its first child is
-//! `Unit::unpack_merchant(3)` at `0x006038e0`.  The first input not owned by the replay is
-//! `Unit::find_merchant_spot` at `0x00603ab0`: it reads terrain, gather, invalid-location,
-//! and ordered Unit-collision state.  This module stops there and emits a typed request.
+//! `Unit::unpack_merchant(3)` at `0x006038e0`. This module retains the whole-call
+//! `Unit::find_merchant_spot` request. The sibling search/Good modules now source-own its
+//! gather, Good, terrain, and golden land invalid-location prefix and stop at the exact
+//! spatial `Unit::detect_unit_collision` child.
 //!
 //! A revisioned retail receipt can answer that request.  A false result is mutation-free but
 //! continues into `think_merchant`'s unported Good-object scan, so it produces a typed tail

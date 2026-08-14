@@ -111,13 +111,31 @@ If the entire radius-four terrain scan contains no reachable call, `calc_gather`
 so `find_merchant_spot` returns `NotFound` before its outer candidate loop; the local proof is
 composed directly into the existing `FAILED_UNPACK_TAIL_VA` boundary.
 
-The outer pieces already recovered for the next continuation are source-exact as well:
+The completed Good receipt now resumes `calc_gather` rather than ending at the child. A `-1`
+answer falls through from a cached probe to ordered index zero, or from an ordered probe to the
+following index. A found Type returns one immediately. Every completed prefix is rerun against
+the current World/Object/Good owners, so a stale object chain or changed Good slot is rejected.
+
+The outer pieces are source-exact as well:
 `move_x/move_y[0..radius[3])` supplies all 49 candidates in shipped order, and
 `good_merchant_spot` checks the four `(tx,ty)` / minus-one corner masks in order. Each requires
 valid TCoord bounds, no `0x4000`, `(low & 3) != 3`, and a nonnegative signed low byte before its
-own fixed-shape `calc_gather`. The later `invalid_loc` answer remains an installed movement-host
-fact, and the final collision call is the read-only `DETOUR_PROBE` shape; neither is crossed
-before the Good lookup is answered.
+own fixed-shape `calc_gather` at `(tx*192,ty*192)`.
+
+After that gather succeeds, `invalid_loc(tx,ty,0,0,0,0,0)` is locally complete for the golden
+land Merchant. The empty order queue leaves both optional flags clear. Retail reads the WData
+flags, then the TData surface/low bits and conditionally `WorldData::is_cliff_at`; the admitted
+spot has low bits zero, surface `0x00` or `0x10`, and returns zero. Its receipt binds all reached
+words and records the unchanged RNG.
+
+The next exact residual is `Unit::detect_unit_collision(tx*192,ty*192,1,1,0,0,0)` at
+`0x00617060`. Type 62's replay row has domain zero, `unit_flags & 0x20000 == 0`, and
+`unit_flags2 & (0x20|0x40) == 0`: it is neither siege, hero, nor supply. Retail therefore jumps
+past the flag-based early-zero arm and enters the spatial detector. The continuation emits this
+call with the complete ordered Good trace, candidate identity, source-owned `invalid_loc`
+receipt, raw type flags, and unchanged RNG. No empty-map collision result is guessed. A
+collision answer is now the precise prerequisite before the successful spot can reach
+`clear_partial_path`.
 
 No RNG call occurs. The legacy whole-call capture remains available for native composition and
 carries an independently captured canonical-Sim SHA-256; Don does not manufacture that snapshot

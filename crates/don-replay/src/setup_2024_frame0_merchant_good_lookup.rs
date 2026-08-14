@@ -14,6 +14,14 @@
 //! name is historical: it retains every base-Good slot, not only Oil. No state or RNG is
 //! mutated. A typed, digest-bound type-availability request is emitted rather than guessing
 //! the Leader/type graph.
+//!
+//! Completed lookup receipts are also consumed in retail order. A `-1` answer resumes the
+//! cached/full `calc_gather` circle after the exact probe that failed; a found Good enters the
+//! 49-position `find_merchant_spot` loop. The four `good_merchant_spot` terrain reads and the
+//! land-Merchant `invalid_loc(...,0,0,0,0,0)` return are source-owned. Golden Type 62 is
+//! non-siege, non-hero, and non-supply, so `detect_unit_collision(...,1,1,0,0,0)` bypasses its
+//! early-zero flag arm and reaches the still-unowned spatial detector. That exact call is the
+//! new typed frontier. No empty-map collision answer or whole-search checksum is synthesized.
 
 #![forbid(unsafe_code)]
 
@@ -32,10 +40,16 @@ use crate::groups_pre_pair_unit_authority::{
 use crate::initial::ReplayByteSpan;
 use crate::replay::{load_payload, Replay};
 use crate::setup_2024_frame0_merchant_search::{
-    validate_frame0_merchant_good_lookup_request, Frame0MerchantGoodLookupRequest,
-    Frame0MerchantSearchError, OBJECTS_FIND_GOOD_AT_WCOORD_VA,
+    advance_frame0_merchant_search, frame0_merchant_candidate_tiles,
+    good_merchant_spot_terrain_prefix, next_calc_gather_good_lookup,
+    validate_frame0_merchant_good_lookup_request, Frame0MerchantCalcGatherSite,
+    Frame0MerchantGoodLookupRequest, Frame0MerchantSearchError, Frame0MerchantSearchFrontier,
+    OBJECTS_FIND_GOOD_AT_WCOORD_VA, UNIT_DETECT_COLLISION_VA, UNIT_GOOD_MERCHANT_SPOT_VA,
+    UNIT_INVALID_LOC_VA,
 };
-use crate::setup_2024_frame0_merchant_unpack::Frame0MerchantSpotRequest;
+use crate::setup_2024_frame0_merchant_unpack::{
+    Frame0MerchantSpotRequest, MerchantSpotOutcome, FAILED_UNPACK_TAIL_VA, MERCHANT_RADIUS,
+};
 use crate::setup_2024_frame379::REPLAY_FILE_SHA256;
 use crate::setup_unit_member_authority::CanonicalSetupUnitMemberReceipt;
 use crate::world_owner_frontier::sha256;
@@ -43,6 +57,97 @@ use crate::world_owner_frontier::sha256;
 pub const LEADER_TYPE_AVAIL_VA: u32 = 0x006e_33a0;
 pub const GOOD_TERMINAL: i16 = -2;
 pub const NOT_FOUND: i32 = -1;
+
+/// One ordered `find_good_at` answer already consumed by `calc_gather`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantSearchGoodStep {
+    pub request: Frame0MerchantGoodLookupRequest,
+    pub receipt: Frame0MerchantGoodLookupReceipt,
+}
+
+/// Exact source-owned reads and return from `invalid_loc(tx,ty,0,0,0,0,0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantInvalidLocReceipt {
+    pub receipt_sha256: [u8; 32],
+    pub call_va: u32,
+    pub candidate_index: usize,
+    pub tile_x: i32,
+    pub tile_y: i32,
+    pub orders_empty: bool,
+    pub domain: i32,
+    pub world_x: i32,
+    pub world_y: i32,
+    pub world_flags: u16,
+    pub tile_mask: u16,
+    pub cliff_predicate_read: Option<bool>,
+    pub unit_masks: u32,
+    pub return_value: i32,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub rng_draws: u32,
+}
+
+/// First exact residual after a source-complete `good_merchant_spot` and `invalid_loc == 0`.
+///
+/// Golden Type 62 is land, non-siege, non-hero, and non-supply. Retail consequently jumps
+/// around the flag-based early-zero arm and enters the spatial collision detector. That
+/// detector is deliberately left as a typed child; no empty-map result is guessed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantCollisionRequest {
+    pub request_sha256: [u8; 32],
+    pub parent_request_sha256: [u8; 32],
+    pub search_trace_sha256: [u8; 32],
+    pub setup_composition_digest: [u8; 32],
+    pub setup_authority_revision: u64,
+    pub invocation_ordinal: usize,
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    pub actor_type: i32,
+    pub candidate_index: usize,
+    pub tile_x: i32,
+    pub tile_y: i32,
+    pub good_merchant_spot_call_va: u32,
+    pub gather_receipt_sha256: [u8; 32],
+    pub invalid_loc: Frame0MerchantInvalidLocReceipt,
+    pub call_va: u32,
+    pub coord_x: i32,
+    pub coord_y: i32,
+    pub footprint_x: i32,
+    pub footprint_y: i32,
+    pub arg5: i32,
+    pub arg6: i32,
+    pub arg7: i32,
+    pub type_domain: i32,
+    pub type_unit_flags: u32,
+    pub type_unit_flags2: u32,
+    pub type_is_siege: bool,
+    pub unit_is_hero: bool,
+    pub unit_is_supply: bool,
+    pub random_state: i32,
+}
+
+/// Source-complete `find_merchant_spot == 0` continuation into the unported Good-object tail.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame0MerchantCompletedSearchTailRequest {
+    pub parent: Frame0MerchantSpotRequest,
+    pub search_proof_sha256: [u8; 32],
+    pub completed_good_steps: usize,
+    pub head_calc_gather_returned_zero: bool,
+    pub find_merchant_spot_outcome: MerchantSpotOutcome,
+    pub next_va: u32,
+    pub reason: &'static str,
+    pub random_state_before: i32,
+    pub random_state_after: i32,
+    pub rng_draws: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame0MerchantSearchContinuationFrontier {
+    NeedsGoodLookup(Frame0MerchantGoodLookupRequest),
+    NeedsCollision(Frame0MerchantCollisionRequest),
+    FailedUnpackTail(Frame0MerchantCompletedSearchTailRequest),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame0MerchantObjectIdentity {
@@ -249,6 +354,11 @@ pub enum Frame0MerchantGoodLookupError {
     StaleTypeAvailRequest,
     MissingTypeAvailAuthorityDigest,
     InvalidTypeAvailCaptureDigest,
+    InvalidSearchReceiptDigest,
+    StaleSearchReceipt,
+    UnexpectedSearchStep,
+    UnsupportedMerchantDomain { domain: i32 },
+    WrongGoldenCollisionPredicates,
 }
 
 impl fmt::Display for Frame0MerchantGoodLookupError {
@@ -1124,11 +1234,437 @@ pub fn complete_frame0_merchant_good_lookup_from_rules(
         .map_err(Frame0MerchantTypeAvailError::Lookup)
 }
 
+/// Stable digest over the exact `invalid_loc` read receipt.
+pub fn frame0_merchant_invalid_loc_receipt_digest(
+    receipt: &Frame0MerchantInvalidLocReceipt,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-merchant-invalid-loc-v1".to_vec();
+    image.extend_from_slice(&receipt.call_va.to_le_bytes());
+    image.extend_from_slice(&(receipt.candidate_index as u64).to_le_bytes());
+    for value in [
+        receipt.tile_x,
+        receipt.tile_y,
+        receipt.domain,
+        receipt.world_x,
+        receipt.world_y,
+        i32::from(receipt.world_flags),
+        i32::from(receipt.tile_mask),
+        receipt.unit_masks as i32,
+        receipt.return_value,
+        receipt.random_state_before,
+        receipt.random_state_after,
+        receipt.rng_draws as i32,
+    ] {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.push(u8::from(receipt.orders_empty));
+    match receipt.cliff_predicate_read {
+        None => image.push(0),
+        Some(value) => {
+            image.push(1);
+            image.push(u8::from(value));
+        }
+    }
+    sha256(&image)
+}
+
+fn append_invalid_loc(image: &mut Vec<u8>, receipt: &Frame0MerchantInvalidLocReceipt) {
+    image.extend_from_slice(&receipt.receipt_sha256);
+}
+
+/// Stable digest over the first unsourced spatial-collision child.
+pub fn frame0_merchant_collision_request_digest(
+    request: &Frame0MerchantCollisionRequest,
+) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-merchant-collision-request-v1".to_vec();
+    image.extend_from_slice(&request.parent_request_sha256);
+    image.extend_from_slice(&request.search_trace_sha256);
+    image.extend_from_slice(&request.setup_composition_digest);
+    image.extend_from_slice(&request.setup_authority_revision.to_le_bytes());
+    image.extend_from_slice(&(request.invocation_ordinal as u64).to_le_bytes());
+    image.push(request.actor_who);
+    image.extend_from_slice(&request.actor_o.to_le_bytes());
+    image.extend_from_slice(&request.actor_uid.to_le_bytes());
+    for value in [
+        request.actor_type,
+        request.candidate_index as i32,
+        request.tile_x,
+        request.tile_y,
+        request.good_merchant_spot_call_va as i32,
+        request.call_va as i32,
+        request.coord_x,
+        request.coord_y,
+        request.footprint_x,
+        request.footprint_y,
+        request.arg5,
+        request.arg6,
+        request.arg7,
+        request.type_domain,
+        request.type_unit_flags as i32,
+        request.type_unit_flags2 as i32,
+        request.random_state,
+    ] {
+        image.extend_from_slice(&value.to_le_bytes());
+    }
+    image.extend_from_slice(&request.gather_receipt_sha256);
+    append_invalid_loc(&mut image, &request.invalid_loc);
+    image.push(u8::from(request.type_is_siege));
+    image.push(u8::from(request.unit_is_hero));
+    image.push(u8::from(request.unit_is_supply));
+    sha256(&image)
+}
+
+/// Stable digest over the ordered Good-call/answer chronology consumed so far.
+pub fn frame0_merchant_search_trace_digest(steps: &[Frame0MerchantSearchGoodStep]) -> [u8; 32] {
+    let mut image = b"don-2024-frame0-merchant-good-search-trace-v1".to_vec();
+    image.extend_from_slice(&(steps.len() as u64).to_le_bytes());
+    for step in steps {
+        image.extend_from_slice(&step.request.request_sha256);
+        image.extend_from_slice(&step.receipt.receipt_sha256);
+    }
+    sha256(&image)
+}
+
+fn continuation_failed_tail(
+    parent: &Frame0MerchantSpotRequest,
+    steps: &[Frame0MerchantSearchGoodStep],
+    head_calc_gather_returned_zero: bool,
+    reason: &'static str,
+) -> Frame0MerchantSearchContinuationFrontier {
+    Frame0MerchantSearchContinuationFrontier::FailedUnpackTail(
+        Frame0MerchantCompletedSearchTailRequest {
+            parent: parent.clone(),
+            search_proof_sha256: frame0_merchant_search_trace_digest(steps),
+            completed_good_steps: steps.len(),
+            head_calc_gather_returned_zero,
+            find_merchant_spot_outcome: MerchantSpotOutcome::NotFound,
+            next_va: FAILED_UNPACK_TAIL_VA,
+            reason,
+            random_state_before: parent.random_state,
+            random_state_after: parent.random_state,
+            rng_draws: 0,
+        },
+    )
+}
+
+fn validate_current_search_receipt(
+    sim: &Sim,
+    goods: &OilGoodRuntime,
+    step: &Frame0MerchantSearchGoodStep,
+) -> Result<(), Frame0MerchantGoodLookupError> {
+    if step.receipt.receipt_sha256 != frame0_merchant_good_lookup_receipt_digest(&step.receipt) {
+        return Err(Frame0MerchantGoodLookupError::InvalidSearchReceiptDigest);
+    }
+    if step.receipt.lookup_request_sha256 != step.request.request_sha256 {
+        return Err(Frame0MerchantGoodLookupError::StaleSearchReceipt);
+    }
+    let current = match evaluate_prevalidated(sim, &step.request, goods)? {
+        Frame0MerchantGoodLookupFrontier::Resolved(receipt) => receipt,
+        Frame0MerchantGoodLookupFrontier::NeedsTypeAvail(request) => {
+            let capture = step
+                .receipt
+                .type_avail_capture
+                .as_ref()
+                .ok_or(Frame0MerchantGoodLookupError::StaleSearchReceipt)?;
+            complete_prevalidated(sim, &step.request, goods, &request, capture)?
+        }
+    };
+    if current != step.receipt {
+        return Err(Frame0MerchantGoodLookupError::StaleSearchReceipt);
+    }
+    Ok(())
+}
+
+fn golden_land_invalid_loc_result(tile_mask: u16, unit_masks: u32) -> (Option<bool>, i32) {
+    let surface = tile_mask & 0x30;
+    let low = tile_mask & 3;
+    // Retail short-circuits the cliff virtual when surface is 0x30 or low is 2.
+    let cliff_predicate_read = (surface != 0x30 && low != 2).then_some(low == 1);
+    let blocked_surface = if surface == 0x30 || low == 2 || cliff_predicate_read == Some(true) {
+        surface != 0x30 || unit_masks & 0x4000 == 0
+    } else {
+        false
+    };
+    let return_value = if blocked_surface || surface == 0x20 {
+        2
+    } else {
+        0
+    };
+    (cliff_predicate_read, return_value)
+}
+
+fn source_invalid_loc(
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    candidate_index: usize,
+    tile_x: i32,
+    tile_y: i32,
+) -> Result<Frame0MerchantInvalidLocReceipt, Frame0MerchantGoodLookupError> {
+    let domain = member.type_facts.domain;
+    if domain != 0 {
+        return Err(Frame0MerchantGoodLookupError::UnsupportedMerchantDomain { domain });
+    }
+    let world = &sim.map.world;
+    let world_x = tile_x >> 2;
+    let world_y = tile_y >> 2;
+    let world_flags = world.wdata(world_x, world_y).flags;
+    let tile_mask = world.tmask(tile_x, tile_y);
+    let (cliff_predicate_read, return_value) =
+        golden_land_invalid_loc_result(tile_mask, parent.actor.unit_masks);
+    let random_state = sim.world.random.state();
+    let mut receipt = Frame0MerchantInvalidLocReceipt {
+        receipt_sha256: [0; 32],
+        call_va: UNIT_INVALID_LOC_VA,
+        candidate_index,
+        tile_x,
+        tile_y,
+        orders_empty: parent.actor.orders.is_empty(),
+        domain,
+        world_x,
+        world_y,
+        world_flags,
+        tile_mask,
+        cliff_predicate_read,
+        unit_masks: parent.actor.unit_masks,
+        return_value,
+        random_state_before: random_state,
+        random_state_after: random_state,
+        rng_draws: 0,
+    };
+    receipt.receipt_sha256 = frame0_merchant_invalid_loc_receipt_digest(&receipt);
+    Ok(receipt)
+}
+
+fn continue_outer_candidates(
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    cached_good_obj: i16,
+    steps: &[Frame0MerchantSearchGoodStep],
+    start: usize,
+) -> Result<Frame0MerchantSearchContinuationFrontier, Frame0MerchantGoodLookupError> {
+    let candidates =
+        frame0_merchant_candidate_tiles(parent.actor.x, parent.actor.y, MERCHANT_RADIUS)
+            .ok_or(Frame0MerchantGoodLookupError::UnexpectedSearchStep)?;
+    for (candidate_index, &(tile_x, tile_y)) in candidates.iter().enumerate().skip(start) {
+        if !good_merchant_spot_terrain_prefix(&sim.map.world, tile_x, tile_y) {
+            continue;
+        }
+        let calc_site = Frame0MerchantCalcGatherSite::GoodMerchantSpot {
+            candidate_index,
+            tile_x,
+            tile_y,
+        };
+        if let Some(child) = next_calc_gather_good_lookup(
+            &sim.map.world,
+            parent,
+            member.authority_revision,
+            cached_good_obj,
+            calc_site,
+            tile_x.wrapping_mul(192),
+            tile_y.wrapping_mul(192),
+            None,
+        ) {
+            return Ok(Frame0MerchantSearchContinuationFrontier::NeedsGoodLookup(
+                child,
+            ));
+        }
+    }
+    Ok(continuation_failed_tail(
+        parent,
+        steps,
+        false,
+        "all 49 ordered Merchant candidates failed good_merchant_spot; find_merchant_spot returned 0 and think_merchant continues with its Good-object scan",
+    ))
+}
+
+fn continue_after_good_step(
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    cached_good_obj: i16,
+    steps: &[Frame0MerchantSearchGoodStep],
+) -> Result<Frame0MerchantSearchContinuationFrontier, Frame0MerchantGoodLookupError> {
+    let step = steps
+        .last()
+        .ok_or(Frame0MerchantGoodLookupError::UnexpectedSearchStep)?;
+    if matches!(
+        step.receipt.outcome,
+        Frame0MerchantGoodLookupOutcome::NotFound(_)
+    ) {
+        if let Some(child) = next_calc_gather_good_lookup(
+            &sim.map.world,
+            parent,
+            member.authority_revision,
+            cached_good_obj,
+            step.request.calc_site,
+            step.request.calc_coord_x,
+            step.request.calc_coord_y,
+            Some(&step.request),
+        ) {
+            return Ok(Frame0MerchantSearchContinuationFrontier::NeedsGoodLookup(
+                child,
+            ));
+        }
+        return match step.request.calc_site {
+            Frame0MerchantCalcGatherSite::FindMerchantSpotHead => Ok(continuation_failed_tail(
+                parent,
+                steps,
+                true,
+                "the complete ordered head calc_gather scan returned 0; find_merchant_spot returned 0 and think_merchant continues with its Good-object scan",
+            )),
+            Frame0MerchantCalcGatherSite::GoodMerchantSpot {
+                candidate_index, ..
+            } => continue_outer_candidates(
+                sim,
+                parent,
+                member,
+                cached_good_obj,
+                steps,
+                candidate_index.saturating_add(1),
+            ),
+        };
+    }
+
+    match step.request.calc_site {
+        Frame0MerchantCalcGatherSite::FindMerchantSpotHead => {
+            continue_outer_candidates(sim, parent, member, cached_good_obj, steps, 0)
+        }
+        Frame0MerchantCalcGatherSite::GoodMerchantSpot {
+            candidate_index,
+            tile_x,
+            tile_y,
+        } => {
+            if !good_merchant_spot_terrain_prefix(&sim.map.world, tile_x, tile_y) {
+                return Err(Frame0MerchantGoodLookupError::StaleSearchReceipt);
+            }
+            let invalid_loc =
+                source_invalid_loc(sim, parent, member, candidate_index, tile_x, tile_y)?;
+            if invalid_loc.return_value != 0 {
+                return continue_outer_candidates(
+                    sim,
+                    parent,
+                    member,
+                    cached_good_obj,
+                    steps,
+                    candidate_index.saturating_add(1),
+                );
+            }
+            let type_is_siege = member.type_facts.unit_flags & 0x0002_0000 != 0;
+            let unit_is_hero = member.type_facts.unit_flags2 & 0x20 != 0;
+            let unit_is_supply = member.type_facts.unit_flags2 & 0x40 != 0;
+            if type_is_siege || unit_is_hero || unit_is_supply {
+                return Err(Frame0MerchantGoodLookupError::WrongGoldenCollisionPredicates);
+            }
+            let mut request = Frame0MerchantCollisionRequest {
+                request_sha256: [0; 32],
+                parent_request_sha256: parent.request_sha256,
+                search_trace_sha256: frame0_merchant_search_trace_digest(steps),
+                setup_composition_digest: parent.setup_composition_digest,
+                setup_authority_revision: member.authority_revision,
+                invocation_ordinal: parent.invocation_ordinal,
+                actor_who: parent.actor.who,
+                actor_o: parent.actor.o,
+                actor_uid: parent.actor.uid,
+                actor_type: parent.actor.type_index,
+                candidate_index,
+                tile_x,
+                tile_y,
+                good_merchant_spot_call_va: UNIT_GOOD_MERCHANT_SPOT_VA,
+                gather_receipt_sha256: step.receipt.receipt_sha256,
+                invalid_loc,
+                call_va: UNIT_DETECT_COLLISION_VA,
+                coord_x: tile_x.wrapping_mul(192),
+                coord_y: tile_y.wrapping_mul(192),
+                footprint_x: 1,
+                footprint_y: 1,
+                arg5: 0,
+                arg6: 0,
+                arg7: 0,
+                type_domain: member.type_facts.domain,
+                type_unit_flags: member.type_facts.unit_flags,
+                type_unit_flags2: member.type_facts.unit_flags2,
+                type_is_siege,
+                unit_is_hero,
+                unit_is_supply,
+                random_state: sim.world.random.state(),
+            };
+            request.request_sha256 = frame0_merchant_collision_request_digest(&request);
+            Ok(Frame0MerchantSearchContinuationFrontier::NeedsCollision(
+                request,
+            ))
+        }
+    }
+}
+
+/// Resume the exact `find_merchant_spot` transaction through an ordered sequence of completed
+/// Good lookups.
+///
+/// Every prefix step is rerun against the current World/Object/Good owners. The returned
+/// frontier is either the next retail `find_good_at`, the first spatial collision child, or
+/// the actual failed-unpack `Unit::think_merchant` tail. This function is read-only and every
+/// admitted branch preserves the RNG state.
+pub fn advance_frame0_merchant_search_after_good_steps(
+    sim: &Sim,
+    parent: &Frame0MerchantSpotRequest,
+    member: &CanonicalSetupUnitMemberReceipt,
+    goods: &OilGoodRuntime,
+    steps: &[Frame0MerchantSearchGoodStep],
+) -> Result<Frame0MerchantSearchContinuationFrontier, Frame0MerchantGoodLookupError> {
+    let cached_good_obj = sim
+        .world
+        .units
+        .good_obj()
+        .get(parent.actor.row)
+        .copied()
+        .ok_or(Frame0MerchantGoodLookupError::StaleSearchReceipt)?;
+    let initial = advance_frame0_merchant_search(sim, parent, member)?;
+    let mut frontier = match initial {
+        Frame0MerchantSearchFrontier::NeedsGoodLookup(child) => {
+            Frame0MerchantSearchContinuationFrontier::NeedsGoodLookup(child)
+        }
+        Frame0MerchantSearchFrontier::FailedUnpackTail(tail) => {
+            if steps.is_empty() {
+                return Ok(Frame0MerchantSearchContinuationFrontier::FailedUnpackTail(
+                    Frame0MerchantCompletedSearchTailRequest {
+                        parent: tail.parent,
+                        search_proof_sha256: tail.local_search_proof_sha256,
+                        completed_good_steps: 0,
+                        head_calc_gather_returned_zero: tail.calc_gather_returned_zero,
+                        find_merchant_spot_outcome: tail.find_merchant_spot_outcome,
+                        next_va: tail.next_va,
+                        reason: tail.reason,
+                        random_state_before: parent.random_state,
+                        random_state_after: parent.random_state,
+                        rng_draws: 0,
+                    },
+                ));
+            }
+            return Err(Frame0MerchantGoodLookupError::UnexpectedSearchStep);
+        }
+    };
+
+    for (index, step) in steps.iter().enumerate() {
+        let Frame0MerchantSearchContinuationFrontier::NeedsGoodLookup(expected) = frontier else {
+            return Err(Frame0MerchantGoodLookupError::UnexpectedSearchStep);
+        };
+        if expected != step.request {
+            return Err(Frame0MerchantGoodLookupError::UnexpectedSearchStep);
+        }
+        validate_current_search_receipt(sim, goods, step)?;
+        frontier =
+            continue_after_good_step(sim, parent, member, cached_good_obj, &steps[..=index])?;
+    }
+    Ok(frontier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::setup_2024_frame0_merchant_search::{
         frame0_merchant_good_lookup_digest, Frame0MerchantCalcGatherScan,
+        Frame0MerchantCalcGatherSite,
     };
     use don_sim::systems::economy::GoodNode;
     use don_sim::systems::world_oil_goods::{OilGoodSlot, CLOSED_COORD_INTERNAL};
@@ -1188,6 +1724,7 @@ mod tests {
             actor_uid: 3,
             actor_type: 62,
             calc_gather_call_va: 0x0060_9180,
+            calc_site: Frame0MerchantCalcGatherSite::FindMerchantSpotHead,
             calc_coord_x: 384,
             calc_coord_y: 384,
             upgrade_level: 0,
@@ -1562,5 +2099,101 @@ mod tests {
         mutant = receipt;
         mutant.serialized_rules_sha256[0] ^= 1;
         assert_ne!(digest, frame0_merchant_type_avail_receipt_digest(&mutant));
+    }
+
+    #[test]
+    fn golden_land_invalid_loc_preserves_retail_short_circuit_order() {
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0000, 0x0008_0000),
+            (Some(false), 0)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0010, 0x0008_0000),
+            (Some(false), 0)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0001, 0x0008_0000),
+            (Some(true), 2)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0002, 0x0008_0000),
+            (None, 2)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0020, 0x0008_0000),
+            (Some(false), 2)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0030, 0x0008_0000),
+            (None, 2)
+        );
+        assert_eq!(
+            golden_land_invalid_loc_result(0x0030, 0x0008_4000),
+            (None, 0)
+        );
+    }
+
+    #[test]
+    fn collision_child_digest_binds_trace_and_spatial_call_shape() {
+        let mut invalid_loc = Frame0MerchantInvalidLocReceipt {
+            receipt_sha256: [0; 32],
+            call_va: UNIT_INVALID_LOC_VA,
+            candidate_index: 3,
+            tile_x: 11,
+            tile_y: 17,
+            orders_empty: true,
+            domain: 0,
+            world_x: 2,
+            world_y: 4,
+            world_flags: 0,
+            tile_mask: 0x200,
+            cliff_predicate_read: Some(false),
+            unit_masks: 0x0008_0000,
+            return_value: 0,
+            random_state_before: 19,
+            random_state_after: 19,
+            rng_draws: 0,
+        };
+        invalid_loc.receipt_sha256 = frame0_merchant_invalid_loc_receipt_digest(&invalid_loc);
+        let mut request = Frame0MerchantCollisionRequest {
+            request_sha256: [0; 32],
+            parent_request_sha256: [1; 32],
+            search_trace_sha256: [2; 32],
+            setup_composition_digest: [3; 32],
+            setup_authority_revision: 4,
+            invocation_ordinal: 1,
+            actor_who: 0,
+            actor_o: 2,
+            actor_uid: 9,
+            actor_type: 62,
+            candidate_index: 3,
+            tile_x: 11,
+            tile_y: 17,
+            good_merchant_spot_call_va: UNIT_GOOD_MERCHANT_SPOT_VA,
+            gather_receipt_sha256: [4; 32],
+            invalid_loc,
+            call_va: UNIT_DETECT_COLLISION_VA,
+            coord_x: 11 * 192,
+            coord_y: 17 * 192,
+            footprint_x: 1,
+            footprint_y: 1,
+            arg5: 0,
+            arg6: 0,
+            arg7: 0,
+            type_domain: 0,
+            type_unit_flags: 0x0120_1882,
+            type_unit_flags2: 6,
+            type_is_siege: false,
+            unit_is_hero: false,
+            unit_is_supply: false,
+            random_state: 19,
+        };
+        request.request_sha256 = frame0_merchant_collision_request_digest(&request);
+        let digest = request.request_sha256;
+        request.search_trace_sha256[0] ^= 1;
+        assert_ne!(digest, frame0_merchant_collision_request_digest(&request));
+        request.search_trace_sha256[0] ^= 1;
+        request.footprint_x = 2;
+        assert_ne!(digest, frame0_merchant_collision_request_digest(&request));
     }
 }
