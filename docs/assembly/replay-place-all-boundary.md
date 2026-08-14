@@ -204,15 +204,29 @@ resolution, and if it does, that becomes the stop.
 | `place_all_reporting_tail` | the localized reporting tail | `0x006a8f12` |
 | `place_all_complete` | `return 1` | `0x006a937d` |
 
-### The oil policy is a switch, and its default assumes nothing
+### Exact owners supersede recorded oil/mountain answers
 
 `World::set_oil_at` `0x006b2a10` sets or clears `WData::OIL` — a `world`-channel byte the
 shipped `don-sim` setter already writes — and additionally closes or creates a `Good` object,
-which belongs to the unmodelled `goods` channel. `don-sim` surfaces this as an external whose
-resolution carries only an echo of the request. The production reconstruction uses
-`OilGoodPolicy::Stop`, so the recorded boundary never crosses it.
+which belongs to the Goods channel. `don-sim` surfaces this as an external whose
+resolution carries only an echo of the request. The compatibility survey uses
+`OilGoodPolicy::Stop` when no owner is mounted, so a recorded row never invents the object effect.
 `OilGoodPolicy::ContinueRecordingGoodEffects` exists for the survey in §5 and records every
 crossed request; the record states which policy produced each row.
+
+The current owned entry instead mounts the cold-process `OilGoodRuntime` and, when explicit
+installed geometry is available, `MountainAddRuntime`. Those owners execute at the exact
+player/region call site and retain typed receipts; they do not consume the policy's asserted
+resolution rows. A cold Great Lakes survey therefore crosses the oil calls and stops first at
+group 2's missing installed mountain catalog.
+
+When every selected group, both doober passes, and the map-style treeification gate complete,
+`PlaceAllPreviewReceipt::post_placement_authority` retains the final staged World/checksum, RNG
+word, mountain-range cursors, TerrainGroup state, and exact mounted owner state. The only
+remaining body is localized reporting. Its recovered transaction reads scores/strings and clears
+`console_info`; it cannot mutate World, RNG, Mountains, or the subsystem owners. The authority is
+therefore a lawful input to post-mountain height/CoordInfo generation without claiming that
+`place_all` returned.
 
 ## 5. Where each dominant style stops, and what is beyond it
 
@@ -226,14 +240,13 @@ hypothesis. The arm order is the data-driven terrain-group order from
   before completing any group.
 - **Great Lakes (style 14, 6 of the 21)** — 10 groups, all `chance="100"`. Group 0 is
   `type="trees" pattern="player"`, and its growth tail reaches `World::set_oil_at`
-  `0x006b2a10`. Under the strict oil policy that is the stop. With the void Good effect
-  crossed (`crossing_the_void_oil_good_effect_reaches_add_mountain_at_group_two`), groups 0
-  and 1 complete at the dispatcher edge `0x006a8ee5` and group 2, `type="mountains"`, stops at
-  `Mountains::add_mountain` as well.
+  `0x006b2a10`. The exact cold-process Good owner now crosses those calls. Groups 0 and 1
+  complete at the dispatcher edge `0x006a8ee5`; group 2, `type="mountains"`, is the first cold
+  stop at `Mountains::add_mountain`. A synthetic explicit installed catalog exercises the
+  mode-5 owner and reaches the reporting-only post-placement authority.
 
-So after the range lists, the two remaining blockers are the same two subsystems for both
-dominant styles: the `Good` object system behind `World::set_oil_at`, and
-`Mountains::add_mountain` `0x0089c2e0`. **[reported]** `add_mountain` needs the mountain
+So after the range lists, the common cold blocker is
+`Mountains::add_mountain` `0x0089c2e0`. `add_mountain` needs the mountain
 template geometry — the `.\art\*_disp_0.tga` art the `MOUNTAINS` section names, which
 `ron-data/` does not contain. If that holds, it is the next extraction question and the same
 class of blocker `tilesets.xml` and `internal_strings.xml` were before they were extracted.
@@ -258,10 +271,9 @@ are eligible — so unlike the oil acknowledgement it cannot be crossed without 
   only which template a given RNG value selects, first read at `0x006a82c5`.
 - **The mountain template geometry is not held.** `Mountains::add_mountain` needs the
   `MOUNTAINS` section's `.tga` displacement art, which `ron-data/` does not contain.
-- **`verify_bits` `0x00e861a8` is not covered.** `Mountains::clear` does not touch it;
-  `excluding_verify` / `sliding_excluding_verify` keep function-static `to_clear` arrays
-  (`0x00ab9f50`, `0x00ab9fa0`) that imply set-then-clear discipline, but that was not proven
-  exhaustively.
+- **The installed template pixels are still absent.** The recovered mode-4/mode-5 runtime owns
+  `verify_bits`, including exact set/clear discipline and the mode-5 cross-candidate transaction,
+  but no checked-in source can supply the 16 canonical displacement surfaces.
 - **Per-group `is_helping` for late groups is untested.** `don-sim` recomputes it per clump
   from its own threshold; the derived entry value is only exercised on the first group,
   because the corpus stops there.

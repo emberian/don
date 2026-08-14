@@ -108,6 +108,18 @@ fn non_nine_style_treeifies_after_group_and_both_doober_rng_passes() {
 
     assert_eq!(boundary, TerrainPlacementBoundary::PostPlacementReporting);
     assert_eq!(preview.completed_placement_groups, [0]);
+    let authority = preview
+        .post_placement_authority
+        .as_ref()
+        .expect("reporting-only boundary must retain final map authority");
+    assert!(authority.checksum_is_coherent());
+    assert!(authority.owners.is_none());
+    assert_ne!(
+        authority.world.wdata(3, 3).flags & wflag::FOREST,
+        0,
+        "treeification must be visible in the retained final World"
+    );
+    let authority_rng = authority.random_state_after;
     let bush = preview.bush_fringe.expect("bush pass must complete");
     let mountain = preview
         .mountain_rock_fringe
@@ -128,6 +140,7 @@ fn non_nine_style_treeifies_after_group_and_both_doober_rng_passes() {
     assert_eq!(mountain_tcoord_mutation.kind, TreeifyMutationKind::Forest);
     assert_eq!(mountain_tcoord_mutation.flags_before, 0);
     assert_ne!(treeify.rng_state_after, mountain.rng_state_after);
+    assert_eq!(authority_rng, treeify.rng_state_after);
     assert!(matches!(
         host.first(),
         Some(PlaceAllHostEvent::NetDaemonProcessAll { group_index: 0 })

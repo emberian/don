@@ -11,7 +11,7 @@
 //! `TerrainGroups::init_tileset_data`; this module deliberately does not invent
 //! a fractal generator or tileset frequencies.
 
-use super::map_terrain::{land, tflag, wflag, World};
+use super::map_terrain::{land, tflag, wflag, World, WorldChecksum};
 use super::mountain_add_runtime::{AddMountainCall, MountainAddRuntime};
 use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::regions::{Regions, WCoordList};
@@ -198,6 +198,30 @@ pub struct PlaceAllPreviewReceipt {
     /// Selected placement arms that reached their native group-local cleanup
     /// and `group_index++` edge at `0x006a8ee5`.
     pub completed_placement_groups: Vec<usize>,
+    /// Present only after every gameplay placement, both doober passes, and
+    /// the map-style treeification gate have completed. The sole remaining
+    /// native tail is reporting, which reads scores/strings and clears
+    /// `console_info` but cannot mutate these retained authorities.
+    pub post_placement_authority: Option<PlaceAllPostPlacementAuthority>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceAllPostPlacementAuthority {
+    pub world: World,
+    pub world_checksum: WorldChecksum,
+    pub random_state_after: i32,
+    pub mountains: Mountains,
+    pub terrain_groups_after: Vec<TerrainGroup>,
+    /// `Some` only for the exact owned entry point. It retains the final
+    /// MountainAddRuntime/Good state rather than reconstructing it from leaf
+    /// receipts or from changed-only World bytes.
+    pub owners: Option<PlaceRegionGroupOwners>,
+}
+
+impl PlaceAllPostPlacementAuthority {
+    pub fn checksum_is_coherent(&self) -> bool {
+        self.world.checksum_sections() == self.world_checksum
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1383,6 +1407,19 @@ impl TerrainGroups {
             }
         }
 
+        let post_placement_authority = (next == TerrainPlacementBoundary::PostPlacementReporting)
+            .then(|| {
+                let world_checksum = preview_world.checksum_sections();
+                PlaceAllPostPlacementAuthority {
+                    world: preview_world,
+                    world_checksum,
+                    random_state_after: preview_random.state(),
+                    mountains: preview_mountains,
+                    terrain_groups_after: preview_groups,
+                    owners: preview_owners,
+                }
+            });
+
         Err(PlaceAllError::GameplayPlacementUnavailable {
             preview: PlaceAllPreviewReceipt {
                 mountain_randomization,
@@ -1409,6 +1446,7 @@ impl TerrainGroups {
                 player_group_formation_y,
                 player_group_dispatches,
                 completed_placement_groups,
+                post_placement_authority,
             },
             boundary: next,
         })
@@ -1942,6 +1980,7 @@ impl TerrainGroups {
                 player_group_formation_y,
                 player_group_dispatches,
                 completed_placement_groups,
+                post_placement_authority: None,
             },
             boundary,
         })

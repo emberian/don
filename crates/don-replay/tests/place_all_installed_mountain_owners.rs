@@ -331,6 +331,12 @@ fn great_lakes_player_mode_five_consumes_the_installed_runtime() {
     let facts = PlaceAllAdvanceFacts {
         mountains: Some(resolve_mountain_ranges(&fixture.effects_graphics_xml()).unwrap()),
         helping: Some(initial_region_helping_state(&map.world)),
+        doober_rules: Some(
+            plan.fertility
+                .as_ref()
+                .expect("installed tileset fertility facts")
+                .doober_rules,
+        ),
         oil_good_policy: OilGoodPolicy::Stop,
         ..PlaceAllAdvanceFacts::default()
     };
@@ -358,6 +364,27 @@ fn great_lakes_player_mode_five_consumes_the_installed_runtime() {
         assert_eq!(execution.execution.rng_draws, 0);
     }
     assert!(advance.completed_groups.contains(&2));
+    assert_eq!(advance.stop, PlaceAllStop::PostPlacementReporting);
+    let authority = advance
+        .post_placement_authority
+        .as_ref()
+        .expect("reporting-only boundary must retain final map authority");
+    assert!(authority.checksum_is_coherent());
+    assert_eq!(
+        authority.world_checksum,
+        authority.world.checksum_sections()
+    );
+    let final_owners = authority
+        .owners
+        .as_ref()
+        .expect("owned survey must retain its final subsystem owners");
+    assert!(!final_owners
+        .mountains
+        .as_ref()
+        .expect("installed runtime survives through treeification")
+        .mountain_types
+        .items
+        .is_empty());
     assert!(
         !matches!(
             advance.stop,

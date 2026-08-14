@@ -47,7 +47,8 @@ use don_sim::systems::terrain_doobers::DooberTilesetRules;
 use don_sim::systems::terrain_drop_tile::{DropTileExternalRequest, DropTileExternalResolution};
 use don_sim::systems::terrain_groups::{
     PlaceAllError, PlaceAllGroupInput, PlaceAllHostEvent, PlaceAllOwnerExecutionReceipt,
-    PlacementReportingInputs, TerrainGroups, TerrainPlacementBoundary,
+    PlaceAllPostPlacementAuthority, PlacementReportingInputs, TerrainGroups,
+    TerrainPlacementBoundary,
 };
 use don_sim::systems::terrain_player_group::{
     PlayerGroupExternalRequest, PlayerGroupExternalResolution,
@@ -533,6 +534,10 @@ pub struct PlaceAllAdvanceReceipt {
     /// Exact mountain/oil owner leaves executed on the staged preview. The
     /// read-only survey commits neither this owner state nor the World.
     pub owner_receipts: Vec<PlaceAllOwnerExecutionReceipt>,
+    /// Final staged World/RNG/Mountains/owner state after the last gameplay
+    /// mutation and draw. Reporting is still a typed boundary, but it cannot
+    /// alter any authority retained here.
+    pub post_placement_authority: Option<PlaceAllPostPlacementAuthority>,
     /// Ordered `World::set_oil_at` calls crossed under
     /// [`OilGoodPolicy::ContinueRecordingGoodEffects`]; always empty otherwise.
     pub crossed_oil_good_effects: Vec<DropTileExternalRequest>,
@@ -641,6 +646,7 @@ pub fn advance_place_all_boundary_owned(
         selected_groups: Vec::new(),
         completed_groups: Vec::new(),
         owner_receipts: Vec::new(),
+        post_placement_authority: None,
         crossed_oil_good_effects: Vec::new(),
         oil_good_policy: facts.oil_good_policy,
         stop: PlaceAllStop::MountainRangeLists,
@@ -734,6 +740,9 @@ pub fn advance_place_all_boundary_owned(
             .completed_groups
             .clone_from(&preview.completed_placement_groups);
         receipt.owner_receipts.clone_from(&preview.owner_receipts);
+        receipt
+            .post_placement_authority
+            .clone_from(&preview.post_placement_authority);
 
         match boundary {
             TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } => {

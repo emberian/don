@@ -775,7 +775,7 @@ pub fn place_start_in_region(
 /// `wcoord_seen`, the danger planes, the collision blocks and the four synced `Terrain`
 /// arrays. `crate::systems::borders_fog` supplies the territory and fog *behaviour* and
 /// writes through this struct; nothing keeps a second copy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct World {
     // +0x00 .. +0x04 — checksum section 1
     /// `+0x00` — width in world cells.

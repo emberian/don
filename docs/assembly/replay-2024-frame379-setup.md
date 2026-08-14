@@ -86,7 +86,9 @@ positions, nonempty orders/paths, wrong Guy marks, and allocation gaps.
 No real `Frame379SetupReceipt` can be emitted yet. Mountain mode 5, its player-group owner,
 CoordInfo and scalar derivation, and the post-mountain height composition are source-recovered;
 the setup-entry binder consumes their final receipts without accepting raw Z or a caller-chosen
-authority digest. The exact run still cannot reach that binder because the 16 installed
+authority digest. An explicit installed run now retains the final staged
+World/RNG/Mountains/TerrainGroup/owner state at the reporting-only boundary, ready for that
+height and setup-entry join. The exact run still cannot reach the binder because the 16 installed
 displacement TGAs are absent, so there is no canonical completed `place_all` World/RNG, final
 height plane, or retail setup-entry snapshot. `place_all` itself contains the selected
 trees/rocks/oil and its doober/treeify/reporting tail; there is no unnamed forest/resource/start

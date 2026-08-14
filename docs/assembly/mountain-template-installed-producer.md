@@ -215,7 +215,9 @@ using generated 32-bit TGA fixtures only:
   former group-zero stop; and
 - the real Great Lakes replay consumes a synthetic installed catalog through the exact
   player-mode-5 owner, retains player-source World/mountain-walk receipts, and crosses its former
-  group-two stop without routing the call through mode 4.
+  group-two stop without routing the call through mode 4; with the already-derived tileset doober
+  rules it reaches the reporting-only boundary and retains a checksum-coherent final staged
+  World/RNG/Mountains/owner authority.
 
 Local gate (actual replays present, synthetic displacement art):
 
