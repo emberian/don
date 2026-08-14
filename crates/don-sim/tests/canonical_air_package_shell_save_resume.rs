@@ -69,6 +69,16 @@ const RETAIL_BUILD_UNIT_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPac
     package_serial: 39_550,
     play: 0,
 };
+const RETAIL_UNIT_UNIT_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 90_353,
+    package_serial: 15_606,
+    play: 0,
+};
+const RETAIL_PATROL_UNIT_FLIGHT_IDENTITY: AirReplayPackageIdentity = AirReplayPackageIdentity {
+    game_frame: 111_040,
+    package_serial: 6_090,
+    play: 0,
+};
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -162,6 +172,34 @@ fn retail_build_unit_flight_commands() -> Vec<Vec<u8>> {
     [
         "0001001008",
         "1c9f000000030000000000000000000000000000000a000000",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_unit_unit_flight_commands() -> Vec<Vec<u8>> {
+    [
+        "4f0008000000000000",
+        "000d01bb00c200f3004d005300c400c800ca00ff000001a0007c002f00",
+        "1cb6000000030000000000000000000000000000000a000000",
+        "3a0eec210adc",
+        "4a48001100000000000000",
+        "4804c4c800005d060100",
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+fn retail_patrol_unit_flight_commands() -> Vec<Vec<u8>> {
+    [
+        "4f0008000000000000",
+        "000001",
+        "0a665500003ae4000002",
+        "000001",
+        "1c12000000040000000000000000000000000000000a000000",
+        "3a06e30e93d2",
+        "4a48001000000000000000",
+        "48043459000029d70000",
     ]
     .map(hex)
     .to_vec()
@@ -830,6 +868,141 @@ fn build_unit_flight_fixture() -> (Sim, Handle) {
     (sim, target.unwrap())
 }
 
+fn install_unit_target_strafe(sim: &mut Sim, actor: Handle, target: Handle) {
+    let actor_row = sim.world.row_of(actor).unwrap();
+    let target_row = sim.world.row_of(target).unwrap();
+    let target_o = i32::from(sim.world.units.o()[target_row]);
+    let target_who = i32::from(sim.world.units.get_who(target_row));
+    let target_uid = sim.world.units.get_uid(target_row);
+    let target_position = (
+        sim.world.units.x_internal()[target_row],
+        sim.world.units.y_internal()[target_row],
+    );
+    sim.world.units.group_mut()[actor_row] = -1;
+    sim.world.units.o_down_mut()[actor_row] = -1;
+    let payload = StrafeOrder {
+        target_o,
+        target_who,
+        target_uid,
+        air: don_sim::systems::air::AirOrderWalk {
+            oxx: -1,
+            whose: -1,
+            cruising_alt: 0x640,
+            ..Default::default()
+        },
+        xx: target_position.0,
+        yy: target_position.1,
+        ..Default::default()
+    };
+    sim.world
+        .orders_mut(actor_row)
+        .replace(Order::strafe(payload, false).unwrap());
+}
+
+fn install_unit_flight_authority(
+    sim: &mut Sim,
+    planes: &[Handle],
+    fresh_flight_target: Option<(i32, i32)>,
+) {
+    sim.replace_group_move_authority(GroupMoveAuthority {
+        revision: 0x15606,
+        composition_digest: [0x06; 32],
+        destination_is_water: false,
+        force_formation_facing_zero: false,
+        members: planes.iter().copied().map(move_member).collect(),
+    });
+    sim.replace_air_group_authority(AirGroupRuntimeAuthority {
+        revision: 0x90353,
+        composition_digest: [0x53; 32],
+        units: planes
+            .iter()
+            .copied()
+            .map(|handle| AirGroupUnitAuthority {
+                handle,
+                object_masks: 0,
+                mana_cap: 1_000,
+                is_biplane: true,
+                is_bomber: false,
+                is_helicopter: false,
+                fresh_flight_target,
+                is_nuclear_missile: false,
+            })
+            .collect(),
+        builds: Vec::new(),
+        busy_spells: Vec::new(),
+    });
+}
+
+fn unit_unit_flight_fixture() -> (Sim, Vec<Handle>, Handle) {
+    const SELECTED: [usize; 13] = [187, 194, 243, 77, 83, 196, 200, 202, 255, 256, 160, 124, 47];
+    let mut sim = Sim::new(0x1c_15606, 256);
+    let mut players = PlayerTable::new();
+    players.seat(0, 1, 1, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_UNIT_UNIT_FLIGHT_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_UNIT_UNIT_FLIGHT_IDENTITY.game_frame;
+
+    let owner_units: Vec<_> = (0..=256)
+        .map(|o| {
+            sim.spawn_unit(1, PLANE_TYPE, 21_000 + o * 16, 24_000, 4)
+                .unwrap()
+        })
+        .collect();
+    let mut target_units = Vec::new();
+    for o in 0..=182 {
+        target_units.push(sim.spawn_unit(3, 91, 49_000 + o * 8, 43_000, 4).unwrap());
+    }
+    let initial_target = target_units[0];
+    let target = target_units[182];
+    let planes = SELECTED.map(|o| owner_units[o]).to_vec();
+    for &plane in &planes {
+        install_unit_target_strafe(&mut sim, plane, initial_target);
+    }
+    install_unit_flight_authority(&mut sim, &planes, None);
+    (sim, planes, target)
+}
+
+fn patrol_unit_flight_fixture() -> (Sim, Vec<Handle>, Handle) {
+    const SELECTED: [usize; 9] = [12, 38, 40, 41, 42, 43, 44, 45, 46];
+    let mut sim = Sim::new(0x1c_6090, 256);
+    let mut players = PlayerTable::new();
+    players.seat(0, 1, 1, 0);
+    sim.players = Some(players);
+    sim.world.frame = RETAIL_PATROL_UNIT_FLIGHT_IDENTITY.game_frame;
+    sim.vic_match.frame = RETAIL_PATROL_UNIT_FLIGHT_IDENTITY.game_frame;
+
+    let owner_units: Vec<_> = (0..=46)
+        .map(|o| {
+            sim.spawn_unit(1, PLANE_TYPE, 31_000 + o * 16, 35_000, 4)
+                .unwrap()
+        })
+        .collect();
+    let mut target_units = Vec::new();
+    for o in 0..=18 {
+        target_units.push(sim.spawn_unit(4, 91, 51_000 + o * 8, 47_000, 4).unwrap());
+    }
+    let initial_target = target_units[0];
+    let target = target_units[18];
+    let planes = SELECTED.map(|o| owner_units[o]).to_vec();
+    for &plane in &planes {
+        install_unit_target_strafe(&mut sim, plane, initial_target);
+    }
+    let mut cache: [Vec<CachedSelection>; 8] = std::array::from_fn(|_| Vec::new());
+    cache[0] = planes
+        .iter()
+        .map(|&plane| {
+            let row = sim.world.row_of(plane).unwrap();
+            CachedSelection {
+                o: sim.world.units.o()[row],
+                uid: sim.world.units.get_uid(row),
+            }
+        })
+        .collect();
+    sim.command_package_state = CommandPackageState::from_saved_selections(cache).unwrap();
+    install_unit_flight_authority(&mut sim, &planes, Some((4, 18)));
+    (sim, planes, target)
+}
+
 fn assert_air_state(left: &Sim, right: &Sim, planes: &[Handle]) {
     assert_eq!(left.world.frame, right.world.frame);
     assert_eq!(left.world.random.state(), right.world.random.state());
@@ -1102,6 +1275,68 @@ fn exact_retail_unit_flight_retargets_current_strafes_and_round_trips_save() {
 }
 
 #[test]
+fn exact_retail_unit_to_unit_flight_retargets_current_strafes_and_resumes() {
+    let (mut sim, planes, target) = unit_unit_flight_fixture();
+    let commands = retail_unit_unit_flight_commands();
+    let target_row = sim.world.row_of(target).unwrap();
+    let target_uid = sim.world.units.get_uid(target_row);
+    let target_position = (
+        sim.world.units.x_internal()[target_row],
+        sim.world.units.y_internal()[target_row],
+    );
+    let before_rng = sim.world.random.state();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_UNIT_UNIT_FLIGHT_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.command_image, commands);
+    assert!(receipt.flight_no_action.is_empty());
+    assert_eq!(receipt.flight_strafe.len(), 1);
+    assert!(receipt.flight_fresh_strafe.is_empty());
+    assert!(receipt.air.is_empty());
+    let flight = &receipt.flight_strafe[0];
+    assert_eq!(flight.actors.len(), 13);
+    assert!(flight.skipped_actors.is_empty());
+    assert_eq!(flight.target.band, CanonicalObjectBand::Unit);
+    assert_eq!(flight.target.address(), (3, 182));
+    assert!(matches!(
+        flight.target.generation,
+        don_sim::systems::air_group_action_transaction::CanonicalObjectGeneration::Unit {
+            id,
+            generation,
+        } if (id, generation) == (target.id, target.generation)
+    ));
+    assert_eq!(flight.target_uid, target_uid);
+    assert_eq!(flight.target_position, target_position);
+    assert!(flight
+        .actors
+        .iter()
+        .all(|actor| actor.effect == FlightStrafeActorEffect::RetargetedAndArmed));
+    assert_eq!(sim.world.random.state(), before_rng);
+    for &plane in &planes {
+        let row = sim.world.row_of(plane).unwrap();
+        let order = sim.world.orders(row).current().unwrap();
+        let strafe = order.strafe.as_ref().unwrap();
+        assert_eq!(order.kind, OrderIndex::Strafe);
+        assert_eq!(order.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!((strafe.target_who, strafe.target_o), (3, 182));
+        assert_eq!(strafe.target_uid, target_uid);
+        assert_eq!((strafe.xx, strafe.yy), target_position);
+        assert_eq!(strafe.mandatory, 1);
+        assert_eq!(strafe.air.returning, 0);
+    }
+
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(save_sim(&loaded).unwrap(), saved);
+    for &plane in &planes {
+        let row = sim.world.row_of(plane).unwrap();
+        assert_eq!(sim.world.orders(row), loaded.world.orders(row));
+    }
+}
+
+#[test]
 fn current_strafe_fuel_exhaustion_retargets_only_the_native_target_fields() {
     let (mut sim, planes) = unit_flight_fixture();
     let exhausted = planes[0];
@@ -1192,6 +1427,155 @@ fn exact_cached_patrol_then_flight_replaces_strafe_atomically_and_resumes() {
     let saved = save_sim(&sim).unwrap();
     let loaded = load_sim(&saved).unwrap();
     assert_eq!(save_sim(&loaded).unwrap(), saved);
+}
+
+#[test]
+fn exact_cached_queue_new_patrol_then_unit_flight_is_atomic_and_resumable() {
+    let (mut sim, planes, target) = patrol_unit_flight_fixture();
+    let commands = retail_patrol_unit_flight_commands();
+    let target_row = sim.world.row_of(target).unwrap();
+    let target_uid = sim.world.units.get_uid(target_row);
+    let target_position = (
+        sim.world.units.x_internal()[target_row],
+        sim.world.units.y_internal()[target_row],
+    );
+    let before_rng = sim.world.random.state();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_PATROL_UNIT_FLIGHT_IDENTITY, &commands)
+        .unwrap();
+    assert!(receipt.validates());
+    assert_eq!(receipt.command_image, commands);
+    assert_eq!(receipt.patrol.len(), 1);
+    assert_eq!(receipt.flight_fresh_strafe.len(), 1);
+    assert!(receipt.air.is_empty());
+    assert!(receipt.flight_no_action.is_empty());
+    assert!(receipt.flight_strafe.is_empty());
+    let patrol = &receipt.patrol[0];
+    assert_eq!(patrol.request.queue, 2);
+    assert_eq!(patrol.destination, (21_862, 58_426));
+    assert_eq!(patrol.actors.len(), 9);
+    assert!(patrol
+        .actors
+        .iter()
+        .all(|actor| actor.after.kind == OrderIndex::AirPatrol));
+    let flight = &receipt.flight_fresh_strafe[0];
+    assert_eq!(flight.target.band, CanonicalObjectBand::Unit);
+    assert_eq!(flight.target.address(), (4, 18));
+    assert!(matches!(
+        flight.target.generation,
+        don_sim::systems::air_group_action_transaction::CanonicalObjectGeneration::Unit {
+            id,
+            generation,
+        } if (id, generation) == (target.id, target.generation)
+    ));
+    assert_eq!(flight.target_uid, target_uid);
+    assert_eq!(flight.target_position, target_position);
+    assert_eq!(flight.actors.len(), 9);
+    assert_eq!(sim.world.random.state(), before_rng);
+    for &plane in &planes {
+        let row = sim.world.row_of(plane).unwrap();
+        let order = sim.world.orders(row).current().unwrap();
+        let strafe = order.strafe.as_ref().unwrap();
+        assert_eq!(order.kind, OrderIndex::Strafe);
+        assert_eq!(order.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!((strafe.target_who, strafe.target_o), (4, 18));
+        assert_eq!(strafe.target_uid, target_uid);
+        assert_eq!((strafe.xx, strafe.yy), target_position);
+        assert_eq!(strafe.mandatory, 1);
+        assert_eq!((strafe.air.oxx, strafe.air.whose), (-1, -1));
+        assert_eq!(strafe.air.cruising_alt, 0x640);
+        let group = usize::try_from(sim.world.units.group()[row]).unwrap();
+        assert_eq!(sim.groups.list[group].form, -1);
+        assert_eq!(sim.groups.list[group].disband, 0);
+    }
+
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(save_sim(&loaded).unwrap(), saved);
+    for &plane in &planes {
+        let row = sim.world.row_of(plane).unwrap();
+        assert_eq!(sim.world.orders(row), loaded.world.orders(row));
+    }
+}
+
+#[test]
+fn changed_queue_new_unit_target_rolls_back_patrol_and_flight_together() {
+    let (mut sim, planes, target) = patrol_unit_flight_fixture();
+    let commands = retail_patrol_unit_flight_commands();
+    let players = std::array::from_fn(|play| (play == 0).then_some(1));
+    let map_tiles = (sim.map.world.xs, sim.map.world.ys);
+    let prepared = prepare_canonical_air_replay_batch(
+        &sim.world,
+        &sim.builds,
+        &sim.groups,
+        &sim.paths,
+        &sim.command_package_state,
+        &sim.group_move_authority,
+        &sim.air_group_authority,
+        &sim.scenario_ignore_orders,
+        &players,
+        map_tiles,
+        RETAIL_PATROL_UNIT_FLIGHT_IDENTITY,
+        &commands,
+    )
+    .unwrap();
+    let before_orders = planes
+        .iter()
+        .map(|&plane| sim.world.orders(sim.world.row_of(plane).unwrap()).clone())
+        .collect::<Vec<_>>();
+    let before_paths = planes
+        .iter()
+        .map(|&plane| sim.paths[sim.world.row_of(plane).unwrap()].clone())
+        .collect::<Vec<_>>();
+    let before_groups = sim.groups.clone();
+    let before_cache = sim.command_package_state.clone();
+    let target_row = sim.world.row_of(target).unwrap();
+    sim.world.units.set_uid(
+        target_row,
+        sim.world.units.get_uid(target_row).wrapping_add(1),
+    );
+
+    assert_eq!(
+        commit_canonical_air_replay_batch(
+            &mut sim.world,
+            &sim.builds,
+            &mut sim.groups,
+            &mut sim.paths,
+            &mut sim.command_package_state,
+            &sim.group_move_authority,
+            &sim.air_group_authority,
+            &sim.scenario_ignore_orders,
+            &players,
+            map_tiles,
+            &commands,
+            prepared,
+        ),
+        Err(CanonicalAirPackageShellError::StaleCanonicalState),
+    );
+    for ((&plane, before_order), before_path) in planes.iter().zip(before_orders).zip(before_paths)
+    {
+        let row = sim.world.row_of(plane).unwrap();
+        assert_eq!(sim.world.orders(row), &before_order);
+        assert_eq!(sim.paths[row], before_path);
+    }
+    assert_eq!(sim.groups.list, before_groups.list);
+    assert_eq!(sim.groups.last_group, before_groups.last_group);
+    assert_eq!(sim.groups.proc_group, before_groups.proc_group);
+    assert_eq!(sim.command_package_state, before_cache);
+}
+
+#[test]
+fn queue_first_patrol_flight_remains_outside_the_exact_cone() {
+    let (mut sim, _, _) = patrol_unit_flight_fixture();
+    let mut commands = retail_patrol_unit_flight_commands();
+    commands[2][9] = 0;
+    assert!(matches!(
+        sim.process_air_replay_batch(RETAIL_PATROL_UNIT_FLIGHT_IDENTITY, &commands),
+        Err(CanonicalAirPackageShellError::PatrolFlight(
+            don_sim::systems::canonical_patrol_flight_host::CanonicalPatrolFlightError::UnsupportedPatrolQueue(0)
+        ))
+    ));
 }
 
 #[test]

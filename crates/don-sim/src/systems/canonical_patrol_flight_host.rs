@@ -30,6 +30,9 @@ use crate::world::{Handle, World};
 pub const PATROL_OPCODE: u8 = 10;
 pub const PATROL_WIRE_SIZE: usize = 10;
 pub const QUEUE_LAST: u8 = 1;
+/// Retail's current-STRAFE replacement arm reaches the same AIR_PATROL installer for
+/// QueueLast and QueueNew; the queue byte is not read by that constructor path.
+pub const QUEUE_NEW: u8 = 2;
 
 fn clamp_axis(value: i32, tiles: i32) -> i32 {
     let value = value.max(0);
@@ -189,7 +192,7 @@ pub fn decode_patrol_request(packet: &[u8]) -> Result<PatrolRequest, CanonicalPa
         y: read_i32(packet, 5),
         queue: packet[9],
     };
-    if request.queue != QUEUE_LAST {
+    if !matches!(request.queue, QUEUE_LAST | QUEUE_NEW) {
         return Err(CanonicalPatrolFlightError::UnsupportedPatrolQueue(
             request.queue,
         ));
@@ -464,16 +467,6 @@ pub(crate) fn prepare_canonical_fresh_flight(
     }
     let request = decode_flight_strafe_request(flight_packet)?;
     let target = flight_target_snapshot(world, builds, request.target_who, request.target_o)?;
-    if target.identity.band
-        != crate::systems::air_group_action_transaction::CanonicalObjectBand::Build
-    {
-        return Err(CanonicalPatrolFlightError::Flight(
-            CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
-            },
-        ));
-    }
     let mut selection = prepare_air_group_selection(
         world,
         builds,

@@ -235,8 +235,8 @@ the command image, map dimensions, all owner snapshots and authorities, then rec
 publishes both pairs or restores the full checkpoint. The real seven-command packet fixture,
 save/load byte identity, changed-map stale rollback, standalone Patrol rejection, and absent
 fresh-range authority rejection are executable gates. The Unit-to-Build wire/shell census is
-therefore 942/942 shell-admissible. Standalone Patrol, ground/mixed Patrol, QueueNew, and
-general AIR_PATROL-to-Flight remain deliberately fail-closed.
+therefore 942/942 shell-admissible. Standalone Patrol, ground/mixed Patrol, other queue
+values, and general AIR_PATROL-to-Flight remain deliberately fail-closed.
 
 ## Cycle 18: Build-to-Unit Flight no-action target
 
@@ -263,3 +263,35 @@ files: 29 explicit and 272 cached selections, with effective group sizes
 grammar. This closes the measured wire/shell and exact empty-containment execution cone; it
 does not authorize non-Airbase selections, incomplete containment, Nuclear Missile children,
 modifiers, or any general Flight mutation.
+
+## Cycle 19: Unit-to-Unit Flight targets
+
+The existing-STRAFE arm is target-band independent after resolving a live generational target.
+Cycle 19 exercises its Unit target with the exact package from
+`Playback___2017.07.15_00_10_31__Sat_.rcx` (SHA-256
+`c9180d5f82666dd6fad304527f65a6a39a97f2e59c9a562940d526c66f6d7f57`), turn index 15,605,
+turn 15,606, play 0, frame 90,353. Its opcodes are `[79,0,28,58,74,72]`; the explicit Group
+selects 13 owner-1 Units and Flight
+`1cb6000000030000000000000000000000000000000a000000` issues unmodified ATTACK against
+owner 3 Unit 182. The canonical receipt binds that Unit's Handle generation, UID, active flag,
+and position, and all 13 coherent current STRAFEs receive the target rewrite plus the proven
+mandatory/returning/group tail with no RNG draw. The result survives save/load byte-identically.
+
+One of the 263 measured Unit-to-Unit pairs has a preceding Patrol. Its exact witness is
+`Playback___2017.07.20_20_46_23__Thu_.rcx` (SHA-256
+`2c962b3607348784caec4ca0f95a1e6a43b28b2175c2db0dce8afb48ae425741`), turn index 6,089,
+turn 6,090, play 0, frame 111,040, opcodes `[79,0,10,0,28,58,74,72]`. Cached Group
+`000001` binds nine owner-1 Units, Patrol `0a665500003ae4000002` requests QueueNew at
+21,862 / 58,426, and the adjacent Flight targets owner 4 Unit 18. Retail's current-STRAFE
+replacement arm sends QueueLast and QueueNew through the same AIR_PATROL installer without
+reading the queue byte. The host admits QueueNew only inside this already-bounded combined
+transaction, with the same actor, fuel, missile, busy, home, and Handle-bound fresh-target
+authority gates. A changed target UID after whole-package prepare publishes neither Patrol nor
+Flight, and the applied package round-trips through save/load byte-identically.
+
+The full corpus has 263 Unit-to-Unit ATTACK/no-modifier Flight pairs across 25 files: 155
+explicit selections and 108 cached selections, with effective group sizes from 1 through 128.
+All 263 packages fit the bounded shell and exactly one is the QueueNew Patrol package above.
+This closes the measured Unit-to-Unit execution cone under authoritative current-order facts;
+standalone Patrol, QueueFirst, unbound fresh Flight, non-STRAFE actors, modifiers, and general
+Flight remain typed refusals.
