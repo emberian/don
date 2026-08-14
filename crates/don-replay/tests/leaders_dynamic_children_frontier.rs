@@ -35,6 +35,12 @@ use don_replay::leaders_setup_build_registry_frontier::{
     FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
     LEADER_GET_BUILDINGS_VA,
 };
+use don_replay::leaders_setup_init_scalar_frontier::{
+    bind_frame_zero_init_scalars, derive_frame_zero_init_scalars, FrameZeroInitScalarError,
+    FRAME_ZERO_INIT_SCALAR_WALKED_BYTES, LEADER_INIT_GOV_STORE_VA,
+    LEADER_INIT_SETUP_STAMPS_BEGIN_VA, LEADER_INIT_SETUP_STAMPS_STOS_BEGIN_VA,
+    LEADER_INIT_SETUP_STAMPS_STOS_END_VA,
+};
 use don_replay::leaders_setup_reg_buildings_frontier::{
     bind_frame_zero_regional_buildings, derive_frame_zero_regional_building_census,
     FrameZeroRegBuildingsError, FRAME_ZERO_REG_BUILDINGS_WALKED_BYTES,
@@ -1125,6 +1131,7 @@ fn frame_zero_starting_build_census_body() {
     let history = derive_frame_zero_last_building_history(&setup).unwrap();
     let region_history = derive_frame_zero_region_strategy_history(&setup).unwrap();
     let build_registry = derive_frame_zero_build_registry_census(&setup, &replay).unwrap();
+    let init_scalars = derive_frame_zero_init_scalars(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1154,10 +1161,16 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES, 258);
     assert_eq!(FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, 384);
     assert_eq!(FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES, 642);
+    assert_eq!(LEADER_INIT_GOV_STORE_VA, 0x006e_3b0f);
+    assert_eq!(LEADER_INIT_SETUP_STAMPS_BEGIN_VA, 0x006e_3ba4);
+    assert_eq!(LEADER_INIT_SETUP_STAMPS_STOS_BEGIN_VA, 0x006e_3bee);
+    assert_eq!(LEADER_INIT_SETUP_STAMPS_STOS_END_VA, 0x006e_3bf9);
+    assert_eq!(FRAME_ZERO_INIT_SCALAR_WALKED_BYTES, 48);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
     assert_eq!(build_registry.claims().len(), active_count);
+    assert_eq!(init_scalars.claims().len(), active_count);
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1218,6 +1231,11 @@ fn frame_zero_starting_build_census_body() {
     for slot in 0..NUM_LEADERS {
         synchronize_setup_only_owner_columns(&mut fixture.columns, &setup.sim, slot);
         synchronize_build_registry_columns(&mut fixture.columns, &build_registry, slot);
+        let gov = leader::FIELDS
+            .iter()
+            .find(|field| field.name == "gov")
+            .unwrap();
+        write_field(&mut fixture.columns, slot, gov, &(-1i32).to_le_bytes());
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1241,20 +1259,18 @@ fn frame_zero_starting_build_census_body() {
         bind_frame_zero_region_strategy_history(build_history, region_history.clone()).unwrap();
     let registry_joined =
         bind_frame_zero_build_registry_census(region_joined, build_registry.clone()).unwrap();
-    let joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
+    let mask_joined = bind_type_mask_owner(registry_joined, &mask_types).unwrap();
+    let joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(
-        joined.newly_canonicalized_walked_bytes(),
-        active_count * 117
-    );
+    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 48);
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 24_541 + (NUM_LEADERS - active_count) * 8
+        active_count * 24_589 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 3_887) as u64
+        (active_count * 3_839) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
@@ -1263,8 +1279,8 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(TYPE_MASK_HEADER_WALKED_BYTES, 8);
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
-    assert_eq!(joined.claims().len(), active_count);
-    assert_eq!(joined.claims()[0].tech_duplicate_payload_bytes, 101);
+    assert_eq!(joined.inner().claims().len(), active_count);
+    assert_eq!(joined.inner().claims()[0].tech_duplicate_payload_bytes, 101);
 
     let mut stale_masks = mask_types.clone();
     stale_masks.leaders[active].obs_flags.bytes[100] ^= 1;
@@ -1295,6 +1311,51 @@ fn frame_zero_starting_build_census_body() {
             slot,
             field: "obs_flags",
             byte: 108,
+            ..
+        }) if slot == active
+    ));
+
+    let stamp_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "tech_cat_frame")
+        .unwrap();
+    let mut stale_stamp_columns = fixture.columns.clone();
+    let mut stale_stamp_bytes = vec![0; stamp_field.size as usize];
+    *stale_stamp_bytes.last_mut().unwrap() = 1;
+    write_field(
+        &mut stale_stamp_columns,
+        active,
+        stamp_field,
+        &stale_stamp_bytes,
+    );
+    let stale_stamp_previous = deferred_frontier_with_authority(
+        &fixture.prefix,
+        &fixture.victory,
+        &fixture.step8,
+        &fixture.types,
+        &stale_stamp_columns,
+        &fixed,
+    );
+    let stale_stamp_tech =
+        bind_sim_tech_frontier(stale_stamp_previous, &fixture.authority, &setup.sim).unwrap();
+    let stale_stamp_owners =
+        bind_sim_owner_frontier(&fixture.prefix, stale_stamp_tech, &setup.sim).unwrap();
+    let stale_stamp_regional =
+        bind_frame_zero_regional_buildings(stale_stamp_owners, census.clone()).unwrap();
+    let stale_stamp_history =
+        bind_frame_zero_last_building_history(stale_stamp_regional, history.clone()).unwrap();
+    let stale_stamp_regions =
+        bind_frame_zero_region_strategy_history(stale_stamp_history, region_history.clone())
+            .unwrap();
+    let stale_stamp_registry =
+        bind_frame_zero_build_registry_census(stale_stamp_regions, build_registry.clone()).unwrap();
+    let stale_stamp_masks = bind_type_mask_owner(stale_stamp_registry, &mask_types).unwrap();
+    assert!(matches!(
+        bind_frame_zero_init_scalars(stale_stamp_masks, init_scalars.clone()),
+        Err(FrameZeroInitScalarError::ConditionalDisagreement {
+            slot,
+            field: "setup_stamps",
+            byte: 43,
             ..
         }) if slot == active
     ));

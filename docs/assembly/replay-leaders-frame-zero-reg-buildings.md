@@ -85,9 +85,10 @@ pre-plan regional strategy histories                      256
 high_buildings history                                    258
 regional City/Fort/Dock registries                        384
 canonical type-owner masks                               117
-frame-zero unique canonical walked bytes               24,541
+setup-surviving Leader::init scalars                       48
+frame-zero unique canonical walked bytes               24,589
 default empty-child transcript                          28,428
-frame-zero residual                                      3,887
+frame-zero residual                                      3,839
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -114,6 +115,13 @@ header and the complete 109-byte `obs_flags` header/payload. Its current `tech` 
 duplicate-checked but not counted twice because the production-tech join already owns it. The
 type owner is not yet mounted directly on `Sim`; this join therefore remains nested under and
 expires with the setup receipt rather than claiming later-frame survival.
+
+The same constructor boundary admits 48 fixed-body bytes written by `Leader::init`: `gov = -1`
+at `0x006e3b0f` and eleven zero dwords spanning the gather, support, nuke, flock, weapon-use,
+and technology-frame stamps at `0x006e3ba4..0x006e3bf9`. The ordinary setup receipt reaches no
+gather/support action, weapon use, or technology completion before publication, so the exact
+initialized bytes survive to that boundary. This is a setup-only historical claim, not a live
+maintainer; it expires before the first world turn.
 
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
@@ -144,3 +152,5 @@ walk remains red and the global scoreboard remains uninstalled and non-substanti
 mutates the independent `high_buildings` tail and replay-source identity, proving that neither
 the historical row nor its Rules provenance can be substituted. A tail mutation in the
 canonical type owner's observation mask also refuses against the already-bound dynamic child.
+The final byte of `tech_cat_frame[4]` is independently mutated as well, proving the entire
+44-byte initialized stamp block must agree before the additional 48-byte cohort is admitted.

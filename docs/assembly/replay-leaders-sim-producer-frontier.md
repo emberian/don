@@ -111,6 +111,11 @@ same-frame residual: the Sim does not yet maintain the regional matrix through a
 lifecycle transitions. See
 [`replay-leaders-frame-zero-reg-buildings.md`](replay-leaders-frame-zero-reg-buildings.md).
 
+The exact `Leader::init` government store and contiguous zeroed activity/technology stamp block
+add 48 more setup-surviving bytes per active row, reducing that conditional residual to 3,839.
+They remain uninstalled with zero survival: the receipt proves only the constructor boundary,
+not maintenance after the first replay turn.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical
