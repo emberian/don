@@ -133,6 +133,7 @@ pub mod script_channel;
 pub mod setup_2024_frame0_merchant_unpack;
 pub mod setup_2024_frame1_leader_options;
 pub mod setup_2024_frame1_set_anim_capture;
+pub mod setup_2024_frame1_set_anim_continuation;
 pub mod setup_2024_frame1_village_process;
 pub mod setup_2024_frame379;
 pub mod setup_2024_frame379_group_move;

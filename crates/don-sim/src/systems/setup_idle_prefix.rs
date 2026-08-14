@@ -110,6 +110,49 @@ pub struct IdleAnimationGateRequest {
     pub o: i16,
 }
 
+/// Source facts required to enter a non-golden `Unit::check_idle` shape after SetAnim.
+///
+/// The supported Citizen has `idle == 1`, no entrench bit and an already-installed object
+/// idle bit. Any other shape stops here with the complete detached receiver instead of
+/// pretending the missing SetAngle/entrench/type-query inputs are known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleCheckIdleBoundary {
+    NonGoldenIdle,
+    EntrenchFacts,
+    ObjectIdleTypeQuery,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdleCheckIdleFactsRequest {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub set_anim_receipt_digest: [u8; 32],
+    pub frame: i32,
+    pub unit: Handle,
+    pub who: u8,
+    pub o: i16,
+    pub boundary: IdleCheckIdleBoundary,
+    pub check_idle_entry: IdleCitizenPreimage,
+    pub restore_mask2_bit8000: bool,
+}
+
+/// Exact boundary after the supported Citizen's local `Unit::check_idle` path and before
+/// `Unit::think`. The temporary `unit_masks2 & 0x8000` clear is still armed; a Think
+/// continuation must either complete and restore it or leave the entire detached transaction
+/// uncommitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdleCitizenThinkRequest {
+    pub authority_revision: u64,
+    pub authority_digest: [u8; 32],
+    pub set_anim_receipt_digest: [u8; 32],
+    pub frame: i32,
+    pub unit: Handle,
+    pub who: u8,
+    pub o: i16,
+    pub after_check_idle: IdleCitizenPreimage,
+    pub restore_mask2_bit8000: bool,
+}
+
 /// First external boundary reached by a detached idle-prefix plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdleOpenRequest {
@@ -118,6 +161,8 @@ pub enum IdleOpenRequest {
     DetectBoatCollision(IdleBoatCollisionRequest),
     AnimationGate(IdleAnimationGateRequest),
     SetAnim(IdleSetAnimRequest),
+    CheckIdleFacts(IdleCheckIdleFactsRequest),
+    Think(IdleCitizenThinkRequest),
     SetAngle(IdleSetAngleRequest),
     Entrench(IdleEntrenchRequest),
     FindBuilds(IdleFindBuildsRequest),

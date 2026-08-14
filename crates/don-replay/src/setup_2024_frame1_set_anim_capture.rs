@@ -137,6 +137,8 @@ pub enum Frame1IdleSetAnimError {
     FinalGuyImageMismatch,
     FinalRandomMismatch,
     UnrelatedCanonicalStateChanged,
+    ReceiptMismatch,
+    ReceiptDigestMismatch,
 }
 
 impl fmt::Display for Frame1IdleSetAnimError {
@@ -322,6 +324,108 @@ fn append_guy_image(image: &mut Vec<u8>, guys: &UnitGuys) {
     for guy in guys.guys.iter().flatten() {
         image.extend_from_slice(&guy.walk_bytes());
     }
+}
+
+pub(crate) fn receipt_composition_digest(receipt: &Frame1IdleSetAnimReceipt) -> [u8; 32] {
+    let request = &receipt.request;
+    let mut image = b"don-frame1-idle-set-anim-capture-v2".to_vec();
+    image.extend_from_slice(&receipt.capture_revision.to_le_bytes());
+    image.extend_from_slice(&receipt.replay_file_sha256);
+    image.extend_from_slice(&receipt.executable_sha256);
+    image.extend_from_slice(&request.authority_revision.to_le_bytes());
+    image.extend_from_slice(&request.authority_digest);
+    image.extend_from_slice(&request.frame.to_le_bytes());
+    image.extend_from_slice(&request.unit.id.to_le_bytes());
+    image.extend_from_slice(&request.unit.generation.to_le_bytes());
+    image.push(request.who);
+    image.extend_from_slice(&request.o.to_le_bytes());
+    image.push(request.animation as u8);
+    image.extend_from_slice(&request.arg2.to_le_bytes());
+    image.extend_from_slice(&request.arg3.to_le_bytes());
+    image.extend_from_slice(&receipt.before_sim_sha256);
+    image.extend_from_slice(&receipt.after_sim_sha256);
+    image.extend_from_slice(&(receipt.setup_ordinal as u64).to_le_bytes());
+    image.extend_from_slice(&(receipt.row as u64).to_le_bytes());
+    image.extend_from_slice(&receipt.type_index.to_le_bytes());
+    append_guy_image(&mut image, &receipt.guys_before);
+    append_guy_image(&mut image, &receipt.guys_after);
+    image.extend_from_slice(&receipt.random_before.to_le_bytes());
+    image.extend_from_slice(&receipt.random_after.to_le_bytes());
+    for call in &receipt.calls {
+        image.extend_from_slice(&(call.guy_index as u64).to_le_bytes());
+        append_guy_image(&mut image, &call.guys_at_child_entry);
+        append_guy_image(&mut image, &call.guys_at_child_return);
+        image.extend_from_slice(&call.random_before.to_le_bytes());
+        image.extend_from_slice(&call.random_after.to_le_bytes());
+        image.extend_from_slice(&call.random_draws.to_le_bytes());
+    }
+    sha256(&image)
+}
+
+/// Revalidate a previously bound receipt before a detached idle continuation consumes it.
+///
+/// The original binder remains the only authority producer: it proves the two adjacent whole
+/// Sim snapshots. This verifier makes every carried field mutation-sensitive and replays the
+/// wrapper/Guy/RNG journal, so a later continuation cannot accept a stale or edited public
+/// receipt value merely because its request still compares equal.
+pub fn validate_frame1_idle_set_anim_receipt(
+    request: &IdleSetAnimRequest,
+    receipt: &Frame1IdleSetAnimReceipt,
+) -> Result<(), Frame1IdleSetAnimError> {
+    let Some(expected_type) = SETUP_TYPES.get(receipt.setup_ordinal).copied() else {
+        return Err(Frame1IdleSetAnimError::ReceiptMismatch);
+    };
+    let (squad_size, crew_size) = SETUP_GUY_SHAPES[receipt.setup_ordinal];
+    if request != &receipt.request
+        || request.authority_revision == 0
+        || request.authority_digest == [0; 32]
+        || receipt.capture_revision == 0
+        || receipt.composition_digest == [0; 32]
+        || receipt.replay_file_sha256 != REPLAY_FILE_SHA256
+        || receipt.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || request.frame != LEADER_OPTIONS_FRAME as i32
+        || request.who != 0
+        || i32::from(request.o) != receipt.setup_ordinal as i32
+        || request.animation != 0
+        || request.arg2 != 0
+        || request.arg3 != 1
+        || receipt.type_index != expected_type
+        || receipt.before_sim_sha256 == [0; 32]
+        || receipt.after_sim_sha256 == [0; 32]
+        || receipt.guys_before != request.guys_before
+        || receipt.random_before != request.random_before
+    {
+        return Err(Frame1IdleSetAnimError::ReceiptMismatch);
+    }
+    validate_complete_guys(
+        &receipt.guys_before,
+        request.who as i8,
+        request.o,
+        receipt.type_index,
+        squad_size,
+        crew_size,
+    )?;
+    validate_complete_guys(
+        &receipt.guys_after,
+        request.who as i8,
+        request.o,
+        receipt.type_index,
+        squad_size,
+        crew_size,
+    )?;
+    validate_call_journal(
+        request,
+        receipt.type_index,
+        squad_size,
+        crew_size,
+        &receipt.calls,
+        &receipt.guys_after,
+        receipt.random_after,
+    )?;
+    if receipt_composition_digest(receipt) != receipt.composition_digest {
+        return Err(Frame1IdleSetAnimError::ReceiptDigestMismatch);
+    }
+    Ok(())
 }
 
 fn validate_call_journal(
@@ -546,33 +650,8 @@ pub fn bind_captured_frame1_idle_set_anim(
         return Err(Frame1IdleSetAnimError::UnrelatedCanonicalStateChanged);
     }
 
-    let mut image = b"don-frame1-idle-set-anim-capture-v1".to_vec();
-    image.extend_from_slice(&capture.revision.to_le_bytes());
-    image.extend_from_slice(&capture.replay_file_sha256);
-    image.extend_from_slice(&capture.executable_sha256);
-    image.extend_from_slice(&request.authority_revision.to_le_bytes());
-    image.extend_from_slice(&request.authority_digest);
-    image.extend_from_slice(&capture.before_sim_sha256);
-    image.extend_from_slice(&capture.after_sim_sha256);
-    image.extend_from_slice(&request.unit.id.to_le_bytes());
-    image.extend_from_slice(&request.unit.generation.to_le_bytes());
-    image.extend_from_slice(&(setup_ordinal as u64).to_le_bytes());
-    image.extend_from_slice(&member.current_type.to_le_bytes());
-    append_guy_image(&mut image, guys_before);
-    append_guy_image(&mut image, guys_after);
-    image.extend_from_slice(&request.random_before.to_le_bytes());
-    image.extend_from_slice(&after.world.random.state().to_le_bytes());
-    for call in &capture.calls {
-        image.extend_from_slice(&(call.guy_index as u64).to_le_bytes());
-        append_guy_image(&mut image, &call.guys_at_child_entry);
-        append_guy_image(&mut image, &call.guys_at_child_return);
-        image.extend_from_slice(&call.random_before.to_le_bytes());
-        image.extend_from_slice(&call.random_after.to_le_bytes());
-        image.extend_from_slice(&call.random_draws.to_le_bytes());
-    }
-
-    Ok(Frame1IdleSetAnimReceipt {
-        composition_digest: sha256(&image),
+    let mut receipt = Frame1IdleSetAnimReceipt {
+        composition_digest: [0; 32],
         capture_revision: capture.revision,
         source: capture.source,
         replay_file_sha256: capture.replay_file_sha256,
@@ -588,7 +667,9 @@ pub fn bind_captured_frame1_idle_set_anim(
         random_before: request.random_before,
         random_after: after.world.random.state(),
         calls: capture.calls.clone(),
-    })
+    };
+    receipt.composition_digest = receipt_composition_digest(&receipt);
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -754,6 +835,95 @@ mod tests {
                 after_draw,
             ),
             Err(Frame1IdleSetAnimError::ChildRandomDrawMismatch { index: 0 })
+        );
+    }
+
+    fn citizen_receipt() -> Frame1IdleSetAnimReceipt {
+        let mut lead = GuyData::default();
+        lead.ty = 50;
+        lead.who = 0;
+        lead.o = 3;
+        lead.guy_num = 0;
+        lead.hold_attack = 7;
+        let guys_before = UnitGuys {
+            guys: vec![Some(lead)],
+            size: 1,
+            increment: 1,
+            flags: 0,
+            guy_mark: 1,
+        };
+        let request = IdleSetAnimRequest {
+            authority_revision: 9,
+            authority_digest: [9; 32],
+            frame: 1,
+            unit: Handle {
+                id: 3,
+                generation: 4,
+            },
+            who: 0,
+            o: 3,
+            animation: 0,
+            arg2: 0,
+            arg3: 1,
+            guys_before: guys_before.clone(),
+            random_before: 123,
+        };
+        let entry = clear_hold_attack_prefix(&guys_before, 0).unwrap();
+        let mut returned = entry.clone();
+        returned.guys[0].as_mut().unwrap().cur_time = 1;
+        let mut receipt = Frame1IdleSetAnimReceipt {
+            composition_digest: [0; 32],
+            capture_revision: 10,
+            source: Frame1IdleSetAnimCaptureSource::SupportedRetailUnitAndGuyCallTrace,
+            replay_file_sha256: REPLAY_FILE_SHA256,
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            request,
+            setup_ordinal: 3,
+            row: 3,
+            type_index: 50,
+            before_sim_sha256: [1; 32],
+            after_sim_sha256: [2; 32],
+            guys_before,
+            guys_after: returned.clone(),
+            random_before: 123,
+            random_after: 123,
+            calls: vec![Frame1CapturedGuySetAnimCall {
+                guy_index: 0,
+                guys_at_child_entry: entry,
+                guys_at_child_return: returned,
+                random_before: 123,
+                random_after: 123,
+                random_draws: 0,
+            }],
+        };
+        receipt.composition_digest = receipt_composition_digest(&receipt);
+        receipt
+    }
+
+    #[test]
+    fn continuation_validator_bites_every_adjacent_receipt_owner() {
+        let receipt = citizen_receipt();
+        validate_frame1_idle_set_anim_receipt(&receipt.request, &receipt).unwrap();
+
+        let mut stale_row = receipt.clone();
+        stale_row.row += 1;
+        assert_eq!(
+            validate_frame1_idle_set_anim_receipt(&receipt.request, &stale_row),
+            Err(Frame1IdleSetAnimError::ReceiptDigestMismatch)
+        );
+
+        let mut stale_after = receipt.clone();
+        stale_after.guys_after.guys[0].as_mut().unwrap().cur_time += 1;
+        assert_eq!(
+            validate_frame1_idle_set_anim_receipt(&receipt.request, &stale_after),
+            Err(Frame1IdleSetAnimError::FinalGuyImageMismatch)
+        );
+
+        let mut wrong_request = receipt.request.clone();
+        wrong_request.unit.generation += 1;
+        assert_eq!(
+            validate_frame1_idle_set_anim_receipt(&wrong_request, &receipt),
+            Err(Frame1IdleSetAnimError::ReceiptMismatch)
         );
     }
 }
