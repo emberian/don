@@ -85,6 +85,20 @@ use don_replay::leaders_setup_region_history_frontier::{
     PLAN_STRATEGY_REG_ATTACKED_FIRST_STORE_VA, PLAN_STRATEGY_RELATION_HISTORY_CLEAR_VA,
     PLAN_STRATEGY_RELATION_HISTORY_LAST_STORE_VA,
 };
+use don_replay::leaders_setup_stat_history_frontier::{
+    bind_frame_zero_stat_history, derive_frame_zero_stat_history, FrameZeroStatHistoryError,
+    ATTACKED_BY_OFFSET, BEST_WAR_HISTORY_BEGIN, BEST_WAR_HISTORY_END,
+    FRAME_ZERO_STAT_HISTORY_WALKED_BYTES, GATHER_TRADE_HISTORY_BEGIN, GATHER_TRADE_HISTORY_END,
+    GOV_HERO_FRAME_OFFSET, INACTIVE_ACTION_HISTORY_BEGIN, INACTIVE_ACTION_HISTORY_END,
+    LEADER_INIT_ATTACK_STATS_BEGIN_VA, LEADER_INIT_ATTACK_STATS_END_VA,
+    LEADER_INIT_BEST_STATS_BEGIN_VA, LEADER_INIT_BEST_STATS_END_VA,
+    LEADER_INIT_GARRISON_STATS_BEGIN_VA, LEADER_INIT_GARRISON_STATS_END_VA,
+    LEADER_INIT_GOV_HERO_FRAME_VA, LEADER_RESET_SCORE_FORTS_BUILT_ZERO_VA,
+    LEADER_RESET_SCORE_TRADE_PROFIT_ZERO_VA, LEADER_RESET_SCORE_UNITS_BRIBED_ZERO_VA,
+    LEADER_RESET_SCORE_VA, PLAN_STRATEGY_GATHER_HIGH_BEGIN_VA, PLAN_STRATEGY_GATHER_HIGH_END_VA,
+    PLAN_STRATEGY_GATHER_HIGH_FIRST_STORE_VA, PLAN_STRATEGY_WAR_RESET_BEGIN_VA,
+    PLAN_STRATEGY_WAR_RESET_END_VA,
+};
 use don_replay::leaders_sim_owner_frontier::{
     bind_sim_owner_frontier, SimOwnerFrontierError, POP_OFFSET, SIM_OWNER_DUPLICATE_BYTES,
     SIM_OWNER_NEWLY_CANONICAL_BYTES, SIM_OWNER_SOURCE_BYTES,
@@ -1165,6 +1179,7 @@ fn frame_zero_starting_build_census_body() {
     let init_scalars = derive_frame_zero_init_scalars(&setup).unwrap();
     let plan_scratch = derive_frame_zero_plan_scratch(&setup).unwrap();
     let rare_history = derive_frame_zero_rare_history(&setup).unwrap();
+    let stat_history = derive_frame_zero_stat_history(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1250,6 +1265,31 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(LEADER_CLOSE_MASK_PAYLOAD_CLEAR_END_VA, 0x006b_80a9);
     assert_eq!(LIFETIME_MASK_HEADERS, 7);
     assert_eq!(LIFETIME_MASK_HEADER_WALKED_BYTES, 56);
+    assert_eq!(GATHER_TRADE_HISTORY_BEGIN, 0x8d4);
+    assert_eq!(GATHER_TRADE_HISTORY_END, 0x8f8);
+    assert_eq!(BEST_WAR_HISTORY_BEGIN, 0x99c);
+    assert_eq!(BEST_WAR_HISTORY_END, 0x9bc);
+    assert_eq!(INACTIVE_ACTION_HISTORY_BEGIN, 0xa28);
+    assert_eq!(INACTIVE_ACTION_HISTORY_END, 0xa4c);
+    assert_eq!(ATTACKED_BY_OFFSET, 0xa44);
+    assert_eq!(GOV_HERO_FRAME_OFFSET, 0xa48);
+    assert_eq!(LEADER_RESET_SCORE_VA, 0x006e_37f0);
+    assert_eq!(LEADER_RESET_SCORE_TRADE_PROFIT_ZERO_VA, 0x006e_38b3);
+    assert_eq!(LEADER_RESET_SCORE_FORTS_BUILT_ZERO_VA, 0x006e_38b9);
+    assert_eq!(LEADER_RESET_SCORE_UNITS_BRIBED_ZERO_VA, 0x006e_38bf);
+    assert_eq!(PLAN_STRATEGY_GATHER_HIGH_BEGIN_VA, 0x006b_b25c);
+    assert_eq!(PLAN_STRATEGY_GATHER_HIGH_FIRST_STORE_VA, 0x006b_b276);
+    assert_eq!(PLAN_STRATEGY_GATHER_HIGH_END_VA, 0x006b_b2d8);
+    assert_eq!(LEADER_INIT_BEST_STATS_BEGIN_VA, 0x006e_4a60);
+    assert_eq!(LEADER_INIT_BEST_STATS_END_VA, 0x006e_4a73);
+    assert_eq!(PLAN_STRATEGY_WAR_RESET_BEGIN_VA, 0x006b_b95c);
+    assert_eq!(PLAN_STRATEGY_WAR_RESET_END_VA, 0x006b_b982);
+    assert_eq!(LEADER_INIT_GARRISON_STATS_BEGIN_VA, 0x006e_4c62);
+    assert_eq!(LEADER_INIT_GARRISON_STATS_END_VA, 0x006e_4c75);
+    assert_eq!(LEADER_INIT_ATTACK_STATS_BEGIN_VA, 0x006e_4a9c);
+    assert_eq!(LEADER_INIT_ATTACK_STATS_END_VA, 0x006e_4aaf);
+    assert_eq!(LEADER_INIT_GOV_HERO_FRAME_VA, 0x006e_3b6e);
+    assert_eq!(FRAME_ZERO_STAT_HISTORY_WALKED_BYTES, 104);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1257,6 +1297,7 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(init_scalars.claims().len(), active_count);
     assert_eq!(plan_scratch.claims().len(), active_count);
     assert_eq!(rare_history.claims().len(), active_count);
+    assert_eq!(stat_history.claims().len(), active_count);
     for claim in build_registry.claims() {
         let slot = usize::from(claim.slot);
         assert_eq!(claim.basic_type_chain.first(), Some(&414));
@@ -1322,6 +1363,13 @@ fn frame_zero_starting_build_census_body() {
             .find(|field| field.name == "gov")
             .unwrap();
         write_field(&mut fixture.columns, slot, gov, &(-1i32).to_le_bytes());
+        for field_name in ["attacked_by", "gov_hero_frame"] {
+            let field = leader::FIELDS
+                .iter()
+                .find(|field| field.name == field_name)
+                .unwrap();
+            write_field(&mut fixture.columns, slot, field, &(-1i32).to_le_bytes());
+        }
     }
     let mut fixed = DeferredLeadersFixedAuthority::default();
     for slot in 0..NUM_LEADERS {
@@ -1349,23 +1397,28 @@ fn frame_zero_starting_build_census_body() {
     let init_joined = bind_frame_zero_init_scalars(mask_joined, init_scalars.clone()).unwrap();
     let plan_joined = bind_frame_zero_plan_scratch(init_joined, plan_scratch.clone()).unwrap();
     let rare_joined = bind_frame_zero_rare_history(plan_joined, rare_history.clone()).unwrap();
-    let joined = bind_lifetime_mask_headers(rare_joined).unwrap();
+    let headers_joined = bind_lifetime_mask_headers(rare_joined).unwrap();
+    let joined = bind_frame_zero_stat_history(headers_joined, stat_history.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 56);
+    assert_eq!(
+        joined.newly_canonicalized_walked_bytes(),
+        active_count * 104
+    );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_383 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_487 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 1_045) as u64
+        (active_count * 941) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    assert!(joined.header_lifetime_stable());
-    assert_eq!(joined.claims().len(), active_count);
+    assert!(joined.inner().header_lifetime_stable());
+    assert_eq!(joined.inner().claims().len(), active_count);
     assert!(joined
+        .inner()
         .claims()
         .iter()
         .all(|claim| claim.masks == 7 && claim.newly_canonical_walked_bytes == 56));
@@ -1375,11 +1428,18 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(OBS_FLAGS_WALKED_BYTES, 109);
     assert_eq!(TYPE_MASK_NEWLY_CANONICAL_WALKED_BYTES, 117);
     assert_eq!(
-        joined.inner().inner().inner().inner().claims().len(),
+        joined
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .claims()
+            .len(),
         active_count
     );
     assert_eq!(
-        joined.inner().inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
+        joined.inner().inner().inner().inner().inner().claims()[0].tech_duplicate_payload_bytes,
         101
     );
 
@@ -1406,6 +1466,58 @@ fn frame_zero_starting_build_census_body() {
         let init = bind_frame_zero_init_scalars(masks, init_scalars.clone()).unwrap();
         bind_frame_zero_plan_scratch(init, plan_scratch.clone())
     };
+    let bind_stat_columns = |columns: &LeaderCols| {
+        let plan = bind_plan_columns(columns).unwrap();
+        let rare = bind_frame_zero_rare_history(plan, rare_history.clone()).unwrap();
+        let headers = bind_lifetime_mask_headers(rare).unwrap();
+        bind_frame_zero_stat_history(headers, stat_history.clone())
+    };
+
+    let mut stale_gov_hero_columns = fixture.columns.clone();
+    let gov_hero_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "gov_hero_frame")
+        .unwrap();
+    write_field(
+        &mut stale_gov_hero_columns,
+        active,
+        gov_hero_field,
+        &0i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_stat_columns(&stale_gov_hero_columns),
+        Err(FrameZeroStatHistoryError::ConditionalDisagreement {
+            slot,
+            begin: 0xa28,
+            byte: 32,
+            expected: 0xff,
+            conditional: 0,
+        }) if slot == active
+    ));
+
+    let mut stale_gather_high_columns = fixture.columns.clone();
+    let gather_high_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "gather_slots_high")
+        .unwrap();
+    let mut gather_high = vec![0; gather_high_field.size as usize];
+    *gather_high.last_mut().unwrap() = 1;
+    write_field(
+        &mut stale_gather_high_columns,
+        active,
+        gather_high_field,
+        &gather_high,
+    );
+    assert!(matches!(
+        bind_stat_columns(&stale_gather_high_columns),
+        Err(FrameZeroStatHistoryError::ConditionalDisagreement {
+            slot,
+            begin: 0x8d4,
+            byte: 23,
+            expected: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let plan_tail_field = leader::FIELDS
         .iter()

@@ -89,9 +89,10 @@ setup-surviving Leader::init scalars                       48
 pre-plan strategy scratch and regional census           2,558
 pre-gather rare-resource fixed history                    180
 lifetime-invariant residual BitMask headers                56
-frame-zero unique canonical walked bytes               27,383
+setup-surviving stat/action histories                     104
+frame-zero unique canonical walked bytes               27,487
 default empty-child transcript                          28,428
-frame-zero residual                                      1,045
+frame-zero residual                                        941
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend
@@ -155,6 +156,15 @@ runtime mutation touches only payload/dirty state. Even `Leader::close` clears p
 the retained bit counts without changing the headers. These 56 values are lifetime-stable, but
 the composed receipt is still nested under setup-only authorities and remains uninstalled.
 
+Three more disjoint fixed ranges contribute 104 setup-surviving history bytes. The 36-byte
+`gather_slots_high`/trade/Fort/bribe range, 32-byte best-stat/war range, and 36-byte
+garrison/nuke/attack range retain their exact `Leader::init` values through ordinary setup.
+Every byte is zero except the `attacked_by` and `gov_hero_frame` sentinels, which are `-1`.
+The complete setup transaction reaches no plan, gather-high update, trade, bribe, Fort build,
+war census, garrison order, missile launch, combat, or government-Hero action. These are
+historical constructor claims, not maintainers: the owner expires before the first relevant
+plan/process/action writer.
+
 `checksum()` consequently still returns the complete frontier as an error and
 `installed_in_scoreboard()` is false. The replay scoreboard remains:
 
@@ -191,3 +201,5 @@ both the sparse-scalar and contiguous-array halves of the 2,558-byte pre-plan co
 The final byte of `rares_collected[44]` independently refuses the 180-byte pre-gather join.
 Existing malformed-mask tests change header bits/size and refuse before the lifetime header
 receipt, while the focused census verifies all seven exact constructor shapes and byte counts.
+Separate mutations of the final `gather_slots_high` byte and the `gov_hero_frame = -1`
+sentinel refuse the 104-byte stat-history join.

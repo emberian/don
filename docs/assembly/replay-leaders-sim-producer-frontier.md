@@ -131,6 +131,12 @@ the composed residual to 1,045. Their shape survives arbitrary payload mutations
 current owner is not mounted independently on `Sim`; the enclosing setup receipt therefore
 still reports zero survived turns and remains uninstalled.
 
+Exact setup-surviving gather-high/score, best-stat/war, and garrison/action histories add 104
+more fixed bytes per active row, reducing the composed residual to 941. The ordinary setup
+transaction reaches none of their first mutators; all bytes remain at constructor zero except
+the `attacked_by` and `gov_hero_frame` `-1` sentinels. The claim expires before the first
+relevant plan/process/action writer and therefore remains uninstalled with zero survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

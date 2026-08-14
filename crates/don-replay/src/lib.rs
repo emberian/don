@@ -86,6 +86,7 @@ pub mod leaders_setup_plan_scratch_frontier;
 pub mod leaders_setup_rare_history_frontier;
 pub mod leaders_setup_reg_buildings_frontier;
 pub mod leaders_setup_region_history_frontier;
+pub mod leaders_setup_stat_history_frontier;
 pub mod leaders_sim_owner_frontier;
 pub mod leaders_sim_tech_frontier;
 pub mod leaders_type_mask_owner_frontier;
