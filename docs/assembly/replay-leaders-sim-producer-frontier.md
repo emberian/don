@@ -166,6 +166,15 @@ row: zero bonus-card/rate arrays, walked padding, zero `defeat_stamp`, and exact
 counted twice. The composed residual is 727 bytes per active row; later conquest/defeat state is
 not mounted, so install and survival remain false/zero.
 
+The plain production-economy constructor then supplies another 108 disjoint bytes per active
+row: zero `econ[6]`, `escrow[6]`, `escrow_rate[6]`, `base_rate[6]`, `worst_good`,
+`best_good`, and `shortages`. The adjacent 24-byte `tributes[6]` array remains outside this
+claim because it already has a runtime owner. `Leader::plan_strategy` is the executable's only
+door to `production_ai`, which is in turn the only caller of `production_ai_setup`; ordinary
+setup reaches neither path nor any market/gather action. The receipt therefore expires before
+the first plan pass, reduces the residual to 619 bytes per active row, and remains
+uninstalled with zero survival.
+
 ## Verification
 
 The focused replay target covers the exact accounting, complete-but-red receipt, canonical

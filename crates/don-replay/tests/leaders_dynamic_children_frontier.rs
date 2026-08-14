@@ -59,6 +59,15 @@ use don_replay::leaders_setup_diplomacy_stamp_frontier::{
     bind_frame_zero_action_stamps, derive_frame_zero_action_stamps, FrameZeroActionStampsError,
     ACTION_STAMPS_BEGIN, ACTION_STAMPS_END, FRAME_ZERO_ACTION_STAMPS_WALKED_BYTES,
 };
+use don_replay::leaders_setup_economy_frontier::{
+    bind_frame_zero_economy, derive_frame_zero_economy, FrameZeroEconomyError,
+    FRAME_ZERO_ECONOMY_BEGIN, FRAME_ZERO_ECONOMY_END, FRAME_ZERO_ECONOMY_WALKED_BYTES,
+    FRAME_ZERO_PLANNING_RATE_BEGIN, FRAME_ZERO_PLANNING_RATE_END, LEADER_INIT_BASE_RATE_ZERO_VA,
+    LEADER_INIT_ECONOMY_LOOP_BEGIN_VA, LEADER_INIT_ESCROW_RATE_CITY_GATE_VA,
+    LEADER_INIT_ESCROW_RATE_FILL_VA, LEADER_INIT_ESCROW_RATE_ZERO_VA, LEADER_INIT_ESCROW_ZERO_VA,
+    LEADER_INIT_RATE_SCALARS_ZERO_BEGIN_VA, LEADER_INIT_RATE_SCALARS_ZERO_END_VA,
+    PLAN_STRATEGY_PRODUCTION_AI_CALL_VA, PRODUCTION_AI_MARKET_CALL_VA, PRODUCTION_AI_SETUP_CALL_VA,
+};
 use don_replay::leaders_setup_fixed_tail_frontier::{
     bind_frame_zero_fixed_tail, derive_frame_zero_fixed_tail, FrameZeroFixedTailError,
     CONQUEST_BYTE_OFFSET, FRAME_ZERO_FIXED_TAIL_DUPLICATE_WALKED_BYTES,
@@ -1215,6 +1224,7 @@ fn frame_zero_starting_build_census_body() {
     let human_personality = derive_frame_zero_human_personality(&setup).unwrap();
     let chat_status = derive_frame_zero_chat_status(&setup).unwrap();
     let fixed_tail = derive_frame_zero_fixed_tail(&setup).unwrap();
+    let economy = derive_frame_zero_economy(&setup).unwrap();
     let active_count = prefix.rows.iter().filter(|row| row.active).count();
 
     assert_eq!(WALL_INCREMENT_STATS_VA, 0x0064_3270);
@@ -1360,6 +1370,22 @@ fn frame_zero_starting_build_census_body() {
     assert_eq!(LEADER_INIT_TEAM_COLOR_STORE_VA, 0x006e_3b02);
     assert_eq!(LEADER_INIT_DEFEAT_STAMP_STORE_VA, 0x006e_3e0f);
     assert_eq!(SETUP_BUILD_GAME_ACTIVE_LEADER_INIT_VA, 0x005a_c190);
+    assert_eq!(FRAME_ZERO_ECONOMY_BEGIN, 0x450);
+    assert_eq!(FRAME_ZERO_ECONOMY_END, 0x498);
+    assert_eq!(FRAME_ZERO_PLANNING_RATE_BEGIN, 0x4b0);
+    assert_eq!(FRAME_ZERO_PLANNING_RATE_END, 0x4d4);
+    assert_eq!(FRAME_ZERO_ECONOMY_WALKED_BYTES, 108);
+    assert_eq!(LEADER_INIT_ECONOMY_LOOP_BEGIN_VA, 0x006e_3de0);
+    assert_eq!(LEADER_INIT_ESCROW_ZERO_VA, 0x006e_3e86);
+    assert_eq!(LEADER_INIT_ESCROW_RATE_ZERO_VA, 0x006e_3e89);
+    assert_eq!(LEADER_INIT_BASE_RATE_ZERO_VA, 0x006e_3f04);
+    assert_eq!(LEADER_INIT_RATE_SCALARS_ZERO_BEGIN_VA, 0x006e_3f2c);
+    assert_eq!(LEADER_INIT_RATE_SCALARS_ZERO_END_VA, 0x006e_3f39);
+    assert_eq!(LEADER_INIT_ESCROW_RATE_CITY_GATE_VA, 0x006e_4105);
+    assert_eq!(LEADER_INIT_ESCROW_RATE_FILL_VA, 0x006e_411e);
+    assert_eq!(PLAN_STRATEGY_PRODUCTION_AI_CALL_VA, 0x006b_9662);
+    assert_eq!(PRODUCTION_AI_SETUP_CALL_VA, 0x006c_1abf);
+    assert_eq!(PRODUCTION_AI_MARKET_CALL_VA, 0x006c_8ad4);
     assert_eq!(census.claims().len(), active_count);
     assert_eq!(history.claims().len(), active_count);
     assert_eq!(region_history.claims().len(), active_count);
@@ -1394,6 +1420,11 @@ fn frame_zero_starting_build_census_body() {
             && claim.duplicate_checked_walked_bytes == 1
             && claim.newly_canonical_walked_bytes == 50
     }));
+    assert_eq!(economy.claims().len(), active_count);
+    assert!(economy
+        .claims()
+        .iter()
+        .all(|claim| claim.newly_canonical_walked_bytes == 108));
     let first_active = prefix.rows.iter().position(|row| row.active).unwrap();
     setup.receipt.team_setup.chat_status[first_active][0] ^= 1;
     assert_eq!(
@@ -1531,21 +1562,26 @@ fn frame_zero_starting_build_census_body() {
     let personality_joined =
         bind_frame_zero_human_personality(city_joined, human_personality.clone()).unwrap();
     let chat_joined = bind_frame_zero_chat_status(personality_joined, chat_status.clone()).unwrap();
-    let joined = bind_frame_zero_fixed_tail(chat_joined, fixed_tail.clone()).unwrap();
+    let tail_joined = bind_frame_zero_fixed_tail(chat_joined, fixed_tail.clone()).unwrap();
+    let joined = bind_frame_zero_economy(tail_joined, economy.clone()).unwrap();
     let walk = joined.walk_frontier();
 
-    assert_eq!(joined.newly_canonicalized_walked_bytes(), active_count * 50);
+    assert_eq!(
+        joined.newly_canonicalized_walked_bytes(),
+        active_count * 108
+    );
     assert_eq!(
         joined.unique_canonical_walked_bytes(),
-        active_count * 27_701 + (NUM_LEADERS - active_count) * 8
+        active_count * 27_809 + (NUM_LEADERS - active_count) * 8
     );
     assert_eq!(
         joined.remaining_unsourced_walked_bytes(),
-        (active_count * 727) as u64
+        (active_count * 619) as u64
     );
     assert_eq!(joined.checksum(), Err(walk));
     assert!(!joined.installed_in_scoreboard());
-    let chat_frontier = joined.inner();
+    let tail_frontier = joined.inner();
+    let chat_frontier = tail_frontier.inner();
     let personality_frontier = chat_frontier.inner();
     assert!(personality_frontier
         .inner()
@@ -1679,6 +1715,56 @@ fn frame_zero_starting_build_census_body() {
         let chat = bind_chat_columns(columns).unwrap();
         bind_frame_zero_fixed_tail(chat, fixed_tail.clone())
     };
+    let bind_economy_columns = |columns: &LeaderCols| {
+        let tail = bind_tail_columns(columns).unwrap();
+        bind_frame_zero_economy(tail, economy.clone())
+    };
+
+    let mut stale_escrow_rate_columns = fixture.columns.clone();
+    let escrow_rate_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "escrow_rate")
+        .unwrap();
+    let mut stale_escrow_rates = [0u8; 24];
+    stale_escrow_rates[23] = 1;
+    write_field(
+        &mut stale_escrow_rate_columns,
+        active,
+        escrow_rate_field,
+        &stale_escrow_rates,
+    );
+    assert!(matches!(
+        bind_economy_columns(&stale_escrow_rate_columns),
+        Err(FrameZeroEconomyError::ConditionalDisagreement {
+            slot,
+            begin: FRAME_ZERO_ECONOMY_BEGIN,
+            byte: 71,
+            expected: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
+
+    let mut stale_shortages_columns = fixture.columns.clone();
+    let shortages_field = leader::FIELDS
+        .iter()
+        .find(|field| field.name == "shortages")
+        .unwrap();
+    write_field(
+        &mut stale_shortages_columns,
+        active,
+        shortages_field,
+        &1i32.to_le_bytes(),
+    );
+    assert!(matches!(
+        bind_economy_columns(&stale_shortages_columns),
+        Err(FrameZeroEconomyError::ConditionalDisagreement {
+            slot,
+            begin: FRAME_ZERO_PLANNING_RATE_BEGIN,
+            byte: 32,
+            expected: 0,
+            conditional: 1,
+        }) if slot == active
+    ));
 
     let mut stale_team_color_columns = fixture.columns.clone();
     let team_color_field = leader::FIELDS

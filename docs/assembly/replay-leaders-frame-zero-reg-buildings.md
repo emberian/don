@@ -95,9 +95,10 @@ starting-Village Leader counter history                    16
 human-only zero Personality child                          92
 canonical init-teams chat status                           32
 ordinary-setup fixed-row tail                              50
-frame-zero unique canonical walked bytes               27,701
+plain pre-production economy caches                       108
+frame-zero unique canonical walked bytes               27,809
 default empty-child transcript                          28,428
-frame-zero residual                                        727
+frame-zero residual                                        619
 ```
 
 Inactive rows still walk and own only their eight-byte header. Dynamic child payloads extend

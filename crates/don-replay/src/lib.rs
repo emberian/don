@@ -84,6 +84,7 @@ pub mod leaders_setup_build_registry_frontier;
 pub mod leaders_setup_chat_status_frontier;
 pub mod leaders_setup_city_stat_frontier;
 pub mod leaders_setup_diplomacy_stamp_frontier;
+pub mod leaders_setup_economy_frontier;
 pub mod leaders_setup_fixed_tail_frontier;
 pub mod leaders_setup_human_personality_frontier;
 pub mod leaders_setup_init_scalar_frontier;
