@@ -61,6 +61,7 @@ pub enum Frame1CitizenVisibilitySource {
     SeeAll,
     RevealCounter,
     AlliedCityRegistry,
+    AlliedFortRegistry,
     ExploredPlane,
     CurrentTerritory,
     CurrentPlane,
@@ -74,6 +75,18 @@ pub struct Frame1CitizenCityWitness {
     pub city: i16,
     pub object: i16,
     pub region: i16,
+}
+
+/// Exact Leader regional-registry values consumed after the live City pool has proved
+/// `reg_cities[region] == 0`.  The receipt digest joins the historical setup census to the
+/// complete frame-one Build band; it is not a caller-supplied Fort count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame1CitizenRegionalRegistryRead {
+    pub authority_sha256: [u8; 32],
+    pub territory_owner: u8,
+    pub region: i16,
+    pub reg_cities: u16,
+    pub reg_forts: u16,
 }
 
 /// One completed retail visibility call.  Optional fields preserve its short-circuit order.
@@ -95,6 +108,7 @@ pub struct Frame1CitizenVisibilityRead {
     pub territory_region: Option<i16>,
     pub allied: Option<bool>,
     pub city_witness: Option<Frame1CitizenCityWitness>,
+    pub regional_registry: Option<Frame1CitizenRegionalRegistryRead>,
     pub plane_index: Option<usize>,
     pub plane_byte: Option<u8>,
     pub source: Frame1CitizenVisibilitySource,
@@ -154,6 +168,18 @@ pub struct Frame1CitizenItemLookupRead {
     pub visible: Option<bool>,
 }
 
+/// Producer state established by the complete Sim save before the search begins. An absent
+/// registry is admitted only when the whole WData plane has no item marker or item sentinel;
+/// initialized-empty remains a distinct present state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame1CitizenItemRegistryAuthority {
+    AbsentAndMapMarkerFree,
+    PresentSaveValidated {
+        logical_length: usize,
+        map_shape: [i32; 2],
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame1CitizenFindGoodyCellDecision {
     OutOfBounds,
@@ -161,7 +187,6 @@ pub enum Frame1CitizenFindGoodyCellDecision {
     NoItemMarker,
     NotExplored,
     NeedsRegionSeen,
-    NeedsItemRegistry,
     HiddenItem,
     AcceptedWaterGate,
     AcceptedNoItem,
@@ -224,17 +249,29 @@ pub struct Frame1CitizenRegionSeenRequest {
     pub restore_mask2_bit8000: bool,
 }
 
-/// Source request when the canonical Sim explicitly has no item registry attached.
+/// Source-bound answer for one regional visibility request.  This is produced only by the
+/// setup-census/frame-one-Build-band join in `setup_2024_frame1_citizen_region_seen`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Frame1CitizenItemRegistryRequest {
+pub struct Frame1CitizenRegionSeenAuthority {
+    pub authority_sha256: [u8; 32],
     pub request_sha256: [u8; 32],
-    pub parent_digest: [u8; 32],
-    pub scan_prefix_sha256: [u8; 32],
-    pub frame: i32,
-    pub unit: Handle,
-    pub world_x: i32,
-    pub world_y: i32,
-    pub map_shape: [i32; 2],
+    pub replay_payload_sha256: [u8; 32],
+    pub post_command_sim_sha256: [u8; 32],
+    pub set_anim_return_sim_sha256: [u8; 32],
+    pub territory_owner: u8,
+    pub region: i16,
+    pub reg_cities: u16,
+    pub reg_forts: u16,
+    pub build_mark: i32,
+    pub center_build_row: usize,
+    pub center_build_o: i16,
+    pub center_build_uid: u16,
+    pub center_build_type: i32,
+    pub center_region: i16,
+    pub market_build_row: usize,
+    pub market_build_o: i16,
+    pub market_build_uid: u16,
+    pub market_build_type: i32,
     pub restore_mask2_bit8000: bool,
 }
 
@@ -271,7 +308,6 @@ pub struct Frame1CitizenGetGoodyBoxRequest {
 pub enum Frame1CitizenFindGoodyOpenRequest {
     ReturnedFalse(Frame1CitizenFindGoodyFalseReceipt),
     RegionSeen(Frame1CitizenRegionSeenRequest),
-    ItemRegistry(Frame1CitizenItemRegistryRequest),
     GetGoodyBox(Frame1CitizenGetGoodyBoxRequest),
 }
 
@@ -290,6 +326,7 @@ pub struct Frame1CitizenFindGoodyPlan {
     pub order_target_y: i32,
     pub order_target_world_x: i32,
     pub order_target_world_y: i32,
+    pub item_registry: Frame1CitizenItemRegistryAuthority,
     pub journal: Vec<Frame1CitizenFindGoodyCellRead>,
     pub restore_mask2_bit8000: bool,
     pub open: Frame1CitizenFindGoodyOpenRequest,
@@ -315,6 +352,7 @@ pub enum Frame1CitizenFindGoodyError {
     UnsupportedObjectAddress { owner: i16, object: i16 },
     StaleObjectRegistry { owner: i16, object: i16 },
     StaleItemRegistry { slot: i16, logical_length: usize },
+    ItemProducerStateMismatch,
     StalePlan,
 }
 
@@ -500,6 +538,7 @@ fn was_seen(
     fog_x: i32,
     fog_y: i32,
     player: u8,
+    regional: Option<&Frame1CitizenRegionSeenAuthority>,
 ) -> Result<WasSeenResult, Frame1CitizenFindGoodyError> {
     let world = &sim.map.world;
     let fog = &sim.map.fog;
@@ -526,6 +565,7 @@ fn was_seen(
         territory_region: None,
         allied: None,
         city_witness: None,
+        regional_registry: None,
         plane_index: None,
         plane_byte: None,
         source,
@@ -585,12 +625,50 @@ fn was_seen(
                 read.city_witness = Some(witness);
                 return Ok(WasSeenResult::Resolved(read));
             }
-            return Ok(WasSeenResult::NeedsRegion {
-                territory_owner: owner,
-                region: cell.region,
-                fog_x,
-                fog_y,
-            });
+            match regional {
+                Some(authority)
+                    if authority.territory_owner == owner
+                        && authority.region == cell.region
+                        && authority.reg_cities == 0 =>
+                {
+                    let mut read = base(
+                        if authority.reg_forts != 0 {
+                            Frame1CitizenVisibilitySource::AlliedFortRegistry
+                        } else {
+                            Frame1CitizenVisibilitySource::ExploredPlane
+                        },
+                        authority.reg_forts != 0,
+                    );
+                    read.territory_index = Some(territory_index);
+                    read.territory_owner = Some(cell.who);
+                    read.territory_region = Some(cell.region);
+                    read.allied = Some(true);
+                    read.regional_registry = Some(Frame1CitizenRegionalRegistryRead {
+                        authority_sha256: authority.authority_sha256,
+                        territory_owner: authority.territory_owner,
+                        region: authority.region,
+                        reg_cities: authority.reg_cities,
+                        reg_forts: authority.reg_forts,
+                    });
+                    if authority.reg_forts != 0 {
+                        return Ok(WasSeenResult::Resolved(read));
+                    }
+                    let plane_index = world.f_index(fog_x, fog_y);
+                    let plane_byte = world.seen2[plane_index];
+                    read.result = plane_byte & leader.player_mask != 0;
+                    read.plane_index = Some(plane_index);
+                    read.plane_byte = Some(plane_byte);
+                    return Ok(WasSeenResult::Resolved(read));
+                }
+                _ => {
+                    return Ok(WasSeenResult::NeedsRegion {
+                        territory_owner: owner,
+                        region: cell.region,
+                        fog_x,
+                        fog_y,
+                    });
+                }
+            }
         }
     }
     let plane_index = world.f_index(fog_x, fog_y);
@@ -640,6 +718,7 @@ fn is_seen(
         territory_region: None,
         allied: None,
         city_witness: None,
+        regional_registry: None,
         plane_index: None,
         plane_byte: None,
         source,
@@ -698,10 +777,16 @@ fn item_lookup(
     sim: &Sim,
     world_x: i32,
     world_y: i32,
-) -> Result<Option<Frame1CitizenItemLookupRead>, Frame1CitizenFindGoodyError> {
-    let Some(runtime) = sim.world.item_runtime.as_ref() else {
-        return Ok(None);
-    };
+) -> Result<Frame1CitizenItemLookupRead, Frame1CitizenFindGoodyError> {
+    // `plan_frame1_citizen_find_goody` first round-trips the complete Sim through save_sim.
+    // Save validation permits an absent producer only when the entire WData plane has neither
+    // an item flag nor an item-chain sentinel. Reaching this call from an item-marked cell
+    // therefore proves that the authoritative registry is present.
+    let runtime = sim
+        .world
+        .item_runtime
+        .as_ref()
+        .ok_or(Frame1CitizenFindGoodyError::ItemProducerStateMismatch)?;
     if runtime.map_shape() != (sim.map.world.xs, sim.map.world.ys) {
         return Err(Frame1CitizenFindGoodyError::ItemRuntimeMapMismatch);
     }
@@ -751,7 +836,7 @@ fn item_lookup(
         } else {
             None
         };
-    Ok(Some(Frame1CitizenItemLookupRead {
+    Ok(Frame1CitizenItemLookupRead {
         call_va: OBJECTS_FIND_GOODY_AT_CALL_VA,
         body_va: OBJECTS_FIND_GOODY_AT_VA,
         initial_object,
@@ -762,7 +847,7 @@ fn item_lookup(
         item,
         item_visibility: Vec::new(),
         visible: None,
-    }))
+    })
 }
 
 fn append_bool(image: &mut Vec<u8>, value: bool) {
@@ -841,6 +926,17 @@ fn append_visibility(image: &mut Vec<u8>, read: &Frame1CitizenVisibilityRead) {
             image.extend_from_slice(&witness.city.to_le_bytes());
             image.extend_from_slice(&witness.object.to_le_bytes());
             image.extend_from_slice(&witness.region.to_le_bytes());
+        }
+    }
+    match read.regional_registry {
+        None => image.push(0),
+        Some(regional) => {
+            image.push(1);
+            image.extend_from_slice(&regional.authority_sha256);
+            image.push(regional.territory_owner);
+            image.extend_from_slice(&regional.region.to_le_bytes());
+            image.extend_from_slice(&regional.reg_cities.to_le_bytes());
+            image.extend_from_slice(&regional.reg_forts.to_le_bytes());
         }
     }
     append_opt_usize(image, read.plane_index);
@@ -974,23 +1070,6 @@ pub fn frame1_citizen_region_seen_request_digest(
     sha256(&image)
 }
 
-pub fn frame1_citizen_item_registry_request_digest(
-    request: &Frame1CitizenItemRegistryRequest,
-) -> [u8; 32] {
-    let mut image = b"don-frame1-citizen-item-registry-v1".to_vec();
-    image.extend_from_slice(&request.parent_digest);
-    image.extend_from_slice(&request.scan_prefix_sha256);
-    image.extend_from_slice(&request.frame.to_le_bytes());
-    image.extend_from_slice(&request.unit.id.to_le_bytes());
-    image.extend_from_slice(&request.unit.generation.to_le_bytes());
-    image.extend_from_slice(&request.world_x.to_le_bytes());
-    image.extend_from_slice(&request.world_y.to_le_bytes());
-    image.extend_from_slice(&request.map_shape[0].to_le_bytes());
-    image.extend_from_slice(&request.map_shape[1].to_le_bytes());
-    append_bool(&mut image, request.restore_mask2_bit8000);
-    sha256(&image)
-}
-
 pub fn frame1_citizen_get_goody_box_request_digest(
     request: &Frame1CitizenGetGoodyBoxRequest,
 ) -> [u8; 32] {
@@ -1037,7 +1116,7 @@ fn false_receipt_digest(receipt: &Frame1CitizenFindGoodyFalseReceipt) -> [u8; 32
 }
 
 fn plan_digest(plan: &Frame1CitizenFindGoodyPlan) -> [u8; 32] {
-    let mut image = b"don-frame1-citizen-find-goody-v1".to_vec();
+    let mut image = b"don-frame1-citizen-find-goody-v2".to_vec();
     image.extend_from_slice(&plan.set_idle.composition_digest);
     image.extend_from_slice(&plan.source_sim_sha256);
     image.extend_from_slice(&(plan.row as u64).to_le_bytes());
@@ -1048,6 +1127,18 @@ fn plan_digest(plan: &Frame1CitizenFindGoodyPlan) -> [u8; 32] {
     image.extend_from_slice(&plan.order_target_y.to_le_bytes());
     image.extend_from_slice(&plan.order_target_world_x.to_le_bytes());
     image.extend_from_slice(&plan.order_target_world_y.to_le_bytes());
+    match plan.item_registry {
+        Frame1CitizenItemRegistryAuthority::AbsentAndMapMarkerFree => image.push(0),
+        Frame1CitizenItemRegistryAuthority::PresentSaveValidated {
+            logical_length,
+            map_shape,
+        } => {
+            image.push(1);
+            image.extend_from_slice(&(logical_length as u64).to_le_bytes());
+            image.extend_from_slice(&map_shape[0].to_le_bytes());
+            image.extend_from_slice(&map_shape[1].to_le_bytes());
+        }
+    }
     append_journal(&mut image, &plan.journal);
     append_bool(&mut image, plan.restore_mask2_bit8000);
     match &plan.open {
@@ -1059,12 +1150,8 @@ fn plan_digest(plan: &Frame1CitizenFindGoodyPlan) -> [u8; 32] {
             image.push(1);
             image.extend_from_slice(&request.request_sha256);
         }
-        Frame1CitizenFindGoodyOpenRequest::ItemRegistry(request) => {
-            image.push(2);
-            image.extend_from_slice(&request.request_sha256);
-        }
         Frame1CitizenFindGoodyOpenRequest::GetGoodyBox(request) => {
-            image.push(3);
+            image.push(2);
             image.extend_from_slice(&request.request_sha256);
         }
     }
@@ -1101,6 +1188,7 @@ fn finish_plan(
     home_region: i16,
     order_target_x: i32,
     order_target_y: i32,
+    item_registry: Frame1CitizenItemRegistryAuthority,
     journal: Vec<Frame1CitizenFindGoodyCellRead>,
     open: Frame1CitizenFindGoodyOpenRequest,
 ) -> Frame1CitizenFindGoodyPlan {
@@ -1117,6 +1205,7 @@ fn finish_plan(
         order_target_y,
         order_target_world_x: wcoord_of(order_target_x),
         order_target_world_y: wcoord_of(order_target_y),
+        item_registry,
         journal,
         restore_mask2_bit8000: true,
         open,
@@ -1141,6 +1230,31 @@ pub fn plan_frame1_citizen_find_goody(
     entry_authority: &GoldenFrame1EntryAuthority,
     set_idle: &Frame1CitizenSetIdlePlan,
 ) -> Result<Frame1CitizenFindGoodyPlan, Frame1CitizenFindGoodyError> {
+    plan_frame1_citizen_find_goody_with_regional_authority(
+        replay,
+        setup_entry,
+        post_authority,
+        post_command,
+        set_anim_return,
+        entry_authority,
+        set_idle,
+        None,
+    )
+}
+
+/// Re-run the exact read-only body with one independently bound regional-registry answer.
+/// The public continuation validates the answer and its predecessor before entering here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_frame1_citizen_find_goody_with_regional_authority(
+    replay: &Replay,
+    setup_entry: &Frame379SetupEntryReceipt,
+    post_authority: &Frame1PostCommandAuthority,
+    post_command: &Sim,
+    set_anim_return: &Sim,
+    entry_authority: &GoldenFrame1EntryAuthority,
+    set_idle: &Frame1CitizenSetIdlePlan,
+    regional: Option<&Frame1CitizenRegionSeenAuthority>,
+) -> Result<Frame1CitizenFindGoodyPlan, Frame1CitizenFindGoodyError> {
     validate_frame1_citizen_set_idle_plan(
         replay,
         setup_entry,
@@ -1164,6 +1278,13 @@ pub fn plan_frame1_citizen_find_goody(
     }
 
     let source_sim_sha256 = sha256(&save_sim(set_anim_return)?);
+    let item_registry = match set_anim_return.world.item_runtime.as_ref() {
+        None => Frame1CitizenItemRegistryAuthority::AbsentAndMapMarkerFree,
+        Some(runtime) => Frame1CitizenItemRegistryAuthority::PresentSaveValidated {
+            logical_length: runtime.items().len(),
+            map_shape: [set_anim_return.map.world.xs, set_anim_return.map.world.ys],
+        },
+    };
     if source_sim_sha256
         != set_idle
             .think_suffix
@@ -1269,7 +1390,14 @@ pub fn plan_frame1_citizen_find_goody(
         ];
         let mut discovered = false;
         for (call_va, fog_x, fog_y) in probes {
-            match was_seen(set_anim_return, call_va, fog_x, fog_y, request.who)? {
+            match was_seen(
+                set_anim_return,
+                call_va,
+                fog_x,
+                fog_y,
+                request.who,
+                regional,
+            )? {
                 WasSeenResult::Resolved(probe) => {
                     discovered = probe.result;
                     read.fog_probes.push(probe);
@@ -1312,6 +1440,7 @@ pub fn plan_frame1_citizen_find_goody(
                         home_region,
                         order_target_x,
                         order_target_y,
+                        item_registry,
                         journal,
                         Frame1CitizenFindGoodyOpenRequest::RegionSeen(request_open),
                     ));
@@ -1331,35 +1460,7 @@ pub fn plan_frame1_citizen_find_goody(
             read.decision = Frame1CitizenFindGoodyCellDecision::AcceptedWaterGate;
             true
         } else {
-            let Some(mut lookup) = item_lookup(set_anim_return, world_x, world_y)? else {
-                read.decision = Frame1CitizenFindGoodyCellDecision::NeedsItemRegistry;
-                journal.push(read);
-                let mut request_open = Frame1CitizenItemRegistryRequest {
-                    request_sha256: [0; 32],
-                    parent_digest: set_idle.composition_digest,
-                    scan_prefix_sha256: scan_prefix_digest(&journal),
-                    frame: request.frame,
-                    unit: request.unit,
-                    world_x,
-                    world_y,
-                    map_shape: [world.xs, world.ys],
-                    restore_mask2_bit8000: true,
-                };
-                request_open.request_sha256 =
-                    frame1_citizen_item_registry_request_digest(&request_open);
-                return Ok(finish_plan(
-                    set_idle,
-                    source_sim_sha256,
-                    row,
-                    unit_world_x,
-                    unit_world_y,
-                    home_region,
-                    order_target_x,
-                    order_target_y,
-                    journal,
-                    Frame1CitizenFindGoodyOpenRequest::ItemRegistry(request_open),
-                ));
-            };
+            let mut lookup = item_lookup(set_anim_return, world_x, world_y)?;
             match lookup.item {
                 None => {
                     lookup.visible = None;
@@ -1387,6 +1488,7 @@ pub fn plan_frame1_citizen_find_goody(
                                 fcoord_of(item_read.x),
                                 fcoord_of(item_read.y),
                                 request.who,
+                                regional,
                             )? {
                                 WasSeenResult::Resolved(item_seen) => {
                                     visible = item_seen.result;
@@ -1429,6 +1531,7 @@ pub fn plan_frame1_citizen_find_goody(
                                         home_region,
                                         order_target_x,
                                         order_target_y,
+                                        item_registry,
                                         journal,
                                         Frame1CitizenFindGoodyOpenRequest::RegionSeen(request_open),
                                     ));
@@ -1470,6 +1573,7 @@ pub fn plan_frame1_citizen_find_goody(
                 home_region,
                 order_target_x,
                 order_target_y,
+                item_registry,
                 journal,
                 false_open(
                     set_idle.composition_digest,
@@ -1513,6 +1617,7 @@ pub fn plan_frame1_citizen_find_goody(
             home_region,
             order_target_x,
             order_target_y,
+            item_registry,
             journal,
             Frame1CitizenFindGoodyOpenRequest::GetGoodyBox(request_open),
         ));
@@ -1527,6 +1632,7 @@ pub fn plan_frame1_citizen_find_goody(
         home_region,
         order_target_x,
         order_target_y,
+        item_registry,
         journal,
         false_open(
             set_idle.composition_digest,
@@ -1622,30 +1728,5 @@ mod tests {
         let digest = request.request_sha256;
         request.scan_prefix_sha256[0] ^= 1;
         assert_ne!(frame1_citizen_region_seen_request_digest(&request), digest);
-    }
-
-    #[test]
-    fn setup_2024_frame1_citizen_find_goody_item_request_binds_target_cell() {
-        let mut request = Frame1CitizenItemRegistryRequest {
-            request_sha256: [0; 32],
-            parent_digest: [0x33; 32],
-            scan_prefix_sha256: [0x44; 32],
-            frame: 1,
-            unit: Handle {
-                id: 9,
-                generation: 5,
-            },
-            world_x: 12,
-            world_y: 14,
-            map_shape: [64, 64],
-            restore_mask2_bit8000: true,
-        };
-        request.request_sha256 = frame1_citizen_item_registry_request_digest(&request);
-        let digest = request.request_sha256;
-        request.world_y += 1;
-        assert_ne!(
-            frame1_citizen_item_registry_request_digest(&request),
-            digest
-        );
     }
 }

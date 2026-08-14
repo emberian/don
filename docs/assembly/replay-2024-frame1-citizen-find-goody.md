@@ -31,10 +31,18 @@ pass virtual `ItemData::is_seen` (`0x00677850`).
 
 The WData/object chain is resolved through the canonical sparse Unit/Build/Wall identities.
 Item shared-vision, Spanish owned-cell history, current visibility, fog option, Leader flags,
-diplomacy, terrain planes, and City registry reads all come from the bound Sim. The one
-remaining truthful `WorldData::was_seen` seam is an allied territory with no City witness:
-retail then reads `LeaderData::reg_forts[region]` at `+0x12DE`, which the current Sim owner
-does not materialize independently. That arm emits `Frame1CitizenRegionSeenRequest`.
+diplomacy, terrain planes, and City registry reads all come from the bound Sim. An allied
+territory with no City witness reaches `LeaderData::reg_forts[region]` at `+0x12DE`, which the
+current Sim owner does not materialize independently. That arm emits
+`Frame1CitizenRegionSeenRequest`; the adjacent regional-visibility continuation joins the exact
+frame-zero census to the unchanged golden frame-one Build band and resumes with its zero Fort
+answer.
+
+The complete Sim save also binds item-registry producer state before the scan. Registry absence
+is coherent only when the entire WData plane has no item marker or item sentinel; therefore any
+reached item-marked cell proves that a synchronized registry is present. The plan records absent
+marker-free versus present-save-validated authority rather than exposing a caller-supplied empty
+registry.
 
 ## Return and Groups boundary
 
