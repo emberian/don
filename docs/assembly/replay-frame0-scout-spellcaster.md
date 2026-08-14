@@ -2,8 +2,9 @@
 
 Status: source-exact detached transaction for the supported 2024 human Scout path. Replay Rules
 plus an adjacent call-entry image now close `SpellTypeData::is_castable`, `UnitData::mana`, and
-`SpellTypeData::get_range`. The complete ordered `ObjectsData::find` spatial traversal and a
-successful Unit order mutation remain typed host boundaries.
+`SpellTypeData::get_range`. A complete ordered `ObjectsData::find` spatial traversal remains a
+typed receipt. After a target hit, the successful Unit-order cone advances to its first mutating
+child, `OrdersMemManager::get_obj(14)`, and stops there.
 
 ## The branch correction
 
@@ -120,7 +121,10 @@ no-target after-image from setup state.
 
 ## Unit order write, not Caster active-spell write
 
-`Unit::add_cast_order` is `0x005E4A60`, 541 bytes. For Counterintel 631 and queue position zero it:
+`Unit::add_cast_order` is `0x005E4A60`, 541 bytes, SHA-256
+`6acb03ec4d923263a59111d4b84f54c9f7dcffb4540def5a946bd6acdd327158`. For
+Counterintel 631 and queue position zero, retail skips the queue-2 close prefix and both
+PACK/DEPLOY canonicalization arms, then:
 
 - allocates `OrderIndex 0x0E` through `OrdersMemManager::get_obj` `0x00730AC0`;
 - writes target object/owner at CastOrder `+0x08/+0x0C`;
@@ -132,10 +136,20 @@ no-target after-image from setup state.
   `Unit::clear_partial_path` `0x005E3920`, rewrites the `Unit+0xDC` current-order link to its first
   pointer, and reaches `Unit::update_action` `0x0060A870`.
 
-The allocation, target-UID read, path clear, current-order/link mutation, and action/Guy
-after-image form one product-host transaction. The Rust frontier stops at that exact request. It
-does not publish the preceding search scratch alone and does not guess any post-order Unit, path,
-Guy, or World state.
+The first child is exactly `push 0x0E; call 0x00730AC0` at `0x005E4BA3/0x005E4BA5`.
+`OrdersMemManager::get_obj` is 236 bytes, SHA-256
+`055847edeebe03094c7e795bb0d1de368027ad9f97e5533a0ed9bec4ba462586`. It indexes the
+pool array at `0x00EB4390` with 32-byte stride. If pool-14 free length at `+8` is nonzero, it
+normalizes a negative length to one, decrements the length, pops the saved pointer from `+0`, and
+calls that node's virtual slot `+4`. Otherwise it calls the type-indexed creator at `0x00730550`.
+Both branches mutate allocator/recycled-node state before returning.
+
+The allocation, target-UID read, list insertion, path clear, current-order/link mutation, and
+action/Guy after-image therefore form one product-host transaction. The Rust frontier binds the
+whole OrdersMemManager revision/digest and stops immediately before the allocator. Its typed
+request retains the exact later continuation but does not authorize allocating one node in
+isolation. Any caller-boundary change fails stale validation without publishing the staged search
+scratch or touching allocator, Unit, order, path, Guy, World, RNG, or Caster state.
 
 There is no access to `CasterData::active_spells` in `Unit::think_spellcaster` or this
 Counterintel `add_cast_order` arm. A queued CastOrder is work for the Unit order dispatcher; it is
@@ -146,7 +160,7 @@ not an `ActiveSpell { type,start,end }` in `CasterData+0x04`. Therefore the exis
 |---|---|---|---|---|
 | not special / not castable / insufficient mana | unchanged | unchanged | unchanged | unchanged |
 | search finds no target | unchanged | sentinel/query-owner write | unchanged | unchanged |
-| search finds target | external atomic CastOrder transaction | selected metric/owner staged | unchanged | unchanged |
+| search finds target | residual before pool-14 allocation; full CastOrder transaction remains atomic | selected metric/owner staged only | unchanged | unchanged |
 
 In particular, a setup-empty Caster array remains empty across this function on every branch.
 That is a proof from the reached write set, not a replay-state guess.
@@ -159,18 +173,21 @@ Counterintel SpellType row, and two Constants fields from the admitted replay Ru
 and replay SHA, stable golden identity, independent adjacent call-entry composition, complete
 Objects request, search scratch, and all checksum-relevant invariant revisions.
 `prepare_golden_scout_spellcaster` is pure. A complete no-cast result can be installed only by
-`commit_no_cast`, which revalidates the whole before-image; a target hit returns the final typed
-`AddCastOrderRequest`.
+`commit_no_cast`, which revalidates the whole before-image. A target hit returns an
+`OrdersGetObjectRequest` for the exact pool-14 child, with the full `AddCastOrderRequest`
+continuation nested inside it.
 
 The focused gate pins both top-level branches, the owned castability result, signed mana gate,
-wrapping range formula, complete find ABI, no-target scratch, exact CastOrder request,
-Rules/call-entry/traversal provenance refusal, and atomic commit invariants.
+wrapping range formula, complete find ABI, no-target scratch, exact allocator-first CastOrder
+continuation, Rules/call-entry/traversal/recycler provenance refusal, stale no-publication, and
+atomic no-target commit invariants.
 
 ## Remaining golden evidence
 
 This closes the static child results and prevents a false Caster/RNG dependency, but it does not
 invent the golden result of the spatial `ObjectsData::find` traversal. An adjacent retail capture
-must supply that complete traversal (and the final Unit order transaction if a target is found).
+must supply that complete traversal. If it finds a target, a product host must still own the
+allocator, target UID read, Unit list/path/action suffix, and their single atomic commit.
 The call-entry composition is intentionally independent of the completed-setup digest: earlier
 frame-zero receivers, including Merchant work, may change live orders, masks, coordinates,
 Leader/World state, object-search scratch, and RNG before the Scout call.

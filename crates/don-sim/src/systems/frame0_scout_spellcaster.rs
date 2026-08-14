@@ -11,8 +11,9 @@
 //! replay-carried Rules plus one adjacent live call-entry image.  The first unmounted owner is
 //! the global `ObjectsData::find` spatial traversal.  A composition-bound native traversal
 //! receipt may advance the detached transaction, but no caller state changes until
-//! [`commit_no_cast`] accepts a complete no-cast plan.  A found target stops at an exact
-//! `Unit::add_cast_order` request; the order/path/Guy after-image is not guessed.
+//! [`commit_no_cast`] accepts a complete no-cast plan.  A found target advances through the
+//! source-owned `Unit::add_cast_order` prefix and stops before its first mutating child,
+//! `OrdersMemManager::get_obj(14)`; the recycler/order/path/Guy after-image is not guessed.
 //!
 //! Most importantly, this function never reads or writes `CasterData::active_spells`.
 //! Its successful arm allocates a Unit `CastOrder` (order index `0x0E`) in `Unit+0xCC`.
@@ -96,6 +97,12 @@ pub const UNIT_ADD_CAST_ORDER_SHA256: [u8; 32] = [
     0xf7, 0xdc, 0xff, 0xb4, 0x54, 0x0d, 0xef, 0x5a, 0x94, 0x6b, 0xd6, 0xac, 0xdd, 0x32, 0x71, 0x58,
 ];
 pub const ORDERS_GET_OBJECT_VA: u32 = 0x0073_0AC0;
+pub const ORDERS_GET_OBJECT_SIZE: u32 = 236;
+pub const ORDERS_GET_OBJECT_SHA256: [u8; 32] = [
+    0x05, 0x58, 0x47, 0xed, 0xee, 0xbe, 0x03, 0x09, 0x4c, 0x7e, 0x79, 0x5b, 0xb0, 0xd1, 0xde, 0x36,
+    0x80, 0x27, 0xad, 0x9f, 0x97, 0xe5, 0x53, 0x3a, 0x0e, 0xd9, 0xbe, 0xc4, 0xba, 0x46, 0x25, 0x86,
+];
+pub const ORDERS_NEW_OBJECT_VA: u32 = 0x0073_0550;
 pub const UNIT_CLEAR_PARTIAL_PATH_VA: u32 = 0x005E_3920;
 pub const UNIT_UPDATE_ACTION_VA: u32 = 0x0060_A870;
 pub const ORDER_LIST_ADD_VA: u32 = 0x0046_D5A0;
@@ -105,6 +112,7 @@ pub const UNIT_DATA_MANA_CALLSITE_VA: u32 = 0x005F_281B;
 pub const SPELL_GET_RANGE_CALLSITE_VA: u32 = 0x005F_2875;
 pub const OBJECTS_FIND_CALLSITE_VA: u32 = 0x005F_2884;
 pub const UNIT_ADD_CAST_ORDER_CALLSITE_VA: u32 = 0x005F_28BE;
+pub const ORDERS_GET_OBJECT_CALLSITE_VA: u32 = 0x005E_4BA5;
 
 pub const SCOUT_TYPE: i32 = 69;
 pub const GOLDEN_OWNER: u8 = 0;
@@ -125,6 +133,12 @@ pub const TERRA_COTTA_WONDER_TYPE: i32 = 0x211;
 pub const RETAIL_CASTABLE_DEFAULT_RESULT: i32 = 3;
 pub const GOLDEN_SERIALIZED_RULES_BYTES: usize = 1_024_221;
 pub const CAST_ORDER_INDEX: i32 = 0x0E;
+pub const CAST_ORDER_GET_SUBOBJECT_VTABLE_OFFSET: u32 = 0x7C;
+pub const ORDERS_MEM_POOLS_VA: u32 = 0x00EB_4390;
+pub const ORDERS_MEM_POOL_STRIDE: u32 = 0x20;
+pub const ORDERS_MEM_FREE_ARRAY_OFFSET: u32 = 0;
+pub const ORDERS_MEM_FREE_LENGTH_OFFSET: u32 = 8;
+pub const RECYCLED_ORDER_RESET_VTABLE_OFFSET: u32 = 4;
 pub const UNIT_ORDER_LIST_OFFSET: u32 = 0xCC;
 pub const UNIT_CURRENT_ORDER_LINK_OFFSET: u32 = 0xDC;
 pub const FILTER_INDEX_20: i32 = 20;
@@ -205,6 +219,10 @@ pub struct Frame0ScoutBoundary {
     pub world_revision: u64,
     pub objects_revision: u64,
     pub search_scratch: ObjectsFindScratch,
+    /// Whole `OrdersMemManager` recycler authority. It is not a checksum channel, but its
+    /// allocation/free chronology controls future order identity and must not be normalized.
+    pub orders_mem_revision: u64,
+    pub orders_mem_digest: [u8; 32],
     pub rng_state: i32,
     pub caster_active_spells_revision: u64,
     pub caster_active_spells_len: u32,
@@ -335,6 +353,8 @@ pub struct ObjectsFindReceipt {
 pub struct AddCastOrderRequest {
     pub callsite_va: u32,
     pub function_va: u32,
+    pub function_size: u32,
+    pub function_sha256: [u8; 32],
     pub actor_who: i32,
     pub actor_o: i32,
     pub target_o: i32,
@@ -353,6 +373,30 @@ pub struct AddCastOrderRequest {
     pub clears_partial_path: bool,
     pub current_order_link_offset: u32,
     pub calls_update_action: bool,
+}
+
+/// Exact first child reached inside the successful queue-zero Counterintel suffix.
+///
+/// This is deliberately a residual, not permission to allocate one node in isolation. The
+/// allocator mutates pool 14 before the caller reads the target UID and inserts the node; a host
+/// must own that entire continuation atomically or leave every field unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrdersGetObjectRequest {
+    pub callsite_va: u32,
+    pub function_va: u32,
+    pub function_size: u32,
+    pub function_sha256: [u8; 32],
+    pub order_index: i32,
+    pub pools_va: u32,
+    pub pool_stride: u32,
+    pub free_array_offset: u32,
+    pub free_length_offset: u32,
+    pub recycled_reset_vtable_offset: u32,
+    pub new_object_function_va: u32,
+    pub pool_revision: u64,
+    pub pool_digest: [u8; 32],
+    pub returned_order_subobject_vtable_offset: u32,
+    pub continuation: AddCastOrderRequest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,7 +419,7 @@ pub enum ExternalRequest {
         o: i32,
     },
     ObjectsFind(ObjectsFindRequest),
-    AddCastOrder(AddCastOrderRequest),
+    OrdersGetObject(OrdersGetObjectRequest),
 }
 
 /// The static retail children are owned locally.  The only admissible child authority is the
@@ -404,11 +448,15 @@ pub struct PreparedNoCast {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TypedResidual {
     pub snapshot_revision: u64,
+    /// Complete caller-owned before-image used for stale validation. No external child is
+    /// authorized after any field changes.
+    pub before: Frame0ScoutBoundary,
     /// State staged by completed receipts.  It is not committed by preparation.
     pub staged: Frame0ScoutBoundary,
     pub request: ExternalRequest,
     pub consumed_receipts: usize,
-    /// Known only for the final add-order child.
+    /// Known only when the residual owns the final child. The allocator-first successful cone
+    /// leaves this unknown until an atomic host owns the complete continuation.
     pub retail_return_after_child: Option<i32>,
 }
 
@@ -418,6 +466,18 @@ impl TypedResidual {
         self.staged.rng_state == before.rng_state
             && self.staged.caster_active_spells_revision == before.caster_active_spells_revision
             && self.staged.caster_active_spells_len == before.caster_active_spells_len
+    }
+
+    /// Validate the full detached before-image without publishing staged Objects scratch or
+    /// executing an external child.
+    pub fn validate_external_before(
+        &self,
+        current: &Frame0ScoutBoundary,
+    ) -> Result<(), CommitError> {
+        if current != &self.before {
+            return Err(CommitError::BoundaryChanged);
+        }
+        Ok(())
     }
 }
 
@@ -437,8 +497,10 @@ pub struct Frame0ScoutCasterSetupJoin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame0ScoutCasterInvariantBranch {
     ReturnedNoCast(NoCastReason),
-    /// The exact human body reached its final Unit-order child.  That child owns Unit orders,
-    /// path, Guy/action, and target UID state; it cannot alias `CasterData::active_spells`.
+    /// The exact human body reached its final Unit-order owner and stopped before pool-14
+    /// allocation. The remaining atomic transaction owns Unit orders, path, Guy/action, and
+    /// target UID state; its exact whole-function write set cannot alias
+    /// `CasterData::active_spells`.
     AddCastOrderOwnerResidual,
 }
 
@@ -485,6 +547,7 @@ pub enum PrepareError {
     ReceiptRequestMismatch { index: usize },
     ReceiptCompositionMismatch { index: usize },
     MissingCandidateTraversalDigest,
+    MissingOrdersMemAuthority,
     ObjectsRevisionMismatch,
     ObjectsRevisionDidNotAdvance,
     InvalidFindResult,
@@ -552,6 +615,7 @@ fn residual(
 ) -> PrepareOutcome {
     PrepareOutcome::ExternalRequired(TypedResidual {
         snapshot_revision: input.snapshot_revision,
+        before: input.before,
         staged,
         request,
         consumed_receipts,
@@ -832,10 +896,15 @@ pub fn prepare_golden_scout_spellcaster(
     if !(0..10).contains(&find.scratch_after.selected_owner) {
         return Err(PrepareError::InvalidFindResult);
     }
+    if input.before.orders_mem_revision == 0 || input.before.orders_mem_digest == [0; 32] {
+        return Err(PrepareError::MissingOrdersMemAuthority);
+    }
     reject_extra(receipts, 1)?;
     let add_request = AddCastOrderRequest {
         callsite_va: UNIT_ADD_CAST_ORDER_CALLSITE_VA,
         function_va: UNIT_ADD_CAST_ORDER_VA,
+        function_size: UNIT_ADD_CAST_ORDER_SIZE,
+        function_sha256: UNIT_ADD_CAST_ORDER_SHA256,
         actor_who: i32::from(input.who),
         actor_o: i32::from(input.o),
         target_o: find.result_o,
@@ -855,12 +924,29 @@ pub fn prepare_golden_scout_spellcaster(
         current_order_link_offset: UNIT_CURRENT_ORDER_LINK_OFFSET,
         calls_update_action: true,
     };
+    let allocation = OrdersGetObjectRequest {
+        callsite_va: ORDERS_GET_OBJECT_CALLSITE_VA,
+        function_va: ORDERS_GET_OBJECT_VA,
+        function_size: ORDERS_GET_OBJECT_SIZE,
+        function_sha256: ORDERS_GET_OBJECT_SHA256,
+        order_index: CAST_ORDER_INDEX,
+        pools_va: ORDERS_MEM_POOLS_VA,
+        pool_stride: ORDERS_MEM_POOL_STRIDE,
+        free_array_offset: ORDERS_MEM_FREE_ARRAY_OFFSET,
+        free_length_offset: ORDERS_MEM_FREE_LENGTH_OFFSET,
+        recycled_reset_vtable_offset: RECYCLED_ORDER_RESET_VTABLE_OFFSET,
+        new_object_function_va: ORDERS_NEW_OBJECT_VA,
+        pool_revision: input.before.orders_mem_revision,
+        pool_digest: input.before.orders_mem_digest,
+        returned_order_subobject_vtable_offset: CAST_ORDER_GET_SUBOBJECT_VTABLE_OFFSET,
+        continuation: add_request,
+    };
     Ok(residual(
         input,
         staged,
-        ExternalRequest::AddCastOrder(add_request),
+        ExternalRequest::OrdersGetObject(allocation),
         1,
-        Some(1),
+        None,
     ))
 }
 
@@ -868,8 +954,9 @@ pub fn prepare_golden_scout_spellcaster(
 ///
 /// Intermediate dynamic-child requests are not enough: the bounded transaction must either
 /// have returned through a complete no-cast arm or reached the final `Unit::add_cast_order`
-/// owner boundary.  The latter leaves the Caster authority complete while the distinct Unit
-/// order/search-scratch transaction remains open for its sibling receipt.
+/// owner boundary and its allocator-first typed residual. The latter leaves the Caster authority
+/// complete while the distinct Unit order/search-scratch transaction remains open for its
+/// sibling receipt.
 pub fn bind_frame0_scout_caster_invariant(
     input: &GoldenScoutInput,
     receipts: &[ChildReceipt],
@@ -893,7 +980,7 @@ pub fn bind_frame0_scout_caster_invariant(
             ready.after,
         ),
         PrepareOutcome::ExternalRequired(residual) => match residual.request {
-            ExternalRequest::AddCastOrder(_) => (
+            ExternalRequest::OrdersGetObject(_) => (
                 Frame0ScoutCasterInvariantBranch::AddCastOrderOwnerResidual,
                 residual.consumed_receipts,
                 residual.staged,
@@ -986,6 +1073,8 @@ pub fn commit_no_cast(
         || prepared.after.guy_revision != prepared.before.guy_revision
         || prepared.after.leader_revision != prepared.before.leader_revision
         || prepared.after.world_revision != prepared.before.world_revision
+        || prepared.after.orders_mem_revision != prepared.before.orders_mem_revision
+        || prepared.after.orders_mem_digest != prepared.before.orders_mem_digest
         || prepared.after.rng_state != prepared.before.rng_state
         || prepared.after.caster_active_spells_revision
             != prepared.before.caster_active_spells_revision
@@ -1036,6 +1125,8 @@ mod tests {
                 best_metric: 123,
                 selected_owner: 7,
             },
+            orders_mem_revision: 18,
+            orders_mem_digest: [6; 32],
             rng_state: 0x1020_3040,
             caster_active_spells_revision: 19,
             caster_active_spells_len: 0,
@@ -1196,7 +1287,7 @@ mod tests {
         assert!(matches!(
             outcome,
             PrepareOutcome::ExternalRequired(TypedResidual {
-                request: ExternalRequest::AddCastOrder(_),
+                request: ExternalRequest::OrdersGetObject(_),
                 ..
             })
         ));
@@ -1217,6 +1308,55 @@ mod tests {
         assert_eq!(HUMAN_COUNTERINTEL_ARM_VA, 0x005F_27C3);
         assert_eq!(AI_SPELLCASTER_ARM_VA, 0x005F_28CF);
         assert_eq!(COUNTERINTEL_SPELL, 631);
+        assert_eq!(
+            (
+                UNIT_ADD_CAST_ORDER_VA,
+                UNIT_ADD_CAST_ORDER_SIZE,
+                ORDERS_GET_OBJECT_CALLSITE_VA,
+                ORDERS_GET_OBJECT_VA,
+                ORDERS_GET_OBJECT_SIZE,
+                ORDERS_NEW_OBJECT_VA,
+                CAST_ORDER_INDEX,
+                ORDERS_MEM_POOLS_VA,
+                ORDERS_MEM_POOL_STRIDE,
+            ),
+            (
+                0x005E_4A60,
+                541,
+                0x005E_4BA5,
+                0x0073_0AC0,
+                236,
+                0x0073_0550,
+                14,
+                0x00EB_4390,
+                0x20,
+            )
+        );
+        assert_eq!(
+            (
+                ORDERS_MEM_FREE_ARRAY_OFFSET,
+                ORDERS_MEM_FREE_LENGTH_OFFSET,
+                RECYCLED_ORDER_RESET_VTABLE_OFFSET,
+                CAST_ORDER_GET_SUBOBJECT_VTABLE_OFFSET,
+            ),
+            (0, 8, 4, 0x7C,)
+        );
+        assert_eq!(
+            UNIT_ADD_CAST_ORDER_SHA256,
+            [
+                0x6a, 0xcb, 0x03, 0xec, 0x4d, 0x92, 0x32, 0x63, 0xa5, 0x91, 0x11, 0xd4, 0xb8, 0x4f,
+                0x54, 0xc9, 0xf7, 0xdc, 0xff, 0xb4, 0x54, 0x0d, 0xef, 0x5a, 0x94, 0x6b, 0xd6, 0xac,
+                0xdd, 0x32, 0x71, 0x58,
+            ]
+        );
+        assert_eq!(
+            ORDERS_GET_OBJECT_SHA256,
+            [
+                0x05, 0x58, 0x47, 0xed, 0xee, 0xbe, 0x03, 0x09, 0x4c, 0x7e, 0x79, 0x5b, 0xb0, 0xd1,
+                0xde, 0x36, 0x80, 0x27, 0xad, 0x9f, 0x97, 0xe5, 0x53, 0x3a, 0x0e, 0xd9, 0xbe, 0xc4,
+                0xba, 0x46, 0x25, 0x86,
+            ]
+        );
         assert_eq!(
             (
                 GOLDEN_SCOUT_UNIT_FLAGS2,
@@ -1331,6 +1471,8 @@ mod tests {
         assert_eq!(p.after.guy_revision, p.before.guy_revision);
         assert_eq!(p.after.leader_revision, p.before.leader_revision);
         assert_eq!(p.after.world_revision, p.before.world_revision);
+        assert_eq!(p.after.orders_mem_revision, p.before.orders_mem_revision);
+        assert_eq!(p.after.orders_mem_digest, p.before.orders_mem_digest);
         assert_eq!(p.after.rng_state, p.before.rng_state);
         assert_eq!(
             p.after.caster_active_spells_revision,
@@ -1343,7 +1485,7 @@ mod tests {
     }
 
     #[test]
-    fn found_target_stops_at_exact_cast_order_without_guessing_post_state() {
+    fn found_target_stops_before_exact_order_allocator_without_guessing_post_state() {
         let i = input();
         let selected = ObjectsFindScratch {
             best_metric: 1234,
@@ -1353,37 +1495,144 @@ mod tests {
         let PrepareOutcome::ExternalRequired(r) =
             prepare_golden_scout_spellcaster(&i, &receipts).unwrap()
         else {
-            panic!("expected add-cast-order residual");
+            panic!("expected order allocator residual");
         };
         assert_eq!(
             r.request,
-            ExternalRequest::AddCastOrder(AddCastOrderRequest {
-                callsite_va: UNIT_ADD_CAST_ORDER_CALLSITE_VA,
-                function_va: UNIT_ADD_CAST_ORDER_VA,
-                actor_who: 0,
-                actor_o: 0,
-                target_o: 44,
-                target_owner: 1,
-                x: 0x1234,
-                y: 0x5678,
-                spell_type: 631,
-                queue_pos: 0,
-                final_flag: 0,
-                allocated_order_index: 14,
-                target_uid_source: TargetUidSource::LiveObjectWordAtOffset0x30,
-                order_offset_1c: 0,
-                order_flag_04: false,
-                order_list_offset: UNIT_ORDER_LIST_OFFSET,
-                closes_orders: false,
-                clears_partial_path: true,
-                current_order_link_offset: UNIT_CURRENT_ORDER_LINK_OFFSET,
-                calls_update_action: true,
+            ExternalRequest::OrdersGetObject(OrdersGetObjectRequest {
+                callsite_va: ORDERS_GET_OBJECT_CALLSITE_VA,
+                function_va: ORDERS_GET_OBJECT_VA,
+                function_size: ORDERS_GET_OBJECT_SIZE,
+                function_sha256: ORDERS_GET_OBJECT_SHA256,
+                order_index: CAST_ORDER_INDEX,
+                pools_va: ORDERS_MEM_POOLS_VA,
+                pool_stride: ORDERS_MEM_POOL_STRIDE,
+                free_array_offset: ORDERS_MEM_FREE_ARRAY_OFFSET,
+                free_length_offset: ORDERS_MEM_FREE_LENGTH_OFFSET,
+                recycled_reset_vtable_offset: RECYCLED_ORDER_RESET_VTABLE_OFFSET,
+                new_object_function_va: ORDERS_NEW_OBJECT_VA,
+                pool_revision: i.before.orders_mem_revision,
+                pool_digest: i.before.orders_mem_digest,
+                returned_order_subobject_vtable_offset: CAST_ORDER_GET_SUBOBJECT_VTABLE_OFFSET,
+                continuation: AddCastOrderRequest {
+                    callsite_va: UNIT_ADD_CAST_ORDER_CALLSITE_VA,
+                    function_va: UNIT_ADD_CAST_ORDER_VA,
+                    function_size: UNIT_ADD_CAST_ORDER_SIZE,
+                    function_sha256: UNIT_ADD_CAST_ORDER_SHA256,
+                    actor_who: 0,
+                    actor_o: 0,
+                    target_o: 44,
+                    target_owner: 1,
+                    x: 0x1234,
+                    y: 0x5678,
+                    spell_type: 631,
+                    queue_pos: 0,
+                    final_flag: 0,
+                    allocated_order_index: 14,
+                    target_uid_source: TargetUidSource::LiveObjectWordAtOffset0x30,
+                    order_offset_1c: 0,
+                    order_flag_04: false,
+                    order_list_offset: UNIT_ORDER_LIST_OFFSET,
+                    closes_orders: false,
+                    clears_partial_path: true,
+                    current_order_link_offset: UNIT_CURRENT_ORDER_LINK_OFFSET,
+                    calls_update_action: true,
+                },
             })
         );
-        assert_eq!(r.retail_return_after_child, Some(1));
+        assert_eq!(r.retail_return_after_child, None);
         assert_eq!(r.staged.objects_revision, 18);
         assert_eq!(r.staged.unit_orders_revision, i.before.unit_orders_revision);
+        assert_eq!(r.staged.orders_mem_revision, i.before.orders_mem_revision);
         assert!(r.preserves_replay_critical_invariants(&i.before));
+        r.validate_external_before(&i.before).unwrap();
+
+        let mut stale_boundary = i.before;
+        stale_boundary.orders_mem_revision += 1;
+        let unchanged = stale_boundary;
+        assert_eq!(
+            r.validate_external_before(&stale_boundary),
+            Err(CommitError::BoundaryChanged)
+        );
+        assert_eq!(
+            stale_boundary, unchanged,
+            "stale refusal must not publish staged scratch"
+        );
+
+        let mut missing_pool = i;
+        missing_pool.before.orders_mem_digest = [0; 32];
+        assert_eq!(
+            prepare_golden_scout_spellcaster(&missing_pool, &receipts),
+            Err(PrepareError::MissingOrdersMemAuthority)
+        );
+    }
+
+    #[test]
+    fn allocator_residual_rejects_every_stale_boundary_field_without_publication() {
+        let i = input();
+        let selected = ObjectsFindScratch {
+            best_metric: 1234,
+            selected_owner: 1,
+        };
+        let receipt = find(&i, GOLDEN_COUNTERINTEL_RANGE, 44, selected);
+        let PrepareOutcome::ExternalRequired(residual) =
+            prepare_golden_scout_spellcaster(&i, &[receipt]).unwrap()
+        else {
+            panic!("expected order allocator residual");
+        };
+
+        let mut stale = Vec::new();
+        let mut value = i.before;
+        value.unit_body_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.unit_orders_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.unit_path_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.guy_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.leader_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.world_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.objects_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.search_scratch.best_metric += 1;
+        stale.push(value);
+        value = i.before;
+        value.orders_mem_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.orders_mem_digest[0] ^= 1;
+        stale.push(value);
+        value = i.before;
+        value.rng_state += 1;
+        stale.push(value);
+        value = i.before;
+        value.caster_active_spells_revision += 1;
+        stale.push(value);
+        value = i.before;
+        value.caster_active_spells_len += 1;
+        stale.push(value);
+
+        for current in stale {
+            let unchanged = current;
+            assert_eq!(
+                residual.validate_external_before(&current),
+                Err(CommitError::BoundaryChanged)
+            );
+            assert_eq!(current, unchanged);
+        }
+        assert_eq!(residual.before, i.before);
+        assert_eq!(residual.staged.objects_revision, 18);
+        assert_eq!(i.before.objects_revision, 17);
     }
 
     #[test]
