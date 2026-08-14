@@ -137,6 +137,23 @@ receipt, raw type flags, and unchanged RNG. No empty-map collision result is gue
 collision answer is now the precise prerequisite before the successful spot can reach
 `clear_partial_path`.
 
+The collision child now has its own smallest source-owned prefix in
+`setup_2024_frame0_merchant_collision_prefix.rs`. After the static Type predicates, retail
+checks `UnitData::path` length at `+0xc0`; the golden request's empty `PathStack` means it does
+not read a top-record flag. It next reads the canonical Unit SoA's signed `safe` byte at
+`+0xb2`. A nonzero retry delay returns zero before converting either coordinate. With `safe ==
+0`, the target and current coordinates are converted to quarter-tile UCoords in order; an
+unchanged cell also returns zero.
+
+For distinct UCoords, the first remaining call is
+`CollCheck::collide_here(o,who,target_ux,target_uy,new_block_radius,&hit_x,&hit_y,0)` at
+`0x00682540`. The radius comes from the replay-bound Type-62 `ObjectTypeData+0x248` row. This
+child is the first mixed footprint/CollBlock operation: its non-overlay arm reads the mutable
+World collision bitmaps and can memoize `CollBlock::flags` while testing emptiness. The typed
+request binds the complete Merchant chronology, both UCoord pairs, radius, output-pointer shape,
+the non-scratch arm, and unchanged RNG. It does not claim the current CollCheck slots or an
+empty bitmap result.
+
 No RNG call occurs. The legacy whole-call capture remains available for native composition and
 carries an independently captured canonical-Sim SHA-256; Don does not manufacture that snapshot
 or replace it with a locally guessed checksum.
