@@ -119,6 +119,26 @@ may be an active Unit or sparse-registry-bound active Build; its identity, UID, 
 revalidated at commit. Fresh STRAFE insertion, non-STRAFE current orders, shift/control/alt,
 order 1, scenario-ignore pruning, and every later Flight branch remain typed refusals.
 
+Cycle 16 keeps that fresh-install boundary red while completing the exact skip/tail behavior
+inside the existing-STRAFE arm. The 942 Unit→Build ATTACK packets span 28 replay files; 603 use
+explicit selections and 339 use cache reuse, with effective selection sizes from 1 through 128.
+941 already fit the canonical Flight batch shell. The sole shell residual is replay
+`Playback___2019.03.24_11_56_19__Sun_.rcx`, turn index 10,869 / turn 10,870 / frame 65,215 /
+play 2, whose `[0,10,0,28,57,74,72]` package still has an unsupported preceding Patrol pair.
+None of the 942 packages contains LaunchPatrol or Scramble.
+
+The bounded actor loop now follows four executable landmarks. ATTACK first records whether the
+Group contains any non-strict Nuclear Missile at `0x006FB555`; when true,
+`0x006FB67B..0x006FB6BE` skips each non-nuclear actor before reading its order. An actor which
+does reach `0x006FB6DB` must still have a coherent current STRAFE—non-STRAFE actors retain the
+fresh-install red boundary. `0x006FB73E..0x006FB748` skips a current STRAFE whose type carries
+object mask `0x08000000`. Otherwise `0x006FB7A2..0x006FB7E7` rewrites the target fields before
+`mana_left` is tested at `0x006FB801`: zero fuel retains that target-only rewrite, while positive
+fuel reaches `0x006FB865..0x006FB87B` and additionally clears `returning`, sets `mandatory`, and
+sets the common Group-order flag. Per-actor receipts distinguish all three current-STRAFE effects
+plus the pre-order nuclear-group skip, and the package CAS still publishes them atomically with
+opcode-0 selection. No branch in this cycle calls `Unit::add_strafe_order` at `0x006FBEB3`.
+
 The exact fixture is finished replay SHA-256
 `558e0cd53dbed4f820e8757c0327a58384d433e5beb8e9eeef5d64df4d67bd54`, turn index 44,294 /
 serial 44,295 / turn 44,295 / frame 43,963 / play 0. Its package is exactly `[0,28]`:
@@ -247,6 +267,9 @@ It also proves the exact 22-Unit Flight witness: all current STRAFE payloads ret
 2,080, preserve their other walked state, consume zero package RNG, and round-trip through the
 current save format byte-for-byte. A changed Build UID after prepare publishes none of the 22
 retargets, while a fresh-install actor or shifted Flight packet is rejected without selection
-publication.
+publication. The same fixture now proves that a fuel-exhausted current STRAFE receives only the
+native target-field rewrite and survives save/load, a missile-mask peer remains order-identical
+while ordinary peers retarget, and a nuclear Group skips non-nuclear members before their empty
+order queues are inspected.
 
 No closure flag is changed by this tranche.

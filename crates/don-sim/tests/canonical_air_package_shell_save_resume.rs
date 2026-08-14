@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Exact retail package shell -> cached Build LaunchPatrol -> current AIR/STRAFE resume.
 
-use don_sim::order::{Order, OrderIndex};
+use don_sim::command::air_launch_receivers::MISSILE_OBJECT_MASK;
+use don_sim::order::{Order, OrderIndex, ORDER_GROUP};
 use don_sim::systems::air_group_action_transaction::{
     AirGroupActionPlan, AirTransactionStatus, CommandPackagePosition,
 };
@@ -10,6 +11,9 @@ use don_sim::systems::canonical_air_package_shell::{
     commit_canonical_air_replay_batch, commit_canonical_air_replay_package,
     prepare_canonical_air_replay_batch, prepare_canonical_air_replay_package,
     AirReplayPackageIdentity, AirReplayShellCommand, CanonicalAirPackageShellError,
+};
+use don_sim::systems::canonical_flight_strafe_host::{
+    FlightStrafeActorEffect, FlightStrafeSkipReason,
 };
 use don_sim::systems::canonical_group_move_host::{
     BuildSelectionAuthority, BuildSelectionIdentity, CachedSelection, CommandPackageState,
@@ -812,8 +816,14 @@ fn exact_retail_unit_flight_retargets_current_strafes_and_round_trips_save() {
     assert_eq!(receipt.air.len(), 0);
     let flight = &receipt.flight_strafe[0];
     assert_eq!(flight.actors.len(), 22);
+    assert!(flight.skipped_actors.is_empty());
     assert_eq!(flight.target.address(), (0, 2_080));
+    assert_eq!(flight.target_uid, sim.builds[80].uid);
     assert_eq!(flight.target_position, sim.builds[80].position());
+    assert!(flight
+        .actors
+        .iter()
+        .all(|actor| actor.effect == FlightStrafeActorEffect::RetargetedAndArmed));
     assert_eq!(sim.world.random.state(), before_rng);
     for plane in &planes {
         let row = sim.world.row_of(*plane).unwrap();
@@ -833,6 +843,130 @@ fn exact_retail_unit_flight_retargets_current_strafes_and_round_trips_save() {
     for plane in &planes {
         let row = sim.world.row_of(*plane).unwrap();
         assert_eq!(sim.world.orders(row), loaded.world.orders(row));
+    }
+}
+
+#[test]
+fn current_strafe_fuel_exhaustion_retargets_only_the_native_target_fields() {
+    let (mut sim, planes) = unit_flight_fixture();
+    let exhausted = planes[0];
+    let exhausted_row = sim.world.row_of(exhausted).unwrap();
+    sim.world.units.mana_burn_mut()[exhausted_row] = 1_000;
+    let before = sim.world.orders(exhausted_row).current().unwrap().clone();
+    let before_rng = sim.world.random.state();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_UNIT_FLIGHT_IDENTITY, &retail_unit_flight_commands())
+        .unwrap();
+    assert!(receipt.validates());
+    let flight = &receipt.flight_strafe[0];
+    let actor = flight
+        .actors
+        .iter()
+        .find(|actor| actor.identity.handle == exhausted)
+        .unwrap();
+    assert_eq!(
+        actor.effect,
+        FlightStrafeActorEffect::RetargetedFuelExhausted
+    );
+    let after = sim.world.orders(exhausted_row).current().unwrap();
+    let payload = after.strafe.as_ref().unwrap();
+    let before_payload = before.strafe.as_ref().unwrap();
+    assert_eq!((after.target_who, after.target_o), (0, 2_080));
+    assert_eq!(after.target_uid, sim.builds[80].uid);
+    assert_eq!((payload.target_who, payload.target_o), (0, 2_080));
+    assert_eq!(payload.target_uid, sim.builds[80].uid);
+    assert_eq!((payload.xx, payload.yy), sim.builds[80].position());
+    assert_eq!(payload.mandatory, before_payload.mandatory);
+    assert_eq!(payload.air.returning, before_payload.air.returning);
+    assert_eq!(after.flags, before.flags);
+    assert_eq!(after.flags & ORDER_GROUP, 0);
+    assert_eq!(sim.world.random.state(), before_rng);
+
+    let saved = save_sim(&sim).unwrap();
+    let loaded = load_sim(&saved).unwrap();
+    assert_eq!(
+        loaded.world.orders(exhausted_row),
+        sim.world.orders(exhausted_row)
+    );
+}
+
+#[test]
+fn current_strafe_missile_mask_skips_that_actor_and_retargets_its_peers() {
+    let (mut sim, planes) = unit_flight_fixture();
+    let masked = planes[0];
+    sim.air_group_authority
+        .units
+        .iter_mut()
+        .find(|unit| unit.handle == masked)
+        .unwrap()
+        .object_masks = MISSILE_OBJECT_MASK;
+    let masked_row = sim.world.row_of(masked).unwrap();
+    let before = sim.world.orders(masked_row).clone();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_UNIT_FLIGHT_IDENTITY, &retail_unit_flight_commands())
+        .unwrap();
+    assert!(receipt.validates());
+    let flight = &receipt.flight_strafe[0];
+    let actor = flight
+        .actors
+        .iter()
+        .find(|actor| actor.identity.handle == masked)
+        .unwrap();
+    assert_eq!(actor.effect, FlightStrafeActorEffect::SkippedMissileMask);
+    assert_eq!(sim.world.orders(masked_row), &before);
+    assert_eq!(
+        flight
+            .actors
+            .iter()
+            .filter(|actor| actor.effect == FlightStrafeActorEffect::RetargetedAndArmed)
+            .count(),
+        21
+    );
+}
+
+#[test]
+fn nuclear_group_skips_non_nuclear_actors_before_reading_their_order() {
+    let (mut sim, planes) = unit_flight_fixture();
+    let nuclear = planes[0];
+    let authority = sim
+        .air_group_authority
+        .units
+        .iter_mut()
+        .find(|unit| unit.handle == nuclear)
+        .unwrap();
+    authority.is_nuclear_missile = true;
+    authority.object_masks = MISSILE_OBJECT_MASK;
+    for plane in &planes[1..] {
+        let row = sim.world.row_of(*plane).unwrap();
+        sim.world.orders_mut(row).clear();
+    }
+    let expected_orders = planes
+        .iter()
+        .map(|plane| sim.world.orders(sim.world.row_of(*plane).unwrap()).clone())
+        .collect::<Vec<_>>();
+
+    let receipt = sim
+        .process_air_replay_batch(RETAIL_UNIT_FLIGHT_IDENTITY, &retail_unit_flight_commands())
+        .unwrap();
+    assert!(receipt.validates());
+    let flight = &receipt.flight_strafe[0];
+    assert_eq!(flight.actors.len(), 1);
+    assert_eq!(
+        flight.actors[0].effect,
+        FlightStrafeActorEffect::SkippedMissileMask
+    );
+    assert_eq!(flight.skipped_actors.len(), 21);
+    assert!(flight
+        .skipped_actors
+        .iter()
+        .all(|actor| { actor.reason == FlightStrafeSkipReason::NonNuclearActorInNuclearGroup }));
+    for (plane, expected) in planes.iter().zip(expected_orders) {
+        assert_eq!(
+            sim.world.orders(sim.world.row_of(*plane).unwrap()),
+            &expected
+        );
     }
 }
 
