@@ -14,12 +14,14 @@ height words at `0x008695f9`. Installing that post-pass is required before the d
 may answer `find_tcoord_z` or make a first-checkpoint claim. The earlier complete-plane/live
 snapshot authority remains the only admitted query source today.
 
-The producer boundary is intentionally upstream of heights but downstream of three still
-unported deterministic owners: both `Fractal::get_height` byte grids and the WCoord-resolution
-`CoordInfo::flags` grid built by `generate_land_lists`. Reconstructing those arrays from the
-map seed and canonical completed World is the exact remaining terrain residual. The three
-installed scalar words (`land_height`, mountain height, and height scale) are also explicit,
-so a tileset/configuration change cannot silently reuse a plane.
+The producer boundary is intentionally upstream of render-resolution samples but downstream
+of three still-unported deterministic owners: the two initialized `Fractal` byte planes and
+the WCoord-resolution `CoordInfo::flags` grid built by `generate_land_lists`. The shipped
+`Fractal::get_height` body now samples both planes inside the producer; callers cannot supply
+its output grids. Reconstructing the initialized Fractal states and CoordInfo flags from the
+map seed and canonical completed World is the exact remaining upstream terrain residual. The
+three installed scalar words (`land_height`, mountain height, and height scale) are also
+explicit, so a tileset/configuration change cannot silently reuse a plane.
 
 ## Exact pre-mountain producer
 
@@ -28,6 +30,7 @@ supported-PE bodies:
 
 | body | VA | bytes | SHA-256 |
 |---|---:|---:|---|
+| `Fractal::get_height(int,int)` | `0x006aa870` | 360 | `93057be843aa676b22710c7b79d22861e052c889fbcc2647aaea061dde4dbe02` |
 | `TerrainOut::generate_land(int,int)` | `0x0085f8d0` | 2,789 | `5cc1f8e243fcf7556492ca1215df4785a5bd810c3550c7a5a0cb27b79e38445a` |
 | `TerrainOut::get_vert_codes` | `0x0086bf70` | 609 | `8eee1044d69671f26222f6801813dbd9e72547a6f9dca4a7b9c4cfbfedaf6695` |
 | `TerrainOut::determine_land_height_color` | `0x0086c1e0` | 434 | `720e687b621b9fb72acb922e6097956462adb0fe31b59d4afd589cae57a1eb68` |
@@ -49,7 +52,12 @@ vertex in row-major order. The port executes the normal `(0,0)` initialization a
    hit locks the vertex and returns height zero.
 2. `get_vert_codes(...,0)` ORs the touching `CoordInfo::flags`. Bits `0x1000`, `0x4`, and
    `0x2` select, in that order, scaled mountain height, zero, and fixed height 100.
-3. All other vertices consume one byte from each exact fractal grid:
+3. All other vertices call `Fractal::get_height(x,y)` on both initialized Fractal states.
+   The port reproduces its double-precision half-coordinate scaling, bilinear interpolation,
+   `cvttsd2si` clamp, and either raw-byte, percentage, or 16-threshold partition return. The
+   native outer-X/inner-Y `(xs+1)*(ys+1)` byte planes, flags, partitions, Random seed, exact
+   increments, and source identities are all bound before sampling. The resulting two bytes
+   enter:
 
    ```text
    base = coarse * 7.5f + land_height + detail * 1.875f
@@ -66,11 +74,12 @@ vertex in row-major order. The port executes the normal `(0,0)` initialization a
    coordinate is odd. Zero samples are excluded from each 3x3 average; only positive centers
    are replaced.
 
-The derived pre-mountain-plane digest binds the upstream completed-worldgen digest, dimensions, all
-three scalar words, both fractal byte grids, all CoordInfo flags, the canonical TData plane,
-and every output height word. Receipt counters expose each native branch plus smoothing
-vertices/passes. Shape mismatches and anonymous authorities fail before any plane is
-published.
+The completed-worldgen digest binds both fully initialized Fractal-state digests, the
+CoordInfo source identity and flags, and World dimensions. The derived pre-mountain-plane
+digest additionally binds all three scalar words, the internally sampled byte grids, the
+canonical TData plane, and every output height word. Receipt counters expose each native
+branch plus smoothing vertices/passes. Invalid Fractal increments, sample bounds, shape
+mismatches, and anonymous authorities fail before any plane is published.
 
 ## Exact shipped body
 

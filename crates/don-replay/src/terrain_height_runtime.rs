@@ -43,6 +43,8 @@ pub const TERRAIN_ADJUST_FOR_MOUNTAINS_VA: u32 = 0x0087_03c0;
 pub const TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES: u32 = 3_305;
 pub const TERRAIN_FILL_MOUNTAIN_DATA_VA: u32 = 0x0086_9380;
 pub const TERRAIN_FILL_MOUNTAIN_DATA_BYTES: u32 = 1_030;
+pub const FRACTAL_GET_HEIGHT_VA: u32 = 0x006a_a870;
+pub const FRACTAL_GET_HEIGHT_BYTES: u32 = 360;
 
 /// Exact supported-PE body identity for `0x008544a0..0x00854564`.
 pub const TERRAIN_FIND_TCOORD_Z_SHA256: &str =
@@ -61,21 +63,42 @@ pub const TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256: &str =
     "4aea3b9267fa1a3bc09b3bcd49cd52e9e4b326f6cf6edc42ae754fdfe5edda5e";
 pub const TERRAIN_FILL_MOUNTAIN_DATA_SHA256: &str =
     "8a85b4f8a9beeff18e562523fbfec5d626c1035e5541c225cad9972732a71cd0";
+pub const FRACTAL_GET_HEIGHT_SHA256: &str =
+    "93057be843aa676b22710c7b79d22861e052c889fbcc2647aaea061dde4dbe02";
 
 /// Retail normal terrain is four render vertices per WCoord.  The height query hardcodes
 /// that same factor at `0x0085450e`/`0x00854517`.
 pub const TERRAIN_TESSELATION_LEVEL: i32 = 4;
 
+/// Exact initialized state read by `Fractal::get_height(int,int)`.
+///
+/// `frac_columns` is the native outer-X/inner-Y `(xs+1)*(ys+1)` byte storage. It is upstream
+/// of all render-resolution samples: callers cannot supply the sample grids consumed by
+/// `generate_land`, let alone height words or Z values. Reconstructing this initialized state
+/// from the map RNG and `Fractal::init` is the remaining upstream fractal residual.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainFractalAuthority {
+    pub frac_columns: Vec<u8>,
+    pub xs: i32,
+    pub ys: i32,
+    pub flags: i32,
+    pub partitions: [i32; 16],
+    pub random_seed: u32,
+    pub x_inc_bits: u64,
+    pub y_inc_bits: u64,
+    pub initialized_source_digest: [u8; 32],
+}
+
 /// Exact completed-worldgen inputs consumed by the height-only `generate_land` slice.
 ///
-/// The byte grids are the results of the two shipped `Fractal::get_height` calls, not fitted
-/// heights. `coord_info_flags` is the WCoord-resolution `CoordInfo::flags` grid created by
-/// `generate_land_lists`. Reconstructing those three arrays from map seed and canonical World
-/// is the explicit upstream residual; this boundary never admits SVX Z or height-plane words.
+/// Both initialized Fractals are sampled by the shipped body. `coord_info_flags` is the
+/// WCoord-resolution `CoordInfo::flags` grid created by `generate_land_lists`. Reconstructing
+/// the Fractal states and those flags from map seed and canonical World is the explicit
+/// upstream residual; this boundary never admits sampled grids, SVX Z, or height-plane words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerrainHeightWorldgenInputs {
-    pub height_fractal_samples: Vec<u8>,
-    pub height_fractal_detail_samples: Vec<u8>,
+    pub height_fractal: TerrainFractalAuthority,
+    pub height_fractal_detail: TerrainFractalAuthority,
     pub coord_info_flags: Vec<u16>,
     /// Exact IEEE-754 global `land_height` word (`0x00cbe54c`).
     pub land_height_bits: u32,
@@ -83,18 +106,21 @@ pub struct TerrainHeightWorldgenInputs {
     pub mountain_height_bits: u32,
     /// Exact IEEE-754 global height scale word (`0x00c0629c`).
     pub height_scale_bits: u32,
-    /// Nonzero identity of the completed World/fractal/CoordInfo production boundary.
-    pub completed_worldgen_digest: [u8; 32],
+    /// Nonzero identity of the `generate_land_lists` CoordInfo production boundary.
+    pub coord_info_source_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerrainHeightWorldgenReceipt {
     pub generate_land_va: u32,
+    pub fractal_get_height_va: u32,
     pub get_vert_codes_va: u32,
     pub determine_land_height_color_va: u32,
     pub find_closest_coordinfo_va: u32,
     pub smooth_tcoord_va: u32,
     pub completed_worldgen_digest: [u8; 32],
+    pub height_fractal_digest: [u8; 32],
+    pub height_fractal_detail_digest: [u8; 32],
     pub derived_plane_digest: [u8; 32],
     pub vertices: usize,
     pub locked_zero_vertices: usize,
@@ -158,6 +184,14 @@ impl TerrainHeightAuthority {
     }
 }
 
+impl TerrainFractalAuthority {
+    /// Execute `Fractal::get_height(int,int)` against an initialized, source-identified grid.
+    pub fn get_height(&self, x: i32, y: i32) -> Result<u8, TerrainHeightError> {
+        validate_fractal_authority(self)?;
+        fractal_get_height(self, x, y)
+    }
+}
+
 impl TerrainHeightPreMountainPlane {
     /// Execute the exact normal-init height-producing slice of `generate_land`.
     ///
@@ -167,19 +201,10 @@ impl TerrainHeightPreMountainPlane {
         inputs: &TerrainHeightWorldgenInputs,
     ) -> Result<(Self, TerrainHeightWorldgenReceipt), TerrainHeightError> {
         validate_world_shape(world)?;
-        if inputs.completed_worldgen_digest == [0; 32] {
+        if inputs.coord_info_source_digest == [0; 32] {
             return Err(TerrainHeightError::MissingSourceIdentity);
         }
         let expected_vertices = grid_len(world.tile_xs, world.tile_ys)?;
-        if inputs.height_fractal_samples.len() != expected_vertices
-            || inputs.height_fractal_detail_samples.len() != expected_vertices
-        {
-            return Err(TerrainHeightError::WorldgenSampleLengthMismatch {
-                expected: expected_vertices,
-                height: inputs.height_fractal_samples.len(),
-                detail: inputs.height_fractal_detail_samples.len(),
-            });
-        }
         if inputs.coord_info_flags.len() != world.size as usize {
             return Err(TerrainHeightError::CoordInfoFlagsLengthMismatch {
                 expected: world.size as usize,
@@ -187,8 +212,34 @@ impl TerrainHeightPreMountainPlane {
             });
         }
 
+        let height_fractal_digest = validate_fractal_authority(&inputs.height_fractal)?;
+        let height_fractal_detail_digest =
+            validate_fractal_authority(&inputs.height_fractal_detail)?;
         let width = world.tile_xs as usize + 1;
         let height = world.tile_ys as usize + 1;
+        let mut height_fractal_samples = Vec::with_capacity(expected_vertices);
+        let mut height_fractal_detail_samples = Vec::with_capacity(expected_vertices);
+        for y in 0..height {
+            for x in 0..width {
+                height_fractal_samples.push(fractal_get_height(
+                    &inputs.height_fractal,
+                    x as i32,
+                    y as i32,
+                )?);
+                height_fractal_detail_samples.push(fractal_get_height(
+                    &inputs.height_fractal_detail,
+                    x as i32,
+                    y as i32,
+                )?);
+            }
+        }
+        let completed_worldgen_digest = completed_worldgen_digest(
+            world,
+            inputs,
+            height_fractal_digest,
+            height_fractal_detail_digest,
+        );
+
         let land_height = f32::from_bits(inputs.land_height_bits);
         let mountain_height = f32::from_bits(inputs.mountain_height_bits);
         let height_scale = f32::from_bits(inputs.height_scale_bits);
@@ -223,8 +274,8 @@ impl TerrainHeightPreMountainPlane {
                     fixed_height_vertices += 1;
                 } else {
                     // 0x0086c297..0x0086c38f. Keep the binary32 operation order explicit.
-                    let coarse = inputs.height_fractal_samples[index] as f32;
-                    let detail = inputs.height_fractal_detail_samples[index] as f32;
+                    let coarse = height_fractal_samples[index] as f32;
+                    let detail = height_fractal_detail_samples[index] as f32;
                     let coarse_height = coarse * 7.5;
                     let base_height = coarse_height + land_height + detail * 1.875;
                     let coast = find_closest_coordinfo(world, &inputs.coord_info_flags, tx, ty);
@@ -259,7 +310,14 @@ impl TerrainHeightPreMountainPlane {
             }
         }
 
-        let derived_plane_digest = worldgen_plane_digest(world, inputs, &heights);
+        let derived_plane_digest = worldgen_plane_digest(
+            world,
+            inputs,
+            completed_worldgen_digest,
+            &height_fractal_samples,
+            &height_fractal_detail_samples,
+            &heights,
+        );
         let plane = TerrainHeightPreMountainPlane {
             master_land_height_bits: heights,
             land_height_bits: inputs.land_height_bits,
@@ -267,11 +325,14 @@ impl TerrainHeightPreMountainPlane {
         };
         let receipt = TerrainHeightWorldgenReceipt {
             generate_land_va: TERRAIN_GENERATE_LAND_VA,
+            fractal_get_height_va: FRACTAL_GET_HEIGHT_VA,
             get_vert_codes_va: TERRAIN_GET_VERT_CODES_VA,
             determine_land_height_color_va: TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA,
             find_closest_coordinfo_va: TERRAIN_FIND_CLOSEST_COORDINFO_VA,
             smooth_tcoord_va: TERRAIN_SMOOTH_TCOORD_VA,
-            completed_worldgen_digest: inputs.completed_worldgen_digest,
+            completed_worldgen_digest,
+            height_fractal_digest,
+            height_fractal_detail_digest,
             derived_plane_digest,
             vertices: expected_vertices,
             locked_zero_vertices,
@@ -426,10 +487,23 @@ pub enum TerrainHeightError {
         expected: usize,
         actual: usize,
     },
-    WorldgenSampleLengthMismatch {
+    InvalidFractalShape {
+        xs: i32,
+        ys: i32,
         expected: usize,
-        height: usize,
-        detail: usize,
+        actual: usize,
+    },
+    InvalidFractalIncrement {
+        x_inc_bits: u64,
+        y_inc_bits: u64,
+    },
+    FractalSampleOutsideInitializedGrid {
+        x: i32,
+        y: i32,
+        column: i32,
+        row: i32,
+        xs: i32,
+        ys: i32,
     },
     CoordInfoFlagsLengthMismatch {
         expected: usize,
@@ -481,6 +555,132 @@ fn grid_len(tile_xs: i32, tile_ys: i32) -> Result<usize, TerrainHeightError> {
     xs.checked_add(1)
         .and_then(|x| ys.checked_add(1).and_then(|y| x.checked_mul(y)))
         .ok_or(TerrainHeightError::ShapeOverflow)
+}
+
+fn validate_fractal_authority(
+    fractal: &TerrainFractalAuthority,
+) -> Result<[u8; 32], TerrainHeightError> {
+    if fractal.initialized_source_digest == [0; 32] {
+        return Err(TerrainHeightError::MissingSourceIdentity);
+    }
+    let expected = if fractal.xs >= 2 && fractal.ys >= 2 {
+        (fractal.xs as usize + 1)
+            .checked_mul(fractal.ys as usize + 1)
+            .ok_or(TerrainHeightError::ShapeOverflow)?
+    } else {
+        0
+    };
+    if expected == 0 || fractal.frac_columns.len() != expected {
+        return Err(TerrainHeightError::InvalidFractalShape {
+            xs: fractal.xs,
+            ys: fractal.ys,
+            expected,
+            actual: fractal.frac_columns.len(),
+        });
+    }
+
+    // `Fractal::init` 0x006aa4e7..0x006aa518. Bit zero selects wrapping in X;
+    // Y's initialized ratio is `ys/ys` and therefore exactly 1.0.
+    let wrap_x = fractal.flags & 1;
+    let expected_x_inc = fractal.xs as f64 / (fractal.xs - wrap_x + 1) as f64;
+    if fractal.x_inc_bits != expected_x_inc.to_bits() || fractal.y_inc_bits != 1.0f64.to_bits() {
+        return Err(TerrainHeightError::InvalidFractalIncrement {
+            x_inc_bits: fractal.x_inc_bits,
+            y_inc_bits: fractal.y_inc_bits,
+        });
+    }
+
+    let mut bytes = Vec::with_capacity(160 + fractal.frac_columns.len());
+    bytes.extend_from_slice(b"don-initialized-fractal-v1\0");
+    bytes.extend_from_slice(&fractal.initialized_source_digest);
+    for value in [fractal.xs, fractal.ys, fractal.flags] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in fractal.partitions {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&fractal.random_seed.to_le_bytes());
+    bytes.extend_from_slice(&fractal.x_inc_bits.to_le_bytes());
+    bytes.extend_from_slice(&fractal.y_inc_bits.to_le_bytes());
+    bytes.extend_from_slice(&fractal.frac_columns);
+    Ok(sha256(&bytes))
+}
+
+fn fractal_get_height(
+    fractal: &TerrainFractalAuthority,
+    x: i32,
+    y: i32,
+) -> Result<u8, TerrainHeightError> {
+    let scaled_x = (x as f64 + 0.5) * f64::from_bits(fractal.x_inc_bits);
+    let scaled_y = (y as f64 + 0.5) * f64::from_bits(fractal.y_inc_bits);
+    let column = cvttsd2si(scaled_x);
+    let row = cvttsd2si(scaled_y);
+    if column < 0 || row < 0 || column >= fractal.xs || row >= fractal.ys {
+        return Err(TerrainHeightError::FractalSampleOutsideInitializedGrid {
+            x,
+            y,
+            column,
+            row,
+            xs: fractal.xs,
+            ys: fractal.ys,
+        });
+    }
+
+    let dx = scaled_x - column as f64;
+    let dy = scaled_y - row as f64;
+    let one_minus_dx = 1.0 - dx;
+    let one_minus_dy = 1.0 - dy;
+    let stride = fractal.ys as usize + 1;
+    let at = |cx: i32, cy: i32| -> f64 {
+        fractal.frac_columns[cx as usize * stride + cy as usize] as f64
+    };
+    let p00 = at(column, row);
+    let p10 = at(column + 1, row);
+    let p01 = at(column, row + 1);
+    let p11 = at(column + 1, row + 1);
+
+    // Preserve the scalar-double multiply/add order at 0x006aa8eb..0x006aa960.
+    let w00 = one_minus_dx * one_minus_dy;
+    let w10 = one_minus_dy * dx;
+    let w01 = one_minus_dx * dy;
+    let w11 = dy * dx;
+    let interpolated = (((p00 * w00 + 0.0) + p10 * w10) + p01 * w01) + p11 * w11;
+    let clamped = cvttsd2si(interpolated).clamp(0, 255) as u8;
+
+    if fractal.partitions[0] != -1 {
+        let mut bucket = 0u8;
+        for &threshold in &fractal.partitions {
+            if threshold == -1 || i32::from(clamped) < threshold {
+                break;
+            }
+            bucket = bucket.wrapping_add(1);
+        }
+        Ok(bucket)
+    } else if fractal.flags & 2 != 0 {
+        Ok(((u16::from(clamped) * 100) >> 8) as u8)
+    } else {
+        Ok(clamped)
+    }
+}
+
+fn completed_worldgen_digest(
+    world: &World,
+    inputs: &TerrainHeightWorldgenInputs,
+    height_fractal_digest: [u8; 32],
+    height_fractal_detail_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(128 + inputs.coord_info_flags.len() * 2);
+    bytes.extend_from_slice(b"don-terrain-height-completed-worldgen-v2\0");
+    bytes.extend_from_slice(&height_fractal_digest);
+    bytes.extend_from_slice(&height_fractal_detail_digest);
+    bytes.extend_from_slice(&inputs.coord_info_source_digest);
+    for value in [world.xs, world.ys, world.tile_xs, world.tile_ys] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for &value in &inputs.coord_info_flags {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    sha256(&bytes)
 }
 
 fn get_coordinfo_vertex_codes(world: &World, flags: &[u16], x: i32, y: i32) -> u16 {
@@ -610,16 +810,19 @@ fn smooth_tcoord(heights: &mut [u32], width: usize, height: usize, x: usize, y: 
 fn worldgen_plane_digest(
     world: &World,
     inputs: &TerrainHeightWorldgenInputs,
+    completed_worldgen_digest: [u8; 32],
+    height_fractal_samples: &[u8],
+    height_fractal_detail_samples: &[u8],
     heights: &[u32],
 ) -> [u8; 32] {
     let mut bytes = Vec::with_capacity(
-        64 + inputs.height_fractal_samples.len() * 2
+        64 + height_fractal_samples.len() * 2
             + inputs.coord_info_flags.len() * 2
             + world.tdata.len() * 2
             + heights.len() * 4,
     );
-    bytes.extend_from_slice(b"don-terrain-height-worldgen-v1\0");
-    bytes.extend_from_slice(&inputs.completed_worldgen_digest);
+    bytes.extend_from_slice(b"don-terrain-height-worldgen-v2\0");
+    bytes.extend_from_slice(&completed_worldgen_digest);
     for value in [
         world.xs,
         world.ys,
@@ -636,8 +839,8 @@ fn worldgen_plane_digest(
     ] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
-    bytes.extend_from_slice(&inputs.height_fractal_samples);
-    bytes.extend_from_slice(&inputs.height_fractal_detail_samples);
+    bytes.extend_from_slice(height_fractal_samples);
+    bytes.extend_from_slice(height_fractal_detail_samples);
     for &value in &inputs.coord_info_flags {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -648,6 +851,15 @@ fn worldgen_plane_digest(
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     sha256(&bytes)
+}
+
+/// SSE `cvttsd2si`: truncate toward zero, returning `0x80000000` on NaN/overflow.
+fn cvttsd2si(value: f64) -> i32 {
+    if !value.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        i32::MIN
+    } else {
+        value.trunc() as i32
+    }
 }
 
 /// SSE `cvttss2si`: truncate toward zero, returning `0x80000000` on NaN/overflow.

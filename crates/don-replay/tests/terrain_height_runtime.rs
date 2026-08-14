@@ -5,18 +5,19 @@ use don_replay::build_init_prefix::{
     SourceBackedBuildInitPrefixError, SUBOBJECT_COORD_XOR,
 };
 use don_replay::terrain_height_runtime::{
-    TerrainHeightAuthority, TerrainHeightError, TerrainHeightPreMountainPlane, TerrainHeightSource,
-    TerrainHeightWorldgenInputs, TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES,
-    TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256, TERRAIN_ADJUST_FOR_MOUNTAINS_VA,
-    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256,
-    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA, TERRAIN_FILL_MOUNTAIN_DATA_BYTES,
-    TERRAIN_FILL_MOUNTAIN_DATA_SHA256, TERRAIN_FILL_MOUNTAIN_DATA_VA,
-    TERRAIN_FIND_CLOSEST_COORDINFO_BYTES, TERRAIN_FIND_CLOSEST_COORDINFO_SHA256,
-    TERRAIN_FIND_CLOSEST_COORDINFO_VA, TERRAIN_FIND_TCOORD_Z_BYTES, TERRAIN_FIND_TCOORD_Z_SHA256,
-    TERRAIN_FIND_TCOORD_Z_VA, TERRAIN_GENERATE_LAND_BYTES, TERRAIN_GENERATE_LAND_SHA256,
-    TERRAIN_GENERATE_LAND_VA, TERRAIN_GET_VERT_CODES_BYTES, TERRAIN_GET_VERT_CODES_SHA256,
-    TERRAIN_GET_VERT_CODES_VA, TERRAIN_SMOOTH_TCOORD_BYTES, TERRAIN_SMOOTH_TCOORD_SHA256,
-    TERRAIN_SMOOTH_TCOORD_VA,
+    TerrainFractalAuthority, TerrainHeightAuthority, TerrainHeightError,
+    TerrainHeightPreMountainPlane, TerrainHeightSource, TerrainHeightWorldgenInputs,
+    FRACTAL_GET_HEIGHT_BYTES, FRACTAL_GET_HEIGHT_SHA256, FRACTAL_GET_HEIGHT_VA,
+    TERRAIN_ADJUST_FOR_MOUNTAINS_BYTES, TERRAIN_ADJUST_FOR_MOUNTAINS_SHA256,
+    TERRAIN_ADJUST_FOR_MOUNTAINS_VA, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_BYTES,
+    TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_SHA256, TERRAIN_DETERMINE_LAND_HEIGHT_COLOR_VA,
+    TERRAIN_FILL_MOUNTAIN_DATA_BYTES, TERRAIN_FILL_MOUNTAIN_DATA_SHA256,
+    TERRAIN_FILL_MOUNTAIN_DATA_VA, TERRAIN_FIND_CLOSEST_COORDINFO_BYTES,
+    TERRAIN_FIND_CLOSEST_COORDINFO_SHA256, TERRAIN_FIND_CLOSEST_COORDINFO_VA,
+    TERRAIN_FIND_TCOORD_Z_BYTES, TERRAIN_FIND_TCOORD_Z_SHA256, TERRAIN_FIND_TCOORD_Z_VA,
+    TERRAIN_GENERATE_LAND_BYTES, TERRAIN_GENERATE_LAND_SHA256, TERRAIN_GENERATE_LAND_VA,
+    TERRAIN_GET_VERT_CODES_BYTES, TERRAIN_GET_VERT_CODES_SHA256, TERRAIN_GET_VERT_CODES_VA,
+    TERRAIN_SMOOTH_TCOORD_BYTES, TERRAIN_SMOOTH_TCOORD_SHA256, TERRAIN_SMOOTH_TCOORD_VA,
 };
 use don_replay::world_owner_frontier::sha256;
 use don_sim::systems::map_terrain::{tflag, World};
@@ -52,15 +53,30 @@ fn set_pair(
 }
 
 fn worldgen_inputs(world: &World) -> TerrainHeightWorldgenInputs {
-    let vertices = ((world.tile_xs + 1) * (world.tile_ys + 1)) as usize;
     TerrainHeightWorldgenInputs {
-        height_fractal_samples: vec![0; vertices],
-        height_fractal_detail_samples: vec![0; vertices],
+        height_fractal: fractal(world, 0, 0xa1),
+        height_fractal_detail: fractal(world, 0, 0xa2),
         coord_info_flags: vec![0; world.size as usize],
         land_height_bits: 30.0f32.to_bits(),
         mountain_height_bits: (-303.0f32).to_bits(),
         height_scale_bits: 1.0f32.to_bits(),
-        completed_worldgen_digest: digest(0xa5),
+        coord_info_source_digest: digest(0xa5),
+    }
+}
+
+fn fractal(world: &World, value: u8, source: u8) -> TerrainFractalAuthority {
+    let xs = world.tile_xs + 1;
+    let ys = world.tile_ys + 1;
+    TerrainFractalAuthority {
+        frac_columns: vec![value; ((xs + 1) * (ys + 1)) as usize],
+        xs,
+        ys,
+        flags: 1,
+        partitions: [-1; 16],
+        random_seed: 0x1234_0000 | u32::from(source),
+        x_inc_bits: 1.0f64.to_bits(),
+        y_inc_bits: 1.0f64.to_bits(),
+        initialized_source_digest: digest(source),
     }
 }
 
@@ -223,14 +239,12 @@ fn build_prefix_consumes_the_height_plane_without_a_raw_z_input() {
 }
 
 #[test]
-fn completed_worldgen_samples_derive_the_pre_mountain_plane() {
+fn initialized_fractals_derive_the_pre_mountain_plane() {
     let world = World::init_default_rules(2, 2);
     let width = world.tile_xs as usize + 1;
     let mut inputs = worldgen_inputs(&world);
     let first = 5 * width + 3;
-    let second = 4 * width + 4;
-    inputs.height_fractal_samples[first] = 20;
-    inputs.height_fractal_samples[second] = 40;
+    inputs.height_fractal.frac_columns.fill(20);
 
     let (terrain, receipt) =
         TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &inputs).unwrap();
@@ -238,7 +252,9 @@ fn completed_worldgen_samples_derive_the_pre_mountain_plane() {
     assert_eq!(receipt.fractal_vertices, receipt.vertices);
     assert_eq!(receipt.smoothing_vertices, 0);
     assert_eq!(terrain.master_land_height_bits[first], 180.0f32.to_bits());
-    assert_eq!(terrain.master_land_height_bits[second], 330.0f32.to_bits());
+    assert_eq!(receipt.fractal_get_height_va, FRACTAL_GET_HEIGHT_VA);
+    assert_ne!(receipt.height_fractal_digest, [0; 32]);
+    assert_ne!(receipt.height_fractal_detail_digest, [0; 32]);
     assert!(!receipt.final_query_authority);
     assert_eq!(
         (
@@ -252,7 +268,7 @@ fn completed_worldgen_samples_derive_the_pre_mountain_plane() {
     );
 
     let mut changed_inputs = inputs;
-    changed_inputs.height_fractal_samples[first] += 1;
+    changed_inputs.height_fractal.frac_columns.fill(21);
     let (changed, changed_receipt) =
         TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &changed_inputs).unwrap();
     assert_ne!(
@@ -262,6 +278,42 @@ fn completed_worldgen_samples_derive_the_pre_mountain_plane() {
     assert_ne!(
         changed_receipt.derived_plane_digest,
         receipt.derived_plane_digest
+    );
+}
+
+#[test]
+fn fractal_sampler_executes_bilinear_partition_and_percentage_paths() {
+    let world = World::init_default_rules(1, 1);
+    let mut source = fractal(&world, 0, 0xb1);
+    let stride = source.ys as usize + 1;
+    source.frac_columns[stride] = 10;
+    source.frac_columns[1] = 20;
+    source.frac_columns[stride + 1] = 30;
+    assert_eq!(source.get_height(0, 0).unwrap(), 15);
+
+    source.partitions = [
+        10, 15, 20, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    ];
+    assert_eq!(source.get_height(0, 0).unwrap(), 2);
+    source.partitions = [-1; 16];
+    source.flags |= 2;
+    assert_eq!(source.get_height(0, 0).unwrap(), 5);
+
+    let mut bad_increment = source.clone();
+    bad_increment.x_inc_bits = 0.5f64.to_bits();
+    assert!(matches!(
+        bad_increment.get_height(0, 0),
+        Err(TerrainHeightError::InvalidFractalIncrement { .. })
+    ));
+    assert!(matches!(
+        source.get_height(i32::MAX, 0),
+        Err(TerrainHeightError::FractalSampleOutsideInitializedGrid { .. })
+    ));
+    let mut anonymous = source;
+    anonymous.initialized_source_digest = [0; 32];
+    assert_eq!(
+        anonymous.get_height(0, 0),
+        Err(TerrainHeightError::MissingSourceIdentity)
     );
 }
 
@@ -310,7 +362,7 @@ fn world_and_coordinfo_codes_drive_native_height_branches() {
 fn coast_distance_smoothing_and_worldgen_shape_are_fail_closed() {
     let world = World::init_default_rules(2, 2);
     let mut inputs = worldgen_inputs(&world);
-    inputs.height_fractal_samples.fill(20);
+    inputs.height_fractal.frac_columns.fill(20);
     inputs.coord_info_flags[0] = 0x20;
     let (terrain, receipt) =
         TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &inputs).unwrap();
@@ -321,11 +373,11 @@ fn coast_distance_smoothing_and_worldgen_shape_are_fail_closed() {
         .iter()
         .any(|&bits| bits != 180.0f32.to_bits()));
 
-    let mut short_samples = inputs.clone();
-    short_samples.height_fractal_samples.pop();
+    let mut short_fractal = inputs.clone();
+    short_fractal.height_fractal.frac_columns.pop();
     assert!(matches!(
-        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &short_samples),
-        Err(TerrainHeightError::WorldgenSampleLengthMismatch { .. })
+        TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &short_fractal),
+        Err(TerrainHeightError::InvalidFractalShape { .. })
     ));
     let mut short_flags = inputs.clone();
     short_flags.coord_info_flags.pop();
@@ -334,7 +386,7 @@ fn coast_distance_smoothing_and_worldgen_shape_are_fail_closed() {
         Err(TerrainHeightError::CoordInfoFlagsLengthMismatch { .. })
     ));
     let mut anonymous = inputs;
-    anonymous.completed_worldgen_digest = [0; 32];
+    anonymous.coord_info_source_digest = [0; 32];
     assert_eq!(
         TerrainHeightPreMountainPlane::from_completed_worldgen(&world, &anonymous),
         Err(TerrainHeightError::MissingSourceIdentity)
@@ -392,6 +444,11 @@ fn supported_pe_freezes_the_height_query_and_producer_bodies() {
     }
     let image = std::fs::read(exe).unwrap();
     for (va, bytes, expected) in [
+        (
+            FRACTAL_GET_HEIGHT_VA,
+            FRACTAL_GET_HEIGHT_BYTES,
+            FRACTAL_GET_HEIGHT_SHA256,
+        ),
         (
             TERRAIN_FIND_TCOORD_Z_VA,
             TERRAIN_FIND_TCOORD_Z_BYTES,
