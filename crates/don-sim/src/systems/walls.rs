@@ -904,6 +904,16 @@ pub enum BuildWallPrefixBoundary {
     InactiveSlowSlot,
     /// The 16-frame unfriendly-territory cone.
     TerritorySlot,
+    /// `BuildTypeData::is_dock()` at `0x00640A3A`.  The receipt carries the exact
+    /// decoded position and `WData::who` read which precede the call.
+    TerritoryIsDock,
+    /// The dock-only `WallData::tile_corner` / `BuildTypeData::check_enemy_adjacent`
+    /// branch.  Golden Village and Market type authority proves this branch unreachable.
+    TerritoryDockFootprint,
+    /// `LeaderData::is_ally(territory_owner)` at `0x00640AB2`.
+    TerritoryIsAlly,
+    /// `Game::war_allowed()` at `0x006408AE`, reached only when rush rules are non-zero.
+    TerritoryWarAllowed,
     /// `Wall::process` returned without reaching an unresolved child.
     Complete,
 }
@@ -920,6 +930,9 @@ pub struct BuildWallPeriodicIdentity {
 
 /// Owner-0 visibility slots reached before the supported frame-31 golden checkpoint.
 pub const GOLDEN_BUILD_WALL_PERIODIC_FRAMES: [i32; 3] = [8, 16, 24];
+
+/// Territory slots reached by the two golden starting Builds before frame 32.
+pub const GOLDEN_BUILD_WALL_TERRITORY_FRAMES: [i32; 3] = [15, 16, 31];
 
 /// Reinstalled Game::everyone_mask authority for the two supported golden starting Builds.
 ///
@@ -988,6 +1001,138 @@ impl BuildWallPeriodicAuthority {
     }
 }
 
+/// Immutable content identity admitted to the golden territory lane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildWallTerritoryIdentity {
+    pub row: usize,
+    pub who: u8,
+    pub o: i16,
+    pub uid: u16,
+    pub type_index: i32,
+    /// Source-evaluated `BuildTypeData::is_dock()`.
+    pub is_dock: bool,
+}
+
+/// Replay/content authority for the exact golden territory calls.
+///
+/// The mutable inputs are deliberately absent. `disable_building_attrition`, object
+/// coordinates and `WData::who` are read from their canonical live Sim owners on the frame
+/// where retail reads them. This sidecar admits only the replay-carried `rush_rules` scalar,
+/// the two stable Build identities, and the source-evaluated type child.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuildWallTerritoryAuthority {
+    pub revision: u64,
+    pub composition_digest: u32,
+    pub rush_rules: u8,
+    pub frames: [i32; 3],
+    pub builds: [BuildWallTerritoryIdentity; 2],
+}
+
+/// Stable structural digest verified before exposing any territory fact.
+pub fn build_wall_territory_authority_digest(authority: &BuildWallTerritoryAuthority) -> u32 {
+    let mut image = b"don-build-wall-territory-authority-v1".to_vec();
+    image.extend_from_slice(&authority.revision.to_le_bytes());
+    image.push(authority.rush_rules);
+    for frame in authority.frames {
+        image.extend_from_slice(&frame.to_le_bytes());
+    }
+    for build in authority.builds {
+        image.extend_from_slice(&(build.row as u64).to_le_bytes());
+        image.push(build.who);
+        image.extend_from_slice(&build.o.to_le_bytes());
+        image.extend_from_slice(&build.uid.to_le_bytes());
+        image.extend_from_slice(&build.type_index.to_le_bytes());
+        image.push(u8::from(build.is_dock));
+    }
+    adler32(1, &image)
+}
+
+/// Source-bound static facts for one reached territory slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildWallTerritoryStaticFacts {
+    pub type_index: i32,
+    pub rush_rules: u8,
+    pub is_dock: bool,
+}
+
+impl BuildWallTerritoryAuthority {
+    /// Admit facts only for the exact live golden identity and one of its native slots.
+    pub fn facts_for(
+        &self,
+        frame: i32,
+        row: usize,
+        build: &crate::systems::production::BuildData,
+        type_index: Option<i32>,
+        live_rush_rules: u8,
+    ) -> Option<BuildWallTerritoryStaticFacts> {
+        if self.revision == 0
+            || self.composition_digest == 0
+            || self.frames != GOLDEN_BUILD_WALL_TERRITORY_FRAMES
+            || !self.frames.contains(&frame)
+            || self.rush_rules != live_rush_rules
+            || self.composition_digest != build_wall_territory_authority_digest(self)
+            || !build.is_started()
+            || !build.is_active()
+        {
+            return None;
+        }
+        self.builds
+            .iter()
+            .find(|identity| {
+                identity.row == row
+                    && identity.who == build.who
+                    && identity.o == build.object_id()
+                    && identity.uid == build.uid
+                    && Some(identity.type_index) == type_index
+            })
+            .map(|identity| BuildWallTerritoryStaticFacts {
+                type_index: identity.type_index,
+                rush_rules: self.rush_rules,
+                is_dock: identity.is_dock,
+            })
+    }
+}
+
+/// Live, instruction-ordered inputs to the golden territory cone.
+///
+/// `fine_position`, `wcoord`, and `territory_owner` are `None` on Market frame 31 because
+/// retail returns at the second phase gate before reading any of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildWallTerritoryInput {
+    pub static_facts: BuildWallTerritoryStaticFacts,
+    pub building_attrition_disabled: i32,
+    pub fine_position: Option<(i32, i32)>,
+    pub wcoord: Option<(i32, i32)>,
+    pub territory_owner: Option<i32>,
+}
+
+/// Why the source-bound territory cone returned or stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildWallTerritoryExit {
+    BuildingAttritionDisabled,
+    Phase32AlternateNoop,
+    IsDockBoundary,
+    DockFootprintBoundary,
+    UnownedTerritory,
+    FriendlyTerritory,
+    IsAllyBoundary,
+    WarAllowedBoundary,
+}
+
+/// Exact read-only envelope consumed after the helper latch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildWallTerritoryReceipt {
+    pub building_attrition_disabled: i32,
+    pub rush_rules: u8,
+    pub phase32_due: bool,
+    pub type_index: i32,
+    pub fine_position: Option<(i32, i32)>,
+    pub wcoord: Option<(i32, i32)>,
+    pub territory_owner: Option<i32>,
+    pub is_dock: Option<bool>,
+    pub exit: BuildWallTerritoryExit,
+}
+
 /// Auditable result of the canonical Build-band `Wall::process` prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildWallPrefixReceipt {
@@ -1002,6 +1147,8 @@ pub struct BuildWallPrefixReceipt {
     pub active: bool,
     /// The periodic child returned at its exact pre-footprint no-op gate.
     pub periodic_child_completed_noop: bool,
+    /// Present only after a source-bound territory authority was consumed.
+    pub territory: Option<BuildWallTerritoryReceipt>,
     pub before: BuildWallPrefixState,
     pub after: BuildWallPrefixState,
     pub boundary: BuildWallPrefixBoundary,
@@ -1021,6 +1168,27 @@ pub fn process_build_wall_prefix(
     o: i16,
     active: bool,
     periodic_everyone_mask: Option<u8>,
+) -> BuildWallPrefixReceipt {
+    process_build_wall_prefix_with_territory(
+        state,
+        frame,
+        who,
+        o,
+        active,
+        periodic_everyone_mask,
+        None,
+    )
+}
+
+/// Execute the same native prefix with an optional source-bound territory envelope.
+pub fn process_build_wall_prefix_with_territory(
+    state: &mut BuildWallPrefixState,
+    frame: i32,
+    who: u8,
+    o: i16,
+    active: bool,
+    periodic_everyone_mask: Option<u8>,
+    territory_input: Option<BuildWallTerritoryInput>,
 ) -> BuildWallPrefixReceipt {
     let before = *state;
     let phase = frame.wrapping_add(i32::from(o));
@@ -1049,6 +1217,7 @@ pub fn process_build_wall_prefix(
                 territory_slot_16_due,
                 active,
                 periodic_child_completed_noop,
+                territory: None,
                 before,
                 after: *state,
                 boundary: BuildWallPrefixBoundary::CheckEverSeenPeriodic,
@@ -1072,6 +1241,7 @@ pub fn process_build_wall_prefix(
                     territory_slot_16_due,
                     active,
                     periodic_child_completed_noop,
+                    territory: None,
                     before,
                     after: *state,
                     boundary: BuildWallPrefixBoundary::InactiveSlowSlot,
@@ -1113,6 +1283,7 @@ pub fn process_build_wall_prefix(
                     territory_slot_16_due,
                     active,
                     periodic_child_completed_noop,
+                    territory: None,
                     before,
                     after: *state,
                     boundary: BuildWallPrefixBoundary::InactiveSlowSlot,
@@ -1135,6 +1306,12 @@ pub fn process_build_wall_prefix(
         }
     };
 
+    let (boundary, territory) = if boundary == BuildWallPrefixBoundary::TerritorySlot {
+        resolve_build_wall_territory(phase, who, territory_input)
+    } else {
+        (boundary, None)
+    };
+
     BuildWallPrefixReceipt {
         frame,
         who,
@@ -1145,10 +1322,122 @@ pub fn process_build_wall_prefix(
         territory_slot_16_due,
         active,
         periodic_child_completed_noop,
+        territory,
         before,
         after: *state,
         boundary,
     }
+}
+
+fn resolve_build_wall_territory(
+    phase: i32,
+    who: u8,
+    input: Option<BuildWallTerritoryInput>,
+) -> (BuildWallPrefixBoundary, Option<BuildWallTerritoryReceipt>) {
+    let Some(input) = input else {
+        return (BuildWallPrefixBoundary::TerritorySlot, None);
+    };
+    let facts = input.static_facts;
+    let phase32_due = phase.rem_euclid(32) == 0;
+    let finish = |boundary, exit, is_dock| {
+        (
+            boundary,
+            Some(BuildWallTerritoryReceipt {
+                building_attrition_disabled: input.building_attrition_disabled,
+                rush_rules: facts.rush_rules,
+                phase32_due,
+                type_index: facts.type_index,
+                fine_position: input.fine_position,
+                wcoord: input.wcoord,
+                territory_owner: input.territory_owner,
+                is_dock,
+                exit,
+            }),
+        )
+    };
+
+    // 0x0064088B..0x0064089C: scenario authority can disable this entire cone.
+    if input.building_attrition_disabled != 0 {
+        return finish(
+            BuildWallPrefixBoundary::Complete,
+            BuildWallTerritoryExit::BuildingAttritionDisabled,
+            None,
+        );
+    }
+    // 0x006408A2..0x006408B5: non-zero rush rules call Game::war_allowed first.
+    if facts.rush_rules != 0 {
+        return finish(
+            BuildWallPrefixBoundary::TerritoryWarAllowed,
+            BuildWallTerritoryExit::WarAllowedBoundary,
+            None,
+        );
+    }
+    // 0x006409E3..0x006409F0: standard rules inspect unfriendly territory only on the
+    // alternating 32-frame occurrence. Market frame 31 closes here without later reads.
+    if !phase32_due {
+        return finish(
+            BuildWallPrefixBoundary::Complete,
+            BuildWallTerritoryExit::Phase32AlternateNoop,
+            None,
+        );
+    }
+
+    // Retail reads both coordinates and WData::who before the is_dock virtual call.
+    if input.fine_position.is_none() || input.wcoord.is_none() || input.territory_owner.is_none() {
+        return finish(
+            BuildWallPrefixBoundary::TerritoryIsDock,
+            BuildWallTerritoryExit::IsDockBoundary,
+            None,
+        );
+    }
+    if facts.is_dock {
+        return finish(
+            BuildWallPrefixBoundary::TerritoryDockFootprint,
+            BuildWallTerritoryExit::DockFootprintBoundary,
+            Some(true),
+        );
+    }
+    let owner = input
+        .territory_owner
+        .expect("the complete live territory probe was checked above");
+    if owner < 0 {
+        return finish(
+            BuildWallPrefixBoundary::Complete,
+            BuildWallTerritoryExit::UnownedTerritory,
+            Some(false),
+        );
+    }
+    if owner == i32::from(who) {
+        return finish(
+            BuildWallPrefixBoundary::Complete,
+            BuildWallTerritoryExit::FriendlyTerritory,
+            Some(false),
+        );
+    }
+    finish(
+        BuildWallPrefixBoundary::TerritoryIsAlly,
+        BuildWallTerritoryExit::IsAllyBoundary,
+        Some(false),
+    )
+}
+
+/// Resume exactly at `0x00640862` after the helper-latch stores have been published.
+/// A receipt which did not reach that boundary is returned unchanged.
+pub fn resume_build_wall_territory(
+    mut receipt: BuildWallPrefixReceipt,
+    input: BuildWallTerritoryInput,
+) -> BuildWallPrefixReceipt {
+    if receipt.boundary != BuildWallPrefixBoundary::TerritorySlot
+        || !receipt.territory_slot_16_due
+        || receipt.territory.is_some()
+    {
+        return receipt;
+    }
+    let (boundary, territory) =
+        resolve_build_wall_territory(receipt.phase, receipt.who, Some(input));
+    receipt.boundary = boundary;
+    receipt.territory = territory;
+    receipt
 }
 
 impl WallState {
@@ -1974,6 +2263,163 @@ mod tests {
         assert_ne!(state.build_masks & MASK_SEEN_A as u16, 0);
         assert_eq!(state.build_masks & MASK_WORKED_THIS_FRAME as u16, 0);
         assert_eq!(state.build_masks & MASK_HAD_HELPERS as u16, 0);
+    }
+
+    fn golden_territory_input(
+        type_index: i32,
+        building_attrition_disabled: i32,
+        fine_position: Option<(i32, i32)>,
+        wcoord: Option<(i32, i32)>,
+        territory_owner: Option<i32>,
+        is_dock: bool,
+    ) -> BuildWallTerritoryInput {
+        BuildWallTerritoryInput {
+            static_facts: BuildWallTerritoryStaticFacts {
+                type_index,
+                rush_rules: 0,
+                is_dock,
+            },
+            building_attrition_disabled,
+            fine_position,
+            wcoord,
+            territory_owner,
+        }
+    }
+
+    #[test]
+    fn market_frame31_territory_returns_before_position_world_or_type_reads() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            ever_seen: 1,
+            ever_seen_completed: 1,
+            build_masks: MASK_WORKED_THIS_FRAME as u16,
+            helpers: 0,
+        };
+        let receipt = process_build_wall_prefix_with_territory(
+            &mut state,
+            31,
+            0,
+            2001,
+            true,
+            None,
+            Some(golden_territory_input(436, 0, None, None, None, false)),
+        );
+
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::Complete);
+        let territory = receipt.territory.expect("source-bound territory receipt");
+        assert_eq!(territory.exit, BuildWallTerritoryExit::Phase32AlternateNoop);
+        assert!(!territory.phase32_due);
+        assert_eq!(territory.fine_position, None);
+        assert_eq!(territory.wcoord, None);
+        assert_eq!(territory.territory_owner, None);
+        assert_eq!(territory.is_dock, None);
+    }
+
+    #[test]
+    fn phase32_territory_stops_typed_at_is_dock_when_live_probe_is_missing() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            ever_seen: 1,
+            ever_seen_completed: 1,
+            build_masks: 0,
+            helpers: 0,
+        };
+        let receipt = process_build_wall_prefix_with_territory(
+            &mut state,
+            15,
+            0,
+            2001,
+            true,
+            None,
+            Some(golden_territory_input(436, 0, None, None, None, false)),
+        );
+
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::TerritoryIsDock);
+        assert_eq!(
+            receipt.territory.expect("typed boundary").exit,
+            BuildWallTerritoryExit::IsDockBoundary
+        );
+    }
+
+    #[test]
+    fn source_bound_non_dock_on_friendly_wdata_returns_wall_process() {
+        let mut state = BuildWallPrefixState {
+            targeted: 0,
+            ever_seen: 1,
+            ever_seen_completed: 1,
+            build_masks: 0,
+            helpers: 0,
+        };
+        let receipt = process_build_wall_prefix_with_territory(
+            &mut state,
+            16,
+            0,
+            2000,
+            true,
+            Some(1),
+            Some(golden_territory_input(
+                414,
+                0,
+                Some((12_288, 12_288)),
+                Some((16, 16)),
+                Some(0),
+                false,
+            )),
+        );
+
+        assert_eq!(receipt.boundary, BuildWallPrefixBoundary::Complete);
+        let territory = receipt.territory.expect("source-bound territory receipt");
+        assert_eq!(territory.exit, BuildWallTerritoryExit::FriendlyTerritory);
+        assert_eq!(territory.is_dock, Some(false));
+        assert_eq!(territory.territory_owner, Some(0));
+    }
+
+    #[test]
+    fn territory_authority_is_self_hashed_and_identity_complete() {
+        let mut build = crate::systems::production::BuildData {
+            flags: crate::systems::production::flag::VALID
+                | crate::systems::production::flag::STARTED
+                | crate::systems::production::flag::ACTIVE,
+            who: 0,
+            uid: 9,
+            ..Default::default()
+        };
+        build.set_object_id(2000);
+        let mut authority = BuildWallTerritoryAuthority {
+            revision: 4,
+            composition_digest: 0,
+            rush_rules: 0,
+            frames: GOLDEN_BUILD_WALL_TERRITORY_FRAMES,
+            builds: [
+                BuildWallTerritoryIdentity {
+                    row: 3,
+                    who: 0,
+                    o: 2000,
+                    uid: 9,
+                    type_index: 414,
+                    is_dock: false,
+                },
+                BuildWallTerritoryIdentity {
+                    row: 4,
+                    who: 0,
+                    o: 2001,
+                    uid: 10,
+                    type_index: 436,
+                    is_dock: false,
+                },
+            ],
+        };
+        authority.composition_digest = build_wall_territory_authority_digest(&authority);
+        assert_eq!(
+            authority.facts_for(16, 3, &build, Some(414), 0),
+            Some(BuildWallTerritoryStaticFacts {
+                type_index: 414,
+                rush_rules: 0,
+                is_dock: false,
+            })
+        );
+        authority.builds[0].uid ^= 1;
+        assert_eq!(authority.facts_for(16, 3, &build, Some(414), 0), None);
     }
 
     #[test]

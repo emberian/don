@@ -9,9 +9,11 @@
 //! The serialized field map is the inverse of the already-owned checksum traversal:
 //! `Type::walk_rules_data` writes `[+0x04,+0x5e)`, `ObjectType` writes
 //! `[+0x1e4,+0x27c)`, and `UnitType` writes four ranges totaling 792 bytes.  Save-only Strings
-//! and the two variable `SimpleArray<u16>` bodies are skipped with the same bounds as
-//! [`crate::initial::parse_serialized_rules_at`].  The caller cannot substitute a convenient
-//! row: the complete Rules span, SHA-256, and all four retail checkpoints are revalidated first.
+//! and the two variable `SimpleArray<u16>` bodies are bounded with the same rules as
+//! [`crate::initial::parse_serialized_rules_at`]. Most projections skip them; the narrow
+//! Build-dock relation authority retains the first array's exact envelope and body. The caller
+//! cannot substitute a convenient row: the complete Rules span, SHA-256, and all four retail
+//! checkpoints are revalidated first.
 
 #![forbid(unsafe_code)]
 
@@ -222,6 +224,32 @@ pub struct ReplayBuildTypeFacts {
     pub civ_graph_mask: u8,
 }
 
+/// `BuildTypeData::is_dock()` is `is(DOCK, 0)`, where `DOCK` is TypeIndex 432.
+pub const BUILD_DOCK_TYPE_INDEX: i32 = 432;
+
+/// One replay-carried node consumed by `ObjectTypeData::is_slow(type, 0)` after an empty
+/// `is_list`: exact type, graft, then the recursive `TypeData::from` edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayBuildTypeRelationNode {
+    pub type_index: i32,
+    pub from: i32,
+    pub graft: i32,
+    pub type_base: ReplayByteSpan,
+}
+
+/// Complete source evaluation of `BuildTypeData::is_dock()` for one serialized Build row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplayBuildTypeIsDockFacts {
+    pub type_index: i32,
+    pub dock_type_index: i32,
+    /// Complete serialized first `SimpleArray<unsigned short>` envelope and body.
+    pub is_list_span: ReplayByteSpan,
+    pub is_list: Vec<u16>,
+    /// Non-empty only when the top-level `is_list` is empty and retail follows `from`.
+    pub ancestry: Vec<ReplayBuildTypeRelationNode>,
+    pub is_dock: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrePairUnitAuthorityError {
     WrongGoldenReplayFile,
@@ -264,6 +292,12 @@ pub enum PrePairUnitAuthorityError {
     WrongSerializedType {
         expected: i32,
         got: i32,
+    },
+    TypeRelationNotBuild {
+        type_index: i32,
+    },
+    TypeRelationCycle {
+        type_index: i32,
     },
     WrongTribeTag {
         tribe_index: usize,
@@ -362,7 +396,10 @@ fn skip_string(section: &[u8], cursor: &mut usize) -> Result<(), PrePairUnitAuth
     Ok(())
 }
 
-fn skip_u16_array(section: &[u8], cursor: &mut usize) -> Result<(), PrePairUnitAuthorityError> {
+fn take_u16_array(
+    section: &[u8],
+    cursor: &mut usize,
+) -> Result<(usize, usize, Vec<u16>), PrePairUnitAuthorityError> {
     let at = *cursor;
     let count = read_i32(section, at)?;
     if !(0..=TYPE_SLOTS as i32).contains(&count) {
@@ -370,7 +407,7 @@ fn skip_u16_array(section: &[u8], cursor: &mut usize) -> Result<(), PrePairUnitA
     }
     *cursor += 4;
     if count == 0 {
-        return Ok(());
+        return Ok((at, 4, Vec::new()));
     }
     need(section, *cursor, 7)?;
     let capacity = read_i32(section, *cursor)?;
@@ -388,8 +425,16 @@ fn skip_u16_array(section: &[u8], cursor: &mut usize) -> Result<(), PrePairUnitA
     *cursor += 7;
     let elements = usize::try_from(count).expect("nonnegative checked count") * 2;
     need(section, *cursor, elements)?;
+    let values = section[*cursor..*cursor + elements]
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect();
     *cursor += elements;
-    Ok(())
+    Ok((at, *cursor - at, values))
+}
+
+fn skip_u16_array(section: &[u8], cursor: &mut usize) -> Result<(), PrePairUnitAuthorityError> {
+    take_u16_array(section, cursor).map(|_| ())
 }
 
 fn absolute_span(rules: &InitialRules, relative: usize, bytes: usize) -> ReplayByteSpan {
@@ -821,6 +866,151 @@ pub fn replay_build_type_facts(
         need(section, cursor, 0)?;
     }
     unreachable!("validated Build TypeIndex must be reached")
+}
+
+fn replay_build_type_is_list(
+    payload: &[u8],
+    rules: &InitialRules,
+    type_index: i32,
+) -> Result<(ReplayByteSpan, Vec<u16>), PrePairUnitAuthorityError> {
+    if !(414..=542).contains(&type_index) {
+        return Err(PrePairUnitAuthorityError::TypeIndexOutOfRange { type_index });
+    }
+    let section = admitted_section(payload, rules)?;
+    let mut cursor = 1usize;
+    for slot in 0..=type_index as usize {
+        need(section, cursor, TYPE_BASE_WALK_BYTES)?;
+        let got = read_i32(section, cursor)?;
+        if got != slot as i32 {
+            return Err(PrePairUnitAuthorityError::WrongSerializedType {
+                expected: slot as i32,
+                got,
+            });
+        }
+        cursor += TYPE_BASE_WALK_BYTES;
+        skip_string(section, &mut cursor)?;
+
+        let kind = match slot {
+            0..=49 => 0,
+            50..=413 => 1,
+            414..=542 => 2,
+            543 => 3,
+            544..=628 => 4,
+            629..=683 => 5,
+            _ => 6,
+        };
+        if kind <= 3 {
+            need(section, cursor, OBJECT_WALK_BYTES)?;
+            cursor += OBJECT_WALK_BYTES;
+            let (at, bytes, is_list) = take_u16_array(section, &mut cursor)?;
+            skip_u16_array(section, &mut cursor)?;
+            if slot as i32 == type_index {
+                return Ok((absolute_span(rules, at, bytes), is_list));
+            }
+        }
+        match kind {
+            0 => cursor += GOOD_TAIL_BYTES,
+            1 => cursor += UNIT_WALK_BYTES,
+            2 => cursor += BUILD_TAIL_BYTES,
+            4 => {
+                cursor += TECH_TAIL_BYTES;
+                for _ in 0..8 {
+                    skip_string(section, &mut cursor)?;
+                }
+            }
+            5 => cursor += SPELL_TAIL_BYTES,
+            3 | 6 => {}
+            _ => unreachable!(),
+        }
+        need(section, cursor, 0)?;
+    }
+    unreachable!("validated Build TypeIndex must be reached")
+}
+
+/// Evaluate the exact retail `BuildTypeData::is_dock()` graph from replay Rules.
+///
+/// `is_dock` (`0x00472A70`) calls `ObjectTypeData::is(432, 0)` (`0x0065F7D0`). Retail
+/// first accepts an exact type or an entry in `is_list`. When that list is empty it calls
+/// `ObjectTypeData::is_slow`, which checks `graft` and recursively follows `TypeData::from`.
+/// The returned receipt retains every serialized byte range which selected the answer.
+pub fn replay_build_type_is_dock_facts(
+    payload: &[u8],
+    rules: &InitialRules,
+    type_index: i32,
+) -> Result<ReplayBuildTypeIsDockFacts, PrePairUnitAuthorityError> {
+    let top = replay_build_type_facts(payload, rules, type_index)?;
+    let (is_list_span, is_list) = replay_build_type_is_list(payload, rules, type_index)?;
+    if type_index == BUILD_DOCK_TYPE_INDEX
+        || is_list
+            .iter()
+            .any(|&candidate| i32::from(candidate) == BUILD_DOCK_TYPE_INDEX)
+    {
+        return Ok(ReplayBuildTypeIsDockFacts {
+            type_index,
+            dock_type_index: BUILD_DOCK_TYPE_INDEX,
+            is_list_span,
+            is_list,
+            ancestry: Vec::new(),
+            is_dock: true,
+        });
+    }
+    // A non-empty list returns false directly; the recursive slow relation is reached only
+    // for an empty list.
+    if !is_list.is_empty() {
+        return Ok(ReplayBuildTypeIsDockFacts {
+            type_index,
+            dock_type_index: BUILD_DOCK_TYPE_INDEX,
+            is_list_span,
+            is_list,
+            ancestry: Vec::new(),
+            is_dock: false,
+        });
+    }
+
+    let mut ancestry = Vec::new();
+    let mut node = top;
+    loop {
+        if ancestry
+            .iter()
+            .any(|prior: &ReplayBuildTypeRelationNode| prior.type_index == node.type_index)
+        {
+            return Err(PrePairUnitAuthorityError::TypeRelationCycle {
+                type_index: node.type_index,
+            });
+        }
+        ancestry.push(ReplayBuildTypeRelationNode {
+            type_index: node.type_index,
+            from: node.from,
+            graft: node.graft,
+            type_base: node.spans.type_base,
+        });
+        if node.type_index == BUILD_DOCK_TYPE_INDEX || node.graft == BUILD_DOCK_TYPE_INDEX {
+            return Ok(ReplayBuildTypeIsDockFacts {
+                type_index,
+                dock_type_index: BUILD_DOCK_TYPE_INDEX,
+                is_list_span,
+                is_list,
+                ancestry,
+                is_dock: true,
+            });
+        }
+        if node.from < 0 {
+            return Ok(ReplayBuildTypeIsDockFacts {
+                type_index,
+                dock_type_index: BUILD_DOCK_TYPE_INDEX,
+                is_list_span,
+                is_list,
+                ancestry,
+                is_dock: false,
+            });
+        }
+        if !(414..=542).contains(&node.from) {
+            return Err(PrePairUnitAuthorityError::TypeRelationNotBuild {
+                type_index: node.from,
+            });
+        }
+        node = replay_build_type_facts(payload, rules, node.from)?;
+    }
 }
 
 /// Resolve the exact nation row and graft selected by setup without constructing a Unit.

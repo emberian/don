@@ -976,6 +976,9 @@ pub struct Sim {
     /// Reinstalled golden Game::everyone_mask/Build identity join for the periodic
     /// `Wall::check_ever_seen(0)` fast return. It is deliberately absent after load.
     pub build_wall_periodic_authority: walls::BuildWallPeriodicAuthority,
+    /// Reinstalled replay/content facts for the golden Build-band territory slots. Mutable
+    /// Leader, Build and WData inputs remain in their canonical owners and are read live.
+    pub build_wall_territory_authority: walls::BuildWallTerritoryAuthority,
     pub combat_rules: combat::CombatConstants,
     /// Band 2000, indexed by the row an [`crate::objects::ObjectRegistry`] entry carries.
     pub builds: Vec<production::BuildData>,
@@ -1706,6 +1709,7 @@ impl Sim {
             prod_rules: production::ProdRules::shipped(),
             production_runtime: production::runtime::LiveProductionRuntime::default(),
             build_wall_periodic_authority: walls::BuildWallPeriodicAuthority::default(),
+            build_wall_territory_authority: walls::BuildWallTerritoryAuthority::default(),
             combat_rules: combat::CombatConstants::shipped(),
             builds: Vec::new(),
             walls: Vec::new(),
@@ -1745,6 +1749,14 @@ impl Sim {
         authority: walls::BuildWallPeriodicAuthority,
     ) {
         self.build_wall_periodic_authority = authority;
+    }
+
+    /// Reinstall the source-bound golden Build/Wall territory projection.
+    pub fn replace_build_wall_territory_authority(
+        &mut self,
+        authority: walls::BuildWallTerritoryAuthority,
+    ) {
+        self.build_wall_territory_authority = authority;
     }
 
     /// Install the target/formation facts consumed by the bounded canonical GUARD host.
@@ -5802,7 +5814,7 @@ impl Sim {
             &self.builds[row],
             type_index,
         );
-        let receipt = {
+        let mut receipt = {
             let bd = &mut self.builds[row];
             let mut state = walls::BuildWallPrefixState {
                 targeted: bd.targeted(),
@@ -5826,6 +5838,52 @@ impl Sim {
             bd.helpers = state.helpers;
             receipt
         };
+
+        // The helper writes above are earlier in retail order than every territory read.
+        // Only after they are published may the source-bound cone inspect Leader, Build and
+        // live WData state. Market frame 31 takes the phase alternate before location access.
+        if receipt.boundary == walls::BuildWallPrefixBoundary::TerritorySlot {
+            let territory_static = self.build_wall_territory_authority.facts_for(
+                frame,
+                row,
+                &self.builds[row],
+                type_index,
+                self.vic_match.options.rush_rules,
+            );
+            if let Some(static_facts) = territory_static {
+                let build = &self.builds[row];
+                if let Some(leader) = self.vic_leaders.slots.get(usize::from(build.who)) {
+                    let location_due = leader.building_attrition_disabled == 0
+                        && static_facts.rush_rules == 0
+                        && receipt.phase.rem_euclid(32) == 0;
+                    let (fine_position, wcoord, territory_owner) = if location_due {
+                        let fine = build.position();
+                        let wc = (
+                            borders_fog::fine_to_wcoord(fine.0),
+                            borders_fog::fine_to_wcoord(fine.1),
+                        );
+                        let owner = (wc.0 >= 0
+                            && wc.1 >= 0
+                            && wc.0 < self.map.world.xs
+                            && wc.1 < self.map.world.ys)
+                            .then(|| self.map.world.get_who(wc.0, wc.1));
+                        (Some(fine), Some(wc), owner)
+                    } else {
+                        (None, None, None)
+                    };
+                    receipt = walls::resume_build_wall_territory(
+                        receipt,
+                        walls::BuildWallTerritoryInput {
+                            static_facts,
+                            building_attrition_disabled: leader.building_attrition_disabled,
+                            fine_position,
+                            wcoord,
+                            territory_owner,
+                        },
+                    );
+                }
+            }
+        }
 
         self.cover.build_process += 1;
         self.cover.build_wall_periodic_noops += u64::from(receipt.periodic_child_completed_noop);
