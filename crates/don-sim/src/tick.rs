@@ -67,7 +67,8 @@ use crate::systems::{
     ammo, borders_fog, canonical_air_patrol_runtime, canonical_build_at_work, canonical_cast_work,
     canonical_gather_work, canonical_strafe_runtime, casters_animals, collision_blocks_live,
     combat, defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys,
-    leaders, movement, movement_driver, movement_live, order_dispatch, production,
+    leader_unit_think_pending, leaders, movement, movement_driver, movement_live, order_dispatch,
+    production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -2512,6 +2513,59 @@ impl Sim {
             victory_score::leader_flag::VALID | victory_score::leader_flag::ACTIVE;
         assert!(self.world.set_object_owner_active(who, true));
         self.map.fog.leaders[who].player_mask = 1u8 << who;
+    }
+
+    /// Prepare the exact type-50/51 `Unit::think` OR into the checksum-owned Leader flags.
+    /// Both Sim mirrors are read here; a disagreement refuses before a plan is published.
+    pub fn prepare_unit_think_leader_pending(
+        &self,
+        source: leader_unit_think_pending::UnitThinkLeaderPendingSource,
+    ) -> Result<
+        leader_unit_think_pending::PreparedUnitThinkLeaderPending,
+        leader_unit_think_pending::UnitThinkLeaderPendingError,
+    > {
+        let owner = source.owner;
+        if owner >= NUM_LEADERS {
+            return Err(
+                leader_unit_think_pending::UnitThinkLeaderPendingError::OwnerOutOfRange { owner },
+            );
+        }
+        leader_unit_think_pending::prepare_unit_think_leader_pending(
+            source,
+            NUM_LEADERS,
+            self.vic_leaders.slots[owner].leader_flags,
+            self.step8.leaders[owner].flags,
+            self.vic_leaders.slots[owner].leader_flags2,
+            self.step8.leaders[owner].ai.flags2,
+        )
+    }
+
+    /// Commit a prepared Citizen-think Leader OR only while authority and both before-images
+    /// still agree. Every refusal occurs before either mirror is written.
+    pub fn commit_unit_think_leader_pending(
+        &mut self,
+        source: leader_unit_think_pending::UnitThinkLeaderPendingSource,
+        prepared: leader_unit_think_pending::PreparedUnitThinkLeaderPending,
+    ) -> Result<
+        leader_unit_think_pending::UnitThinkLeaderPendingReceipt,
+        leader_unit_think_pending::UnitThinkLeaderPendingError,
+    > {
+        let owner = source.owner;
+        if owner >= NUM_LEADERS {
+            return Err(
+                leader_unit_think_pending::UnitThinkLeaderPendingError::OwnerOutOfRange { owner },
+            );
+        }
+        let victory_flags2 = self.vic_leaders.slots[owner].leader_flags2;
+        let step8_flags2 = self.step8.leaders[owner].ai.flags2;
+        leader_unit_think_pending::commit_unit_think_leader_pending(
+            source,
+            prepared,
+            &mut self.vic_leaders.slots[owner].leader_flags,
+            &mut self.step8.leaders[owner].flags,
+            victory_flags2,
+            step8_flags2,
+        )
     }
 
     /// Register the completed-Wonder slice reached at `Build::activate` `0x00625B5B`.

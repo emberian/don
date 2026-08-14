@@ -238,6 +238,8 @@ pub mod leader_tribe_bonus_runtime;
 /// Atomic publication of production-owned current tech and ages into the victory and
 /// step-8 duplicate views. Production completion preflights this before mutation.
 pub mod leader_tech_sync;
+/// Atomic dual-mirror Leader pending-bit transaction reached by type-50/51 `Unit::think`.
+pub mod leader_unit_think_pending;
 /// `Leader::process_taunt` `0x006B8CC0`, whole — step 8's last unported child. The tribute
 /// arms stage a two-sided `Diplomacy::offers` ledger through `Leader::action_clear_all`
 /// `0x006D15E0` and `Leader::action_offer` `0x006D1780`; the build arms rewrite and clamp
