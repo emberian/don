@@ -153,6 +153,7 @@ pub struct Frame1CommandEntryCapture {
 pub enum Frame1CommandEntryBindError {
     Plan(Frame1LeaderOptionsError),
     MissingCaptureRevision,
+    WrongCaptureSource,
     ReplayMismatch,
     UnsupportedExecutable,
     WrongSetupFrame { expected: i32, actual: i32 },
@@ -546,6 +547,11 @@ pub fn bind_captured_frame1_command_entry(
     let plan = plan_frame1_setup_leader_options(replay)?;
     if capture.revision == 0 {
         return Err(Frame1CommandEntryBindError::MissingCaptureRevision);
+    }
+    if capture.source
+        != Frame1CommandEntrySource::AuthoritativePlaybackChronologyFrameZeroThroughOne
+    {
+        return Err(Frame1CommandEntryBindError::WrongCaptureSource);
     }
     if capture.replay_file_sha256 != REPLAY_FILE_SHA256
         || setup.replay_file_sha256 != REPLAY_FILE_SHA256

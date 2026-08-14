@@ -71,7 +71,12 @@ completed `TerrainGroups::place_all` receipt and its exact post-map RNG to the s
 post-mountain `TerrainHeightAuthority`, then validates a supported-retail frame-zero DoNSave at
 the `Setup::build_units` entry. The later snapshot must contain the camera-selected owner-0
 Village as canonical object 2000, its live City/region link and intrusive WData head, and the
-same terrain Z returned by the completed height plane. The binder derives the
+same terrain Z returned by the completed height plane. Dutch civilization-specific setup runs
+unconditionally before `build_units`, so the entry must also contain active owner-0 Market type
+436 as Build object 2001, sharing the center's City slot with `center.city_down=2001` and
+`market.city_down=-1`. The Market may not carry the center/CITY flag. Its exact footprint and
+post-placement World/RNG remain committed by the whole-Sim capture rather than guessed by this
+structural gate. The binder derives the
 `Frame379WorldgenAuthority.composition_digest`; callers no longer choose that digest when a real
 entry capture is available. The post-`place_all` and setup-entry World checksums are deliberately
 distinct boundaries because Village construction changes World. Neither is read from a replay
@@ -94,7 +99,8 @@ height plane, or retail setup-entry snapshot. `place_all` itself contains the se
 trees/rocks/oil and its doober/treeify/reporting tail; there is no unnamed forest/resource/start
 placement pass after it.
 
-After that seam lands, the receiver binder needs seven coherent retail capture tranches containing
+After that seam lands, the schema-v2 golden manifest needs the Market-complete entry followed by
+seven coherent retail capture tranches containing
 the complete graphics, height, collision, visibility, Leader-accounting, RNG, Unit, and Guy
 after-images for the Scout, both Merchants, and four Citizens. Full frame-379 replay also needs
 every other player's setup chronology and exact intervening frame simulation; this owner-0 receipt

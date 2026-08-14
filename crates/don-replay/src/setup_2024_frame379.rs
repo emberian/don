@@ -71,6 +71,8 @@ pub const SETUP_CALLS: usize = 7;
 pub const CITIZEN_ORDINALS: [usize; 4] = [3, 4, 5, 6];
 pub const GROUP_MOVE_SERIAL: i32 = 64;
 pub const GROUP_MOVE_FRAME: i32 = 379;
+pub const DUTCH_STARTING_MARKET_TYPE: i32 = 436;
+pub const DUTCH_STARTING_MARKET_O: i32 = 2_001;
 /// Exact Great Lakes RNG handoff immediately before `TerrainGroups::place_all` for the
 /// target replay. This is executable-derived procedural chronology, not a recorded checksum.
 pub const PLACE_ALL_RANDOM_STATE_BEFORE: i32 = 0x58df_377d_u32 as i32;
@@ -155,6 +157,9 @@ pub struct Frame379SetupEntryReceipt {
     pub center_build_o: i32,
     pub center_city_slot: i16,
     pub center_region: i16,
+    pub market_build_row: usize,
+    pub market_build_o: i32,
+    pub market_city_slot: i16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +189,8 @@ pub enum Frame379SetupEntryBindError {
     MissingCenterCity,
     CenterCityMismatch,
     CenterWorldLinkMismatch,
+    MissingStartingMarket,
+    StartingMarketMismatch,
     EntryAllocationNotFresh,
 }
 
@@ -1005,6 +1012,44 @@ pub fn bind_captured_frame379_setup_entry(
     if world_cell.down != center.object_id() || world_cell.down_who != i16::from(OWNER) {
         return Err(Frame379SetupEntryBindError::CenterWorldLinkMismatch);
     }
+    let market_identity = entry
+        .world
+        .object_bands()
+        .live_identity(
+            don_sim::systems::sparse_object_bands_authority_frontier::RetailObjectAddress::new(
+                OWNER,
+                don_sim::systems::sparse_object_bands_authority_frontier::RetailBand::Build,
+                DUTCH_STARTING_MARKET_O,
+            ),
+        )
+        .ok_or(Frame379SetupEntryBindError::MissingStartingMarket)?;
+    let WorldObjectIdentity::BuildRow(market_row) = market_identity else {
+        return Err(Frame379SetupEntryBindError::MissingStartingMarket);
+    };
+    let market_build_row = market_row as usize;
+    let market = entry
+        .builds
+        .get(market_build_row)
+        .ok_or(Frame379SetupEntryBindError::MissingStartingMarket)?;
+    let required_market_flags = don_sim::systems::production::flag::VALID
+        | don_sim::systems::production::flag::STARTED
+        | don_sim::systems::production::flag::ACTIVE;
+    if market.flags & required_market_flags != required_market_flags
+        || market.flags & 0x20 != 0
+        || market.who != OWNER
+        || i32::from(market.object_id()) != DUTCH_STARTING_MARKET_O
+        || market.city != center_city_slot
+        || market.city_down != -1
+        || center.city_down != DUTCH_STARTING_MARKET_O as i16
+        || entry
+            .production_runtime
+            .build_types
+            .get(market_build_row)
+            .and_then(|value| *value)
+            != Some(DUTCH_STARTING_MARKET_TYPE)
+    {
+        return Err(Frame379SetupEntryBindError::StartingMarketMismatch);
+    }
     if entry.world.unit_mark(usize::from(OWNER)) != Some(0) {
         return Err(Frame379SetupEntryBindError::EntryAllocationNotFresh);
     }
@@ -1026,6 +1071,9 @@ pub fn bind_captured_frame379_setup_entry(
     image.extend_from_slice(&center_build_o.to_le_bytes());
     image.extend_from_slice(&center_city_slot.to_le_bytes());
     image.extend_from_slice(&city.reg.to_le_bytes());
+    image.extend_from_slice(&(market_build_row as u64).to_le_bytes());
+    image.extend_from_slice(&DUTCH_STARTING_MARKET_O.to_le_bytes());
+    image.extend_from_slice(&market.city.to_le_bytes());
     append_world_checksum(&mut image, &entry_world_checksum);
     image.extend_from_slice(&entry.world.random.state().to_le_bytes());
     let composition_digest = sha256(&image);
@@ -1051,6 +1099,9 @@ pub fn bind_captured_frame379_setup_entry(
         center_build_o,
         center_city_slot,
         center_region: city.reg,
+        market_build_row,
+        market_build_o: DUTCH_STARTING_MARKET_O,
+        market_city_slot: market.city,
     })
 }
 

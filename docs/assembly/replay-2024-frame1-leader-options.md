@@ -1,6 +1,6 @@
 # 2024 frame-1 LeaderOptions chronology
 
-Status: exact source and synchronized mutation plan; canonical Sim commit still open,
+Status: exact source and synchronized mutation plan; minimal retail-oracle contracts defined,
 2026-08-13.
 
 The actual Rust replay classifier, rather than the older loose Python package survey, finds
@@ -60,12 +60,23 @@ It does not mutate a caller Sim, advance frame zero to frame one, or manufacture
 chronology authority. `bind_captured_frame1_command_entry` admits the one-tick retail capture only
 when both whole-DoNSave hashes match, the executable/replay identities are exact, the first image
 is the completed seven-call setup receipt, and all seven generation-bound Units survive into live
-frame 1. It produces the command-entry authority; it does not derive that tick from replay bytes.
+frame 1. That pre-command image is mandatory: frame zero already runs Merchant think/unpack and
+Scout spellcaster work, so their orders, masks, paths and Objects search scratch are not yet
+derivable from the completed setup image. The Scout branch cannot mutate
+`CasterData::active_spells`; its setup-empty queue remains independently derivable. The binder
+produces the command-entry authority; it does not derive that tick from replay bytes.
 
 `mount_frame1_setup_leader_options` consumes that authority, rebinds all four Citizens by
 generation and the Village through both object registries, validates every zero-stance
 before-image, and commits the five writes atomically. It cannot relabel the setup receipt's
 frame-zero snapshot.
+
+`setup_2024_golden_capture::bind_captured_frame1_post_command` then requires the supported retail
+serial-1 after-image to equal that independent mount byte for byte. The resulting shared authority
+binds the full Sim, World/RNG, all seven Unit identities, and the Village/Market/City inventory.
+The same module makes the frame-2 post-tick capture the final mandatory image in the minimal
+schema-v2 oracle bundle. Frame 32 wildlife and frames 379/384/391 remain independent optional
+second-stage manifests.
 
 After the serial-1 commands execute at live frame 1, the next exact boundary is the
 **post-command frame-1 tick**, followed by entry ticks 2 through 378 to reach the frame-379

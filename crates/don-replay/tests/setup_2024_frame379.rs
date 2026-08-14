@@ -405,6 +405,33 @@ fn captured_setup_entry(
     )
     .unwrap();
     entry.builds[center.row].city = 0;
+    let mut market_build = production::BuildData {
+        flags: production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE,
+        city: -1,
+        gather_down: -1,
+        city_down: -1,
+        wonder: -1,
+        dock: -1,
+        attack_ox: -1,
+        attack_whom: -1,
+        ..production::BuildData::default()
+    };
+    market_build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+    market_build.other[0x3e] = u8::MAX;
+    let market = spawn_canonical_build(
+        &mut entry,
+        CanonicalBuildSpawnRequest {
+            owner: 0,
+            type_index: don_replay::setup_2024_frame379::DUTCH_STARTING_MARKET_TYPE,
+            snapped_x: facts.center_position.0 + 0x300,
+            snapped_y: facts.center_position.1,
+            build: market_build,
+        },
+    )
+    .unwrap();
+    assert_eq!(i32::from(market.object_id), 2_001);
+    entry.builds[center.row].city_down = market.object_id;
+    entry.builds[market.row].city = 0;
     let wx = WCoord::from_coord(Coord(facts.center_position.0)).0;
     let wy = WCoord::from_coord(Coord(facts.center_position.1)).0;
     let wrow = (wy * entry.map.world.xs + wx) as usize;
@@ -549,6 +576,8 @@ fn captured_setup_entry_derives_worldgen_authority_from_map_height_and_village()
     assert_eq!(bound.center_build_o, 2_000);
     assert_eq!(bound.center_city_slot, 0);
     assert_eq!(bound.center_region, 1);
+    assert_eq!(bound.market_build_o, 2_001);
+    assert_eq!(bound.market_city_slot, 0);
     assert_eq!(bound.terrain_query.returned_z, 0);
 }
 
