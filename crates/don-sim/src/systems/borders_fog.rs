@@ -1182,6 +1182,28 @@ pub struct Diplomacy {
     pub diplo: [[i32; 8]; 8],
 }
 
+/// The contested-City predicate at `World::compute_reg_territory`
+/// `0x006B17C8..0x006B17EC`.
+///
+/// Once a City wins a tile and a non-negative runner-up exists, retail sets both player
+/// bits in `CityData::bordering +0x65` unless the runner-up is the winner's team owner or
+/// both relevant declarations are non-zero.  This is deliberately *not* reduced to
+/// [`is_enemy_territory`]: that later query tests for mutual declaration value `2`, while
+/// this writer's machine code compares both declaration dwords with literal zero.
+#[inline]
+pub fn city_border_is_contested(d: &Diplomacy, winner: i32, runner_up: i32) -> bool {
+    let Some(winner) = usize::try_from(winner).ok().filter(|&who| who < 8) else {
+        return false;
+    };
+    let Some(runner_up) = usize::try_from(runner_up).ok().filter(|&who| who < 8) else {
+        return false;
+    };
+    let Some(team) = usize::try_from(d.team[winner]).ok().filter(|&who| who < 8) else {
+        return false;
+    };
+    runner_up != team && (d.diplo[winner][runner_up] == 0 || d.diplo[runner_up][team] == 0)
+}
+
 /// `WorldData::is_enemy_territory(WCoord, WCoord, int player)` `0x006B2490`, and the same
 /// predicate as `WallData::in_unfriendly_territory` `0x0063ECA0`.
 ///
@@ -2898,5 +2920,23 @@ mod tests {
                 .differing_sections(&b.checksum_sections()),
             vec![map_terrain::WorldSection::WData]
         );
+    }
+
+    #[test]
+    fn city_bordering_uses_the_native_zero_declaration_predicate() {
+        let mut d = Diplomacy::default();
+        for who in 0..8 {
+            d.team[who] = who as i32;
+            d.diplo[who][who] = 2;
+        }
+        assert!(city_border_is_contested(&d, 0, 1));
+        d.diplo[0][1] = 1;
+        assert!(city_border_is_contested(&d, 0, 1));
+        d.diplo[1][0] = 1;
+        assert!(!city_border_is_contested(&d, 0, 1));
+        d.team[0] = 1;
+        assert!(!city_border_is_contested(&d, 0, 1));
+        assert!(!city_border_is_contested(&d, -1, 1));
+        assert!(!city_border_is_contested(&d, 0, 8));
     }
 }
