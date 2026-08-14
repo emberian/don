@@ -620,11 +620,7 @@ impl StagedForceArmyAuthority {
                     .as_ref()
                     .and_then(|facts| {
                         facts.iter().find(|fact| {
-                            groups.list.get(fact.gid).is_none_or(|group| {
-                                group.id != fact.id
-                                    || group.army != fact.army
-                                    || group.num != fact.num
-                            })
+                            !fact.is_current(groups)
                         })
                     })
                     .map_or(0, |fact| fact.gid);
@@ -1316,6 +1312,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                     .iter()
                     .flat_map(|receipt| receipt.retirement_groups.iter().flatten())
                 {
+                    self.sim.groups.list[fact.gid].num = 0;
                     self.sim.groups.list[fact.gid].army = -1;
                 }
                 self.sim.armies = *staged.armies;

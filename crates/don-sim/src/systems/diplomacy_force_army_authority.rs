@@ -5,7 +5,8 @@
 //! the ordinary Army gates. The complete general body is not mounted. The bounded arms below are
 //! authority-complete: `leader_flags & 0x40` still reaches the entry decrement of `human_frame`,
 //! then returns before normalization; an active non-mustering Army with either no Groups or only
-//! already-empty persistent Groups normalizes its five derived fields, unlinks those Groups,
+//! persistent Groups whose live prefixes are empty or all tombstones normalizes its five derived
+//! fields, unlinks those Groups,
 //! lazily scans its saved City prefix, optionally rallies through `send_here` at the first active
 //! row, and takes the exact retirement/`close` path without Unit, terrain, AI, or RNG access; an
 //! empty mustering Army with a still-live human-order
@@ -27,10 +28,12 @@
 //! leader bit `0x40` at `0x006F94B7`, and returns at `0x006F983A` without a deeper call. With
 //! that bit clear the same body calls `Army::normalize` (`0x006F9B50`, 657 bytes). Its zero-Group
 //! input reads no Group. For an already-zero-member Group its reverse scan enters the empty
-//! `Group::normalize` loop, observes zero, and calls `Army::remove_group` (`0x006F8B50`), which
-//! clears only the Group's Army backlink and recursively normalizes the shorter prefix. The exact
-//! all-empty cone therefore reaches no Unit or Group action. At `0x006F94F7..0x006F9557` the
-//! zero-standard retirement initializes
+//! `Group::normalize` loop and observes zero. For a nonempty all-negative prefix, that same loop
+//! tests each `list[i]` from the tail, removes the current last entry, and reaches zero without
+//! reading a Unit or shifting the parallel arrays. Both call `Army::remove_group` (`0x006F8B50`),
+//! which clears only the Group's Army backlink and recursively normalizes the shorter prefix. The
+//! exact all-empty/tombstone cone therefore reaches no Unit or Group action. At
+//! `0x006F94F7..0x006F9557` the zero-standard retirement initializes
 //! `city=0`, reads only each City's low flags byte until the saved count is exhausted or the first
 //! active row is found, then additionally reads that row's coordinates and calls `send_here(1)`.
 //! It finally calls `Army::close` (`0x006F8EA0`, 118 bytes), whose zero-group input likewise
@@ -69,7 +72,7 @@ pub struct ForceArmyProcessReceipt {
     pub leader_city_num: Option<i32>,
     /// Exact City prefix read by the positive-city empty-retirement branch.
     pub retirement_cities: Option<Vec<ForceArmyRetirementCityFact>>,
-    /// Exact empty Groups removed by normalization before the retirement predicate.
+    /// Exact empty or tombstone-only Groups removed by normalization before retirement.
     pub retirement_groups: Option<Vec<ForceArmyRetirementGroupFact>>,
     /// Read by `send_here` for a human rally or first-active-City retirement rally.
     pub world_size: Option<(i32, i32)>,
@@ -112,13 +115,35 @@ pub enum ForceArmyRetirementCityFact {
     Active { flags_low: u8, x: i32, y: i32 },
 }
 
-/// Minimal Group fields read while normalization removes an already empty member Group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Minimal Group fields read while normalization removes an empty or tombstone-only Group.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForceArmyRetirementGroupFact {
     pub gid: usize,
     pub id: i32,
     pub army: i32,
     pub num: i32,
+    /// Exact negative member ids, in retail's tail-to-head read/removal order.
+    pub tombstones: Vec<i16>,
+}
+
+impl ForceArmyRetirementGroupFact {
+    pub(crate) fn is_current(&self, groups: &Groups) -> bool {
+        let Some(group) = groups.list.get(self.gid) else {
+            return false;
+        };
+        let Ok(count) = usize::try_from(self.num) else {
+            return false;
+        };
+        group.id == self.id
+            && group.army == self.army
+            && group.num == self.num
+            && count <= group.list.len()
+            && self.tombstones.len() == count
+            && (0..count)
+                .rev()
+                .map(|index| group.list[index])
+                .eq(self.tombstones.iter().copied())
+    }
 }
 
 impl ForceArmyRetirementCityFact {
@@ -300,7 +325,7 @@ fn retirement_cities_are_current(cities: &CityPool, receipt: &ForceArmyProcessRe
     observe_retirement_cities(cities, receipt.request.owner, city_num).as_deref() == Some(expected)
 }
 
-fn observe_empty_retirement_groups(
+fn observe_retirement_groups(
     groups: &Groups,
     before: &ArmyData,
 ) -> Option<Vec<ForceArmyRetirementGroupFact>> {
@@ -318,15 +343,28 @@ fn observe_empty_retirement_groups(
             return None;
         }
         let group = groups.list.get(gid)?;
+        let member_count = usize::try_from(group.num).ok()?;
+        if member_count > group.list.len() {
+            return None;
+        }
+        let tombstones = (0..member_count)
+            .rev()
+            .map(|member| group.list[member])
+            .collect::<Vec<_>>();
         let fact = ForceArmyRetirementGroupFact {
             gid,
             id: group.id,
             army: group.army,
             num: group.num,
+            tombstones,
         };
-        // This exact cone relies on Group::normalize's zero-member loop and on
-        // Army::remove_group finding the same persistent id and backlink.
-        if fact.id != gid as i32 || fact.army != before.army as i32 || fact.num != 0 {
+        // Each negative entry is removed from the current tail, so normalization reads no Unit
+        // and shifts none of the Group's parallel arrays. Army::remove_group must then find the
+        // same persistent id and backlink.
+        if fact.id != gid as i32
+            || fact.army != before.army as i32
+            || fact.tombstones.iter().any(|member| *member >= 0)
+        {
             return None;
         }
         facts.push(fact);
@@ -354,7 +392,8 @@ fn retirement_groups_validate_shape(
             usize::try_from(before.list[index]).ok() == Some(fact.gid)
                 && fact.id == fact.gid as i32
                 && fact.army == before.army as i32
-                && fact.num == 0
+                && usize::try_from(fact.num).ok() == Some(fact.tombstones.len())
+                && fact.tombstones.iter().all(|member| *member < 0)
                 && !facts[..offset]
                     .iter()
                     .any(|earlier| earlier.gid == fact.gid)
@@ -371,7 +410,7 @@ fn retirement_groups_are_current(
     let Some(groups) = groups else {
         return false;
     };
-    observe_empty_retirement_groups(groups, &receipt.before).as_deref() == Some(expected)
+    observe_retirement_groups(groups, &receipt.before).as_deref() == Some(expected)
 }
 
 fn muster_city_is_current(cities: &CityPool, receipt: &ForceArmyProcessReceipt) -> bool {
@@ -1273,7 +1312,7 @@ fn prepare_force_army_process_impl(
                             army_slot: request.army_slot,
                         });
                     };
-                    let Some(facts) = observe_empty_retirement_groups(groups, &before) else {
+                    let Some(facts) = observe_retirement_groups(groups, &before) else {
                         return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
                             owner: request.owner,
                             army_slot: request.army_slot,
@@ -1660,10 +1699,7 @@ fn commit_force_army_process_impl(
                 facts.iter().find(|fact| {
                     groups
                         .as_deref()
-                        .and_then(|groups| groups.list.get(fact.gid))
-                        .is_none_or(|group| {
-                            group.id != fact.id || group.army != fact.army || group.num != fact.num
-                        })
+                        .is_none_or(|groups| !fact.is_current(groups))
                 })
             })
             .map_or(0, |fact| fact.gid);
@@ -1728,6 +1764,7 @@ fn commit_force_army_process_impl(
             .iter()
             .flat_map(|receipt| receipt.retirement_groups.iter().flatten())
         {
+            groups.list[fact.gid].num = 0;
             groups.list[fact.gid].army = -1;
         }
     }

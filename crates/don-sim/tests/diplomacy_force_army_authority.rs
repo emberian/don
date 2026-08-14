@@ -339,7 +339,7 @@ fn stale_retirement_city_rejects_the_whole_army_publish() {
 }
 
 #[test]
-fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
+fn empty_and_tombstone_groups_normalize_out_in_reverse_order_before_empty_retirement() {
     let mut armies = live_army();
     let first_gid = Groups::index(2, 4);
     let second_gid = Groups::index(2, 5);
@@ -356,10 +356,12 @@ fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
     groups.list[first_gid] = GroupData {
         id: first_gid as i32,
         army: 3,
+        num: 3,
         who: 2,
         stamp: 111,
         ..GroupData::default()
     };
+    groups.list[first_gid].list[..3].copy_from_slice(&[-2, -7, -1]);
     groups.list[second_gid] = GroupData {
         id: second_gid as i32,
         army: 3,
@@ -433,12 +435,14 @@ fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
                     id: second_gid as i32,
                     army: 3,
                     num: 0,
+                    tombstones: vec![],
                 },
                 ForceArmyRetirementGroupFact {
                     gid: first_gid,
                     id: first_gid as i32,
                     army: 3,
-                    num: 0,
+                    num: 3,
+                    tombstones: vec![-1, -7, -2],
                 },
             ]
             .as_slice()
@@ -449,8 +453,10 @@ fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
     assert_eq!(receipt.after.list[0], first_gid as i32);
     assert_eq!(receipt.after.list[1], second_gid as i32);
     assert_eq!(groups.list[first_gid].army, -1);
+    assert_eq!(groups.list[first_gid].num, 0);
     assert_eq!(groups.list[second_gid].army, -1);
     let mut expected_first = group_before.list[first_gid].clone();
+    expected_first.num = 0;
     expected_first.army = -1;
     let mut expected_second = group_before.list[second_gid].clone();
     expected_second.army = -1;
@@ -459,7 +465,7 @@ fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
 }
 
 #[test]
-fn stale_or_still_populated_retirement_group_never_publishes() {
+fn stale_or_live_member_retirement_group_never_publishes() {
     let mut armies = live_army();
     let gid = Groups::index(2, 4);
     armies.lists[2][3].num_groups = 1;
@@ -468,9 +474,11 @@ fn stale_or_still_populated_retirement_group_never_publishes() {
     groups.list[gid] = GroupData {
         id: gid as i32,
         army: 3,
+        num: 2,
         who: 2,
         ..GroupData::default()
     };
+    groups.list[gid].list[..2].copy_from_slice(&[-3, -8]);
     let mut flags = [0; 8];
     flags[2] = 1;
     let strategy = [[0; MUSTER_STRATEGY_REGIONS]; 8];
@@ -495,7 +503,7 @@ fn stale_or_still_populated_retirement_group_never_publishes() {
     )
     .unwrap();
     let army_before = armies.clone();
-    groups.list[gid].num = 1;
+    groups.list[gid].list[0] = -4;
     assert!(!prepared.is_current_with_groups_strategy_and_difficulty(
         &armies,
         &CityPool::new(),
@@ -526,7 +534,9 @@ fn stale_or_still_populated_retirement_group_never_publishes() {
     );
     assert_eq!(armies.lists, army_before.lists);
     assert_eq!(groups.list[gid].army, 3);
-    assert_eq!(groups.list[gid].num, 1);
+    assert_eq!(groups.list[gid].num, 2);
+
+    groups.list[gid].list[0] = 4;
 
     assert!(matches!(
         prepare_force_army_process_with_groups_strategy_and_difficulty(

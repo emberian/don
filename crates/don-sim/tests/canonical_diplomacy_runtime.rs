@@ -787,7 +787,7 @@ fn active_winner_empty_army_city_rally_resumes_from_canonical_city_owners() {
 }
 
 #[test]
-fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
+fn active_winner_tombstone_group_retirement_resumes_and_unlinks_atomically() {
     with_large_stack(|| {
         let mut uninterrupted = configured_alliance_victory_sim();
         let gid = Groups::index(2, 4);
@@ -806,19 +806,23 @@ fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
         uninterrupted.groups.list[gid] = GroupData {
             id: gid as i32,
             army: 3,
+            num: 3,
             who: 2,
             stamp: 1234,
             ..GroupData::default()
         };
+        uninterrupted.groups.list[gid].list[..3].copy_from_slice(&[-2, -7, -1]);
 
-        let checkpoint = save_sim(&uninterrupted).expect("zero-member Army Group input is savable");
-        let mut resumed = load_sim(&checkpoint).expect("zero-member Army Group input reloads");
+        let checkpoint =
+            save_sim(&uninterrupted).expect("tombstone-only Army Group input is savable");
+        let mut resumed = load_sim(&checkpoint).expect("tombstone-only Army Group input reloads");
         resumed.replace_diplomacy_authority(complete_facts());
         assert_eq!(resumed.armies.lists[2][3].list[0], gid as i32);
         assert_eq!(resumed.armies.lists[2][3].num_groups, 1);
         assert_eq!(resumed.groups.list[gid].id, gid as i32);
         assert_eq!(resumed.groups.list[gid].army, 3);
-        assert_eq!(resumed.groups.list[gid].num, 0);
+        assert_eq!(resumed.groups.list[gid].num, 3);
+        assert_eq!(&resumed.groups.list[gid].list[..3], &[-2, -7, -1]);
         assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
 
         let resumed_receipt = resumed
@@ -843,7 +847,8 @@ fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
                     gid,
                     id: gid as i32,
                     army: 3,
-                    num: 0,
+                    num: 3,
+                    tombstones: vec![-1, -7, -2],
                 }]
                 .as_slice()
             )
@@ -853,6 +858,8 @@ fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
         assert_eq!(army_receipt.after.list[0], gid as i32);
         assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
         assert_eq!(resumed.groups.list[gid].army, -1);
+        assert_eq!(resumed.groups.list[gid].num, 0);
+        assert_eq!(&resumed.groups.list[gid].list[..3], &[-2, -7, -1]);
         assert_eq!(resumed.groups.list[gid].stamp, 1234);
         assert_ne!(
             resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
@@ -863,8 +870,8 @@ fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
             save_sim(&uninterrupted).unwrap()
         );
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
-        let reloaded =
-            load_sim(&save_sim(&resumed).unwrap()).expect("unlinked empty Group result reloads");
+        let reloaded = load_sim(&save_sim(&resumed).unwrap())
+            .expect("unlinked tombstone Group result reloads");
         assert_eq!(reloaded.groups.list[gid].army, -1);
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
     });
