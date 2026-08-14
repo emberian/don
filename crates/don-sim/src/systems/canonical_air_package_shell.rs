@@ -17,8 +17,9 @@ use crate::systems::canonical_air_group_host::{
     CanonicalAirPackageError, PreparedCanonicalAirPackage,
 };
 use crate::systems::canonical_flight_strafe_host::{
-    commit_canonical_flight_strafe, prepare_canonical_flight_strafe, CanonicalFlightStrafeError,
-    CanonicalFlightStrafeReceipt,
+    commit_canonical_flight_strafe, flight_target_snapshot, flight_target_still_current,
+    prepare_canonical_flight_strafe, CanonicalFlightStrafeError, CanonicalFlightStrafeReceipt,
+    FlightTargetSnapshot,
 };
 use crate::systems::canonical_group_move_host::{
     build_still_current, groups_equal, prepare_air_group_selection, unit_still_current,
@@ -125,8 +126,8 @@ impl From<CanonicalFlightStrafeError> for CanonicalAirPackageShellError {
     }
 }
 
-/// The exact retail Flight subdomain which precedes the sole otherwise-supported AIR package:
-/// cached Airbases, ATTACK, no modifier, and a complete containment walk with no Nuclear Missile.
+/// An exact retail Flight no-action subdomain: selected Airbases, ATTACK, no modifier, and a
+/// complete containment walk with no Nuclear Missile.
 /// Retail filters every child at the type-315 test before reading busy/mana/range/order state, so
 /// this arm mutates only the opcode-0 Group/cache selection and has no Flight order tail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +176,8 @@ pub struct CanonicalFlightNoActionReceipt {
     pub flight_packet: Vec<u8>,
     pub request: FlightAttackNoActionRequest,
     pub target: crate::systems::air_group_action_transaction::CanonicalObjectIdentity,
+    pub target_uid: u16,
+    pub target_position: (i32, i32),
     pub selected_airbases: Vec<BuildSelectionIdentity>,
     pub contained_non_missiles:
         Vec<crate::systems::air_group_action_transaction::CanonicalObjectIdentity>,
@@ -185,6 +188,7 @@ pub struct CanonicalFlightNoActionReceipt {
 #[derive(Clone, Debug)]
 struct PreparedCanonicalFlightNoAction {
     selection: PreparedGroupSelection,
+    target: FlightTargetSnapshot,
     authority_before: AirGroupRuntimeAuthority,
     scenario_before: ScenarioIgnoreOrdersAuthority,
     receipt: CanonicalFlightNoActionReceipt,
@@ -446,24 +450,11 @@ fn prepare_flight_no_action(
         return Err(CanonicalFlightNoActionError::ScenarioIgnoreOrdersArmed);
     }
     let request = decode_flight_attack_no_action(flight_packet)?;
-    let target_who = u8::try_from(request.target_who).map_err(|_| {
-        CanonicalFlightNoActionError::InvalidTarget {
+    let target = flight_target_snapshot(world, builds, request.target_who, request.target_o)
+        .map_err(|_| CanonicalFlightNoActionError::InvalidTarget {
             who: request.target_who,
             o: request.target_o,
-        }
-    })?;
-    let target_o = i16::try_from(request.target_o).map_err(|_| {
-        CanonicalFlightNoActionError::InvalidTarget {
-            who: request.target_who,
-            o: request.target_o,
-        }
-    })?;
-    let target = canonical_unit_identity(world, target_who, target_o).map_err(|_| {
-        CanonicalFlightNoActionError::InvalidTarget {
-            who: request.target_who,
-            o: request.target_o,
-        }
-    })?;
+        })?;
 
     let selection = prepare_air_group_selection(
         world,
@@ -537,7 +528,9 @@ fn prepare_flight_no_action(
         group_packet: group_packet.to_vec(),
         flight_packet: flight_packet.to_vec(),
         request,
-        target,
+        target: target.identity,
+        target_uid: target.uid,
+        target_position: target.position,
         selected_airbases,
         contained_non_missiles,
         command_state_revision_before: selection.command_state_before.revision(),
@@ -545,6 +538,7 @@ fn prepare_flight_no_action(
     };
     Ok(PreparedCanonicalFlightNoAction {
         selection,
+        target,
         authority_before: authority.clone(),
         scenario_before: scenario.clone(),
         receipt,
@@ -570,6 +564,7 @@ fn commit_flight_no_action(
         || selection_authority.members != selection.authority_members
         || authority != &prepared.authority_before
         || scenario != &prepared.scenario_before
+        || !flight_target_still_current(world, builds, prepared.target)
         || selection
             .units
             .iter()
@@ -612,8 +607,8 @@ impl CanonicalFlightNoActionReceipt {
             && !self.selected_airbases.is_empty()
             && group.owner == self.selected_airbases[0].who
             && self.target.is_well_formed()
-            && self.target.address()
-                == (self.request.target_who as u8, self.request.target_o as i16)
+            && i32::from(self.target.owner) == self.request.target_who
+            && self.target.o == self.request.target_o
             && self.selected_airbases.iter().all(|identity| {
                 identity.who == group.owner
                     && crate::systems::air_group_action_transaction::CanonicalObjectBand::Build

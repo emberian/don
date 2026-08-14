@@ -62,7 +62,7 @@ published a new fixed Group/cache even when Scramble installs no order. The tran
 therefore binds the exact selection revision pair; empty explicit and cached Build Scrambles
 commit that selection alone, retain every target order/path byte, and consume zero RNG.
 
-The batch shell also admits one deliberately narrower opcode-28 predecessor, without claiming
+The batch shell also admits one deliberately narrow opcode-28 no-action cone, without claiming
 `Group::action_flight` generally complete. In `Group::action_launch_flight` (`0x006FBFB0`), the
 ATTACK arm first evaluates the selected Group's non-strict AIRBASE count at
 `0x006FC095` (`COUNT_TYPE = 0x11`, `AIRBASE = 0x1BF`). Its contained-object loop then applies
@@ -76,12 +76,31 @@ The sole audited AIR-bearing package with this shape is package index 21,990 / s
 turn 21,991 / frame 131,771 / play 3 from retail replay SHA-256
 `063bff8b293029c44cc14a4056eef130cf0efaf2e91632432653dbb1de477edc`. Its exact chronology is
 `[0, 28, 79, 0, 11, 58, 74, 72]`. Flight
-`1c36070000000000000000000000000000000000000a000000` targets owner 0 / object 1,846 with
+`1c36070000000000000000000000000000000000000a000000` targets owner 0 / Unit object 1,846 with
 ATTACK (`OrderIndex = 10`) and all three modifier fields clear. Both Group packets are the cached
 owner-3 selection `000003`; its latest explicit origin is package index 21,985, Group
 `000403e808e908ea08eb08`, selecting Build addresses 2,280–2,283. This replay evidence fixes the
 wire chronology and cache origin. The all-AIRBASE and no-Nuclear-Missile facts remain mandatory
 host authority, not facts inferred from the recording.
+
+Cycle 15 extends only the target band of that same proven no-action cone. Of the 2,164
+no-modifier ATTACK Flight pairs, 658 select Build-band objects and target another Build-band
+object. All 658 occur in package shells already decoded by the canonical batch host, across 21
+replay files; 92 selections are explicit and 566 reuse the player cache, with effective selection
+sizes `1:336, 2:80, 3:64, 4:92, 5:21, 6:56, 7:9`. None of those packages contains LaunchPatrol
+or Scramble, so this cone adds standalone Flight package leverage rather than duplicating the AIR
+pair coverage.
+
+The executable's no-Nuclear-Missile exit precedes every order-install path and does not require a
+Unit-band target. The host therefore admits a sparse-registry-bound valid Build target under the
+same all-AIRBASE selection and complete no-Nuclear-Missile containment proof. Its BuildRow,
+owner/object address, UID, and position are snapshotted; both direct commit and package rerun bind
+the target image before publishing the opcode-0 selection. The exact witness is the finished
+replay SHA-256 above at turn index 54,616 / serial 54,617 / frame 54,211 / play 0. Cached Group
+`000000` reselects owner-0 Build 2,064 from explicit origin turn index 54,537, Group
+`0001001008`; Flight `1c21080000030000000000000000000000000000000a000000` targets owner 3 /
+Build 2,081. Replay bytes establish the package/cache chronology; AIRBASE and containment type
+answers remain mandatory runtime authority.
 
 Cycle 14 adds one second, separately bounded Flight arm. The full corpus contains 2,205 opcode-28
 pairs, all immediately preceded by opcode 0; 2,164 are ATTACK with no modifiers, versus 18 order-1

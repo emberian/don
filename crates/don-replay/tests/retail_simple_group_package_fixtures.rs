@@ -2,6 +2,7 @@
 
 use don_replay::replay::{corpus, Replay};
 use don_replay::world_owner_frontier::sha256;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 const REPLAY_RELATIVE_PATH: &str = "ron-data/replays/Playback - 2026.08.11 11'44'38 (Tue).rcx";
@@ -203,6 +204,60 @@ fn retail_replay_binds_three_cached_launch_patrol_pairs_in_one_package() {
             "3973a3bbc3e077860b01000000d57d28869bce92f336b1e1442dcfc45b842dde4b68127735010000009ce18c5f3887b6a70431ba12db1c2db801000400c8de273d",
             "4a48001000000000000000",
             "48049a940000398a0000",
+        ],
+    );
+}
+
+#[test]
+fn finished_replay_binds_cached_airbase_flight_to_build_and_explicit_origin() {
+    let path = root().join(REPLAY_RELATIVE_PATH);
+    if !path.exists() {
+        eprintln!("SKIPPED — NOT A PASS. {} is absent", path.display());
+        return;
+    }
+    assert_eq!(
+        hex(&sha256(&std::fs::read(&path).unwrap())),
+        REPLAY_FILE_SHA256
+    );
+    let replay = Replay::open(&path).unwrap();
+
+    let origin = &replay.turns[54_537];
+    let origin_player = origin
+        .players
+        .iter()
+        .find(|player| player.play == 0)
+        .unwrap();
+    assert_eq!((origin.turn, origin_player.stamp), (54_538, 54_133));
+    assert_eq!(
+        origin_player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 24],
+    );
+    assert_eq!(hex(&origin_player.commands[0].bytes), "0001001008");
+
+    let turn = &replay.turns[54_616];
+    let player = turn.players.iter().find(|player| player.play == 0).unwrap();
+    assert_eq!((turn.turn, player.stamp), (54_617, 54_211));
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| command.opcode)
+            .collect::<Vec<_>>(),
+        [0, 28],
+    );
+    assert_eq!(
+        player
+            .commands
+            .iter()
+            .map(|command| hex(&command.bytes))
+            .collect::<Vec<_>>(),
+        [
+            "000000",
+            "1c21080000030000000000000000000000000000000a000000",
         ],
     );
 }
@@ -685,6 +740,99 @@ fn retail_replay_binds_stance_explicit_origin_and_immediate_cache_reuse() {
         assert_eq!(hex(&pair[0].bytes), group_hex);
         assert_eq!(hex(&pair[1].bytes), "02ffffffff");
     }
+}
+
+#[test]
+#[ignore = "full retail replay corpus"]
+fn census_flight_build_to_build_no_action_shell() {
+    let mut count = 0usize;
+    let mut explicit = 0usize;
+    let mut cached = 0usize;
+    let mut sizes = BTreeMap::new();
+    let mut files = BTreeSet::new();
+    for path in corpus(&root()) {
+        let Ok(replay) = Replay::open(&path) else {
+            continue;
+        };
+        let mut selections = HashMap::<i32, Vec<i16>>::new();
+        for turn in &replay.turns {
+            for player in &turn.players {
+                let selection = selections.entry(player.play).or_default();
+                for (index, group) in player.commands.iter().enumerate() {
+                    if group.opcode != 0 || group.bytes.len() < 3 {
+                        continue;
+                    }
+                    let members = usize::from(group.bytes[1]);
+                    if group.bytes.len() != 3 + members * 2 {
+                        continue;
+                    }
+                    let is_explicit = members != 0;
+                    if is_explicit {
+                        *selection = group.bytes[3..]
+                            .chunks_exact(2)
+                            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                            .collect();
+                    }
+                    let Some(flight) = player.commands.get(index + 1) else {
+                        continue;
+                    };
+                    if flight.opcode != 28
+                        || flight.bytes.len() != 25
+                        || !selection
+                            .iter()
+                            .all(|&o| (2_000..3_000).contains(&i32::from(o)))
+                        || selection.is_empty()
+                        || !(2_000..3_000)
+                            .contains(&i32::from_le_bytes(flight.bytes[1..5].try_into().unwrap()))
+                        || [9, 13, 17].into_iter().any(|offset| {
+                            i32::from_le_bytes(flight.bytes[offset..offset + 4].try_into().unwrap())
+                                != 0
+                        })
+                        || i32::from_le_bytes(flight.bytes[21..25].try_into().unwrap()) != 10
+                    {
+                        continue;
+                    }
+                    let mut package_index = 0usize;
+                    while package_index < player.commands.len() {
+                        let opcode = player.commands[package_index].opcode;
+                        if opcode == 0 {
+                            assert!(player
+                                .commands
+                                .get(package_index + 1)
+                                .is_some_and(|action| { matches!(action.opcode, 11 | 28 | 36) }));
+                            package_index += 2;
+                        } else {
+                            assert!(matches!(opcode, 57 | 58 | 72 | 74 | 79));
+                            package_index += 1;
+                        }
+                    }
+                    assert!(!player
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command.opcode, 11 | 36)));
+                    count += 1;
+                    explicit += usize::from(is_explicit);
+                    cached += usize::from(!is_explicit);
+                    *sizes.entry(selection.len()).or_insert(0usize) += 1;
+                    files.insert(path.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(count, 658);
+    assert_eq!((explicit, cached, files.len()), (92, 566, 21));
+    assert_eq!(
+        sizes,
+        BTreeMap::from([
+            (1, 336),
+            (2, 80),
+            (3, 64),
+            (4, 92),
+            (5, 21),
+            (6, 56),
+            (7, 9)
+        ])
+    );
 }
 
 #[test]

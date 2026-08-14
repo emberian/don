@@ -93,17 +93,17 @@ pub struct CanonicalFlightStrafeReceipt {
 #[derive(Clone, Debug)]
 pub struct PreparedCanonicalFlightStrafe {
     selection: PreparedGroupSelection,
-    target: TargetSnapshot,
+    target: FlightTargetSnapshot,
     authority_before: AirGroupRuntimeAuthority,
     scenario_before: ScenarioIgnoreOrdersAuthority,
     receipt: CanonicalFlightStrafeReceipt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TargetSnapshot {
-    identity: CanonicalObjectIdentity,
-    uid: u16,
-    position: (i32, i32),
+pub(crate) struct FlightTargetSnapshot {
+    pub(crate) identity: CanonicalObjectIdentity,
+    pub(crate) uid: u16,
+    pub(crate) position: (i32, i32),
     backing: TargetBacking,
 }
 
@@ -151,45 +151,44 @@ pub fn decode_flight_strafe_request(
     Ok(request)
 }
 
-fn target_snapshot(
+pub(crate) fn flight_target_snapshot(
     world: &World,
     builds: &[BuildData],
-    request: FlightStrafeRequest,
-) -> Result<TargetSnapshot, CanonicalFlightStrafeError> {
-    let who = u8::try_from(request.target_who).map_err(|_| {
-        CanonicalFlightStrafeError::InvalidTarget {
-            who: request.target_who,
-            o: request.target_o,
-        }
+    target_who: i32,
+    target_o: i32,
+) -> Result<FlightTargetSnapshot, CanonicalFlightStrafeError> {
+    let who = u8::try_from(target_who).map_err(|_| CanonicalFlightStrafeError::InvalidTarget {
+        who: target_who,
+        o: target_o,
     })?;
-    i16::try_from(request.target_o).map_err(|_| CanonicalFlightStrafeError::InvalidTarget {
-        who: request.target_who,
-        o: request.target_o,
+    i16::try_from(target_o).map_err(|_| CanonicalFlightStrafeError::InvalidTarget {
+        who: target_who,
+        o: target_o,
     })?;
-    if RetailBand::Unit.contains(request.target_o) {
-        let row = world
-            .unit_row_at(request.target_who, request.target_o)
-            .ok_or(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
-            })?;
+    if RetailBand::Unit.contains(target_o) {
+        let row = world.unit_row_at(target_who, target_o).ok_or(
+            CanonicalFlightStrafeError::InvalidTarget {
+                who: target_who,
+                o: target_o,
+            },
+        )?;
         if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
             return Err(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
+                who: target_who,
+                o: target_o,
             });
         }
         let handle = world
             .handle_at_row(row)
             .ok_or(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
+                who: target_who,
+                o: target_o,
             })?;
-        return Ok(TargetSnapshot {
+        return Ok(FlightTargetSnapshot {
             identity: CanonicalObjectIdentity {
                 owner: who,
                 band: CanonicalObjectBand::Unit,
-                o: request.target_o,
+                o: target_o,
                 generation: CanonicalObjectGeneration::Unit {
                     id: handle.id,
                     generation: handle.generation,
@@ -200,37 +199,35 @@ fn target_snapshot(
             backing: TargetBacking::Unit { handle, row },
         });
     }
-    if RetailBand::Build.contains(request.target_o) {
-        let address = RetailObjectAddress::new(who, RetailBand::Build, request.target_o);
+    if RetailBand::Build.contains(target_o) {
+        let address = RetailObjectAddress::new(who, RetailBand::Build, target_o);
         let WorldObjectIdentity::BuildRow(row) = world
             .object_bands()
             .live_identity(address)
             .ok_or(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
+                who: target_who,
+                o: target_o,
             })?
         else {
             return Err(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
+                who: target_who,
+                o: target_o,
             });
         };
         let build = builds
             .get(row as usize)
             .filter(|build| {
-                build.who == who
-                    && i32::from(build.object_id()) == request.target_o
-                    && build.is_valid()
+                build.who == who && i32::from(build.object_id()) == target_o && build.is_valid()
             })
             .ok_or(CanonicalFlightStrafeError::InvalidTarget {
-                who: request.target_who,
-                o: request.target_o,
+                who: target_who,
+                o: target_o,
             })?;
-        return Ok(TargetSnapshot {
+        return Ok(FlightTargetSnapshot {
             identity: CanonicalObjectIdentity {
                 owner: who,
                 band: CanonicalObjectBand::Build,
-                o: request.target_o,
+                o: target_o,
                 generation: CanonicalObjectGeneration::BuildRow(row),
             },
             uid: build.uid,
@@ -239,8 +236,8 @@ fn target_snapshot(
         });
     }
     Err(CanonicalFlightStrafeError::InvalidTarget {
-        who: request.target_who,
-        o: request.target_o,
+        who: target_who,
+        o: target_o,
     })
 }
 
@@ -256,7 +253,7 @@ fn air_authority(
         .ok_or(CanonicalFlightStrafeError::MissingAirAuthority(handle))
 }
 
-fn retarget_current_strafe(order: &mut Order, target: TargetSnapshot) -> Result<(), ()> {
+fn retarget_current_strafe(order: &mut Order, target: FlightTargetSnapshot) -> Result<(), ()> {
     if order.kind != OrderIndex::Strafe {
         return Err(());
     }
@@ -281,7 +278,11 @@ fn retarget_current_strafe(order: &mut Order, target: TargetSnapshot) -> Result<
     Ok(())
 }
 
-fn target_still_current(world: &World, builds: &[BuildData], target: TargetSnapshot) -> bool {
+pub(crate) fn flight_target_still_current(
+    world: &World,
+    builds: &[BuildData],
+    target: FlightTargetSnapshot,
+) -> bool {
     match target.backing {
         TargetBacking::Unit { handle, row } => {
             world.row_of(handle) == Some(row)
@@ -348,7 +349,7 @@ pub fn prepare_canonical_flight_strafe(
         return Err(CanonicalFlightStrafeError::ScenarioIgnoreOrdersArmed);
     }
     let request = decode_flight_strafe_request(flight_packet)?;
-    let target = target_snapshot(world, builds, request)?;
+    let target = flight_target_snapshot(world, builds, request.target_who, request.target_o)?;
     let mut selection = prepare_air_group_selection(
         world,
         builds,
@@ -455,7 +456,7 @@ pub fn commit_canonical_flight_strafe(
         || selection_authority.members != selection.authority_members
         || authority != &prepared.authority_before
         || scenario != &prepared.scenario_before
-        || !target_still_current(world, builds, prepared.target)
+        || !flight_target_still_current(world, builds, prepared.target)
         || selection
             .units
             .iter()
@@ -486,8 +487,8 @@ impl CanonicalFlightStrafeReceipt {
         self.position.action_command_index == self.position.group_command_index + 1
             && request == self.request
             && self.target.is_well_formed()
-            && self.target.address()
-                == (self.request.target_who as u8, self.request.target_o as i16)
+            && i32::from(self.target.owner) == self.request.target_who
+            && self.target.o == self.request.target_o
             && !self.actors.is_empty()
             && self.actors.iter().all(|actor| {
                 actor.identity.who == group.owner
