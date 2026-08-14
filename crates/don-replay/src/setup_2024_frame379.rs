@@ -133,7 +133,10 @@ pub enum Frame379SetupEntrySource {
 /// The post-`place_all` checksum is a locally walked runtime image, not a value copied from the
 /// replay. `post_place_all_random_state` belongs to the earlier procedural-map boundary;
 /// `entry_random_state` belongs to the later captured entry Sim after Village and Market setup.
-/// They are deliberately separate because Market fine probes consume `GameAccess::game_random`.
+/// They are deliberately separate: `Setup::build_game` first consumes the eight-slot start/player
+/// shuffle, and the later Market fine probes consume `GameAccess::game_random` again. The exact
+/// Market transaction therefore binds its own before/after states without equating either one to
+/// the earlier `place_all` return.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame379SetupEntryCapture {
     pub revision: u64,

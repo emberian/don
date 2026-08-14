@@ -621,13 +621,18 @@ fn validate_fine_random_trace(
     let mut previous_index = None;
     let mut random = Random::new(before_state);
     let mut best = None;
-    for draw in &capture.fine_random_draws {
+    for (draw_ordinal, draw) in capture.fine_random_draws.iter().enumerate() {
         let Some(index) = allowed
             .iter()
             .position(|&site| site == draw.placement_coord)
         else {
             return false;
         };
+        // The first 2x2 probe is the accepted coarse site. Retail therefore reaches the fine
+        // RNG call for index zero before it can consider any later fine site.
+        if draw_ordinal == 0 && index != 0 {
+            return false;
+        }
         if previous_index.is_some_and(|previous| index <= previous) {
             return false;
         }
@@ -971,6 +976,18 @@ mod tests {
             selected,
             &capture,
         ));
+        let mut skipped_first = capture.clone();
+        skipped_first.fine_random_draws.truncate(1);
+        skipped_first.fine_random_draws[0].placement_coord = sites[1];
+        skipped_first.selected_placement_coord = sites[1];
+        assert!(!validate_fine_random_trace(
+            7,
+            first_after,
+            corner,
+            sites[1],
+            &skipped_first,
+        ));
+
         let mut bad = capture;
         bad.coarse_random_draws = 1;
         assert!(!validate_fine_random_trace(
