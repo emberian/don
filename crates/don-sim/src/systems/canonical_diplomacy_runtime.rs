@@ -9,6 +9,7 @@
 //! the entry countdown decrements and the leader's armies-off bit returns before normalization.
 //! The exact instruction-ordered no-op Victory plus armies-off cohort publishes atomically too;
 //! an active zero-city winner's empty non-mustering Army also normalizes and retires atomically.
+//! An empty mustering Army with a live human countdown normalizes and clamps its rally atomically.
 //! Every broader external authority remains unavailable before publication.
 
 use super::canonical_diplomacy_host::{
@@ -579,6 +580,7 @@ impl StagedForceArmyAuthority {
         &self,
         armies: &super::armies::Armies,
         leader_city_num: &[i32; NUM_LEADERS],
+        world_size: (i32, i32),
     ) -> Option<super::diplomacy_force_army_authority::ForceArmyProcessError> {
         self.receipts.iter().find_map(|receipt| {
             if receipt
@@ -589,6 +591,14 @@ impl StagedForceArmyAuthority {
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleLeader {
                         owner: receipt.request.owner,
                     },
+                );
+            }
+            if receipt
+                .world_size
+                .is_some_and(|expected| expected != world_size)
+            {
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleWorld,
                 );
             }
             (armies
@@ -910,11 +920,13 @@ fn stage_force_army_authority(
         return Ok(None);
     }
     let leader_city_num = std::array::from_fn(|who| sim.step8.leaders[who].city_num);
+    let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
     let prepared = match prepare_force_army_process(
         &sim.armies,
         leader_flags,
         leader_flags2,
         &leader_city_num,
+        world_size,
         &requests,
     ) {
         Ok(prepared) => prepared,
@@ -935,6 +947,7 @@ fn stage_force_army_authority(
         leader_flags,
         leader_flags2,
         &leader_city_num,
+        world_size,
         prepared,
     )
     .map_err(CanonicalDiplomacyRuntimeError::ForceArmy)?;
@@ -1153,10 +1166,10 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 return Err(CanonicalDiplomacyRuntimeError::StaleProjection);
             }
             let leader_city_num = std::array::from_fn(|who| self.sim.step8.leaders[who].city_num);
-            if let Some(error) = staged_army
-                .as_ref()
-                .and_then(|staged| staged.current_error(&self.sim.armies, &leader_city_num))
-            {
+            let world_size = (self.sim.map.world.tile_xs, self.sim.map.world.tile_ys);
+            if let Some(error) = staged_army.as_ref().and_then(|staged| {
+                staged.current_error(&self.sim.armies, &leader_city_num, world_size)
+            }) {
                 return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error));
             }
             fold_owner(self.sim, committed);

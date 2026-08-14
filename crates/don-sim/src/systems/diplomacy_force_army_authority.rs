@@ -2,11 +2,12 @@
 //! Atomic exact bounded arms of diplomacy-forced `Army::process(1)`.
 //!
 //! `Leader::set_diplo` calls `Army::process(1)` for every valid Army when the owner passes
-//! the ordinary Army gates. The complete general body is not mounted. Two substantive arms are
+//! the ordinary Army gates. The complete general body is not mounted. Three substantive arms are
 //! authority-complete: `leader_flags & 0x40` still reaches the entry decrement of `human_frame`,
 //! then returns before normalization; an active empty non-mustering Army with zero cities
 //! normalizes its five derived fields and takes the exact retirement/`close` path without any
-//! Group, Unit, terrain, AI, or RNG access.
+//! Group, Unit, terrain, AI, or RNG access; an empty mustering Army with a still-live human-order
+//! countdown normalizes, clamps its rally point through `send_here`, and returns before dispatch.
 //!
 //! Retail evidence is the shipped PE `30478a44…625079`: `Armies::diplo_change`
 //! `0x006F30F0..0x006F3159` (105 bytes, SHA-256 `8191743c…f3eb6`) performs the owner gates,
@@ -16,12 +17,15 @@
 //! leader bit `0x40` at `0x006F94B7`, and returns at `0x006F983A` without a deeper call. With
 //! that bit clear the same body calls `Army::normalize` (`0x006F9B50`, 657 bytes); its empty
 //! input reads no Group, and the zero-standard retirement calls `Army::close` (`0x006F8EA0`,
-//! 118 bytes), whose zero-group input likewise reaches no external host.
+//! 118 bytes), whose zero-group input likewise reaches no external host. The human-order branch
+//! calls `Army::send_here` (`0x006F98A0`, 422 bytes); with zero groups its only external reads are
+//! the World width and height used by the retail coordinate clamp.
 
 use super::armies::{
-    Armies, ArmyData, LF2_SKIP_MASK, LF_ACTIVE, LF_ARMIES_OFF, LF_KIND_MASK, LF_KIND_SKIP,
-    ST_MUSTERING,
+    div3_shift8, Armies, ArmyData, LF2_SKIP_MASK, LF_ACTIVE, LF_ARMIES_OFF, LF_KIND_MASK,
+    LF_KIND_SKIP, ST_MUSTERING,
 };
+use crate::trig::find_angle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ForceArmyProcessRequest {
@@ -35,8 +39,10 @@ pub struct ForceArmyProcessReceipt {
     pub request: ForceArmyProcessRequest,
     pub leader_flags: u32,
     pub leader_flags2: u32,
-    /// Read only by the empty-retirement branch; the armies-off arm leaves this `None`.
+    /// Read only by the empty-retirement branch; the other bounded arms leave this `None`.
     pub leader_city_num: Option<i32>,
+    /// Read only when an empty Army obeys its outstanding human rally order.
+    pub world_size: Option<(i32, i32)>,
     pub outcome: ForceArmyProcessOutcome,
     pub before: ArmyData,
     pub after: ArmyData,
@@ -46,6 +52,7 @@ pub struct ForceArmyProcessReceipt {
 pub enum ForceArmyProcessOutcome {
     ArmiesOff,
     RetiredEmpty,
+    MovedEmptyHumanOrder,
 }
 
 impl ForceArmyProcessReceipt {
@@ -66,7 +73,10 @@ impl ForceArmyProcessReceipt {
         }
         match self.outcome {
             ForceArmyProcessOutcome::ArmiesOff => {
-                if self.leader_flags & LF_ARMIES_OFF == 0 || self.leader_city_num.is_some() {
+                if self.leader_flags & LF_ARMIES_OFF == 0
+                    || self.leader_city_num.is_some()
+                    || self.world_size.is_some()
+                {
                     return false;
                 }
             }
@@ -75,6 +85,7 @@ impl ForceArmyProcessReceipt {
                     || self.leader_city_num != Some(0)
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING != 0
+                    || self.world_size.is_some()
                 {
                     return false;
                 }
@@ -91,6 +102,50 @@ impl ForceArmyProcessReceipt {
                 expected.human_frame = 0;
                 expected.num_groups = 0;
             }
+            ForceArmyProcessOutcome::MovedEmptyHumanOrder => {
+                let Some((width, height)) = self.world_size else {
+                    return false;
+                };
+                let Some(max_x) = width.checked_mul(3 * 256) else {
+                    return false;
+                };
+                let Some(max_y) = height.checked_mul(3 * 256) else {
+                    return false;
+                };
+                if self.leader_flags & LF_ARMIES_OFF != 0
+                    || self.leader_city_num.is_some()
+                    || self.before.num_groups != 0
+                    || self.before.status & ST_MUSTERING == 0
+                    || self.before.human_frame <= 1
+                    || max_x <= 0
+                    || max_y <= 0
+                {
+                    return false;
+                }
+                expected.role = 0;
+                expected.num_units = 0;
+                expected.num_captains = 0;
+                expected.num_standard = 0;
+                expected.num_decoys = 0;
+                let old_x = expected.x;
+                let old_y = expected.y;
+                let mut x = old_x.max(0);
+                let mut y = old_y.max(0);
+                if x >= max_x {
+                    x = max_x - 1;
+                }
+                if y >= max_y {
+                    y = max_y - 1;
+                }
+                if x != old_x && y != old_y {
+                    expected.muster_angle =
+                        find_angle(x.wrapping_sub(old_x), y.wrapping_sub(old_y));
+                }
+                expected.x = x;
+                expected.y = y;
+                expected.muster_x = div3_shift8(x);
+                expected.muster_y = div3_shift8(y);
+            }
         }
         self.after == expected
     }
@@ -103,6 +158,7 @@ pub struct PreparedForceArmyProcess {
     leader_flags: [u32; 8],
     leader_flags2: [u32; 8],
     leader_city_num: [i32; 8],
+    world_size: (i32, i32),
     receipts: Vec<ForceArmyProcessReceipt>,
 }
 
@@ -122,6 +178,9 @@ impl PreparedForceArmyProcess {
                     && receipt.leader_city_num.is_none_or(|city_num| {
                         self.leader_city_num[receipt.request.owner] == city_num
                     })
+                    && receipt
+                        .world_size
+                        .is_none_or(|world_size| self.world_size == world_size)
                     && self.before.lists[receipt.request.owner][receipt.request.army_slot]
                         == receipt.before
                     && self.after.lists[receipt.request.owner][receipt.request.army_slot]
@@ -135,6 +194,7 @@ impl PreparedForceArmyProcess {
         leader_flags: &[u32; 8],
         leader_flags2: &[u32; 8],
         leader_city_num: &[i32; 8],
+        world_size: (i32, i32),
     ) -> bool {
         self.receipts.iter().all(|receipt| {
             leader_flags[receipt.request.owner] == receipt.leader_flags
@@ -142,6 +202,9 @@ impl PreparedForceArmyProcess {
                 && receipt
                     .leader_city_num
                     .is_none_or(|city_num| leader_city_num[receipt.request.owner] == city_num)
+                && receipt
+                    .world_size
+                    .is_none_or(|expected| world_size == expected)
                 && armies
                     .lists
                     .get(receipt.request.owner)
@@ -168,6 +231,7 @@ pub enum ForceArmyProcessError {
     DuplicateRequest { owner: usize, army_slot: usize },
     StaleArmy { owner: usize, army_slot: usize },
     StaleLeader { owner: usize },
+    StaleWorld,
     InvalidPrepared,
 }
 
@@ -176,6 +240,7 @@ pub fn prepare_force_army_process(
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
+    world_size: (i32, i32),
     requests: &[ForceArmyProcessRequest],
 ) -> Result<PreparedForceArmyProcess, ForceArmyProcessError> {
     if requests.is_empty() {
@@ -222,12 +287,29 @@ pub fn prepare_force_army_process(
                 owner: request.owner,
             });
         }
-        let (outcome, city_num) = if flags & LF_ARMIES_OFF != 0 {
-            (ForceArmyProcessOutcome::ArmiesOff, None)
+        let (outcome, city_num, receipt_world_size) = if flags & LF_ARMIES_OFF != 0 {
+            (ForceArmyProcessOutcome::ArmiesOff, None, None)
+        } else if before.num_groups == 0
+            && before.status & ST_MUSTERING != 0
+            && before.human_frame > 1
+            && world_size
+                .0
+                .checked_mul(3 * 256)
+                .is_some_and(|limit| limit > 0)
+            && world_size
+                .1
+                .checked_mul(3 * 256)
+                .is_some_and(|limit| limit > 0)
+        {
+            (
+                ForceArmyProcessOutcome::MovedEmptyHumanOrder,
+                None,
+                Some(world_size),
+            )
         } else {
             let city_num = leader_city_num[request.owner];
             if before.num_groups == 0 && before.status & ST_MUSTERING == 0 && city_num == 0 {
-                (ForceArmyProcessOutcome::RetiredEmpty, Some(city_num))
+                (ForceArmyProcessOutcome::RetiredEmpty, Some(city_num), None)
             } else {
                 return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
                     owner: request.owner,
@@ -253,17 +335,48 @@ pub fn prepare_force_army_process(
         if army_after.human_frame != 0 {
             army_after.human_frame = army_after.human_frame.wrapping_sub(1);
         }
-        if outcome == ForceArmyProcessOutcome::RetiredEmpty {
-            army_after.role = 0;
-            army_after.num_units = 0;
-            army_after.num_captains = 0;
-            army_after.num_standard = 0;
-            army_after.num_decoys = 0;
-            army_after.city = 0;
-            army_after.valid = 0;
-            army_after.status = 0;
-            army_after.human_frame = 0;
-            army_after.num_groups = 0;
+        match outcome {
+            ForceArmyProcessOutcome::ArmiesOff => {}
+            ForceArmyProcessOutcome::RetiredEmpty => {
+                army_after.role = 0;
+                army_after.num_units = 0;
+                army_after.num_captains = 0;
+                army_after.num_standard = 0;
+                army_after.num_decoys = 0;
+                army_after.city = 0;
+                army_after.valid = 0;
+                army_after.status = 0;
+                army_after.human_frame = 0;
+                army_after.num_groups = 0;
+            }
+            ForceArmyProcessOutcome::MovedEmptyHumanOrder => {
+                army_after.role = 0;
+                army_after.num_units = 0;
+                army_after.num_captains = 0;
+                army_after.num_standard = 0;
+                army_after.num_decoys = 0;
+                let (width, height) = world_size;
+                let max_x = width * 3 * 256;
+                let max_y = height * 3 * 256;
+                let old_x = army_after.x;
+                let old_y = army_after.y;
+                let mut x = old_x.max(0);
+                let mut y = old_y.max(0);
+                if x >= max_x {
+                    x = max_x - 1;
+                }
+                if y >= max_y {
+                    y = max_y - 1;
+                }
+                if x != old_x && y != old_y {
+                    army_after.muster_angle =
+                        find_angle(x.wrapping_sub(old_x), y.wrapping_sub(old_y));
+                }
+                army_after.x = x;
+                army_after.y = y;
+                army_after.muster_x = div3_shift8(x);
+                army_after.muster_y = div3_shift8(y);
+            }
         }
         after.lists[request.owner][request.army_slot] = army_after.clone();
         receipts.push(ForceArmyProcessReceipt {
@@ -271,6 +384,7 @@ pub fn prepare_force_army_process(
             leader_flags: flags,
             leader_flags2: flags2,
             leader_city_num: city_num,
+            world_size: receipt_world_size,
             outcome,
             before,
             after: army_after,
@@ -282,6 +396,7 @@ pub fn prepare_force_army_process(
         leader_flags: *leader_flags,
         leader_flags2: *leader_flags2,
         leader_city_num: *leader_city_num,
+        world_size,
         receipts,
     };
     if !prepared.validates() {
@@ -295,6 +410,7 @@ pub fn commit_force_army_process(
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
+    world_size: (i32, i32),
     prepared: PreparedForceArmyProcess,
 ) -> Result<Vec<ForceArmyProcessReceipt>, ForceArmyProcessError> {
     if !prepared.validates() {
@@ -310,6 +426,13 @@ pub fn commit_force_army_process(
         return Err(ForceArmyProcessError::StaleLeader {
             owner: stale.request.owner,
         });
+    }
+    if prepared.receipts.iter().any(|receipt| {
+        receipt
+            .world_size
+            .is_some_and(|expected| expected != world_size)
+    }) {
+        return Err(ForceArmyProcessError::StaleWorld);
     }
     if let Some(stale) = prepared.receipts.iter().find(|receipt| {
         armies

@@ -47,8 +47,11 @@ early-return arm where `human_frame` decrements and leader bit `0x40` returns be
 that bit is also retail's `DEFEATED` bit, so a preceding Victory call on the same winner takes its
 exact no-op return. It also admits an active zero-city owner's empty non-mustering Army: normalize
 zeros the five derived aggregates and the zero-standard path closes the formation without reaching
-a Group, Unit, terrain, AI, or RNG host. The runtime preserves both mixed instruction orders and
-publishes each Victory/Army cohort atomically. The remaining general AI body stays unavailable.
+a Group, Unit, terrain, AI, or RNG host. An empty mustering Army with more than one human-order
+frame remaining takes a third exact arm: normalize zeros those aggregates, `send_here` clamps its
+rally using the saved World dimensions, and the zero-group fanout returns before dispatch. The
+runtime preserves all three mixed instruction orders and publishes each Victory/Army cohort
+atomically. The remaining general AI body stays unavailable.
 Generic Victory is admitted only through its canonical Leader/Match transaction and the explicitly
 supported defeated-owner cleanup branches. `ConsiderTribute` is executed inside the prepared owner
 image, including its
@@ -97,8 +100,9 @@ empty, consists only of staged generic-Victory authority, or consists only of ex
 bounded `ForceArmyProcess(1)` calls. They execute the exact mixed cohort in which a defeated
 winner's Victory call returns unchanged before its armies-off calls decrement their v17-owned
 countdowns, and the active-winner cohort in which substantive Victory precedes empty-Army
-normalization/retirement. An active winner followed by any deeper mustering/Group/AI body still
-refuses the entire transaction, including the staged Victory. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
+normalization/retirement or an outstanding empty-Army human rally. An active winner whose human
+countdown expires on entry, or whose forced processing reaches any Group/AI body, still refuses the
+entire transaction, including staged Victory. This includes the complete ordinary reciprocal peace acceptance: both resource directions,
 the two root relation calls, peace stamps, `consider_tribute`, `notify_deal`, and reciprocal record
 clears publish together. Generic alliance Victory is also mounted when its staged canonical
 Leader/Match transaction has an exact staged defeated-player Army/Unit cleanup: relation rows are
@@ -116,7 +120,8 @@ cleanup clones publish only after the diplomacy stale-owner CAS. Separately, the
 arm. Each non-zero `ArmyData::human_frame` decrements once; zero remains zero. Full Army bytes and
 both Leader flag words participate in the same stale CAS before the v17 Army image is replaced. The
 empty-retirement branch additionally binds the lazily read zero `LeaderData::city_num`; the
-armies-off branch does not. Planes, contained-Unit mutation calls, missing type/path facts, or
+empty-human-rally branch instead binds the lazily read World width/height. The armies-off branch
+binds neither. Planes, contained-Unit mutation calls, missing type/path facts, or
 forced-army calls that proceed past exact empty normalization into the remaining AI state machine
 refuse before publication, so both static
 rows remain `StateWired`. Opcode 41's ordinary accepted-deal roots use
@@ -124,19 +129,19 @@ rows remain `StateWired`. Opcode 41's ordinary accepted-deal roots use
 ally. The measured contained-ejection branch is therefore reached by opcode-38 alliance
 revocation, not manufactured through an impossible op41 downgrade.
 
-Focused status: the live opcode-38/opcode-41 runtime suite passes 15/15 and includes a real opcode-38
+Focused status: the live opcode-38/opcode-41 runtime suite passes 16/16 and includes a real opcode-38
 packet-to-current-v18-save/load-to-resume ejection projection covering success, failure/kill, and
 successful air/Strafe arms. A second real opcode-38 war packet crosses the same current save/load,
 whose Army section remains the exact v17 owner, reinstalls only transient query facts, decrements
 the exact armies-off countdown, and matches uninterrupted save bytes and channel digest; the
-focused Army transaction suite passes 6/6, including stale Army, Leader, and lazily read city-count
-rollback. It also
+focused Army transaction suite passes 8/8, including stale Army, Leader, and lazily read city-count
+and World-size rollback. It also
 covers multi-opponent alliance Victory with empty cleanup, active-ground-Unit save/resume, and
 standing-Army packet-to-current-save/load-to-resume equality; plane and missing-type paths remain
-atomic refusals. Real opcode-41 packets cross save/load through both the ordered no-op Victory plus
-armies-off transaction and substantive Victory plus empty-Army retirement; a mustering-Army
-counterpart proves staged Victory and the Army countdown both roll back when the deeper body is
-reached.
+atomic refusals. Real opcode-41 packets cross save/load through the ordered no-op Victory plus
+armies-off transaction, substantive Victory plus empty-Army retirement, and substantive Victory
+plus an empty-Army human rally. A countdown-expiry counterpart proves staged Victory and the Army
+countdown both roll back when the deeper body is reached.
 The callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 46 private

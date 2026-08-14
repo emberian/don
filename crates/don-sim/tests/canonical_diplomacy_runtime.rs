@@ -694,7 +694,73 @@ fn active_winner_victory_then_empty_army_retirement_resumes_identically() {
 }
 
 #[test]
-fn active_winner_mustering_army_body_remains_atomic_unavailable() {
+fn active_winner_victory_then_empty_human_rally_resumes_identically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.status = ST_MUSTERING;
+        army.human_frame = 9;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        let checkpoint = save_sim(&uninterrupted).expect("empty mustering Army is savable");
+        let mut resumed = load_sim(&checkpoint).expect("empty mustering Army reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2943, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2943, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.completed_authority.len(), 2);
+        assert_eq!(resumed_receipt.victory_receipts.len(), 1);
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
+        assert_eq!(
+            army_receipt.outcome,
+            ForceArmyProcessOutcome::MovedEmptyHumanOrder
+        );
+        assert_eq!(army_receipt.before.human_frame, 9);
+        assert_eq!(army_receipt.after.valid, 1);
+        assert_eq!(army_receipt.after.status, ST_MUSTERING);
+        assert_eq!(army_receipt.after.human_frame, 8);
+        assert_eq!(army_receipt.after.role, 0);
+        assert_eq!(army_receipt.after.num_units, 0);
+        assert_eq!(army_receipt.after.num_captains, 0);
+        assert_eq!(army_receipt.after.num_standard, 0);
+        assert_eq!(army_receipt.after.num_decoys, 0);
+        assert_eq!((army_receipt.after.x, army_receipt.after.y), (0, 0));
+        assert_ne!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
+            0
+        );
+        assert_eq!(
+            resumed.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
+            1u32 << game_sem::VICTORY_RESOLVED
+        );
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("human rally result reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn active_winner_empty_mustering_countdown_expiry_remains_atomic_unavailable() {
     with_large_stack(|| {
         let mut sim = configured_alliance_victory_sim();
         let army = &mut sim.armies.lists[2][3];
@@ -702,11 +768,11 @@ fn active_winner_mustering_army_body_remains_atomic_unavailable() {
         army.army = 3;
         army.who = 2;
         army.status = ST_MUSTERING;
-        army.human_frame = 9;
+        army.human_frame = 1;
         let before = save_sim(&sim).unwrap();
 
         let receipt = sim
-            .process_diplomacy_package(2, 0x2943, &RETAIL_ACCEPT_2_3)
+            .process_diplomacy_package(2, 0x2944, &RETAIL_ACCEPT_2_3)
             .unwrap();
         assert_eq!(receipt.status, CanonicalDiplomacyStatus::Unavailable);
         assert!(receipt.validates(&receipt.request));
@@ -714,28 +780,6 @@ fn active_winner_mustering_army_body_remains_atomic_unavailable() {
             receipt.error,
             Some(CanonicalDiplomacyRuntimeError::ExternalAuthority(ref calls))
                 if calls.len() == 2
-                    && matches!(
-                        calls[0],
-                        ExternalDiplomacyAuthority::Accept(
-                            don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
-                                call: SetDiploAuthority::Victory { winner: 2, .. },
-                                ..
-                            }
-                        )
-                    )
-                    && matches!(
-                        calls[1],
-                        ExternalDiplomacyAuthority::Accept(
-                            don_sim::systems::diplomacy_accept_host::AcceptAuthority::SetDiplo {
-                                call: SetDiploAuthority::ForceArmyProcess {
-                                    owner: 2,
-                                    army_slot: 3,
-                                    forced: 1,
-                                },
-                                ..
-                            }
-                        )
-                    )
         ));
         assert_eq!(save_sim(&sim).unwrap(), before);
         assert_eq!(sim.vic_leaders.slots[2].leader_flags & leader_flag::WON, 0);
@@ -743,7 +787,7 @@ fn active_winner_mustering_army_body_remains_atomic_unavailable() {
             sim.vic_match.semaphore & (1u32 << game_sem::VICTORY_RESOLVED),
             0
         );
-        assert_eq!(sim.armies.lists[2][3].human_frame, 9);
+        assert_eq!(sim.armies.lists[2][3].human_frame, 1);
         assert_eq!(sim.armies.lists[2][3].status, ST_MUSTERING);
     });
 }

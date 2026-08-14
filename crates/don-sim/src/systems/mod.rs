@@ -150,7 +150,7 @@ pub mod diplomacy_deal_callbacks;
 pub mod diplomacy_declare_host;
 /// Digest- and identity-bound callback answers for alliance-revocation Unit ejection.
 pub mod diplomacy_ejection_authority;
-/// Exact armies-off return and empty-Army retirement for diplomacy-forced processing.
+/// Exact armies-off, empty-retirement, and empty-human-rally diplomacy processing.
 pub mod diplomacy_force_army_authority;
 pub mod economy;
 /// Canonical fixed-`Groups` contract for economy/containment action transactions.
