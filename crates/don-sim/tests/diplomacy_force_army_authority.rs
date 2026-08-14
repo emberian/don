@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use don_sim::systems::armies::{div3_shift8, Armies, LF_ARMIES_OFF, ST_MUSTERING};
+use don_sim::systems::army_do_mustering::MUSTER_STRATEGY_REGIONS;
 use don_sim::systems::diplomacy_force_army_authority::{
-    commit_force_army_process, commit_force_army_process_with_strategy,
+    commit_force_army_process, commit_force_army_process_with_groups_strategy_and_difficulty,
+    commit_force_army_process_with_strategy,
     commit_force_army_process_with_strategy_and_difficulty, prepare_force_army_process,
+    prepare_force_army_process_with_groups_strategy_and_difficulty,
     prepare_force_army_process_with_strategy,
     prepare_force_army_process_with_strategy_and_difficulty, ForceArmyMusterCityFact,
     ForceArmyMusterDifficultyFact, ForceArmyMusterStrategyFact, ForceArmyProcessError,
     ForceArmyProcessOutcome, ForceArmyProcessRequest, ForceArmyRetirementCityFact,
+    ForceArmyRetirementGroupFact,
 };
+use don_sim::systems::groups_guys::{GroupData, Groups};
 use don_sim::systems::tech_cities::CityPool;
 use don_sim::systems::victory_score::game_sem;
 use don_sim::trig::find_angle;
@@ -331,6 +336,217 @@ fn stale_retirement_city_rejects_the_whole_army_publish() {
         Err(ForceArmyProcessError::StaleRetirementCity { owner: 2 })
     );
     assert_eq!(armies.lists, before.lists);
+}
+
+#[test]
+fn zero_member_groups_normalize_out_in_reverse_order_before_empty_retirement() {
+    let mut armies = live_army();
+    let first_gid = Groups::index(2, 4);
+    let second_gid = Groups::index(2, 5);
+    let army = &mut armies.lists[2][3];
+    army.num_groups = 2;
+    army.list[0] = first_gid as i32;
+    army.list[1] = second_gid as i32;
+    army.role = 0x55;
+    army.num_units = 12;
+    army.num_captains = 4;
+    army.num_standard = 3;
+    army.num_decoys = 2;
+    let mut groups = Groups::default();
+    groups.list[first_gid] = GroupData {
+        id: first_gid as i32,
+        army: 3,
+        who: 2,
+        stamp: 111,
+        ..GroupData::default()
+    };
+    groups.list[second_gid] = GroupData {
+        id: second_gid as i32,
+        army: 3,
+        who: 2,
+        stamp: 222,
+        ..GroupData::default()
+    };
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let strategy = [[0; MUSTER_STRATEGY_REGIONS]; 8];
+    let multi_diff = [0; 8];
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+
+    let prepared = prepare_force_army_process_with_groups_strategy_and_difficulty(
+        &armies,
+        &CityPool::new(),
+        &groups,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        game_sem::NET_OR_RECORDING,
+        &multi_diff,
+        &[request],
+    )
+    .unwrap();
+    // Normalization never reads this field; an unrelated concurrent change remains current and
+    // must survive the targeted backlink publication.
+    groups.list[first_gid].stamp = 333;
+    assert!(prepared.is_current_with_groups_strategy_and_difficulty(
+        &armies,
+        &CityPool::new(),
+        &groups,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        game_sem::NET_OR_RECORDING,
+        &multi_diff,
+    ));
+    let group_before = groups.clone();
+    let receipts = commit_force_army_process_with_groups_strategy_and_difficulty(
+        &mut armies,
+        &CityPool::new(),
+        &mut groups,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        game_sem::NET_OR_RECORDING,
+        &multi_diff,
+        prepared,
+    )
+    .unwrap();
+    let receipt = &receipts[0];
+    assert!(receipt.validates());
+    assert_eq!(receipt.outcome, ForceArmyProcessOutcome::RetiredEmpty);
+    assert_eq!(
+        receipt.retirement_groups.as_deref(),
+        Some(
+            [
+                ForceArmyRetirementGroupFact {
+                    gid: second_gid,
+                    id: second_gid as i32,
+                    army: 3,
+                    num: 0,
+                },
+                ForceArmyRetirementGroupFact {
+                    gid: first_gid,
+                    id: first_gid as i32,
+                    army: 3,
+                    num: 0,
+                },
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(receipt.after.valid, 0);
+    assert_eq!(receipt.after.num_groups, 0);
+    assert_eq!(receipt.after.list[0], first_gid as i32);
+    assert_eq!(receipt.after.list[1], second_gid as i32);
+    assert_eq!(groups.list[first_gid].army, -1);
+    assert_eq!(groups.list[second_gid].army, -1);
+    let mut expected_first = group_before.list[first_gid].clone();
+    expected_first.army = -1;
+    let mut expected_second = group_before.list[second_gid].clone();
+    expected_second.army = -1;
+    assert_eq!(groups.list[first_gid], expected_first);
+    assert_eq!(groups.list[second_gid], expected_second);
+}
+
+#[test]
+fn stale_or_still_populated_retirement_group_never_publishes() {
+    let mut armies = live_army();
+    let gid = Groups::index(2, 4);
+    armies.lists[2][3].num_groups = 1;
+    armies.lists[2][3].list[0] = gid as i32;
+    let mut groups = Groups::default();
+    groups.list[gid] = GroupData {
+        id: gid as i32,
+        army: 3,
+        who: 2,
+        ..GroupData::default()
+    };
+    let mut flags = [0; 8];
+    flags[2] = 1;
+    let strategy = [[0; MUSTER_STRATEGY_REGIONS]; 8];
+    let multi_diff = [0; 8];
+    let request = ForceArmyProcessRequest {
+        owner: 2,
+        army_slot: 3,
+        forced: 1,
+    };
+    let prepared = prepare_force_army_process_with_groups_strategy_and_difficulty(
+        &armies,
+        &CityPool::new(),
+        &groups,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        game_sem::NET_OR_RECORDING,
+        &multi_diff,
+        &[request],
+    )
+    .unwrap();
+    let army_before = armies.clone();
+    groups.list[gid].num = 1;
+    assert!(!prepared.is_current_with_groups_strategy_and_difficulty(
+        &armies,
+        &CityPool::new(),
+        &groups,
+        &flags,
+        &[0; 8],
+        &[0; 8],
+        WORLD_SIZE,
+        &strategy,
+        game_sem::NET_OR_RECORDING,
+        &multi_diff,
+    ));
+    assert_eq!(
+        commit_force_army_process_with_groups_strategy_and_difficulty(
+            &mut armies,
+            &CityPool::new(),
+            &mut groups,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &strategy,
+            game_sem::NET_OR_RECORDING,
+            &multi_diff,
+            prepared,
+        ),
+        Err(ForceArmyProcessError::StaleRetirementGroup { owner: 2, gid })
+    );
+    assert_eq!(armies.lists, army_before.lists);
+    assert_eq!(groups.list[gid].army, 3);
+    assert_eq!(groups.list[gid].num, 1);
+
+    assert!(matches!(
+        prepare_force_army_process_with_groups_strategy_and_difficulty(
+            &armies,
+            &CityPool::new(),
+            &groups,
+            &flags,
+            &[0; 8],
+            &[0; 8],
+            WORLD_SIZE,
+            &strategy,
+            game_sem::NET_OR_RECORDING,
+            &multi_diff,
+            &[request],
+        ),
+        Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+            owner: 2,
+            army_slot: 3,
+        })
+    ));
 }
 
 #[test]

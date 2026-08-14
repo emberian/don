@@ -8,7 +8,9 @@
 //! empty Army rosters and on-map ground Unit bands. It also owns the exact forced-Army arm where
 //! the entry countdown decrements and the leader's armies-off bit returns before normalization.
 //! The exact instruction-ordered no-op Victory plus armies-off cohort publishes atomically too;
-//! an active zero-city winner's empty non-mustering Army also normalizes and retires atomically.
+//! an active winner's non-mustering Army also normalizes and retires atomically when it has no
+//! Groups or its live prefix consists only of already-empty persistent Groups; the latter are
+//! unlinked in the same publication.
 //! An empty mustering Army with a live human countdown normalizes and clamps its rally atomically.
 //! An expired empty naval muster with a foreign/inactive canonical City releases, enters the
 //! zero-mobile `do_marching` close arm, and publishes in the same Victory-plus-Army transaction,
@@ -34,8 +36,8 @@ use crate::objects::Band;
 use crate::order::Order;
 use crate::systems::defeat_cleanup::DefeatCleanupReceipt;
 use crate::systems::diplomacy_force_army_authority::{
-    commit_force_army_process_with_strategy_and_difficulty,
-    prepare_force_army_process_with_strategy_and_difficulty, ForceArmyProcessReceipt,
+    commit_force_army_process_with_groups_strategy_and_difficulty,
+    prepare_force_army_process_with_groups_strategy_and_difficulty, ForceArmyProcessReceipt,
     ForceArmyProcessRequest,
 };
 use crate::systems::order_dispatch::OrderQueue;
@@ -586,6 +588,7 @@ impl StagedForceArmyAuthority {
         &self,
         armies: &super::armies::Armies,
         cities: &super::tech_cities::CityPool,
+        groups: &super::groups_guys::Groups,
         leader_city_num: &[i32; NUM_LEADERS],
         world_size: (i32, i32),
         leader_strategy: &[[u16; super::army_do_mustering::MUSTER_STRATEGY_REGIONS]; NUM_LEADERS],
@@ -609,6 +612,27 @@ impl StagedForceArmyAuthority {
             {
                 return Some(
                     super::diplomacy_force_army_authority::ForceArmyProcessError::StaleWorld,
+                );
+            }
+            if !receipt.retirement_groups_are_current(groups) {
+                let gid = receipt
+                    .retirement_groups
+                    .as_ref()
+                    .and_then(|facts| {
+                        facts.iter().find(|fact| {
+                            groups.list.get(fact.gid).is_none_or(|group| {
+                                group.id != fact.id
+                                    || group.army != fact.army
+                                    || group.num != fact.num
+                            })
+                        })
+                    })
+                    .map_or(0, |fact| fact.gid);
+                return Some(
+                    super::diplomacy_force_army_authority::ForceArmyProcessError::StaleRetirementGroup {
+                        owner: receipt.request.owner,
+                        gid,
+                    },
                 );
             }
             if !receipt.retirement_cities_are_current(cities) {
@@ -970,9 +994,10 @@ fn stage_force_army_authority(
     // transient LeaderData projection.
     let leader_city_num = std::array::from_fn(|who| sim.cities.count(who));
     let world_size = (sim.map.world.tile_xs, sim.map.world.tile_ys);
-    let prepared = match prepare_force_army_process_with_strategy_and_difficulty(
+    let prepared = match prepare_force_army_process_with_groups_strategy_and_difficulty(
         &sim.armies,
         &sim.cities,
+        &sim.groups,
         leader_flags,
         leader_flags2,
         &leader_city_num,
@@ -995,9 +1020,11 @@ fn stage_force_army_authority(
         Err(error) => return Err(CanonicalDiplomacyRuntimeError::ForceArmy(error)),
     };
     let mut armies = Box::new(sim.armies.clone());
-    let receipts = commit_force_army_process_with_strategy_and_difficulty(
+    let mut groups = sim.groups.clone();
+    let receipts = commit_force_army_process_with_groups_strategy_and_difficulty(
         &mut armies,
         &sim.cities,
+        &mut groups,
         leader_flags,
         leader_flags2,
         &leader_city_num,
@@ -1252,6 +1279,7 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 staged.current_error(
                     &self.sim.armies,
                     &self.sim.cities,
+                    &self.sim.groups,
                     &leader_city_num,
                     world_size,
                     &leader_strategy,
@@ -1283,6 +1311,13 @@ impl Fleet for CanonicalDiplomacyFleet<'_> {
                 (Vec::new(), None)
             };
             let army_process_receipts = if let Some(staged) = staged_army {
+                for fact in staged
+                    .receipts
+                    .iter()
+                    .flat_map(|receipt| receipt.retirement_groups.iter().flatten())
+                {
+                    self.sim.groups.list[fact.gid].army = -1;
+                }
                 self.sim.armies = *staged.armies;
                 staged.receipts
             } else {

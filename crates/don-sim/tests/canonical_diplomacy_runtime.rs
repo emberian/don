@@ -16,6 +16,7 @@ use don_sim::systems::diplomacy_ejection_authority::{
 };
 use don_sim::systems::diplomacy_force_army_authority::{
     ForceArmyMusterCityFact, ForceArmyProcessOutcome, ForceArmyRetirementCityFact,
+    ForceArmyRetirementGroupFact,
 };
 use don_sim::systems::groups_guys::{GroupData, Groups};
 use don_sim::systems::leader_set_diplo::{Relation, SetDiploAuthority};
@@ -781,6 +782,90 @@ fn active_winner_empty_army_city_rally_resumes_from_canonical_city_owners() {
         );
         assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
         let reloaded = load_sim(&save_sim(&resumed).unwrap()).expect("City-rallied Army reloads");
+        assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
+    });
+}
+
+#[test]
+fn active_winner_zero_member_group_retirement_resumes_and_unlinks_atomically() {
+    with_large_stack(|| {
+        let mut uninterrupted = configured_alliance_victory_sim();
+        let gid = Groups::index(2, 4);
+        let army = &mut uninterrupted.armies.lists[2][3];
+        army.valid = 1;
+        army.army = 3;
+        army.who = 2;
+        army.human_frame = 9;
+        army.role = 0x55;
+        army.num_units = 12;
+        army.num_captains = 4;
+        army.num_standard = 3;
+        army.num_decoys = 2;
+        army.num_groups = 1;
+        army.list[0] = gid as i32;
+        uninterrupted.groups.list[gid] = GroupData {
+            id: gid as i32,
+            army: 3,
+            who: 2,
+            stamp: 1234,
+            ..GroupData::default()
+        };
+
+        let checkpoint = save_sim(&uninterrupted).expect("zero-member Army Group input is savable");
+        let mut resumed = load_sim(&checkpoint).expect("zero-member Army Group input reloads");
+        resumed.replace_diplomacy_authority(complete_facts());
+        assert_eq!(resumed.armies.lists[2][3].list[0], gid as i32);
+        assert_eq!(resumed.armies.lists[2][3].num_groups, 1);
+        assert_eq!(resumed.groups.list[gid].id, gid as i32);
+        assert_eq!(resumed.groups.list[gid].army, 3);
+        assert_eq!(resumed.groups.list[gid].num, 0);
+        assert_eq!(save_sim(&resumed).unwrap(), checkpoint);
+
+        let resumed_receipt = resumed
+            .process_diplomacy_package(2, 0x2948, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        let uninterrupted_receipt = uninterrupted
+            .process_diplomacy_package(2, 0x2948, &RETAIL_ACCEPT_2_3)
+            .unwrap();
+        assert_eq!(resumed_receipt, uninterrupted_receipt);
+        assert_eq!(resumed_receipt.status, CanonicalDiplomacyStatus::Applied);
+        assert!(resumed_receipt.validates(&resumed_receipt.request));
+        assert_eq!(resumed_receipt.completed_authority.len(), 2);
+        assert_eq!(resumed_receipt.victory_receipts.len(), 1);
+        assert_eq!(resumed_receipt.army_process_receipts.len(), 1);
+        let army_receipt = &resumed_receipt.army_process_receipts[0];
+        assert!(army_receipt.validates());
+        assert_eq!(army_receipt.outcome, ForceArmyProcessOutcome::RetiredEmpty);
+        assert_eq!(
+            army_receipt.retirement_groups.as_deref(),
+            Some(
+                [ForceArmyRetirementGroupFact {
+                    gid,
+                    id: gid as i32,
+                    army: 3,
+                    num: 0,
+                }]
+                .as_slice()
+            )
+        );
+        assert_eq!(army_receipt.after.valid, 0);
+        assert_eq!(army_receipt.after.num_groups, 0);
+        assert_eq!(army_receipt.after.list[0], gid as i32);
+        assert_eq!(resumed.armies.lists[2][3], army_receipt.after);
+        assert_eq!(resumed.groups.list[gid].army, -1);
+        assert_eq!(resumed.groups.list[gid].stamp, 1234);
+        assert_ne!(
+            resumed.vic_leaders.slots[2].leader_flags & leader_flag::WON,
+            0
+        );
+        assert_eq!(
+            save_sim(&resumed).unwrap(),
+            save_sim(&uninterrupted).unwrap()
+        );
+        assert_eq!(resumed.channel_digest(), uninterrupted.channel_digest());
+        let reloaded =
+            load_sim(&save_sim(&resumed).unwrap()).expect("unlinked empty Group result reloads");
+        assert_eq!(reloaded.groups.list[gid].army, -1);
         assert_eq!(save_sim(&reloaded).unwrap(), save_sim(&resumed).unwrap());
     });
 }

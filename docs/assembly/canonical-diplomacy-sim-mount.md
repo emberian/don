@@ -139,8 +139,12 @@ empty-retirement branch additionally reconstructs `LeaderData::city_num` from th
 CityPool, binds its lazily read City prefix, and stops that receipt at the first active low flags
 byte. Inactive rows bind no coordinates; the first active row binds x/y and the World dimensions
 used by the exact zero-group `send_here` clamp before retirement. The empty-human-rally branch
-binds only those World dimensions. The armies-off branch binds neither. Planes, contained-Unit
-mutation calls, missing type/path facts, or
+binds only those World dimensions. A saved Army whose live prefix consists entirely of
+already-zero-member persistent Groups takes the same retirement transaction: exact reverse
+normalization removes each Group, clears only its Army backlink, and reaches no Unit or Group
+action. The receipt binds each minimally read Group row and commits every unlink with the Army;
+Group drift rejects the whole diplomacy transaction. The armies-off branch binds neither. Planes,
+contained-Unit mutation calls, missing type/path facts, or
 forced-army calls that proceed past exact empty normalization into the remaining AI state machine
 refuse before publication, so both static
 rows remain `StateWired`. Opcode 41's ordinary accepted-deal roots use
@@ -153,16 +157,18 @@ packet-to-current-v18-save/load-to-resume ejection projection covering success, 
 successful air/Strafe arms. A second real opcode-38 war packet crosses the same current save/load,
 whose Army section remains the exact v17 owner, reinstalls only transient query facts, decrements
 the exact armies-off countdown, and matches uninterrupted save bytes and channel digest; the
-focused Army transaction suite includes stale Army, Leader, World-size, and lazily read City-prefix
-rollback. It also
+focused Army transaction suite includes stale Army, Leader, World-size, lazily read City-prefix,
+and zero-member Group rollback. It also
 covers multi-opponent alliance Victory with empty cleanup, active-ground-Unit save/resume, and
 standing-Army packet-to-current-save/load-to-resume equality; plane and missing-type paths remain
 atomic refusals. Real opcode-41 packets cross save/load through the ordered no-op Victory plus
 armies-off transaction, substantive Victory plus both zero-City and City-rally empty-Army
 retirement, and substantive Victory plus an empty-Army human rally. The City-rally case proves the
 saved City owner reconstructs the positive count across current save/load and reproduces receipt,
-save bytes, and checksum digest. A countdown-expiry counterpart proves staged Victory and the Army
-countdown both roll back when the deeper body is reached.
+save bytes, and checksum digest. A zero-member Group counterpart crosses the same save boundary,
+then publishes the reverse-normalize Group unlink, Army close, and Victory together with identical
+receipt, save bytes, and checksum digest. A countdown-expiry counterpart proves staged Victory and
+the Army countdown both roll back when the deeper body is reached.
 The callback/aggregate
 suites pass 12/12; the economy forward-compatibility suite
 passes 11/11; LeaderMatch integration passes 3/3; production AI passes 11/11; and all 46 private

@@ -4,10 +4,11 @@
 //! `Leader::set_diplo` calls `Army::process(1)` for every valid Army when the owner passes
 //! the ordinary Army gates. The complete general body is not mounted. The bounded arms below are
 //! authority-complete: `leader_flags & 0x40` still reaches the entry decrement of `human_frame`,
-//! then returns before normalization; an active empty non-mustering Army normalizes its five
-//! derived fields, lazily scans its saved City prefix, optionally rallies through `send_here` at
-//! the first active row, and takes the exact retirement/`close` path without any Group, Unit,
-//! terrain, AI, or RNG access; an empty mustering Army with a still-live human-order
+//! then returns before normalization; an active non-mustering Army with either no Groups or only
+//! already-empty persistent Groups normalizes its five derived fields, unlinks those Groups,
+//! lazily scans its saved City prefix, optionally rallies through `send_here` at the first active
+//! row, and takes the exact retirement/`close` path without Unit, terrain, AI, or RNG access; an
+//! empty mustering Army with a still-live human-order
 //! countdown normalizes, clamps its rally point through `send_here`, and returns before dispatch;
 //! and an empty naval muster whose canonical founding City is foreign or inactive follows the
 //! exact countdown/normalize/merge/retarget/dispatch tail, releases, enters `do_marching`, then
@@ -24,8 +25,12 @@
 //! `0x006F93D0..0x006F9836` (1,138 bytes, SHA-256 `81f684bf…446d3`) decrements the non-zero
 //! `human_frame` at `0x006F93DA..0x006F93E5`; the forced path jumps to `0x006F94AA`, tests
 //! leader bit `0x40` at `0x006F94B7`, and returns at `0x006F983A` without a deeper call. With
-//! that bit clear the same body calls `Army::normalize` (`0x006F9B50`, 657 bytes); its empty
-//! input reads no Group. At `0x006F94F7..0x006F9557` the zero-standard retirement initializes
+//! that bit clear the same body calls `Army::normalize` (`0x006F9B50`, 657 bytes). Its zero-Group
+//! input reads no Group. For an already-zero-member Group its reverse scan enters the empty
+//! `Group::normalize` loop, observes zero, and calls `Army::remove_group` (`0x006F8B50`), which
+//! clears only the Group's Army backlink and recursively normalizes the shorter prefix. The exact
+//! all-empty cone therefore reaches no Unit or Group action. At `0x006F94F7..0x006F9557` the
+//! zero-standard retirement initializes
 //! `city=0`, reads only each City's low flags byte until the saved count is exhausted or the first
 //! active row is found, then additionally reads that row's coordinates and calls `send_here(1)`.
 //! It finally calls `Army::close` (`0x006F8EA0`, 118 bytes), whose zero-group input likewise
@@ -43,6 +48,7 @@ use super::army_do_defending::{do_defending_empty_prefix, EmptyDefendingPrefixEx
 use super::army_do_mustering::{
     do_mustering, MusteringCity, MusteringExit, MusteringHost, MUSTER_STRATEGY_REGIONS,
 };
+use super::groups_guys::Groups;
 use super::leader_tribe_bonus_runtime::{get_diff, GetDiffExit, GetDiffInputs};
 use super::tech_cities::CityPool;
 use crate::trig::find_angle;
@@ -63,6 +69,8 @@ pub struct ForceArmyProcessReceipt {
     pub leader_city_num: Option<i32>,
     /// Exact City prefix read by the positive-city empty-retirement branch.
     pub retirement_cities: Option<Vec<ForceArmyRetirementCityFact>>,
+    /// Exact empty Groups removed by normalization before the retirement predicate.
+    pub retirement_groups: Option<Vec<ForceArmyRetirementGroupFact>>,
     /// Read by `send_here` for a human rally or first-active-City retirement rally.
     pub world_size: Option<(i32, i32)>,
     /// Exact short-circuit City fields read by `Army::release_mustering`.
@@ -102,6 +110,15 @@ pub enum ForceArmyMusterCityFact {
 pub enum ForceArmyRetirementCityFact {
     Inactive { flags_low: u8 },
     Active { flags_low: u8, x: i32, y: i32 },
+}
+
+/// Minimal Group fields read while normalization removes an already empty member Group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForceArmyRetirementGroupFact {
+    pub gid: usize,
+    pub id: i32,
+    pub army: i32,
+    pub num: i32,
 }
 
 impl ForceArmyRetirementCityFact {
@@ -283,6 +300,80 @@ fn retirement_cities_are_current(cities: &CityPool, receipt: &ForceArmyProcessRe
     observe_retirement_cities(cities, receipt.request.owner, city_num).as_deref() == Some(expected)
 }
 
+fn observe_empty_retirement_groups(
+    groups: &Groups,
+    before: &ArmyData,
+) -> Option<Vec<ForceArmyRetirementGroupFact>> {
+    let count = usize::try_from(before.num_groups).ok()?;
+    if count == 0 || count > before.list.len() {
+        return None;
+    }
+    let mut facts = Vec::with_capacity(count);
+    for index in (0..count).rev() {
+        let gid = usize::try_from(before.list[index]).ok()?;
+        if facts
+            .iter()
+            .any(|fact: &ForceArmyRetirementGroupFact| fact.gid == gid)
+        {
+            return None;
+        }
+        let group = groups.list.get(gid)?;
+        let fact = ForceArmyRetirementGroupFact {
+            gid,
+            id: group.id,
+            army: group.army,
+            num: group.num,
+        };
+        // This exact cone relies on Group::normalize's zero-member loop and on
+        // Army::remove_group finding the same persistent id and backlink.
+        if fact.id != gid as i32 || fact.army != before.army as i32 || fact.num != 0 {
+            return None;
+        }
+        facts.push(fact);
+    }
+    Some(facts)
+}
+
+fn retirement_groups_validate_shape(
+    before: &ArmyData,
+    facts: Option<&[ForceArmyRetirementGroupFact]>,
+) -> bool {
+    let Ok(count) = usize::try_from(before.num_groups) else {
+        return false;
+    };
+    if count == 0 {
+        return facts.is_none();
+    }
+    let Some(facts) = facts else {
+        return false;
+    };
+    count <= before.list.len()
+        && facts.len() == count
+        && facts.iter().enumerate().all(|(offset, fact)| {
+            let index = count - 1 - offset;
+            usize::try_from(before.list[index]).ok() == Some(fact.gid)
+                && fact.id == fact.gid as i32
+                && fact.army == before.army as i32
+                && fact.num == 0
+                && !facts[..offset]
+                    .iter()
+                    .any(|earlier| earlier.gid == fact.gid)
+        })
+}
+
+fn retirement_groups_are_current(
+    groups: Option<&Groups>,
+    receipt: &ForceArmyProcessReceipt,
+) -> bool {
+    let Some(expected) = receipt.retirement_groups.as_deref() else {
+        return true;
+    };
+    let Some(groups) = groups else {
+        return false;
+    };
+    observe_empty_retirement_groups(groups, &receipt.before).as_deref() == Some(expected)
+}
+
 fn muster_city_is_current(cities: &CityPool, receipt: &ForceArmyProcessReceipt) -> bool {
     let Some(expected) = receipt.muster_city else {
         return true;
@@ -321,6 +412,10 @@ fn muster_difficulty_is_current(
 impl ForceArmyProcessReceipt {
     pub fn retirement_cities_are_current(&self, cities: &CityPool) -> bool {
         retirement_cities_are_current(cities, self)
+    }
+
+    pub fn retirement_groups_are_current(&self, groups: &Groups) -> bool {
+        retirement_groups_are_current(Some(groups), self)
     }
 
     pub fn muster_city_is_current(&self, cities: &CityPool) -> bool {
@@ -362,6 +457,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF == 0
                     || self.leader_city_num.is_some()
                     || self.retirement_cities.is_some()
+                    || self.retirement_groups.is_some()
                     || self.world_size.is_some()
                     || self.muster_city.is_some()
                     || self.muster_strategy.is_some()
@@ -378,11 +474,16 @@ impl ForceArmyProcessReceipt {
                 if !retirement_cities_validate_shape(city_num, retirement_cities) {
                     return false;
                 }
+                if !retirement_groups_validate_shape(
+                    &self.before,
+                    self.retirement_groups.as_deref(),
+                ) {
+                    return false;
+                }
                 let active_city = retirement_cities
                     .and_then(|facts| facts.last())
                     .and_then(|fact| fact.active_coordinates());
                 if self.leader_flags & LF_ARMIES_OFF != 0
-                    || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING != 0
                     || (active_city.is_some() != self.world_size.is_some())
                     || self.muster_city.is_some()
@@ -397,6 +498,7 @@ impl ForceArmyProcessReceipt {
                 expected.num_captains = 0;
                 expected.num_standard = 0;
                 expected.num_decoys = 0;
+                expected.num_groups = 0;
                 expected.city = 0;
                 if let Some(facts) = retirement_cities {
                     for fact in facts.iter().copied() {
@@ -454,6 +556,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
                     || self.retirement_cities.is_some()
+                    || self.retirement_groups.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
                     || self.before.human_frame <= 1
@@ -493,6 +596,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
                     || self.retirement_cities.is_some()
+                    || self.retirement_groups.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -552,6 +656,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
                     || self.retirement_cities.is_some()
+                    || self.retirement_groups.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -608,6 +713,7 @@ impl ForceArmyProcessReceipt {
                 if self.leader_flags & LF_ARMIES_OFF != 0
                     || self.leader_city_num.is_some()
                     || self.retirement_cities.is_some()
+                    || self.retirement_groups.is_some()
                     || self.world_size.is_some()
                     || self.before.num_groups != 0
                     || self.before.status & ST_MUSTERING == 0
@@ -711,6 +817,7 @@ impl PreparedForceArmyProcess {
         self.is_current_impl(
             armies,
             cities,
+            None,
             leader_flags,
             leader_flags2,
             leader_city_num,
@@ -733,6 +840,7 @@ impl PreparedForceArmyProcess {
         self.is_current_impl(
             armies,
             cities,
+            None,
             leader_flags,
             leader_flags2,
             leader_city_num,
@@ -757,6 +865,33 @@ impl PreparedForceArmyProcess {
         self.is_current_impl(
             armies,
             cities,
+            None,
+            leader_flags,
+            leader_flags2,
+            leader_city_num,
+            world_size,
+            Some(leader_strategy),
+            Some((match_semaphore, leader_multi_diff)),
+        )
+    }
+
+    pub fn is_current_with_groups_strategy_and_difficulty(
+        &self,
+        armies: &Armies,
+        cities: &CityPool,
+        groups: &Groups,
+        leader_flags: &[u32; 8],
+        leader_flags2: &[u32; 8],
+        leader_city_num: &[i32; 8],
+        world_size: (i32, i32),
+        leader_strategy: &[[u16; MUSTER_STRATEGY_REGIONS]; 8],
+        match_semaphore: u32,
+        leader_multi_diff: &[i32; 8],
+    ) -> bool {
+        self.is_current_impl(
+            armies,
+            cities,
+            Some(groups),
             leader_flags,
             leader_flags2,
             leader_city_num,
@@ -770,6 +905,7 @@ impl PreparedForceArmyProcess {
         &self,
         armies: &Armies,
         cities: &CityPool,
+        groups: Option<&Groups>,
         leader_flags: &[u32; 8],
         leader_flags2: &[u32; 8],
         leader_city_num: &[i32; 8],
@@ -787,6 +923,7 @@ impl PreparedForceArmyProcess {
                     .world_size
                     .is_none_or(|expected| world_size == expected)
                 && retirement_cities_are_current(cities, receipt)
+                && retirement_groups_are_current(groups, receipt)
                 && muster_city_is_current(cities, receipt)
                 && receipt.muster_strategy.is_none_or(|_| {
                     leader_strategy
@@ -824,6 +961,7 @@ pub enum ForceArmyProcessError {
     StaleArmy { owner: usize, army_slot: usize },
     StaleLeader { owner: usize },
     StaleWorld,
+    StaleRetirementGroup { owner: usize, gid: usize },
     StaleRetirementCity { owner: usize },
     StaleCity { owner: usize, city: i32 },
     StaleStrategy { owner: usize, region: usize },
@@ -843,6 +981,7 @@ pub fn prepare_force_army_process(
     prepare_force_army_process_impl(
         armies,
         cities,
+        None,
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -866,6 +1005,7 @@ pub fn prepare_force_army_process_with_strategy(
     prepare_force_army_process_impl(
         armies,
         cities,
+        None,
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -891,6 +1031,34 @@ pub fn prepare_force_army_process_with_strategy_and_difficulty(
     prepare_force_army_process_impl(
         armies,
         cities,
+        None,
+        leader_flags,
+        leader_flags2,
+        leader_city_num,
+        world_size,
+        Some(leader_strategy),
+        Some((match_semaphore, leader_multi_diff)),
+        requests,
+    )
+}
+
+pub fn prepare_force_army_process_with_groups_strategy_and_difficulty(
+    armies: &Armies,
+    cities: &CityPool,
+    groups: &Groups,
+    leader_flags: &[u32; 8],
+    leader_flags2: &[u32; 8],
+    leader_city_num: &[i32; 8],
+    world_size: (i32, i32),
+    leader_strategy: &[[u16; MUSTER_STRATEGY_REGIONS]; 8],
+    match_semaphore: u32,
+    leader_multi_diff: &[i32; 8],
+    requests: &[ForceArmyProcessRequest],
+) -> Result<PreparedForceArmyProcess, ForceArmyProcessError> {
+    prepare_force_army_process_impl(
+        armies,
+        cities,
+        Some(groups),
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -904,6 +1072,7 @@ pub fn prepare_force_army_process_with_strategy_and_difficulty(
 fn prepare_force_army_process_impl(
     armies: &Armies,
     cities: &CityPool,
+    groups: Option<&Groups>,
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
@@ -960,6 +1129,7 @@ fn prepare_force_army_process_impl(
             outcome,
             city_num,
             retirement_cities,
+            retirement_groups,
             receipt_world_size,
             muster_city,
             muster_strategy,
@@ -967,6 +1137,7 @@ fn prepare_force_army_process_impl(
         ) = if flags & LF_ARMIES_OFF != 0 {
             (
                 ForceArmyProcessOutcome::ArmiesOff,
+                None,
                 None,
                 None,
                 None,
@@ -990,6 +1161,7 @@ fn prepare_force_army_process_impl(
                 ForceArmyProcessOutcome::MovedEmptyHumanOrder,
                 None,
                 None,
+                None,
                 Some(world_size),
                 None,
                 None,
@@ -1009,6 +1181,7 @@ fn prepare_force_army_process_impl(
             };
             (
                 ForceArmyProcessOutcome::ClosedEmptyNavalMuster,
+                None,
                 None,
                 None,
                 None,
@@ -1083,13 +1256,31 @@ fn prepare_force_army_process_impl(
                 None,
                 None,
                 None,
+                None,
                 Some(muster_city),
                 Some(ForceArmyMusterStrategyFact { region, value }),
                 muster_difficulty,
             )
         } else {
             let city_num = leader_city_num[request.owner];
-            if before.num_groups == 0 && before.status & ST_MUSTERING == 0 {
+            if before.status & ST_MUSTERING == 0 {
+                let retirement_groups = if before.num_groups == 0 {
+                    None
+                } else {
+                    let Some(groups) = groups else {
+                        return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                            owner: request.owner,
+                            army_slot: request.army_slot,
+                        });
+                    };
+                    let Some(facts) = observe_empty_retirement_groups(groups, &before) else {
+                        return Err(ForceArmyProcessError::RequiresUnresolvedArmyBody {
+                            owner: request.owner,
+                            army_slot: request.army_slot,
+                        });
+                    };
+                    Some(facts)
+                };
                 let retirement_cities = if city_num > 0 {
                     let Some(facts) = observe_retirement_cities(cities, request.owner, city_num)
                     else {
@@ -1125,6 +1316,7 @@ fn prepare_force_army_process_impl(
                     ForceArmyProcessOutcome::RetiredEmpty,
                     Some(city_num),
                     retirement_cities,
+                    retirement_groups,
                     active_city.map(|_| world_size),
                     None,
                     None,
@@ -1163,6 +1355,9 @@ fn prepare_force_army_process_impl(
                 army_after.num_captains = 0;
                 army_after.num_standard = 0;
                 army_after.num_decoys = 0;
+                // Every receipt-bound zero-member Group is removed from the live prefix in
+                // reverse order by normalize/remove_group before retirement continues.
+                army_after.num_groups = 0;
                 army_after.city = 0;
                 if let Some(facts) = retirement_cities.as_deref() {
                     for fact in facts.iter().copied() {
@@ -1293,6 +1488,7 @@ fn prepare_force_army_process_impl(
             leader_flags2: flags2,
             leader_city_num: city_num,
             retirement_cities,
+            retirement_groups,
             world_size: receipt_world_size,
             muster_city,
             muster_strategy,
@@ -1331,6 +1527,7 @@ pub fn commit_force_army_process(
     commit_force_army_process_impl(
         armies,
         cities,
+        None,
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -1354,6 +1551,7 @@ pub fn commit_force_army_process_with_strategy(
     commit_force_army_process_impl(
         armies,
         cities,
+        None,
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -1379,6 +1577,34 @@ pub fn commit_force_army_process_with_strategy_and_difficulty(
     commit_force_army_process_impl(
         armies,
         cities,
+        None,
+        leader_flags,
+        leader_flags2,
+        leader_city_num,
+        world_size,
+        Some(leader_strategy),
+        Some((match_semaphore, leader_multi_diff)),
+        prepared,
+    )
+}
+
+pub fn commit_force_army_process_with_groups_strategy_and_difficulty(
+    armies: &mut Armies,
+    cities: &CityPool,
+    groups: &mut Groups,
+    leader_flags: &[u32; 8],
+    leader_flags2: &[u32; 8],
+    leader_city_num: &[i32; 8],
+    world_size: (i32, i32),
+    leader_strategy: &[[u16; MUSTER_STRATEGY_REGIONS]; 8],
+    match_semaphore: u32,
+    leader_multi_diff: &[i32; 8],
+    prepared: PreparedForceArmyProcess,
+) -> Result<Vec<ForceArmyProcessReceipt>, ForceArmyProcessError> {
+    commit_force_army_process_impl(
+        armies,
+        cities,
+        Some(groups),
         leader_flags,
         leader_flags2,
         leader_city_num,
@@ -1392,6 +1618,7 @@ pub fn commit_force_army_process_with_strategy_and_difficulty(
 fn commit_force_army_process_impl(
     armies: &mut Armies,
     cities: &CityPool,
+    mut groups: Option<&mut Groups>,
     leader_flags: &[u32; 8],
     leader_flags2: &[u32; 8],
     leader_city_num: &[i32; 8],
@@ -1420,6 +1647,30 @@ fn commit_force_army_process_impl(
             .is_some_and(|expected| expected != world_size)
     }) {
         return Err(ForceArmyProcessError::StaleWorld);
+    }
+    if let Some(stale) = prepared
+        .receipts
+        .iter()
+        .find(|receipt| !retirement_groups_are_current(groups.as_deref(), receipt))
+    {
+        let gid = stale
+            .retirement_groups
+            .as_ref()
+            .and_then(|facts| {
+                facts.iter().find(|fact| {
+                    groups
+                        .as_deref()
+                        .and_then(|groups| groups.list.get(fact.gid))
+                        .is_none_or(|group| {
+                            group.id != fact.id || group.army != fact.army || group.num != fact.num
+                        })
+                })
+            })
+            .map_or(0, |fact| fact.gid);
+        return Err(ForceArmyProcessError::StaleRetirementGroup {
+            owner: stale.request.owner,
+            gid,
+        });
     }
     if let Some(stale) = prepared
         .receipts
@@ -1470,6 +1721,15 @@ fn commit_force_army_process_impl(
             owner: stale.request.owner,
             army_slot: stale.request.army_slot,
         });
+    }
+    if let Some(groups) = groups.as_deref_mut() {
+        for fact in prepared
+            .receipts
+            .iter()
+            .flat_map(|receipt| receipt.retirement_groups.iter().flatten())
+        {
+            groups.list[fact.gid].army = -1;
+        }
     }
     *armies = prepared.after;
     Ok(prepared.receipts)

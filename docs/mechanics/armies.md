@@ -37,13 +37,17 @@ zero-group Army proves that count is zero, so the canonical path closes before `
 object search, muster search, or RNG. Nonempty Armies still stop before mutation.
 
 The diplomacy-forced `Army::process(1)` adapter also owns the complete empty non-mustering
-retirement transaction. After exact empty normalization, retail initializes the Army's City cursor
-to zero and scans City slots through `LeaderData::city_num`. Each inactive row reads only the low
-flags byte and advances the cursor. The first active row additionally reads x/y, calls the exact
-zero-group `send_here(1)` coordinate clamp, and stops the scan; exhaustion skips World reads. The
-receipt binds precisely that lazy City prefix, the optional World dimensions, and the before/after
-Army image. City, World, Leader-count, or Army drift rejects atomically. General nonempty processing
-and every reached AI body remain fail-closed.
+retirement transaction. An Army whose nonzero live prefix consists entirely of already-empty
+persistent Groups is part of the same cone. `Army::normalize` visits them in reverse order;
+`Group::normalize` has an empty loop, then `Army::remove_group` clears the Group's Army backlink
+and recursively normalizes the shorter prefix. No Unit or Group action is reached. After exact
+normalization, retail initializes the Army's City cursor to zero and scans City slots through
+`LeaderData::city_num`. Each inactive row reads only the low flags byte and advances the cursor.
+The first active row additionally reads x/y, calls the exact zero-group `send_here(1)` coordinate
+clamp, and stops the scan; exhaustion skips World reads. The receipt binds precisely the removed
+Group rows, lazy City prefix, optional World dimensions, and before/after Army image. Group, City,
+World, Leader-count, or Army drift rejects atomically. Populated Groups, general nonempty
+processing, and every reached AI body remain fail-closed.
 
 The following retail bodies are reached by the step-13 control flow and remain absent:
 
