@@ -79,17 +79,20 @@ equal-scoring candidates replace earlier ones because the comparison is `best <=
 The chosen coarse cell produces a 2x2 fine scan, again x outer / y inner. Every fine candidate
 first calls `blocked_site`. Only a zero result consumes `Random::get(0,65535)` at `0x006E2C00` and
 scores `draw % 100`; a rejected probe consumes no draw. The initial fine score is `-1` and later
-ties replace earlier sites. The Market therefore consumes zero through four main-RNG draws,
-exactly one for each valid fine probe. There are no later Market-specific RNG calls. The exact draw
+ties replace earlier sites. The Market consumes exactly one draw for each valid fine probe. The
+first fine candidate is the already accepted coarse
+site, so it necessarily succeeds again: the exact total is **one through four**, never zero. There
+are no later Market-specific RNG calls. The exact draw
 count and selected site are unresolved until the World placement receipt supplies the four-probe
 mask.
 
 This is the main simulation stream, not a private placement RNG. The retail call site
 `0x006E2BF4` loads `ECX` from `0x00C06184`; the PDB identifies that object as
 `GameAccess::game_random`. `Random::get` at `0x00A39D70` advances the pointed-to LCG state before
-returning the scaled low-word result. Consequently the post-Market `Setup::build_units` capture
-must carry an RNG state distinct from the earlier post-`place_all` receipt whenever at least one
-fine probe succeeds.
+returning the scaled low-word result. `Setup::build_game` also consumes collision-retried draws for
+its eight-slot player/start shuffle after `place_all` and before `build_cities`. Consequently the
+post-`place_all`, post-shuffle/pre-Market, and post-Market `Setup::build_units` RNG boundaries must
+remain independently bound. Only Market-after is equal to the BuildUnits-entry state.
 
 ## Allocation, City link and activation chronology
 
@@ -144,7 +147,7 @@ checks. Thus this starting call creates no Group or Unit mutation.
 | Leader 0 | `buildings_built += 1`; `num_buildings[22] += 1`; when region is below 64, `region_buildings[region][22] += 1`; `gather_slots[2] += 1`; both high-water mirrors take `max`; dirty bits `0x02000000` then `0x08000000` |
 | World / Terrain | object/occupancy down chains, footprint placed/masked state, owner/visibility and behind-tile state, covering-doober removal, road regeneration effects, seen projection |
 | Game | activation dirty scalar/byte projection; no frame-zero payment or AI production counters |
-| Random | no coarse draw; one fine draw per valid fine probe, zero through four total |
+| Random | no Market coarse draw; one fine draw per valid fine probe, one through four total; earlier setup shuffle draws remain a separate owner |
 | Groups / Units | no mutation on the frame-zero path |
 
 The adjacent golden capture reports grade four. If that independent capture is accepted, the
