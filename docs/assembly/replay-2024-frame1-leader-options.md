@@ -61,10 +61,12 @@ chronology authority. `bind_captured_frame1_command_entry` admits the one-tick r
 when both whole-DoNSave hashes match, the executable/replay identities are exact, the first image
 is the completed seven-call setup receipt, and all seven generation-bound Units survive into live
 frame 1. That pre-command image is mandatory: frame zero already runs Merchant think/unpack and
-Scout spellcaster work, so their orders, masks, paths and Objects search scratch are not yet
-derivable from the completed setup image. The Scout branch cannot mutate
-`CasterData::active_spells`; its setup-empty queue remains independently derivable. The binder
-produces the command-entry authority; it does not derive that tick from replay bytes.
+Scout spellcaster work, so their orders, masks, paths and Objects search scratch are not all
+derivable from the completed setup image. The Scout portion now has an exact detached frontier:
+human owner zero takes the direct Counterintel arm with no RNG draw, and the unresolved retail
+predicate/search results are typed receipts. That arm can add a Unit CastOrder but cannot mutate
+`CasterData::active_spells`; its setup-empty active-spell array remains independently derivable.
+The binder produces the command-entry authority; it does not derive that tick from replay bytes.
 
 `mount_frame1_setup_leader_options` consumes that authority, rebinds all four Citizens by
 generation and the Village through both object registries, validates every zero-stance

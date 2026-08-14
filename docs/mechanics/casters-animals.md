@@ -13,6 +13,8 @@ What now works is deliberately narrower than the original lane brief:
   predicate are executable;
 - `Caster::process_spells` logical expiry, reverse removal order, Ambush/Forced March flag
   cleanup, and Jam Radar pulse cadence are executable;
+- the golden human Scout's frame-zero `Unit::think_spellcaster` path is a separate detached
+  transaction: it may request a Unit CastOrder but never populates this active-spell array;
 - all 12 Gaia TypeIndex values are frozen;
 - the 64-frame herd scheduler, two-draw herd migration, spawn counts, and conditional angle
   draw are executable;
@@ -109,6 +111,12 @@ The shipped `OBJ_MASK` alphabet assigns detector capability to uppercase `Z`, en
 that mask and predicate. Stamping its LOS into `seen3` remains a fog/world integration step.
 
 ## Active-spell lifetime
+
+The frame-zero golden Scout producer is documented in
+[`replay-frame0-scout-spellcaster.md`](../assembly/replay-frame0-scout-spellcaster.md). Its
+successful Counterintel arm calls `Unit::add_cast_order`; it does not append an `ActiveSpell`.
+Consequently an empty setup `CasterData+0x04` array remains empty when this frame-one processor
+begins, independent of whether the Scout order queue changed.
 
 `Caster::process_spells` scans from the last element to the first. A spell remains active
 while `end_frame >= current_frame`; expiration starts one frame later. The force path removes

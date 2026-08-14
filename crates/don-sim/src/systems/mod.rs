@@ -172,6 +172,9 @@ pub mod fight;
 /// Exact `Unit::do_follow` planner and atomic host receipt. The live order dispatcher owns
 /// its concrete queue/effect integration.
 pub mod follow_executor;
+/// Detached, source-exact golden-2024 human Scout `think_spellcaster` transaction. It owns
+/// the no-cast arms and stops at typed retail children or the final Unit CastOrder mutation.
+pub mod frame0_scout_spellcaster;
 /// Revision-bound adjacent-call authority for the golden frame-one Scout's
 /// `Caster::process_spells` child. Only a captured empty, unchanged engine array completes;
 /// nonempty queues remain typed residuals.
