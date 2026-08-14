@@ -39,11 +39,12 @@ use don_replay::leaders_setup_build_history_frontier::{
 };
 use don_replay::leaders_setup_build_registry_frontier::{
     bind_frame_zero_build_registry_census, derive_frame_zero_build_registry_census,
-    FrameZeroBuildRegistryError, BUILD_ACTIVATE_HIGH_WATER_BEGIN_VA,
-    BUILD_ACTIVATE_HIGH_WATER_END_VA, BUILD_ACTIVATE_TO_LOAD_VA, BUILD_TYPE_BASIC_TYPE_VA,
-    DOCK_INIT_REGISTRY_STORE_VA, FORT_INIT_REGISTRY_STORE_VA, FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES,
-    FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES, FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES,
-    LEADER_GET_BUILDINGS_VA,
+    mount_frame_zero_build_accounting, FrameZeroBuildRegistryError,
+    BUILD_ACTIVATE_HIGH_WATER_BEGIN_VA, BUILD_ACTIVATE_HIGH_WATER_END_VA,
+    BUILD_ACTIVATE_TO_LOAD_VA, BUILD_TYPE_BASIC_TYPE_VA, DOCK_INIT_REGISTRY_STORE_VA,
+    FORT_INIT_REGISTRY_STORE_VA, FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES,
+    FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES, FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES,
+    FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES, LEADER_GET_BUILDINGS_VA,
 };
 use don_replay::leaders_setup_chat_status_frontier::{
     bind_frame_zero_chat_status, derive_frame_zero_chat_status, FrameZeroChatStatusError,
@@ -1480,6 +1481,32 @@ fn frame_zero_starting_build_census_body() {
             1
         );
     }
+
+    let mount = mount_frame_zero_build_accounting(&mut setup, &replay).unwrap();
+    assert_eq!(mount.active_slots.len(), active_count);
+    assert_eq!(mount.buildings_mounted, active_count);
+    assert_eq!(FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES, 17_080);
+    assert_eq!(
+        mount.source_produced_bytes,
+        active_count * FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES
+    );
+    for claim in census.claims() {
+        let slot = usize::from(claim.slot);
+        let leader = &setup.sim.vic_leaders.slots[slot];
+        let village = 1 * REG_BUILDING_TYPE_SLOTS;
+        assert_eq!(leader.buildings_built, 1);
+        assert_eq!(leader.num_buildings[0], 1);
+        assert_eq!(leader.high_buildings[0], 1);
+        assert_eq!(leader.reg_buildings[village], 1);
+        assert_eq!(leader.gather_slots, [0; 6]);
+        assert_eq!(leader.gather_slots_high, [0; 6]);
+    }
+    setup.sim.vic_leaders.slots[first_active].reg_buildings[0] = 9;
+    assert!(matches!(
+        mount_frame_zero_build_accounting(&mut setup, &replay),
+        Err(FrameZeroBuildRegistryError::CanonicalOwnerDisagreement { .. })
+    ));
+    setup.sim.vic_leaders.slots[first_active].reg_buildings[0] = 0;
 
     let victory = setup.sim.vic_leaders.clone();
     let step8 = setup.sim.step8.clone();

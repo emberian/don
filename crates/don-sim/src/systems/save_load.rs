@@ -75,7 +75,9 @@ const MUSTER_STRATEGY_FORMAT_VERSION: u32 =
     leader_match::LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION;
 const GAME_INFO_DIFFICULTY_FORMAT_VERSION: u32 =
     leader_match::LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION;
-const FORMAT_VERSION: u32 = GAME_INFO_DIFFICULTY_FORMAT_VERSION;
+const LEADER_BUILD_ACCOUNTING_FORMAT_VERSION: u32 =
+    leader_match::LEADER_MATCH_BUILD_ACCOUNTING_FORMAT_VERSION;
+const FORMAT_VERSION: u32 = LEADER_BUILD_ACCOUNTING_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -201,6 +203,7 @@ const REQUIRED: [u16; 17] = [
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
+        LEADER_BUILD_ACCOUNTING_FORMAT_VERSION => &REQUIRED,
         GAME_INFO_DIFFICULTY_FORMAT_VERSION => &REQUIRED,
         MUSTER_STRATEGY_FORMAT_VERSION => &REQUIRED,
         PATH_STACK_METADATA_FORMAT_VERSION => &REQUIRED,
@@ -4213,6 +4216,56 @@ mod tests {
         assert_eq!(
             prior_format_stream(&upgraded, MUSTER_STRATEGY_FORMAT_VERSION),
             v21
+        );
+    }
+
+    #[test]
+    fn leader_build_accounting_v23_roundtrips_and_v22_refuses_a_lossy_downgrade() {
+        let mut original = supported_sim();
+        let row = &mut original.vic_leaders.slots[0];
+        row.buildings_built = 2;
+        row.gather_slots[2] = 1;
+        row.gather_slots_high[2] = 3;
+        row.num_buildings[22] = 1;
+        row.high_buildings[22] = 4;
+        row.reg_buildings[7 * crate::systems::victory_score::NUM_BUILD_SLOTS + 22] = 1;
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        let row = &loaded.vic_leaders.slots[0];
+        assert_eq!(row.buildings_built, 2);
+        assert_eq!(row.gather_slots[2], 1);
+        assert_eq!(row.gather_slots_high[2], 3);
+        assert_eq!(row.num_buildings[22], 1);
+        assert_eq!(row.high_buildings[22], 4);
+        assert_eq!(
+            row.reg_buildings[7 * crate::systems::victory_score::NUM_BUILD_SLOTS + 22],
+            1
+        );
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+        assert_eq!(
+            leader_match::write_for_version(&original, GAME_INFO_DIFFICULTY_FORMAT_VERSION),
+            Err(SaveError::Unsupported(
+                "Leader Building-accounting extension"
+            ))
+        );
+
+        let pristine = supported_sim();
+        let v22 = prior_format_stream(&pristine, GAME_INFO_DIFFICULTY_FORMAT_VERSION);
+        let upgraded = load_sim(&v22).unwrap();
+        assert_eq!(upgraded.vic_leaders.slots[0].buildings_built, 0);
+        assert_eq!(upgraded.vic_leaders.slots[0].gather_slots, [0; 6]);
+        assert!(upgraded.vic_leaders.slots[0]
+            .high_buildings
+            .iter()
+            .all(|&value| value == 0));
+        assert!(upgraded.vic_leaders.slots[0]
+            .reg_buildings
+            .iter()
+            .all(|&value| value == 0));
+        assert_eq!(
+            prior_format_stream(&upgraded, GAME_INFO_DIFFICULTY_FORMAT_VERSION),
+            v22
         );
     }
 

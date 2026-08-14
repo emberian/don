@@ -67,8 +67,8 @@ use crate::systems::{
     ammo, borders_fog, canonical_air_patrol_runtime, canonical_build_at_work, canonical_cast_work,
     canonical_gather_work, canonical_strafe_runtime, casters_animals, collision_blocks_live,
     combat, defeat_cleanup, economy, game_daemon_calc_danger, game_daemon_step12, groups_guys,
-    leader_unit_think_pending, leaders, movement, movement_driver, movement_live, order_dispatch,
-    production,
+    leader_market_build_accounting, leader_unit_think_pending, leaders, movement, movement_driver,
+    movement_live, order_dispatch, production,
     sparse_object_bands_authority_frontier::{RetailBand, SparseSlotLifecycle, TraversalEntry},
     special_anim_executor, step12_visibility_producer_frontier, step12_visibility_runtime,
     tech_cities, unit_inctime, victory_score, walls, wonders,
@@ -2567,6 +2567,94 @@ impl Sim {
             &mut self.step8.leaders[owner].flags,
             victory_flags2,
             step8_flags2,
+        )
+    }
+
+    fn linked_golden_market_build(
+        &self,
+        source: leader_market_build_accounting::MarketLeaderRegionAuthority,
+    ) -> Result<
+        leader_market_build_accounting::LinkedMarketBuildFacts,
+        leader_market_build_accounting::MarketLeaderAccountingError,
+    > {
+        if source.owner >= BANDED_SLOTS {
+            return Err(
+                leader_market_build_accounting::MarketLeaderAccountingError::UnsupportedSource,
+            );
+        }
+        let slot = i32::from(source.object_id)
+            .checked_sub(crate::objects::BUILD_BAND_BASE as i32)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(
+                leader_market_build_accounting::MarketLeaderAccountingError::LinkedBuildDisagreement,
+            )?;
+        let row = self
+            .world
+            .objects
+            .slot(source.owner)
+            .band(Band::Build)
+            .get(slot)
+            .copied()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(
+                leader_market_build_accounting::MarketLeaderAccountingError::LinkedBuildDisagreement,
+            )?;
+        let build = self.builds.get(row).ok_or(
+            leader_market_build_accounting::MarketLeaderAccountingError::LinkedBuildDisagreement,
+        )?;
+        let type_index = self
+            .production_runtime
+            .build_types
+            .get(row)
+            .and_then(|value| *value)
+            .ok_or(
+                leader_market_build_accounting::MarketLeaderAccountingError::LinkedBuildDisagreement,
+            )?;
+        Ok(leader_market_build_accounting::LinkedMarketBuildFacts {
+            row,
+            owner: usize::from(build.who),
+            object_id: build.object_id(),
+            type_index,
+            city: build.city,
+            active: build.flags & production::flag::ACTIVE != 0,
+        })
+    }
+
+    /// Prepare the complete Leader-owned after-image of the golden free Market only after
+    /// owner 0's object 2001 is linked, ACTIVE, typed 436, and attached to City 0.
+    pub fn prepare_golden_market_leader_accounting(
+        &self,
+        source: leader_market_build_accounting::MarketLeaderRegionAuthority,
+    ) -> Result<
+        leader_market_build_accounting::PreparedMarketLeaderAccounting,
+        leader_market_build_accounting::MarketLeaderAccountingError,
+    > {
+        let linked = self.linked_golden_market_build(source)?;
+        leader_market_build_accounting::prepare_market_leader_accounting(
+            source,
+            linked,
+            &self.vic_leaders.slots[source.owner],
+            self.step8.leaders[source.owner].flags,
+        )
+    }
+
+    /// Atomically publish the prepared Build-init, increment-stats, Market-special, and
+    /// high-water writes to the canonical Leader owner and both flag mirrors.
+    pub fn commit_golden_market_leader_accounting(
+        &mut self,
+        source: leader_market_build_accounting::MarketLeaderRegionAuthority,
+        prepared: leader_market_build_accounting::PreparedMarketLeaderAccounting,
+    ) -> Result<
+        leader_market_build_accounting::MarketLeaderAccountingReceipt,
+        leader_market_build_accounting::MarketLeaderAccountingError,
+    > {
+        let linked = self.linked_golden_market_build(source)?;
+        leader_market_build_accounting::commit_market_leader_accounting(
+            source,
+            linked,
+            prepared,
+            &mut self.vic_leaders.slots[source.owner],
+            &mut self.step8.leaders[source.owner].flags,
         )
     }
 

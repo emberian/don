@@ -298,6 +298,10 @@ pub const NUM_TYPES: usize = 806;
 pub const NUM_UNIT_SLOTS: usize = 352;
 /// `LeaderData::num_buildings` is `unsigned short[129]` at `+0x555E`, indexed by `TypeIndex - 414`.
 pub const NUM_BUILD_SLOTS: usize = 129;
+/// Land-region rows in `LeaderData::reg_buildings[64][129]`.
+pub const NUM_BUILD_REGIONS: usize = 64;
+/// Flattened region-major cells in `LeaderData::reg_buildings`.
+pub const NUM_REG_BUILDING_SLOTS: usize = NUM_BUILD_REGIONS * NUM_BUILD_SLOTS;
 /// Six primary resources: FOOD, TIMBER, WEALTH, KNOWLEDGE, METAL, OIL (`TypeIndex` 0..5).
 pub const NUM_RESOURCES: usize = 6;
 /// Player slots. `?leaders@@3VLeaders@@A` at `0x00E3A390`, stride `0x6EEC`, 8 entries.
@@ -855,11 +859,22 @@ pub struct LeaderState {
     /// swap is attempted.
     pub cities_lost: i32,
 
+    /// `+0x814` `buildings_built`, incremented by `Build::init` even before activation.
+    pub buildings_built: i32,
+    /// `+0x8A4` `gather_slots[6]`, maintained by resource-building activation.
+    pub gather_slots: [i32; NUM_RESOURCES],
+    /// `+0x8D4` `gather_slots_high[6]`, the lifetime high-water of [`Self::gather_slots`].
+    pub gather_slots_high: [i32; NUM_RESOURCES],
+
     /// `+0x940` `control`, included in production AI's effective-population value.
     pub control: i32,
 
     /// `+0x555E` `num_buildings[129]`, indexed by `TypeIndex - 414`.
     pub num_buildings: Vec<u16>,
+    /// `+0x5660` `high_buildings[129]`, indexed by the root/basic Building type.
+    pub high_buildings: Vec<u16>,
+    /// `+0x14DE` `reg_buildings[64][129]`, flattened region-major.
+    pub reg_buildings: Vec<u16>,
     /// `+0x5762` `num_units[352]`, indexed by `TypeIndex - 50`.
     pub num_units: Vec<u16>,
     /// `+0x5A22` `num_queued[806]`, indexed by raw `TypeIndex`.
@@ -942,8 +957,13 @@ impl Default for LeaderState {
             building_attrition_disabled: 0,
             cities_captured: 0,
             cities_lost: 0,
+            buildings_built: 0,
+            gather_slots: [0; NUM_RESOURCES],
+            gather_slots_high: [0; NUM_RESOURCES],
             control: 0,
             num_buildings: vec![0; NUM_BUILD_SLOTS],
+            high_buildings: vec![0; NUM_BUILD_SLOTS],
+            reg_buildings: vec![0; NUM_REG_BUILDING_SLOTS],
             num_units: vec![0; NUM_UNIT_SLOTS],
             num_queued: vec![0; NUM_TYPES],
             tech_at_start: vec![0; NUM_TYPES.div_ceil(8)],

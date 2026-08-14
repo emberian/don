@@ -19,7 +19,7 @@ use crate::systems::tech_cities::{
 use crate::systems::victory_score::{
     DefeatType, EncryptedEconomy, LeaderState, Leaders, Match, MatchEvent, ScoreConstants,
     TypeKind, TypeRow, TypeTable, VictoryOptions, VictoryType, NUM_BUILD_SLOTS, NUM_LEADERS,
-    NUM_RESOURCES, NUM_TYPES, NUM_UNIT_SLOTS,
+    NUM_REG_BUILDING_SLOTS, NUM_RESOURCES, NUM_TYPES, NUM_UNIT_SLOTS,
 };
 use crate::tick::lifecycle_host::PlayerTable;
 use crate::tick::Sim;
@@ -35,6 +35,9 @@ const CITY_POOL_FORMAT_VERSION: u32 = 12;
 pub(crate) const LEADER_MATCH_MUSTER_STRATEGY_FORMAT_VERSION: u32 = 21;
 /// First DoNSave version that carries mutable `GameInfo::difficulty`.
 pub(crate) const LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION: u32 = 22;
+/// First DoNSave version carrying the live Building activation counters needed by the
+/// golden frame-zero Market continuation.
+pub(crate) const LEADER_MATCH_BUILD_ACCOUNTING_FORMAT_VERSION: u32 = 23;
 
 pub(super) struct LeaderMatchState {
     game: Match,
@@ -471,6 +474,8 @@ fn read_match(r: &mut Reader<'_>, format_version: u32) -> Result<Match, SaveErro
 
 fn validate_leader(row: &LeaderState) -> Result<(), SaveError> {
     if row.num_buildings.len() != NUM_BUILD_SLOTS
+        || row.high_buildings.len() != NUM_BUILD_SLOTS
+        || row.reg_buildings.len() != NUM_REG_BUILDING_SLOTS
         || row.num_units.len() != NUM_UNIT_SLOTS
         || row.num_queued.len() != NUM_TYPES
         || row.tech_at_start.len() != NUM_TYPES.div_ceil(8)
@@ -634,6 +639,22 @@ fn write_leader(w: &mut Writer, row: &LeaderState, format_version: u32) -> Resul
             "Army muster strategy Leader extension",
         ));
     }
+    if format_version >= LEADER_MATCH_BUILD_ACCOUNTING_FORMAT_VERSION {
+        w.i32(row.buildings_built);
+        write_i32s(w, &row.gather_slots);
+        write_i32s(w, &row.gather_slots_high);
+        write_u16s(w, &row.high_buildings);
+        write_u16s(w, &row.reg_buildings);
+    } else if row.buildings_built != 0
+        || row.gather_slots != [0; NUM_RESOURCES]
+        || row.gather_slots_high != [0; NUM_RESOURCES]
+        || row.high_buildings.iter().any(|&value| value != 0)
+        || row.reg_buildings.iter().any(|&value| value != 0)
+    {
+        return Err(SaveError::Unsupported(
+            "Leader Building-accounting extension",
+        ));
+    }
     Ok(())
 }
 
@@ -710,6 +731,24 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
     } else {
         [0; MUSTER_STRATEGY_REGIONS]
     };
+    let (buildings_built, gather_slots, gather_slots_high, high_buildings, reg_buildings) =
+        if format_version >= LEADER_MATCH_BUILD_ACCOUNTING_FORMAT_VERSION {
+            (
+                r.i32()?,
+                read_i32_array(r)?,
+                read_i32_array(r)?,
+                read_u16s(r, NUM_BUILD_SLOTS)?,
+                read_u16s(r, NUM_REG_BUILDING_SLOTS)?,
+            )
+        } else {
+            (
+                0,
+                [0; NUM_RESOURCES],
+                [0; NUM_RESOURCES],
+                vec![0; NUM_BUILD_SLOTS],
+                vec![0; NUM_REG_BUILDING_SLOTS],
+            )
+        };
     Ok(LeaderState {
         leader_flags,
         leader_flags2,
@@ -749,8 +788,13 @@ fn read_leader(r: &mut Reader<'_>, format_version: u32) -> Result<LeaderState, S
         building_attrition_disabled,
         cities_captured,
         cities_lost,
+        buildings_built,
+        gather_slots,
+        gather_slots_high,
         control: production_ai.control,
         num_buildings,
+        high_buildings,
+        reg_buildings,
         num_units,
         num_queued,
         tech_at_start,
@@ -866,7 +910,7 @@ fn read_players(r: &mut Reader<'_>) -> Result<Option<PlayerTable>, SaveError> {
 }
 
 pub(super) fn write(sim: &Sim) -> Result<Vec<u8>, SaveError> {
-    write_for_version(sim, LEADER_MATCH_GAME_INFO_DIFFICULTY_FORMAT_VERSION)
+    write_for_version(sim, LEADER_MATCH_BUILD_ACCOUNTING_FORMAT_VERSION)
 }
 
 pub(super) fn write_for_version(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {

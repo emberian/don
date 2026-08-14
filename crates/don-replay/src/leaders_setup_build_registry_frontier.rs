@@ -29,6 +29,7 @@ use crate::setup_cities_builds::StartingSetupState;
 use crate::world_owner_frontier::sha256;
 use don_sim::systems::bhs_type_table::{BUILD_BEGIN, BUILD_END};
 use don_sim::systems::tech_cities::ty;
+use don_sim::systems::victory_score;
 
 pub const BUILD_ACTIVATE_HIGH_WATER_BEGIN_VA: u32 = 0x0062_4ba4;
 pub const BUILD_ACTIVATE_TO_LOAD_VA: u32 = 0x0062_4baa;
@@ -44,10 +45,17 @@ pub const FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES: usize =
     REG_BUILD_REGISTRY_VALUES * std::mem::size_of::<u16>();
 pub const FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES: usize =
     FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES + FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES;
+/// Exact canonical Sim bytes produced per active ordinary-setup Leader: the aggregate and
+/// regional Building counts, both high-water/count arrays, and both gather-slot arrays.
+pub const FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES: usize = std::mem::size_of::<i32>()
+    + 2 * victory_score::NUM_RESOURCES * std::mem::size_of::<i32>()
+    + 2 * victory_score::NUM_BUILD_SLOTS * std::mem::size_of::<u16>()
+    + victory_score::NUM_REG_BUILDING_SLOTS * std::mem::size_of::<u16>();
 
 const _: () = assert!(FRAME_ZERO_HIGH_BUILDINGS_WALKED_BYTES == 258);
 const _: () = assert!(FRAME_ZERO_BUILD_REGISTRY_WALKED_BYTES == 384);
 const _: () = assert!(FRAME_ZERO_BUILD_CENSUS_WALKED_BYTES == 642);
+const _: () = assert!(FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES == 17_080);
 const _: () = assert!(HIGH_BUILDINGS_END - HIGH_BUILDINGS_BEGIN == 258);
 const _: () = assert!(REG_BUILD_REGISTRY_END - REG_CITIES_BEGIN == 384);
 
@@ -73,6 +81,17 @@ pub struct FrameZeroBuildRegistryCensus {
     regional_registries: [[u16; REG_BUILD_REGISTRY_VALUES]; CHECKSUM_LEADER_SLOTS],
     active: [bool; CHECKSUM_LEADER_SLOTS],
     claims: Vec<FrameZeroBuildCensusClaim>,
+}
+
+/// Receipt for mounting the exact ordinary-setup Building accounting image into the
+/// canonical [`don_sim::tick::Sim`] Leader owner. This is an execution bridge, not a new
+/// checksum claim: later Build lifecycles must keep the same owner current.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameZeroBuildAccountingMountReceipt {
+    pub replay_payload_sha256: [u8; 32],
+    pub active_slots: Vec<u8>,
+    pub buildings_mounted: usize,
+    pub source_produced_bytes: usize,
 }
 
 impl FrameZeroBuildRegistryCensus {
@@ -176,6 +195,10 @@ pub enum FrameZeroBuildRegistryError {
         byte: usize,
         census: u8,
         conditional: u8,
+    },
+    CanonicalOwnerDisagreement {
+        slot: usize,
+        field: &'static str,
     },
 }
 
@@ -344,6 +367,91 @@ pub fn derive_frame_zero_build_registry_census(
         regional_registries,
         active,
         claims,
+    })
+}
+
+fn pristine_or_equal_u16(current: &[u16], expected: &[u16]) -> bool {
+    current.iter().all(|&value| value == 0) || current == expected
+}
+
+/// Install the setup census into `StartingSetupState.sim` before any later Build activation.
+/// The function derives every array internally from the setup receipts and replay Rules; it
+/// accepts no caller-supplied counts, root type, region, or high-water values.
+pub fn mount_frame_zero_build_accounting(
+    setup: &mut StartingSetupState,
+    replay: &Replay,
+) -> Result<FrameZeroBuildAccountingMountReceipt, FrameZeroBuildRegistryError> {
+    if setup.sim.world.frame != 0 {
+        return Err(FrameZeroBuildRegistryError::CanonicalOwnerDisagreement {
+            slot: 0,
+            field: "frame-zero Building-accounting lifetime",
+        });
+    }
+    let regional = derive_frame_zero_regional_building_census(setup)?;
+    let registry = derive_frame_zero_build_registry_census(setup, replay)?;
+    let mut staged = setup.sim.vic_leaders.clone();
+    let mut active_slots = Vec::new();
+    let mut buildings_mounted = 0usize;
+
+    for slot in 0..CHECKSUM_LEADER_SLOTS {
+        if !regional.active(slot).unwrap_or(false) {
+            continue;
+        }
+        let row = regional
+            .row(slot)
+            .expect("the setup census carries every Leader row");
+        let high = registry
+            .high_buildings(slot)
+            .expect("the setup registry carries every Leader row");
+        let leader = &mut staged.slots[slot];
+        if leader.reg_buildings.len() != row.len()
+            || leader.high_buildings.len() != high.len()
+            || leader.num_buildings.len() != victory_score::NUM_BUILD_SLOTS
+        {
+            return Err(FrameZeroBuildRegistryError::CanonicalOwnerDisagreement {
+                slot,
+                field: "Leader Building-accounting shape",
+            });
+        }
+
+        let mut aggregate = vec![0u16; victory_score::NUM_BUILD_SLOTS];
+        for region in 0..victory_score::NUM_BUILD_REGIONS {
+            let begin = region * victory_score::NUM_BUILD_SLOTS;
+            for (building, value) in aggregate.iter_mut().enumerate() {
+                *value = value.wrapping_add(row[begin + building]);
+            }
+        }
+        let build_count = aggregate
+            .iter()
+            .fold(0u16, |count, value| count.wrapping_add(*value));
+        if !pristine_or_equal_u16(&leader.reg_buildings, row)
+            || !pristine_or_equal_u16(&leader.high_buildings, high)
+            || !pristine_or_equal_u16(&leader.num_buildings, &aggregate)
+            || (leader.buildings_built != 0 && leader.buildings_built != i32::from(build_count))
+            || leader.gather_slots != [0; victory_score::NUM_RESOURCES]
+            || leader.gather_slots_high != [0; victory_score::NUM_RESOURCES]
+        {
+            return Err(FrameZeroBuildRegistryError::CanonicalOwnerDisagreement {
+                slot,
+                field: "Leader Building-accounting before-image",
+            });
+        }
+
+        leader.reg_buildings.copy_from_slice(row);
+        leader.high_buildings.copy_from_slice(high);
+        leader.num_buildings.copy_from_slice(&aggregate);
+        leader.buildings_built = i32::from(build_count);
+        active_slots.push(slot as u8);
+        buildings_mounted += usize::from(build_count);
+    }
+
+    setup.sim.vic_leaders = staged;
+    let source_produced_bytes = active_slots.len() * FRAME_ZERO_BUILD_ACCOUNTING_SOURCE_BYTES;
+    Ok(FrameZeroBuildAccountingMountReceipt {
+        replay_payload_sha256: setup.receipt.replay_payload_sha256,
+        active_slots,
+        buildings_mounted,
+        source_produced_bytes,
     })
 }
 

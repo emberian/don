@@ -15,6 +15,9 @@ use std::fmt;
 use don_sim::objects::{Band, BUILD_BAND_BASE};
 use don_sim::rng::Random;
 use don_sim::systems::bhs_type_table::TypeBuiltinState;
+use don_sim::systems::leader_market_build_accounting::{
+    MarketLeaderAccountingError, MarketLeaderAccountingReceipt, MarketLeaderRegionAuthority,
+};
 use don_sim::systems::leader_produce_building_blocked_site_prefix::{
     apply_sim_leader_produce_building_blocked_site_prefix,
     apply_sim_leader_produce_building_blocked_site_raw_zero_footprint,
@@ -36,6 +39,7 @@ use don_sim::systems::leader_tribe_bonus_runtime::{
     has_tribe_bonus, CanonicalConquestRacialPowers, TribeBonusInputError, TribeBonusInputs,
     TribeBonusReceipt,
 };
+use don_sim::systems::map_terrain::{Coord, WCoord};
 use don_sim::systems::production::{flag, runtime::LiveProductionRuntime, Footprint};
 use don_sim::systems::save_load::SaveError;
 use don_sim::systems::sparse_object_bands_authority_frontier::{RetailBand, RetailObjectAddress};
@@ -501,6 +505,32 @@ pub enum GoldenStartingMarketBindError {
     Cities(CitiesRuntimeError),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoldenStartingMarketLeaderAccountingError {
+    InvalidSetupEntryAuthority,
+    Snapshot(SaveError),
+    EntrySnapshotMismatch,
+    WorldRegionUnavailable,
+    Accounting(MarketLeaderAccountingError),
+}
+
+impl fmt::Display for GoldenStartingMarketLeaderAccountingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "golden starting Market Leader accounting refused: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for GoldenStartingMarketLeaderAccountingError {}
+
+impl From<MarketLeaderAccountingError> for GoldenStartingMarketLeaderAccountingError {
+    fn from(value: MarketLeaderAccountingError) -> Self {
+        Self::Accounting(value)
+    }
+}
+
 impl fmt::Display for GoldenStartingMarketBindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "golden starting Market City receipt refused: {self:?}")
@@ -885,6 +915,69 @@ pub fn bind_golden_starting_market_city(
         source_produced_city_bytes: after_cities.bytes_walked,
         installed_in_scoreboard: false,
     })
+}
+
+/// Consume the digest-bound lifecycle/setup-entry join and mount the missing Leader-owned half
+/// of the same retail Market call. The current Sim must still equal the authority's post-Market
+/// setup-entry snapshot; the commit changes only canonical Leader accounting and its exact
+/// step-8 flag mirror.
+pub fn commit_golden_starting_market_leader_accounting(
+    sim: &mut Sim,
+    authority: &GoldenStartingMarketSetupEntryAuthority,
+) -> Result<MarketLeaderAccountingReceipt, GoldenStartingMarketLeaderAccountingError> {
+    if authority.revision == 0
+        || authority.composition_digest == [0; 32]
+        || authority.composition_digest != golden_starting_market_setup_entry_digest(authority)
+        || authority.schema_version != GOLDEN_STARTING_MARKET_SETUP_ENTRY_SCHEMA_VERSION
+        || authority.replay_file_sha256 != REPLAY_FILE_SHA256
+        || authority.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256
+        || authority.before_sim_sha256 == [0; 32]
+        || authority.entry_sim_sha256 == [0; 32]
+        || authority.before_sim_sha256 == authority.entry_sim_sha256
+        || authority.native_trace_sha256 == [0; 32]
+        || authority.footprint_receipt_sha256 == [0; 32]
+        || authority.market_build_o != DUTCH_STARTING_MARKET_O
+        || authority.market_city_slot != STARTING_CITY_SLOT
+        || authority.space_grade != 4
+        || authority.source_produced_city_bytes == 0
+        || sim.world.random.state() != authority.random_state_after
+        || build_row(sim, STARTING_VILLAGE_O) != Some(authority.center_build_row)
+        || build_row(sim, DUTCH_STARTING_MARKET_O) != Some(authority.market_build_row)
+    {
+        return Err(GoldenStartingMarketLeaderAccountingError::InvalidSetupEntryAuthority);
+    }
+    let snapshot = frame379_setup_snapshot_sha256(sim)
+        .map_err(GoldenStartingMarketLeaderAccountingError::Snapshot)?;
+    if snapshot != authority.entry_sim_sha256 {
+        return Err(GoldenStartingMarketLeaderAccountingError::EntrySnapshotMismatch);
+    }
+
+    let market = sim
+        .builds
+        .get(authority.market_build_row)
+        .ok_or(GoldenStartingMarketLeaderAccountingError::InvalidSetupEntryAuthority)?;
+    let (x, y) = market.position();
+    let wx = WCoord::from_coord(Coord(x)).0;
+    let wy = WCoord::from_coord(Coord(y)).0;
+    if !sim.map.world.valid_w(wx, wy) {
+        return Err(GoldenStartingMarketLeaderAccountingError::WorldRegionUnavailable);
+    }
+    let region = u8::try_from(sim.map.world.wdata(wx, wy).region)
+        .ok()
+        .filter(|region| usize::from(*region) < 64)
+        .ok_or(GoldenStartingMarketLeaderAccountingError::WorldRegionUnavailable)?;
+    let source = MarketLeaderRegionAuthority {
+        capture_revision: authority.revision,
+        native_trace_sha256: authority.native_trace_sha256,
+        after_sim_sha256: authority.entry_sim_sha256,
+        owner: usize::from(OWNER),
+        object_id: DUTCH_STARTING_MARKET_O as i16,
+        type_index: DUTCH_STARTING_MARKET_TYPE,
+        region,
+    };
+    let prepared = sim.prepare_golden_market_leader_accounting(source)?;
+    sim.commit_golden_market_leader_accounting(source, prepared)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
