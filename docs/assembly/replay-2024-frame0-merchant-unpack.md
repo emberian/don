@@ -69,10 +69,29 @@ The first qualifying tile calls
 
 `ObjectsData::find_good_at(tile_x >> 2, tile_y >> 2, who, 0, 0)` at `0x0065bec0`.
 
-That return value is now the first typed child. `Sim` deliberately has no canonical frame-zero
-base-`Good` pool/`good_mark`; WData resource/occupancy bits do not prove which active Good slot
-the retail array search returns. The child binds the parent request, setup authority revision,
-actor identity, exact scan kind/index, TCoord/WCoord, TData mask, and all five call arguments.
+That return value is the first child emitted by the terrain prefix. Its fifth argument is zero,
+which selects a materially narrower retail arm than a whole-array Good scan. The continuation in
+`setup_2024_frame0_merchant_good_lookup.rs` reads the requested WData cell's `down/down_who`,
+follows every nonnegative Object address in exact chain order, and accepts only terminal
+`down == -2`. Live Unit links come from the canonical World columns, Build links from the exact
+opaque Build image, Wall links from `WallState`, and every address is resolved through the
+canonical sparse object registry before its link is read.
+
+The terminal `down_who` is the base-Good slot. This arm does not read `good_mark`, array order,
+or Good coordinates. It filters the selected Good's active bit, dereferences its type pointer,
+rejects TypeIndex 5 (Oil), then—because the fourth argument is zero and `who` is nonnegative—
+calls `LeaderData::type_avail(good_type, 1)` at `0x006e33a0`. `OilGoodRuntime` supplies the exact
+base-Good slot image; the historical name does not restrict its rows to Oil. The first remaining
+typed child is now that exact Leader/type query, bound to the complete WData/Object/Good read
+prefix. A false installed answer resolves the lookup to `-1`; a true answer resolves it to the
+Good TypeIndex. Neither branch mutates state or consumes RNG.
+
+Malformed or cyclic object chains, an absent terminal Good slot, and an active Good with a null
+type pointer fail closed. No WData resource/occupancy bit is treated as proof of a Good identity,
+and no `good_mark`-bounded scan is invented for this call shape. The original search child still
+binds the parent request, setup authority revision, actor identity, exact scan kind/index,
+TCoord/WCoord, TData mask, and all five call arguments.
+
 If the entire radius-four terrain scan contains no reachable call, `calc_gather` returns zero,
 so `find_merchant_spot` returns `NotFound` before its outer candidate loop; the local proof is
 composed directly into the existing `FAILED_UNPACK_TAIL_VA` boundary.
