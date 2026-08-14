@@ -407,14 +407,43 @@ impl PathData {
 /// the *next* waypoint. `Unit::move_step` pops when it arrives. `Stack<PathData>::walk_data` is
 /// invoked from `Unit::walk_data` `0x0060CF40` behind mask bit 2, which is why this type is on
 /// the `units` checksum channel.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathStack {
     pub records: Vec<PathData>,
+    /// `Stack<PathData>+0x04`: allocated record capacity. Retail walks this before length,
+    /// so clearing a path must retain it and save/resume must not reconstruct it from length.
+    pub capacity: i32,
+    /// `Stack<PathData>+0x0c`: signed one-byte growth hint. Unit paths are initialized with
+    /// ten, but imported retail state may carry a different exact value.
+    pub increment: i8,
+}
+
+impl Default for PathStack {
+    fn default() -> Self {
+        Self {
+            records: Vec::with_capacity(crate::container::STACK_INITIAL_SIZE as usize),
+            capacity: crate::container::STACK_INITIAL_SIZE,
+            increment: 10,
+        }
+    }
 }
 
 impl PathStack {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Construct one exact walked Stack header. Invalid allocation history is rejected before
+    /// a caller can install records or publish a partial canonical owner.
+    pub fn with_header(capacity: i32, increment: i8) -> Option<Self> {
+        usize::try_from(capacity).ok()?;
+        Some(Self {
+            records: Vec::new(),
+            capacity,
+            increment,
+        })
+    }
+    pub fn checksum_header(&self) -> (i32, i32, i8) {
+        (self.capacity, self.len(), self.increment)
     }
     pub fn len(&self) -> i32 {
         self.records.len() as i32
@@ -423,6 +452,19 @@ impl PathStack {
         self.records.is_empty()
     }
     pub fn push(&mut self, r: PathData) {
+        if self.records.len() as i32 >= self.capacity {
+            let growth = crate::container::increase_by(i16::from(self.increment), self.capacity);
+            assert!(
+                growth > 0,
+                "Stack<PathData>::push cannot grow capacity {} with increment {}",
+                self.capacity,
+                self.increment
+            );
+            self.capacity = self
+                .capacity
+                .checked_add(growth)
+                .expect("Stack<PathData> capacity overflow");
+        }
         self.records.push(r);
     }
     pub fn pop(&mut self) -> Option<PathData> {
@@ -446,11 +488,14 @@ impl PathStack {
         self.records.pop().unwrap()
     }
 
-    /// Little-endian bytes in record order, which is what `Stack<PathData>::walk_data` hands the
-    /// `DataWalk` visitor. Feed to [`adler32`] to produce this unit's contribution to the
-    /// `units` channel.
+    /// Exact little-endian `Stack<PathData>::walk_data` image: capacity, length, the signed
+    /// increment byte, then records in backing-array order. Feed to [`adler32`] to produce this
+    /// path's contribution to the retail units channel.
     pub fn walk_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.records.len() * 16);
+        let mut out = Vec::with_capacity(9 + self.records.len() * 16);
+        out.extend_from_slice(&self.capacity.to_le_bytes());
+        out.extend_from_slice(&self.len().to_le_bytes());
+        out.push(self.increment as u8);
         for r in &self.records {
             out.extend_from_slice(&r.to_x.to_le_bytes());
             out.extend_from_slice(&r.to_y.to_le_bytes());
@@ -2543,7 +2588,8 @@ mod tests {
             flags: 8,
         });
         let b = s.walk_bytes();
-        assert_eq!(b.len(), 32);
+        assert_eq!(b.len(), 9 + 32);
+        assert_eq!(&b[..9], &[10, 0, 0, 0, 2, 0, 0, 0, 10]);
         // adler starts at 1 for every channel
         let c = adler32(1, &b);
         assert_ne!(c, 1);
@@ -2562,6 +2608,11 @@ mod tests {
             flags: 4,
         });
         assert_ne!(adler32(1, &t.walk_bytes()), c);
+
+        let mut different_history = s.clone();
+        different_history.capacity = 20;
+        assert_ne!(different_history.walk_bytes(), b);
+        assert_ne!(adler32(1, &different_history.walk_bytes()), c);
     }
 
     #[test]

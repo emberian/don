@@ -107,14 +107,7 @@ pub fn order_queue_digest(queue: &OrderQueue) -> u64 {
 /// Shared with [`crate::systems::garrison_dispatch`]; both arm adapters need the same
 /// dispatcher-side fingerprint and duplicating it would let the two drift.
 pub fn path_stack_digest(path: &PathStack) -> u64 {
-    let mut bytes = Vec::with_capacity(path.records.len() * 16);
-    for r in &path.records {
-        bytes.extend_from_slice(&r.to_x.to_le_bytes());
-        bytes.extend_from_slice(&r.to_y.to_le_bytes());
-        bytes.extend_from_slice(&r.tolerance.to_le_bytes());
-        bytes.extend_from_slice(&r.flags.to_le_bytes());
-    }
-    fnv1a(&bytes)
+    fnv1a(&path.walk_bytes())
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {

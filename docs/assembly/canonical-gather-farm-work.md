@@ -1,11 +1,13 @@
 # Canonical saved Farm/Gather grow transaction
 
 Status: **production `Sim::unit_work`; four stable-animation grows plus exact owner-2/o-5
-animation 8→35 + Farm grow; complete UnitGuys owner; DoNSave v19 save/load/resume; zero RNG**.
+animation 8→35 + Farm grow; complete UnitGuys owner; DoNSave v20 save/load/resume; zero RNG**.
 
-Closure status remains **RED**. The second animation-changing Farm node, owner 2 Unit `o=9`,
-is queued behind a live `MOVE_TO`; reaching it charges the still-open movement-completion child.
-Relocation, snip, periodic search, and retirement children also remain charged.
+Closure status remains **RED**. The next saved Farm continuation, owner 2 Unit `o=9`, is queued
+behind a live `MOVE_TO`. Its exact queue, Path allocation history, Guy, and target Farm now have
+canonical byte-identical save/resume ownership, but advancing that path still charges the open
+movement/collision, Move completion, and Guy clock children. Relocation, snip, periodic search,
+and retirement children also remain charged.
 
 The fresh save contains 17 Farm `GATHER` nodes. A structural walk and exact retail
 branch audit found four bounded, checksum-changing continuations whose full mutable surface is
@@ -107,6 +109,45 @@ The literal call sequence at `Unit::do_gather` `0x005eff7b..0x005eff96` pushes
 type-50/gpiece-6336 animation packet makes the class-8 to class-35 arm reset exactly those
 four Guy fields; no `Random::get` call is reached.
 
+## Exact queued owner-2/o-9 frontier
+
+The fresh save's owner-2 Unit `(o,uid,type)=(9,18,50)` is the first remaining Farm witness
+whose Gather node is not current. The complete Unit record is `0x5982f..0x59a1b`, SHA-256
+`bd554cbdddc2a13726a3ca10594da4deadeba0b879a92502c091744166567fdd`.
+Its current coordinate is `(2013,32688)` and its fixed Unit destination is `(2232,32760)`.
+
+The exact `Stack<PathData>` at `0x598db..0x598f4` has
+`(capacity,length,increment)=(10,1,10)` followed by the one record
+`(to_x,to_y,tolerance,flags)=(2232,32760,0,1)`. Its complete 25-byte walk has SHA-256
+`34ebba9b0985dc83e49adfe8a7f563e8ee1fa8446de15e0a912364e930471c3a`.
+DoNSave v20 now preserves both allocation fields rather than reconstructing them from the
+logical records. `PathStack::walk_bytes` and transaction digests include the same nine-byte
+header, so a capacity-only or increment-only divergence is observable.
+
+The exact two-node OrderList is `0x598f4..0x5996e`, SHA-256
+`01676b4d4e9dc4ded959b63302cb0660bad8c2f15e6aea7591721b83086af8c6`:
+
+| execution position | node | exact evidence |
+|---:|---|---|
+| 0 | `MOVE_TO`, flags 1, `(x,y)=(2232,32760)`, angle `0x4ad30000`, dest 1, facing -1, offsets `(696,504)` | 77-byte payload SHA-256 `973ca9ab67548b69d3011e43756819caa3a5879a4762d9e2322ef6fa6e70c227`; 82-byte node SHA-256 `1cc91021f89a3d1f9529d437eee14300bc0e70cae7d81811a1b757023ff43350` |
+| 1 | `GATHER` target `(2,2002,2)`, Farm property 417, `tx=ty=-1`, `(goto,nonflat,dist,been)=(1,0,0,1)` | 31-byte payload SHA-256 `59a882603b91746be7630220e7377f82628c2eb622b597dfac040e94bec4efd7`; 36-byte node SHA-256 `4d3a3cfda5dd0ac43de8f47725bc096ab44fc53c462c85187692d5b3985ca623` |
+
+The Guys array at `0x5996e..0x59a1b` has exact shape `(1,1,1,0)` and SHA-256
+`95e6f87337705c74c82eedcbdceb9fc4acc6f979105f0e050283c0180acea7ac`.
+Its sole 155-byte Guy image has SHA-256
+`b74f23ab73abd60305923d6659f7cdf8229c3262006a059a733da83585d86e15` and retains
+animation 8, clock `3<15`, last speed 24, average speed 13, angle `0x4d1c0000`, and the
+exact current/last/desire coordinates. Target Farm index 6 is `(who,o)=(2,2002)`; its
+190-byte image at `0xe3a49..0xe3b07` has SHA-256
+`fe4df1d7d1bb80e87f5ffb2239192db4f6c54737fcfd6f463a1703cdc7c89f67`.
+
+`canonical_gather_queued_move_frontier.rs` reconstructs those literal Path, both nodes,
+Guys, and Farm images, saves and reloads them, and proves a production frame does not skip or
+reorder the Gather node while the collision/Guy continuation is unavailable. That is exact
+frontier evidence, not completion credit: the current compact `Sim::do_move` still lacks the
+live type turn-rate/Guy composition and full arrival epilogue, and the research-only Unit
+`inc_time` path is deliberately not mounted.
+
 ## Exact transaction and ownership
 
 The host atomically revalidates actor Handle/identity/type, complete current Gather order,
@@ -128,6 +169,10 @@ DoNSave v19 adds the per-live-row optional UnitGuys section. A present row prese
 increment, flags, `guy_mark`, null topology, and every 155-byte Guy image without float/NaN
 normalization. Formats v7–v18 restore rows as explicitly unmaterialized; they do not fabricate
 empty Guy arrays. Whole-owner stale comparison is byte-based, so equal NaN payloads remain equal.
+DoNSave v20 extends the existing Path section with the walked Stack capacity and signed-byte
+increment. A v19 stream reconstructs the historical constructor/growth sequence; v20 retains
+arbitrary imported allocation history exactly and rejects negative, undersized, or unbounded
+capacity before allocation.
 DoNSave v16 added the Farms section, including allocation metadata and every walked record.
 The Build's existing `dock/farm/fort/oil_well` i16 union is accepted only for Farm type and
 must bind exactly one valid Farm record `(who,o,index)`. Older saves load with an empty
@@ -147,8 +192,9 @@ With the instruction-exact x-then-y lookup, the 17 images split into two type-on
 nine already-stable status-three animation no-ops, four already-stable status-one grows, and
 two grow paths which require a Guy animation mutation. The four stable grows are owner/unit
 `0/7`, `2/1`, `3/3`, and `1/8`; all are admitted by the same atomic production transaction.
-The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9 remains charged behind its
-current MOVE_TO. No fresh witness reaches relocation or snip. Expired animation, periodic
+The immediate owner-2/o-5 mutation is now admitted. Owner-2/o-9's complete saved frontier is
+owned but remains charged behind its current MOVE_TO. No fresh current Gather witness reaches
+relocation or snip. Expired animation, periodic
 special effect, invalid Farm binding, Mine, capacity and retirement still refuse before a write.
 
 Focused gates:
@@ -157,6 +203,7 @@ Focused gates:
 cargo test -p don-sim --test canonical_gather_farm_runtime
 cargo test -p don-sim --test canonical_gather_farm_animation_runtime
 cargo test -p don-sim --test canonical_gather_farm_xy_index
+cargo test -p don-sim --test canonical_gather_queued_move_frontier
 cargo test -p don-sim --test canonical_gather_runtime --test canonical_gather_saved_work
 cargo test -p don-sim save_load --lib
 cargo check -p don-sim

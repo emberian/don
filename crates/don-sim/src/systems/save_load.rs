@@ -69,7 +69,9 @@ const ARMIES_FORMAT_VERSION: u32 = 17;
 const SCENARIO_DATA_FORMAT_VERSION: u32 = 18;
 /// First version persisting each live Unit's optional, complete walked Guys-array owner.
 const UNIT_GUYS_FORMAT_VERSION: u32 = 19;
-const FORMAT_VERSION: u32 = UNIT_GUYS_FORMAT_VERSION;
+/// First version persisting `Stack<PathData>` allocation capacity and signed-byte increment.
+const PATH_STACK_METADATA_FORMAT_VERSION: u32 = 20;
+const FORMAT_VERSION: u32 = PATH_STACK_METADATA_FORMAT_VERSION;
 /// First version reserving the retail `RecycledOrderNode::metric` byte per order-list node.
 const ORDER_NODE_METRIC_FORMAT_VERSION: u32 = 13;
 /// First version carrying the typed, extension-safe per-order payload envelope.
@@ -195,6 +197,7 @@ const REQUIRED: [u16; 17] = [
 /// The root sections a stream of `version` must carry, in order.
 fn required_sections(version: u32) -> &'static [u16] {
     match version {
+        PATH_STACK_METADATA_FORMAT_VERSION => &REQUIRED,
         UNIT_GUYS_FORMAT_VERSION => &REQUIRED,
         SCENARIO_DATA_FORMAT_VERSION => &REQUIRED[..16],
         ARMIES_FORMAT_VERSION => &REQUIRED[..15],
@@ -1578,7 +1581,7 @@ fn read_world_state(
     })
 }
 
-fn write_paths(sim: &Sim) -> Result<Vec<u8>, SaveError> {
+fn write_paths(sim: &Sim, format_version: u32) -> Result<Vec<u8>, SaveError> {
     let live = sim.world.live_count() as usize;
     if sim.unit_type.len() != live
         || sim.paths.len() != live
@@ -1603,6 +1606,18 @@ fn write_paths(sim: &Sim) -> Result<Vec<u8>, SaveError> {
         w.bool(unit.can_board_transport);
         w.bool(unit.small_footprint);
         w.bool(unit.can_transport);
+        if format_version >= PATH_STACK_METADATA_FORMAT_VERSION {
+            let (capacity, length, increment) = sim.paths[row].checksum_header();
+            if capacity < 0
+                || capacity as usize > MAX_PATH_RECORDS
+                || length < 0
+                || length > capacity
+            {
+                return Err(SaveError::Invalid("PathStack allocation metadata"));
+            }
+            w.i32(capacity);
+            w.i8(increment);
+        }
         if sim.paths[row].records.len() > MAX_PATH_RECORDS {
             return Err(SaveError::Limit("path records"));
         }
@@ -1620,6 +1635,7 @@ fn write_paths(sim: &Sim) -> Result<Vec<u8>, SaveError> {
 fn read_paths(
     data: &[u8],
     expected_types: &[i32],
+    format_version: u32,
 ) -> Result<(Vec<i32>, Vec<movement::PathStack>, Vec<movement::PathUnit>), SaveError> {
     let mut r = Reader::new(data);
     let n = r.len(MAX_UNITS, "path unit count")?;
@@ -1643,8 +1659,23 @@ fn read_paths(
             small_footprint: r.bool()?,
             can_transport: r.bool()?,
         });
+        let header = if format_version >= PATH_STACK_METADATA_FORMAT_VERSION {
+            Some((r.i32()?, r.i8()?))
+        } else {
+            None
+        };
         let count = r.len(MAX_PATH_RECORDS, "path records")?;
-        let mut path = movement::PathStack::new();
+        let mut path = match header {
+            Some((capacity, increment)) => {
+                if capacity < 0 || capacity as usize > MAX_PATH_RECORDS || count > capacity as usize
+                {
+                    return Err(SaveError::Invalid("PathStack allocation metadata"));
+                }
+                movement::PathStack::with_header(capacity, increment)
+                    .ok_or(SaveError::Invalid("PathStack allocation metadata"))?
+            }
+            None => movement::PathStack::new(),
+        };
         path.records.reserve(count);
         for _ in 0..count {
             path.push(movement::PathData {
@@ -3607,7 +3638,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(MAP, map),
             Chunk::leaf(OBJECTS, write_world_state(&state)?),
             Chunk::leaf(LEADERS, write_leaders(sim)?),
-            Chunk::leaf(PATHS, write_paths(sim)?),
+            Chunk::leaf(PATHS, write_paths(sim, FORMAT_VERSION)?),
             Chunk::leaf(ITEMS, items),
             Chunk::leaf(BUILDS, builds),
             Chunk::leaf(PLAYER_SETUP, write_player_setup(sim)?),
@@ -3714,7 +3745,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     let builds = read_builds(builds, &world_state)?;
     let expected_types = world_state.unit_type_id.clone();
     let (leaders, market) = read_leaders(leaders)?;
-    let (unit_type, paths, path_unit) = read_paths(paths, &expected_types)?;
+    let (unit_type, paths, path_unit) = read_paths(paths, &expected_types, core.format_version)?;
     let item_runtime = read_items(items, &map.world)?;
     let player_setup = match sections[7] {
         Some(data) => read_player_setup(data)?,
@@ -4081,6 +4112,47 @@ mod tests {
     }
 
     #[test]
+    fn path_stack_v20_roundtrips_allocation_history_and_v19_upgrades_canonically() {
+        let mut original = supported_sim();
+        let row = 0;
+        let records = original.paths[row].records.clone();
+        let mut exact = movement::PathStack::with_header(37, -1).unwrap();
+        for record in records {
+            exact.push(record);
+        }
+        original.paths[row] = exact;
+
+        let bytes = save_sim(&original).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.paths[row], original.paths[row]);
+        assert_eq!(loaded.paths[row].checksum_header(), (37, 1, -1));
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+        assert_eq!(loaded.channel_digest(), original.channel_digest());
+
+        let v19 = prior_format_stream(&original, UNIT_GUYS_FORMAT_VERSION);
+        let upgraded = load_sim(&v19).unwrap();
+        assert_eq!(upgraded.paths[row].checksum_header(), (10, 1, 10));
+        assert_eq!(
+            prior_format_stream(&upgraded, UNIT_GUYS_FORMAT_VERSION),
+            v19
+        );
+    }
+
+    #[test]
+    fn path_stack_v20_rejects_capacity_shorter_than_length() {
+        let original = supported_sim();
+        let mut bytes = save_sim(&original).unwrap();
+        let data = section_offset(&bytes, PATHS) + 8;
+        // count:u32, then row-0 type:i32 + PathUnit(i32 + three bools), then capacity:i32.
+        let capacity = data + 4 + 4 + 4 + 3;
+        bytes[capacity..capacity + 4].copy_from_slice(&0i32.to_le_bytes());
+        assert_eq!(
+            load_error(&bytes),
+            SaveError::Invalid("PathStack allocation metadata")
+        );
+    }
+
+    #[test]
     fn unit_guys_v19_shape_topology_and_identity_corruption_fail_closed() {
         let mut original = supported_sim();
         let row = 0;
@@ -4169,6 +4241,8 @@ mod tests {
                     data[..4].copy_from_slice(&format_version.to_le_bytes());
                 } else if child.header.id == OBJECTS {
                     data = write_world_state_for_version(&state, format_version).unwrap();
+                } else if child.header.id == PATHS {
+                    data = write_paths(sim, format_version).unwrap();
                 } else if child.header.id == LEADER_MATCH {
                     data = leader_match::write_for_version(sim, format_version).unwrap();
                 }
@@ -4978,6 +5052,8 @@ mod tests {
                 } else if child.header.id == OBJECTS {
                     data = write_world_state_for_version(&state, SPARSE_OBJECTS_FORMAT_VERSION)
                         .unwrap();
+                } else if child.header.id == PATHS {
+                    data = write_paths(&original, SPARSE_OBJECTS_FORMAT_VERSION).unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })
@@ -5031,6 +5107,8 @@ mod tests {
                     data[..4].copy_from_slice(&GROUPS_FORMAT_VERSION.to_le_bytes());
                 } else if child.header.id == OBJECTS {
                     data = write_world_state_for_version(&state, GROUPS_FORMAT_VERSION).unwrap();
+                } else if child.header.id == PATHS {
+                    data = write_paths(&original, GROUPS_FORMAT_VERSION).unwrap();
                 }
                 Chunk::leaf(child.header.id, data)
             })

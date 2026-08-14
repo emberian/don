@@ -2,7 +2,8 @@
 
 Status: **production `Sim::unit_work` hook; revision-bound fresh-SVX Camp/Farm authority;
 Camp wait-zero/all-gathering/RNG tail plus four stable Farm grows and the exact owner-2/o-5
-Guy animation 8→35/Farm-grow transaction**. Overall Gather closure remains **RED**.
+Guy animation 8→35/Farm-grow transaction; DoNSave v20 exact queued owner-2/o-9
+Move/Path/Guy frontier**. Overall Gather closure remains **RED**.
 
 The full fresh Unit census found 29 `GATHER` nodes, making Gather the dominant concrete
 saved executor.  `crates/don-sim/src/systems/canonical_gather_work.rs` binds all 29 exact
@@ -161,6 +162,11 @@ but resets the content adapter to default, so Gather work fails closed until con
 the matching authority. Pre-v19 streams mark every row unmaterialized rather than inventing an
 empty Guys array.
 
+DoNSave v20 also owns the complete walked `Stack<PathData>` header. Capacity and the signed-byte
+increment are checksum state, not derivable scratch: clearing a Stack preserves them, and equal
+waypoints with different allocation history desynchronize retail. V19 and earlier streams retain
+their historical constructor/growth reconstruction; v20 saves imported histories byte-for-byte.
+
 The integration test installs the exact first Camp image from the fresh SVX on owner 0 Unit
 `o=3`, targeting Build `o=2001, uid=1`.  Its `wait=295`, `tx=270`, `ty=116`, and payload
 SHA-256 is
@@ -186,8 +192,10 @@ reschedule), stale compare/exchange, exact `check_gatherers` unlink publication,
 Guys authority, and zero writes on every refusal.
 
 This is production credit for the exact Camp branches and Farm continuations above, not general
-Gather closure. The other animation-changing Farm node, owner 2 Unit `o=9`, is queued behind a
-live `MOVE_TO` and therefore charges movement completion. Residual Farm relocation/snip, Mine,
+Gather closure. Owner 2 Unit `o=9` now has literal executable evidence and byte-identical
+save/resume ownership for its current Move node, queued Gather node, Path header/record, complete
+Guy, and target Farm. It remains queued behind a live `MOVE_TO`, so movement/collision, complete
+arrival order surgery, and the Guy clock still stay charged. Residual Farm relocation/snip, Mine,
 capacity phase, destination/collision, resource payout, retirement/replacement, and
 containment-special arms remain explicit boundaries.
 
@@ -198,5 +206,6 @@ CARGO_TARGET_DIR=/tmp/don-gather-runtime-target \
   cargo test -p don-sim --test canonical_gather_saved_work \
   --test canonical_gather_runtime \
   --test canonical_gather_farm_runtime \
-  --test canonical_gather_farm_animation_runtime
+  --test canonical_gather_farm_animation_runtime \
+  --test canonical_gather_queued_move_frontier
 ```

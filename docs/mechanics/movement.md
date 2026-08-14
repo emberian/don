@@ -317,9 +317,12 @@ optional sections are the path stack, the order list, and the garrison `PtrArray
 path buffer this lane produces is checksummed state, not scratch** — a wrong waypoint is a desync,
 not a cosmetic difference.
 
-`PathStack::walk_bytes` emits records in stack order as 4 little-endian `i32` each;
-`adler32(1, bytes)` is the channel accumulator. The module asserts the adler primitive against the
-zlib definition and asserts that record order changes the result.
+`PathStack::walk_bytes` emits the exact nine-byte Stack header first—capacity and length as
+little-endian i32, then the signed-byte increment—followed by records in stack order as four
+little-endian i32 each. `adler32(1, bytes)` is the channel accumulator. The module asserts the
+adler primitive against the zlib definition and proves both record order and allocation history
+change the result. DoNSave v20 preserves the same header; older streams reconstruct the default
+capacity-ten/increment-ten growth sequence.
 
 Separately, `CheckSums::check_pathfinder` `0x00936E30` is **not** one of the fifteen `check_all`
 channels but is not empty either: it walks a flat 108-byte window at `pathfinder + 0x58`, i.e. the

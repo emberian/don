@@ -161,9 +161,9 @@ promote a fidelity tier or claim behavioral parity.
    placement, or all Unit links.
 3. Expose or install canonical live ptype authority. `World` currently keeps its Unit type
    sidecar private to the owner.
-4. Preserve exact path container history. `tick::Sim.paths` currently uses the semantic
-   `movement::PathStack`, which drops the retail Stack capacity/increment that the checksum
-   hashes; an `EngineStack<PathData>` owner or exact sidecar is required.
+4. Map the replay owner's exact path container history into `tick::Sim.paths`. The Sim-side
+   `movement::PathStack` now owns capacity/increment and DoNSave v20 preserves them, but the
+   replay-to-Sim composition still needs to prove and publish the same header with the records.
 5. Add canonical ownership for `ObjectData::launching`, concrete OrderList nodes, and
    recursive `PtrArray<Guy>` state.
 6. Only after those owners are populated should replay install this direct Units channel

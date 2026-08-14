@@ -266,6 +266,18 @@ pub struct MoveOrderState {
     pub in_group: i32,
 }
 
+/// Bytes walked by the shared retail `MoveOrder::walk_data` body: the inherited one-byte
+/// `UnitOrder::flags` plus its 76-byte fixed scalar range.
+pub const RETAIL_MOVE_ORDER_WALKED_BYTES: usize = 77;
+/// `OrderList::walk_data` prefixes every concrete order with `type:i32, metric:u8`.
+pub const RETAIL_MOVE_ORDER_NODE_BYTES: usize = 5 + RETAIL_MOVE_ORDER_WALKED_BYTES;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetailMoveOrderImageError {
+    UnsupportedKind(OrderIndex),
+    MissingMoveState,
+}
+
 impl Default for MoveOrderState {
     fn default() -> Self {
         Self {
@@ -573,6 +585,65 @@ impl Order {
             move_state: Some(MoveOrderState::fresh(x, y)),
             ..Order::default()
         }
+    }
+
+    /// Exact retail walk image for the four concrete classes served by the shared
+    /// `MoveOrder::walk_data` body at `0x00482e70`.
+    pub fn retail_move_walk_image(
+        &self,
+    ) -> Result<[u8; RETAIL_MOVE_ORDER_WALKED_BYTES], RetailMoveOrderImageError> {
+        if !matches!(
+            self.kind,
+            OrderIndex::MoveTo | OrderIndex::AttackTo | OrderIndex::ExploreTo | OrderIndex::FleeTo
+        ) {
+            return Err(RetailMoveOrderImageError::UnsupportedKind(self.kind));
+        }
+        let state = self
+            .move_state
+            .ok_or(RetailMoveOrderImageError::MissingMoveState)?;
+        let mut out = Vec::with_capacity(RETAIL_MOVE_ORDER_WALKED_BYTES);
+        out.push(self.flags);
+        for word in [
+            self.x,
+            self.y,
+            state.angle,
+            state.dest,
+            self.tolerance,
+            state.pause,
+            state.retry,
+            state.attempts,
+            state.timer,
+            state.facing,
+            state.dest_x,
+            state.dest_y,
+            state.last_x,
+            state.last_y,
+            state.coll_x,
+            state.coll_y,
+            state.orig_x,
+            state.orig_y,
+        ] {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out.extend_from_slice(&state.off_x.to_le_bytes());
+        out.extend_from_slice(&state.off_y.to_le_bytes());
+        Ok(out
+            .try_into()
+            .expect("retail MoveOrder walk has a fixed 77-byte image"))
+    }
+
+    /// Exact `OrderList::walk_data` image for one shared-family MoveOrder node.
+    pub fn retail_move_node_image(
+        &self,
+    ) -> Result<[u8; RETAIL_MOVE_ORDER_NODE_BYTES], RetailMoveOrderImageError> {
+        let payload = self.retail_move_walk_image()?;
+        let mut out = Vec::with_capacity(RETAIL_MOVE_ORDER_NODE_BYTES);
+        out.extend_from_slice(&(self.kind as i32).to_le_bytes());
+        out.push(self.node_metric);
+        out.extend_from_slice(&payload);
+        Ok(out
+            .try_into()
+            .expect("retail MoveOrder node has a fixed 82-byte image"))
     }
 
     pub fn attack(target_who: i8, target_o: i16) -> Order {
