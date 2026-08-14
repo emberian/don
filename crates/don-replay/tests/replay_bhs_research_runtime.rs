@@ -1107,6 +1107,134 @@ fn insufficient_resources_return_zero_before_cursor_group_or_queue_commit() {
 }
 
 #[test]
+fn owned_game_info_gates_commit_the_complete_research_transaction() {
+    let fixture = repo_root().join("crates/don-replay/tests/fixtures/bhs_research_rollback.bhs");
+    let inc = don_bhs_cc::load::install_include_path(repo_root());
+    let loaded = don_bhs_cc::load::load_script_file(&inc, &fixture).unwrap();
+    let mut timers = ScriptTimers::default();
+    timers.add_timer("1", 300).unwrap();
+    let mut script_runtime =
+        ScriptRuntime::new_with_timers(loaded.program, None, None, timers).unwrap();
+    let binding = ReplayBhsBinding {
+        file: 0,
+        name: "research_then_commit".into(),
+    };
+    let mut call = ReplayProductionCall {
+        who: 1,
+        step: 99,
+        boom_vs_rush: 1,
+        num_loops: 5,
+    };
+    let image = ProductionBuiltinImage {
+        setup: Some(ProductionSetupImage {
+            game_info_flags: 0b100,
+            game_rules: 0,
+            rush_rules: 14,
+            victory: don_bhs::scenario::victory::ECONOMIC,
+            starting_town: 2,
+            starting_resources: 1,
+            starting_resources2: 1,
+            semaphore: [0; 32],
+        }),
+        leaders: std::array::from_fn(|who| {
+            if who == OWNER {
+                ProductionLeaderImage {
+                    flags: 3,
+                    ..ProductionLeaderImage::default()
+                }
+            } else {
+                ProductionLeaderImage::default()
+            }
+        }),
+        ..ProductionBuiltinImage::default()
+    };
+    let (types, upgrades) = canonical_type_owners(OWNER);
+    let (mut sim, mut production, row) = production_owners(OWNER);
+    sim.spawn_unit(OWNER, 50, 100, 200, 4)
+        .expect("install one live idle Citizen captain");
+
+    let receipt = run_production_research_call(
+        &mut script_runtime,
+        &binding,
+        &mut call,
+        &image,
+        &types,
+        &upgrades,
+        &PlaceBuildingCostAuthority::default(),
+        None,
+        &mut sim,
+        &mut production,
+        game_seconds(0),
+    )
+    .expect("all reached setup gates are replay-owned");
+
+    assert_eq!(
+        receipt
+            .production
+            .trace
+            .iter()
+            .map(|call| call.index)
+            .collect::<Vec<_>>(),
+        [78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105]
+    );
+    assert_eq!(
+        receipt.production.trace[5..]
+            .iter()
+            .map(|call| call.returned.clone())
+            .collect::<Vec<_>>(),
+        [
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(14),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+        ]
+    );
+    assert_eq!(receipt.research.len(), 1);
+    assert_eq!(
+        receipt.research[0].status,
+        SingleLibraryResearchStatus::Applied
+    );
+    assert_eq!(receipt.idle_units[0].returned, 1);
+    assert_eq!(call.step, BUILD_BAND_BASE as i32 + 17);
+    assert_eq!(receipt.production.returned, BUILD_BAND_BASE as i32 + 23);
+    assert!(script_runtime.script_timers().is_empty());
+    assert_eq!(sim.scenario_data.find_counters[30], BUILD_BAND_BASE as i32);
+    assert_eq!(sim.builds[row].queue.queued, 1);
+    assert_eq!(
+        production.leaders[OWNER].resources,
+        [100, 88, 95, 100, 100, 100]
+    );
+    assert_eq!(
+        sim.leaders[OWNER].econ.stockpile,
+        production.leaders[OWNER].resources
+    );
+    assert_eq!(
+        sim.step8.leaders[OWNER].econ.stockpile,
+        production.leaders[OWNER].resources
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[OWNER].economy.bucket,
+        production.leaders[OWNER].resources
+    );
+    assert_eq!(
+        production.leaders[OWNER].queued_counts[WRITTEN_WORD as usize],
+        1
+    );
+    assert_eq!(
+        sim.vic_leaders.slots[OWNER].num_queued[WRITTEN_WORD as usize],
+        1
+    );
+}
+
+#[test]
 fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_leader_mirrors() {
     let fixture = repo_root().join("crates/don-replay/tests/fixtures/bhs_research_rollback.bhs");
     let inc = don_bhs_cc::load::install_include_path(repo_root());
@@ -1129,6 +1257,16 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     };
     let call_before = call;
     let image = ProductionBuiltinImage {
+        setup: Some(ProductionSetupImage {
+            game_info_flags: 0b100,
+            game_rules: 0,
+            rush_rules: 14,
+            victory: don_bhs::scenario::victory::ECONOMIC,
+            starting_town: 2,
+            starting_resources: 1,
+            starting_resources2: 1,
+            semaphore: [0; 32],
+        }),
         leaders: std::array::from_fn(|who| {
             if who == OWNER {
                 ProductionLeaderImage {
@@ -1176,8 +1314,8 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
         matches!(
             &error.failure,
             ProductionRunFailure::Vm(VmError::UnimplementedBuiltin {
-                index: 94,
-                name: "get_is_no_nation_powers"
+                index: 106,
+                name: "set_difficulty"
             })
         ),
         "unexpected failure: {:?}",
@@ -1189,7 +1327,7 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
             .iter()
             .map(|call| call.index)
             .collect::<Vec<_>>(),
-        [78, 357, 455, 386, 436]
+        [78, 357, 455, 386, 436, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105]
     );
     assert_eq!(call, call_before);
     assert_eq!(
@@ -1199,7 +1337,27 @@ fn later_vm_failure_rolls_back_program_ref_timer_cursor_group_queue_and_all_lead
     assert_eq!(script_runtime.script_timers(), &pristine_timers);
     assert_eq!(
         error.trace.last().map(|call| (&call.index, &call.returned)),
-        Some((&436, &ProductionBuiltinValue::Int(0)))
+        Some((&105, &ProductionBuiltinValue::Int(0)))
+    );
+    assert_eq!(
+        error.trace[5..]
+            .iter()
+            .map(|call| call.returned.clone())
+            .collect::<Vec<_>>(),
+        [
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(14),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(1),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+            ProductionBuiltinValue::Int(0),
+        ]
     );
     assert_eq!(sim.scenario_data, scenario_before);
     assert_eq!(sim.cities.slots, cities_before.slots);
@@ -1299,7 +1457,10 @@ fn shipped_economic_program_reaches_the_canonical_type_queue_then_the_next_missi
     let image = ProductionBuiltinImage {
         map_style: Some(bind_production_map_style(12, &installed_style).unwrap()),
         setup: Some(ProductionSetupImage {
+            game_info_flags: 0,
             game_rules: 0,
+            rush_rules: 0,
+            victory: 0,
             starting_town: 2,
             starting_resources: 1,
             starting_resources2: 1,

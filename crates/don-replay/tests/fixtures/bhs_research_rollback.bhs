@@ -5,7 +5,41 @@ int scenario research_then_fail(int who, ref int step, int boom_vs_rush, int num
     step += find_num_idle_unit(who, "Citizen");
     step += num_city_buildings(who, "Athens", "Farm", 1);
     step += num_type_queued(who, 2000, "Citizen");
-    get_is_no_nation_powers();
+    step += get_is_no_nation_powers();
+    step += get_rush_rules();
+    step += is_victory_standard();
+    step += is_victory_conquest();
+    step += is_victory_economic();
+    step += is_victory_musical_chairs();
+    step += is_victory_score();
+    step += is_victory_sudden_death();
+    step += is_victory_tech_race();
+    step += is_victory_territory();
+    step += is_victory_time_limit();
+    step += is_victory_wonder();
+    set_difficulty(0);
+    return step + boom_vs_rush + num_loops;
+}
+
+int scenario research_then_commit(int who, ref int step, int boom_vs_rush, int num_loops)
+{
+    stop_timer(who);
+    step = research_tech_with_cost(who, "Written Word");
+    step += find_num_idle_unit(who, "Citizen");
+    step += num_city_buildings(who, "Athens", "Farm", 1);
+    step += num_type_queued(who, 2000, "Citizen");
+    step += get_is_no_nation_powers();
+    step += get_rush_rules();
+    step += is_victory_standard();
+    step += is_victory_conquest();
+    step += is_victory_economic();
+    step += is_victory_musical_chairs();
+    step += is_victory_score();
+    step += is_victory_sudden_death();
+    step += is_victory_tech_race();
+    step += is_victory_territory();
+    step += is_victory_time_limit();
+    step += is_victory_wonder();
     return step + boom_vs_rush + num_loops;
 }
 

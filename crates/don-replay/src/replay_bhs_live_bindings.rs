@@ -10,7 +10,9 @@ use crate::initial::{InitialPlayer, InitialState};
 use crate::leaders_runtime_frontier::{RuntimeCoveredRange, RuntimeLeadersFrontier};
 use crate::map_style::{MapStyleStaticData, StaticFileEvidence, SHIPPED_MAP_STYLE_CATALOG};
 use crate::replay_bhs_runtime::{ReplayBhsBinding, LEADER_FLAG_HUMAN};
-use don_bhs::{BuiltinDecl, Host, HostError, HostResult, RuntimeError, Value, VmError};
+use don_bhs::{
+    scenario::victory, BuiltinDecl, Host, HostError, HostResult, RuntimeError, Value, VmError,
+};
 use don_sim::script_runtime::{
     ExternalGameSeconds, ExternalScriptFailure, ExternalTimerHost, ScriptRuntime,
 };
@@ -367,10 +369,14 @@ pub fn bind_production_type_counts(
     Ok(ProductionTypeCountImage { rows, leaders })
 }
 
-/// Replay-backed inputs read by the three setup gates in the reached prefix.
+/// Replay-backed `GameInfo` scalars and fixed `Game::semaphore` bytes read by
+/// the admitted production-script gates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionSetupImage {
+    pub game_info_flags: u32,
     pub game_rules: u8,
+    pub rush_rules: u8,
+    pub victory: u8,
     pub starting_town: u8,
     pub starting_resources: u8,
     pub starting_resources2: u8,
@@ -393,7 +399,10 @@ impl ProductionSetupImage {
         })?;
         let settings = &initial.info.settings;
         Ok(Self {
+            game_info_flags: initial.info.flags,
             game_rules: settings.game_rules,
+            rush_rules: settings.rush_rules,
+            victory: settings.victory,
             starting_town: settings.starting_town,
             starting_resources: settings.starting_resources,
             starting_resources2: settings.starting_resources2,
@@ -664,6 +673,49 @@ impl<'a> ReplayProductionBuiltinHost<'a> {
                     .ok_or(HostError::Unimplemented)?
                     .name,
             )),
+            // GameInfo scalar gates, `0x009e5230`..`0x009e52e0`. The flags
+            // handler reads only bit 2 of the low byte; rush rules returns its
+            // byte verbatim; each victory handler is one exact equality test.
+            94 => Ok(Value::Int(
+                ((self
+                    .image
+                    .setup
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?
+                    .game_info_flags
+                    >> 2)
+                    & 1) as i32,
+            )),
+            95 => Ok(Value::Int(i32::from(
+                self.image
+                    .setup
+                    .as_ref()
+                    .ok_or(HostError::Unimplemented)?
+                    .rush_rules,
+            ))),
+            96..=105 => {
+                let want = match decl.index {
+                    96 => victory::STANDARD,
+                    97 => victory::CONQUEST,
+                    98 => victory::ECONOMIC,
+                    99 => victory::MUSICAL_CHAIRS,
+                    100 => victory::SCORE,
+                    101 => victory::SUDDEN_DEATH,
+                    102 => victory::TECH_RACE,
+                    103 => victory::TERRITORY,
+                    104 => victory::TIME_LIMIT,
+                    _ => victory::WONDER,
+                };
+                Ok(Value::Int(
+                    (self
+                        .image
+                        .setup
+                        .as_ref()
+                        .ok_or(HostError::Unimplemented)?
+                        .victory
+                        == want) as i32,
+                ))
+            }
             // is_conquest_scenario(), `0x009e6040`: Game semaphore bit 17.
             147 => Ok(Value::Int(
                 self.image

@@ -82,10 +82,18 @@ owners changed by builtin 357: ScenarioData scalars, Groups, Build queues,
 `LiveProductionRuntime`, Sim and step-8 stockpiles, and victory Leader resources/counters.
 Any VM or validation failure restores every one of those owners before returning the error.
 
-The rollback test removes timer `"1"`, queues Written Word, mutates the retained cursor and
-Group, then deliberately reaches unsupported builtin 94. It proves that Program statics,
-the ref step, timer plus cursor, ScenarioData cursor, Group pool, Build queue, resources,
-`num_queued`, `ages_queued`, and `epochs_queued` all return to their entry images.
+The production host now binds the replay-carried `GameInfo::flags`, `rush_rules`, and
+`victory` fields into one immutable setup receipt. That exact owner executes builtin 94,
+builtin 95, and the ten equality gates 96--105 without a fallback value. The successful
+transaction test removes timer `"1"`, queues Written Word, executes all twelve gates, and
+commits the ref step, timer removal, cursor, Group, Build queue, six-good payment, and every
+Leader resource/counter mirror together.
+
+The rollback twin performs the same work and then deliberately reaches still-unowned
+mutation builtin 106 `set_difficulty`. It proves that Program statics, the ref step, timer
+plus cursor, ScenarioData cursor, Group pool, Build queue, resources, `num_queued`,
+`ages_queued`, and `epochs_queued` all return to their entry images even after the complete
+read-only GameInfo cohort has executed.
 
 ## Deliberately red boundaries
 

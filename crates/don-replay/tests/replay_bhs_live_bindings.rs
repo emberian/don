@@ -653,7 +653,10 @@ fn setup_gates_preserve_replay_options_and_live_leader_branches() {
     semaphore[1] = 0x10; // Game semaphore bit 12.
     let mut image = ProductionBuiltinImage {
         setup: Some(ProductionSetupImage {
+            game_info_flags: 0b100,
             game_rules: 8,
+            rush_rules: 14,
+            victory: don_bhs::scenario::victory::ECONOMIC,
             starting_town: 2,
             starting_resources: 1,
             starting_resources2: 7,
@@ -676,6 +679,32 @@ fn setup_gates_preserve_replay_options_and_live_leader_branches() {
     };
     {
         let mut host = ReplayProductionBuiltinHost::new(&image);
+        assert_eq!(
+            host.call(find_builtin("get_is_no_nation_powers").unwrap(), &[]),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            host.call(find_builtin("get_rush_rules").unwrap(), &[]),
+            Ok(Value::Int(14))
+        );
+        for (name, expected) in [
+            ("is_victory_standard", 0),
+            ("is_victory_conquest", 0),
+            ("is_victory_economic", 1),
+            ("is_victory_musical_chairs", 0),
+            ("is_victory_score", 0),
+            ("is_victory_sudden_death", 0),
+            ("is_victory_tech_race", 0),
+            ("is_victory_territory", 0),
+            ("is_victory_time_limit", 0),
+            ("is_victory_wonder", 0),
+        ] {
+            assert_eq!(
+                host.call(find_builtin(name).unwrap(), &[]),
+                Ok(Value::Int(expected)),
+                "unexpected {name} gate"
+            );
+        }
         assert_eq!(
             host.call(find_builtin("is_conquest_scenario").unwrap(), &[]),
             Ok(Value::Int(0))
@@ -785,7 +814,10 @@ fn strict_economic_prefix_reaches_research_tech_and_rolls_back() {
     let image = ProductionBuiltinImage {
         map_style: Some(bind_production_map_style(12, &installed_style).unwrap()),
         setup: Some(ProductionSetupImage {
+            game_info_flags: 0,
             game_rules: 0,
+            rush_rules: 0,
+            victory: 0,
             starting_town: 2,
             starting_resources: 1,
             starting_resources2: 1,
@@ -915,6 +947,9 @@ fn checksum_corpus_supplies_only_who_and_never_fabricates_retained_arguments() {
         let setup = ProductionSetupImage::from_initial(&replay.initial)
             .expect("checksum replay carries the complete Game semaphore");
         assert_eq!(setup.game_rules, replay.initial.info.settings.game_rules);
+        assert_eq!(setup.game_info_flags, replay.initial.info.flags);
+        assert_eq!(setup.rush_rules, replay.initial.info.settings.rush_rules);
+        assert_eq!(setup.victory, replay.initial.info.settings.victory);
         assert_eq!(
             setup.starting_resources,
             replay.initial.info.settings.starting_resources
