@@ -25,6 +25,8 @@ docs/DESIGN-INTENT.md
 # Live captures are game data (copyrighted); reproduce with the probes in docs/.
 schema/live/*.bin
 schema/live/*.txt
+# the capture don-replay include_str!s (rules_channel.rs) and analysis/opening.py reads
+!schema/live/rules-block-pid14644.txt
 # RoNtoy captures can contain player names, diplomacy/chat state, and other live-session
 # material. Runtime output belongs here; only synthetic/redacted fixtures belong in git.
 var/rontoy/
