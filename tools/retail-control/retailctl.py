@@ -239,6 +239,14 @@ def pid() -> int:
     return values[0]
 
 
+def pid_retryable() -> int:
+    """pid() that raises RuntimeError, so guest_op_retry can retry it."""
+    try:
+        return pid()
+    except SystemExit as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 def process_pids() -> tuple[list[int], str]:
     returncode, out = guest_cmd_status(
         "for /f \"tokens=2\" %p in "
@@ -1631,7 +1639,7 @@ def require_armed_controller(root: str) -> tuple[int, str]:
             "REFUSING retail request because the hash-bound guest injector is not ready: " +
             "; ".join(injector["issues"])
         )
-    target_pid = guest_op_retry(lambda: pid())
+    target_pid = guest_op_retry(pid_retryable)
     guest_op_retry(lambda: preflight(target_pid))
     root_name = root.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
     generation = generation_from_root_name(root_name)

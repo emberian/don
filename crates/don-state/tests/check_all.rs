@@ -1,6 +1,7 @@
 //! Gate 2: the fifteen `CheckSums::check_*` channels over the typed `Save`
-//! state vs the live manifest (`check_words` / `check_bytes`) for
-//! donf2/donf3/donf4. Skips when the proprietary captures are absent.
+//! state vs the live manifest (`check_words` / `check_bytes`) for every
+//! `schema/live/frame-pairs/*/manifest.json` step. Skips when the
+//! proprietary captures are absent.
 //!
 //! Channels in `OPEN` are known-incomplete: they must still MISMATCH (the
 //! assertion guards against accidental "fixes"); closing one means removing
@@ -14,10 +15,23 @@ use std::path::{Path, PathBuf};
 ///   14 script_run_time — RunTimeEnv records (initialized script state)
 const OPEN: &[usize] = &[12, 13, 14];
 
-fn live_dir() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().ok()?;
-    let d = root.join("schema/live/frame-pairs/20261004-044959");
-    d.is_dir().then_some(d)
+/// Every `schema/live/frame-pairs/<ts>*/` containing a manifest.json.
+fn capture_dirs() -> Vec<PathBuf> {
+    let Ok(root) = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize() else {
+        return Vec::new();
+    };
+    let pairs = root.join("schema/live/frame-pairs");
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(pairs) {
+        for e in rd.flatten() {
+            let d = e.path();
+            if d.is_dir() && d.join("manifest.json").is_file() {
+                out.push(d);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 struct Frame {
@@ -82,21 +96,22 @@ fn manifest_frames(dir: &Path, channels: &[&str]) -> Vec<(i64, Frame)> {
 
 #[test]
 fn check_all_matches_manifest() {
-    let Some(dir) = live_dir() else {
-        eprintln!("SKIP: proprietary live captures absent");
+    let dirs = capture_dirs();
+    if dirs.is_empty() {
+        eprintln!("SKIP: proprietary live captures absent (schema/live/frame-pairs/*)");
         return;
-    };
-    let frames = manifest_frames(&dir, &don_state::CHANNEL_NAMES);
-    assert!(!frames.is_empty(), "manifest has no steps");
+    }
     let mut failures = Vec::new();
     let mut open_flips = Vec::new();
     let mut tested = 0;
-    for (frame, f) in &frames {
-        if !(2..=4).contains(frame) {
-            continue; // f0/f1 were probes; the gate covers f2..f4
-        }
-        let name = format!("{}.svx", f.save);
-        let raw = don_state::container::load_svx(&dir.join(&name)).expect(&name);
+    for dir in &dirs {
+        let dname = dir.file_name().unwrap().to_string_lossy().to_string();
+        let frames = manifest_frames(dir, &don_state::CHANNEL_NAMES);
+        assert!(!frames.is_empty(), "{dname}: manifest has no steps");
+        for (frame, f) in &frames {
+        let svx = format!("{}.svx", f.save);
+        let name = format!("{dname}/{svx}");
+        let raw = don_state::container::load_svx(&dir.join(&svx)).expect(&name);
         let (mut save, _) = don_state::sections::load_save(&raw).expect(&name);
         let sums = don_state::CheckSums::check_all(&mut save).expect(&name);
         tested += 1;
@@ -129,8 +144,9 @@ fn check_all_matches_manifest() {
                 failures.push((name.clone(), c));
             }
         }
+        }
     }
-    assert_eq!(tested, 3, "expected donf2/3/4 in manifest");
+    assert!(tested > 0, "no manifest steps gated");
     assert!(
         failures.is_empty(),
         "closed-channel mismatches: {failures:?}"
