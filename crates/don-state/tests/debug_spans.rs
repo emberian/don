@@ -1,6 +1,4 @@
-//! Diagnostic: dump the tail of the span trace when the loader stops, to
-//! attribute the stopping offset to a field path. Skips when the proprietary
-//! live captures are absent.
+//! Diagnostic: dump spans around the post-Scene tail for boundary checking.
 use std::path::Path;
 
 #[test]
@@ -16,8 +14,9 @@ fn dump_tail() {
     let bytes = don_state::container::load_svx(&p).unwrap();
     let (l, e) = don_state::sections::load_save_dbg(&bytes);
     eprintln!("err: {e:?}\npos={:#x}", l.pos);
-    let start = l.spans.len().saturating_sub(40);
-    for s in &l.spans[start..] {
-        eprintln!("  {:#x} +{:#x} {}", s.offset, s.len, s.path);
+    for s in &l.spans {
+        if s.offset >= 0x1677c9 && (s.len > 20 || s.path.contains("tag") || s.path.contains("count") || s.path.contains("len")) {
+            eprintln!("  {:#x} +{:#x} {}", s.offset, s.len, s.path);
+        }
     }
 }

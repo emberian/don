@@ -219,6 +219,13 @@ impl CheckSum {
     pub fn new(mask: u32) -> Self {
         CheckSum { adler: 1, bytes: 0, pos: 0, mask }
     }
+
+    /// Feed bytes into the checksum without counting them as walked — retail
+    /// does this where check_* calls `FUN_005089d0` (raw adler32 on +0x10)
+    /// directly instead of `walk_function` (e.g. check_groups' last_group).
+    pub fn feed(&mut self, buf: &[u8]) {
+        self.adler = adler32(self.adler, buf);
+    }
 }
 
 impl DataWalk for CheckSum {

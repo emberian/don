@@ -10,11 +10,13 @@
 //! against the disassembly, allocation history is preserved verbatim, and
 //! unknown bodies fail closed with class/VA/offset rather than being guessed.
 
+pub mod check_all;
 pub mod container;
 pub mod prim;
 pub mod sections;
 pub mod walk;
 
+pub use check_all::{CheckSums, CHANNEL_NAMES};
 pub use sections::Save;
 pub use walk::{adler32, CheckSum, DataWalk, Loader, Saver, Span, WalkError};
 
