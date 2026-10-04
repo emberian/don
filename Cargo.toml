@@ -9,6 +9,7 @@ members = [
     "crates/don-ai",
     "crates/don-env",
     "crates/don-replay",
+    "crates/don-state",
     "crates/don-bhs",
     "crates/don-bhs-cc",
     "crates/rontoy-core",
