@@ -15,59 +15,63 @@ out to `gzip` (same pattern as `don-replay`).
 
 1. **Round-trip**: parse `donf2/3/4.svx` (decompressed) to EOF with zero
    residue and re-emit byte-identical bytes — `tests/roundtrip.rs`.
-   Currently green: 100.0% consumed on all 53 captured saves.
+   Currently green: 100.0% consumed on all 55 captured saves.
 2. **Checksums**: the 15 `CheckSums::check_*` channels (adler-32 word +
    bytes-walked) equal `manifest.json` for every captured frame —
-   `tests/check_all.rs`. Currently **13/15 exact** on all 53 captured
-   frames.
+   `tests/check_all.rs`. Currently **15/15 exact** on all 55 captured
+   frames; the `OPEN` list is empty.
 
-   Closed (exact): units, builds, walls, ammo, deaths, groups, guys,
-   leaders, cities, items, goods, world, **rules** (typed
-   `Rules`/`TypeRec`/`TribeRec` grammar now wired into load/save — the
-   section is located by a self-authenticating scan: `0x92` tag, first
-   record's serialized `type_index` == 0, full-width parse).
+## Tail map (donf2, decompressed offsets)
 
-   Open (`OPEN` list in the test — asserted to still mismatch so a fix must
-   remove them):
-   - `scenario_data` — retail's `ScenarioData::walk_data` (0x00997ad0)
-     checksums the *initialized* `Game::init` scenario state, not just the
-     serialized `.svx` bytes. Ours: 8,320 B; retail: 8,453 B.
-   - `script_run_time` — `RunTimeEnv::walk_data` (0x009c41a0) checksums
-     initialized `ScriptFile` state (`FUN_009c63b0` records: tag +
-     SimpleArray\<u8\> bytecode + pointer array + tagged hash list +
-     SimpleArray\<int\> + gated path/name data). Ours: 4 B; retail: 52,029 B.
+Every section boundary from `GraphicEvents` to EOF is now reached
+structurally and self-validated: each `walk_test` byte is checked against
+`section_tag(name)` — the low byte of `String::generate_hash`'s
+case-insensitive hash of the `internal_strings.xml` entry retail passes
+(`SaveGame::walk_test` 0x0043d840 writes it, `LoadGame::walk_test`
+0x0043da60 compares it). The misdecode that produced the earlier "zeros /
+scan" tail was a 15,368 `GraphicEvents` slot count; the shipped install has
+**60,415** slots (`first_ammo_piece + ammo_names.length`), and the
+`AmbienceStruct` row is 23 B, not 24.
 
-## Open problem: the tail interior
-
-The tail after `final_globals` is now tri-partitioned (`RulesTail` =
-`pre_rules` + `rules` + `post_rules`), byte-exact on all 53 saves. For
-donf2 (decompressed offsets):
-
-- `0x16d7f1..0x172821`: ~20.5 KB of pure zeros — owner section unidentified.
-- `0x172822..0x25e9cf`: ~1.83 MB of script-VM serialization — a
-  `ScriptFile` body parses forward at `0x172820` (tag + SimpleArray\<u8\>
-  code + …); interior strings include `editor_scratch_file.svx`
-  (`0x24f3d1`), `./scenario/scriptlibrary/general_powers` (`0x24f40f`),
-  and trigger names (`city_build`, `one_farm`, …). Both the
-  `ScenarioData::walk_data` virtual collections (`FUN_004c7060`,
-  `FUN_004c7270`, `FUN_004c8070`, `FUN_004c8420`×8, `FUN_004c7db0`,
-  `FUN_004c75e0`, `FUN_004c78b0`×16, `FUN_00473120`×16) and
-  `RunTimeEnv`'s `ScriptFile` records live here — their serialized element
-  bodies (`FUN_009d7ea0` virtual elements: Int/Float/String/Object/Array)
-  are the remaining decode. Chained file parse drifts at file 1 — grammar
-  is close but not exact.
-- `0x25e9d0`: `RunTimeEnv` tag + count = **0** (empty on the save stream;
-  retail's `script_run_time` channel walks 52,029 B of *initialized live*
-  state — same files, checksum projection only).
-- `0x25e9d5`: `final_globals` (tag `0xc2`, count 1, 341 B) ending exactly
-  at `0x25eb34`.
-- `0x25eb34..0x358c11`: **Rules** — 1,024,221 B, unique `0x92` candidate
-  in the tail; all 806 serialized `type_index` values validate.
-- `0x358c11..EOF`: ~840 KB trailer of dense i32-grid-like data
-  (`0x20001` × 75 K, `0x420021` × 47 K). No walk after
-  `Game::walk_rules_data` accounts for it — `do_save` 0x005a81f0 calls
-  `WalkDataGame::walk_data` then only a flush. Owner unidentified; kept as
-  `post_rules` opaque span.
+- `0x15f9f6` `GraphicEvents` (tag `0x7c`) … `0x1728da` `Scene` (`0xb7`),
+  `Farms` (`0x26`), `UnbuiltWonders/Cities/Forts`, `ConquestGame` (`0x0c`,
+  with 25 `Tribe` rows), then `DAT_00c0623c` (4 B) + **Camera** (`0x94`,
+  228 + 468 B), `SelectGroups` (`0x76`), `Options` (`0xa8`),
+  `CommandManager` (`0x59`), `Rivers`.
+- `Terrain::walk_coord_data` 0x00850ef0: `2*(xs*ys-1)` B — one 2-byte
+  `CoordInfo` flag word per tile, except the single tile in the list
+  `TerrainOut::generate_land_lists` files at index `xs+ys-1`, which the
+  walk's `xs-1+ys` bound skips.
+- `MessageWin` (`0x58`), `Terrain::walk_data` (height floats + road lists),
+  `CliffsData` (two 8-B heads each followed by a `count` payload — 20,000 B
+  per-tile planes here), `Doober` (`0x66`; four trailing
+  `SimpleArray<int>`), 8 B regions globals, `ObjectArray<Region>` (128),
+  `Array<WCoordData>`, `Terrain::walk_roads` (flag byte per tile, 256 B
+  when nonzero), 12 B, `Achieve` (`0xc1`, 6 `AchieveData` `0x95`).
+- `0x24d422` `ScenarioData` (`0x04`): 8,102 B of direct globals, 6 Strings
+  (`temp_save = editor_scratch_file.svx`, `general_powers_script_file =
+  ./scenario/scriptlibrary/general_powers.bhs`), colours, and the
+  component/message/objective/group/reveal collections.
+- `0x24f531` `RunTimeEnv` (`"Script RunTimeEnv"` → `0x99`) + count **3** +
+  3 × `ScriptFile` (`0x5c`): code `SimpleArray<u8>`, `PtrArray<Script>`
+  (`"Script"` `0x50`: static vars, DynamicBitMask, params, refs, three
+  name arrays, name, 12 B), const pool via `ScriptType::walk_array`
+  (`"Script Vars Walk Array"`; elements `"Script Vars Walk"` + data_type /
+  scope / ref_count + Int `0x57bad` / Float `0x12f35f` / String `0x168174`
+  / Object / Array (scope bit 0x80) payloads, each with its own tag),
+  linked files, then (save/load only) names, source path, `line_to_op`,
+  break lines, 9 B. Ends at `0x25e9d5` exactly — this is the 52,029-B
+  `script_run_time` channel.
+- `0x25e9d5` `TurnControl` (`0xc2`) globals, 341 B tail.
+- `0x25eb34..0x358c11` **Rules** (`"Game Rules"` `0x92`), 1,024,221 B,
+  reached directly (`find_rules_boundary` is now diagnostic only).
+- `0x358c11..EOF` (840,784 B): `SaveGame::verify_save` 0x005a76b0 — called
+  by `do_save` 0x005a81f0 through vtable slot +0x10 after `walk_data`. It
+  drives a stack `CheckSum` through each state walker and appends the
+  4-byte adler word after every sub-walk (`0x00020001` = adler of two zero
+  bytes, `0x00420021` = adler of `u16 0x20`). Kept as the opaque
+  `verify_words` run (asserted 4-byte aligned); transcribing the 2,866-byte
+  verifier is the remaining tail work.
 
 ## Tests
 

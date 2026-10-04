@@ -21,17 +21,77 @@ use crate::walk::{DataWalk, Loader, WalkError};
 
 /// `GraphicEvents::init` (re/decomp-all/008e5390.c) sizes the event root
 /// array as `ammo_names.length + GraphicPieces.first_ammo_piece` — driven by
-/// the installation's `effects_graphics.xml` (233 AMMO rows), not by the save
-/// or the map. The installed fresh game yields 15,368; it is a named constant
-/// because retail never serializes it.
-pub const GRAPHIC_EVENT_SLOTS: usize = 15_368;
+/// the installation's graphics data, not by the save or the map. Retail never
+/// serializes it. Measured on the shipped install: the slot plane of every
+/// captured save (55 live frames + the fresh `ron-data/savegames` game)
+/// parses to exactly 60,415 presence bytes before the entrench/ambience
+/// arrays, with `Scene::walk_data`'s section tag (`0xb7`, the low byte of
+/// `String::generate_hash("Scene")`) landing immediately after
+/// `missile_offset_{x,y,z}` — see `section_tag`. The earlier 15,368 figure
+/// was a misdecode that left ~45 KB of absent-slot zeros for the following
+/// sections to parse as empty.
+pub const GRAPHIC_EVENT_SLOTS: usize = 60_415;
 
 const CLS: &str = "WalkDataGame";
 
 type R = Result<(), WalkError>;
 
+/// `String::generate_hash` 0x00a1b6b0 prime table at `DAT_00b14500` (50 u32).
+const HASH_PRIMES: [u32; 50] = [
+    0x0000007f, 0x0000032b, 0x0000063d, 0x00000853, 0x00000abd, 0x00001297, 0x00001597,
+    0x00001741, 0x00001fb5, 0x00002543, 0x00002821, 0x00002a01, 0x00002b97, 0x0000300d,
+    0x000033a1, 0x0000377f, 0x00003c35, 0x00004511, 0x000048e5, 0x00004a45, 0x00005261,
+    0x00005623, 0x00006217, 0x000064c9, 0x00006b41, 0x00006d99, 0x0000738d, 0x00007859,
+    0x00007f63, 0x000086a5, 0x00008ce3, 0x00009287, 0x00009743, 0x00009c9d, 0x0000a3ff,
+    0x0000a939, 0x0000b01b, 0x0000b947, 0x0000c203, 0x0000c64f, 0x0000d0cd, 0x0000d8ad,
+    0x0000df69, 0x0000e7e9, 0x0000f223, 0x0000fe2f, 0x00011ecd, 0x00013019, 0x000148ff,
+    0x00015bb1,
+];
+
+/// The byte `SaveGame::walk_test` 0x0043d840 writes for a section whose
+/// `walk_test` argument is the StringTable entry `name`: the low byte of the
+/// case-insensitive hash (`String+0x10`, the second output of
+/// `String::generate_hash`). `LoadGame::walk_test` 0x0043da60 compares the
+/// stream byte against the same value ("Error loading section, probably in").
+/// `internal_strings.xml` is the shipped table; e.g. "Achieve" → 0xc1,
+/// "Game Rules" → 0x92, "TurnControl" → 0xc2, "ScenarioData" → 0x04.
+pub fn section_tag(name: &str) -> u8 {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    let n = units.len() as u32;
+    let mut h: u32 = 0;
+    let mut u = n;
+    for i in (0..units.len()).rev() {
+        let c = units[i] as u32;
+        // towlower on the BMP code unit; the section names are ASCII.
+        let lc = if (b'A' as u32..=b'Z' as u32).contains(&c) { c + 32 } else { c };
+        h = h
+            .wrapping_add(HASH_PRIMES[(lc % 50) as usize].wrapping_mul(u))
+            .wrapping_add(lc.wrapping_mul(HASH_PRIMES[(i as u32 % 50) as usize]));
+        u -= 1;
+    }
+    (h & 0xff) as u8
+}
+
 fn tag(w: &mut dyn DataWalk, path: &str, t: &mut u8) -> R {
     w.walk_tag(path, t)
+}
+
+/// `walk_test(StringTable[name])`: on load the stream byte must equal
+/// `section_tag(name)` — the same check `LoadGame::walk_test` makes — so a
+/// misaligned parse fails at the section boundary instead of drifting.
+fn tag_named(w: &mut dyn DataWalk, path: &str, name: &str, class: &'static str, va: u32, t: &mut u8) -> R {
+    if !w.is_loading() {
+        *t = section_tag(name);
+    }
+    w.walk_tag(path, t)?;
+    if w.is_loading() && *t != section_tag(name) {
+        return Err(w.fail(
+            class,
+            va,
+            format!("{path}: section tag {:#04x} != {:#04x} for {name:?}", *t, section_tag(name)),
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1458,7 +1518,9 @@ pub struct GraphicEvents {
     pub entrench_who: SimpleVec,
     pub entrench_o: SimpleVec,
     pub entrench_angle: SimpleVec,
-    pub ambience: Arr<Row<24>>,
+    /// `Array<AmbienceStruct>::walk_data` 0x004aa9a0: element stride 0x18 but
+    /// each row walks `[elem, elem+0x17)` — 23 bytes.
+    pub ambience: Arr<Row<23>>,
     /// missile_offset_{x,y,z}.
     pub missiles: Vec<u8>,
 }
@@ -1467,7 +1529,7 @@ impl GraphicEvents {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x008e4d70;
         const C: &str = "GraphicEvents";
-        tag(w, "GraphicEvents.tag", &mut self.tag)?;
+        tag_named(w, "GraphicEvents.tag", "GraphicEvents", C, VA, &mut self.tag)?;
         let slots = if w.is_loading() {
             self.roots.clear();
             self.roots.resize_with(GRAPHIC_EVENT_SLOTS, EventRoot::default);
@@ -1550,7 +1612,7 @@ impl Scene {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x008c0f70;
         const C: &str = "Scene";
-        tag(w, "Scene.tag", &mut self.tag)?;
+        tag_named(w, "Scene.tag", "Scene", C, VA, &mut self.tag)?;
         self.flags.walk(w, "Scene.flags", C, VA)?;
         self.draw_flags.walk(w, "Scene.draw_flags", C, VA)?;
         for (sv, name, esz) in [
@@ -1626,9 +1688,13 @@ pub struct Save {
     pub unbuilt_cities: Unbuilt<4, false>,
     pub unbuilt_forts: Unbuilt<4, true>,
     pub conquest: ConquestGame,
+    /// Direct global `DAT_00c0623c..0x00c06240` (4B) walked right after
+    /// ConquestGame, before the Camera section tag (asm 0x005a2efa).
+    pub post_conq_0: Vec<u8>,
     /// Direct globals block [0x00c06200]+0x28c..+0x370 (228B).
     pub post_conq_a: Vec<u8>,
-    /// Tag walked between the two direct-globals blocks.
+    /// Camera section tag (`walk_test` StringTable "Camera", 0x94) — walked
+    /// before both direct-globals blocks (asm 0x005a2f0a..0x005a2f22).
     pub post_conq_tag: u8,
     /// Direct globals block [0x00c06200]+0xb4..+0x288 (468B).
     pub post_conq_b: Vec<u8>,
@@ -1636,9 +1702,13 @@ pub struct Save {
     pub options: Options,
     pub command_manager: CommandManager,
     pub rivers: PtrVec<River>,
-    /// Terrain::walk_coord_data emits 2B per runtime coord-list node; the
-    /// node census is not serialized. Currently walks nothing — if the stream
-    /// carries node bytes here, MessageWin will misparse and report the stop.
+    /// `Terrain::walk_coord_data` 0x00850ef0: `CoordInfo+0x1c..+0x1e` (2B)
+    /// for every node chained from `TerrainOut.lists[0..xs+ys-1)`.
+    /// `TerrainOut::generate_land_lists` 0x0085f6a0 files every tile `(x,y)`
+    /// into list `xs+ys-1-(x+y)`; the walk's bound `xs-1+ys` skips the last
+    /// list, which holds exactly the one tile with `x+y == 0`. So the run is
+    /// `2 * (xs*ys - 1)` bytes, derived from `World.xs/ys`.
+    pub terrain_coord_data: Vec<u8>,
     pub message_win: MessageWin,
     pub terrain_roads: TerrainRoads,
     pub cliffs: Cliffs,
@@ -1728,15 +1798,17 @@ impl Save {
         self.unbuilt_cities.walk(w, "UnbuiltCities", 0x00460dc0)?;
         self.unbuilt_forts.walk(w, "UnbuiltForts", 0x0073bcc0)?;
         self.conquest.walk(w)?;
-        prim::take(w, "WalkDataGame.post_conq_a", &mut self.post_conq_a, 228, CLS, VA)?;
-        tag(w, "WalkDataGame.post_conq.tag", &mut self.post_conq_tag)?;
-        prim::take(w, "WalkDataGame.post_conq_b", &mut self.post_conq_b, 468, CLS, VA)?;
+        prim::take(w, "WalkDataGame.post_conq_0", &mut self.post_conq_0, 4, CLS, VA)?;
+        tag_named(w, "Camera.tag", "Camera", CLS, VA, &mut self.post_conq_tag)?;
+        prim::take(w, "Camera.a", &mut self.post_conq_a, 228, CLS, VA)?;
+        prim::take(w, "Camera.b", &mut self.post_conq_b, 468, CLS, VA)?;
         self.select_groups.walk(w)?;
         self.options.walk(w)?;
         self.command_manager.walk(w)?;
         self.rivers.walk(w, "Rivers", "PtrArray<River>", 0x004a2f80)?;
-        // Terrain::walk_coord_data (0x00850ef0): runtime-list walk, emits
-        // nothing for empty coord lists.
+        let tiles = (self.world.xs.max(0) as usize) * (self.world.ys.max(0) as usize);
+        let coord_nodes = tiles.saturating_sub(1);
+        prim::take(w, "Terrain.coord_data", &mut self.terrain_coord_data, 2 * coord_nodes, "Terrain", 0x00850ef0)?;
         self.message_win.walk(w)?;
         self.terrain_roads.walk(w)?;
         self.cliffs.walk(w)?;
@@ -1927,7 +1999,7 @@ pub struct Farms {
 impl Farms {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x005a2e20;
-        tag(w, "Farms.tag", &mut self.tag)?;
+        tag_named(w, "Farms.tag", "Farms", "Farms", 0x008d9280, &mut self.tag)?;
         prim::take(w, "Farms.start_color", &mut self.start_color, 10, "Farms", VA)?;
         prim::take(w, "Farms.heights", &mut self.heights, 8, "Farms", VA)?;
         self.farm_data.walk(w, "Farms.data", "Array<FarmStruct>", 0x004a8db0)
@@ -2314,12 +2386,12 @@ impl ConquestGame {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x00798410;
         const C: &str = "ConquestGame";
-        tag(w, "ConquestGame.tag", &mut self.tag)?;
+        tag_named(w, "ConquestGame.tag", "ConquestGame", C, VA, &mut self.tag)?;
         prim::take(w, "ConquestGame.head", &mut self.head, 388, C, VA)?;
         self.colors.walk(w, "ConquestGame.colors", "Array<Color>", 0x004912e0)?;
-        tag(w, "ConquestGame.leaders.tag", &mut self.leaders_tag)?;
+        tag_named(w, "ConquestGame.leaders.tag", "ConquestLeaders", C, VA, &mut self.leaders_tag)?;
         self.leaders.walk(w, "ConquestGame.leaders", "ObjectArray<ConquestLeader>", 0x0079b6d0)?;
-        tag(w, "ConquestGame.nodes.tag", &mut self.nodes_tag)?;
+        tag_named(w, "ConquestGame.nodes.tag", "ConquestNodes", C, VA, &mut self.nodes_tag)?;
         self.nodes.walk(w, "ConquestGame.nodes", "ObjectArray<ConquestNode>", 0x007a5520)?;
         self.colonies.walk(w, "ConquestGame.colonies", "ObjectArray<ConquestColony>", 0x00789400)?;
         self.continents.walk(w, "ConquestGame.continents", "ObjectArray<String>", 0x00490fb0)?;
@@ -2344,7 +2416,7 @@ impl ConquestGame {
         self.stored_ints.walk(w, "ConquestGame.stored_ints", C, 0x00490960)?;
         self.stored_strs.walk(w, "ConquestGame.stored_strs", C, 0x00491ca0)?;
         self.diplo_deals.walk(w, "ConquestGame.diplo_deals", C, 0x00490960)?;
-        tag(w, "ConquestGame.tribes.tag", &mut self.tribes_tag)?;
+        tag_named(w, "ConquestGame.tribes.tag", "Tribes", C, VA, &mut self.tribes_tag)?;
         self.tribes.walk(w, "ConquestGame.tribes", "ObjectArray<Tribe>", 0x0047e230)?;
         if w.is_loading() && self.tribe_names.is_empty() {
             self.tribe_names.resize_with(8, Vec::new);
@@ -2385,7 +2457,7 @@ pub struct SelectGroups {
 
 impl SelectGroups {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
-        tag(w, "SelectGroups.tag", &mut self.tag)?;
+        tag_named(w, "SelectGroups.tag", "SelectGroups", "SelectGroups", 0x00717230, &mut self.tag)?;
         self.a.walk(w, "SelectGroups.a", "Array<SelectGroup>", 0x00480900)?;
         self.b.walk(w, "SelectGroups.b", "Array<SelectGroup>", 0x00480900)
     }
@@ -2406,7 +2478,7 @@ impl Options {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const C: &str = "Options";
         self.list.walk(w, "Options.list", "Array<Option>", 0x00480cc0)?;
-        tag(w, "Options.tag", &mut self.tag)?;
+        tag_named(w, "Options.tag", "Options", "Options", 0x0072c240, &mut self.tag)?;
         prim::take(w, "Options.a", &mut self.a, 92, C, 0x00480cc0)?;
         prim::take(w, "Options.b", &mut self.b, 18, C, 0x00480cc0)
     }
@@ -2500,7 +2572,7 @@ impl Default for CommandManager {
 impl CommandManager {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x00942d30;
-        tag(w, "CommandManager.tag", &mut self.tag)?;
+        tag_named(w, "CommandManager.tag", "CommandManager", "CommandManager", VA, &mut self.tag)?;
         tag(w, "CommandManager.local.tag", &mut self.local_tag)?;
         self.local_package.walk("CommandManager.local_package", w)?;
         for i in 0..8 {
@@ -2541,12 +2613,6 @@ impl Body for River {
     }
 }
 
-/// Terrain::walk_coord_data 0x00850ef0: per coordinate slot, two bytes for
-/// each node of the runtime coord list. Node counts are rebuilt at load time
-/// from already-loaded state and are not serialized; an empty list emits
-/// nothing. Preserved as a flat run of 2B node records whose length is
-/// determined on load by the runtime list census — unknown here, so a
-/// nonzero stream length surfaces as a stop via the next section.
 /// MessageWin::walk_data 0x007e9d40.
 #[derive(Clone)]
 pub struct MessageWin {
@@ -2618,7 +2684,7 @@ impl MessageWin {
             self.lists[i].walk(w, &format!("MessageWin.lists[{i}]"), C, 0x00497cf0)?;
         }
         prim::take(w, "MessageWin.a", &mut self.a, 10, C, VA)?;
-        tag(w, "MessageWin.tag", &mut self.tag)?;
+        tag_named(w, "MessageWin.tag", "MessageWin", "MessageWin", 0x007e9d40, &mut self.tag)?;
         prim::take(w, "MessageWin.b", &mut self.b, 8, C, VA)?;
         prim::wstr(w, "MessageWin.s0", &mut self.s0, C, VA)?;
         prim::wstr(w, "MessageWin.s1", &mut self.s1, C, VA)?;
@@ -2650,8 +2716,12 @@ impl TerrainRoads {
 #[derive(Default, Clone)]
 pub struct Cliffs {
     pub cliffs: PtrVec<Row<4>>,
+    /// `[+0x5d8,+0x5e0)` head (count at +0x5dc) then `count` payload bytes.
     pub a: Vec<u8>, // 8
+    pub a_data: Vec<u8>,
+    /// `[+0x5e4,+0x5ec)` head (count at +0x5e8) then `count` payload bytes.
     pub b: Vec<u8>, // 8
+    pub b_data: Vec<u8>,
     pub list: SimpleVec,
     pub mining: PtrVec<CliffMining>,
 }
@@ -2677,8 +2747,8 @@ impl Cliffs {
         const VA: u32 = 0x008a9480;
         const C: &str = "CliffsData";
         self.cliffs.walk(w, "CliffsData.cliffs", "PtrArray<Cliff>", 0x004a7100)?;
-        prim::take(w, "CliffsData.a", &mut self.a, 8, C, VA)?;
-        prim::take(w, "CliffsData.b", &mut self.b, 8, C, VA)?;
+        count_run(w, "CliffsData.a", &mut self.a, &mut self.a_data, C, VA)?;
+        count_run(w, "CliffsData.b", &mut self.b, &mut self.b_data, C, VA)?;
         self.list.walk(w, "CliffsData.list", C, VA, 4)?;
         self.mining.walk(w, "CliffsData.mining", "PtrArray<CliffMiningData>", 0x004a7440)
     }
@@ -2699,13 +2769,14 @@ pub struct Doober {
     pub f: SimpleVec,
     pub g: SimpleVec,
     pub h: SimpleVec,
+    pub i: SimpleVec,
 }
 
 impl Doober {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x00846ff0;
         const C: &str = "Doober";
-        tag(w, "Doober.tag", &mut self.tag)?;
+        tag_named(w, "Doober.tag", "Doober", "Doober", 0x00846ff0, &mut self.tag)?;
         self.a.walk(w, "Doober.a", C, VA, 4)?;
         self.uv0.walk(w, "Doober.uv0", "Array<UVPair>", 0x00499e90)?;
         self.b.walk(w, "Doober.b", C, VA, 4)?;
@@ -2716,7 +2787,9 @@ impl Doober {
         self.rects.walk(w, "Doober.rects", C, VA, 8)?;
         self.f.walk(w, "Doober.f", C, VA, 4)?;
         self.g.walk(w, "Doober.g", C, VA, 4)?;
-        self.h.walk(w, "Doober.h", C, VA, 4)
+        self.h.walk(w, "Doober.h", C, VA, 4)?;
+        // Fourth trailing SimpleArray<int> (decomp 00846ff0 lines 27-30).
+        self.i.walk(w, "Doober.i", C, VA, 4)
     }
 }
 
@@ -2849,7 +2922,7 @@ impl AchieveData {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x007af0b0;
         const C: &str = "AchieveData";
-        tag(w, "AchieveData.tag", &mut self.tag)?;
+        tag_named(w, "AchieveData.tag", "AchieveData", C, VA, &mut self.tag)?;
         prim::take(w, "AchieveData.a", &mut self.a, 8, C, VA)?;
         if w.is_loading() && self.l.is_empty() {
             self.l.resize_with(8, SimpleVec::default);
@@ -2886,7 +2959,7 @@ impl Achieve {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x007af790;
         const C: &str = "Achieve";
-        tag(w, "Achieve.tag", &mut self.tag)?;
+        tag_named(w, "Achieve.tag", "Achieve", C, VA, &mut self.tag)?;
         prim::w_i32(w, "Achieve.head", VA, &mut self.head)?;
         if w.is_loading() {
             self.data.resize_with(6, AchieveData::default);
@@ -2948,6 +3021,8 @@ impl Body for ScenarioObjective {
 /// sub-collections fail closed when nonzero.
 #[derive(Default, Clone)]
 pub struct ScenarioData {
+    /// `walk_test(StringTable "ScenarioData")` → 0x04.
+    pub tag: u8,
     pub g0: Vec<u8>,  // 32 (8 x i32)
     pub g1: Vec<u8>,  // 96 (8 slots x 3 i32)
     pub g2: Vec<u8>,  // 4
@@ -2992,6 +3067,7 @@ impl ScenarioData {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x00997ad0;
         const C: &str = "ScenarioData";
+        tag_named(w, "ScenarioData.tag", "ScenarioData", C, VA, &mut self.tag)?;
         prim::take(w, "ScenarioData.g0", &mut self.g0, 32, C, VA)?;
         prim::take(w, "ScenarioData.g1", &mut self.g1, 96, C, VA)?;
         prim::take(w, "ScenarioData.g2", &mut self.g2, 4, C, VA)?;
@@ -3053,108 +3129,240 @@ impl ScenarioData {
     }
 }
 
-/// RunTimeEnv 0x009c41a0: tag + i32 record count + per-record bodies
-/// (FUN_009c63b0). FUN_009c40a0 takes no visitor — load-side reset only.
+/// `RunTimeEnv::walk_data` 0x009c41a0: `walk_test("Script RunTimeEnv")`,
+/// `RunTimeEnv::close` (no stream bytes), then the i32 count of
+/// `ScriptFile::script_files` (`PtrArray<ScriptFile>` at 0x00c8cba0, count at
+/// +4) and each file's `ScriptFile::walk_data` 0x009c63b0 in index order.
+/// The same traversal drives the `script_run_time` checksum channel.
 #[derive(Default, Clone)]
 pub struct RunTimeEnv {
     pub tag: u8,
     pub count: i32,
-    pub records: Vec<EnvRecord>,
+    pub records: Vec<ScriptFile>,
 }
 
-/// Element of a record's FUN_004cccd0 pointer array (FUN_009c5f30, object
-/// size 0xcc): tag + i32/n pair + count-prefixed data + SimpleArray<int> +
-/// SimpleArray<u8> + 3 × ObjectArray<String> + String + 12B.
+/// `ScriptType::walk_array` 0x009d84a0: `walk_test("Script Vars Walk Array")`
+/// + i32 count (`PtrArray+4`) + per slot `ScriptType::walk_base`.
 #[derive(Default, Clone)]
-pub struct EnvSub {
+pub struct ScriptVarArray {
     pub tag: u8,
-    pub head: Vec<u8>, // 8: i32 + data count
-    pub data: Vec<u8>,
-    pub ints: SArr,
-    pub bytes: SimpleVec,
-    pub s0: Arr<WStr>,
-    pub s1: Arr<WStr>,
-    pub s2: Arr<WStr>,
-    pub name: Vec<u16>,
-    pub tail: Vec<u8>, // 12
+    pub vars: Vec<ScriptVar>,
 }
 
-impl Body for EnvSub {
-    fn walk(&mut self, path: &str, w: &mut dyn DataWalk) -> R {
-        const VA: u32 = 0x009c5f30;
-        const C: &str = "RunTimeEnv.Sub";
-        tag(w, path, &mut self.tag)?;
-        if !w.is_loading() {
-            let n = self.data.len() as i32;
-            self.head[4..8].copy_from_slice(&n.to_le_bytes());
+impl ScriptVarArray {
+    pub(crate) fn walk(&mut self, path: &str, w: &mut dyn DataWalk, depth: u32) -> R {
+        const VA: u32 = 0x009d84a0;
+        const C: &str = "ScriptType::walk_array";
+        tag_named(w, &format!("{path}.tag"), "Script Vars Walk Array", C, VA, &mut self.tag)?;
+        let mut n = self.vars.len() as i32;
+        prim::w_i32(w, path, VA, &mut n)?;
+        if w.is_loading() {
+            if !(0..=1 << 20).contains(&n) {
+                return Err(w.fail(C, VA, format!("{path} count {n}")));
+            }
+            self.vars.clear();
+            self.vars.resize_with(n as usize, ScriptVar::default);
         }
-        prim::take(w, path, &mut self.head, 8, C, VA)?;
-        let n = i32::from_le_bytes(self.head[4..8].try_into().unwrap());
-        if !(0..=1 << 24).contains(&n) {
-            return Err(w.fail(C, VA, format!("{path} data count {n}")));
+        for i in 0..self.vars.len() {
+            self.vars[i].walk(&format!("{path}[{i}]"), w, depth)?;
         }
-        if n != 0 {
-            prim::take(w, path, &mut self.data, n as usize, C, VA)?;
-        }
-        self.ints.walk(&format!("{path}.ints"), w)?;
-        self.bytes.walk(w, &format!("{path}.bytes"), C, VA, 1)?;
-        self.s0.walk(w, &format!("{path}.s0"), "ObjectArray<String>", 0x00490fb0)?;
-        self.s1.walk(w, &format!("{path}.s1"), "ObjectArray<String>", 0x00490fb0)?;
-        self.s2.walk(w, &format!("{path}.s2"), "ObjectArray<String>", 0x00490fb0)?;
-        prim::wstr(w, path, &mut self.name, C, VA)?;
-        prim::take(w, path, &mut self.tail, 12, C, VA)
+        Ok(())
     }
 }
 
-/// FUN_004cd230 counted list: i32 count + n × 7B nodes (i16 + 5B).
+/// `ScriptType::walk_base` 0x009d7ea0 (static; `ScriptType**` in EDX):
+/// `walk_test("Script Vars Walk")`; null → i32 0. Otherwise i32 `data_type`
+/// (`+4`), u16 `scope` (`+8`, OR 0x80 when virtual `is_ref()`), u16
+/// `ref_count` (`[+0xc,+0xe)`), then the most-derived `walk_data` (vtable
+/// +0x30). On load `ScriptType::pop` 0x009d7fb0 picks the class from
+/// `data_type` (0x57bad Int, 0x12f35f Float, 0x168174 String) and otherwise
+/// from the scope's 0x80 bit (set → `ScriptArray`, clear → `ScriptObject`),
+/// which is exactly the discriminator this grammar uses.
 #[derive(Default, Clone)]
-pub struct EnvList7 {
+pub struct ScriptVar {
+    pub tag: u8,
+    pub data_type: i32,
+    pub scope: u16,
+    pub ref_count: u16,
+    pub val: ScriptVal,
+}
+
+#[derive(Default, Clone)]
+pub enum ScriptVal {
+    #[default]
+    Null,
+    /// `ScriptInt::walk_data` 0x009d7720: `walk_test("Script Walk Int")` + `[+0x10,+0x14)`.
+    Int(u8, Vec<u8>),
+    /// `ScriptFloat::walk_data` 0x009d7000: `walk_test("Script Walk Float")` + `[+0x10,+0x14)`.
+    Float(u8, Vec<u8>),
+    /// `ScriptString::walk_data` 0x009d6ae0: `walk_test("Script Walk String")` + `String`.
+    Str(u8, Vec<u16>),
+    /// `ScriptObject::walk_data` 0x009d6500: `walk_test("Script Walk Object")` + member `walk_array`.
+    Object(u8, ScriptVarArray),
+    /// `ScriptArray::walk_data` 0x009d5bc0: `walk_test("Script Walk Array")` +
+    /// `walk_base(blank_base)` + `walk_test("Script Walk Object")` + element `walk_array`.
+    Array(u8, Box<ScriptVar>, u8, ScriptVarArray),
+}
+
+pub const SCRIPT_TYPE_INT: i32 = 0x57bad;
+pub const SCRIPT_TYPE_FLOAT: i32 = 0x12f35f;
+pub const SCRIPT_TYPE_STRING: i32 = 0x168174;
+
+impl ScriptVar {
+    pub(crate) fn walk(&mut self, path: &str, w: &mut dyn DataWalk, depth: u32) -> R {
+        const VA: u32 = 0x009d7ea0;
+        const C: &str = "ScriptType::walk_base";
+        if depth > 64 {
+            return Err(w.fail(C, VA, format!("{path}: ScriptType nesting too deep")));
+        }
+        tag_named(w, &format!("{path}.tag"), "Script Vars Walk", C, VA, &mut self.tag)?;
+        if !w.is_loading() && matches!(self.val, ScriptVal::Null) {
+            self.data_type = 0;
+        }
+        prim::w_i32(w, &format!("{path}.data_type"), VA, &mut self.data_type)?;
+        if self.data_type == 0 {
+            if w.is_loading() {
+                self.val = ScriptVal::Null;
+            }
+            return Ok(());
+        }
+        prim::w_u16(w, &format!("{path}.scope"), VA, &mut self.scope)?;
+        prim::w_u16(w, &format!("{path}.ref_count"), VA, &mut self.ref_count)?;
+        if w.is_loading() {
+            self.val = match self.data_type {
+                SCRIPT_TYPE_INT => ScriptVal::Int(0, Vec::new()),
+                SCRIPT_TYPE_FLOAT => ScriptVal::Float(0, Vec::new()),
+                SCRIPT_TYPE_STRING => ScriptVal::Str(0, Vec::new()),
+                _ if self.scope & 0x80 != 0 => {
+                    ScriptVal::Array(0, Box::default(), 0, ScriptVarArray::default())
+                }
+                _ => ScriptVal::Object(0, ScriptVarArray::default()),
+            };
+        }
+        match &mut self.val {
+            ScriptVal::Null => unreachable!("non-null data_type with Null payload"),
+            ScriptVal::Int(t, v) => {
+                tag_named(w, &format!("{path}.int.tag"), "Script Walk Int", "ScriptInt", 0x009d7720, t)?;
+                prim::take(w, &format!("{path}.int"), v, 4, "ScriptInt", 0x009d7720)
+            }
+            ScriptVal::Float(t, v) => {
+                tag_named(w, &format!("{path}.float.tag"), "Script Walk Float", "ScriptFloat", 0x009d7000, t)?;
+                prim::take(w, &format!("{path}.float"), v, 4, "ScriptFloat", 0x009d7000)
+            }
+            ScriptVal::Str(t, v) => {
+                tag_named(w, &format!("{path}.string.tag"), "Script Walk String", "ScriptString", 0x009d6ae0, t)?;
+                prim::wstr(w, &format!("{path}.string"), v, "ScriptString", 0x009d6ae0)
+            }
+            ScriptVal::Object(t, members) => {
+                tag_named(w, &format!("{path}.object.tag"), "Script Walk Object", "ScriptObject", 0x009d6500, t)?;
+                members.walk(&format!("{path}.members"), w, depth + 1)
+            }
+            ScriptVal::Array(t, blank, t2, elems) => {
+                tag_named(w, &format!("{path}.array.tag"), "Script Walk Array", "ScriptArray", 0x009d5bc0, t)?;
+                blank.walk(&format!("{path}.blank_base"), w, depth + 1)?;
+                tag_named(w, &format!("{path}.array.object.tag"), "Script Walk Object", "ScriptArray", 0x009d5bc0, t2)?;
+                elems.walk(&format!("{path}.elems"), w, depth + 1)
+            }
+        }
+    }
+}
+
+/// `Script::walk_data` 0x009c5f30 (object size 0xcc), element of a
+/// `ScriptFile`'s `PtrArray<Script>` 0x004cccd0: `walk_test("Script")` +
+/// `static_vars` walk_array + `DynamicBitMask` (`[+0x58,+0x60)` with the
+/// byte count at +0x5c, then that many bytes) + `params: SimpleArray<int>` +
+/// `refs: SimpleArray<u8>` + `trigger_names`/`var_names`/`static_var_names`
+/// (3 × `ObjectArray<String>`) + `name: String` + `[+0xc0,+0xcc)`.
+#[derive(Default, Clone)]
+pub struct Script {
+    pub tag: u8,
+    pub static_vars: ScriptVarArray,
+    pub mask_head: Vec<u8>, // 8: bits + size
+    pub mask_data: Vec<u8>,
+    pub params: SimpleVec,
+    pub refs: SimpleVec,
+    pub trigger_names: Arr<WStr>,
+    pub var_names: Arr<WStr>,
+    pub static_var_names: Arr<WStr>,
+    pub name: Vec<u16>,
+    pub tail: Vec<u8>, // 12: offset, return_type, script_type
+}
+
+impl Body for Script {
+    fn walk(&mut self, path: &str, w: &mut dyn DataWalk) -> R {
+        const VA: u32 = 0x009c5f30;
+        const C: &str = "Script";
+        tag_named(w, &format!("{path}.tag"), "Script", C, VA, &mut self.tag)?;
+        self.static_vars.walk(&format!("{path}.static_vars"), w, 0)?;
+        count_run(w, &format!("{path}.mask"), &mut self.mask_head, &mut self.mask_data, C, VA)?;
+        self.params.walk(w, &format!("{path}.params"), C, 0x00473120, 4)?;
+        self.refs.walk(w, &format!("{path}.refs"), C, 0x0049a090, 1)?;
+        self.trigger_names.walk(w, &format!("{path}.trigger_names"), "ObjectArray<String>", 0x00490fb0)?;
+        self.var_names.walk(w, &format!("{path}.var_names"), "ObjectArray<String>", 0x00490fb0)?;
+        self.static_var_names.walk(w, &format!("{path}.static_var_names"), "ObjectArray<String>", 0x00490fb0)?;
+        prim::wstr(w, &format!("{path}.name"), &mut self.name, C, VA)?;
+        prim::take(w, &format!("{path}.tail"), &mut self.tail, 12, C, VA)
+    }
+}
+
+/// `LinkList<BreakInfo,unsigned short>::walk_data` 0x004cd230: i32 count +
+/// per node `[+0x10,+0x12)` key + `[+0x8,+0xd)` — 7 B.
+#[derive(Default, Clone)]
+pub struct BreakLines {
     pub len: i32,
     pub nodes: Vec<u8>,
 }
 
-impl EnvList7 {
-    pub(crate) fn walk(&mut self, w: &mut dyn DataWalk, path: &str, va: u32) -> R {
+impl BreakLines {
+    pub(crate) fn walk(&mut self, w: &mut dyn DataWalk, path: &str) -> R {
+        const VA: u32 = 0x004cd230;
         if !w.is_loading() {
             self.len = (self.nodes.len() / 7) as i32;
         }
-        prim::w_i32(w, path, va, &mut self.len)?;
+        prim::w_i32(w, path, VA, &mut self.len)?;
         if w.is_loading() && !(0..=4_000_000).contains(&self.len) {
-            return Err(w.fail("EnvList7", va, format!("{path} count {}", self.len)));
+            return Err(w.fail("BreakLines", VA, format!("{path} count {}", self.len)));
         }
-        prim::take(w, path, &mut self.nodes, self.len.max(0) as usize * 7, "EnvList7", va)
+        prim::take(w, path, &mut self.nodes, self.len.max(0) as usize * 7, "BreakLines", VA)
     }
 }
 
+/// `ScriptFile::walk_data` 0x009c63b0 (object size 0xe0):
+/// `walk_test("ScriptFile")` + `code: SimpleArray<u8>` + `scripts:
+/// PtrArray<Script>` + `const_pool` walk_array + `linked_files:
+/// SimpleArray<int>`; then, gated on `DataWalk+8 == 0` (skipped by
+/// CheckSum): `linked_file_names: ObjectArray<String>`, `source_file:
+/// String`, `line_to_op: SimpleArray<int>`, `break_lines`, and
+/// `[+0xd4,+0xdd)` (two timestamps + file_flags).
 #[derive(Default, Clone)]
-pub struct EnvRecord {
+pub struct ScriptFile {
     pub tag: u8,
-    pub a: SimpleVec, // SimpleArray<u8>
-    pub subs: PtrVec<EnvSub>, // FUN_004cccd0
-    pub c: SimpleVec, // SimpleArray<int>
-    // Everything below is gated `param_1[2] == 0` — walked on save/load,
-    // skipped by CheckSum.
-    pub d: Arr<WStr>, // ObjectArray<String>
-    pub s: Vec<u16>,
-    pub e: SimpleVec,
-    pub f: EnvList7,  // FUN_004cd230
-    pub tail: Vec<u8>, // +0xd4..+0xdd 9B
+    pub code: SimpleVec,
+    pub scripts: PtrVec<Script>,
+    pub const_pool: ScriptVarArray,
+    pub linked_files: SimpleVec,
+    pub linked_file_names: Arr<WStr>,
+    pub source_file: Vec<u16>,
+    pub line_to_op: SimpleVec,
+    pub break_lines: BreakLines,
+    pub tail: Vec<u8>, // 9
 }
 
-impl Body for EnvRecord {
+impl Body for ScriptFile {
     fn walk(&mut self, path: &str, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x009c63b0;
-        const C: &str = "RunTimeEnv.Record";
-        tag(w, path, &mut self.tag)?;
-        self.a.walk(w, &format!("{path}.a"), C, 0x0049a090, 1)?;
-        self.subs.walk(w, &format!("{path}.subs"), C, 0x004cccd0)?;
-        self.c.walk(w, &format!("{path}.c"), C, VA, 4)?;
+        const C: &str = "ScriptFile";
+        tag_named(w, &format!("{path}.tag"), "ScriptFile", C, VA, &mut self.tag)?;
+        self.code.walk(w, &format!("{path}.code"), C, 0x0049a090, 1)?;
+        self.scripts.walk(w, &format!("{path}.scripts"), C, 0x004cccd0)?;
+        self.const_pool.walk(&format!("{path}.const_pool"), w, 0)?;
+        self.linked_files.walk(w, &format!("{path}.linked_files"), C, 0x00473120, 4)?;
         if !w.is_checksum() {
-            self.d.walk(w, &format!("{path}.d"), "ObjectArray<String>", 0x00490fb0)?;
-            prim::wstr(w, path, &mut self.s, C, VA)?;
-            self.e.walk(w, &format!("{path}.e"), C, VA, 4)?;
-            self.f.walk(w, &format!("{path}.f"), 0x004cd230)?;
-            prim::take(w, path, &mut self.tail, 9, C, VA)?;
+            self.linked_file_names.walk(w, &format!("{path}.linked_file_names"), "ObjectArray<String>", 0x00490fb0)?;
+            prim::wstr(w, &format!("{path}.source_file"), &mut self.source_file, C, VA)?;
+            self.line_to_op.walk(w, &format!("{path}.line_to_op"), C, 0x00473120, 4)?;
+            self.break_lines.walk(w, &format!("{path}.break_lines"))?;
+            prim::take(w, &format!("{path}.tail"), &mut self.tail, 9, C, VA)?;
         }
         Ok(())
     }
@@ -3164,7 +3372,7 @@ impl RunTimeEnv {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const VA: u32 = 0x009c41a0;
         const C: &str = "RunTimeEnv";
-        tag(w, "RunTimeEnv.tag", &mut self.tag)?;
+        tag_named(w, "RunTimeEnv.tag", "Script RunTimeEnv", C, VA, &mut self.tag)?;
         if !w.is_loading() {
             self.count = self.records.len() as i32;
         }
@@ -3174,10 +3382,10 @@ impl RunTimeEnv {
                 return Err(w.fail(C, VA, format!("record count {}", self.count)));
             }
             self.records.clear();
-            self.records.resize_with(self.count as usize, EnvRecord::default);
+            self.records.resize_with(self.count as usize, ScriptFile::default);
         }
         for i in 0..self.records.len() {
-            self.records[i].walk(&format!("RunTimeEnv.records[{i}]"), w)?;
+            self.records[i].walk(&format!("RunTimeEnv.files[{i}]"), w)?;
         }
         Ok(())
     }
@@ -3196,7 +3404,7 @@ pub struct FinalGlobals {
 impl FinalGlobals {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const C: &str = "WalkDataGame.final";
-        tag(w, "WalkDataGame.final.tag", &mut self.tag)?;
+        tag_named(w, "TurnControl.tag", "TurnControl", C, 0x005a2360, &mut self.tag)?;
         count_run(w, "WalkDataGame.final.data", &mut self.head, &mut self.data, C, 0)?;
         prim::take(w, "WalkDataGame.final.tail", &mut self.tail, 341, C, 0)
     }
@@ -3223,27 +3431,28 @@ impl FinalGlobals {
 /// `SHIPPED_RULES_SERIALIZED_BYTES`).
 pub const RULES_SERIALIZED_BYTES: usize = 1_024_221;
 
-/// Tail grammar after `final_globals` (`WalkDataGame::walk_data` 0x005a2360
-/// ends with `Game::walk_rules_data` 0x00589550):
-///   [opaque scenario/RunTimeEnv-serialized bytes] + [Rules] + [opaque trailer].
-/// The leading span is bounded by the self-authenticating Rules scan (every
-/// type record serializes its slot index at image[0..4), so a false tag
-/// cannot survive the first two records); the trailing span is bounded by
-/// EOF. Both opaque spans are reported stop points: the leading one is
-/// script-VM serialization (bytecode, const pools, editor paths) whose
-/// interior counts live in globals we have not yet resolved, and the trailer
-/// (~840 KB, i32-grid-like) has no known writer in the walk — no section
-/// between `final_globals` and EOF accounts for it.
+/// Tail of the stream after the TurnControl globals. `WalkDataGame::walk_data`
+/// 0x005a2360 ends with `Game::walk_rules_data` 0x00589550 (asm 0x005a3546),
+/// reached directly — no scan. Everything after it is written by
+/// `SaveGame::verify_save` 0x005a76b0 (vtable 0x00b35ac4 slot +0x10, called
+/// by `SaveGame::do_save` 0x005a81f0 right after `walk_data`): a stack
+/// `CheckSum` (adler seed 1) is driven through each state walker in turn and
+/// after every sub-walk the 4-byte adler word is appended to the stream and
+/// the seed reset — hence the 4-byte-aligned trailer dominated by
+/// `0x00020001` (adler of two zero bytes) and `0x00420021` (adler of
+/// `u16 0x0020`). Its word count is a function of the state (per-object /
+/// per-tile sub-walks); the verifier body (2,866 bytes) is not yet
+/// transcribed, so the words are preserved as an opaque `u32` run.
 #[derive(Default, Clone)]
 pub struct RulesTail {
-    pub pre_rules: Vec<u8>,
     pub rules: Rules,
-    pub post_rules: Vec<u8>,
+    /// `SaveGame::verify_save` adler words, in emission order (4B each).
+    pub verify_words: Vec<u8>,
 }
 
-/// Scan `buf[start..]` for the Rules section: a `0x92` tag followed by a
-/// zero type_index, then a full typed `Rules::walk` that must consume
-/// exactly `RULES_SERIALIZED_BYTES`. Returns the absolute offset.
+/// Diagnostic only (no longer used by the loader): locate a Rules section
+/// by scanning for its `0x92` tag + zero `type_index` and a full-width
+/// typed parse. Kept for `svx-diff`-style tooling.
 pub fn find_rules_boundary(buf: &[u8], start: usize) -> Option<usize> {
     let scan_end = buf.len().checked_sub(RULES_SERIALIZED_BYTES)? + 1;
     for o in start.min(scan_end)..scan_end {
@@ -3264,23 +3473,18 @@ pub fn find_rules_boundary(buf: &[u8], start: usize) -> Option<usize> {
 
 impl RulesTail {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
-        const C: &str = "RulesTail";
-        const VA: u32 = 0x00589550;
-        if w.is_loading() {
-            let off = w.rules_boundary().ok_or_else(|| {
-                w.fail(C, VA, "no self-validating Rules section found in tail".into())
-            })?;
-            self.pre_rules.clear();
-            self.pre_rules.resize(off, 0);
-        }
-        w.walk_bytes("RulesTail.pre_rules", &mut self.pre_rules)?;
+        const C: &str = "SaveGame::verify_save";
+        const VA: u32 = 0x005a76b0;
         self.rules.walk(w)?;
         if w.is_loading() {
             let n = w.remaining();
-            self.post_rules.clear();
-            self.post_rules.resize(n, 0);
+            if n % 4 != 0 {
+                return Err(w.fail(C, VA, format!("verify_save trailer {n} B is not 4-byte aligned")));
+            }
+            self.verify_words.clear();
+            self.verify_words.resize(n, 0);
         }
-        w.walk_bytes("RulesTail.post_rules", &mut self.post_rules)
+        w.walk_bytes("SaveGame.verify_save", &mut self.verify_words)
     }
 }
 
@@ -3424,7 +3628,7 @@ impl Rules {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
         const C: &str = "Rules";
         const VA: u32 = 0x00589550;
-        tag(w, "Rules.tag", &mut self.tag)?;
+        tag_named(w, "Rules.tag", "Game Rules", C, VA, &mut self.tag)?;
         if w.is_loading() {
             self.types.resize_with(806, TypeRec::default);
             self.tribes.resize_with(24, TribeRec::default);

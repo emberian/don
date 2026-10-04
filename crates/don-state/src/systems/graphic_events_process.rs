@@ -2,7 +2,7 @@
 //!
 //! Despite the class name this is walked sim state: the body is a fog-reveal
 //! sweep over `GraphicEvents::ambience_structs` (the walked
-//! `GraphicEvents.ambience` array, `Array<AmbienceStruct>`, 24-byte rows).
+//! `GraphicEvents.ambience` array, `Array<AmbienceStruct>`, 23-byte rows).
 //! Transcribed from `re/decomp-all/008e50a0.c`, cross-checked against the
 //! Capstone listing of 0x008E50A0..0x008E521A (no `call` in the body, so it
 //! consumes **zero** `game_random` draws).
@@ -100,7 +100,7 @@ pub fn run(save: &mut Save, effects: &mut Vec<String>) {
     let mut touched = 0usize;
     for (i, row) in save.graphic_events.ambience.elems.iter_mut().enumerate() {
         let d = &mut row.data;
-        if d.len() < 24 {
+        if d.len() < 23 {
             continue; // malformed row: leave untouched rather than guess
         }
         let old = d[AMB_SEEN];

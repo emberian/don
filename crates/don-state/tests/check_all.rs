@@ -9,10 +9,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// Channel indices still open (see crate README):
-///   13 scenario_data   — retail hashes Game::init scenario state, not in .svx
-///   14 script_run_time — RunTimeEnv records (initialized script state)
-const OPEN: &[usize] = &[13, 14];
+/// Channel indices still open (see crate README). Empty: all fifteen
+/// channels are exact-equality gates (scenario_data and script_run_time
+/// closed once the GraphicEvents slot plane, Camera, Terrain coord data,
+/// Cliffs payloads, Doober and ScenarioData/ScriptFile grammars were typed).
+const OPEN: &[usize] = &[];
 
 /// Every `schema/live/frame-pairs/<ts>*/` containing a manifest.json.
 fn capture_dirs() -> Vec<PathBuf> {
