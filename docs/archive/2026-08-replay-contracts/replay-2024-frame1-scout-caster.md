@@ -26,7 +26,7 @@ object, whose `CasterData` base owns `Array<ActiveSpell>` at `+0x04`.
 
 ## Exact captured owner
 
-[`frame1_caster_process`](../../crates/don-sim/src/systems/frame1_caster_process.rs) defines the
+[`frame1_caster_process`](../../../crates/don-sim/src/systems/frame1_caster_process.rs) defines the
 child-local call-boundary authority.  The PDB fixes the complete engine array shape:
 
 | array field | array offset | captured form |

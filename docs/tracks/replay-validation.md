@@ -244,9 +244,9 @@ first missing generated-content `World::gather_at` fact. Final territory is also
 The producer remains the same frozen constructor, so a full corpus regeneration keeps the
 **36,955 / 0 matches / 0 survival** metrics unchanged. Full channel derivation and the
 fail-closed bridge mutation proof are in
-[`docs/assembly/replay-cities-sim-channel.md`](../assembly/replay-cities-sim-channel.md).
+[`docs/archive/2026-08-replay-contracts/replay-cities-sim-channel.md`](../archive/2026-08-replay-contracts/replay-cities-sim-channel.md) (archived).
 The new transaction and its atomic refusal boundary are in
-[`docs/assembly/replay-starting-city-unit-census.md`](../assembly/replay-starting-city-unit-census.md).
+[`docs/archive/2026-08-replay-contracts/replay-starting-city-unit-census.md`](../archive/2026-08-replay-contracts/replay-starting-city-unit-census.md) (archived).
 
 ### The corpus has a **second** checksum stream, and 39 recordings were carrying it
 
@@ -718,7 +718,7 @@ owner, full move-near decompilation and bounded Sim transaction now exist. What 
 source-backed Unit/content/formation/order/path state at that package frame, including preceding
 Farm packages for the strict 2018 witness, followed by the object-removal and leader-speed facts
 used when a live slot reaches `Groups::process`. The exact receipts and chronology are in
-[`docs/assembly/replay-groups-pre-pair-unit-authority.md`](../assembly/replay-groups-pre-pair-unit-authority.md).
+[`docs/archive/2026-08-replay-contracts/replay-groups-pre-pair-unit-authority.md`](../archive/2026-08-replay-contracts/replay-groups-pre-pair-unit-authority.md) (archived).
 
 Deferred, and deliberately: **`deaths` and `ammo`**. Their divergence turns (847 / 1,584 in
 the 2025 game) are still the first place a real mechanic has to be right, but both start

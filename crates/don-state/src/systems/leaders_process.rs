@@ -46,13 +46,12 @@
 //!    0x006CEEE0 on them. Its gate (0x006CEEF4..0x006CEF27): with
 //!    `leader_flags & 0x2000000` clear, run only when
 //!    `frame >= gather_stamp + 300 && (frame + who*8) % 256 == 0`; with it
-//!    set, run when `frame == 0 || (who + frame) % 8 == 0`. The body
-//!    (income recomputation from cities/buildings/caravans/rares, writes
-//!    `resources`, `known_rares`, `rares_collected`, `rare_owned`,
-//!    `gather_stamp = frame`, clears 0x2000000) is UNTRANSCRIBED: when the
-//!    gate passes, nothing is written and the effect log says so. In the
-//!    stride-1 captures the gate never passes (frames 11..40,
-//!    `gather_stamp` 2..9).
+//!    set, run when `frame == 0 || (who + frame) % 8 == 0`. The body lives
+//!    in `systems::leader_calc_gather` (non-object writes transcribed:
+//!    `rare_owned` clear, `known_rares`, `rares_collected`, `bonus`,
+//!    `rare` sync, `gather_stamp`, flag clear; the `resources` recompute
+//!    from cities/buildings/caravans is UNTRANSCRIBED). In the stride-1
+//!    captures the gate never passes (frames 11..40, `gather_stamp` 2..9).
 //! 2. `rare = rare_owned | rare_conquest` (`BitMask<44>::operator|`
 //!    0x0047CE20 / `operator!=` 0x0047CD90 compare payload bytes only); on
 //!    change `leader_flags |= 0xc000000`.
@@ -172,7 +171,7 @@ pub const STATUS: StepStatus = StepStatus::Partial;
 
 // --- LeaderData image offsets (body index = image offset − 8) ---------------
 const LD_BASE: usize = 0x8;
-const LD_WHO: usize = 0x8;
+pub(crate) const LD_WHO: usize = 0x8;
 const LD_TRIBE: usize = 0xc;
 const LD_MULTI_DIFF: usize = 0x50;
 const LD_DIPLOS: usize = 0x74;
@@ -190,7 +189,7 @@ const LD_WONDERWIN_TIMER: usize = 0x44c;
 const LD_ESCROW: usize = 0x468;
 const LD_ESCROW_RATE: usize = 0x480;
 const LD_BASE_RATE: usize = 0x4b0;
-const LD_GATHER_STAMP: usize = 0x7ac;
+pub(crate) const LD_GATHER_STAMP: usize = 0x7ac;
 const LD_POP_ISSUES: usize = 0x7e8;
 const LD_COLLECTED: usize = 0x874;
 const LD_BONUS_CAP: usize = 0x918;
@@ -203,14 +202,15 @@ const ENC_BUCKET: usize = 0;
 const ENC_LEFTOVER: usize = 1;
 const ENC_RESOURCE_CAP: usize = 2;
 const ENC_OVER_CAP: usize = 3;
-const ENC_RESOURCES: usize = 4;
+pub(crate) const ENC_RESOURCES: usize = 4;
 const ENC_SUPPORT: usize = 5;
 const ENC_INCOME: usize = 6;
-const ENC_PER_GOOD: usize = 9;
+pub(crate) const ENC_BONUS: usize = 8;
+pub(crate) const ENC_PER_GOOD: usize = 9;
 const ENC_RESOURCE_CAP6: usize = 54;
 const ENC_EPOCH: usize = 55; // epoch[0..4] = 55..58
 const ENC_LEN: usize = 62 * 4;
-const NUM_GOODS: usize = 6;
+pub(crate) const NUM_GOODS: usize = 6;
 
 // --- GameInfo offsets (GameInfo-relative; Game+X == GameInfo+(X-0xc)) -------
 const GI_FLAGS: usize = 0x14; // head[20..24]
@@ -279,16 +279,16 @@ fn put_i32(buf: &mut [u8], off: usize, v: i32) {
     buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
 }
 
-fn ld_i32(l: &Leader, img: usize) -> i32 {
+pub(crate) fn ld_i32(l: &Leader, img: usize) -> i32 {
     get_i32(&l.body, img - LD_BASE)
 }
-fn ld_put_i32(l: &mut Leader, img: usize, v: i32) {
+pub(crate) fn ld_put_i32(l: &mut Leader, img: usize, v: i32) {
     put_i32(&mut l.body, img - LD_BASE, v)
 }
-fn enc_i32(l: &Leader, idx: usize) -> i32 {
+pub(crate) fn enc_i32(l: &Leader, idx: usize) -> i32 {
     get_i32(&l.data_encrypted, idx * 4)
 }
-fn enc_put_i32(l: &mut Leader, idx: usize, v: i32) {
+pub(crate) fn enc_put_i32(l: &mut Leader, idx: usize, v: i32) {
     put_i32(&mut l.data_encrypted, idx * 4, v)
 }
 fn bit(mask: &BitMask, b: i32) -> bool {
@@ -300,17 +300,17 @@ fn bit(mask: &BitMask, b: i32) -> bool {
 }
 
 /// Read-only game context shared by every leader in the pass.
-struct Ctx<'a> {
-    frame: i32,
-    game: &'a Game,
-    rules: &'a Rules,
-    constants_fallback: &'a [u8],
+pub(crate) struct Ctx<'a> {
+    pub(crate) frame: i32,
+    pub(crate) game: &'a Game,
+    pub(crate) rules: &'a Rules,
+    pub(crate) constants_fallback: &'a [u8],
 }
 
 impl Ctx<'_> {
     /// `Constants` image accessor (typed Rules image, falling back to the
     /// earlier direct walk of the same object).
-    fn constant(&self, off: usize) -> i32 {
+    pub(crate) fn constant(&self, off: usize) -> i32 {
         let c = &self.rules.constants;
         if c.len() >= off + 4 {
             return get_i32(c, off);
@@ -367,9 +367,9 @@ impl Ctx<'_> {
 }
 
 /// Evaluator for the `LeaderData` const queries over one leader snapshot.
-struct Eval<'a> {
-    ctx: &'a Ctx<'a>,
-    l: &'a Leader,
+pub(crate) struct Eval<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    pub(crate) l: &'a Leader,
 }
 
 impl Eval<'_> {
@@ -384,7 +384,7 @@ impl Eval<'_> {
     }
 
     /// `LeaderData::has_tribe_bonus(int)` 0x006E1370.
-    fn has_tribe_bonus(&self, b: i32) -> Option<bool> {
+    pub(crate) fn has_tribe_bonus(&self, b: i32) -> Option<bool> {
         if self.ctx.info_flags() & 4 != 0 {
             return Some(false);
         }
@@ -583,7 +583,7 @@ impl Eval<'_> {
 
     /// `LeaderData::has_wonder(int)` 0x006EBC10. The owned-wonder scan over
     /// the Objects lists is only entered when `wonder_mark > 0`.
-    fn has_wonder(&self, w: i32) -> Option<i32> {
+    pub(crate) fn has_wonder(&self, w: i32) -> Option<i32> {
         if !is_wonder_type(w) {
             return Some(0);
         }
@@ -670,7 +670,7 @@ pub fn run(save: &mut Save, effects: &mut Vec<String>) {
     process_all(&ctx, &mut leaders.slots, effects);
 }
 
-fn readable(l: &Leader) -> bool {
+pub(crate) fn readable(l: &Leader) -> bool {
     l.flags & 1 != 0 && l.body.len() >= LD_MIN_BODY && l.data_encrypted.len() >= ENC_LEN
 }
 
@@ -777,17 +777,10 @@ fn gather(ctx: &Ctx, slots: &mut [Leader], slot: usize, effects: &mut Vec<String
     let frame = ctx.frame;
     let who = ld_i32(&slots[slot], LD_WHO);
 
-    // 1. calc_gather gate (0x006CEEF4..0x006CEF27, 0x006CF788..0x006CF7A4).
-    let due = if slots[slot].flags & 0x2000000 == 0 {
-        frame >= ld_i32(&slots[slot], LD_GATHER_STAMP).wrapping_add(300)
-            && frame.wrapping_add(who.wrapping_mul(8)) % 256 == 0
-    } else {
-        frame == 0 || who.wrapping_add(frame) % 8 == 0
-    };
-    if due {
-        effects.push(format!(
-            "Leader[{slot}] who {who}: calc_gather 0x006CEEE0 body due (frame {frame}): UNTRANSCRIBED (resources/gather_stamp untouched)"
-        ));
+    // 1. calc_gather gate (0x006CEEF4..0x006CEF27, 0x006CF788..0x006CF7A4);
+    //    body in `leader_calc_gather` (non-object writes only).
+    if super::leader_calc_gather::due(frame, slots[slot].flags, who, ld_i32(&slots[slot], LD_GATHER_STAMP)) {
+        super::leader_calc_gather::run(ctx, slots, slot, effects);
     }
 
     // 2. rare = rare_owned | rare_conquest.
@@ -1347,9 +1340,16 @@ mod tests {
                     // recomputed by the untranscribed body; its economy
                     // values are out of scope for this pair (introduced
                     // check below still applies).
-                    let gather_due = fx.iter().any(|e| e.starts_with(&format!("Leader[{li}] who")) && e.contains("calc_gather 0x006CEEE0 body due"));
+                    let gather_due = fx.iter().any(|e| e.starts_with(&format!("Leader[{li}] who")) && e.contains("calc_gather 0x006CEEE0 (frame"));
                     if gather_due {
                         gather_skipped += 1;
+                        assert_eq!(
+                            ld_i32(lo, LD_GATHER_STAMP),
+                            ld_i32(lb, LD_GATHER_STAMP),
+                            "{} f{fa}->f{fb} Leader[{li}] gather_stamp",
+                            dir.display()
+                        );
+                        assert_eq!(lo.flags & 0x2000000, lb.flags & 0x2000000, "{} f{fa}->f{fb} Leader[{li}] 0x2000000", dir.display());
                     } else {
                         for idx in 0..62 {
                             let (o, r) = (enc_i32(lo, idx), enc_i32(lb, idx));

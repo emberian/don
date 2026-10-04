@@ -64,14 +64,23 @@ scan" tail was a 15,368 `GraphicEvents` slot count; the shipped install has
   `script_run_time` channel.
 - `0x25e9d5` `TurnControl` (`0xc2`) globals, 341 B tail.
 - `0x25eb34..0x358c11` **Rules** (`"Game Rules"` `0x92`), 1,024,221 B,
-  reached directly (`find_rules_boundary` is now diagnostic only).
+  reached directly (the former tag scan is gone).
 - `0x358c11..EOF` (840,784 B): `SaveGame::verify_save` 0x005a76b0 — called
   by `do_save` 0x005a81f0 through vtable slot +0x10 after `walk_data`. It
-  drives a stack `CheckSum` through each state walker and appends the
-  4-byte adler word after every sub-walk (`0x00020001` = adler of two zero
-  bytes, `0x00420021` = adler of `u16 0x20`). Kept as the opaque
-  `verify_words` run (asserted 4-byte aligned); transcribing the 2,866-byte
-  verifier is the remaining tail work.
+  drives a stack `CheckSum` (seed 1, mask -1) through each state walker and
+  appends the 4-byte adler word after every sub-walk; per-tile (`wdata` rows,
+  21 B), per-`tdata` u16 and per-fog `check_seen` loops make it 210 K words.
+  **Transcribed** as `check_all::verify_save_words` (62 labelled steps):
+  `save()` regenerates the trailer from the state tree and the loader
+  recomputes it and rejects a stream whose trailer it cannot reproduce. Two
+  CheckSum projections surfaced here and are now in the grammars:
+  `GameInfo` under CheckSum skips the version string and the gated leading
+  dword and hashes the +0x14 flags with bit 0 cleared; `Game` skips the
+  semaphore/graphic_tick; `Docks` rows walk `[+0,+6)`, `[+8,+10)` then the
+  gated `[+6,+8)`.
+
+There are no opaque spans left: every byte of every capture is produced by a
+typed walker, and the trailer is a function of the typed state.
 
 ## Tests
 

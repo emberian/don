@@ -156,3 +156,39 @@ fn check_all_matches_manifest() {
         "OPEN channel now matches — remove it from OPEN: {open_flips:?}"
     );
 }
+
+/// `load(save(do_frame(load(x))))`: a save emitted from a *mutated* state
+/// tree must load again, reproduce itself byte-for-byte on a second save,
+/// and carry a `SaveGame::verify_save` trailer regenerated from the mutated
+/// state (the loader recomputes and compares it, so a stale trailer fails
+/// the load). Run on the first frame of every capture directory.
+#[test]
+fn mutated_state_save_roundtrips() {
+    let dirs = capture_dirs();
+    if dirs.is_empty() {
+        eprintln!("SKIP: proprietary live captures absent (schema/live/frame-pairs/*)");
+        return;
+    }
+    let mut tested = 0;
+    for dir in &dirs {
+        let dname = dir.file_name().unwrap().to_string_lossy().to_string();
+        let frames = manifest_frames(dir, &don_state::CHANNEL_NAMES);
+        let Some((frame, f)) = frames.first() else { continue };
+        let name = format!("{dname}/{}.svx (frame {frame})", f.save);
+        let raw = don_state::container::load_svx(&dir.join(format!("{}.svx", f.save))).expect(&name);
+        let mut img = don_state::load(&raw).expect(&name);
+        let trailer_before = img.state.rules_tail.verify_words.clone();
+        let report = don_state::tick::do_frame(&mut img.state);
+        let emitted = don_state::save(&mut img.state).unwrap_or_else(|e| panic!("{name}: save after do_frame: {e}"));
+        assert_ne!(emitted, raw, "{name}: do_frame changed nothing (frame counter must advance)");
+        let trailer_after = img.state.rules_tail.verify_words.clone();
+        assert_ne!(trailer_before, trailer_after, "{name}: verify_save trailer did not follow the mutated state");
+        let mut again = don_state::load(&emitted).unwrap_or_else(|e| panic!("{name}: reload of mutated save: {e}"));
+        assert_eq!(again.consumed, emitted.len(), "{name}: reload left residue");
+        let twice = don_state::save(&mut again.state).expect("second save");
+        assert_eq!(twice, emitted, "{name}: mutated save is not a fixed point of load/save");
+        let _ = report;
+        tested += 1;
+    }
+    assert!(tested > 0);
+}

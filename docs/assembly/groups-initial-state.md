@@ -224,7 +224,7 @@ The corpus result remains the same, for a measured reason rather than because th
 frozen. The canonical replay package hosts require post-worldgen Unit identity, content,
 formation, order and path authority. The replay setup pipeline cannot yet produce those facts,
 so the live pool remains at its initializer image until the first unowned retail mutation.
-[`replay-groups-pre-pair-unit-authority.md`](replay-groups-pre-pair-unit-authority.md) pins that
+[`replay-groups-pre-pair-unit-authority.md`](../archive/2026-08-replay-contracts/replay-groups-pre-pair-unit-authority.md) (archived) pins that
 boundary down to the exact missing receipts and preceding package chronology.
 
 The corpus splits on exactly the same seven recordings as channels 14 and 15, and the

@@ -1255,7 +1255,7 @@ Do not re-derive these:
   offset `0x3396f`. The vbtable at `0x00b245c8` reads `00000000 6c010000 6c010000 54020000`,
   so `vbtable[2] = 0x16c`. The three `LinkList<int,unsigned char>` bases are then
   `0x00e860d4 / 0x00e860ec / 0x00e86104`, `length` at `+0xC` of each.
-- **`docs/assembly/replay-place-all-boundary.md` §1's address triple is mistranscribed.**
+- **`docs/archive/2026-08-replay-contracts/replay-place-all-boundary.md` §1's address triple is mistranscribed.**
   It quotes `+0xe85f74` (a *length*) beside `+0xe85f80` and `+0xe85f98` (list *bases*). The
   self-consistent sets are bases `0xe85f68 / 0xe85f80 / 0xe85f98` (stride `0x18`) and lengths
   `0xe85f74 / 0xe85f8c / 0xe85fa4`. Its conclusions are unaffected.

@@ -18,7 +18,7 @@ bytes as a substantive disagreement instead of treating Cities as absent.
 ## Retail traversal
 
 The instruction-derived walker remains the one documented in
-[`docs/mechanics/tech-cities.md`](../mechanics/tech-cities.md):
+[`docs/mechanics/tech-cities.md`](../../mechanics/tech-cities.md):
 
 - `CheckSums::check_cities` `0x00937600` visits eight Leader slots in ascending order and
   admits an owner only when `LeaderData::leader_flags & 1` is set;

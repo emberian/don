@@ -29,3 +29,4 @@ pub mod territory;
 pub mod achieve_events;
 pub mod animals;
 pub mod post_rules_trailer;
+pub mod img;

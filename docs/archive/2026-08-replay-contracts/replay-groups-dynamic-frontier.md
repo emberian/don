@@ -1,9 +1,9 @@
 # Dynamic replay `Groups` frontier — checksum channel 5
 
 Lane: `replay-groups-dynamic`. This is the first producer step after the frozen
-`Groups::clear` image in [`groups-initial-state.md`](groups-initial-state.md). It does
+`Groups::clear` image in [`groups-initial-state.md`](../../assembly/groups-initial-state.md). It does
 not replace that derivation, the save-game work in
-[`savegame-groups.md`](../derivation/savegame-groups.md), or any of the mounted
+[`savegame-groups.md`](../../derivation/savegame-groups.md), or any of the mounted
 `Group::action_*` planners. It joins the already-derived pieces at the replay boundary.
 
 ## The authoritative path

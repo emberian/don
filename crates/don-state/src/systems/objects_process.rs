@@ -849,13 +849,18 @@ fn unit_work(save: &Save, img: &mut UImg, tag: &str, effects: &mut Vec<String>) 
         // frames) for non-move orders on non-supply/hero types. Fields
         // untouched.
     }
-    // do_job(ty, order)
-    // TODO(va 0x00617a10) Unit::do_job — the order dispatcher. ty 0 ->
-    // do_idle (Unit::do_idle 0x0060dcd0 / Animal::do_idle 0x005d7460),
-    // 1..4 -> Unit::do_move 0x005f7b30 -> Unit::move_step 0x005faf30
-    // (writes x/y/z, angle +0x50, dest_angle +0x58, collide_*, the Guy
-    // des_x/des_y/des_angle, path stack), 7 -> gather. Fields untouched.
-    effects.push(format!("{tag}: do_job(ty={ty}) 0x00617a10 not transcribed"));
+    // do_job(ty, order) 0x00617a10 — switch on OrderIndex:
+    //   0 -> do_idle (vtable +0x184: Unit::do_idle 0x0060dcd0 / Animal::do_idle
+    //        0x005d7460)             TODO(va 0x0060dcd0, 0x005d7460)
+    //   1,4 -> Unit::do_move 0x005f7b30; 3 -> Unit::do_explore_to 0x005f24a0
+    //        (= do_move, then every 15 frames a captain check); 2 ->
+    //        Unit::do_attack_to 0x005f2320   [do_move below; attack_to TODO]
+    //   6 -> Unit::do_build 0x005eebf0, 7 -> Unit::do_gather 0x005ef2a0,
+    //   14 -> Unit::do_cast 0x005ebfe0, others   TODO(va 0x00617a10 arms)
+    match ty {
+        1 | 3 | 4 => do_move(save, img, tag, effects),
+        _ => effects.push(format!("{tag}: do_job(ty={ty}) arm not transcribed")),
+    }
 
     if ti.flags & 0x20 != 0 && img.u8(0x08) & 1 != 0 && img.i16(0x82) < 0 {
         // TODO(va 0x0060daf0) ObjectsData::find_unit 0x0065ca80 neighbour
@@ -867,6 +872,431 @@ fn unit_work(save: &Save, img: &mut UImg, tag: &str, effects: &mut Vec<String>) 
         effects.push(format!("{tag}.Unit.unit_masks &= ~0x10"));
     }
     true
+}
+
+// ---------------------------------------------------------------------------
+// Unit::do_move 0x005f7b30 (preamble) -> Unit::move_step 0x005faf30 (turn phase)
+// ---------------------------------------------------------------------------
+
+/// MoveOrder payload accessor: `payload[0]` is `UnitOrder::flags`, the
+/// MoveOrder field at image offset `off` (PDB `MoveOrder`, +4..+0x50) is at
+/// `payload[off - 3]`.
+struct MoImg<'a>(&'a mut Vec<u8>);
+
+impl MoImg<'_> {
+    fn ok(&self) -> bool {
+        self.0.len() == 77
+    }
+    fn flags(&self) -> u8 {
+        self.0[0]
+    }
+    fn i32(&self, off: usize) -> i32 {
+        i32::from_le_bytes(self.0[off - 3..off + 1].try_into().unwrap())
+    }
+    fn set_i32(&mut self, off: usize, v: i32) {
+        self.0[off - 3..off + 1].copy_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// `Unit::do_move(order)` 0x005f7b30 — the preamble up to `move_step`.
+/// Transcribed: the MoveOrder countdowns (`timer` +0x24, `retry` +0x1c,
+/// `attempts` +0x20, `pause` +0x18) and every gate that decides whether
+/// `move_step` is reached; the branches that re-path, pick the next path
+/// node, or resolve a collision are `TODO` and stop the body (fields
+/// untouched) because each one lands in `PathFinder`
+/// (`FUN_00688f40`/`FUN_00688fc0`/`FUN_006897d0`), `Unit::detect_unit_collision`
+/// 0x00617060 or `Unit::resolve_unit_collision` 0x005f9d30.
+fn do_move(save: &Save, img: &mut UImg, tag: &str, effects: &mut Vec<String>) {
+    let fr = frame(save);
+    let o = img.o();
+    let ti = type_info(save, img.ptype());
+    let um = img.u32(0x68);
+    let Some((ty, _, _)) = img.order(0) else { return };
+    {
+        let mo = MoImg(&mut img.0.orders.orders[0].payload);
+        if !mo.ok() {
+            return;
+        }
+    }
+    if ti.flags & 0x200000 != 0 {
+        // TODO(va 0x005f7b70) herd/formation types (flags & 0x200000):
+        // ObjectData::... FUN_006469f0 / Unit::do_formation FUN_005ff4b0,
+        // writes herd (+0xa2). Stop.
+        effects.push(format!("{tag}: do_move formation preamble 0x005f7b70 not transcribed"));
+        return;
+    }
+    // in_ECX[0x41] (+0x104 const_guys) != 0 -> blocked-step handling
+    // (0x005f7bdd..0x005f7d4c: detect_unit_collision at dest every other
+    // frame, collide (+0x88) += 1, PathFinder FUN_00688f40 re-path). The
+    // pointer is runtime-only and null for the captured units (none of
+    // them carry const guys); TODO(va 0x005f7bdd) if a type ever does.
+
+    // if (timer > 0) { if (timer == 1) { kill_current_order(0); work(); return } timer -= 1 }
+    let timer = MoImg(&mut img.0.orders.orders[0].payload).i32(0x24);
+    if timer > 0 {
+        if timer == 1 {
+            // TODO(va 0x005e2cb0) Unit::kill_current_order(0) then work() again.
+            effects.push(format!("{tag}: MoveOrder.timer expired — kill_current_order 0x005e2cb0 not transcribed"));
+            return;
+        }
+        MoImg(&mut img.0.orders.orders[0].payload).set_i32(0x24, timer - 1);
+        effects.push(format!("{tag}.orders[0].MoveOrder.timer {timer} -> {}", timer - 1));
+    }
+    // action = get_action() 0x00608450 (same scan as update_action); type 10
+    // (board) and 0xf (trade) have target-proximity preambles.
+    let action_ty = scan_action(img).and_then(|i| img.order(i).map(|(t, _, _)| t));
+    if matches!(action_ty, Some(10) | Some(0xf)) {
+        // TODO(va 0x005f7e60, 0x005f827a) board/trade target checks
+        // (ObjectData::is_in_range 0x00648d70, ObjectsData::check_... 0x0065b1b0,
+        // Unit::repath 0x005e29b0 when vector_dist < 0x481). Stop.
+        effects.push(format!("{tag}: do_move action type {:?} preamble not transcribed", action_ty));
+        return;
+    }
+    // LAB_005f82c1: if (retry != 0) { if (--retry == 0) attempts += 3; return }
+    let retry = MoImg(&mut img.0.orders.orders[0].payload).i32(0x1c);
+    if retry != 0 {
+        let mut mo = MoImg(&mut img.0.orders.orders[0].payload);
+        mo.set_i32(0x1c, retry - 1);
+        if retry - 1 == 0 {
+            let a = mo.i32(0x20);
+            mo.set_i32(0x20, a + 3);
+        }
+        effects.push(format!("{tag}.orders[0].MoveOrder.retry {retry} -> {}", retry - 1));
+        return;
+    }
+    // (o*0x11 + frame) & 0x7f == 0 && !(unit_masks & 4) && is_modern_infantry()
+    //   && has_general(0x8000,-1) < 0 -> crawl animation (set_angle to the
+    //   path node, set_new_location, set_anim(0x17), retry = anim length,
+    //   attempts = -3; return)   TODO(va 0x005f8300) — only modern infantry
+    //   (UnitData::is_modern_infantry 0x00607b40 default: type flags), never
+    //   the captured ancient-age units.
+    // if (attempts != 0) attempts -= 1;
+    let attempts = MoImg(&mut img.0.orders.orders[0].payload).i32(0x20);
+    if attempts != 0 {
+        MoImg(&mut img.0.orders.orders[0].payload).set_i32(0x20, attempts - 1);
+        effects.push(format!("{tag}.orders[0].MoveOrder.attempts {attempts} -> {}", attempts - 1));
+    }
+    // if (!order->is_pathed() (flags & 1) || path.length == 0) -> PathFinder
+    let oflags = MoImg(&mut img.0.orders.orders[0].payload).flags();
+    let path_len = img.0.path.data.len() / 16;
+    if oflags & 1 == 0 || path_len == 0 {
+        // TODO(va 0x005f83a0) PathFinder::find (FUN_00688fc0 / FUN_006897d0)
+        // from (x,y) to MoveOrder.x/y; pushes the path stack and sets
+        // flags |= 1; `path_recursion` (+0xaf) > 10 returns. Stop.
+        effects.push(format!("{tag}: do_move needs a path (flags {oflags:#x}, path {path_len}) — PathFinder not transcribed"));
+        return;
+    }
+    let dest_valid = MoImg(&mut img.0.orders.orders[0].payload).i32(0x10) != 0;
+    if !dest_valid {
+        // TODO(va 0x005f8470) next-node selection: dest = 1, dest_x/dest_y =
+        // path top, tolerance (+0x60) = node tolerance, unit_masks &= ~8,
+        // region/road checks (FUN_006b52e0, FUN_00875700), detect_unit_collision
+        // at the node, Unit::invalid_loc 0x00607c30. Stop.
+        effects.push(format!("{tag}: do_move next-node selection 0x005f8470 not transcribed"));
+        return;
+    }
+    // speed = get_speed(x, y, 0) (vtable +0x17c, UnitData::get_speed
+    // 0x00608720) [* game-speed multiplier] [* 5/4 if modern infantry] —
+    // only consumed by the translation phase; see move_step.
+    if um & 8 == 0 {
+        // TODO(va 0x005f8a40) step acquisition: Unit::... FUN_005fb910 at
+        // dest, Random::get(0,0xffff) % 5 lookahead (0x600/0xf00/0x1800) and
+        // the PathFinder re-path (FUN_00688e10/e60/eb0) — the "pathfinder
+        // failure epilogue" draw site. Stop.
+        effects.push(format!("{tag}: do_move step acquisition 0x005f8a40 (Random::get) not transcribed"));
+        return;
+    }
+    // if (pause != 0) { pause -= 1; if type not in {2,0x15} return; if ptype->attack return; set_anim(0,0,1); return }
+    let pause = MoImg(&mut img.0.orders.orders[0].payload).i32(0x18);
+    if pause != 0 {
+        MoImg(&mut img.0.orders.orders[0].payload).set_i32(0x18, pause - 1);
+        effects.push(format!("{tag}.orders[0].MoveOrder.pause {pause} -> {}", pause - 1));
+        if ty == 2 || ty == 0x15 {
+            // TODO(va 0x005da300) Unit::set_anim(0,0,1) for unarmed attack-to.
+        }
+        return;
+    }
+    // LAB_005f8c6a: collide_x/collide_y (+0x120/+0x124, runtime) = -1; move_step(order, speed)
+    move_step(save, img, ti, fr, o, tag, effects);
+}
+
+/// `UnitData::get_action` 0x00608450 — same ring scan as `update_action`
+/// without its writes; returns the index of the first non-move order.
+fn scan_action(img: &UImg) -> Option<usize> {
+    let n = img.0.orders.orders.len();
+    if n == 0 {
+        return None;
+    }
+    let is_move = |ty: i32| matches!(ty, 1..=4);
+    let mut i = 0usize;
+    loop {
+        let (ty, fl, _) = img.order(i).unwrap();
+        if ((is_move(ty) && fl & 4 == 0) || ty == 0x12) && i != n - 1 {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    let (ty, fl, _) = img.order(i).unwrap();
+    if (is_move(ty) && fl & 4 == 0) || ty == 0x12 {
+        None
+    } else {
+        Some(i)
+    }
+}
+
+/// `find_angle(dx, dy)` 0x0092d130 (ECX = dx, EDX = dy): integer atan2 in
+/// 1/2^32-turn units, quadrant-folded from a quadratic approximation.
+fn find_angle(dx: i32, dy: i32) -> i32 {
+    let ny = dy.wrapping_neg();
+    if dx == 0 {
+        return if ny > 0 { 0 } else { i32::MIN };
+    }
+    if ny == 0 {
+        return if dx > 0 { 0x4000_0000 } else { -0x4000_0000 };
+    }
+    let ax = dx.wrapping_abs();
+    let ay = ny.wrapping_abs();
+    let (lo, hi) = if ay < ax { (ay, ax) } else { (ax, ay) };
+    let x_le_y = ax <= ay;
+    let r = lo.wrapping_mul(0x4000) / hi;
+    let d = 0x1333 - r;
+    let u = ((0x2800 - ((d.wrapping_abs().wrapping_mul(0xb00)) >> 0xe)).wrapping_mul(r) as u32 & 0xffff_c000) as i32;
+    let a4 = u.wrapping_mul(4);
+    if dx <= 0 {
+        if ny <= 0 {
+            return if x_le_y { a4.wrapping_add(i32::MIN) } else { u.wrapping_mul(-4).wrapping_add(-0x4000_0000) };
+        }
+        return if x_le_y { u.wrapping_mul(-4) } else { a4.wrapping_add(-0x4000_0000) };
+    }
+    if ny > 0 {
+        return if x_le_y { a4 } else { u.wrapping_mul(-4).wrapping_add(0x4000_0000) };
+    }
+    if x_le_y {
+        u.wrapping_mul(-4).wrapping_add(i32::MIN)
+    } else {
+        a4.wrapping_add(0x4000_0000)
+    }
+}
+
+/// `Unit::set_angle(angle, _, set_now)` 0x00605400: a turn of more than a
+/// quarter toggles `unit_masks` bit 1 (and the unit's Group record flip at
+/// `DAT_00e85f20 + group*0x9d4 + 0x48` — Groups image, TODO(va 0x00605430));
+/// then `angle` (+0x50) and `guys[0].set_angle(angle, set_now)`.
+fn unit_set_angle(img: &mut UImg, ti: TypeInfo, angle: i32, set_now: bool, tag: &str, effects: &mut Vec<String>) {
+    let cur = img.i32(0x50);
+    let d = (angle as u32).wrapping_sub(cur as u32);
+    if d > 0x3fff_ffff && d < 0xc000_0001 {
+        let um = img.u32(0x68);
+        img.set_u32(0x68, um ^ 2);
+        effects.push(format!("{tag}.Unit.unit_masks ^= 2 (quarter turn)"));
+        if img.i16(0x80) >= 0 {
+            // TODO(va 0x00605430) Group leader-facing flip for group +0x80.
+        }
+    }
+    if cur != angle {
+        img.set_i32(0x50, angle);
+        effects.push(format!("{tag}.Unit.angle {cur} -> {angle}"));
+    }
+    guy_set_angle(img.0, 0, ti, angle, set_now, tag, effects);
+}
+
+/// `Guy::set_angle(angle, set_now)` 0x005d9010 on `guys[gi]`.
+fn guy_set_angle(u: &mut Unit, gi: usize, ti: TypeInfo, angle: i32, set_now: bool, tag: &str, effects: &mut Vec<String>) {
+    let Some(row) = guy_row(u, gi) else { return };
+    let mut g = GImg(row);
+    if g.i32(0x64) != angle {
+        g.set_i32(0x64, angle);
+        effects.push(format!("{tag}.guys[{gi}].des_angle -> {angle}"));
+    }
+    if set_now {
+        g.set_i32(0x18, angle);
+        g.set_i32(0x1c, angle);
+    }
+    let (gx, gy) = (g.i32(0x0c), g.i32(0x10));
+    let primary = g.u8(0xa2) == 0 && (gi as i32) < ti.num_guys;
+    if !primary {
+        return;
+    }
+    let len = u.guys.elems.len();
+    for ei in (ti.num_guys.max(0) as usize)..len {
+        let Some(erow) = guy_row(u, ei) else { continue };
+        let mut e = GImg(erow);
+        e.set_i32(0x64, angle);
+        if e.i32(0x54) != 0 || e.i32(0x58) != 0 {
+            // TODO(va 0x005d90b0) track offset rotation via sin_table
+            // 0x00a46a00 and the map clamp; des_x/des_y untouched.
+            continue;
+        }
+        e.set_i32(0x5c, gx);
+        e.set_i32(0x60, gy);
+        if set_now {
+            // TODO(va 0x005d91c0) attachment set_angle(…,1) + set_new_location.
+        }
+    }
+}
+
+/// `Unit::move_step(order, speed)` 0x005faf30 — the turn phase. Transcribed
+/// through the `Guy::do_turn` that precedes translation; the translation /
+/// arrival halves (`sin_table` 0x00a46a00 step, `Unit::detect_unit_collision`
+/// 0x00617060, `Unit::set_new_location` 0x005f8d20 which also derives `z`
+/// from the terrain, `Unit::resolve_unit_collision` 0x005f9d30, path pop
+/// and `Unit::kill_current_order` 0x005e2cb0) are `TODO(va 0x005fb2e0)`.
+fn move_step(save: &Save, img: &mut UImg, ti: TypeInfo, _fr: i32, _o: i32, tag: &str, effects: &mut Vec<String>) {
+    let um = img.u32(0x68);
+    if um & 0x2000000 != 0 {
+        let um2 = img.u32(0x6c);
+        img.set_u32(0x6c, um2 & 0xfffdefff);
+        img.set_u32(0x68, um & 0xfdffffff);
+        effects.push(format!("{tag}.Unit.unit_masks &= ~0x2000000, unit_masks2 &= ~0x21000 (move start)"));
+        // GraphicEvents FUN_008e45d0(who, o): FX, not sim state.
+    }
+    if img.i16(0xa2) >= 0 && ti.flags & 0x200000 != 0 {
+        // TODO(va 0x005faf90) herd leader bookkeeping on guys (ox/whom,
+        // set_all_pivots, turret reset). Stop.
+        effects.push(format!("{tag}: move_step herd preamble 0x005faf90 not transcribed"));
+        return;
+    }
+    let (x, y) = (img.x(), img.y());
+    let (dest_x, dest_y) = {
+        let mo = MoImg(&mut img.0.orders.orders[0].payload);
+        (mo.i32(0x2c), mo.i32(0x30))
+    };
+    let dx = dest_x.wrapping_sub(x);
+    let dy = dest_y.wrapping_sub(y);
+    // top path node flags (puVar15[3]).
+    let node_flags = {
+        let p = &img.0.path.data;
+        let n = p.len() / 16;
+        if n == 0 {
+            0u32
+        } else {
+            u32::from_le_bytes(p[(n - 1) * 16 + 12..(n - 1) * 16 + 16].try_into().unwrap())
+        }
+    };
+    let ang = find_angle(dx, dy);
+    unit_set_angle(img, ti, ang, false, tag, effects);
+    let um = img.u32(0x68);
+    let Some(row) = guy_row(img.0, 0) else { return };
+    let g = GImg(row);
+    let cur = g.i32(0x18);
+    let d = (ang as u32).wrapping_sub(cur as u32);
+    let ad = if d > 0x8000_0000 { !d } else { d };
+    let (remaining, new) = if ad < 0x0222_2220 {
+        (0u32, ang)
+    } else {
+        let ts = turn_speed_param0(save, &g, ti, um);
+        if ad <= ts {
+            (0, ang)
+        } else if d <= 0x8000_0000 {
+            (ad - ts, (cur as u32).wrapping_add(ts) as i32)
+        } else {
+            (ad - ts, (cur as u32).wrapping_sub(ts) as i32)
+        }
+    };
+    let dist = dx.wrapping_abs().wrapping_add(dy.wrapping_abs());
+    let gtag = format!("{tag}.guys[0]");
+    if ti.flags & 0x20 == 0 || remaining > 0x4000_0000 {
+        let k: i32 = if ti.turn < 0x0e38_e38c { 2 } else { 1 };
+        let turn_only = if dist < k * 0xc0 || node_flags & 4 != 0 {
+            remaining != 0
+        } else {
+            // ptype +0x218(kind) == 0 && !has_objmask(0x200000) -> close = remaining < 0x20000000
+            // else if dist < k*0x180 -> same; else close = remaining < 0x38e38e3a
+            let near = if ti.kind == 0 && ti.flags & 0x200000 == 0 {
+                remaining < 0x2000_0000
+            } else if dist < k * 0x180 {
+                remaining < 0x2000_0000
+            } else {
+                remaining < 0x38e3_8e3a
+            };
+            !near
+        };
+        if turn_only {
+            do_turn(img.0, 0, ti, ang, new, &gtag, effects);
+            effects.push(format!("{tag}: move_step turn-only frame (remaining {remaining:#x})"));
+            return;
+        }
+        let um = img.u32(0x68);
+        if remaining < (0x2000_0000u32 / k as u32) {
+            if um & 0x100000 != 0 {
+                // speed /= 2 (translation input) and clear the one-shot bit.
+                img.set_u32(0x68, um & !0x100000);
+                effects.push(format!("{tag}.Unit.unit_masks &= ~0x100000"));
+            }
+        }
+        do_turn_quiet(img.0, 0, ti, ang, new, &gtag, effects);
+    } else {
+        do_turn_quiet(img.0, 0, ti, ang, new, &gtag, effects);
+    }
+    // TODO(va 0x005fb2e0) translation / arrival: speed vs dist, sin_table
+    // step, bounds, detect_unit_collision, set_anim(walk), set_new_location
+    // (x/y/z + guys des_x/des_y), path pop, order flag clear,
+    // kill_current_order. x/y/z and the path untouched.
+    effects.push(format!("{tag}: move_step translation 0x005fb2e0 not transcribed (dist {dist}, angle {ang})"));
+}
+
+/// `GuyData::turn_speed(0)` 0x005de340: the `param_1 == 0` arm divides by
+/// `avg_speed/4 + 1` and floors at `Constants+8 * 0xb60b`.
+fn turn_speed_param0(save: &Save, g: &GImg, ti: TypeInfo, um: u32) -> u32 {
+    let mut ts: u32 = 0x4000_0000;
+    if (g.u8(0xa2) as i8 as i32) < ti.num_guys {
+        ts = (ti.turn >> 8).wrapping_mul(constant(save, 8) as u32);
+        if um & 0x80000 != 0 {
+            ts = ts.wrapping_mul(constant(save, 0xc) as u32);
+        }
+    } else if g.i32(0x54) != 0 || g.i32(0x58) != 0 {
+        return 0x4000_0000;
+    }
+    if g.i32(0x80) == 0 && g.u16(0x9a) & 0x10 != 0 {
+        return 0x8000_0000;
+    }
+    let avg = g.i32(0x84);
+    let div = ((avg + ((avg >> 31) & 3)) >> 2) as u32 + 1;
+    let ts = ts / div;
+    let floor = (constant(save, 8) as u32).wrapping_mul(0xb60b);
+    if floor < ts {
+        ts
+    } else {
+        floor
+    }
+}
+
+/// `Guy::do_turn(target, new, _, 0)` 0x005d97a0 — the `param_4 == 0`
+/// variant used by `move_step` (no turn-anim request).
+fn do_turn_quiet(u: &mut Unit, gi: usize, ti: TypeInfo, target: i32, new: i32, gtag: &str, effects: &mut Vec<String>) {
+    let Some(row) = guy_row(u, gi) else { return };
+    let mut g = GImg(row);
+    let cur = g.i32(0x18);
+    if new != cur {
+        let gf = g.u16(0x9a);
+        g.set_u16(0x9a, gf | 2);
+    }
+    let saved_des = g.i32(0x64);
+    g.set_i32(0x18, new);
+    if new != cur {
+        effects.push(format!("{gtag}.angle {cur} -> {new}"));
+    }
+    guy_set_angle(u, gi, ti, new, false, gtag, effects);
+    let Some(row) = guy_row(u, gi) else { return };
+    let mut g = GImg(row);
+    g.set_i32(0x64, saved_des);
+    let primary = g.u8(0xa2) == 0 && (gi as i32) < ti.num_guys;
+    if primary {
+        let len = u.guys.elems.len();
+        for ei in (ti.num_guys.max(0) as usize)..len {
+            let skip = match guy_row(u, ei) {
+                Some(erow) => {
+                    let e = GImg(erow);
+                    e.i32(0x54) != 0 || e.i32(0x58) != 0
+                }
+                None => true,
+            };
+            if !skip && ei != gi {
+                do_turn_quiet(u, ei, ti, target, new, &format!("{gtag}~att{ei}"), effects);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,6 +1469,17 @@ fn guy_move(save: &Save, u: &mut Unit, gi: usize, ti: TypeInfo, des_known: bool,
     let gtag = format!("{tag}.guys[{gi}]");
 
     // last_x = x; last_y = y; if !(guy_flags & 0x40) last_z = z; last_angle = angle;
+    //
+    // The prefix reads the guy's *current* x/y/z/angle, which the
+    // untranscribed order bodies may already have rewritten this frame
+    // (`Unit::set_new_location` 0x005f8d20 with the snap flag moves the guy
+    // before `Guy::process`; 044959 f2->f3 [2][1] shows last_x(N+1) ==
+    // x(N+1) != x(N)). So the prefix, like the branches, is only applied
+    // when `des_known` says no order body ran ahead of us.
+    if !des_known {
+        effects.push(format!("{gtag}: Guy::move skipped (x/des may be rewritten by do_job 0x00617a10 before Guy::process)"));
+        return;
+    }
     let (x, y, z, angle) = (g.i32(0x0c), g.i32(0x10), g.i32(0x14), g.i32(0x18));
     let mut touched = false;
     if g.i32(0x68) != x || g.i32(0x6c) != y {
@@ -1059,12 +1500,6 @@ fn guy_move(save: &Save, u: &mut Unit, gi: usize, ti: TypeInfo, des_known: bool,
     }
 
     let (des_x, des_y, des_angle) = (g.i32(0x5c), g.i32(0x60), g.i32(0x64));
-    if !des_known {
-        // See `des_known`: do_job may have re-aimed this guy before we got
-        // here; neither branch below can be chosen from the serialized des.
-        effects.push(format!("{gtag}: Guy::move branch skipped (des may be rewritten by do_job 0x00617a10)"));
-        return;
-    }
     if des_x == x && des_y == y {
         // Stationary.
         if g.i32(0x80) != 0 {
@@ -1245,7 +1680,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn capture_dir() -> Option<PathBuf> {
-        let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/frame-pairs/20261004-075733-stride1");
+        let name = std::env::var("DON_CAPTURE").unwrap_or_else(|_| "20261004-075733-stride1".into());
+        let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/frame-pairs").join(name);
         d.join("manifest.json").exists().then_some(d)
     }
 
@@ -1382,7 +1818,11 @@ mod tests {
             let mut ours = a.clone();
             let mut effects = Vec::new();
             let s0 = u32::from_le_bytes(ours.post_world[0x28..0x2c].try_into().unwrap());
-            run(&mut ours, &mut effects);
+            if std::env::var("DON_FULL_TICK").is_ok() {
+                crate::tick::do_frame(&mut ours);
+            } else {
+                run(&mut ours, &mut effects);
+            }
             let s1 = u32::from_le_bytes(ours.post_world[0x28..0x2c].try_into().unwrap());
             let draws = crate::tick::rng_draws(s0, s1).unwrap_or(0);
             draws_total += draws;
@@ -1445,6 +1885,105 @@ mod tests {
         }
         assert_eq!(introduced, 0, "introduced bytes");
         assert!(explained > 0, "no Unit byte explained");
+    }
+
+    /// Diagnostic: replicate tests/tick.rs's span-level view for one object
+    /// path (`DON_SPAN_PATH`, default `Objects.lists[2][1].Unit.guys[0]`) on
+    /// the first consecutive pair of `DON_CAPTURE`: prints retail N, retail
+    /// N+1 and our re-emitted bytes side by side.
+    #[test]
+    #[ignore]
+    fn dump_span_triple() {
+        let Some(dir) = capture_dir() else { return };
+        let st = steps(&dir);
+        let want = std::env::var("DON_SPAN_PATH").unwrap_or_else(|_| "Objects.lists[2][1].Unit.guys[0]".into());
+        let k0: usize = std::env::var("DON_PAIR").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        for k in k0..st.len() - 1 {
+            if st[k + 1].0 - st[k].0 != 1 {
+                continue;
+            }
+            let ra = container::load_svx(&dir.join(format!("{}.svx", st[k].1))).unwrap();
+            let rb = container::load_svx(&dir.join(format!("{}.svx", st[k + 1].1))).unwrap();
+            let ia = load(&ra).unwrap();
+            let ib = load(&rb).unwrap();
+            let mut ours = ia.state.clone();
+            crate::tick::do_frame(&mut ours);
+            let ro = crate::save(&mut ours).unwrap();
+            let io = load(&ro).unwrap();
+            let pick = |spans: &[crate::walk::Span], raw: &[u8]| -> Vec<Vec<u8>> {
+                spans.iter().filter(|s| s.path == want).map(|s| raw[s.offset..s.offset + s.len].to_vec()).collect()
+            };
+            let (sa, sb, so) = (pick(&ia.spans, &ra), pick(&ib.spans, &rb), pick(&io.spans, &ro));
+            println!("== f{} {want}: spans a={} b={} ours={}", st[k].0, sa.len(), sb.len(), so.len());
+            // tests/tick.rs view: align(ours, b) then align(a, b); show what b's span pairs with.
+            use crate::spandiff::{align, AlignEvent};
+            let mut ours_for_b = std::collections::BTreeMap::new();
+            for ev in align(&io.spans, &ib.spans) {
+                if let AlignEvent::Aligned(o, j) = ev {
+                    ours_for_b.insert(j, o);
+                }
+            }
+            for (j, sp) in ib.spans.iter().enumerate() {
+                if sp.path != want {
+                    continue;
+                }
+                match ours_for_b.get(&j) {
+                    Some(&o) => {
+                        let os = &io.spans[o];
+                        println!("  tick-align: b#{j} ({} @{:#x} len {}) <- ours#{o} ({} @{:#x} len {})", sp.path, sp.offset, sp.len, os.path, os.offset, os.len);
+                        let ob = &ro[os.offset..os.offset + os.len];
+                        let bb = &rb[sp.offset..sp.offset + sp.len];
+                        for off in 0..ob.len().min(bb.len()) {
+                            if ob[off] != bb[off] {
+                                println!("     +{off:#04x}: b={:#04x} ours={:#04x}", bb[off], ob[off]);
+                            }
+                        }
+                    }
+                    None => println!("  tick-align: b#{j} unaligned"),
+                }
+            }
+            // Exact tests/tick.rs computation for every aligned span under `want`.
+            for ev in align(&ia.spans, &ib.spans) {
+                if let AlignEvent::Aligned(i, j) = ev {
+                    let (a, b) = (&ia.spans[i], &ib.spans[j]);
+                    if a.path != want {
+                        continue;
+                    }
+                    let ours_bytes = ours_for_b.get(&j).map(|&o| {
+                        let os = &io.spans[o];
+                        &ro[os.offset..os.offset + os.len]
+                    });
+                    let burn = crate::spandiff::burn_span(a, b, &ra, &rb, ours_bytes, false);
+                    println!("  burn_span a#{i} b#{j}: introduced={} ranges={:?} unexplained={} explained={}", burn.introduced, burn.introduced_ranges, burn.unexplained, burn.explained);
+                    if let Some(ob) = ours_bytes {
+                        for (s, e) in &burn.introduced_ranges {
+                            for off in *s..*e {
+                                println!("     +{off:#04x}: a={:#04x} b={:#04x} ours={:#04x}", ra[a.offset + off], rb[b.offset + off], ob[off]);
+                            }
+                        }
+                    }
+                }
+            }
+            let ai = ia.spans.iter().position(|s| s.path == want);
+            let bi = ib.spans.iter().position(|s| s.path == want);
+            let oi = io.spans.iter().position(|s| s.path == want);
+            println!("  span indices a={ai:?} b={bi:?} ours={oi:?}; totals a={} b={} ours={}", ia.spans.len(), ib.spans.len(), io.spans.len());
+            if let (Some(ai), Some(bi)) = (ai, bi) {
+                for d in -6i32..=2 {
+                    let (x, y) = ((ai as i32 + d) as usize, (bi as i32 + d) as usize);
+                    println!("    a[{x}] {:<48} len {:<4} | b[{y}] {:<48} len {}", ia.spans[x].path, ia.spans[x].len, ib.spans[y].path, ib.spans[y].len);
+                }
+            }
+            for (i, (a, (b, o))) in sa.iter().zip(sb.iter().zip(so.iter())).enumerate() {
+                println!(" span#{i} len a={} b={} o={}", a.len(), b.len(), o.len());
+                for off in 0..a.len().min(b.len()).min(o.len()) {
+                    if a[off] != b[off] || a[off] != o[off] {
+                        println!("   +{off:#04x}: a={:#04x} b={:#04x} ours={:#04x}{}", a[off], b[off], o[off], if a[off] == b[off] { "  INTRODUCED" } else { "" });
+                    }
+                }
+            }
+            break;
+        }
     }
 
     /// Diagnostic: dump every Unit/Animal byte retail changed between

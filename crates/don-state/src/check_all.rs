@@ -27,7 +27,7 @@
 
 use crate::prim::Body;
 use crate::sections::{Obj, Save};
-use crate::walk::{CheckSum, WalkError};
+use crate::walk::{CheckSum, DataWalk, WalkError};
 
 type R = Result<(), WalkError>;
 
@@ -283,4 +283,150 @@ impl CheckSums {
     fn check_script_run_time(save: &mut Save, cs: &mut CheckSum) -> R {
         save.run_time_env.walk(cs)
     }
+}
+
+// ---------------------------------------------------------------------------
+// SaveGame::verify_save 0x005a76b0 — the trailer after Game::walk_rules_data.
+// ---------------------------------------------------------------------------
+
+/// Run one verify step with a fresh adler seed and append the resulting word.
+fn verify_step(
+    save: &mut Save,
+    out: &mut Vec<(&'static str, u32)>,
+    label: &'static str,
+    f: impl FnOnce(&mut Save, &mut CheckSum) -> R,
+) -> R {
+    let mut cs = CheckSum::new(u32::MAX);
+    f(save, &mut cs)?;
+    out.push((label, cs.adler));
+    Ok(())
+}
+
+/// The `verify_save` trailer as little-endian bytes (what the stream holds).
+pub fn verify_save(save: &mut Save) -> Result<Vec<u8>, WalkError> {
+    let words = verify_save_words(save)?;
+    let mut out = Vec::with_capacity(words.len() * 4);
+    for (_, w) in words {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    Ok(out)
+}
+
+/// `SaveGame::verify_save` 0x005a76b0 (vtable 0x00b35ac4 slot +0x10, called
+/// by `SaveGame::do_save` 0x005a81f0 right after `WalkDataGame::walk_data`).
+/// A stack `CheckSum` (seed 1, mask -1) is driven through the state walkers
+/// below in this exact order; after each step the 4-byte adler word is
+/// written to the stream and the seed reset. The per-tile / per-fog loops
+/// make the trailer ~840 KB for a 100x100 map. Returns the emitted bytes.
+pub fn verify_save_words(save: &mut Save) -> Result<Vec<(&'static str, u32)>, WalkError> {
+    let mut out = Vec::new();
+    let o = &mut out;
+    let version = save.version;
+    verify_step(save, o, "Game", |s, cs| s.game.walk(cs, version))?; // Game::walk_data 0x00589600
+    verify_step(save, o, "TileSet", |s, cs| s.tileset.walk(cs))?; // 0x0087b290
+    verify_step(save, o, "Mountains", |s, cs| s.mountains.walk(cs))?; // 0x0089d320
+    verify_step(save, o, "empty", |_, _| Ok(()))?;
+    // Constants [c061f0,+0xd40) + [+0x804,+0x808) (first dword of direct_scalars).
+    verify_step(save, o, "Constants", |s, cs| {
+        cs.walk_bytes("verify.constants", &mut s.constants)?;
+        cs.walk_bytes("verify.const_dup", &mut s.direct_scalars[0..4])
+    })?;
+    // GameDaemon [c061bc,+0x28) == post_world[0..40).
+    verify_step(save, o, "GameDaemon", |s, cs| cs.walk_bytes("verify.game_daemon", &mut s.post_world[0..40]))?;
+    verify_step(save, o, "Armies", |s, cs| s.armies.walk(cs, "Armies", 0x006f3700))?;
+    verify_step(save, o, "Cities", |s, cs| s.cities.walk(cs, "Cities", 0x00735410))?;
+    verify_step(save, o, "Forms", |s, cs| s.forms.walk(cs))?; // tag + ObjectArray<Form> 0x00481190
+    // Every slot of the goods PtrArray through vtable +0x7c (walk_data).
+    for i in 0..save.goods.elems.len() {
+        verify_step(save, o, "Good", |s, cs| match s.goods.elems[i].as_mut() {
+            Some(g) => g.walk("verify.goods[]", cs),
+            None => Err(cs.fail("SaveGame::verify_save", 0x005a76b0, format!("goods slot {i} is null"))),
+        })?;
+    }
+    verify_step(save, o, "Goods", |s, cs| s.goods.walk(cs, "Goods", "Goods", 0))?; // PtrArray<Good> 0x0045cce0
+    verify_step(save, o, "Items", |s, cs| s.items.walk(cs, "Items", "Items", 0))?; // PtrArray<Item> 0x0045d020
+    verify_step(save, o, "Regions", |s, cs| {
+        cs.walk_bytes("verify.regions.head", &mut s.post_doober)?;
+        s.regions.walk(cs, "Regions", "ObjectArray<Region>", 0x00478ed0)?;
+        s.wcoords.walk(cs, "Regions.wcoords", "Array<WCoordData>", 0x00478990)
+    })?;
+    verify_step(save, o, "Heroes", |s, cs| s.heroes.walk(cs, "Heroes", 0))?;
+    verify_step(save, o, "Herds", |s, cs| s.herds.walk(cs))?;
+    verify_step(save, o, "Specials", |s, cs| s.specials.walk(cs, "Specials", 0))?;
+    verify_step(save, o, "Wonders", |s, cs| s.wonders.walk(cs, "Wonders", 0))?;
+    verify_step(save, o, "Forts", |s, cs| s.forts.walk(cs, "Forts", 0))?;
+    verify_step(save, o, "Docks", |s, cs| s.docks.walk(cs, "Docks", 0))?;
+    verify_step(save, o, "OilWells", |s, cs| s.oil_wells.walk(cs, "OilWells", 0))?;
+    verify_step(save, o, "Supplies", |s, cs| s.supplies.walk(cs, "Supplies", 0))?;
+    verify_step(save, o, "Caravans", |s, cs| s.caravans.walk(cs, "Caravans", 0))?;
+    verify_step(save, o, "Lands", |s, cs| s.lands.walk(cs))?;
+    // Nine LeaderData::walk_data 0x006d6750, one word each (0xe3a390..0xe789dc).
+    for i in 0..9 {
+        verify_step(save, o, "LeaderData", |s, cs| s.leaders.slots[i].walk(&format!("verify.leader[{i}]"), cs))?;
+    }
+    verify_step(save, o, "Leaders", |s, cs| s.leaders.walk(cs))?; // tag + prod script path + 9 leaders
+    // 85 TechType bytes ([tech]+0x1e2 for slots 0x880/4..0x9d4/4).
+    verify_step(save, o, "Types", |s, cs| cs.walk_bytes("verify.types", &mut s.types))?;
+    verify_step(save, o, "LeaderOptions", |s, cs| s.leader_options.walk(cs))?;
+    verify_step(save, o, "Tribes", |s, cs| s.tribes.walk(cs))?;
+    verify_step(save, o, "OptionInfo", |s, cs| s.option_info.walk(cs))?;
+    verify_step(save, o, "Pathfinder", |s, cs| cs.walk_bytes("verify.pathfinder", &mut s.pathfinder))?;
+    verify_step(save, o, "Groups", |s, cs| s.groups.walk(cs))?;
+    verify_step(save, o, "HotKeyGroups", |s, cs| s.hotkey_groups.walk(cs))?;
+    // Nine MultiPtrArray<Object>::walk_data 0x0045d550, one word each.
+    for i in 0..9 {
+        verify_step(save, o, "ObjectList", |s, cs| s.objects.lists[i].walk(&format!("verify.objects[{i}]"), cs, "Objects"))?;
+    }
+    verify_step(save, o, "Objects", |s, cs| s.objects.walk(cs))?;
+    // Per tile: WorldData[+0x134] rows, first 0x15 bytes (== wdata rows).
+    let tiles = save.world.wdata.len() / 21;
+    for i in 0..tiles {
+        verify_step(save, o, "tile", |s, cs| cs.walk_bytes("verify.tile", &mut s.world.wdata[i * 21..i * 21 + 21]))?;
+    }
+    // Per tile-size entry: u16 at [+0x138] (== tdata).
+    let tsz = save.world.tdata.len() / 2;
+    for i in 0..tsz {
+        verify_step(save, o, "tdata", |s, cs| cs.walk_bytes("verify.tdata", &mut s.world.tdata[i * 2..i * 2 + 2]))?;
+    }
+    // CheckSums::check_seen 0x009370f0 per fog index: seen[i], seen2[i], seen3[i].
+    let fog = save.world.seen.len();
+    for i in 0..fog {
+        verify_step(save, o, "seen", |s, cs| {
+            cs.walk_bytes("verify.seen", &mut s.world.seen[i..i + 1])?;
+            cs.walk_bytes("verify.seen2", &mut s.world.seen2[i..i + 1])?;
+            cs.walk_bytes("verify.seen3", &mut s.world.seen3[i..i + 1])
+        })?;
+    }
+    verify_step(save, o, "World", |s, cs| s.world.walk(cs))?; // World::walk_data(-1)
+    let (xs, ys) = (save.world.xs.max(0) as usize, save.world.ys.max(0) as usize);
+    verify_step(save, o, "TerrainRoads", |s, cs| s.terrain.walk(cs, xs, ys))?; // Terrain::walk_roads 0x00852b00
+    verify_step(save, o, "GraphicEvents", |s, cs| s.graphic_events.walk(cs))?;
+    verify_step(save, o, "empty", |_, _| Ok(()))?;
+    verify_step(save, o, "Scene", |s, cs| s.scene.walk(cs))?;
+    verify_step(save, o, "MessageWin", |s, cs| s.message_win.walk(cs))?;
+    verify_step(save, o, "Doober", |s, cs| s.doober.walk(cs))?;
+    verify_step(save, o, "Farms", |s, cs| s.farms.walk(cs))?;
+    verify_step(save, o, "UnbuiltWonders", |s, cs| s.unbuilt_wonders.walk(cs, "UnbuiltWonders", 0x0073c290))?;
+    verify_step(save, o, "UnbuiltCities", |s, cs| s.unbuilt_cities.walk(cs, "UnbuiltCities", 0x00460dc0))?;
+    verify_step(save, o, "UnbuiltForts", |s, cs| s.unbuilt_forts.walk(cs, "UnbuiltForts", 0x0073bcc0))?;
+    verify_step(save, o, "TurnControl", |s, cs| s.final_globals.walk(cs))?;
+    verify_step(save, o, "check_units", CheckSums::check_units)?;
+    verify_step(save, o, "check_builds", CheckSums::check_builds)?;
+    verify_step(save, o, "check_walls", CheckSums::check_walls)?;
+    verify_step(save, o, "check_guys", CheckSums::check_guys)?;
+    verify_step(save, o, "check_ammo", CheckSums::check_ammo)?; // inline Objects list loop, flags&3
+    verify_step(save, o, "check_groups", CheckSums::check_groups)?;
+    // Eight LeaderData (0xe3a390..0xe71af0) in one word.
+    verify_step(save, o, "Leaders8", |s, cs| {
+        for i in 0..8 {
+            s.leaders.slots[i].walk(&format!("verify.leaders8[{i}]"), cs)?;
+        }
+        Ok(())
+    })?;
+    verify_step(save, o, "World2", |s, cs| s.world.walk(cs))?; // gated on World+0x134 != 0
+    verify_step(save, o, "check_cities", CheckSums::check_cities)?;
+    verify_step(save, o, "check_goods", CheckSums::check_goods)?;
+    verify_step(save, o, "check_items", CheckSums::check_items)?;
+    verify_step(save, o, "RunTimeEnv", |s, cs| s.run_time_env.walk(cs))?;
+    Ok(out)
 }

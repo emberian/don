@@ -67,10 +67,6 @@ pub trait DataWalk {
     fn pos(&self) -> usize;
     /// Bytes left in the stream; only meaningful for [`Loader`].
     fn remaining(&self) -> usize { 0 }
-    /// Offset (relative to the current position) where the self-validating
-    /// `Game::walk_rules_data` section begins; `None` for non-loaders or when
-    /// no candidate parses at full width.
-    fn rules_boundary(&self) -> Option<usize> { None }
     fn fail(&self, class: &'static str, va: u32, detail: String) -> WalkError {
         WalkError::new(class, va, self.pos(), detail)
     }
@@ -81,14 +77,11 @@ pub struct Loader<'a> {
     pub buf: &'a [u8],
     pub pos: usize,
     pub spans: Vec<Span>,
-    /// Set by section grammars that need a runtime value retail reads from a
-    /// global (e.g. GraphicEvents' slot count) rather than the stream.
-    pub graphic_event_slots: usize,
 }
 
 impl<'a> Loader<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Loader { buf, pos: 0, spans: Vec::new(), graphic_event_slots: crate::sections::GRAPHIC_EVENT_SLOTS }
+        Loader { buf, pos: 0, spans: Vec::new() }
     }
 
     pub fn take(&mut self, path: &str, va: u32, n: usize, class: &'static str) -> Result<&'a [u8], WalkError> {
@@ -164,9 +157,6 @@ impl<'a> DataWalk for Loader<'a> {
     fn mask(&self) -> u32 { 0 }
     fn pos(&self) -> usize { self.pos }
     fn remaining(&self) -> usize { self.buf.len() - self.pos }
-    fn rules_boundary(&self) -> Option<usize> {
-        crate::sections::find_rules_boundary(self.buf, self.pos).map(|o| o - self.pos)
-    }
     fn fail(&self, class: &'static str, va: u32, detail: String) -> WalkError {
         let mut e = WalkError::new(class, va, self.pos(), detail.into());
         e.last_span = self.spans.last().map(|s| s.path.clone()).unwrap_or_default();

@@ -110,7 +110,8 @@ pub struct PlayerInfo {
 pub struct GameInfo {
     pub tag: u8,
     pub version_string: Vec<u16>,
-    /// version + seed + checksum_deep + window_size + failure_threshold + flags
+    /// gated dword (save/load only) + [+4,+0x14) + flags dword at +0x14
+    /// (CheckSum sees it with bit 0 cleared).
     pub head: Vec<u8>,
     /// gi+0x18..+0x36: 29 single-byte settings + mods byte
     pub settings: Vec<u8>,
@@ -131,6 +132,17 @@ impl GameInfo {
         const VA: u32 = 0x005d6570;
         const C: &str = "GameInfo";
         tag(w, "GameInfo.tag", &mut self.tag)?;
+        if w.is_checksum() {
+            // `piVar4[2] != 0` projection: no version string and no gated
+            // leading dword (head[0..4]); [+4,+0x14) raw; the +0x14 flags
+            // dword with bit 0 cleared; 29 + 1 settings bytes; players and
+            // the mod block are skipped.
+            w.walk_bytes("GameInfo.head", &mut self.head[4..20])?;
+            let mut flags = u32::from_le_bytes(self.head[20..24].try_into().unwrap()) & !1;
+            prim::w_u32(w, "GameInfo.flags&~1", VA, &mut flags)?;
+            w.walk_bytes("GameInfo.settings", &mut self.settings)?;
+            return Ok(());
+        }
         prim::wstr(w, "GameInfo.version_string", &mut self.version_string, C, VA)?;
         prim::take(w, "GameInfo.head", &mut self.head, 24, C, VA)?;
         prim::take(w, "GameInfo.settings", &mut self.settings, 30, C, VA)?;
@@ -187,6 +199,11 @@ impl Game {
         tag(w, "Game.tag", &mut self.tag)?;
         self.info.walk(w, save_version)?;
         prim::take(w, "Game.scalars", &mut self.scalars, 404, C, VA)?;
+        // Semaphore and graphic_tick are `param_1[2] == 0` gated: save/load
+        // only, skipped by CheckSum (verify_save word 0).
+        if w.is_checksum() {
+            return Ok(());
+        }
         prim::w_i32(w, "Game.semaphore.bits", VA, &mut self.sem_bits)?;
         prim::w_i32(w, "Game.semaphore.size", VA, &mut self.sem_size)?;
         if w.is_loading() && !(0..=32).contains(&self.sem_size) {
@@ -1665,7 +1682,7 @@ pub struct Save {
     pub specials: OwnerLists<HeroLike>,
     pub wonders: OwnerLists<Row<14>>,
     pub forts: OwnerLists<Row<8>>,
-    pub docks: OwnerLists<Row<10>>,
+    pub docks: OwnerLists<DockRow>,
     pub oil_wells: OwnerLists<Row<8>>,
     pub supplies: OwnerLists<Row<6>>,
     pub caravans: OwnerLists<Caravan>,
@@ -1730,6 +1747,28 @@ pub struct Save {
     /// serialization and the rules block is not yet resolved (see Rules below
     /// for the decoded rules grammar).
     pub rules_tail: RulesTail,
+}
+
+/// Docks::walk_data 0x00741100 element, in stream order: `[+0,+6)`,
+/// `[+8,+10)`, then `[+6,+8)` only outside CheckSum (`piVar2[2] == 0`; load
+/// resets that word to 0xffff).
+#[derive(Default, Clone)]
+pub struct DockRow {
+    pub a: Vec<u8>, // [+0,+6)
+    pub c: Vec<u8>, // [+8,+10)
+    pub b: Vec<u8>, // [+6,+8), gated
+}
+
+impl Body for DockRow {
+    fn walk(&mut self, path: &str, w: &mut dyn DataWalk) -> R {
+        const VA: u32 = 0x00741100;
+        prim::take(w, path, &mut self.a, 6, "Dock", VA)?;
+        prim::take(w, path, &mut self.c, 2, "Dock", VA)?;
+        if !w.is_checksum() {
+            prim::take(w, path, &mut self.b, 2, "Dock", VA)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default, Clone)]
@@ -1823,7 +1862,50 @@ impl Save {
         self.scenario.walk(w)?;
         self.run_time_env.walk(w)?;
         self.final_globals.walk(w)?;
-        self.rules_tail.walk(w)
+        self.rules_tail.rules.walk(w)?;
+        self.verify_trailer(w)
+    }
+
+    /// `SaveGame::verify_save` 0x005a76b0 output (see
+    /// `check_all::verify_save`). Save: regenerated from the state tree.
+    /// Load: the stream's remaining bytes must equal the regenerated words —
+    /// the trailer is a function of the state, so a mismatch means a grammar
+    /// error upstream and is reported with the first differing word index.
+    /// CheckSum visitors never see it (retail computes it outside
+    /// `walk_data`).
+    fn verify_trailer(&mut self, w: &mut dyn DataWalk) -> R {
+        const C: &str = "SaveGame::verify_save";
+        const VA: u32 = 0x005a76b0;
+        if w.is_checksum() {
+            return Ok(());
+        }
+        let mut words = crate::check_all::verify_save(self)?;
+        if w.is_loading() {
+            let n = w.remaining();
+            let mut got = vec![0u8; n];
+            w.walk_bytes("SaveGame.verify_save", &mut got)?;
+            if got != words {
+                let first = got
+                    .chunks(4)
+                    .zip(words.chunks(4))
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(got.len().min(words.len()) / 4);
+                return Err(w.fail(
+                    C,
+                    VA,
+                    format!(
+                        "verify trailer mismatch: stream {} words, regenerated {} words, first difference at word {first}",
+                        n / 4,
+                        words.len() / 4
+                    ),
+                ));
+            }
+            self.rules_tail.verify_words = got;
+        } else {
+            w.walk_bytes("SaveGame.verify_save", &mut words)?;
+            self.rules_tail.verify_words = words;
+        }
+        Ok(())
     }
 }
 
@@ -3431,61 +3513,17 @@ impl FinalGlobals {
 /// `SHIPPED_RULES_SERIALIZED_BYTES`).
 pub const RULES_SERIALIZED_BYTES: usize = 1_024_221;
 
-/// Tail of the stream after the TurnControl globals. `WalkDataGame::walk_data`
-/// 0x005a2360 ends with `Game::walk_rules_data` 0x00589550 (asm 0x005a3546),
-/// reached directly — no scan. Everything after it is written by
-/// `SaveGame::verify_save` 0x005a76b0 (vtable 0x00b35ac4 slot +0x10, called
-/// by `SaveGame::do_save` 0x005a81f0 right after `walk_data`): a stack
-/// `CheckSum` (adler seed 1) is driven through each state walker in turn and
-/// after every sub-walk the 4-byte adler word is appended to the stream and
-/// the seed reset — hence the 4-byte-aligned trailer dominated by
-/// `0x00020001` (adler of two zero bytes) and `0x00420021` (adler of
-/// `u16 0x0020`). Its word count is a function of the state (per-object /
-/// per-tile sub-walks); the verifier body (2,866 bytes) is not yet
-/// transcribed, so the words are preserved as an opaque `u32` run.
+/// Tail of the stream after the TurnControl globals: `Game::walk_rules_data`
+/// 0x00589550 (the last op of `WalkDataGame::walk_data`, asm 0x005a3546),
+/// then the `SaveGame::verify_save` 0x005a76b0 trailer that `do_save`
+/// 0x005a81f0 appends through vtable slot +0x10. The trailer is regenerated
+/// on save and checked on load by `Save::verify_trailer`; `verify_words`
+/// holds the bytes as last loaded/emitted for diffing.
 #[derive(Default, Clone)]
 pub struct RulesTail {
     pub rules: Rules,
     /// `SaveGame::verify_save` adler words, in emission order (4B each).
     pub verify_words: Vec<u8>,
-}
-
-/// Diagnostic only (no longer used by the loader): locate a Rules section
-/// by scanning for its `0x92` tag + zero `type_index` and a full-width
-/// typed parse. Kept for `svx-diff`-style tooling.
-pub fn find_rules_boundary(buf: &[u8], start: usize) -> Option<usize> {
-    let scan_end = buf.len().checked_sub(RULES_SERIALIZED_BYTES)? + 1;
-    for o in start.min(scan_end)..scan_end {
-        if buf[o] != 0x92 {
-            continue;
-        }
-        if buf[o + 1..o + 5] != [0, 0, 0, 0] {
-            continue;
-        }
-        let mut probe = Loader::new(&buf[o..o + RULES_SERIALIZED_BYTES]);
-        let mut rules = Rules::default();
-        if rules.walk(&mut probe).is_ok() && probe.pos == RULES_SERIALIZED_BYTES {
-            return Some(o);
-        }
-    }
-    None
-}
-
-impl RulesTail {
-    pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
-        const C: &str = "SaveGame::verify_save";
-        const VA: u32 = 0x005a76b0;
-        self.rules.walk(w)?;
-        if w.is_loading() {
-            let n = w.remaining();
-            if n % 4 != 0 {
-                return Err(w.fail(C, VA, format!("verify_save trailer {n} B is not 4-byte aligned")));
-            }
-            self.verify_words.clear();
-            self.verify_words.resize(n, 0);
-        }
-        w.walk_bytes("SaveGame.verify_save", &mut self.verify_words)
-    }
 }
 
 /// Per-slot walker for one serialized type record. The serialized image
