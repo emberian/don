@@ -181,6 +181,9 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
         let mut effects = Vec::new();
         match s.idx {
             12 => {
+                // GameDaemon::process_all 0x00732700: market/regions/borders/
+                // collision cursor first, then Groups::process last.
+                crate::systems::game_daemon::run(save, &mut effects);
                 // Groups::process FUN_006fa210 tail (re/decomp-all/006fa210.c:88-92):
                 //   DAT_00e85f50 += 1; if (DAT_00e85f50 > 0x3f) DAT_00e85f50 = 0;
                 // Runs once per leader-slot pass completes — once per frame.
@@ -189,7 +192,6 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
                     save.groups.proc_group = 0;
                 }
                 effects.push("Groups.proc_group = (proc_group + 1) % 64".into());
-                crate::systems::game_daemon::run(save, &mut effects);
             }
             20 => {
                 // 00591ef0.c:234 — *(Game+0x550) += 1.
@@ -210,10 +212,23 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
             8 => crate::systems::leaders_process::run(save, &mut effects),
             13 => crate::systems::armies_process::run(save, &mut effects),
             16 => crate::systems::graphic_events_process::run(save, &mut effects),
-            17 | 19 => crate::systems::leaders_end_process::run(save, &mut effects),
-            21 | 22 => crate::systems::orders_roads::run(save, &mut effects),
-            0..=3 | 9 | 10 | 18 | 24 | 26..=28 => crate::systems::misc_steps::run(save, &mut effects),
-            14 => crate::systems::objects_process::run(save, &mut effects),
+            17 => crate::systems::leaders_end_process::end_process_all(save, &mut effects),
+            19 => crate::systems::leaders_end_process::process_event_frame_all(save, &mut effects),
+            21 | 22 => crate::systems::orders_roads::run_step(s.idx, save, &mut effects),
+            0..=3 | 9 | 10 | 18 | 24 | 26..=28 => {
+                crate::systems::misc_steps::run_step(s.idx, save, &mut effects)
+            }
+            14 => {
+                // Objects::process_all 0x0065DCE0: the Unit plane runs before the
+                // Build/Wall plane (Wall::do_construct precedes Wall::process).
+                // build_process::run is not called here yet: without the Unit
+                // plane's Wall::do_construct (helpers += 1, build_masks |= 0x800)
+                // running first, Wall::process clears 0x400 on under-construction
+                // sites and the burn-down reports introduced bytes. The
+                // objects_process traversal calls process_build/process_wall
+                // itself once it lands.
+                crate::systems::objects_process::run(save, &mut effects);
+            }
             15 => crate::systems::objects_inc_time::run(save, &mut effects),
             _ => {}
         }
@@ -221,8 +236,11 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
             8 => crate::systems::leaders_process::STATUS,
             13 => crate::systems::armies_process::STATUS,
             16 => crate::systems::graphic_events_process::STATUS,
-            17 | 19 => crate::systems::leaders_end_process::STATUS,
-            21 | 22 => crate::systems::orders_roads::STATUS,
+            12 => crate::systems::game_daemon::STATUS,
+            17 => crate::systems::leaders_end_process::STATUS_END_PROCESS_ALL,
+            19 => crate::systems::leaders_end_process::STATUS_PROCESS_EVENT_FRAME,
+            21 | 22 => crate::systems::orders_roads::step_status(s.idx),
+            0..=3 | 9 | 10 | 18 | 24 | 26..=28 => crate::systems::misc_steps::step_status(s.idx),
             14 => crate::systems::objects_process::STATUS,
             15 => crate::systems::objects_inc_time::STATUS,
             _ => s.status,
@@ -244,7 +262,8 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
 }
 
 /// The retail LCG (`FUN_00a39d70` Random::get): `s = s*1664525 + 1013904223`.
-/// `get` consumes one step per call and returns bits 16..31 scaled.
+/// `Random::get(min,max)` consumes one step and returns `((s & 0xffff) * (max-min)) >> 16 + min`
+/// (the LOW 16 bits of the new seed; see `systems::game_daemon::game_random`).
 pub fn rng_step(s: u32) -> u32 {
     s.wrapping_mul(1664525).wrapping_add(1013904223)
 }
@@ -263,4 +282,23 @@ pub fn rng_draws(from: u32, to: u32) -> Option<u32> {
         return Some(1 << 20);
     }
     None
+}
+
+/// Effective status of a step: the owning system module's declaration when
+/// one exists, else the static table entry.
+pub fn step_status(idx: usize) -> StepStatus {
+    use crate::systems::*;
+    match idx {
+        8 => leaders_process::STATUS,
+        12 => game_daemon::STATUS,
+        13 => armies_process::STATUS,
+        14 => objects_process::STATUS,
+        15 => objects_inc_time::STATUS,
+        16 => graphic_events_process::STATUS,
+        17 => leaders_end_process::STATUS_END_PROCESS_ALL,
+        19 => leaders_end_process::STATUS_PROCESS_EVENT_FRAME,
+        21 | 22 => orders_roads::step_status(idx),
+        0..=3 | 9 | 10 | 18 | 24 | 26..=28 => misc_steps::step_status(idx),
+        _ => STEPS[idx].status,
+    }
 }

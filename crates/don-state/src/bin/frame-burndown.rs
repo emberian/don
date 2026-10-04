@@ -267,7 +267,7 @@ fn run_dir(dir: PathBuf) {
             s.idx,
             s.va.map(|v| format!("{v:#010x} ")).unwrap_or_else(|| "          ".into()),
             s.name,
-            format!("{:?}", s.status),
+            format!("{:?}", tick::step_status(s.idx)),
         );
     }
 
@@ -300,7 +300,7 @@ fn write_json(dir: &Path, pairs: &[PairRow], rng: &[(i64, Option<u32>)], top: &[
             s.idx,
             s.name,
             s.va.map(|v| format!("\"{v:#010x}\"")).unwrap_or("null".into()),
-            s.status,
+            tick::step_status(s.idx),
             if i + 1 == tick::STEPS.len() { "" } else { "," }
         );
     }
