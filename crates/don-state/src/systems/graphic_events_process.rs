@@ -157,7 +157,7 @@ mod tests {
             s.leaders.slots.push(l);
         }
         for (x, y, seen) in rows {
-            let mut r: Row<24> = Row::default();
+            let mut r: Row<23> = Row::default();
             r.data[AMB_X..AMB_X + 4].copy_from_slice(&x.to_le_bytes());
             r.data[AMB_Y..AMB_Y + 4].copy_from_slice(&y.to_le_bytes());
             r.data[AMB_SEEN] = seen;
