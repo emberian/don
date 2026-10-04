@@ -69,3 +69,24 @@ far enough to parse records forward; once the runtime region is measured,
 
 `tests/check_all.rs` skips when `schema/live/frame-pairs/` (gitignored
 proprietary captures) is absent.
+
+## Simulation tick (`src/tick.rs`)
+
+`tick::do_frame(&mut Save)` runs the retail `Game::do_frame` `0x00591ef0`
+29-step schedule over the canonical state. Each `STEPS` entry is `Ported`
+(whole body transcribed from the disassembly), `Partial` (some writes
+transcribed), or `Stub` (no-op). Currently ported: `Game::frame++`
+(`0x005924BF`), `Game::tick++` on `frame % 15 == 0` (`0x005924CF`), and
+inside `GameDaemon::process_all` the `Groups::process` tail
+`proc_group = (proc_group + 1) % 64` (`FUN_006fa210`). `Game::market_tick`
+(`+0x564`) is owned by `FUN_00732180` and stays stubbed pending the rules
+constants at `[0x00c061f0]+0xcd8..0xcec`. `Game::graphic_tick` is excluded
+as nondeterministic — `FUN_00591570` derives it from `timeGetTime()`
+66 ms quanta.
+
+`src/bin/frame-burndown.rs <capture-dir>...` diffs each stride-1 pair
+through `spandiff`: `retail_changed` / `explained` / `unexplained` /
+`introduced` (must stay 0), the `game_random` LCG draw count per frame
+(`FUN_00a39d70`, seed at post-World +40), channel matches, and writes
+`frame-burndown.json` into the capture dir. `src/spandiff.rs` holds the
+shared span alignment/attribution factored out of `svx-diff`.

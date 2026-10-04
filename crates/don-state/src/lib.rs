@@ -15,6 +15,8 @@ pub mod container;
 pub mod generated;
 pub mod prim;
 pub mod sections;
+pub mod spandiff;
+pub mod tick;
 pub mod walk;
 
 pub use check_all::{CheckSums, CHANNEL_NAMES};
