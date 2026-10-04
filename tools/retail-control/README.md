@@ -35,6 +35,16 @@ game:
   sites around one observed own Citizen, returning only retail's canonical `(x,y,-1,-1)` click.
 - `run-frames` is an internal supervised boundary: it starts only paused, advances exactly 1–30
   retail simulation frames, re-pauses on the retail main thread, and verifies the terminal frame.
+- `save NAME` calls shipped `SaveGame::save_game(String const&, int)` on the paused retail main
+  thread with a bare save name (retail appends `.SVX` against its working directory — the install
+  root — unless the name carries a path); the event carries the return value plus frame/paused
+  before-and-after.
+- `check-all` replicates `CheckSums::check_all` instruction-exact on the paused main thread:
+  the same inline `CheckSum` visitor, walker entry points, arguments, mask, and the
+  `[[0x00c06188]+0x134] != 0` world condition, publishing all 15 channel words, per-channel
+  bytes walked, and the wrapping-sum total.
+- `capture-pairs` drives save + check-all at frame N, `run-frames --stride`, repeat, pulling
+  each `.svx` hash-verified to a host directory next to a JSON manifest.
 - `marshal-policy` adapts the source-ordered supported subsequence of Arena `Marshal::act` to the
   fog-safe player protocol. v3 derives own Camp/Farm seat gaps from exact signed retail capacity,
   gates every prospective gather footprint through current fog before retail validation/capacity,

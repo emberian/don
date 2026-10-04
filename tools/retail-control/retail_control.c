@@ -79,6 +79,34 @@
 #define RVA_WALL_VTABLE  (0x00b42cf8u - PREFERRED_BASE)
 #define RVA_LAST_NUM_RECEIVED (0x00cbee88u - PREFERRED_BASE)
 #define RVA_PEER_CHECKSUMS (0x00cbee90u - PREFERRED_BASE)
+/* SaveGame::save_game and the global SaveGame object (PDB). */
+#define RVA_SAVE_GAME      (0x005a8220u - PREFERRED_BASE)
+#define RVA_SAVE_GAME_OBJ  (0x00c12ba4u - PREFERRED_BASE)
+#define RVA_STRING_FROM_CSTR (0x00a1d660u - PREFERRED_BASE)
+#define RVA_STRING_DTOR    (0x00a1ee20u - PREFERRED_BASE)
+/* CheckSums::check_all replication: CheckSum vftable and the fifteen walkers. */
+#define RVA_CHECKSUM_VFTABLE (0x00b3f920u - PREFERRED_BASE)
+#define RVA_WORLD_COND_PTR (0x00c06188u - PREFERRED_BASE)
+#define RVA_CHECK_UNITS    (0x009371d0u - PREFERRED_BASE)
+#define RVA_CHECK_BUILDS   (0x00937290u - PREFERRED_BASE)
+#define RVA_CHECK_WALLS    (0x00937360u - PREFERRED_BASE)
+#define RVA_CHECK_AMMO     (0x009374e0u - PREFERRED_BASE)
+#define RVA_CHECK_DEATHS   (0x00936bb0u - PREFERRED_BASE)
+#define RVA_CHECK_GROUPS   (0x00937530u - PREFERRED_BASE)
+#define RVA_CHECK_GUYS     (0x00937430u - PREFERRED_BASE)
+#define RVA_CHECK_LEADER   (0x006d6750u - PREFERRED_BASE)
+#define RVA_CHECK_LEADERS_BASE (0x00e3a390u - PREFERRED_BASE)
+#define RVA_CHECK_CITIES   (0x00937600u - PREFERRED_BASE)
+#define RVA_CHECK_ITEMS    (0x00937790u - PREFERRED_BASE)
+#define RVA_CHECK_GOODS    (0x00937710u - PREFERRED_BASE)
+#define RVA_CHECK_WORLD    (0x006b5cf0u - PREFERRED_BASE)
+#define RVA_CHECK_RULES    (0x00589550u - PREFERRED_BASE)
+#define RVA_CHECK_SCENARIO (0x00997ad0u - PREFERRED_BASE)
+#define RVA_CHECK_SCRIPT   (0x009c41a0u - PREFERRED_BASE)
+#define CHECK_LEADER_STRIDE 0x6eecu
+#define CHECK_LEADER_COUNT 8u
+#define CHECK_CHANNELS     15u
+#define SAVE_NAME_CAP      208u
 
 #define OFF_GAME_FRAME 0x550u
 #define OFF_GAME_SECONDS 0x560u
@@ -146,7 +174,9 @@ enum Verb {
     V_FIND_GATHER_BUILD,
     V_FIND_SCOUT_STEP,
     V_VALIDATE_ATTACK,
-    V_OBSERVE_NETWORK
+    V_OBSERVE_NETWORK,
+    V_SAVE,
+    V_CHECK_ALL
 };
 
 enum ChecksumGate {
@@ -236,6 +266,7 @@ typedef struct {
     int arg[10];
     int num_ids;
     short ids[MAX_IDS];
+    char save_name[SAVE_NAME_CAP];
 } request_t;
 
 /*
@@ -380,6 +411,14 @@ typedef struct {
     int checksum_capture_valid;
     int checksum_padding_length;
     unsigned checksum_words[16];
+    unsigned frame_after;
+    int paused_after;
+    int save_result;
+    char save_name[SAVE_NAME_CAP];
+    unsigned check_words[CHECK_CHANNELS];
+    unsigned check_bytes[CHECK_CHANNELS];
+    unsigned check_total;
+    unsigned check_world_walked;
     int checksum_total_consistent;
     int checksum_adler_shaped;
     int validation_result;
@@ -1472,6 +1511,16 @@ typedef int (__attribute__((thiscall)) *fn_was_seen)(const void *self,
                                                       const int *x, const int *y,
                                                       int who);
 typedef int (__attribute__((thiscall)) *fn_int0)(const void *self);
+/* The check_all walkers are callee-clean: stdcall for stack-arg bodies,
+   thiscall where ecx carries the object. */
+typedef void (__attribute__((stdcall)) *fn_walk2)(void *walk, unsigned arg);
+typedef void (__attribute__((stdcall)) *fn_walk1)(void *walk);
+typedef void (__attribute__((thiscall)) *fn_leader_walk)(void *leader, void *walk);
+typedef void (__attribute__((thiscall)) *fn_walk_this)(void *walk);
+typedef int (__attribute__((thiscall)) *fn_save_game)(void *self,
+                                                      const void *name, int flag);
+typedef void *(__attribute__((thiscall)) *fn_string_cstr)(void *self,
+                                                        const char *s);
 typedef int (__attribute__((fastcall)) *fn_vector_dist_coords)(const int *x1,
                                                                const int *y1,
                                                                const int *x2,
@@ -1592,6 +1641,98 @@ static void capture_append(event_t *e) {
     if (safe_read(g_base + RVA_COMMAND_PACKAGE + PACKAGE_BYTES + (unsigned)e->package_before,
                   e->command, (unsigned)delta))
         e->command_len = (unsigned)delta;
+}
+
+static void post_frame_state(event_t *e) {
+    unsigned game = 0, turn = 0, flags = 0;
+    e->frame_after = e->frame;
+    e->paused_after = e->paused;
+    if (rd32(g_base + RVA_GAME_PTR, &game) && game)
+        rd32(game + OFF_GAME_FRAME, &e->frame_after);
+    if (rd32(g_base + RVA_TURN_PTR, &turn) && turn &&
+        rd32(turn + OFF_TURN_FLAGS, &flags))
+        e->paused_after = (flags & 1u) != 0;
+}
+
+static void check_channel_reset(unsigned cs[7]) {
+    cs[4] = 1;
+    cs[5] = 0;
+}
+
+/*
+ * Replicates CheckSums::check_all (0x00936560) exactly: the same CheckSum
+ * visitor object layout, the same per-channel adler-32/byte-count resets, the
+ * same walker entry points and arguments, and the same wrapping-u32 total.
+ * check_all returns only its last channel and stores nothing into check_sums,
+ * so the per-channel words must be captured here.  Returns 0 on a fail-closed
+ * global read; the world channel walker runs only while [[0x00c06188]+0x134]
+ * is non-zero, exactly like retail.
+ */
+static int check_all_walk(event_t *e) {
+    unsigned cs[7];
+    unsigned channel = 0, world_base = 0, world_flag = 0, leader, leader_end;
+    memset(cs, 0, sizeof(cs));
+    cs[0] = g_base + RVA_CHECKSUM_VFTABLE;
+    cs[1] = 0;
+    cs[2] = 1;
+    cs[3] = 0xffffffffu;
+    if (!rd32(g_base + RVA_WORLD_COND_PTR, &world_base) ||
+        (world_base && !rd32(world_base + 0x134u, &world_flag))) {
+        e->note = 31;
+        return 0;
+    }
+#define CHECK_STEP2(rva, arg) do { \
+        check_channel_reset(cs); \
+        ((fn_walk2)(g_base + (rva)))(cs, (arg)); \
+        e->check_words[channel] = cs[4]; \
+        e->check_bytes[channel] = cs[5]; \
+        channel++; \
+    } while (0)
+#define CHECK_STEP1(rva) do { \
+        check_channel_reset(cs); \
+        ((fn_walk1)(g_base + (rva)))(cs); \
+        e->check_words[channel] = cs[4]; \
+        e->check_bytes[channel] = cs[5]; \
+        channel++; \
+    } while (0)
+    CHECK_STEP2(RVA_CHECK_UNITS, 0);
+    CHECK_STEP2(RVA_CHECK_BUILDS, 0);
+    CHECK_STEP2(RVA_CHECK_WALLS, 0);
+    CHECK_STEP2(RVA_CHECK_AMMO, 0);
+    CHECK_STEP2(RVA_CHECK_DEATHS, 0);
+    CHECK_STEP2(RVA_CHECK_GROUPS, 0);
+    CHECK_STEP2(RVA_CHECK_GUYS, 0);
+    check_channel_reset(cs);
+    leader = g_base + RVA_CHECK_LEADERS_BASE;
+    leader_end = leader + CHECK_LEADER_STRIDE * CHECK_LEADER_COUNT;
+    for (; leader < leader_end; leader += CHECK_LEADER_STRIDE)
+        ((fn_leader_walk)(g_base + RVA_CHECK_LEADER))((void *)leader, cs);
+    e->check_words[channel] = cs[4];
+    e->check_bytes[channel] = cs[5];
+    channel++;
+    CHECK_STEP2(RVA_CHECK_CITIES, 0);
+    CHECK_STEP2(RVA_CHECK_ITEMS, 0);
+    CHECK_STEP2(RVA_CHECK_GOODS, 0);
+    check_channel_reset(cs);
+    if (world_base && world_flag) {
+        ((fn_walk2)(g_base + RVA_CHECK_WORLD))(cs, 0xffffffffu);
+        e->check_world_walked = 1;
+    }
+    e->check_words[channel] = cs[4];
+    e->check_bytes[channel] = cs[5];
+    channel++;
+    CHECK_STEP1(RVA_CHECK_RULES);
+    check_channel_reset(cs);
+    ((fn_walk_this)(g_base + RVA_CHECK_SCENARIO))(cs);
+    e->check_words[channel] = cs[4];
+    e->check_bytes[channel] = cs[5];
+    channel++;
+    CHECK_STEP1(RVA_CHECK_SCRIPT);
+    for (channel = 0; channel < CHECK_CHANNELS; channel++)
+        e->check_total += e->check_words[channel];
+    return 1;
+#undef CHECK_STEP2
+#undef CHECK_STEP1
 }
 
 static int dispatch(const request_t *r, event_t *e) {
@@ -1880,6 +2021,30 @@ static int dispatch(const request_t *r, event_t *e) {
             if (package_length() <= e->package_before) return 0;
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 0);
             break;
+        case V_SAVE: {
+            /* SaveGame::save_game(String const& name, int no_prompt) on the
+               global SaveGame object.  Retail's own autosave passes 1, which
+               skips the interactive file-exists prompt entirely. */
+            unsigned char name_string[20];
+            memset(name_string, 0, sizeof(name_string));
+            memcpy(e->save_name, r->save_name, sizeof(e->save_name));
+            ((fn_string_cstr)(g_base + RVA_STRING_FROM_CSTR))(
+                name_string, r->save_name);
+            e->save_result = ((fn_save_game)(g_base + RVA_SAVE_GAME))(
+                (void *)(g_base + RVA_SAVE_GAME_OBJ), name_string, 1);
+            ((fn_void0)(g_base + RVA_STRING_DTOR))(name_string);
+            post_frame_state(e);
+            if (e->frame_after != e->frame || e->paused_after != 1)
+                e->note = 30;
+            return 1;
+        }
+        case V_CHECK_ALL: {
+            if (!check_all_walk(e)) return 0;
+            post_frame_state(e);
+            if (e->frame_after != e->frame || e->paused_after != 1)
+                e->note = 30;
+            return 1;
+        }
         default:
             return 0;
     }
@@ -2062,9 +2227,16 @@ pending_request:
         e->phase = 4;
         e->note = g_trace.active ? 3 : (e->paused != 1 ? 2 : 4);
         push_event(e);
+    } else if ((r.verb == V_SAVE || r.verb == V_CHECK_ALL) &&
+               (g_trace.active || e->paused != 1)) {
+        /* Ground-truth capture is exact only on a fully paused main thread. */
+        e->phase = 4;
+        e->note = g_trace.active ? 3 : 2;
+        push_event(e);
     } else if (dispatch(&r, e)) {
         e->phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
                    r.verb == V_OBSERVE_PLAYER || r.verb == V_OBSERVE_NETWORK ||
+                   r.verb == V_SAVE || r.verb == V_CHECK_ALL ||
                    r.verb == V_VALIDATE_QUEUE ||
                    r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD ||
                    r.verb == V_FIND_GATHER_BUILD ||
@@ -2558,6 +2730,8 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq gather WHO TARGET_ID QUEUED ID...
  * seq queue WHO TYPE COUNT PRODUCER_ID...
  * seq build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
+ * seq save NAME
+ * seq check-all
  */
 static int parse_request(char *line, request_t *r) {
     char *t[160];
@@ -2714,7 +2888,23 @@ static int parse_request(char *line, request_t *r) {
         r->verb = V_RUN_FRAMES;
         r->arg[0] = parse_int(t[2], &ok);
         if (r->arg[0] < 1 || r->arg[0] > 30) ok = 0;
-    } else return 0;
+    } else if (!strcmp(t[1], "save") && n == 3) {
+        size_t len = strlen(t[2]);
+        r->verb = V_SAVE;
+        if (!len || len >= SAVE_NAME_CAP || len > 200) ok = 0;
+        else {
+            for (i = 0; i < (int)len; i++) {
+                unsigned char c = (unsigned char)t[2][i];
+                /* One save-name token: printable ASCII, no whitespace (the
+                   tokenizer already split it), no path or shell metachars. */
+                if (c < 0x21 || c > 0x7e || c == '/' || c == '\\' ||
+                    c == ':' || c == '*' || c == '?' || c == '"' ||
+                    c == '<' || c == '>' || c == '|') ok = 0;
+            }
+            if (ok) memcpy(r->save_name, t[2], len + 1);
+        }
+    } else if (!strcmp(t[1], "check-all") && n == 2) r->verb = V_CHECK_ALL;
+    else return 0;
     if (!ok) return 0;
     if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
          r->verb == V_ATTACK_VISIBLE ||
@@ -2828,6 +3018,7 @@ static const char *verb_name(unsigned verb) {
         case V_FIND_GATHER_BUILD: return "find-gather-build";
         case V_FIND_SCOUT_STEP: return "find-scout-step";
         case V_VALIDATE_ATTACK: return "validate-attack";
+        case V_SAVE: return "save"; case V_CHECK_ALL: return "check-all";
         default: return "unknown";
     }
 }
@@ -2996,6 +3187,27 @@ static void write_event(const event_t *e) {
             e->placement_x, e->placement_y, e->placement_tested,
             e->placement_legal, e->placement_seen, e->placement_capacity,
             e->placement_snap_x, e->placement_snap_y, e->placement_ring))
+        goto serialize_failed;
+    /* save_name is fail-closed validated to printable ASCII without quotes or
+       backslashes in parse_request, so it is JSON-safe as written. */
+    if (!append_json(line, EVENT_JSON_CAP, &used,
+            "\"save_name\":\"%s\",\"save_result\":%d,\"frame_after\":%u,"
+            "\"paused_after\":%d,"
+            "\"check_words\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u],"
+            "\"check_bytes\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u],"
+            "\"check_total\":%u,\"check_world_walked\":%u,",
+            e->save_name, e->save_result, e->frame_after, e->paused_after,
+            e->check_words[0], e->check_words[1], e->check_words[2],
+            e->check_words[3], e->check_words[4], e->check_words[5],
+            e->check_words[6], e->check_words[7], e->check_words[8],
+            e->check_words[9], e->check_words[10], e->check_words[11],
+            e->check_words[12], e->check_words[13], e->check_words[14],
+            e->check_bytes[0], e->check_bytes[1], e->check_bytes[2],
+            e->check_bytes[3], e->check_bytes[4], e->check_bytes[5],
+            e->check_bytes[6], e->check_bytes[7], e->check_bytes[8],
+            e->check_bytes[9], e->check_bytes[10], e->check_bytes[11],
+            e->check_bytes[12], e->check_bytes[13], e->check_bytes[14],
+            e->check_total, e->check_world_walked))
         goto serialize_failed;
     if (!append_json(line, EVENT_JSON_CAP, &used,
             "\"network_state_valid\":%d,\"network_game_flags\":%u,"

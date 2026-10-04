@@ -1617,19 +1617,32 @@ def wait_for_ready_state(root: str, target_pid: int, desired: str,
 
 
 def require_armed_controller(root: str) -> tuple[int, str]:
-    injector = injector_diagnostic()
+    # The prlctl guest transport intermittently returns garbage exit/output;
+    # a read-only injector diagnostic is retried before it may refuse.
+    injector = {"ready": False, "issues": ["injector diagnostic did not run"]}
+    for attempt in range(4):
+        injector = injector_diagnostic()
+        if injector["ready"]:
+            break
+        if attempt < 3:
+            time.sleep(0.5)
     if not injector["ready"]:
         raise SystemExit(
             "REFUSING retail request because the hash-bound guest injector is not ready: " +
             "; ".join(injector["issues"])
         )
-    target_pid = pid()
-    preflight(target_pid)
+    target_pid = guest_op_retry(lambda: pid())
+    guest_op_retry(lambda: preflight(target_pid))
     root_name = root.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
     generation = generation_from_root_name(root_name)
     if generation is None:
         raise SystemExit(f"REFUSING request through unrecognized controller root {root!r}")
-    inventory = controller_inventory(target_pid)
+    inventory = guest_op_retry(lambda: controller_inventory(target_pid))
+    for attempt in range(3):
+        if inventory["complete"] and not inventory["issues"]:
+            break
+        time.sleep(0.5)
+        inventory = controller_inventory(target_pid)
     if (not inventory["complete"] or inventory["issues"] or
             inventory["hook_owner"] != generation):
         detail = "; ".join(inventory["issues"]) or (
@@ -1730,12 +1743,22 @@ def validate_words(words: list[str]) -> None:
                "move", "halt", "attack", "attack-visible", "trace-move", "observe-guys",
                "observe-player", "validate-queue", "validate-build", "gather",
                "queue", "build", "run-frames", "find-build", "find-gather-build",
-               "find-scout-step", "validate-attack"}
+               "find-scout-step", "validate-attack", "save", "check-all"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
+    if words[0] == "save" and (len(words) != 2 or not save_name_ok(words[1])):
+        raise SystemExit(f"unsafe save name {words[1:]!r}")
     for word in words:
         if not word or any(c not in "abcdefghijklmnopqrstuvwxyz-0123456789xABCDEF" for c in word):
-            raise SystemExit(f"unsafe token {word!r}")
+            if not (words[0] == "save" and word is words[1] and save_name_ok(word)):
+                raise SystemExit(f"unsafe token {word!r}")
+
+
+def save_name_ok(name: str) -> bool:
+    """Mirror the DLL parse gate: one printable-ASCII token, <=200 chars, no
+    whitespace or path/shell metacharacters.  The cmd echo transport also makes
+    shell metacharacters unsafe, so this stays a strict subset."""
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}", name))
 
 
 def validate_multiplayer_events(verb: str, events: list[dict]) -> None:
@@ -1778,16 +1801,40 @@ def validate_multiplayer_events(verb: str, events: list[dict]) -> None:
         raise SystemExit("REFUSING eligible checksum response that did not capture a packet")
 
 
+def write_request(root: str, line: str, attempts: int = 4) -> None:
+    """Atomically publish one request line, tolerating flaky prlctl exec calls.
+
+    A failed write is confirmed against request.txt before retrying: if the
+    exact seq line already landed, the request is considered delivered and is
+    never rewritten (a rewrite would re-dispatch the same seq as a new request).
+    """
+    for attempt in range(attempts):
+        try:
+            # A rename makes the one-slot request atomic from the worker's
+            # point of view.
+            guest_cmd(
+                f'(echo {line})>"{root}\\request.tmp" && '
+                f'move /y "{root}\\request.tmp" "{root}\\request.txt" >nul'
+            )
+            return
+        except subprocess.CalledProcessError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+            current = guest_cmd(
+                f'if exist "{root}\\request.txt" type "{root}\\request.txt"',
+                check=False,
+            )
+            if line in current.splitlines():
+                return
+
+
 def send(words: list[str], timeout: float, root: str) -> list[dict]:
     validate_words(words)
-    require_armed_controller(root)
+    guest_op_retry(lambda: require_armed_controller(root))
     seq = next_seq()
     line = " ".join([str(seq), *words])
-    # A rename makes the one-slot request atomic from the worker's point of view.
-    guest_cmd(
-        f'(echo {line})>"{root}\\request.tmp" && '
-        f'move /y "{root}\\request.tmp" "{root}\\request.txt" >nul'
-    )
+    write_request(root, line)
     deadline = time.monotonic() + timeout
     seen: dict[str, dict] = {}
     while time.monotonic() < deadline:
@@ -3631,10 +3678,7 @@ def advance_frames(root: str, frames: int, timeout: float = 10.0) -> dict:
     words = ["run-frames", str(frames)]
     validate_words(words)
     line = " ".join([str(seq), *words])
-    guest_cmd(
-        f'(echo {line})>"{root}\\request.tmp" && '
-        f'move /y "{root}\\request.tmp" "{root}\\request.txt" >nul'
-    )
+    write_request(root, line)
     events: list[dict] = []
     seen: set[tuple] = set()
     terminal: dict | None = None
@@ -3677,6 +3721,177 @@ def advance_frames(root: str, frames: int, timeout: float = 10.0) -> dict:
         "pause_after": terminal["paused"],
         "unpause_command_hex": queued["command_hex"],
     }
+
+
+CHECK_ALL_CHANNELS = (
+    "units", "builds", "walls", "ammo", "deaths", "groups", "guys",
+    "leaders", "cities", "items", "goods", "world", "rules",
+    "scenario_data", "script_run_time",
+)
+GUEST_SAVES_DIR = r"C:\Users\ember\Documents\My Games\Rise of Nations\Saves"
+# A bare save name is resolved against the retail working directory (the
+# install root), which is where verb-driven saves materialize.
+GUEST_SAVE_DIRS = (RETAIL_ROOT, GUEST_SAVES_DIR)
+
+
+def terminal_request_event(words: list[str], timeout: float, root: str) -> dict:
+    """Drive one immediate (non-trace) main-thread verb to its terminal event."""
+    events = send(words, timeout, root)
+    if len(events) != 1:
+        raise RuntimeError(f"{words[0]} returned an ambiguous event set")
+    event = events[0]
+    if event.get("phase") == "rejected":
+        raise RuntimeError(f"retail rejected {words[0]} (note={event.get('note')})")
+    if event.get("phase") != "observed":
+        raise RuntimeError(f"{words[0]} returned unexpected phase {event.get('phase')!r}")
+    return event
+
+
+def retail_save(name: str, timeout: float, root: str) -> dict:
+    if not save_name_ok(name):
+        raise RuntimeError(f"unsafe save name {name!r}")
+    event = terminal_request_event(["save", name], timeout, root)
+    if event.get("save_name") != name or not isinstance(event.get("save_result"), int):
+        raise RuntimeError("save event lacks the exact echoed name and result")
+    if event.get("frame_after") != event.get("frame") or event.get("paused_after") != 1:
+        raise RuntimeError("save moved the simulation off its paused frame")
+    return event
+
+
+def check_all_result(root: str, timeout: float = 30.0) -> dict:
+    event = terminal_request_event(["check-all"], timeout, root)
+    words = event.get("check_words")
+    walked = event.get("check_bytes")
+    total = event.get("check_total")
+    if (not isinstance(words, list) or len(words) != len(CHECK_ALL_CHANNELS) or
+            not all(isinstance(v, int) and 0 <= v <= 0xFFFFFFFF for v in words) or
+            not isinstance(walked, list) or len(walked) != len(CHECK_ALL_CHANNELS) or
+            not all(isinstance(v, int) for v in walked) or
+            not isinstance(total, int)):
+        raise RuntimeError("check-all event lacks the exact 15-channel record")
+    if total != (sum(words) & 0xFFFFFFFF):
+        raise RuntimeError("check-all total is not the wrapping sum of its words")
+    if event.get("frame_after") != event.get("frame") or event.get("paused_after") != 1:
+        raise RuntimeError("check-all moved the simulation off its paused frame")
+    event["check_all"] = dict(zip(CHECK_ALL_CHANNELS, words))
+    event["check_all_bytes"] = dict(zip(CHECK_ALL_CHANNELS, walked))
+    return event
+
+
+def guest_op_retry(fn, attempts: int = 4):
+    """Retry a read-only guest operation through the flaky prlctl transport."""
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except (subprocess.CalledProcessError, RuntimeError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
+def guest_save_path(name: str) -> str | None:
+    """Resolve the on-disk save for a bare save name, or None when absent."""
+    for directory in GUEST_SAVE_DIRS:
+        for ext in ("SVX", "svx"):
+            candidate = f"{directory}\\{name}.{ext}"
+            if guest_op_retry(lambda: guest_leaf_present(candidate)):
+                return candidate
+    return None
+
+
+def pull_guest_save(name: str, destination: Path) -> dict:
+    """Copy one resolved guest .svx to the host, hash-verified on both sides."""
+    source = guest_save_path(name)
+    if source is None:
+        raise RuntimeError(f"no guest .svx materialized for save {name!r}")
+    record = guest_op_retry(lambda: guest_file_record(source))
+    data = guest_op_retry(lambda: guest_read_bytes(source, 4 * 1024 * 1024))
+    digest = hashlib.sha256(data).hexdigest()
+    if (not record["present"] or record.get("size") != len(data) or
+            record.get("sha256") != digest):
+        raise RuntimeError("guest .svx identity changed while reading")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(data)
+    return {
+        "guest_path": source,
+        "host_path": str(destination),
+        "size": record["size"],
+        "sha256": digest,
+    }
+
+
+def require_paused_observation(root: str, timeout: float = 10.0) -> dict:
+    event = terminal_request_event(["observe"], timeout, root)
+    if event.get("paused") == 1:
+        return event
+    # pause is verify-gated: it must reach its applied event, not just queue.
+    events = send(["pause", "1"], timeout, root)
+    if not any(e.get("phase") == "applied" and e.get("paused") == 1
+               for e in events):
+        raise RuntimeError("pause 1 was not applied on the retail main thread")
+    for _ in range(40):
+        event = terminal_request_event(["observe"], timeout, root)
+        if event.get("paused") == 1:
+            return event
+        time.sleep(0.1)
+    raise RuntimeError("game did not reach the paused state required for capture")
+
+
+def capture_pairs(root: str, generation: str, output_dir: Path, count: int,
+                  stride: int, prefix: str, timeout: float = 30.0) -> dict:
+    if not 1 <= count <= 64:
+        raise RuntimeError("capture-pairs count must be between 1 and 64")
+    if not 1 <= stride <= 30:
+        raise RuntimeError("capture-pairs stride must be between 1 and 30")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", prefix):
+        raise RuntimeError(f"unsafe capture prefix {prefix!r}")
+    manifest: dict = {
+        "schema": "don.retail-frame-pairs.v1",
+        "controller_generation": generation,
+        "channels": list(CHECK_ALL_CHANNELS),
+        "stride": stride,
+        "steps": [],
+    }
+    observation = require_paused_observation(root)
+    try:
+        for _ in range(count):
+            frame = observation["frame"]
+            name = f"{prefix}f{frame}"
+            save_event = retail_save(name, timeout, root)
+            check_event = check_all_result(root, timeout)
+            if save_event["frame"] != frame or check_event["frame"] != frame:
+                raise RuntimeError("capture verbs disagree about the paused frame")
+            pulled = pull_guest_save(
+                name, output_dir / f"{name}.svx")
+            manifest["steps"].append({
+                "frame": frame,
+                "save_name": name,
+                "save_result": save_event["save_result"],
+                "check_words": dict(zip(CHECK_ALL_CHANNELS, check_event["check_words"])),
+                "check_total": check_event["check_total"],
+                "check_bytes": dict(zip(CHECK_ALL_CHANNELS, check_event["check_bytes"])),
+                "check_world_walked": check_event["check_world_walked"],
+                "svx": pulled,
+            })
+            if len(manifest["steps"]) < count:
+                advance_frames(root, stride)
+                observation = require_paused_observation(root)
+    finally:
+        # A rejected or failed step still leaves the game paused by contract;
+        # re-assert it so a caller never inherits a running simulation.
+        try:
+            require_paused_observation(root)
+        except Exception:
+            pass
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest["manifest_path"] = str(manifest_path)
+    print(json.dumps({k: manifest[k] for k in
+                      ("schema", "controller_generation", "stride",
+                       "manifest_path")} | {"steps": len(manifest["steps"])},
+                     indent=2))
+    return manifest
 
 
 def economy_policy_run(root: str, generation: str, output: Path, apply: bool) -> None:
@@ -7163,6 +7378,31 @@ def main() -> None:
     s.add_argument("--timeout", type=float, default=5.0)
     add_generation(s)
     s.add_argument("command", nargs=argparse.REMAINDER)
+    sv = sub.add_parser(
+        "save",
+        help="retail SaveGame::save_game on the paused main thread; pulls the .svx",
+    )
+    sv.add_argument("name")
+    sv.add_argument("--timeout", type=float, default=30.0)
+    sv.add_argument("--pull", type=Path,
+                    help="host path for the pulled .svx (default: resolve only)")
+    add_generation(sv)
+    ca = sub.add_parser(
+        "check-all",
+        help="replicated CheckSums::check_all: the 15 lockstep words on one paused frame",
+    )
+    ca.add_argument("--timeout", type=float, default=30.0)
+    add_generation(ca)
+    cp = sub.add_parser(
+        "capture-pairs",
+        help="save + check-all at frame N, advance --stride frames, repeat",
+    )
+    cp.add_argument("--dir", type=Path, required=True)
+    cp.add_argument("--count", type=int, default=2)
+    cp.add_argument("--stride", type=int, default=1)
+    cp.add_argument("--prefix", default="don")
+    cp.add_argument("--timeout", type=float, default=30.0)
+    add_generation(cp)
     t = sub.add_parser("trajectory")
     t.add_argument("owner", type=int)
     t.add_argument("unit_id", type=int)
@@ -7275,6 +7515,31 @@ def main() -> None:
             a.injector_port, prepare=False,
         )
     elif a.action == "send": send(a.command, a.timeout, generation_root(a.generation))
+    elif a.action == "save":
+        event = retail_save(a.name, a.timeout, generation_root(a.generation))
+        record = {"save_event": {k: event[k] for k in
+                                 ("seq", "frame", "frame_after", "paused",
+                                  "paused_after", "save_result")},
+                  "guest_file": None}
+        guest_path = guest_save_path(a.name)
+        if guest_path is not None:
+            record["guest_file"] = guest_file_record(guest_path)
+            if a.pull is not None:
+                record["pulled"] = pull_guest_save(a.name, a.pull.resolve())
+        print(json.dumps(record, indent=2))
+        if event.get("save_result") != 0 or guest_path is None:
+            raise SystemExit("save did not materialize a guest .svx")
+    elif a.action == "check-all":
+        event = check_all_result(generation_root(a.generation), a.timeout)
+        print(json.dumps({"frame": event["frame"], "paused": event["paused"],
+                          "check_all": event["check_all"],
+                          "check_all_bytes": event["check_all_bytes"],
+                          "check_total": event["check_total"],
+                          "check_world_walked": event["check_world_walked"]},
+                         indent=2))
+    elif a.action == "capture-pairs":
+        capture_pairs(generation_root(a.generation), a.generation,
+                      a.dir.resolve(), a.count, a.stride, a.prefix, a.timeout)
     elif a.action == "trajectory":
         trajectory(a.owner, a.unit_id, a.x, a.y, a.max_frames, a.timeout,
                    generation_root(a.generation), a.generation, a.output.resolve())

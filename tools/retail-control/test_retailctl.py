@@ -810,8 +810,101 @@ class RetailCtlTests(unittest.TestCase):
             ["find-scout-step", "0", "3", "2496", "30144"],
             ["validate-attack", "0", "12", "1", "22", "37"],
             ["run-frames", "30"],
+            ["save", "donf123"], ["save", "quicksave-2.1"], ["check-all"],
         ]:
             retailctl.validate_words(words)
+
+    def test_save_names_are_fail_closed_single_tokens(self):
+        for name in ["a/b", "a\\b", "a;b", "a&b", "a b", "..", "", "x" * 201,
+                     "name|whoami", "a>b", "-leading"]:
+            self.assertFalse(retailctl.save_name_ok(name), name)
+            with self.assertRaises(SystemExit):
+                retailctl.validate_words(["save", name])
+        self.assertTrue(retailctl.save_name_ok("donf123"))
+        self.assertTrue(retailctl.save_name_ok("a" * 200))
+
+    def test_check_all_event_requires_the_exact_15_channel_record(self):
+        words = list(range(15))
+        event = {
+            "phase": "observed", "frame": 90, "frame_after": 90,
+            "paused": 1, "paused_after": 1,
+            "check_words": words,
+            "check_bytes": [v * 4 for v in words],
+            "check_total": sum(words) & 0xFFFFFFFF,
+            "check_world_walked": 1,
+        }
+        with mock.patch.object(retailctl, "send", return_value=[event]):
+            result = retailctl.check_all_result("root")
+        self.assertEqual(result["check_all"]["units"], 0)
+        self.assertEqual(result["check_all"]["script_run_time"], 14)
+        self.assertEqual(len(result["check_all"]), 15)
+        bad_total = {**event, "check_total": (sum(words) + 1) & 0xFFFFFFFF}
+        with mock.patch.object(retailctl, "send", return_value=[bad_total]):
+            with self.assertRaisesRegex(RuntimeError, "wrapping sum"):
+                retailctl.check_all_result("root")
+        short = {**event, "check_words": words[:14]}
+        with mock.patch.object(retailctl, "send", return_value=[short]):
+            with self.assertRaisesRegex(RuntimeError, "15-channel"):
+                retailctl.check_all_result("root")
+        moved = {**event, "frame_after": 91}
+        with mock.patch.object(retailctl, "send", return_value=[moved]):
+            with self.assertRaisesRegex(RuntimeError, "paused frame"):
+                retailctl.check_all_result("root")
+
+    def test_capture_pairs_manifest_records_frame_save_words_and_svx(self):
+        steps_seen = []
+        base_event = {
+            "phase": "observed", "paused": 1, "paused_after": 1,
+            "save_result": 0,
+            "check_words": [1] * 15, "check_bytes": [4] * 15,
+            "check_total": 15, "check_world_walked": 1,
+        }
+        events = []
+        for frame in (90, 91):
+            events.append([
+                {**base_event, "frame": frame, "frame_after": frame,
+                 "save_name": f"tf{frame}", "verb": "save"},
+                {**base_event, "frame": frame, "frame_after": frame,
+                 "verb": "check-all"},
+            ])
+        calls = {"i": 0}
+
+        def fake_send(words, timeout, root):
+            if words[0] == "observe":
+                frame = 90 + len(steps_seen)
+                return [{**base_event, "frame": frame, "frame_after": frame}]
+            idx = calls["i"] // 2
+            kind = calls["i"] % 2
+            calls["i"] += 1
+            return [events[idx][kind]]
+
+        def fake_pull(name, destination):
+            steps_seen.append(name)
+            return {"guest_path": f"C:\\Saves\\{name}.svx",
+                    "host_path": str(destination), "size": 1, "sha256": "0" * 64}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "pairs"
+            with mock.patch.object(retailctl, "send", side_effect=fake_send), \
+                 mock.patch.object(retailctl, "advance_frames",
+                                   return_value={"frame_after": 91}), \
+                 mock.patch.object(retailctl, "pull_guest_save",
+                                   side_effect=fake_pull):
+                manifest = retailctl.capture_pairs(
+                    "root", "gen-test", out_dir, count=2, stride=1, prefix="t")
+            self.assertEqual(len(manifest["steps"]), 2)
+            for step, frame in zip(manifest["steps"], (90, 91)):
+                self.assertEqual(step["frame"], frame)
+                self.assertEqual(step["save_name"], f"tf{frame}")
+                self.assertEqual(len(step["check_words"]), 15)
+                self.assertEqual(step["check_words"]["units"], 1)
+                self.assertEqual(step["check_total"], 15)
+                self.assertIn("svx", step)
+            on_disk = json.loads((out_dir / "manifest.json").read_text())
+            self.assertEqual(on_disk["schema"], "don.retail-frame-pairs.v1")
+            self.assertEqual(on_disk["channels"], list(retailctl.CHECK_ALL_CHANNELS))
+            self.assertEqual(len(on_disk["steps"]), 2)
+        self.assertEqual(steps_seen, ["tf90", "tf91"])
 
     def test_shell_metacharacters_are_refused(self):
         for words in [["observe&whoami"], ["pause", "1>pwn"], ["move", "$(x)"]]:
