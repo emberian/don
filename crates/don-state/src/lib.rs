@@ -16,6 +16,7 @@ pub mod generated;
 pub mod prim;
 pub mod sections;
 pub mod spandiff;
+pub mod systems;
 pub mod tick;
 pub mod walk;
 

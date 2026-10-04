@@ -206,13 +206,22 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
                     effects.push(format!("Game.tick -> {t} (frame {f} % 15 == 0)"));
                 }
             }
+            8 => crate::systems::leaders_process::run(save, &mut effects),
+            14 => crate::systems::objects_process::run(save, &mut effects),
+            15 => crate::systems::objects_inc_time::run(save, &mut effects),
             _ => {}
         }
+        let status = match s.idx {
+            8 => crate::systems::leaders_process::STATUS,
+            14 => crate::systems::objects_process::STATUS,
+            15 => crate::systems::objects_inc_time::STATUS,
+            _ => s.status,
+        };
         steps.push(StepRecord {
             idx: s.idx,
             name: s.name,
             va: s.va,
-            status: s.status,
+            status,
             effects,
         });
     }
