@@ -79,6 +79,24 @@ has an obvious test.
 
 ### 2. Replay fidelity
 
+**Convergence order (2026-10-04).** The retail save game is the primary oracle, ahead of
+seed-driven world generation. `CheckSum`, `SaveGame`, and `LoadGame` are siblings of one
+`DataWalk` visitor, so a `.svx` is the complete lockstep-critical state at a frame, and the
+live controller can now emit one at any paused frame together with the fifteen `check_all`
+words and per-channel byte counts (`tools/retail-control/retailctl.py capture-pairs`). The
+ladder is:
+
+1. `crates/don-state` loads a captured `.svx`, re-emits it byte-identically, and reproduces
+   the fifteen live words and byte counts from the loaded state (walker/layout fidelity with
+   zero dynamics involved);
+2. consecutive frame captures give a field-attributed per-frame diff of retail, and the sim
+   is driven from frame N to compare against frame N+1 — the first divergence is a named
+   field in a named system in one frame;
+3. the replay corpus is re-admitted from mid-game saves as the long-horizon regression;
+4. world generation is validated last, against frame-zero saves of fresh games.
+
+Seed-driven world generation and the 2024 golden chronology continue as a secondary lane.
+
 - Parse Game/GameInfo setup, rules, players, teams, seed, map parameters, and initial command
   packages from `.rcx`.
 - Deterministically reconstruct the initial world; `.rcx` is not a complete `.svx` state
