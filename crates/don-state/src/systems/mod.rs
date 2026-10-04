@@ -6,3 +6,10 @@
 pub mod leaders_process;
 pub mod objects_inc_time;
 pub mod objects_process;
+pub mod game_daemon;
+pub mod armies_process;
+pub mod graphic_events_process;
+pub mod leaders_end_process;
+pub mod orders_roads;
+pub mod build_process;
+pub mod misc_steps;

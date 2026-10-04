@@ -189,6 +189,7 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
                     save.groups.proc_group = 0;
                 }
                 effects.push("Groups.proc_group = (proc_group + 1) % 64".into());
+                crate::systems::game_daemon::run(save, &mut effects);
             }
             20 => {
                 // 00591ef0.c:234 — *(Game+0x550) += 1.
@@ -207,12 +208,21 @@ pub fn do_frame(save: &mut Save) -> FrameReport {
                 }
             }
             8 => crate::systems::leaders_process::run(save, &mut effects),
+            13 => crate::systems::armies_process::run(save, &mut effects),
+            16 => crate::systems::graphic_events_process::run(save, &mut effects),
+            17 | 19 => crate::systems::leaders_end_process::run(save, &mut effects),
+            21 | 22 => crate::systems::orders_roads::run(save, &mut effects),
+            0..=3 | 9 | 10 | 18 | 24 | 26..=28 => crate::systems::misc_steps::run(save, &mut effects),
             14 => crate::systems::objects_process::run(save, &mut effects),
             15 => crate::systems::objects_inc_time::run(save, &mut effects),
             _ => {}
         }
         let status = match s.idx {
             8 => crate::systems::leaders_process::STATUS,
+            13 => crate::systems::armies_process::STATUS,
+            16 => crate::systems::graphic_events_process::STATUS,
+            17 | 19 => crate::systems::leaders_end_process::STATUS,
+            21 | 22 => crate::systems::orders_roads::STATUS,
             14 => crate::systems::objects_process::STATUS,
             15 => crate::systems::objects_inc_time::STATUS,
             _ => s.status,
