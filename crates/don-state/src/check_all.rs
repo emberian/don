@@ -271,7 +271,7 @@ impl CheckSums {
     /// load/save; tags no-op and checksum-gated strings are skipped under
     /// `is_checksum()`.
     fn check_rules(save: &mut Save, cs: &mut CheckSum) -> R {
-        save.rules_tail.walk(cs)
+        save.rules_tail.rules.walk(cs)
     }
 
     /// ScenarioData::walk_data 0x00997ad0.

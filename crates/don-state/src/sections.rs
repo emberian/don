@@ -3215,29 +3215,78 @@ impl FinalGlobals {
 //   544..629 TechType, 629..684 SpellType, 684..806 Type (BonusType).
 // ---------------------------------------------------------------------------
 
-/// Opaque tail span bounded by EOF: RunTimeEnv records + conditional object +
-/// Rules section. Byte-exact for load/save; reported as a stop point for the
-/// checksum lane until the interior boundaries are resolved.
+/// Serialized width of one shipped `Game::walk_rules_data` section
+/// (`0x00589550`) for this install: tag + 806 type records + Constants
+/// (0xd40) + duplicated dword + Balance (493*493*2) + 24 tribes. The string
+/// data inside type records makes it install-specific, but every shipped
+/// capture agrees on this width (matches don-replay's
+/// `SHIPPED_RULES_SERIALIZED_BYTES`).
+pub const RULES_SERIALIZED_BYTES: usize = 1_024_221;
+
+/// Tail grammar after `final_globals` (`WalkDataGame::walk_data` 0x005a2360
+/// ends with `Game::walk_rules_data` 0x00589550):
+///   [opaque scenario/RunTimeEnv-serialized bytes] + [Rules] + [opaque trailer].
+/// The leading span is bounded by the self-authenticating Rules scan (every
+/// type record serializes its slot index at image[0..4), so a false tag
+/// cannot survive the first two records); the trailing span is bounded by
+/// EOF. Both opaque spans are reported stop points: the leading one is
+/// script-VM serialization (bytecode, const pools, editor paths) whose
+/// interior counts live in globals we have not yet resolved, and the trailer
+/// (~840 KB, i32-grid-like) has no known writer in the walk — no section
+/// between `final_globals` and EOF accounts for it.
 #[derive(Default, Clone)]
 pub struct RulesTail {
-    pub data: Vec<u8>,
+    pub pre_rules: Vec<u8>,
+    pub rules: Rules,
+    pub post_rules: Vec<u8>,
+}
+
+/// Scan `buf[start..]` for the Rules section: a `0x92` tag followed by a
+/// zero type_index, then a full typed `Rules::walk` that must consume
+/// exactly `RULES_SERIALIZED_BYTES`. Returns the absolute offset.
+pub fn find_rules_boundary(buf: &[u8], start: usize) -> Option<usize> {
+    let scan_end = buf.len().checked_sub(RULES_SERIALIZED_BYTES)? + 1;
+    for o in start.min(scan_end)..scan_end {
+        if buf[o] != 0x92 {
+            continue;
+        }
+        if buf[o + 1..o + 5] != [0, 0, 0, 0] {
+            continue;
+        }
+        let mut probe = Loader::new(&buf[o..o + RULES_SERIALIZED_BYTES]);
+        let mut rules = Rules::default();
+        if rules.walk(&mut probe).is_ok() && probe.pos == RULES_SERIALIZED_BYTES {
+            return Some(o);
+        }
+    }
+    None
 }
 
 impl RulesTail {
     pub(crate) fn walk(&mut self, w: &mut dyn DataWalk) -> R {
+        const C: &str = "RulesTail";
+        const VA: u32 = 0x00589550;
+        if w.is_loading() {
+            let off = w.rules_boundary().ok_or_else(|| {
+                w.fail(C, VA, "no self-validating Rules section found in tail".into())
+            })?;
+            self.pre_rules.clear();
+            self.pre_rules.resize(off, 0);
+        }
+        w.walk_bytes("RulesTail.pre_rules", &mut self.pre_rules)?;
+        self.rules.walk(w)?;
         if w.is_loading() {
             let n = w.remaining();
-            self.data.clear();
-            self.data.resize(n, 0);
+            self.post_rules.clear();
+            self.post_rules.resize(n, 0);
         }
-        w.walk_bytes("RulesTail", &mut self.data)
+        w.walk_bytes("RulesTail.post_rules", &mut self.post_rules)
     }
 }
 
-/// Per-slot walker for one serialized type record. (Typed rules grammar —
-/// decoded from the disassembly but not yet wired into load/save: the stream
-/// boundary where `Rules` starts is unresolved because the RunTimeEnv record
-/// region size is unknown.)
+/// Per-slot walker for one serialized type record. The serialized image
+/// begins with the slot's `type_index` (i32 == slot), which the load path
+/// validates — it is the self-authentication the boundary scan relies on.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeRuleKind {
@@ -3293,6 +3342,15 @@ impl TypeRec {
         let kind = TypeRuleKind::for_slot(slot);
         let path = format!("Types[{slot}]");
         prim::take(w, &path, &mut self.head, 90, C, VA)?;
+        if w.is_loading()
+            && i32::from_le_bytes(self.head[..4].try_into().unwrap()) != slot as i32
+        {
+            return Err(w.fail(
+                C,
+                VA,
+                format!("{path}: serialized type_index != slot"),
+            ));
+        }
         if !w.is_checksum() {
             prim::wstr(w, &path, &mut self.name, C, VA)?;
         }

@@ -10,10 +10,9 @@
 use std::path::{Path, PathBuf};
 
 /// Channel indices still open (see crate README):
-///   12 rules           — tail boundary unresolved (runtime/script region)
 ///   13 scenario_data   — retail hashes Game::init scenario state, not in .svx
 ///   14 script_run_time — RunTimeEnv records (initialized script state)
-const OPEN: &[usize] = &[12, 13, 14];
+const OPEN: &[usize] = &[13, 14];
 
 /// Every `schema/live/frame-pairs/<ts>*/` containing a manifest.json.
 fn capture_dirs() -> Vec<PathBuf> {
